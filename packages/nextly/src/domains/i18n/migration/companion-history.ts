@@ -15,9 +15,12 @@
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { SNAPSHOT_RECORD_MARKER } from "../../schema/migrate-create/format-file";
+
 import { parseLocalizationIntent } from "./migration-intent";
 import type { I18nTransitionKind } from "./transition-state";
 import type { LocalizedColumnSpec } from "./types";
+import { LOCALIZATION_MIGRATION_MARKER } from "./write-migration-file";
 
 /** The key an entity's companion is recorded under: its kind and its slug. */
 export function companionHistoryKey(
@@ -37,6 +40,17 @@ export interface CompanionHistory {
    * say the table is gone; only a `disable` drops it.
    */
   present: Set<string>;
+  /**
+   * The entities whose first file here makes their companion (`enable` or `create-only`), so the
+   * files describe every column it has had.
+   */
+  founded: Set<string>;
+  /**
+   * Whether a companion file this build cannot read comes after the last snapshot record: one
+   * written before companion files recorded their intent, or one whose intent does not parse. The
+   * columns such a file made or dropped are missing from `columns`, for any entity it may be for.
+   */
+  unread: boolean;
 }
 
 /**
@@ -53,31 +67,53 @@ export async function readCompanionColumnHistory(
 /**
  * The companion files in `migrationsDir` replayed in the order they run (by name): each entity's
  * columns, and whether its table is still there. A file whose header cannot be read is left out
- * rather than guessed at.
+ * rather than guessed at, and said to be there (`unread`).
+ *
+ * Read only: the files are this generator's own, and their SQL is never run or parsed here.
  */
 export async function readCompanionHistory(
   migrationsDir: string
 ): Promise<CompanionHistory> {
   const history = new Map<string, Map<string, LocalizedColumnSpec>>();
   const present = new Set<string>();
+  const founded = new Set<string>();
+  let unread = false;
   let names: string[];
   try {
     names = (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
   } catch {
-    return { columns: history, present };
+    return { columns: history, present, founded, unread };
   }
   for (const name of names.sort()) {
-    let intent;
+    let content: string;
     try {
-      intent = parseLocalizationIntent(
-        await readFile(resolve(migrationsDir, name), "utf-8"),
-        name
-      );
+      content = await readFile(resolve(migrationsDir, name), "utf-8");
     } catch {
+      unread = true;
       continue;
     }
-    if (intent === null) continue;
+    if (content.includes(SNAPSHOT_RECORD_MARKER)) {
+      unread = false;
+      continue;
+    }
+    let intent;
+    try {
+      intent = parseLocalizationIntent(content, name);
+    } catch {
+      unread = true;
+      continue;
+    }
+    if (intent === null) {
+      if (content.includes(LOCALIZATION_MIGRATION_MARKER)) unread = true;
+      continue;
+    }
     const key = companionHistoryKey(intent.entity, intent.spec.collection);
+    if (
+      !history.has(key) &&
+      (intent.kind === "enable" || intent.kind === "create-only")
+    ) {
+      founded.add(key);
+    }
     const columns = history.get(key) ?? new Map<string, LocalizedColumnSpec>();
     switch (intent.kind) {
       case "create-only":
@@ -101,5 +137,5 @@ export async function readCompanionHistory(
     }
     history.set(key, columns);
   }
-  return { columns: history, present };
+  return { columns: history, present, founded, unread };
 }

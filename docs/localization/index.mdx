@@ -120,6 +120,22 @@ In code, set `localized: true` on the field (or remove `localized: false` from a
 
 A field whose type, length or precision changes in the same change is refused, because its value would be copied into a column of the new shape: save the new type with the field still shared, then make it translated.
 
+### When your migrations predate the record of translated fields
+
+Snapshots written by early versions of Nextly don't record which fields are translated, and neither do the localization migration files from that time. When the snapshot doesn't say, `nextly migrate:create` reads it from the localization files that do. When neither says, and a change could move a field between translated and shared, `migrate:create` refuses and writes nothing, because guessing either way could lose the field's values. It names the fields. Changes that move no field go through as usual.
+
+To record the translated fields, take two steps:
+
+1. Undo the change in your config, so it matches what was last migrated, and run:
+
+   ```bash
+   npx nextly migrate:create --record-snapshot
+   ```
+
+   It writes a migration that changes nothing when it runs or rolls back, and a snapshot that records which fields are translated. Commit both. Run again with nothing new to record, it writes nothing. It's refused while the config has changes to migrate.
+
+2. Make the change again and run `npx nextly migrate:create --name <name>`.
+
 ### When a translated field is renamed
 
 Renaming a translated field in the Schema Builder keeps every language's value under the new name, for a collection, a Single or a field group. The schema dialog lists it as a rename; keep that choice to keep the values. Renamed and made shared in the same change, the field keeps the default language's value as its shared value, and the other languages go to the archive under the new name, so `nextly i18n:restore --field <new name>` brings them back once the field is translated again.

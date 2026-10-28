@@ -179,6 +179,43 @@ ${downBody}
 }
 
 /**
+ * Header line of the migration `nextly migrate:create --record-snapshot` writes. Its
+ * snapshot records which fields are translated, so the localization files before it no longer
+ * need to say (`readCompanionHistory`).
+ */
+export const SNAPSHOT_RECORD_MARKER = "-- Generated: snapshot record";
+
+/**
+ * The migration `nextly migrate:create --record-snapshot` writes beside its snapshot. Applying it
+ * or rolling it back changes nothing: its UP is comments only, and its DOWN a statement that reads
+ * nothing, since `nextly migrate:down` refuses a file with none as one that cannot be rolled back.
+ * It names no entity, and says so.
+ */
+export function formatSnapshotRecordFile(
+  name: string,
+  dialect: SupportedDialect,
+  now: Date
+): string {
+  return `-- Migration: ${name}
+${SNAPSHOT_RECORD_MARKER}
+${SCOPED_ENTITIES_MARKER}
+-- Generated at: ${now.toISOString()}
+-- Dialect: ${getDialectDisplayName(dialect)}
+--
+-- Written by \`nextly migrate:create --record-snapshot\`. It changes nothing in
+-- the database: its snapshot records which fields are translated, which the
+-- snapshot before it did not.
+
+-- UP
+
+
+-- DOWN
+-- Nothing to undo. A rollback needs a statement to run, so this one reads nothing.
+SELECT 1;
+`;
+}
+
+/**
  * A blank migration file for SQL the author writes.
  *
  * `transaction: false` writes `NO_TRANSACTION_MARKER` as the first line, the

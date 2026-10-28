@@ -162,6 +162,15 @@ export interface MigrateCreateCommandOptions {
    * @default true
    */
   transaction?: boolean;
+
+  /**
+   * Write a migration that changes nothing, whose snapshot records which fields are
+   * translated, for a project whose latest snapshot was written before
+   * snapshots recorded them. Refused while the config has changes to migrate.
+   * The name defaults to `record_translated_fields`.
+   * @default false
+   */
+  recordSnapshot?: boolean;
 }
 
 interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
@@ -203,6 +212,17 @@ export async function runMigrateCreate(
 ): Promise<void> {
   const { logger } = context;
 
+  // The app's snapshot is the one that records translated fields; a blank
+  // file and a plugin module have none.
+  if (options.recordSnapshot === true && (options.blank || options.plugin)) {
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        "--record-snapshot writes the app's migration and snapshot, so it can't be combined with --blank or --plugin.",
+      statusCode: 400,
+    });
+  }
+
   if (options.plugin) {
     await runMigrateCreatePlugin(nameArg ?? options.name, options, context);
     return;
@@ -242,7 +262,10 @@ export async function runMigrateCreate(
 
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
-  const name = options.name ?? nameArg;
+  const name =
+    options.name ??
+    nameArg ??
+    (options.recordSnapshot === true ? "record_translated_fields" : undefined);
   if (!options.blank && !name) {
     logger.error(
       "--name is required for non-blank migrations. " +
@@ -475,6 +498,7 @@ export async function runMigrateCreate(
       metadataUpserts,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
+      recordSnapshot: options.recordSnapshot === true,
     });
   } catch (error) {
     // F11 PR 3 review fix #3: distinguish "operator cancelled prompt"
@@ -489,6 +513,14 @@ export async function runMigrateCreate(
     process.exit(1);
   }
 
+  if (result === null && options.recordSnapshot === true) {
+    logger.newline();
+    logger.info(
+      "Nothing to record. The latest snapshot already records which fields are translated."
+    );
+    process.exit(2);
+  }
+
   if (result === null) {
     logger.newline();
     logger.info(
@@ -500,6 +532,19 @@ export async function runMigrateCreate(
   }
 
   const duration = Date.now() - startTime;
+  if (options.recordSnapshot === true) {
+    logger.newline();
+    logger.success(`Recorded translated fields → ${result.snapshotPath}`);
+    logger.success(`Migration (changes nothing) → ${result.sqlPath}`);
+    logger.newline();
+    logger.info("Next steps:");
+    logger.item("Commit both files", 1);
+    logger.item(
+      "Make your change to the config, then run `nextly migrate:create --name <name>`",
+      1
+    );
+    return;
+  }
   logger.newline();
   logger.success(`Created migration → ${result.sqlPath}`);
   logger.success(`Snapshot → ${result.snapshotPath}`);
@@ -1272,6 +1317,11 @@ export function registerMigrateCreateCommand(program: Command): void {
     .option(
       "--plugin <entry>",
       "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"
+    )
+    .option(
+      "--record-snapshot",
+      "Write a migration that changes nothing, whose snapshot records which fields are translated, for a project whose latest snapshot predates that record. Run it with the config as last migrated",
+      false
     )
     .option(
       "--no-transaction",

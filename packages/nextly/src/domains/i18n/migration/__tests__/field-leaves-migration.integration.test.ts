@@ -18,7 +18,7 @@
  * left tables in would fail these cases for a reason that is not theirs.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -291,6 +291,69 @@ for (const entry of DIALECTS) {
         // Applied again, it changes nothing more: the archive still holds one row.
         await migrate();
         await expectShared();
+      });
+
+      it("keeps every language in a project from before translated fields were recorded, once recorded", async () => {
+        await migrateCreate(translated);
+        // As an early version left the project: no snapshot records the translated fields, and the
+        // companion file does not say what it is for. Changed before it runs, as it was written.
+        for (const name of await readdir(resolve(migrationsDir, "meta"))) {
+          const path = resolve(migrationsDir, "meta", name);
+          const file = JSON.parse(await readFile(path, "utf-8")) as {
+            snapshot: { tables: Record<string, unknown>[] };
+          };
+          for (const t of file.snapshot.tables) {
+            delete t.localized;
+            delete t.localizedColumns;
+            delete t.uniqueLocalizedColumns;
+          }
+          await writeFile(path, JSON.stringify(file), "utf-8");
+        }
+        for (const name of await readdir(migrationsDir)) {
+          if (!name.includes("_localization_")) continue;
+          const path = resolve(migrationsDir, name);
+          const kept = (await readFile(path, "utf-8"))
+            .split("\n")
+            .filter(line => !line.startsWith("-- Localization:"));
+          await writeFile(path, kept.join("\n"), "utf-8");
+        }
+        await migrate();
+        await seed();
+
+        await expect(migrateCreate(shared)).rejects.toThrow(
+          /--record-snapshot/
+        );
+        created += 1;
+        const record = await generateMigration({
+          name: "record_translated_fields",
+          dialect,
+          migrationsDir,
+          defaultLocale: "en",
+          collections: [translated],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          recordSnapshot: true,
+          now: new Date(Date.UTC(2026, 9, 16, 10, created)),
+        });
+        expect(record).not.toBeNull();
+        await migrate();
+        await migrateCreate(shared);
+        await migrate();
+        await expectShared();
+
+        // The record rolls back with the rest and changes nothing doing it.
+        expect(await migrateDown(4)).toHaveLength(4);
+        const back = await adapter.executeQuery<{
+          locale: string;
+          body: string;
+        }>(
+          `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' ORDER BY ${q("_locale")}`
+        );
+        expect(back).toEqual([
+          { locale: "en", body: "Hello" },
+          { locale: "es", body: "Hola" },
+        ]);
       });
 
       it("adds no archive rows when the archive file runs again", async () => {
