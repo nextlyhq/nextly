@@ -21,9 +21,10 @@ const SUPPORTED_ROOT = vi.hoisted(() => "/projects/supported");
 vi.mock("../shared/lib/installed-package-version", () => ({
   installedPackageVersion: (appRoot: string, name: string) => {
     judgedRoots.push(appRoot);
-    // One app on a supported Next.js; every other on Next.js 15.
+    // One app on a supported Next.js; every other on Next.js 15. Compared as
+    // the boot hands it over, resolved: on Windows that adds the drive.
     if (name === "next") {
-      return appRoot === SUPPORTED_ROOT ? "16.4.2" : "15.5.0";
+      return appRoot === resolve(SUPPORTED_ROOT) ? "16.4.2" : "15.5.0";
     }
     return "19.3.1";
   },
@@ -93,7 +94,8 @@ describe("starting nextly on an unsupported Next.js", () => {
         imageProcessor: getImageProcessor(),
       })
     ).rejects.toMatchObject(REFUSAL);
-    expect(new Set(judgedRoots)).toEqual(new Set(["/projects/site"]));
+    // Resolved, as the boot resolves it: `D:\projects\site` on Windows.
+    expect(new Set(judgedRoots)).toEqual(new Set([resolve("/projects/site")]));
   });
 
   it("judges each app root on its own, so one that passed vouches for no other", async () => {

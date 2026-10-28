@@ -32,10 +32,6 @@
  * @module domains/widgets/canonical
  */
 
-import {
-  generatedCollectionSlug,
-  generatedWidgets,
-} from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
 import type { WidgetPermissionGate } from "./gate";
 import {
@@ -54,31 +50,6 @@ import { UNSTATED_WIDGET_SIZE } from "./unstated-size";
 /** The part of a widget that layout resolution needs, from either channel. */
 export interface CanonicalWidget {
   id: string;
-  /**
-   * Whether core DERIVED this card rather than an author declaring it.
-   *
-   * 🔴 It decides one thing: a derived card is offered and never placed. The
-   * default arrangement is materialized from the widgets an install DECLARES,
-   * and a generated set is unbounded in the install's own content -- forty
-   * collections would open onto eighty cards nobody asked for, and could fill
-   * the submission cap before the reader chose anything.
-   *
-   * Set only where the generated channel is the one that supplied the entry. A
-   * contribution or a registration claiming the same id has DECLARED that
-   * widget, so it is placed like any other: the flag describes where the
-   * surviving declaration came from, not which ids core can generate.
-   */
-  generated?: boolean;
-  /**
-   * The collection a GENERATED card reads, when it is one.
-   *
-   * Carried because access to such a card is a question about that collection
-   * rather than about a declared permission — it has none — and the summary is
-   * what layout resolution filters. Taken from the definition's QUERY where the
-   * generated channel supplies it, so the value names the thing actually read
-   * rather than a slug recovered from a display identity.
-   */
-  collection?: string;
   /**
    * The plugin that contributed this widget, by its name. Set by the
    * contribution channel alone, so a registration overriding a plugin's widget
@@ -498,20 +469,6 @@ export function canonicalWidgets(
   for (const widget of contributed) {
     if (widget.id && !byId.has(widget.id)) byId.set(widget.id, widget);
   }
-  // Generated cards sit BETWEEN the two declared channels. A contribution
-  // already holding the id keeps it -- a plugin that declared that widget meant
-  // it, and core's derived guess must not displace it -- while a registration
-  // below still merges over whichever of the two is here, for the same reason.
-  for (const definition of generatedWidgets()) {
-    if (!byId.has(definition.id)) {
-      const collection = generatedCollectionSlug(definition);
-      byId.set(definition.id, {
-        ...fromRegistration(definition),
-        generated: true,
-        ...(collection === undefined ? {} : { collection }),
-      });
-    }
-  }
   for (const definition of publishableWidgets()) {
     const registration = fromRegistration(definition);
     const contribution = byId.get(definition.id);
@@ -542,18 +499,6 @@ const globalForContributed = globalThis as unknown as {
   __nextly_contributedWidgets?: CanonicalWidget[];
 };
 
-/**
- * The contributed set, for a caller that needs to know which ids a PLUGIN
- * claimed rather than merely which ids exist.
- *
- * The workspace payload asks: a generated card published under an id a plugin
- * declared would be read by the admin as a registration, and the merge gives a
- * registration authority over the contribution's title, archetype and query.
- */
-export function contributedWidgets(): CanonicalWidget[] {
-  return [...(globalForContributed.__nextly_contributedWidgets ?? [])];
-}
-
 /** Replace the contributed set. Called once per boot, beside the registry. */
 export function setContributedWidgets(
   widgets: readonly CanonicalWidget[]
@@ -567,28 +512,15 @@ export function setContributedWidgets(
  * The question every server-side consumer should ask. `listWidgets()` answers
  * only the imperative registry and is the reason a contributed widget could
  * render and never be arranged.
+ *
+ * Every widget here was DECLARED by core, a plugin or the site: core mints no
+ * card from the install's own content, so this is also the set the default
+ * arrangement is materialized from, with no narrower view of it to keep.
  */
 export function allWidgets(): CanonicalWidget[] {
   return canonicalWidgets(
     globalForContributed.__nextly_contributedWidgets ?? []
   );
-}
-
-/**
- * The widgets an install DECLARES, which is what a default arrangement is built
- * from.
- *
- * DERIVED from {@link allWidgets} rather than assembled separately, so the two
- * cannot disagree about which widgets exist: this is the same set, less the
- * cards core generated for content the reader has not asked to see.
- *
- * The distinction is not cosmetic. A generated card suggested to the default
- * would both take a position and consume one of the placements a caller may
- * submit -- so an install with many collections would open onto a dashboard
- * nobody chose and, past the cap, one they could not add to.
- */
-export function declaredWidgets(): CanonicalWidget[] {
-  return allWidgets().filter(widget => widget.generated !== true);
 }
 
 /** What the dashboard needs to know about a widget's size. */

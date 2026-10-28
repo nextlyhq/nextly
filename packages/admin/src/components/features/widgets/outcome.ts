@@ -241,11 +241,13 @@ function drawsDeclaredComponent(definition: DashboardWidget): boolean {
 /**
  * What a card missing a setting says, with the one step that fixes it: its own settings, opened
  * on their first field. The button is drawn only where the card can open them
- * (`WidgetRenderer`); elsewhere the sentence alone still says where the setting is chosen.
+ * (`WidgetRenderer`); elsewhere its words are drawn as the detail line, so the card still says
+ * where the setting is chosen.
  */
 function needsSettingEmpty(setting: string): OutcomeEmpty {
   return {
-    title: `Choose ${setting} in the card's settings`,
+    // Says what is missing; the button beside it says how to fix it, so the two never repeat.
+    title: `No ${lowerFirst(setting)} chosen yet`,
     action: { label: `Choose ${lowerFirst(setting)}`, opensSettings: true },
   };
 }

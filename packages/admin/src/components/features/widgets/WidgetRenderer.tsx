@@ -108,7 +108,9 @@ function answeredState(isFetching: boolean): CardState {
 
 /**
  * An empty card's content as the frame draws it: an action opening the card's settings becomes a
- * button that does, where the card can open them, and is left out where it cannot.
+ * button that does, where the card can open them. Where it cannot (customising, or no settings
+ * write), the button is left out and its words become the detail line, "Choose collection in the
+ * card's settings.", so the card still says where the missing setting is chosen.
  */
 function drawnEmpty(
   empty: Extract<WidgetOutcome, { state: "empty" }>["empty"],
@@ -119,7 +121,7 @@ function drawnEmpty(
     return action === undefined ? words : { ...words, action };
   }
   return onOpenSettings === undefined
-    ? words
+    ? { ...words, detail: `${action.label} in the card's settings.` }
     : { ...words, action: { label: action.label, onSelect: onOpenSettings } };
 }
 

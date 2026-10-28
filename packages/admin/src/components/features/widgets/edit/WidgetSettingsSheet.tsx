@@ -25,7 +25,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@nextlyhq/ui";
-import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
+import {
+  resolveWidgetSettings,
+  type AnyWidgetSetting,
+  type PublishedContentSource,
+} from "nextly/config";
 import {
   useCallback,
   useEffect,
@@ -110,8 +114,12 @@ export interface DoneSettled {
  * 🔴 Built from the DECLARATION rather than from the stored config, so a
  * setting the reader has never touched still opens at its default instead of
  * blank — and a key the declaration no longer knows about does not appear as a
- * ghost field. This mirrors `resolveWidgetSettings` on purpose: what the form
- * shows is what the card is actually using.
+ * ghost field. Read through `resolveWidgetSettings`, the server's own reader,
+ * so what the form shows is what the card is actually using: a stored value
+ * the setting no longer accepts (a retired option, a number past a narrowed
+ * bound, a value of another kind) opens at the default the card fell back to,
+ * not at the value it set aside. A note's own text over its bound is the
+ * exception, opened as written so it can be shortened.
  */
 export function initialValues(
   settings: readonly AnyWidgetSetting[],
@@ -125,9 +133,16 @@ export function initialValues(
    * prototype-free for the same reason, and this function exists to mirror it.
    */
   const values: Record<string, unknown> = Object.create(null);
+  const resolved = resolveWidgetSettings(settings, config);
   for (const setting of settings) {
     const stored = config?.[setting.name];
-    values[setting.name] = stored ?? setting.defaultValue ?? "";
+    // A note over its bound is the one stale value kept as written: it is the
+    // reader's own text, so they shorten it rather than lose it, and Done
+    // refuses it until it fits (`overlongSetting`).
+    values[setting.name] =
+      setting.type === "textarea" && typeof stored === "string"
+        ? stored
+        : (resolved[setting.name] ?? "");
   }
   return values;
 }

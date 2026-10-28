@@ -29,7 +29,7 @@ import {
   RELEASE_MEMBERS_TABLE,
   RELEASES_TABLE,
 } from "../../releases/release-tables";
-import { refreshContentSources } from "../collection-widgets";
+import { refreshContentSources } from "../content-sources";
 import { CORE_WIDGETS } from "../core-widgets";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";

@@ -140,7 +140,7 @@ const NEVER_EXPOSED_FIELD_TYPES: ReadonlySet<string> = new Set(["password"]);
  * `checkbox` is absent for that reason, and its absence is the point rather than
  * an oversight: a boolean is a legal `useAsTitle` nomination and a conventional
  * field can itself be a checkbox, so nominating one here made the field-level
- * answer disagree with every value-level answer -- the generated card selecting
+ * answer disagree with every value-level answer -- a card listing entries selecting
  * a column whose value each of those rules then declines, while the same entry
  * is named by a conventional fallback everywhere else. A type this list admits
  * but the value rule refuses is a card that names nothing.
@@ -444,7 +444,7 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     ...(titleField === undefined ? {} : { titleField }),
     // What a HUMAN calls this collection, which is what `label` means. The slug
     // is a storage identifier: a collection whose plural label is "Articles"
-    // was published to the source picker, and to every generated card's title,
+    // was published to the source picker, and to every card set to it,
     // as `blog-posts` -- disagreeing with the name used everywhere else in the
     // admin. The slug remains the identity, in `id`.
     label: collection.label ?? collection.slug,

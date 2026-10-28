@@ -385,7 +385,7 @@ describe("an empty card's action in a short card", () => {
   const empty: CardState = {
     kind: "empty",
     empty: {
-      title: "Choose collection in the card's settings",
+      title: "No collection chosen yet",
       action: { label: "Choose collection", onSelect: () => {} },
     },
   };

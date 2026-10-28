@@ -52,7 +52,8 @@ export async function runComponentMapCheck(
     found = await checkComponentMapFiles(
       loaded.config.plugins ?? [],
       generatedTypesFile(cwd, loaded.config.typescript.outputFile),
-      cwd
+      cwd,
+      loaded.configPath
     );
   } catch (error) {
     logger.error(
@@ -82,6 +83,11 @@ function outOfDateReport(found: ComponentMapAgreement, cwd: string): string[] {
       ? []
       : [
           `- the map does not register exactly the paths its list names: ${map}`,
+        ]),
+    ...(found.otherConfig === undefined
+      ? []
+      : [
+          `- checks its widgets against ${found.otherConfig.written ?? "no config"}, not ${found.otherConfig.expected ?? "no config"}: ${map}`,
         ]),
     ...found.missing.map(each => `- missing: ${describeComponentUse(each)}`),
     ...found.obsolete.map(path => `- no longer declared: ${path}`),

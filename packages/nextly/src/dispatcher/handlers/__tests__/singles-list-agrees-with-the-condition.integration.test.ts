@@ -27,8 +27,8 @@ import {
 import type { RequestCaller } from "../../../auth/caller-scope";
 import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineSingle, text } from "../../../config";
-import { refreshCollectionWidgets } from "../../../domains/widgets/collection-widgets";
 import { evaluateConditions } from "../../../domains/widgets/conditions";
+import { refreshContentSources } from "../../../domains/widgets/content-sources";
 import {
   createTestNextly,
   type TestNextly,
@@ -92,7 +92,7 @@ async function boot(): Promise<void> {
   // The refresh the layout endpoint performs before it evaluates a condition:
   // the singles half reads the widget source registry, which boot does not
   // populate.
-  await refreshCollectionWidgets();
+  await refreshContentSources();
 }
 
 /** An API key holding read grants on the two rule-bearing Singles, and the editor role. */
