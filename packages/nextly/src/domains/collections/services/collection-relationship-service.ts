@@ -4,10 +4,7 @@ import { inArray, sql } from "drizzle-orm";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { relatedRowReads } from "../../../auth/access/population-read";
-import {
-  actorForVisitor,
-  readsAsVisitor,
-} from "../../../auth/access/resolve-actor";
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
@@ -71,7 +68,6 @@ import {
   type LiveFieldGroupReadPass,
 } from "../../field-groups/live-read-access";
 import { passwordReachOf } from "../../field-groups/password-reach";
-import { MetaService } from "../../meta/services/meta-service";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -1846,13 +1842,7 @@ export class CollectionRelationshipService extends BaseService {
           // Without the access-control service, the Public role as this
           // service's own database records it, as its direct gate reads it.
           visitorWithoutService: () =>
-            actorForVisitor({
-              executor: this.db,
-              own: {
-                meta: new MetaService(this.adapter, this.logger),
-                dialect: this.dialect,
-              },
-            }),
+            this.resolveAccessService().ownDatabaseVisitor(),
         },
         container.has("rbacAccessControlService")
           ? container.get<RBACAccessControlService>("rbacAccessControlService")
@@ -3969,6 +3959,8 @@ export class CollectionRelationshipService extends BaseService {
             // seeing the anonymous bearer who is actually asking.
             user: access.fieldAccessUser ?? access.user,
             overrideAccess: false,
+            // A visitor is handed the Public role the row gate above read.
+            visitor: this.resolveAccessService().fieldRuleVisitor,
           },
           redactions
         );
@@ -3997,7 +3989,12 @@ export class CollectionRelationshipService extends BaseService {
       // A scoped API key's own grants, never its owner's.
       state = {
         passes: new Map(),
-        grants: callerAccessGrants(user, access.authenticatedScope),
+        grants: callerAccessGrants(
+          user,
+          access.authenticatedScope,
+          undefined,
+          this.resolveAccessService().fieldRuleVisitor
+        ),
         redactions: new WeakMap(),
       };
       relatedFieldGroupState.set(access, state);

@@ -34,6 +34,7 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { VisitorGrantsLoader } from "../../../shared/lib/field-level-registry";
 import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 
@@ -943,7 +944,11 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
-    await assertCallerFilterReadable(params, this.queryService);
+    await assertCallerFilterReadable(
+      params,
+      this.queryService,
+      this.accessService.fieldRuleVisitor
+    );
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
     // UPDATE access was already checked above, so this runs with overrideAccess
@@ -1129,7 +1134,11 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
-    await assertCallerFilterReadable(params, this.queryService);
+    await assertCallerFilterReadable(
+      params,
+      this.queryService,
+      this.accessService.fieldRuleVisitor
+    );
 
     // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
     // the READ rules (a role allowed to delete but not read must still see its
@@ -2289,7 +2298,9 @@ async function assertCallerFilterReadable(
     user?: UserContext;
     authenticatedScope?: AuthenticatedScope;
   },
-  queryService: CollectionQueryService
+  queryService: CollectionQueryService,
+  /** Where a visitor's Public grants are read, as the write's gate reads them. */
+  visitor: VisitorGrantsLoader | undefined
 ): Promise<void> {
   // A reserved condition on another table is not a field, so the field check
   // below never sees it. `_pendingChange` and `_inRelease` select rows by what
@@ -2308,6 +2319,7 @@ async function assertCallerFilterReadable(
       caller: {
         user: params.user as Record<string, unknown> | undefined,
         authenticatedScope: params.authenticatedScope,
+        visitor,
       },
     }
   );

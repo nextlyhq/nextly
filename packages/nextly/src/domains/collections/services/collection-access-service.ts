@@ -33,6 +33,7 @@ import type { AccessOperation } from "../../../services/access";
 import { hasPermission } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { VisitorGrantsLoader } from "../../../shared/lib/field-level-registry";
 import { MetaService } from "../../meta/services/meta-service";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
@@ -73,6 +74,32 @@ export class CollectionAccessService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * The visitor as this service's own database records it: the Public role
+   * read there, its `nextly_meta` through a reader on this service's adapter,
+   * on `executor` when the caller's work holds a transaction. The one loader
+   * this gate, the relationship reads over the same database and the field
+   * rules judged on it share, so none of them reads Public elsewhere.
+   */
+  readonly ownDatabaseVisitor: VisitorGrantsLoader = executor =>
+    actorForVisitor({
+      executor: executor ?? this.db,
+      own: {
+        meta: new MetaService(this.adapter, this.logger),
+        dialect: this.dialect,
+      },
+    });
+
+  /**
+   * Where the field rules of a read or write through this service read a
+   * visitor's Public grants, as this gate reads them (`visitorOf`): this
+   * database without an access-control service, and with one undefined, so
+   * they read the process's cached copy as the gate then does.
+   */
+  get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return this.rbacAccessControlService ? undefined : this.ownDatabaseVisitor;
   }
 
   /**
@@ -176,16 +203,8 @@ export class CollectionAccessService extends BaseService {
             executor ?? this.db,
             this.dialect
           ),
-        // A visitor likewise: the Public role as this database records it,
-        // its `nextly_meta` read through a reader on this service's adapter.
-        visitorWithoutService: () =>
-          actorForVisitor({
-            executor: executor ?? this.db,
-            own: {
-              meta: new MetaService(this.adapter, this.logger),
-              dialect: this.dialect,
-            },
-          }),
+        // A visitor likewise: the Public role as this database records it.
+        visitorWithoutService: () => this.ownDatabaseVisitor(executor),
       });
   }
 
