@@ -1,13 +1,19 @@
 /**
  * The Next cache adapter maps intents to `next/cache` calls with a fake module
- * (no real Next runtime), no-ops when the module is absent, and never throws.
+ * (no real Next runtime), no-ops when the module is absent, never throws, and
+ * hands off what it could not expire.
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { withSideEffectWarnings } from "../../../hooks/side-effect-warnings";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import {
+  CACHE_EXPIRY_DEFERRED,
+  DEFERRED_EXPIRY_NOTICE,
+  MAX_TAGS_PER_WRITE,
   NextCacheRevalidator,
   nextCacheFrom,
+  tagsToExpire,
   type NextCacheModule,
 } from "../next-cache-revalidator";
 
@@ -67,17 +73,29 @@ describe("NextCacheRevalidator", () => {
     expect(() => revalidator.flush([{ tags: ["nextly:posts"] }])).not.toThrow();
   });
 
-  it("swallows a throwing next/cache so a committed write never errors", () => {
+  it("keeps a committed write when next/cache keeps throwing, and hands the tags off", () => {
     const next = fakeNextCache();
     // revalidateTag throws outside a request scope (a CLI/background write).
     next.revalidateTag.mockImplementation(() => {
       throw new Error("static generation store missing");
     });
-    const revalidator = new NextCacheRevalidator(() => next);
+    const handoff = { handOff: vi.fn() };
+    const revalidator = new NextCacheRevalidator(
+      () => next,
+      () => handoff
+    );
 
-    expect(() => revalidator.flush([{ tags: ["a", "b"] }])).not.toThrow();
-    // One throwing tag does not stop the rest.
-    expect(next.revalidateTag).toHaveBeenCalledTimes(2);
+    let outcome: ReturnType<NextCacheRevalidator["flush"]>;
+    expect(
+      () => (outcome = revalidator.flush([{ tags: ["a", "b"] }]))
+    ).not.toThrow();
+    // Each tag is tried twice, and one throwing tag does not stop the rest.
+    expect(next.revalidateTag).toHaveBeenCalledTimes(4);
+    expect(outcome!).toEqual({ deferredTags: ["a", "b"] });
+    expect(handoff.handOff).toHaveBeenCalledWith(
+      ["a", "b"],
+      "static generation store missing"
+    );
   });
 
   // `flush` runs after a write has committed, so resolving `next/cache` is
@@ -101,5 +119,235 @@ describe("NextCacheRevalidator", () => {
     );
 
     expect(() => revalidator.flush([{ tags: ["a"] }])).not.toThrow();
+  });
+});
+
+/*
+ * An expiry that fails is retried once and, failing again, handed to the
+ * out-of-request path; the write it follows is never undone. In a Server Action
+ * the tag is expired with `updateTag`, so the acting user reads their own write;
+ * anywhere else Next.js refuses `updateTag` and the tag goes through
+ * `revalidateTag(tag, { expire: 0 })`.
+ */
+describe("NextCacheRevalidator, when an expiry fails or the context differs", () => {
+  const OUTSIDE = new Error(
+    "updateTag can only be called from within a Server Action. To invalidate cache tags in Route Handlers or other contexts, use revalidateTag instead."
+  );
+
+  it("retries a tag that fails once, and hands nothing off", () => {
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementationOnce(() => {
+      throw new Error("flaky cache handler");
+    });
+    const handoff = { handOff: vi.fn() };
+    const outcome = new NextCacheRevalidator(
+      () => next,
+      () => handoff
+    ).flush([{ tags: ["a"] }]);
+
+    expect(next.revalidateTag).toHaveBeenCalledTimes(2);
+    expect(outcome).toBeUndefined();
+    expect(handoff.handOff).not.toHaveBeenCalled();
+  });
+
+  it("hands off only the tags that failed twice", () => {
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(tag => {
+      if (tag === "b") throw new Error("cache handler down");
+    });
+    const handoff = { handOff: vi.fn() };
+    const outcome = new NextCacheRevalidator(
+      () => next,
+      () => handoff
+    ).flush([{ tags: ["a", "b", "c"] }]);
+
+    expect(outcome).toEqual({ deferredTags: ["b"] });
+    expect(handoff.handOff).toHaveBeenCalledWith(["b"], "cache handler down");
+  });
+
+  it("expires with updateTag in a Server Action, and does not also revalidate", () => {
+    const next = {
+      ...fakeNextCache(),
+      updateTag: vi.fn<(tag: string) => void>(),
+    };
+    new NextCacheRevalidator(() => next).flush([
+      { tags: ["nextly:posts", "nextly:posts:id:1"] },
+    ]);
+
+    expect(next.updateTag.mock.calls).toEqual([
+      ["nextly:posts"],
+      ["nextly:posts:id:1"],
+    ]);
+    expect(next.revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("falls back to revalidateTag with immediate expiry where Next.js refuses updateTag", () => {
+    const next = {
+      ...fakeNextCache(),
+      updateTag: vi.fn<(tag: string) => void>(() => {
+        throw OUTSIDE;
+      }),
+    };
+    const outcome = new NextCacheRevalidator(() => next).flush([
+      { tags: ["nextly:posts"] },
+    ]);
+
+    expect(next.revalidateTag).toHaveBeenCalledWith("nextly:posts", {
+      expire: 0,
+    });
+    expect(outcome).toBeUndefined();
+  });
+
+  it("does not fall back on any other updateTag failure: it is retried, then handed off", () => {
+    const next = {
+      ...fakeNextCache(),
+      updateTag: vi.fn<(tag: string) => void>(() => {
+        throw new Error("cache handler down");
+      }),
+    };
+    const handoff = { handOff: vi.fn() };
+    const outcome = new NextCacheRevalidator(
+      () => next,
+      () => handoff
+    ).flush([{ tags: ["nextly:posts"] }]);
+
+    expect(next.updateTag).toHaveBeenCalledTimes(2);
+    expect(next.revalidateTag).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ deferredTags: ["nextly:posts"] });
+  });
+
+  it("keeps the write when the hand-off itself throws or rejects", async () => {
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    const throwing = {
+      handOff: () => {
+        throw new Error("queue down");
+      },
+    };
+    const rejecting = {
+      handOff: () => Promise.reject(new Error("queue down")),
+    };
+
+    expect(
+      new NextCacheRevalidator(
+        () => next,
+        () => throwing
+      ).flush([{ tags: ["a"] }])
+    ).toEqual({ deferredTags: ["a"] });
+    expect(
+      new NextCacheRevalidator(
+        () => next,
+        () => rejecting
+      ).flush([{ tags: ["a"] }])
+    ).toEqual({ deferredTags: ["a"] });
+    // The rejection is handled, not left unhandled.
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+});
+
+/*
+ * Next.js keeps at most 128 tags on a cached read. A write naming more expires
+ * each collection's or Single's own tag instead, which every read of it carries.
+ */
+describe("the tags a write expires", () => {
+  const ids = (n: number) =>
+    Array.from({ length: n }, (_, i) => `nextly:posts:id:${i}`);
+
+  it("keeps every tag up to the limit", () => {
+    expect(tagsToExpire([{ tags: ids(MAX_TAGS_PER_WRITE) }])).toHaveLength(
+      MAX_TAGS_PER_WRITE
+    );
+  });
+
+  it("falls back past it to each collection's and Single's tag, keeping the app's own tags", () => {
+    const tags = tagsToExpire([
+      { tags: ids(MAX_TAGS_PER_WRITE) },
+      {
+        tags: [
+          "nextly:pages:slug:about",
+          "nextly:single:header",
+          "nextly:single:header:en",
+          "navigation",
+        ],
+      },
+    ]);
+    expect(tags.sort()).toEqual([
+      "navigation",
+      "nextly:pages",
+      "nextly:posts",
+      "nextly:single:header",
+    ]);
+  });
+
+  it("counts a tag named by two intents once", () => {
+    expect(
+      tagsToExpire([{ tags: ["nextly:posts"] }, { tags: ["nextly:posts"] }])
+    ).toEqual(["nextly:posts"]);
+  });
+
+  it("expires the fallback tags through flush", () => {
+    const next = fakeNextCache();
+    new NextCacheRevalidator(() => next).flush([
+      { tags: ids(MAX_TAGS_PER_WRITE + 1) },
+    ]);
+    expect(next.revalidateTag.mock.calls).toEqual([
+      ["nextly:posts", { expire: 0 }],
+    ]);
+  });
+});
+
+/*
+ * A write whose expiry was handed off tells its caller so, through the same
+ * channel a post-commit hook's notice takes: the change is saved, and may take
+ * a moment to show. One notice per collection or Single, naming nothing else.
+ */
+describe("the notice a deferred expiry leaves on the response", () => {
+  it("names each collection and Single whose reads wait, once", async () => {
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(tag => {
+      if (tag !== "nextly:pages") throw new Error("down");
+    });
+    const { notices } = await withSideEffectWarnings(async () => {
+      new NextCacheRevalidator(
+        () => next,
+        () => ({ handOff: vi.fn() })
+      ).flush([
+        {
+          tags: [
+            "nextly:posts",
+            "nextly:posts:id:1",
+            "nextly:single:header",
+            "nextly:pages",
+          ],
+        },
+      ]);
+    });
+
+    expect(notices).toEqual([
+      {
+        severity: "notice",
+        phase: "cache-expiry",
+        collection: "posts",
+        code: CACHE_EXPIRY_DEFERRED,
+        message: DEFERRED_EXPIRY_NOTICE,
+      },
+      {
+        severity: "notice",
+        phase: "cache-expiry",
+        collection: "single:header",
+        code: CACHE_EXPIRY_DEFERRED,
+        message: DEFERRED_EXPIRY_NOTICE,
+      },
+    ]);
+  });
+
+  it("leaves no notice when every tag expired", async () => {
+    const next = fakeNextCache();
+    const { notices } = await withSideEffectWarnings(async () => {
+      new NextCacheRevalidator(() => next).flush([{ tags: ["nextly:posts"] }]);
+    });
+    expect(notices).toEqual([]);
   });
 });
