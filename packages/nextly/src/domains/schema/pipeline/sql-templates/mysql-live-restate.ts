@@ -34,11 +34,20 @@ import { quoteIdent } from "./identifier-quoting";
 const q = (name: string) => quoteIdent(name, "mysql");
 
 /**
- * A MySQL string literal. Quotes are doubled; a backslash, which MySQL reads as an escape unless
- * `NO_BACKSLASH_ESCAPES` is set, is never written into one: the one place that needs it spells it
- * `CHAR(92)`.
+ * A MySQL string literal, read back as `text` in every SQL mode. Quotes are doubled. A backslash,
+ * which MySQL reads as an escape unless `NO_BACKSLASH_ESCAPES` is set, is never written into one:
+ * a text holding one, such as a column named `caption\suffix`, is the CONCAT of the literals
+ * around it with `CHAR(92)` between them (`BACKSLASH_PART`).
  */
-const literal = (text: string): string => `'${text.replace(/'/g, "''")}'`;
+const literal = (text: string): string => {
+  const parts = text.split("\\").map(part => `'${part.replace(/'/g, "''")}'`);
+  return parts.length === 1
+    ? parts[0]
+    : `CONCAT(${parts.join(BACKSLASH_PART)})`;
+};
+
+/** What stands for a backslash between two parts of a literal (`literal`). */
+const BACKSLASH_PART = ", CHAR(92 USING utf8mb4), ";
 
 /** The variable and prepared statement these use. One name, reused: each set replaces the last. */
 const VARIABLE = "@nextly_ddl";
@@ -236,10 +245,12 @@ export function plainMysqlEquivalents(statements: readonly string[]): string[] {
 
 /**
  * A name as the run spells it inside a SQL string literal, read back: `literal` doubles each
- * apostrophe, so `app_o''brien` is the table `app_o'brien`. Read as written, the name would be
+ * apostrophe, so `app_o''brien` is the table `app_o'brien`, and writes a backslash as `CHAR(92)`
+ * between two literals. Read as written, the name would be
  * rendered with its apostrophes doubled twice and never match the run.
  */
-const unliteral = (spelled: string): string => spelled.replace(/''/g, "'");
+const unliteral = (spelled: string): string =>
+  spelled.split(`'${BACKSLASH_PART}'`).join("\\").replace(/''/g, "'");
 
 /** The plain statement a four-statement run amounts to, when it is exactly one of this module's. */
 function plainEquivalentOf(run: readonly string[]): string | undefined {

@@ -668,6 +668,50 @@ for (const entry of DIALECTS) {
         }
       );
 
+      it.skipIf(dialect !== "mysql")(
+        "renames a MySQL column to a name holding a backslash exactly as named",
+        async () => {
+          await exec(
+            "CREATE TABLE `slashes` (`id` int PRIMARY KEY, `label` varchar(32) NULL)"
+          );
+          for (const statement of mysqlLiveStatements({
+            type: "rename_column",
+            tableName: "slashes",
+            fromColumn: "label",
+            toColumn: "caption\\suffix",
+            fromType: "varchar(32)",
+            toType: "varchar(32)",
+          })!) {
+            await exec(statement);
+          }
+          expect(
+            (await definitionOf("slashes")).columns.map(c => c.name)
+          ).toEqual(["id", "caption\\suffix"]);
+        }
+      );
+
+      it.skipIf(dialect !== "sqlite")(
+        "refuses a SQLite rebuild that would lose a collation on a declared index",
+        async () => {
+          // The index keeps its declared name but was recreated by hand to compare case-blind; the
+          // rebuild would recreate it from the snapshot, comparing byte for byte.
+          await migrateCreate(heading("heading"));
+          await migrate();
+          await exec(`DROP INDEX "idx_dc_posts_heading"`);
+          await exec(
+            `CREATE INDEX "idx_dc_posts_heading" ON "dc_posts" ("heading" COLLATE NOCASE)`
+          );
+          const before = await definitionOf("dc_posts");
+
+          await migrateCreate(heading("heading", { required: true }));
+          await expect(migrate()).rejects.toThrow(
+            /would drop collations its schema does not track/
+          );
+
+          expect(await definitionOf("dc_posts")).toEqual(before);
+        }
+      );
+
       /** The app's table, whose column carries the default the schema declares for it. */
       function notes(column: string, columnDefault: string): AppStreamTables {
         const spec: TableSpec = {

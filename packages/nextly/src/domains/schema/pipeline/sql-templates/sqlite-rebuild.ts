@@ -407,9 +407,17 @@ export function untrackedConstraintCounts(
  */
 function untrackedCollationCount(table: TableSpec): string {
   const name = literalOf(table.name);
+  // The indexes' keys too: an index can compare by a collation of its own
+  // (`CREATE INDEX ... ("email" COLLATE NOCASE)`), which the table's statement
+  // does not show and no index spec records, so even an index whose name the
+  // spec declares would come back comparing byte for byte. Read from
+  // `pragma_index_xinfo`, which reports each key's collating sequence.
+  const onIndexes =
+    `(SELECT COUNT(*) FROM pragma_index_list(${name}) AS il, pragma_index_xinfo(il.name) AS ix ` +
+    `WHERE ix.key = 1 AND upper(ix.coll) <> 'BINARY')`;
   return (
-    `COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'COLLATE', ''))) / 7 ` +
-    `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0)`
+    `(COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'COLLATE', ''))) / 7 ` +
+    `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0) + ${onIndexes})`
   );
 }
 

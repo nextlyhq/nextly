@@ -89,6 +89,22 @@ describe("reading Nextly's own MySQL runs as plain statements", () => {
     ]);
   });
 
+  it("writes a backslash in a name so that no SQL mode reads it as an escape, and reads the run back", () => {
+    const renamed = mysqlLiveStatements({
+      type: "rename_column",
+      tableName: "app\\notes",
+      fromColumn: "label",
+      toColumn: "caption\\suffix",
+      fromType: "text",
+      toType: "text",
+    })!;
+    // A literal holding `\s` would be read as `s` by a session in MySQL's default mode.
+    expect(renamed.join("\n")).not.toMatch(/'[^']*\\[^']*'/);
+    expect(plainMysqlEquivalents(renamed)).toEqual([
+      "ALTER TABLE `app\\notes` RENAME COLUMN `label` TO `caption\\suffix`",
+    ]);
+  });
+
   it("leaves a hand-written PREPARE as written", () => {
     const handWritten = [
       "SET @nextly_ddl = 'DROP TABLE `dc_posts`'",
