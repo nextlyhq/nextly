@@ -7280,6 +7280,9 @@ export class CollectionMutationService extends BaseService {
   async unpublishAllLocales(
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before the
+    // translation table's shape is read: whatever it holds, the write is refused.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     if (await this.companionLacksStatus(params.collectionName)) {
       return {
         success: false,
