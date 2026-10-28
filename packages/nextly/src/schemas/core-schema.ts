@@ -24,6 +24,8 @@ import { apiKeyTables } from "./api-keys";
 import { auditTables } from "./audit";
 import { authTokenTables } from "./auth-tokens";
 import { contentEventsTables } from "./content-events";
+import { dashboardPinsTables } from "./dashboard-pins";
+import { dashboardPreferencesTables } from "./dashboard-preferences";
 import {
   DELETED_PRINCIPALS_TABLE,
   deletedPrincipalsTables,
@@ -259,6 +261,11 @@ export function getCoreSchema(
     // `nextly_notices` — each person's own notices. In the snapshot for the
     // reason every table above is: it is the set `nextly migrate` creates.
     ...Object.values(noticesTables(dialect)),
+    // `nextly_dashboard_pins` and `nextly_dashboard_preferences` — each
+    // reader's pinned entries and remembered dashboard choices. In the
+    // snapshot for the reason every table above is.
+    ...Object.values(dashboardPinsTables(dialect)),
+    ...Object.values(dashboardPreferencesTables(dialect)),
     // `email_brand` — the site's email brand settings, one row. In the
     // snapshot for the reason every table above is.
     ...Object.values(emailBrandTables(dialect)),
@@ -353,6 +360,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_webhooks",
   "nextly_webhook_deliveries",
   "nextly_notices",
+  "nextly_dashboard_pins",
+  "nextly_dashboard_preferences",
 ] as const;
 
 /**
