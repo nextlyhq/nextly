@@ -652,7 +652,7 @@ function refuseUnknownOrRepeated(
         {
           path: "placements",
           code: "INVALID_VALUE",
-          message: `"${widgetId}" is ${replacement}.`,
+          message: `"${widgetId}" ${replacement}`,
         },
       ],
     });

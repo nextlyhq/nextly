@@ -992,13 +992,13 @@ describe("PUT /api/dashboard/layout", () => {
 
     const collection = await refused("collection/posts-count");
     expect(collection).toContain(
-      '\\"collection/posts-count\\" is a per-collection card core no longer makes; use a core widget with a Collection setting instead'
+      '\\"collection/posts-count\\" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.'
     );
     const single = await refused("single/about-card");
     expect(single).toContain(
-      "a per-Single card core no longer makes; a Single's edits show in core/recently-edited"
+      `\\"single/about-card\\" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
     );
-    expect(single).not.toContain("that collection");
+    expect(single).not.toContain("Collection to");
     expect(saved).toBeUndefined();
   });
 

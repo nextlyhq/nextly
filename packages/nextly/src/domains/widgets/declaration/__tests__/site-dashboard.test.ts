@@ -132,12 +132,12 @@ describe("a site config that names what exists", () => {
         defaultLayout: [{ widget: "collection/posts-count", w: 6, h: 3 }],
       })
     );
-    const told =
-      "a per-collection card core no longer makes; use a core widget with a Collection setting instead (core/count, core/breakdown, core/over-time, core/recent-entries), set to that collection";
-    // A Single's card is never told to pick "that collection": the widgets with
-    // a Collection setting offer collections only.
-    const toldSingle =
-      "a per-Single card core no longer makes; a Single's edits show in core/recently-edited";
+    // The collection's card is told the widgets that replace it and the
+    // collection to set them to, the slug its id was minted from.
+    const told = `which is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.`;
+    // A Single's card is never told to pick a collection: the widgets with a
+    // Collection setting offer collections only.
+    const toldSingle = `which is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`;
     expect(message).toContain(`hide names "single/home-card", ${toldSingle}`);
     expect(message).toContain(
       `overrides names "collection/posts-count", ${told}`
@@ -167,10 +167,10 @@ describe("a site config that names what exists", () => {
       })
     );
     expect(message).toContain(
-      'defaultLayout names "collection/posts-count", a per-collection card core no longer makes'
+      'defaultLayout names "collection/posts-count", which is a retired card'
     );
     expect(message).toContain(
-      'defaultLayout names "single/home-card", a per-Single card core no longer makes'
+      'defaultLayout names "single/home-card", which is a retired card'
     );
     // The control: an optional card naming any other absent widget is still
     // left out without a fault.

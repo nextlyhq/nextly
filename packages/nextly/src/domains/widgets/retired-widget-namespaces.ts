@@ -28,21 +28,33 @@ export const RETIRED_WIDGET_NAMESPACES = ["collection", "single"] as const;
 type RetiredNamespace = (typeof RETIRED_WIDGET_NAMESPACES)[number];
 
 /**
- * What took each namespace's place, said after a card's id: "is <this>".
+ * The slug a retired card was minted from: `collection/blog-posts-count` gives
+ * `blog-posts`. Each id was `<namespace>/<slug>-<kind>` with a one-word kind,
+ * so the slug is all but the last segment; an id of any other shape is named
+ * whole.
+ */
+function mintedSlug(widgetId: string, namespace: RetiredNamespace): string {
+  const rest = widgetId.slice(namespace.length + 1);
+  const cut = rest.lastIndexOf("-");
+  return cut > 0 ? rest.slice(0, cut) : rest;
+}
+
+/**
+ * What a retired card is and what replaced it, said after its id: `"<id>" is a
+ * retired card: ...`.
  *
  * 🔴 Each says only what is true of its own namespace. A per-collection card's
  * place is a core widget set to that collection; a Single has no such widget,
  * since those widgets offer collections only, and its edits show in Recently
- * edited, so a per-Single card is never told to pick "that collection".
+ * edited, so a per-Single card is never told to pick a collection. The widgets
+ * are named by their titles here, as a person finds them in the add panel; this
+ * module cannot load them (see above), so the titles are spelled out.
  */
-const REPLACED_BY: Record<RetiredNamespace, string> = {
-  collection: `a per-collection card core no longer makes; use a core widget with a Collection setting instead (${[
-    CORE_WIDGET_ID.count,
-    CORE_WIDGET_ID.breakdown,
-    CORE_WIDGET_ID.overTime,
-    CORE_WIDGET_ID.recentEntries,
-  ].join(", ")}), set to that collection`,
-  single: `a per-Single card core no longer makes; a Single's edits show in ${CORE_WIDGET_ID.recentlyEdited}`,
+const RETIRED_CARD: Record<RetiredNamespace, (slug: string) => string> = {
+  collection: slug =>
+    `is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to ${slug}.`,
+  single: () =>
+    `is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (${CORE_WIDGET_ID.recentlyEdited}).`,
 };
 
 /** The retired namespace `widgetId` is in, or `undefined`. */
@@ -58,10 +70,13 @@ export function inRetiredWidgetNamespace(widgetId: string): boolean {
 }
 
 /**
- * What replaced the card `widgetId` names, as every door that refuses one
- * says it ("<id>" is ...), or `undefined` for an id in no retired namespace.
+ * What the card `widgetId` names is, as every door that refuses one says it
+ * after the id (`"<id>" is a retired card: ...`), or `undefined` for an id in
+ * no retired namespace.
  */
 export function retiredWidgetReplacement(widgetId: string): string | undefined {
   const namespace = retiredNamespaceOf(widgetId);
-  return namespace === undefined ? undefined : REPLACED_BY[namespace];
+  return namespace === undefined
+    ? undefined
+    : RETIRED_CARD[namespace](mintedSlug(widgetId, namespace));
 }

@@ -154,7 +154,7 @@ function addToStore(def: WidgetDefinition, source: string): void {
   const replacement = retiredWidgetReplacement(def.id);
   if (replacement !== undefined) {
     throw NextlyError.invalidInput({
-      message: `Widget "${def.id}" cannot be registered: "${def.id}" is ${replacement}.`,
+      message: `Widget "${def.id}" cannot be registered: "${def.id}" ${replacement}`,
     });
   }
   const existing = store().get(def.id);

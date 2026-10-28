@@ -61,10 +61,10 @@ describe("widget registry", () => {
     // registered there would be offered, then refused by every layout write
     // and dropped by every read, so the registry refuses it at startup.
     expect(() => registerWidget(def("collection/x-count"))).toThrow(
-      'Widget "collection/x-count" cannot be registered: "collection/x-count" is a per-collection card core no longer makes; use a core widget with a Collection setting instead'
+      'Widget "collection/x-count" cannot be registered: "collection/x-count" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to x.'
     );
     expect(() => registerWidget(def("single/about-card"))).toThrow(
-      "a per-Single card core no longer makes; a Single's edits show in core/recently-edited"
+      `Widget "single/about-card" cannot be registered: "single/about-card" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
     );
     expect(listWidgets()).toEqual([]);
     // The control: the same definition outside those namespaces registers.

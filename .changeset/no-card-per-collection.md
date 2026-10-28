@@ -29,9 +29,9 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The dashboard no longer makes a card per collection and per Single. A card about one collection is a core widget (Count, Breakdown, Over time or Recent entries) whose Collection setting names it, so adding a collection adds no widget. Single cards were removed, and a Single's edits show in Recently edited. **Breaking:**
+The dashboard no longer makes a card per collection or per Single. A card about one collection is a core widget (Count, Breakdown, Over time or Recent entries) whose Collection setting names it, so adding a collection adds no widget. A Single's edits show in Recently edited (`core/recently-edited`). **Breaking:**
 
 - The `collection/<slug>-<kind>` and `single/<slug>-<kind>` cards are no longer offered, drawn or accepted.
 - A saved dashboard holding one drops it when it is read, and the next save stores the dashboard without it.
-- A layout write naming one is refused, and so is `registerWidget` with an id in either namespace, at startup. The message says what replaced it: a core widget set to that collection, or Recently edited for a Single.
+- A layout write naming one is refused, and so is `registerWidget` with an id in either namespace, at startup. The message says the card is retired and what replaced it: add Count, Breakdown, Over time or Recent entries and set its Collection to the collection's slug, or, for a Single, that its edits show in Recently edited.
 - A site config (`dashboard.defaultLayout`, `hide` or `overrides`) naming one is refused at startup, an optional `defaultLayout` card included, naming the id and what replaced it.

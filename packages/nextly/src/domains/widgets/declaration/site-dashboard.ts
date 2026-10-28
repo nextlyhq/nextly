@@ -162,7 +162,7 @@ function unknownWidget(
   // what replaced it instead.
   const replacement = retiredWidgetReplacement(id);
   if (replacement !== undefined)
-    return `${where} names "${id}", ${replacement}`;
+    return `${where} names "${id}", which ${replacement}`;
   if (ctx.factsOf(id) !== undefined) return undefined;
   const near = nearest(id, ctx.ids);
   return `${where} names "${id}", which no widget declares${near === undefined ? "" : `; did you mean "${near}"?`}`;
