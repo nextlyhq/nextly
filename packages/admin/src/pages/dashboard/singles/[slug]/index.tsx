@@ -55,7 +55,6 @@ import {
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
-import { singleApi } from "@admin/services/singleApi";
 
 // ============================================================================
 // Types
@@ -479,15 +478,6 @@ function useSingleSaveFailure(args: {
     scope: slug && documentId ? { kind: "single", slug, documentId } : null,
     locale,
     fields: args.schema?.fields ?? NO_FIELDS,
-    // A save without a status keeps the values as the pending change. The
-    // Single's update answers with the document alone, no hook warnings.
-    save: useCallback(
-      async (values: Record<string, unknown>) => {
-        await singleApi.updateDocument(slug, values, { locale });
-        return undefined;
-      },
-      [slug, locale]
-    ),
     // Answers once the reloaded document is back, which the recovery waits
     // for before letting the editor save again.
     onTaken: useCallback(

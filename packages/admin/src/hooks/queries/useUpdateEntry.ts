@@ -277,18 +277,6 @@ export function useUpdateEntry<
       : null,
     locale,
     fields: fields ?? NO_FIELDS,
-    // A save without a status keeps the values as the pending change. The
-    // values are the form's, which is what the payload type describes.
-    save: useCallback(
-      (values: Record<string, unknown>) =>
-        entryApi.update(
-          collectionSlug,
-          entryId,
-          values as UpdateEntryPayload,
-          locale ? { locale, fallbackLocale } : undefined
-        ),
-      [collectionSlug, entryId, locale, fallbackLocale]
-    ),
     // Answers once the reloaded document is back, which the recovery waits
     // for before letting the editor save again.
     onTaken: useCallback(

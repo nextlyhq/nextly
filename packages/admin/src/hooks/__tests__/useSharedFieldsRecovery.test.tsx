@@ -39,7 +39,8 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 
-import type { HookWarning } from "@admin/lib/mutation-warnings";
+import type { DocumentActionOutcome } from "@admin/components/features/entries/EntryForm/useDocumentActionBindings";
+import { RecoverySaveRefused } from "@admin/components/features/entries/EntryForm/useRefusedForm";
 
 import {
   type RefusedForm,
@@ -58,22 +59,12 @@ function refusal(data: Record<string, unknown>) {
   });
 }
 
-function renderRecovery(
-  args: {
-    onTaken?: () => unknown;
-    save?: (values: unknown) => unknown;
-  } = {}
-) {
+function renderRecovery(args: { onTaken?: () => unknown } = {}) {
   const rendered = renderHook(() =>
     useSharedFieldsRecovery({
       scope: { kind: "collection", slug: "authors", entryId: "e1" },
       locale: "es",
       fields: [{ name: "articleCount", label: "Article Count" }],
-      // Whatever the stand-in answers, read as a save's result is.
-      save: async values =>
-        (await args.save?.(values)) as
-          | { warnings?: readonly HookWarning[] }
-          | undefined,
       // Whatever the stand-in does, answered as a reload is.
       onTaken: async () => args.onTaken?.(),
     })
@@ -81,29 +72,33 @@ function renderRecovery(
   return { recover: rendered.result.current, unmount: rendered.unmount };
 }
 
-/** A form the recovery reads and updates, recording what it was asked. */
+/** What the recovery says when it may no longer take once its Save is done. */
+const NOT_TAKEN_MESSAGE =
+  "Your changes were saved, but the live values weren't taken: the editor moved to another language or document, or someone else is editing it now. Publish again to be offered them.";
+
+/**
+ * A form the recovery stores and holds, recording what it was asked. Its Save
+ * answers `saved` (stored, unless a test says otherwise), and the take runs
+ * only once that Save has stored, as the editor's own hold does.
+ */
 function formHolding(
-  values: Record<string, unknown>,
-  order: string[] = []
+  _values: Record<string, unknown>,
+  order: string[] = [],
+  saved: () => DocumentActionOutcome = () => ({ ok: true })
 ): RefusedForm {
   return {
-    pendingChangeNow: vi.fn(async () => {
-      order.push("read");
-      return values;
-    }),
-    saved: vi.fn(() => {
-      order.push("saved");
-    }),
-    // A mock of the generic gate, typed as the port's: the mock itself only
-    // sees `unknown`, which is all the recovery hands back through it.
-    run: vi.fn(async (work: () => Promise<unknown>) => {
+    mayWrite: vi.fn(() => true),
+    recover: vi.fn(async (takeAfter: () => Promise<void>) => {
       order.push("hold");
       try {
-        return await work();
+        const outcome = saved();
+        order.push("save");
+        if (!outcome.ok) throw new RecoverySaveRefused(outcome);
+        await takeAfter();
       } finally {
         order.push("release");
       }
-    }) as unknown as RefusedForm["run"],
+    }),
   };
 }
 
@@ -144,12 +139,8 @@ describe("useSharedFieldsRecovery", () => {
     });
   });
 
-  it("saves what the form holds when the action is taken, then takes the live values, shows them, and reloads", async () => {
+  it("stores the form with the editor's own Save, then takes the live values and reloads, all inside its hold", async () => {
     const order: string[] = [];
-    const save = vi.fn((values: unknown) => {
-      order.push("save");
-      return values;
-    });
     take.mockImplementation(async () => {
       order.push("take");
       return {
@@ -158,120 +149,69 @@ describe("useSharedFieldsRecovery", () => {
       };
     });
     const onTaken = vi.fn(() => order.push("reload"));
-    const { recover } = renderRecovery({ onTaken, save });
+    const { recover } = renderRecovery({ onTaken });
     recover(
       refusal({
         reason: "shared-fields-out-of-date",
         fields: ["articleCount"],
       }),
-      formHolding({ articleCount: 3, bio: "Typed after the refusal" }, order)
+      formHolding({}, order)
     );
 
-    // Nothing is read until the action is taken: the form may change first.
+    // Nothing runs until the action is taken: the form may change first.
     expect(order).toEqual([]);
     actionOf(toast.error.mock.calls[0])();
-    await vi.waitFor(() => expect(onTaken).toHaveBeenCalled());
+    await vi.waitFor(() => expect(order).toContain("release"));
 
-    expect(order).toEqual([
-      "hold",
-      "read",
-      "save",
-      "saved",
-      "take",
-      "reload",
-      "release",
-    ]);
-    expect(save).toHaveBeenCalledWith({
-      articleCount: 3,
-      bio: "Typed after the refusal",
-    });
+    expect(order).toEqual(["hold", "save", "take", "reload", "release"]);
     expect(take).toHaveBeenCalledWith(
       { kind: "collection", slug: "authors", entryId: "e1" },
       "es"
     );
+    // The Save says what it stored on its own toast; this one says what
+    // was taken.
     expect(toast.success).toHaveBeenCalledWith(
       "Spanish now uses the live Article Count. Its earlier value is in History."
-    );
-  });
-
-  it("says on the success toast when a hook after the recovery's save failed", async () => {
-    take.mockResolvedValue({
-      message: "ok",
-      item: { taken: ["articleCount"], outOfDate: [] },
-    });
-    const onTaken = vi.fn();
-    const failed: HookWarning = {
-      severity: "failure",
-      phase: "afterUpdate",
-      collection: "authors",
-      code: "INTERNAL_ERROR",
-      message: "The search index wasn't updated.",
-    };
-    const { recover } = renderRecovery({
-      onTaken,
-      save: () => ({ item: { id: "e1" }, warnings: [failed] }),
-    });
-    recover(
-      refusal({
-        reason: "shared-fields-out-of-date",
-        fields: ["articleCount"],
-      }),
-      formHolding({ articleCount: 3 })
-    );
-
-    actionOf(toast.error.mock.calls[0])();
-    await vi.waitFor(() => expect(onTaken).toHaveBeenCalled());
-
-    // The take is reported, and so is what failed after the save, on the
-    // one toast rather than as a plain success.
-    expect(toast.success).not.toHaveBeenCalled();
-    expect(toast.warning).toHaveBeenCalledWith(
-      "Spanish now uses the live Article Count. Its earlier value is in History, but 1 follow-up action failed",
-      expect.objectContaining({ duration: 10_000 })
     );
   });
 
   it.each([
     [
       "succeeds",
-      () => undefined,
-      ["hold", "taking", "read", "saved", "taken", "reload", "release", "done"],
+      () => ({
+        message: "ok",
+        item: { taken: ["articleCount"], outOfDate: [] },
+      }),
+      ["hold", "save", "taking", "taken", "reload", "release", "done"],
     ],
     [
       "fails",
       () => Promise.reject(new Error("offline")),
-      ["hold", "taking", "read", "release", "failed", "done"],
+      ["hold", "save", "taking", "release", "failed", "done"],
     ],
   ])(
-    "says the live values are being taken while the editor is held, and stops once it %s",
-    async (_outcome, save, expected) => {
-      take.mockResolvedValue({
-        message: "ok",
-        item: { taken: ["articleCount"], outOfDate: [] },
-      });
+    "says the live values are being taken while it takes them, and stops once the take %s",
+    async (_outcome, answer, expected) => {
+      take.mockImplementation(answer);
       const order: string[] = [];
       toast.loading.mockImplementation(() => order.push("taking"));
       toast.success.mockImplementation(() => order.push("taken"));
       toast.dismiss.mockImplementation(() => order.push("done"));
       const { recover } = renderRecovery({
         onTaken: () => order.push("reload"),
-        save,
       });
       recover(
         refusal({
           reason: "shared-fields-out-of-date",
           fields: ["articleCount"],
         }),
-        formHolding({ articleCount: 3 }, order)
+        formHolding({}, order)
       );
       toast.error.mockImplementation(() => order.push("failed"));
 
       actionOf(toast.error.mock.calls[0])();
       await vi.waitFor(() => expect(order).toContain("done"));
 
-      // Said from the moment the editor is held, and told once the save and
-      // the take have committed; taken down once the hold is released,
-      // however it ended.
       expect(order).toEqual(expected);
       const shown = (toast.loading.mock.calls[0] as unknown[])[1] as {
         id: string;
@@ -280,31 +220,39 @@ describe("useSharedFieldsRecovery", () => {
     }
   );
 
-  it("doesn't take the live values when the form's values can't be saved", async () => {
-    const { recover } = renderRecovery({
-      save: () => Promise.reject(new Error("offline")),
-    });
-    recover(
-      refusal({
-        reason: "shared-fields-out-of-date",
-        fields: ["articleCount"],
-      }),
-      formHolding({ articleCount: 3 })
-    );
+  it.each([
+    ["failed", "The entry couldn't be saved."],
+    ["invalid", "Some fields need attention before this can be saved."],
+  ] as const)(
+    "takes nothing when the Save %s, which says why itself",
+    async (reason, message) => {
+      const { recover } = renderRecovery();
+      const form = formHolding({}, [], () => ({ ok: false, reason, message }));
+      recover(
+        refusal({
+          reason: "shared-fields-out-of-date",
+          fields: ["articleCount"],
+        }),
+        form
+      );
 
-    actionOf(toast.error.mock.calls[0])();
-    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+      actionOf(toast.error.mock.calls[0])();
+      await vi.waitFor(() => expect(form.recover).toHaveBeenCalled());
+      await new Promise(resolve => setTimeout(resolve, 20));
 
-    expect(take).not.toHaveBeenCalled();
-  });
+      expect(take).not.toHaveBeenCalled();
+      // Only the refusal itself: the Save's own message is its to give.
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    }
+  );
 
-  it("doesn't save or take when the form fails its own checks", async () => {
-    const save = vi.fn();
-    const { recover } = renderRecovery({ save });
-    const form = formHolding({});
-    vi.mocked(form.pendingChangeNow).mockRejectedValue(
-      new Error("Some fields need attention before this can be saved.")
-    );
+  it("says why when the Save was refused before it ran, and takes nothing", async () => {
+    const { recover } = renderRecovery();
+    const form = formHolding({}, [], () => ({
+      ok: false,
+      reason: "busy",
+      message: "A save is already in progress.",
+    }));
     recover(
       refusal({
         reason: "shared-fields-out-of-date",
@@ -314,9 +262,31 @@ describe("useSharedFieldsRecovery", () => {
     );
 
     actionOf(toast.error.mock.calls[0])();
-    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("A save is already in progress.")
+    );
+    expect(take).not.toHaveBeenCalled();
+  });
 
-    expect(save).not.toHaveBeenCalled();
+  it("takes nothing once the document changed hands during the Save", async () => {
+    const { recover } = renderRecovery();
+    // A colleague takes the document over while the Save is in flight.
+    const form = formHolding({}, [], () => {
+      vi.mocked(form.mayWrite).mockReturnValue(false);
+      return { ok: true };
+    });
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(NOT_TAKEN_MESSAGE)
+    );
     expect(take).not.toHaveBeenCalled();
   });
 
@@ -346,7 +316,6 @@ describe("useSharedFieldsRecovery", () => {
           scope: { kind: "collection", slug: "authors", entryId: "e1" },
           locale,
           fields: [{ name: "articleCount", label: "Article Count" }],
-          save: async () => undefined,
           onTaken: async () => undefined,
         }),
       { initialProps: { locale: "es" } }
@@ -383,7 +352,6 @@ describe("useSharedFieldsRecovery", () => {
           scope: { kind: "collection", slug: "authors", entryId: "e1" },
           locale,
           fields: [{ name: "articleCount", label: "Article Count" }],
-          save: async () => undefined,
           onTaken,
         }),
       { initialProps: { locale: "es" } }
@@ -419,7 +387,7 @@ describe("useSharedFieldsRecovery", () => {
     );
   });
 
-  it("runs the save, the take and the reload inside the form's write gate, held until the reload finishes", async () => {
+  it("runs the Save, the take and the reload inside the form's hold, held until the reload finishes", async () => {
     const order: string[] = [];
     take.mockImplementation(async () => {
       order.push("take");
@@ -439,13 +407,7 @@ describe("useSharedFieldsRecovery", () => {
           };
         })
     );
-    const { recover } = renderRecovery({
-      onTaken,
-      save: values => {
-        order.push("save");
-        return values;
-      },
-    });
+    const { recover } = renderRecovery({ onTaken });
     recover(
       refusal({
         reason: "shared-fields-out-of-date",
@@ -464,9 +426,7 @@ describe("useSharedFieldsRecovery", () => {
 
     expect(order).toEqual([
       "hold",
-      "read",
       "save",
-      "saved",
       "take",
       "reload",
       "reloaded",
@@ -475,10 +435,9 @@ describe("useSharedFieldsRecovery", () => {
   });
 
   it("saves and takes nothing when the form won't run it, its writes being held", async () => {
-    const save = vi.fn();
-    const { recover } = renderRecovery({ save });
+    const { recover } = renderRecovery();
     const form = formHolding({ articleCount: 3 });
-    vi.mocked(form.run).mockRejectedValue(
+    vi.mocked(form.recover).mockRejectedValue(
       new Error("This document can't be saved right now.")
     );
     recover(
@@ -492,7 +451,6 @@ describe("useSharedFieldsRecovery", () => {
     actionOf(toast.error.mock.calls[0])();
     await vi.waitFor(() => expect(toast.error).toHaveBeenCalledTimes(2));
 
-    expect(save).not.toHaveBeenCalled();
     expect(take).not.toHaveBeenCalled();
   });
 
@@ -544,26 +502,23 @@ describe("takenMessage", () => {
     ["another language", { entryId: "e1", locale: "en" }],
     ["another document", { entryId: "e2", locale: "es" }],
   ])(
-    "saves and takes nothing when the editor moves to %s before the form is read",
+    "takes nothing when the editor moves to %s while the Save runs",
     async (_where, movedTo) => {
-      const save = vi.fn();
       const rendered = renderHook(
         ({ entryId, locale }: { entryId: string; locale: string }) =>
           useSharedFieldsRecovery({
             scope: { kind: "collection", slug: "authors", entryId },
             locale,
             fields: [{ name: "articleCount", label: "Article Count" }],
-            save: async values => save(values),
             onTaken: async () => undefined,
           }),
         { initialProps: { entryId: "e1", locale: "es" } }
       );
-      const form = formHolding({ articleCount: 3 });
-      // The editor moves while the recovery waits to read: the shared form
-      // now holds the other language's or document's values.
-      form.pendingChangeNow = vi.fn(async () => {
+      // The editor moves while its Save runs: what is on screen now is the
+      // other language or document, not the change this refusal was for.
+      const form = formHolding({}, [], () => {
         rendered.rerender(movedTo);
-        return { articleCount: 99 };
+        return { ok: true };
       });
       rendered.result.current(
         refusal({
@@ -575,13 +530,9 @@ describe("takenMessage", () => {
 
       actionOf(toast.error.mock.calls[0])();
       await vi.waitFor(() =>
-        expect(toast.error).toHaveBeenCalledWith(
-          "Nothing was taken: the editor moved to another language or document. Publish again from the one you meant to take them into."
-        )
+        expect(toast.error).toHaveBeenCalledWith(NOT_TAKEN_MESSAGE)
       );
-      expect(save).not.toHaveBeenCalled();
       expect(take).not.toHaveBeenCalled();
-      expect(form.saved).not.toHaveBeenCalled();
     }
   );
 });
@@ -682,7 +633,6 @@ describe("a recovery whose reload fails", () => {
           scope: { kind: "collection", slug: "authors", entryId: "e1" },
           locale,
           fields: [{ name: "articleCount", label: "Article Count" }],
-          save: async () => undefined,
           onTaken: () => Promise.reject(new Error("offline")),
         }),
       { initialProps: { locale: "es" } }
@@ -729,7 +679,6 @@ describe("a recovery whose reload fails", () => {
               : { kind: "collection", slug: "authors", entryId },
           locale,
           fields: [{ name: "articleCount", label: "Article Count" }],
-          save: async () => undefined,
           onTaken: reload,
         }),
       {
@@ -860,17 +809,17 @@ describe("a recovery whose reload fails", () => {
     // A form whose gate admits one recovery at a time, as the editor's does.
     let busy = false;
     const form = formHolding({ articleCount: 3 }, order);
-    form.run = (async (work: () => Promise<unknown>) => {
+    form.recover = async (takeAfter: () => Promise<void>) => {
       if (busy) throw new Error("A save is already in progress.");
       busy = true;
       order.push("hold");
       try {
-        return await work();
+        await takeAfter();
       } finally {
         busy = false;
         order.push("release");
       }
-    }) as RefusedForm["run"];
+    };
     recover(
       refusal({
         reason: "shared-fields-out-of-date",

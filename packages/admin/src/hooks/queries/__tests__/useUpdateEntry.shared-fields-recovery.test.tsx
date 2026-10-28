@@ -65,28 +65,31 @@ beforeEach(() => {
 });
 
 describe("a publish refused over out-of-date shared fields", () => {
-  it("saves what the form holds when the action is taken, not the refused request", async () => {
+  it("leaves the save to the editor's form, then takes the live values into this entry's change", async () => {
     const client = new QueryClient({
       defaultOptions: { mutations: { retry: false } },
     });
-    update
-      .mockRejectedValueOnce(outOfDate(["articleCount"]))
-      .mockResolvedValue({ item: { id: "e1" } });
+    update.mockRejectedValueOnce(outOfDate(["articleCount"]));
     take.mockResolvedValue({
       message: "ok",
       item: { taken: ["articleCount"], outOfDate: [] },
     });
-    // What the form holds by the time the action is taken: the author went on
-    // editing the biography after the refusal.
+    const order: string[] = [];
+    // The editor's form: its own Save stores the change, then the take runs.
     const form = {
-      pendingChangeNow: vi.fn(async () => ({
-        articleCount: 3,
-        bio: "Typed after the refusal",
-      })),
-      saved: vi.fn(),
-      // The editor's write gate, open: the work runs as handed over.
-      run: <T,>(work: () => Promise<T>) => work(),
+      mayWrite: vi.fn(() => true),
+      recover: vi.fn(async (takeAfter: () => Promise<void>) => {
+        order.push("editor's Save");
+        await takeAfter();
+      }),
     };
+    take.mockImplementation(async () => {
+      order.push("take");
+      return {
+        message: "ok",
+        item: { taken: ["articleCount"], outOfDate: [] },
+      };
+    });
     const { result } = renderHook(
       () =>
         useUpdateEntry({
@@ -111,15 +114,14 @@ describe("a publish refused over out-of-date shared fields", () => {
       { action: { onClick: () => void } },
     ];
     options.action.onClick();
-    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(take).toHaveBeenCalled());
 
-    expect(update.mock.calls[1]).toEqual([
-      "authors",
-      "e1",
-      { articleCount: 3, bio: "Typed after the refusal" },
-      { locale: "es", fallbackLocale: undefined },
-    ]);
-    // And the editor hears that its form was saved.
-    await vi.waitFor(() => expect(form.saved).toHaveBeenCalledTimes(1));
+    expect(order).toEqual(["editor's Save", "take"]);
+    expect(take).toHaveBeenCalledWith(
+      { kind: "collection", slug: "authors", entryId: "e1" },
+      "es"
+    );
+    // The refused publish is the only write it made itself.
+    expect(update).toHaveBeenCalledTimes(1);
   });
 });

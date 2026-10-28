@@ -13,7 +13,14 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type RefObject,
+  useMemo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -38,6 +45,7 @@ import {
   type DeleteOutcome,
   type SubmitOutcome,
 } from "./submit-outcome";
+import type { DocumentActionOutcome } from "./useDocumentActionBindings";
 import { useRefusedForm } from "./useRefusedForm";
 
 // ============================================================================
@@ -170,16 +178,18 @@ export interface UseEntryFormOptions {
   readDraft?: boolean;
   /**
    * Whether the host holds the document's writes now (it is someone else's,
-   * or a past version is on screen). The host gates its own saves; this is
-   * asked when a refused publish's recovery runs, which writes too. Absent,
-   * writes are never held.
+   * or a past version is on screen). Asked immediately before every write:
+   * a save's, after its validation, and a refused publish's recovery's.
+   * Absent, writes are never held.
    */
   writesHeld?: () => boolean;
   /**
-   * Called when a refused publish's recovery has saved the form as the
-   * pending change, which the host counts as one of its own saves.
+   * The host's Save of the pending change that never publishes, as its Save
+   * control runs it, for a refused publish's recovery to store the form with.
    */
-  onRecoverySaved?: () => void;
+  saveWithoutPublishing?: RefObject<
+    (() => Promise<DocumentActionOutcome>) | undefined
+  >;
 }
 
 /**
@@ -472,8 +482,8 @@ function storedAfterSave(
 
 /** A host that holds nothing: writes are never held. */
 const writesNeverHeld = () => false;
-/** A host that doesn't count saves: a recovery's save goes uncounted. */
-const noRecoveryCount = () => {};
+/** A host with no Save to offer a recovery. */
+const noSaveWithoutPublishing: RefObject<undefined> = { current: undefined };
 
 export function useEntryForm({
   collection,
@@ -486,7 +496,7 @@ export function useEntryForm({
   locale,
   readDraft,
   writesHeld = writesNeverHeld,
-  onRecoverySaved = noRecoveryCount,
+  saveWithoutPublishing = noSaveWithoutPublishing,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -556,13 +566,6 @@ export function useEntryForm({
     inFlight: false,
   });
 
-  // Password fields submit "" to mean "keep the stored hash", so they are
-  // exempt from the blank-to-null normalization applied on submit.
-  const blankPasswordFields = useMemo(
-    () => passwordFieldNames(fields),
-    [fields]
-  );
-
   //
   // The synchronous half of the submit guard. `isSubmitting` is render state:
   // it publishes one render behind the mutation, so two submissions in the
@@ -577,23 +580,15 @@ export function useEntryForm({
   const latestDefaults = useRef(defaultValues);
   latestDefaults.current = defaultValues;
 
-  // The form as a refused publish's way out reaches it: saved as the pending
-  // change the way a status-less save sends it, then started afresh from the
-  // entry that carries the live values it takes.
-  const { refusedForm, recovering } = useRefusedForm(
-    form,
-    values =>
-      withoutPlaceholders(
-        fields,
-        mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
-      ),
-    {
-      writesHeld,
-      latch: submissionLatch,
-      resetToDocument: () => form.reset(latestDefaults.current),
-      saved: onRecoverySaved,
-    }
-  );
+  // The form as a refused publish's way out reaches it: stored with the
+  // host's own Save, then started afresh from the entry that carries the
+  // live values it takes.
+  const { refusedForm, recovering } = useRefusedForm({
+    writesHeld,
+    latch: submissionLatch,
+    saveWithoutPublishing,
+    resetToDocument: () => form.reset(latestDefaults.current),
+  });
 
   useEffect(() => {
     if (!entry || mode !== "edit") return;
@@ -634,6 +629,13 @@ export function useEntryForm({
     translationStatus: asksTranslationStatus,
     refusedForm,
   });
+
+  // Password fields submit "" to mean "keep the stored hash", so they are
+  // exempt from the blank-to-null normalization applied on submit.
+  const blankPasswordFields = useMemo(
+    () => passwordFieldNames(fields),
+    [fields]
+  );
 
   const deleteMutation = useDeleteEntry({
     collectionSlug: collection.name,
@@ -688,6 +690,9 @@ export function useEntryForm({
         const outcome = await submitDocument({
           form,
           event: e,
+          // Asked again once validation is done, immediately before the
+          // write: the document can change hands while it runs.
+          mayWrite: () => !writesHeld(),
           // Why: intent → payload mapping is the core PR-3 bug fix —
           // extracted to mapIntentToPayload above so the contract is
           // unit-testable without renderHook plumbing.
@@ -753,6 +758,7 @@ export function useEntryForm({
       onError,
       blankPasswordFields,
       fields,
+      writesHeld,
     ]
   );
 

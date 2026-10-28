@@ -15,7 +15,14 @@
  *
  * @module components/features/entries/EntryForm/DocumentActionsContext
  */
-import { createContext, useContext, type ReactNode, type JSX } from "react";
+import {
+  createContext,
+  useContext,
+  useLayoutEffect,
+  type JSX,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 
@@ -64,6 +71,26 @@ export function DocumentActionsHost({
  *
  * Rendered inside `DocumentActionsHost`, which is where the action lives.
  */
+/**
+ * Hands the host's Save that never publishes to the editor rendering the
+ * host, which sits above it: a refused publish's way out stores the form
+ * with it, as the Save control would, rather than with a write of its own.
+ *
+ * Rendered inside `DocumentActionsHost`, which is where the Save lives.
+ */
+export function SaveWithoutPublishingBridge({
+  into,
+}: {
+  into: RefObject<DocumentActionBindings["saveWithoutPublishing"] | undefined>;
+}): null {
+  const { saveWithoutPublishing } = useHostedDocumentActions();
+  // After every commit, so the editor runs the Save of the render on screen.
+  useLayoutEffect(() => {
+    into.current = saveWithoutPublishing;
+  });
+  return null;
+}
+
 export function DocumentSaveShortcuts({
   onCancel,
   hasUnsavedWork,

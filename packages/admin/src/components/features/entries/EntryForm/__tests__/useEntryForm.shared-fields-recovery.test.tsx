@@ -2,21 +2,21 @@
  * What the entry form gives the recovery from a publish refused over shared
  * values someone else published since.
  *
- * The recovery saves the pending change and then takes the live values into
- * it. What it saves has to be the form as it is when the action is taken,
- * since the author may have kept editing. And once the live values are taken
- * the form has to show them: the reloaded entry has the same identity as the
- * one on screen, so an ordinary reset keeps the author's unsaved value for the
- * field, the stale one, and the next Publish would send it and put the old
- * value back live.
+ * The recovery stores the form with the editor's own Save and then takes the
+ * live values into the pending change. What it stores has to be the form as it
+ * is when the action is taken, since the author may have kept editing. And once
+ * the live values are taken the form has to show them: the reloaded entry has
+ * the same identity as the one on screen, so an ordinary reset keeps the
+ * author's unsaved value for the field, the stale one, and the next Publish
+ * would send it and put the old value back live.
  */
 import { renderHook } from "@testing-library/react";
-import { useEffect } from "react";
-import { flushSync } from "react-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { act } from "@admin/__tests__/utils";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
+
+import type { DocumentActionOutcome } from "../useDocumentActionBindings";
 
 const { update, updateOptions } = vi.hoisted(() => ({
   update: vi.fn(),
@@ -63,19 +63,37 @@ const stored = {
   updatedAt: "2026-10-22T09:00:00.000Z",
 };
 
+beforeEach(() => {
+  update.mockResolvedValue({ item: stored });
+});
+
 afterEach(() => {
   update.mockReset();
   updateOptions.current = undefined;
 });
 
+/** The form's recovery, as the editor hands it to its update mutation. */
+function recovery(): RefusedForm {
+  const refusedForm = updateOptions.current?.refusedForm;
+  if (!refusedForm) throw new Error("The editor handed no recovery.");
+  return refusedForm;
+}
+
+/**
+ * The entry form, with the Save its host offers a recovery: the form's own
+ * submit of the pending change, as the host's Save runs it.
+ */
 function render(options: { writesHeld?: () => boolean } = {}) {
-  return renderHook(
+  const save: { current: (() => Promise<DocumentActionOutcome>) | undefined } =
+    { current: undefined };
+  const rendered = renderHook(
     ({ entry, locale }: { entry: Record<string, unknown>; locale?: string }) =>
       useEntryForm({
         collection,
         entry: entry as never,
         mode: "edit",
         ...(locale === undefined ? {} : { locale }),
+        saveWithoutPublishing: save,
         ...options,
       }),
     {
@@ -85,6 +103,9 @@ function render(options: { writesHeld?: () => boolean } = {}) {
       },
     }
   );
+  save.current = () =>
+    rendered.result.current.handleSubmit(undefined, "save-working-draft");
+  return rendered;
 }
 
 /**
@@ -105,7 +126,7 @@ function reloadBrings(
 }
 
 describe("the entry form, for a publish refused over shared values", () => {
-  it("gives the recovery its values as they are when the action is taken", async () => {
+  it("stores the form with the editor's own Save, as it is when the action is taken", async () => {
     const { result } = render();
     act(() => {
       result.current.form.setValue("nickname", "Ada L", { shouldDirty: true });
@@ -116,27 +137,32 @@ describe("the entry form, for a publish refused over shared values", () => {
         shouldDirty: true,
       });
     });
+    const take = vi.fn(async () => undefined);
 
-    const values = await updateOptions.current?.refusedForm?.pendingChangeNow();
+    await act(async () => {
+      await recovery().recover(take);
+    });
 
     // A save of the pending change: no status, so nothing is published.
-    expect(values).toEqual({
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith({
       nickname: "Ada L",
       bio: "Typed after the refusal",
     });
+    expect(take).toHaveBeenCalledTimes(1);
   });
 
   it("starts the form afresh from the reloaded entry, so it shows the live value and publishes it next", async () => {
     const { result, rerender } = render();
     // The refused publish carried a stale nickname; the bio is the author's
-    // own edit. Both are in the pending change the recovery saves.
+    // own edit. Both are in the pending change the recovery's Save stores.
     act(() => {
       result.current.form.setValue("nickname", "Stale", { shouldDirty: true });
       result.current.form.setValue("bio", "Mine", { shouldDirty: true });
     });
 
     let reloaded: Promise<void> | undefined;
-    await updateOptions.current?.refusedForm?.run(async () => {
+    await recovery().recover(async () => {
       // The reloaded entry: the saved change with the live nickname taken
       // into it, at the same version, which an arriving entry alone would
       // treat as unsaved work to keep over.
@@ -157,6 +183,7 @@ describe("the entry form, for a publish refused over shared values", () => {
       expect(result.current.form.formState.isDirty).toBe(false)
     );
 
+    update.mockClear();
     update.mockResolvedValue({ item: { ...stored, nickname: "Live" } });
     await act(async () => {
       await result.current.handleSubmit(undefined, "publish");
@@ -167,14 +194,14 @@ describe("the entry form, for a publish refused over shared values", () => {
       status: "published",
     });
   });
+
   it("won't run the recovery while the host holds the document's writes", async () => {
     render({ writesHeld: () => true });
-    const work = vi.fn(async () => undefined);
+    const take = vi.fn(async () => undefined);
 
-    await expect(
-      updateOptions.current?.refusedForm?.run(work)
-    ).rejects.toThrow();
-    expect(work).not.toHaveBeenCalled();
+    await expect(recovery().recover(take)).rejects.toThrow();
+    expect(update).not.toHaveBeenCalled();
+    expect(take).not.toHaveBeenCalled();
   });
 
   it("won't run the recovery while a save is in flight", async () => {
@@ -191,12 +218,11 @@ describe("the entry form, for a publish refused over shared values", () => {
       saving = result.current.handleSubmit(undefined, "save-working-draft");
     });
     await vi.waitFor(() => expect(update).toHaveBeenCalled());
-    const work = vi.fn(async () => undefined);
+    const take = vi.fn(async () => undefined);
 
-    await expect(
-      updateOptions.current?.refusedForm?.run(work)
-    ).rejects.toThrow();
-    expect(work).not.toHaveBeenCalled();
+    await expect(recovery().recover(take)).rejects.toThrow();
+    expect(take).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       finish({ item: stored });
@@ -204,14 +230,19 @@ describe("the entry form, for a publish refused over shared values", () => {
     });
   });
 
-  it("holds the editor's saves and publishes while the recovery runs", async () => {
+  it("holds the editor's saves and publishes while the recovery takes", async () => {
     const { result } = render();
-    // Made before the recovery starts, which runs its work a task later.
+    // Made before the recovery starts, which takes once its Save is done.
     let done: () => void = () => {};
-    const held = new Promise<void>(resolve => {
+    const taking = new Promise<void>(resolve => {
       done = resolve;
     });
-    const running = updateOptions.current?.refusedForm?.run(() => held);
+    let takeStarted = false;
+    const running = recovery().recover(() => {
+      takeStarted = true;
+      return taking;
+    });
+    await vi.waitFor(() => expect(takeStarted).toBe(true));
 
     let outcome: unknown;
     await act(async () => {
@@ -219,7 +250,8 @@ describe("the entry form, for a publish refused over shared values", () => {
     });
     // A publish now would send the value the take is replacing.
     expect(outcome).toMatchObject({ ok: false, reason: "busy" });
-    expect(update).not.toHaveBeenCalled();
+    // The recovery's own Save, and nothing after it.
+    expect(update).toHaveBeenCalledTimes(1);
 
     done();
     await running;
@@ -229,7 +261,7 @@ describe("the entry form, for a publish refused over shared values", () => {
     const { result, rerender } = render();
     let heldWhenItArrived: boolean | undefined;
     let reloaded: Promise<void> | undefined;
-    await updateOptions.current?.refusedForm?.run(async () => {
+    await recovery().recover(async () => {
       // The reload settles, and the editor is handed the entry a task later,
       // as React Query does: the fields it takes must not be open to typing
       // until it is on screen.
@@ -245,40 +277,6 @@ describe("the entry form, for a publish refused over shared values", () => {
     await vi.waitFor(() => expect(result.current.recovering).toBe(false));
   });
 
-  it("reads the form once the hold is on screen, so what commits as it lands is saved", async () => {
-    // A field that commits its work into the form as it goes read-only, as
-    // an editor that commits on leaving does.
-    const { result } = renderHook(() => {
-      const editor = useEntryForm({
-        collection,
-        entry: stored as never,
-        mode: "edit",
-      });
-      const { recovering, form } = editor;
-      useEffect(() => {
-        if (recovering) {
-          form.setValue("bio", "Committed as the hold landed", {
-            shouldDirty: true,
-          });
-        }
-      }, [recovering, form]);
-      return editor;
-    });
-    const refusedForm = updateOptions.current?.refusedForm;
-    let read: Record<string, unknown> | undefined;
-    let running: Promise<unknown> | undefined;
-    // Rendered at once, as an action's state change is.
-    flushSync(() => {
-      running = refusedForm?.run(async () => {
-        read = await refusedForm.pendingChangeNow();
-      });
-    });
-    await running;
-
-    expect(read).toMatchObject({ bio: "Committed as the hold landed" });
-    await vi.waitFor(() => expect(result.current.recovering).toBe(false));
-  });
-
   it("stays held when a document arrives other than through the recovery's own reload", async () => {
     // A take keeps the document's version, so nothing that merely arrives
     // proves the live values are in it: only the recovery's reload does.
@@ -289,7 +287,7 @@ describe("the entry form, for a publish refused over shared values", () => {
     });
     let running: Promise<unknown> | undefined;
     act(() => {
-      running = updateOptions.current?.refusedForm?.run(() => reload);
+      running = recovery().recover(() => reload);
     });
     act(() => {
       rerender({ entry: { ...stored, _isWorkingDraft: true } });
@@ -311,7 +309,7 @@ describe("the entry form, for a publish refused over shared values", () => {
     // The take changed only fields this author can't view, so the reload is
     // the entry already on screen and the editor is handed nothing new.
     await act(async () => {
-      await updateOptions.current?.refusedForm?.run(async () => {});
+      await recovery().recover(async () => {});
     });
     act(() => {
       result.current.form.setValue("bio", "Typed after the recovery", {
@@ -332,4 +330,28 @@ describe("the entry form, for a publish refused over shared values", () => {
 
     expect(result.current.form.getValues("bio")).toBe("Restored");
   });
+});
+
+describe("the entry form's save, when the entry changes hands while it validates", () => {
+  it.each(["save-working-draft", "publish"] as const)(
+    "stores nothing on %s: the hold is asked again immediately before the write",
+    async intent => {
+      let held = false;
+      const { result } = render({ writesHeld: () => held });
+      act(() => {
+        result.current.form.setValue("bio", "Mine", { shouldDirty: true });
+      });
+
+      let outcome: unknown;
+      await act(async () => {
+        const saving = result.current.handleSubmit(undefined, intent);
+        // A colleague takes the entry over while validation runs.
+        held = true;
+        outcome = await saving;
+      });
+
+      expect(update).not.toHaveBeenCalled();
+      expect(outcome).toMatchObject({ ok: false, reason: "refused" });
+    }
+  );
 });

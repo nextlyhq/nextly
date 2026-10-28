@@ -225,6 +225,13 @@ export interface DocumentActionBindings {
    */
   trackWrite: (label: string, write: Promise<unknown>) => void;
   /**
+   * The Save the document's state calls for, run as its control runs it —
+   * every open edit committed and tracked write settled first — wherever that
+   * Save stores without publishing; absent where it would publish. For a
+   * refused publish's way out, which must never put anything live.
+   */
+  saveWithoutPublishing: (() => Promise<DocumentActionOutcome>) | undefined;
+  /**
    * Whether the document's work is stored, as one value every surface reads,
    * so no two of them can say different things.
    */
@@ -496,20 +503,21 @@ export function useDocumentActionBindings({
     isPublishedEditState,
   });
 
+  // Saving means three different calls depending on where the work lands, a
+  // fact about this host rather than the document: a drafts-enabled published
+  // entry stores a working draft and leaves the live one alone, a
+  // drafts-disabled one re-asserts published, and anything else writes a
+  // draft. The model names ONE verb, `save`; its label says which.
+  const runSave = saveFor({
+    isPublishedEditState,
+    draftsEnabled,
+    onSaveDraft,
+    onSaveChanges,
+    onSaveWorkingDraft,
+  });
   const performers = builtInPerformers({
     hasStatus,
-    // Saving means three different calls depending on where the work lands, a
-    // fact about this host rather than the document: a drafts-enabled
-    // published entry stores a working draft and leaves the live one alone, a
-    // drafts-disabled one re-asserts published, and anything else writes a
-    // draft. The model names ONE verb, `save`; its label says which.
-    runSave: saveFor({
-      isPublishedEditState,
-      draftsEnabled,
-      onSaveDraft,
-      onSaveChanges,
-      onSaveWorkingDraft,
-    }),
+    runSave,
     onSubmit,
     onPublish,
     storing,
@@ -574,6 +582,11 @@ export function useDocumentActionBindings({
     },
     registerBeforeAction: gate.registerBeforeAction,
     trackWrite: gate.trackWrite,
+    saveWithoutPublishing: storingWithoutPublishing(
+      hasStatus,
+      saveWithoutPublishing(runSave, onSaveChanges),
+      storing
+    ),
     saveState,
     lastStoredAt: storedAt(gate.lastStore),
   };
@@ -669,6 +682,30 @@ function saveFor(host: {
 }): StoringHandler | undefined {
   if (!host.isPublishedEditState) return host.onSaveDraft;
   return host.draftsEnabled ? host.onSaveWorkingDraft : host.onSaveChanges;
+}
+
+/**
+ * The Save the document's state calls for, unless that Save publishes: a
+ * drafts-disabled published document's Save re-asserts it live.
+ */
+export function saveWithoutPublishing(
+  runSave: StoringHandler | undefined,
+  onSaveChanges: StoringHandler | undefined
+): StoringHandler | undefined {
+  return runSave === onSaveChanges ? undefined : runSave;
+}
+
+/**
+ * That Save as a storing action, where the document has a status to keep: a
+ * document without one has no Save that leaves it unpublished.
+ */
+function storingWithoutPublishing(
+  hasStatus: boolean,
+  save: StoringHandler | undefined,
+  storing: StoringGate["storing"]
+): (() => Promise<DocumentActionOutcome>) | undefined {
+  if (!hasStatus || save === undefined) return undefined;
+  return storing("save", () => stored(save));
 }
 
 /** `perform` when the action is offered here, otherwise nothing. */

@@ -1,9 +1,10 @@
 /**
  * A refused publish's recovery writes to the entry's pending change, so the
- * entry editor runs it through the same gate as its own saves: while another
- * author holds the entry the recovery is refused before it saves or takes
- * anything, though its toast may still be on screen from before. While it
- * runs, the entry's fields are read-only, so nothing typed can race it.
+ * entry editor runs it through the same gate as its own saves, and stores the
+ * form with its own Save: while another author holds the entry the recovery is
+ * refused before it saves or takes anything, though its toast may still be on
+ * screen from before. While it runs, the entry's fields are read-only, so
+ * nothing typed can race it.
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -78,6 +79,8 @@ const collection = {
   name: "pages",
   label: "Pages",
   status: true,
+  // A published entry's Save keeps its change pending rather than live.
+  draftsEnabled: true,
   fields: [
     { name: "title", type: "text", label: "Title" },
     { name: "summary", type: "text", label: "Summary" },
@@ -101,6 +104,7 @@ function lockedBy(status: "held-by-me" | "held-by-other") {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  update.mockResolvedValue({ item: entry });
   updateOptions.current = undefined;
   autosaveOffer.current = null;
 });
@@ -118,9 +122,10 @@ describe("the entry editor's recovery from a refused publish", () => {
     const work = vi.fn(async () => undefined);
 
     await expect(
-      updateOptions.current?.refusedForm?.run(work)
+      updateOptions.current?.refusedForm?.recover(work)
     ).rejects.toThrow();
     expect(work).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("runs while the entry is this author's", async () => {
@@ -128,21 +133,22 @@ describe("the entry editor's recovery from a refused publish", () => {
     render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
       wrapper: Providers,
     });
-    const work = vi.fn(async () => "ran");
+    const work = vi.fn(async () => undefined);
 
-    await expect(updateOptions.current?.refusedForm?.run(work)).resolves.toBe(
-      "ran"
-    );
+    await act(async () => {
+      await updateOptions.current?.refusedForm?.recover(work);
+    });
+    // Its own Save first, then the take.
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    // Once it succeeds the form is the reloaded entry, with nothing to save.
-    ["succeeds", (finish: Finish) => finish.resolve(), false],
-    // A recovery that fails leaves the edit, and its Save, as they were.
-    ["fails", (finish: Finish) => finish.reject(new Error("offline")), true],
+    ["succeeds", (finish: Finish) => finish.resolve()],
+    ["fails", (finish: Finish) => finish.reject(new Error("offline"))],
   ])(
     "holds the fields read-only while the recovery runs, and gives them back once it %s",
-    async (_outcome, settle, saveOfferedAfter) => {
+    async (_outcome, settle) => {
       lockedBy("held-by-me");
       render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
         wrapper: Providers,
@@ -163,11 +169,20 @@ describe("the entry editor's recovery from a refused publish", () => {
       // handled here, since it may be rejected before then.
       held.catch(() => undefined);
       let running: Promise<unknown> | undefined;
+      let taking = false;
       act(() => {
         running = updateOptions.current?.refusedForm
-          ?.run(() => held)
+          ?.recover(() => {
+            taking = true;
+            return held;
+          })
           .catch(() => undefined);
       });
+      // Its Save has stored the edit, and the take is under way.
+      await act(async () => {
+        await vi.waitFor(() => expect(taking).toBe(true));
+      });
+      expect(update).toHaveBeenCalledTimes(1);
 
       // Read-only, not disabled, so a field keeps focus: the title too.
       expect(summary).toHaveAttribute("readonly");
@@ -189,34 +204,40 @@ describe("the entry editor's recovery from a refused publish", () => {
       expect(summary).not.toHaveAttribute("readonly");
       expect(summary.closest("form")).not.toHaveAttribute("aria-busy");
       expect(title).not.toHaveAttribute("readonly");
-      expect(writeControls().some(control => !control.disabled)).toBe(
-        saveOfferedAfter
-      );
     }
   );
 
   it("withholds an autosave recovery point while the recovery runs", async () => {
     // Restoring one writes into the form the recovery holds.
     autosaveOffer.current = { savedAt: new Date(), snapshot: {} };
+    // Its Save fails, so nothing is stored that would withdraw the offer for
+    // good: only the hold keeps it away.
+    let failSave: () => void = () => {};
+    update.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          failSave = () => reject(new Error("offline"));
+        })
+    );
     lockedBy("held-by-me");
     render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
       wrapper: Providers,
     });
     expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
 
-    // Made before the recovery starts, which runs its work a task later.
-    let done: () => void = () => {};
-    const held = new Promise<void>(resolve => {
-      done = resolve;
-    });
     let running: Promise<unknown> | undefined;
     act(() => {
-      running = updateOptions.current?.refusedForm?.run(() => held);
+      running = updateOptions.current?.refusedForm
+        ?.recover(async () => undefined)
+        .catch(() => undefined);
+    });
+    await act(async () => {
+      await vi.waitFor(() => expect(update).toHaveBeenCalled());
     });
     expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
 
     await act(async () => {
-      done();
+      failSave();
       await running;
     });
     expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
@@ -279,11 +300,11 @@ describe("the entry editor's recovery from a refused publish", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toBeTruthy();
 
     await act(async () => {
-      await updateOptions.current?.refusedForm?.run(async () => {
-        updateOptions.current?.refusedForm?.saved();
-      });
+      await updateOptions.current?.refusedForm?.recover(async () => undefined);
     });
 
+    // Its Save stored the change, as any save does, which withdraws it.
+    expect(update).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
   });
 
@@ -300,9 +321,7 @@ describe("the entry editor's recovery from a refused publish", () => {
       );
 
     await act(async () => {
-      await updateOptions.current?.refusedForm?.run(async () => {
-        updateOptions.current?.refusedForm?.saved();
-      });
+      await updateOptions.current?.refusedForm?.recover(async () => undefined);
     });
 
     // The same form element, never remounted, and the claim asked for on
@@ -310,6 +329,112 @@ describe("the entry editor's recovery from a refused publish", () => {
     expect(container.querySelector("form")).toBe(formBefore);
     expect(claims().every(Boolean)).toBe(true);
   });
+
+  it("never opens a field between its Save resolving and the take, through the real host", async () => {
+    // The Save's write answers when the test says; everything else, the
+    // host's Save, the gate and the hold, is the editor's own.
+    let storeSave: () => void = () => {};
+    update.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          storeSave = () => resolve({ item: entry });
+        })
+    );
+    lockedBy("held-by-me");
+    render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+    const summary = screen.getByRole("textbox", { name: "Summary" });
+    fireEvent.change(summary, { target: { value: "Edited" } });
+
+    let taking = false;
+    let heldAtTake: boolean | undefined;
+    let running: Promise<unknown> | undefined;
+    act(() => {
+      running = updateOptions.current?.refusedForm?.recover(async () => {
+        taking = true;
+        heldAtTake = summary.hasAttribute("readonly");
+      });
+    });
+    await act(async () => {
+      await vi.waitFor(() => expect(update).toHaveBeenCalled());
+    });
+
+    // The Save resolves; from here to the take, task by task as the browser
+    // would run them, the field is never open to typing.
+    const openAt: number[] = [];
+    storeSave();
+    for (let task = 0; task < 20 && !taking; task++) {
+      if (!summary.hasAttribute("readonly")) openAt.push(task);
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+    }
+    await act(async () => {
+      await running;
+    });
+
+    expect(taking).toBe(true);
+    expect(openAt).toEqual([]);
+    expect(heldAtTake).toBe(true);
+  });
+
+  it.each([
+    [
+      "a published entry with drafts: its change kept pending",
+      { draftsEnabled: true },
+      { status: "published" },
+      { stores: true, status: undefined },
+    ],
+    [
+      "an entry not yet published: saved as a draft",
+      { draftsEnabled: true },
+      { status: "draft" },
+      { stores: true, status: "draft" },
+    ],
+    [
+      "a published entry without drafts, whose every Save publishes",
+      { draftsEnabled: false },
+      { status: "published" },
+      { stores: false, status: undefined },
+    ],
+  ])(
+    "never publishes with its Save: %s",
+    async (_case, collectionChange, entryChange, expected) => {
+      lockedBy("held-by-me");
+      const thisCollection = { ...(collection as object), ...collectionChange };
+      const thisEntry = { ...(entry as object), ...entryChange };
+      render(
+        <EntryForm
+          collection={thisCollection as never}
+          entry={thisEntry as never}
+          mode="edit"
+        />,
+        { wrapper: Providers }
+      );
+      fireEvent.change(screen.getByRole("textbox", { name: "Summary" }), {
+        target: { value: "Edited" },
+      });
+      const take = vi.fn(async () => undefined);
+
+      await act(async () => {
+        await updateOptions.current?.refusedForm
+          ?.recover(take)
+          .catch(() => undefined);
+      });
+
+      if (expected.stores) {
+        expect(update).toHaveBeenCalledTimes(1);
+        const [payload] = update.mock.calls[0] as [Record<string, unknown>];
+        expect(payload.status).toBe(expected.status);
+        expect(take).toHaveBeenCalledTimes(1);
+      } else {
+        // Nothing stored, nothing taken: there is no Save of it to use.
+        expect(update).not.toHaveBeenCalled();
+        expect(take).not.toHaveBeenCalled();
+      }
+    }
+  );
 });
 
 /** The document's Save and Publish controls, wherever they are drawn. */

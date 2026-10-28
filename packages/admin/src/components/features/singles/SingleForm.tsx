@@ -35,6 +35,7 @@ import type { ContributedAction } from "@admin/components/features/entries/Entry
 import {
   DocumentActionsHost,
   DocumentSaveShortcuts,
+  SaveWithoutPublishingBridge,
   SaveActionFormProvider,
 } from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
 import { DocumentLockBanner } from "@admin/components/features/entries/EntryForm/DocumentLockBanner";
@@ -64,6 +65,7 @@ import {
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
 import {
   storingHandlers,
+  type DocumentActionBindings,
   type DocumentActionBindingsInput,
 } from "@admin/components/features/entries/EntryForm/useDocumentActionBindings";
 import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
@@ -565,28 +567,21 @@ export function SingleForm({
   // the version on screen are known; read when a recovery runs.
   const writesHeldNow = useRef(false);
 
-  // How many times this form has saved: see the preview pane below. A
-  // refused publish's recovery saves the form too, and counts.
-  const [savedCount, setSavedCount] = useState(0);
+  // The Single's Save that never publishes, handed up from inside its
+  // document's actions, where the Save lives.
+  const saveWithoutPublishing = useRef<
+    DocumentActionBindings["saveWithoutPublishing"] | undefined
+  >(undefined);
 
-  // The form as a refused publish's way out reaches it: saved as the pending
-  // change the way a status-less save sends it, run inside this form's own
-  // write gate, then started afresh from the Single that carries the live
-  // values it takes.
-  const { refusedForm, recovering } = useRefusedForm(
-    form,
-    values =>
-      withoutPlaceholders(
-        schema.fields,
-        mapIntentToPayload(values, "save-working-draft", blankPasswordFields)
-      ),
-    {
-      writesHeld: () => writesHeldNow.current,
-      latch: submissionLatch,
-      resetToDocument: () => form.reset(defaultValuesRef.current),
-      saved: () => setSavedCount(n => n + 1),
-    }
-  );
+  // The form as a refused publish's way out reaches it: stored with the
+  // Single's own Save, run inside this form's own write gate, then started
+  // afresh from the Single that carries the live values it takes.
+  const { refusedForm, recovering } = useRefusedForm({
+    writesHeld: () => writesHeldNow.current,
+    latch: submissionLatch,
+    saveWithoutPublishing,
+    resetToDocument: () => form.reset(defaultValuesRef.current),
+  });
 
   useEffect(() => {
     if (!document) return;
@@ -627,7 +622,7 @@ export function SingleForm({
    * both stand still while its content changes underneath them. Counting saves
    * is the only signal to that write available on this side of the wire.
    */
-  // `savedCount` itself is declared above, with the recovery that counts too.
+  const [savedCount, setSavedCount] = useState(0);
 
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape — same intent set as the collection
@@ -735,13 +730,18 @@ export function SingleForm({
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
       if (editsHeld) return submitHeld;
-      if (busy || submissionLatch.current) return submitBusy;
+      // A save or discard in flight; a refused publish's recovery runs its
+      // Save through here, and holds the rest of the editor itself.
+      if (writePending || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
 
       try {
         return await submitDocument({
           form,
           event: e,
+          // Asked again once validation is done, immediately before the
+          // write: the Single can change hands while it runs.
+          mayWrite: () => !writesHeldNow.current,
           // Why: shared intent→payload helper mirrors the EntryForm
           // contract (see useEntryForm.mapIntentToPayload). Unpublish
           // strips other dirty fields so a confirm-modal misclick can't
@@ -790,7 +790,7 @@ export function SingleForm({
       onSubmit,
       refusedForm,
       blankPasswordFields,
-      busy,
+      writePending,
       editsHeld,
       document.id,
       schema,
@@ -1127,6 +1127,7 @@ export function SingleForm({
                   {/* A document view replaces the form body and nothing around
                       it, as in the entry editor. */}
                   <DocumentActionsHost input={documentActionsInput}>
+                    <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
                     {/* Mod+S runs the Save action, so a Single saves by the
                       same rule the entry editor does. The view owns Escape;
                       the save chords stay. */}

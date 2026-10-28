@@ -66,6 +66,7 @@ import type { ContributedAction } from "./DocumentActionBar";
 import {
   DocumentActionsHost,
   DocumentSaveShortcuts,
+  SaveWithoutPublishingBridge,
   SaveActionFormProvider,
 } from "./DocumentActionsContext";
 import { DocumentLockBanner } from "./DocumentLockBanner";
@@ -94,6 +95,7 @@ import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
 import {
   storingHandlers,
+  type DocumentActionBindings,
   type DocumentActionBindingsInput,
 } from "./useDocumentActionBindings";
 import { useDocumentLockSurface } from "./useDocumentLockSurface";
@@ -334,6 +336,11 @@ export function EntryForm({
   // and the version on screen are known. Read by the form when a refused
   // publish's recovery runs, which writes like the handlers below do.
   const writesHeldNow = useRef(false);
+  // The entry's Save that never publishes, handed up from inside its
+  // document's actions, where the Save lives.
+  const saveWithoutPublishing = useRef<
+    DocumentActionBindings["saveWithoutPublishing"] | undefined
+  >(undefined);
 
   const {
     form,
@@ -351,8 +358,7 @@ export function EntryForm({
     locale,
     readDraft,
     writesHeld: () => writesHeldNow.current,
-    // A refused publish's recovery saves the form too: counted as a save.
-    onRecoverySaved: () => setSavedCount(n => n + 1),
+    saveWithoutPublishing,
     onSuccess: data => {
       // Before the caller's handler, which may navigate away: this is the only
       // point that knows a write landed, and a revision that misses one leaves
@@ -1010,6 +1016,7 @@ export function EntryForm({
                       recovery, the shortcut and the document's actions are
                       this editor's own either way. */}
                   <DocumentActionsHost input={documentActionsInput}>
+                    <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
                     {/* Standalone only: an embedded editor in a modal takes no
                       shortcuts. Mod+S runs the Save action, so the shortcut
                       and the button cannot save by different rules. A

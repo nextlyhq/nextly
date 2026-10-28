@@ -10,13 +10,12 @@
  * holds the value it replaced, and the editor reloads to show the result.
  *
  * The refused request saved nothing, so what the author typed may exist only
- * in the form. Before taking, the form is saved as the pending change (without
- * publishing), as it is when the action is taken rather than as it was
- * refused: the author may have kept editing, and the reload would otherwise
- * replace those edits. Once taken, the form shows the live values of the
- * fields taken: the reloaded document has the same identity as the one on
- * screen, so the editor would otherwise keep the stale value it held, and the
- * next Publish would put it back live.
+ * in the form. Before taking, the editor's own Save stores it as the pending
+ * change (never publishing), as it is when the action is taken: the author
+ * may have kept editing, and the reload would otherwise replace those edits.
+ * Once taken, the form starts afresh from the reloaded document, so it shows
+ * the live values of the fields taken rather than the stale ones the next
+ * Publish would put back live.
  *
  * The toast stays until it is acted on or closed: an action in a toast that
  * vanishes on a timer can be missed. There is one per document and language,
@@ -29,14 +28,11 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 
+import { RecoverySaveRefused } from "@admin/components/features/entries/EntryForm/useRefusedForm";
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { apiErrorMessage, isApiError } from "@admin/lib/api/parseApiError";
 import { fieldLabel, humanizeFieldName } from "@admin/lib/field-label";
-import {
-  type HookWarning,
-  toastMutationResult,
-} from "@admin/lib/mutation-warnings";
 import {
   type TakenLiveValues,
   versionApi,
@@ -91,29 +87,26 @@ interface LabelledFieldConfig {
  */
 export interface RefusedForm {
   /**
-   * The form's values now, as a save of the pending change sends them (no
-   * status, so nothing is published). Rejects when the form's own checks
-   * refuse them, which the form then shows.
+   * Whether the editor may write now: the document is still this author's and
+   * no past version is on screen. Asked immediately before a write.
    */
-  pendingChangeNow: () => Promise<Record<string, unknown>>;
-  /** Tell the editor its form was saved as the pending change. */
-  saved: () => void;
+  mayWrite: () => boolean;
   /**
-   * Run the recovery inside the editor's own write gate: refused, without
-   * running, while the editor's writes are held (the document is someone
-   * else's, or a past version is on screen) or a save is in flight; and
-   * while it runs, the editor's own saves and publishes are held in turn.
-   * Once it has run, the form starts afresh from the document on screen.
+   * Save the form as the pending change with the editor's own Save, never
+   * publishing, then run `take`; refused, without running, while the editor's
+   * writes are held or a save is in flight. The form is held read-only from
+   * the call until it starts afresh from the document on screen, once `take`
+   * has run. Rejects with the Save's outcome when the Save didn't store.
    */
-  run: <T>(work: () => Promise<T>) => Promise<T>;
+  recover: (take: () => Promise<void>) => Promise<void>;
 }
 
 /** How a recovery's hold ends when the editor moves to another document. */
 const LET_GO = new Error("The editor moved to another document.");
 
-/** What a recovery says when the editor moved before it could save. */
-const MOVED_BEFORE_SAVE = new Error(
-  "Nothing was taken: the editor moved to another language or document. Publish again from the one you meant to take them into."
+/** What a recovery says when it may no longer write once its Save is done. */
+const NOT_TAKEN = new Error(
+  "Your changes were saved, but the live values weren't taken: the editor moved to another language or document, or someone else is editing it now. Publish again to be offered them."
 );
 
 /** The refusal toast of one document in one language. */
@@ -129,8 +122,8 @@ function refusalToastId(scope: VersionScope, locale?: string): string {
  * A handler for a failed save or publish: when the failure is the
  * out-of-date refusal, it shows the refusal with "Take the live values" and
  * answers true; otherwise it answers false and the caller reports the error
- * as before. The action saves the form's values, read when it is taken, as
- * the pending change, takes the live values, and has the form show them.
+ * as before. The action saves the form with the editor's own Save, takes the
+ * live values into the pending change, and has the form show them.
  */
 export function useSharedFieldsRecovery(args: {
   /** The document; null while it has no id yet. */
@@ -140,26 +133,18 @@ export function useSharedFieldsRecovery(args: {
   /** The document's fields, for their labels. */
   fields: readonly LabelledFieldConfig[];
   /**
-   * Save values as the pending change, without publishing. Answers with the
-   * warnings of anything that failed after the write, which the success toast
-   * carries, as a save's does.
-   */
-  save: (
-    values: Record<string, unknown>
-  ) => Promise<{ warnings?: readonly HookWarning[] } | undefined>;
-  /**
    * Reload the editor once the live values are taken, answering when the
    * reloaded document has arrived and rejecting when it couldn't be loaded.
    */
   onTaken: () => Promise<unknown>;
 }): (error: unknown, form: RefusedForm) => boolean {
-  const { scope, locale, fields, save, onTaken } = args;
+  const { scope, locale, fields, onTaken } = args;
   const { getLocale, defaultLocale } = useLocalization();
   // A string, so the effect below follows the document's address rather than
   // the scope object, which callers build afresh on every render.
   const toastId = scope ? refusalToastId(scope, locale) : null;
   // The document and language the editor shows at this render, read when a
-  // recovery is about to save: the form it reads is whichever is on screen.
+  // recovery is about to take: its Save stored whichever was on screen.
   const onScreen = useRef(toastId);
   onScreen.current = toastId;
 
@@ -300,49 +285,51 @@ export function useSharedFieldsRecovery(args: {
         });
       };
       const take = async () => {
-        // Whether this call got through the gate and holds the form: a call
-        // the gate refused leaves another's hold and toast alone.
+        // Whether this call got as far as taking: a call the gate refused
+        // leaves another's hold and toast alone.
         let holds = false;
         try {
-          // The whole sequence inside the editor's write gate, through to
-          // the reloaded document: a Publish between the take and the reload
-          // would still send the value the take replaced.
-          await form.run(async () => {
+          // The editor's own Save first, then the take, the reload and the
+          // form starting afresh, all inside the editor's hold: a Publish
+          // between the take and the reload would still send the value the
+          // take replaced.
+          await form.recover(async () => {
             holds = true;
             holding.current.set(taking, {
               document: forDocument,
               letGo: () => undefined,
             });
             toast.loading("Taking the live values…", { id: taking });
-            // Read now, not when refused: edits made since are part of it.
-            const values = await form.pendingChangeNow();
-            // The form is the one on screen: if the editor has moved to
-            // another language or document since the action, what was read
-            // belongs there, not to the change this refusal was for. Checked
-            // with nothing awaited before the save, so no move slips between.
-            if (onScreen.current !== refusedFor) throw MOVED_BEFORE_SAVE;
-            const saved = await save(values);
-            form.saved();
+            // Asked with nothing awaited before the take: the editor still
+            // shows the change the refusal was for, and may still write it.
+            if (onScreen.current !== refusedFor || !form.mayWrite()) {
+              throw NOT_TAKEN;
+            }
             const { item } = await versionApi.takeLiveSharedValues(
               scope,
               locale
             );
-            // Said once both have committed, before the reload, so a reload
-            // that fails can't hide that they did. The save committed even
-            // when a hook after it failed: the author hears about both, on
-            // the one toast.
-            toastMutationResult(
-              takenMessage(item, language, labelOf),
-              saved?.warnings
-            );
+            // Said once it has committed, before the reload, so a reload
+            // that fails can't hide that it did. The Save said what it
+            // stored on its own toast.
+            toast.success(takenMessage(item, language, labelOf));
             await reloaded();
           });
         } catch (failure) {
           // Let go by a move: nothing failed that the author must hear of.
           if (failure === LET_GO) return;
-          // Moved before it saved: nothing was written, which it says plainly.
-          if (failure === MOVED_BEFORE_SAVE) {
-            toast.error(MOVED_BEFORE_SAVE.message);
+          if (failure === NOT_TAKEN) {
+            toast.error(NOT_TAKEN.message);
+            return;
+          }
+          // The Save didn't store. Where it failed or its own checks refused
+          // it, it has said why itself; a refusal of its own goes unsaid
+          // unless said here.
+          if (failure instanceof RecoverySaveRefused) {
+            const { reason, message } = failure.outcome;
+            if (reason !== "failed" && reason !== "invalid") {
+              toast.error(message);
+            }
             return;
           }
           toast.error(
@@ -374,7 +361,7 @@ export function useSharedFieldsRecovery(args: {
       );
       return true;
     },
-    [scope, locale, fields, save, onTaken, getLocale, defaultLocale]
+    [scope, locale, fields, onTaken, getLocale, defaultLocale]
   );
 }
 
