@@ -35,6 +35,7 @@ import type { ReadCaller } from "../services/dashboard/readable-resources";
 import { askableCards } from "./widget-layout";
 import {
   failedSlot,
+  SLOT_TIMEOUT_MS,
   unavailableSlot,
   withinSlotBudget,
   type CardAnswer,
@@ -337,12 +338,21 @@ type CardVerdict =
   | { kind: "not-shown" }
   | { kind: "shown"; input: LoadInput };
 
+/**
+ * Which of a card's rules is being judged, kept up to date by `judgeCard` for whoever bounds it:
+ * a timeout names the stage that was running, the widget's access (its predicate, or core's own
+ * check of the collections it reads) or its `shows`.
+ */
+type JudgingStage = { at: "access" | "shows" };
+
 async function judgeCard(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
-  asked: CardInput
+  asked: CardInput,
+  stage: JudgingStage = { at: "access" }
 ): Promise<CardVerdict> {
+  stage.at = "access";
   if (await refusedAccess(declared, batch)) return { kind: "refused" };
   const { declaration, collections } = declared;
   const settings = resolveCardSettings(declaration.settings, placement.config);
@@ -367,6 +377,7 @@ async function judgeCard(
   };
   const { shows } = declaration;
   if (shows !== undefined) {
+    stage.at = "shows";
     const shown = await ownCode(declared, "widget-shows-threw", () =>
       shows(input)
     );
@@ -397,7 +408,7 @@ async function answerCard(
       return {
         settled: {
           ok: false,
-          error: `Choose ${verdict.label} in the card's settings`,
+          error: `No ${verdict.label} chosen yet`,
           code: "needs-setting",
           setting: verdict.label,
         },
@@ -426,8 +437,9 @@ async function answerCard(
  * leaves out the cards they would not be shown.
  *
  * - Refused by its `access`: no.
- * - A setting it needs has no value: YES. The card asks for that setting itself ("Choose ...
- *   in the card's settings"), and leaving it out would hide the one step that fixes it.
+ * - A setting it needs has no value: YES. The card asks for that setting itself ("No ...
+ *   chosen yet", with a button to choose it), and leaving it out would hide the one step that
+ *   fixes it.
  * - Its `shows`, as the person: only `true` is yes.
  * - No `shows`: yes.
  *
@@ -445,12 +457,12 @@ export async function cardIsShownTo(
   batch: CardBatch,
   asked: CardInput
 ): Promise<boolean> {
+  const stage: JudgingStage = { at: "access" };
   try {
     const verdict = await withinSlotBudget(
-      signal => judgeCard(declared, placement, batch, { ...asked, signal }),
-      () => {
-        throw pluginFailure(declared, "widget-shows-timed-out", undefined);
-      },
+      signal =>
+        judgeCard(declared, placement, batch, { ...asked, signal }, stage),
+      () => judgingTimedOut(declared, stage),
       asked.signal
     );
     return verdict.kind === "shown" || verdict.kind === "needs-setting";
@@ -459,6 +471,26 @@ export async function cardIsShownTo(
     if (!asked.signal.aborted) logNotJudged(declared, error);
     return false;
   }
+}
+
+/**
+ * The failure a card whose judgement ran past its budget becomes, naming the stage that was
+ * running. Core's own error, not the plugin's: the stage may be core's check of the collections
+ * the widget reads, and nothing the plugin said is in it.
+ */
+function judgingTimedOut(declared: DeclaredWidget, stage: JudgingStage): never {
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "This widget took too long to answer",
+    logMessage: `Declared widget "${declared.declaration.id}" of ${declared.owner} was not judged within ${SLOT_TIMEOUT_MS}ms, at its ${stage.at}`,
+    logContext: {
+      owner: declared.owner,
+      widget: declared.declaration.id,
+      reason: "widget-judging-timed-out",
+      stage: stage.at,
+      timeoutMs: SLOT_TIMEOUT_MS,
+    },
+  });
 }
 
 /** That a card could not be judged shown, so it was not, for the operator. */

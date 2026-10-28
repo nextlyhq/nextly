@@ -109,7 +109,7 @@ describe.each(renderers)("a count drawn by %s", (_name, draw) => {
 sizeChartsInTests();
 
 describe("a stats cell that links", () => {
-  /** The generated collection-health cells all declare a link. */
+  /** Collection-health cells that all declare a link. */
   const linked = {
     ...statsWidget,
     cells: [

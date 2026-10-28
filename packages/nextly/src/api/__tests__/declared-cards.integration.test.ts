@@ -24,7 +24,7 @@ import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, text } from "../../config";
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
-import { settings } from "../../domains/widgets/declaration/setting-builders";
+import { setting } from "../../domains/widgets/declaration/setting-builders";
 import { clearSources } from "../../domains/widgets/sources";
 import { definePlugin } from "../../plugins/plugin-context";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
@@ -86,7 +86,14 @@ const shop = definePlugin({
           category: "Shop",
           size: { default: { w: 12, h: 3 }, min: { w: 6, h: 3 } },
           access: `read-${ORDERS}`,
-          settings: { items: settings.items({ default: 5 }) },
+          settings: {
+            items: setting.number({
+              label: "Number of items",
+              defaultValue: 5,
+              min: 1,
+              max: 10,
+            }),
+          },
           load: async ({ settings: values, services, signal }) => {
             reads.push({ widget: "acme/open-orders", signal });
             const found = await services.find(ORDERS, {
