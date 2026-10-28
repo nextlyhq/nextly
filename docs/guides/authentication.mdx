@@ -313,7 +313,9 @@ export async function GET(req: Request) {
 
 ## Permissions
 
-Permissions follow the slug format `<action>-<resource>` -- e.g. `read-users`, `create-roles`, `update-api-keys`, `manage-settings`. The four standard actions are `create`, `read`, `update`, `delete`; some resources also use `manage` as a coarse-grained shortcut.
+Permissions follow the slug format `<action>-<resource>` -- e.g. `read-users`, `create-roles`, `update-api-keys`, `update-settings`. The four standard actions are `create`, `read`, `update`, `delete`; a few resources have a `manage` permission of their own, such as `manage-background-jobs`.
+
+> **Upgrading:** `manage-media`, `manage-settings`, `manage-email-providers` and `manage-email-templates` are retired. Run `nextly upgrade` after updating: it gives each role holding one the plain `read-`, `create-`, `update-` and `delete-` permissions on that resource. Until it has run, a role holding only the retired permission is refused there.
 
 Permissions for the core resources (`users`, `roles`, `permissions`) are seeded the first time the database is set up. Permissions for collections and singles you define in `nextly.config.ts` are wired up by the collection / single registration path -- you don't need to add them to a seeder.
 

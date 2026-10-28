@@ -69,7 +69,9 @@ Image-size presets and the (programmatic) Permissions page also live under setti
 
 ## Permissions
 
-Nextly's RBAC model uses permission slugs in the form `<action>-<resource>` (e.g. `read-users`, `create-roles`, `update-api-keys`, `manage-settings`). Permissions and the `Super Admin` role are seeded the first time the database is set up — for the core resources (`users`, `roles`, `permissions`) the seeder creates one row per `(action, resource)` pair across `create`, `read`, `update`, `delete`. See [`packages/nextly/src/database/seeders/permissions.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/database/seeders/permissions.ts) for the seeder source.
+Nextly's RBAC model uses permission slugs in the form `<action>-<resource>` (e.g. `read-users`, `create-roles`, `update-api-keys`, `update-settings`). Permissions and the `Super Admin` role are seeded the first time the database is set up — for the core resources (`users`, `roles`, `permissions`) the seeder creates one row per `(action, resource)` pair across `create`, `read`, `update`, `delete`. See [`packages/nextly/src/database/seeders/permissions.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/database/seeders/permissions.ts) for the seeder source.
+
+> **Upgrading:** `manage-media`, `manage-settings`, `manage-email-providers` and `manage-email-templates` are retired. Run `nextly upgrade` after updating: it gives each role holding one the plain `read-`, `create-`, `update-` and `delete-` permissions on that resource. Until it has run, a role holding only the retired permission is refused there.
 
 The admin sidebar is permission-gated. The built-in mapping is:
 
@@ -81,11 +83,11 @@ The admin sidebar is permission-gated. The built-in mapping is:
 | Media Library | `read-media` |
 | Users | `read-users` |
 | Roles | `read-roles` |
-| Custom Fields | `manage-settings` |
-| General settings | `manage-settings` |
+| Custom Fields | `read-settings` |
+| General settings | `read-settings` |
 | API Keys | `update-api-keys` |
-| Email Providers / Templates / Layout | `manage-settings` |
-| Plugins overview | `manage-settings` |
+| Email Providers / Templates / Layout | `read-email-providers` (Sending) or `read-email-templates` (Messages, Design) |
+| Plugins overview | `create-settings`, `update-settings` or `delete-settings` |
 | Builders (Collections / Singles / Field Groups Builder) | Gated by the `admin.branding.showBuilder` toggle |
 
 Permissions for collections you define in `nextly.config.ts` follow the same slug pattern (`read-posts`, `update-posts`, etc.); they are wired up automatically when the collection is registered. Assign permissions to roles from `/admin/security/roles`.

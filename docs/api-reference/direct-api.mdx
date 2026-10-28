@@ -699,7 +699,7 @@ The writes of `nextly.roles` (`create`, `update`, `delete`, `setPermissions`), `
 
 - roles: `create-roles`, `update-roles` (for `setPermissions` too) or `delete-roles`;
 - permissions: `create-permissions` or `delete-permissions`, or `manage-permissions` for either;
-- field groups: `create-settings`, `update-settings` or `delete-settings`, or `manage-settings` for any.
+- field groups: `create-settings`, `update-settings` or `delete-settings`.
 
 A super-admin passes. An API key (`actor`) is judged by its own grants. A checked call that names no `user` is refused with `AUTH_REQUIRED`, and every refusal comes before anything is written.
 

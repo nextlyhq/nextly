@@ -59,7 +59,7 @@ interface PluginContributions {
   routes?: PluginRoute[]; // { method, path, handler, requiredPermission?, public?, middleware?, rateLimit?, rawBody?, csrf?, noStore?, formatTimestamps?, mount? }
   auth?: PluginAuthContributions; // hooks, challenges, ui — see Auth extensibility
   settings?: ZodObject; // gives ctx.settings
-  settingsPermission?: PermissionSlug; // one of your own permissions; replaces manage-settings for writes and the settings page
+  settingsPermission?: PermissionSlug; // one of your own permissions; replaces update-settings for writes and the settings page
   audit?: PluginAuditDeclaration; // gives ctx.audit
   hookPoints?: PluginHookPointDeclaration[]; // your slug and a dot, never core's prefixes, or boot fails
   admin?: {

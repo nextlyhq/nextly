@@ -384,7 +384,7 @@ Go to **Settings -> Image Sizes** in the admin panel to add, edit and remove siz
 | GET    | `/admin/api/image-sizes/regeneration-status` | Status of an in-progress regeneration job. |
 | POST   | `/admin/api/image-sizes/regenerate`       | Re-generate variants for existing media.     |
 
-The list endpoint is permission-gated by `read-settings`; mutation endpoints require `manage-settings`.
+The list endpoint is permission-gated by `read-settings`; adding a size requires `create-settings`, changing one or regenerating `update-settings`, and deleting one `delete-settings`.
 
 ### Using sizes from your frontend
 
