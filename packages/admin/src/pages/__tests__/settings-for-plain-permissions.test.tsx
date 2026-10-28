@@ -81,7 +81,11 @@ function guardAdmits(
 }
 
 /** The settings pages a reader sees, and the editing one an editor uses. */
-const SEEN = [ROUTES.SETTINGS, ROUTES.SETTINGS_IMAGE_SIZES, ROUTES.USERS_FIELDS];
+const SEEN = [
+  ROUTES.SETTINGS,
+  ROUTES.SETTINGS_IMAGE_SIZES,
+  ROUTES.USERS_FIELDS,
+];
 const EDITED = [ROUTES.SETTINGS_IMAGE_SIZES_EDIT, ROUTES.USERS_FIELDS_EDIT];
 const CREATED = [
   ROUTES.SETTINGS_IMAGE_SIZES_CREATE,
@@ -112,6 +116,20 @@ describe("the settings pages, by plain permission", () => {
     // Creating asks create, which this role does not hold.
     for (const route of CREATED) {
       expect(guardAdmits(route, access), route).toBe(false);
+    }
+  });
+
+  it("opens the edit pages to a role that may read settings, and not to one that may only update them", async () => {
+    // An edit page first loads what it shows, a read that asks
+    // `read-settings`: a reader opens it read-only, and a role holding only
+    // `update-settings` would be shown a form that cannot load.
+    const reader = await accessFor(["read-settings"]);
+    for (const route of EDITED) {
+      expect(guardAdmits(route, reader), route).toBe(true);
+    }
+    const updater = await accessFor(["update-settings"]);
+    for (const route of EDITED) {
+      expect(guardAdmits(route, updater), route).toBe(false);
     }
   });
 

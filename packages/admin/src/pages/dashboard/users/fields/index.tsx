@@ -335,9 +335,10 @@ function SortableFieldRow({
   /** The settings changes the reader may make; without one, its control is not offered. */
   changes: SettingsChanges;
 }) {
-  // Reordering, opening a field and its menu each change or lead to changing
-  // the field, so each is offered only to a reader holding update (or delete,
-  // for Delete). A read-only reader sees the row and nothing to act on.
+  // Reordering and editing a field are offered only to a reader holding
+  // update, and deleting one only to a reader holding delete. Every reader may
+  // open a field to see it: one that may not change it, like anyone opening a
+  // code-defined field, gets View, and the form shows it read-only.
   const {
     attributes,
     listeners,
@@ -355,16 +356,15 @@ function SortableFieldRow({
   const typeConfig = fieldTypeConfig(field.type);
   const TypeIcon = typeConfig.icon;
   const isCode = field.source === "code";
-  const open = changes.update
-    ? () => (isCode ? onView(field) : onEdit(field))
-    : undefined;
+  const viewOnly = isCode || !changes.update;
+  const open = () => (viewOnly ? onView(field) : onEdit(field));
 
   return (
     <TableRow
       ref={setNodeRef}
       style={style}
       className={cn(
-        open && "hover-unified-table-row cursor-pointer",
+        "hover-unified-table-row cursor-pointer",
         isDragging && "bg-muted opacity-80"
       )}
       onClick={open}
@@ -384,29 +384,23 @@ function SortableFieldRow({
               <GripVertical className="h-4 w-4" />
             </span>
           )}
-          {open ? (
-            <code
-              className="text-sm bg-muted px-1.5 py-0.5 rounded-sm font-mono cursor-pointer hover-unified transition-colors"
-              onClick={e => {
-                e.stopPropagation();
+          <code
+            className="text-sm bg-muted px-1.5 py-0.5 rounded-sm font-mono cursor-pointer hover-unified transition-colors"
+            onClick={e => {
+              e.stopPropagation();
+              open();
+            }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
                 open();
-              }}
-              role="button"
-              tabIndex={0}
-              onKeyDown={e => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  open();
-                }
-              }}
-            >
-              {field.name}
-            </code>
-          ) : (
-            <code className="text-sm bg-muted px-1.5 py-0.5 rounded-sm font-mono">
-              {field.name}
-            </code>
-          )}
+              }
+            }}
+          >
+            {field.name}
+          </code>
         </div>
       </TableCell>
 
@@ -462,45 +456,39 @@ function SortableFieldRow({
         className="whitespace-nowrap text-sm"
         onClick={e => e.stopPropagation()}
       >
-        {(changes.update || (!isCode && changes.delete)) && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm">
-                <MoreHorizontal className="h-4 w-4" />
-                <span className="sr-only">Open menu</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              {isCode ? (
-                <DropdownMenuItem onClick={() => onView(field)}>
-                  <Eye className="h-4 w-4" />
-                  View
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm">
+              <MoreHorizontal className="h-4 w-4" />
+              <span className="sr-only">Open menu</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            {viewOnly ? (
+              <DropdownMenuItem onClick={() => onView(field)}>
+                <Eye className="h-4 w-4" />
+                View
+              </DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem onClick={() => onEdit(field)}>
+                <Edit className="h-4 w-4" />
+                Edit
+              </DropdownMenuItem>
+            )}
+            {!isCode && changes.delete && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => onDelete(field)}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete
                 </DropdownMenuItem>
-              ) : (
-                <>
-                  {changes.update && (
-                    <DropdownMenuItem onClick={() => onEdit(field)}>
-                      <Edit className="h-4 w-4" />
-                      Edit
-                    </DropdownMenuItem>
-                  )}
-                  {changes.update && changes.delete && (
-                    <DropdownMenuSeparator />
-                  )}
-                  {changes.delete && (
-                    <DropdownMenuItem
-                      onClick={() => onDelete(field)}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Delete
-                    </DropdownMenuItem>
-                  )}
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </TableCell>
     </TableRow>
   );
@@ -612,7 +600,8 @@ function UserFieldsTable() {
   }, []);
 
   const handleView = useCallback((field: UserFieldDefinitionRecord) => {
-    // For code-sourced fields, navigate to edit page (form will be read-only)
+    // The edit page, which shows the field read-only to a reader who may not
+    // change it (anyone, for a code-defined field)
     navigateTo(buildRoute(ROUTES.USERS_FIELDS_EDIT, { id: field.id }));
   }, []);
 

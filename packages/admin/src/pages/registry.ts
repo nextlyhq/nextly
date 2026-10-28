@@ -31,7 +31,6 @@ import {
   CHANGE_SETTINGS,
   CREATE_SETTINGS,
   READ_SETTINGS,
-  UPDATE_SETTINGS,
 } from "../lib/permissions/system-policy";
 import type { PageProps } from "../lib/routing";
 import type { RouteSection } from "../types/route-section";
@@ -815,11 +814,13 @@ export const routeConfig: Record<string, RouteConfig> = {
     requiredPermission: CREATE_SETTINGS,
     section: overridableBy("settings"),
   },
+  // Opened on read, since the page first loads what it shows and that read
+  // asks `read-settings`; the form is read-only without `update-settings`.
   [ROUTES.SETTINGS_IMAGE_SIZES_EDIT]: {
     component: EditImageSizePage,
     screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
     type: "private",
-    requiredPermission: UPDATE_SETTINGS,
+    requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
 
@@ -877,11 +878,13 @@ export const routeConfig: Record<string, RouteConfig> = {
     requiredPermission: CREATE_SETTINGS,
     section: overridableBy("settings"),
   },
+  // Opened on read, since the page first loads what it shows and that read
+  // asks `read-settings`; the form is read-only without `update-settings`.
   [ROUTES.USERS_FIELDS_EDIT]: {
     component: EditUserFieldPage,
     screenName: settingsScreen(ROUTES.USERS_FIELDS),
     type: "private",
-    requiredPermission: UPDATE_SETTINGS,
+    requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
 };
