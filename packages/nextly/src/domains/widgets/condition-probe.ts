@@ -28,12 +28,9 @@
  * @module domains/widgets/condition-probe
  */
 
-import { callerMayPerform } from "../../auth/access/route-gate-adapters";
+import { callerHoldsAny } from "../../auth/access/route-gate-adapters";
 import { scopeHoldsSuperAdmin } from "../../auth/authenticated-scope";
-import {
-  COLLECTION_DEFINITION_ACTION,
-  COLLECTION_DEFINITION_RESOURCE,
-} from "../../auth/collection-definition-policy";
+import { COLLECTION_DEFINITION_PERMISSIONS } from "../../auth/collection-definition-policy";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
@@ -97,7 +94,7 @@ export interface ConditionProbe {
   /**
    * Whether this reader could create a COLLECTION, resolved at most once.
    *
-   * Two halves: may they DEFINE one (the grant
+   * Two halves: may they DEFINE one (every grant
    * `auth/collection-definition-policy` names, which the schema route and the
    * dispatcher both enforce), and would they be able to READ the result. The
    * second is what makes the step finishable, and it is not implied by the
@@ -168,13 +165,16 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
     // ways nothing reports: a step hidden after it became finishable, or
     // offered after it stopped being.
     createCollection ??= (async () => {
-      const mayDefine = await callerMayPerform(
-        caller.authenticatedScope,
-        COLLECTION_DEFINITION_ACTION,
-        COLLECTION_DEFINITION_RESOURCE,
-        caller.user
-      );
-      if (!mayDefine) return false;
+      // Every grant a definition change asks, each by grant as the routes
+      // ask it, no entity's rule read.
+      for (const permission of COLLECTION_DEFINITION_PERMISSIONS) {
+        const mayDefine = await callerHoldsAny(
+          caller.authenticatedScope,
+          [permission],
+          caller.user
+        );
+        if (!mayDefine) return false;
+      }
       return wouldReadOwnNewCollection({
         userId: caller.user.id,
         isApiKey: caller.authenticatedScope?.actorType === "apiKey",

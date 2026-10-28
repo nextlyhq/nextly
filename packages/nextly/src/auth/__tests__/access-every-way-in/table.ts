@@ -642,13 +642,12 @@ const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
 /**
  * The permissions an install seeds for each resource that is not an entry.
  * An action missing here has no permission to tick, so only a super-admin's
- * own session reaches it: there is no `update-email-providers`, and a key
- * holds only rows that exist.
+ * own session reaches it, and a key holds only rows that exist.
  */
 const SEEDED: Partial<Record<Target, readonly Action[]>> = {
   users: ["create", "read", "update", "delete"],
   roles: ["create", "read", "update", "delete"],
-  providers: ["create", "read", "delete"],
+  providers: ["create", "read", "update", "delete"],
 };
 
 /**

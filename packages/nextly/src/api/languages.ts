@@ -65,14 +65,13 @@ const changeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("setDefault"), code, confirmed: z.literal(true) }),
 ]);
 
-/** Refuses a caller holding neither `action` nor `manage` on settings, as the rest of Settings does. */
+/** Refuses a caller without `action` on settings, as the rest of Settings does; `manage-settings` counts as it. */
 async function requireSettings(
   req: Request,
   action: "read" | "update"
 ): Promise<void> {
   const authResult = await requireAnyPermission(req, [
     { action, resource: "settings" },
-    { action: "manage", resource: "settings" },
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 }

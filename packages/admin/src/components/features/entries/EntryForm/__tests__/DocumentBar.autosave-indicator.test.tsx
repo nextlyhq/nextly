@@ -12,7 +12,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
+import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 
@@ -32,7 +32,7 @@ function Harness({
   const methods = useForm({ defaultValues: { title: "" } });
   return (
     <FormProvider {...methods}>
-      <EntrySystemHeader
+      <DocumentBar
         mode="edit"
         hasStatus
         isDirty={isDirty}
@@ -60,7 +60,7 @@ function headerRendered() {
   ).toBeInTheDocument();
 }
 
-describe("EntrySystemHeader save indicator", () => {
+describe("DocumentBar save indicator", () => {
   it("reports an unstored change before any recovery point exists", () => {
     render(<Harness isDirty />);
     expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
