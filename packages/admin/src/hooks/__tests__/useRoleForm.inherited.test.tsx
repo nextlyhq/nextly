@@ -1,11 +1,11 @@
 /**
- * Saving a role sends only the permissions it holds itself.
+ * The role form holds and saves only the permissions a role holds itself.
  *
- * The form shows a base role's permissions ticked and locked, so its value
- * holds them alongside the role's own. The permissions save replaces the
- * role's own assignments, so sending the value whole would copy every
- * inherited permission onto the role, where it would outlast its removal
- * from the base.
+ * A base role's permissions are shown locked beside the role's own, but they
+ * are the base's: the permissions save replaces the role's own assignments,
+ * so one sent as the role's own would be copied onto it and outlast its
+ * removal from the base. The form's value is therefore the role's own
+ * permissions alone, and the locked ones are kept apart.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -24,6 +24,7 @@ vi.mock("@admin/components/ui", () => ({
 
 vi.mock("../../services/roleApi", () => ({
   roleApi: {
+    fetchRoles: vi.fn(async () => ({ items: [] })),
     getRoleDetails: vi.fn(),
     getRoleById: vi.fn(),
     updateRole: vi.fn(async () => undefined),
@@ -63,10 +64,24 @@ async function editingRole(own: string[], inherited: string[]) {
   const { result } = renderHook(() => useRoleForm("role-1"), {
     wrapper: wrapper(),
   });
-  // Loaded once the base's permissions are locked and shown in the value.
+  // Loaded once the base's permissions are locked.
   await waitFor(() =>
     expect(result.current.lockedPermissionIds).toEqual(inherited)
   );
+  return result;
+}
+
+/** The form for a new role built on one base giving `inherited`. */
+function creatingOnBase(inherited: string[]) {
+  const { result } = renderHook(() => useRoleForm(), { wrapper: wrapper() });
+  act(() => {
+    result.current.form.setValue("name", "Writer");
+    result.current.form.setValue("slug", "writer");
+    // As choosing a base leaves the form: the base chosen and its
+    // permissions locked.
+    result.current.setSelectedBaseRoleIds(["base-1"]);
+    result.current.setLockedPermissionIds(inherited);
+  });
   return result;
 }
 
@@ -74,11 +89,15 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("saving a role built on a base role", () => {
-  it("does not send the base's permissions as the role's own", async () => {
+describe("the role form on a role built on a base role", () => {
+  it("holds only the role's own permissions, not the base's", async () => {
     const result = await editingRole(["p1"], ["p3"]);
-    // POPULATION CONTROL: the form shows the inherited permission ticked.
-    expect(result.current.form.getValues("permissions")).toEqual(["p1", "p3"]);
+
+    expect(result.current.form.getValues("permissions")).toEqual(["p1"]);
+  });
+
+  it("saves only the role's own permissions", async () => {
+    const result = await editingRole(["p1"], ["p3"]);
 
     await act(async () => {
       await result.current.onSubmit();
@@ -105,15 +124,28 @@ describe("saving a role built on a base role", () => {
     );
   });
 
-  it("creates a role with only the permissions it was given itself", async () => {
-    const { result } = renderHook(() => useRoleForm(), { wrapper: wrapper() });
+  it("takes away a permission the role holds itself though it also inherits it", async () => {
+    const result = await editingRole(["p1", "p3"], ["p3"]);
+
+    // What Clear All hands the form.
     act(() => {
-      result.current.form.setValue("name", "Writer");
-      result.current.form.setValue("slug", "writer");
-      // As choosing a base role leaves the form: its permissions locked and
-      // ticked beside the one chosen here.
-      result.current.setLockedPermissionIds(["p3"]);
-      result.current.form.setValue("permissions", ["p1", "p3"]);
+      result.current.form.setValue("permissions", []);
+    });
+    await act(async () => {
+      await result.current.onSubmit();
+    });
+
+    expect(roleApi.updateRolePermissions).toHaveBeenCalledWith(
+      "role-1",
+      ["p1", "p3"],
+      []
+    );
+  });
+
+  it("creates a role with only the permissions it was given itself", async () => {
+    const result = creatingOnBase(["p3"]);
+    act(() => {
+      result.current.form.setValue("permissions", ["p1"]);
     });
 
     await act(async () => {
@@ -121,7 +153,20 @@ describe("saving a role built on a base role", () => {
     });
 
     expect(roleApi.createRole).toHaveBeenCalledWith(
-      expect.objectContaining({ permissions: ["p1"] })
+      expect.objectContaining({ permissions: ["p1"], childRoleIds: ["base-1"] })
     );
+  });
+
+  it("says a role on one base needs a permission of its own, and sends nothing", async () => {
+    const result = creatingOnBase(["p3"]);
+
+    await act(async () => {
+      await result.current.onSubmit();
+    });
+
+    expect(result.current.error).toBe(
+      "A role built on one base needs at least one permission of its own."
+    );
+    expect(roleApi.createRole).not.toHaveBeenCalled();
   });
 });
