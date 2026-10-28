@@ -328,9 +328,10 @@ import { getService } from "./service-access";
 export interface NextlyServiceConfig {
   /**
    * The directory of the app nextly runs in, whose installed Next.js, React
-   * and React DOM the start check judges. Defaults to the process's own
-   * directory, which is the app's for a server; the CLI passes the project it
-   * was pointed at with `--cwd`.
+   * and React DOM the start check judges. A relative path is resolved against
+   * `process.cwd()`. Defaults to the process's own directory, which is the
+   * app's for a server; the CLI passes the project it was pointed at with
+   * `--cwd`.
    */
   appRoot?: string;
 

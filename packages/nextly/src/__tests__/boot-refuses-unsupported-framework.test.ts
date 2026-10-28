@@ -6,6 +6,8 @@
  * is the one the boot names. One file for both, since each boot loads
  * the whole service registry.
  */
+import { resolve } from "node:path";
+
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { defineConfig } from "../collections/config/define-config";
@@ -13,11 +15,17 @@ import { sanitizeConfig } from "../shared/types/config";
 
 // Which app directory each version read asked about.
 const judgedRoots = vi.hoisted(() => [] as string[]);
+// The one app that installs a supported Next.js.
+const SUPPORTED_ROOT = vi.hoisted(() => "/projects/supported");
 
 vi.mock("../shared/lib/installed-package-version", () => ({
   installedPackageVersion: (appRoot: string, name: string) => {
     judgedRoots.push(appRoot);
-    return name === "next" ? "15.5.0" : "19.3.1";
+    // One app on a supported Next.js; every other on Next.js 15.
+    if (name === "next") {
+      return appRoot === SUPPORTED_ROOT ? "16.4.2" : "15.5.0";
+    }
+    return "19.3.1";
   },
 }));
 
@@ -25,6 +33,9 @@ const { getNextly } = await import("../init");
 const { createDynamicHandlers } = await import("../routeHandler");
 const { registerServices } = await import("../di/register");
 const { getImageProcessor } = await import("../storage/image-processor");
+const { ensureSupportedFrameworkVersions } = await import(
+  "../runtime/framework-versions"
+);
 
 const ORIGINAL_DB_DIALECT = process.env.DB_DIALECT;
 // sqlite is the one dialect that needs no connection string.
@@ -83,5 +94,34 @@ describe("starting nextly on an unsupported Next.js", () => {
       })
     ).rejects.toMatchObject(REFUSAL);
     expect(new Set(judgedRoots)).toEqual(new Set(["/projects/site"]));
+  });
+
+  it("judges each app root on its own, so one that passed vouches for no other", async () => {
+    // The check `registerServices()` makes, for an app that passes, as a
+    // process that booted it first would have made it.
+    expect(() =>
+      ensureSupportedFrameworkVersions(SUPPORTED_ROOT)
+    ).not.toThrow();
+
+    await expect(
+      registerServices({
+        appRoot: "/projects/other",
+        imageProcessor: getImageProcessor(),
+      })
+    ).rejects.toMatchObject(REFUSAL);
+  });
+
+  it("resolves a relative app root against the process's directory", async () => {
+    judgedRoots.length = 0;
+
+    await expect(
+      registerServices({
+        appRoot: "apps/site",
+        imageProcessor: getImageProcessor(),
+      })
+    ).rejects.toMatchObject(REFUSAL);
+    expect(new Set(judgedRoots)).toEqual(
+      new Set([resolve(process.cwd(), "apps/site")])
+    );
   });
 });
