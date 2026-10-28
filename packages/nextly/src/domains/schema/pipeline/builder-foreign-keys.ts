@@ -15,10 +15,12 @@
  * The table's keys here are the ones its live table already holds, kept
  * while their columns remain, and the key of each relationship whose column
  * this push adds, described by the Builder's own rule
- * (`relationshipForeignKey`). Nothing else: a relationship whose column
- * already exists without a key keeps it that way, so an existing install is
- * planned no new key it did not ask for, and a code-first collection is not
- * touched.
+ * (`relationshipForeignKey`). A relationship the change adds whose column an
+ * earlier apply already added counts as added: MySQL commits each schema
+ * statement, so an apply refused part-way can leave the column without its
+ * key. Nothing else: a relationship the registry already records whose
+ * column has no key keeps it that way, so an existing install is planned no
+ * new key it did not ask for, and a code-first collection is not touched.
  *
  * @module domains/schema/pipeline/builder-foreign-keys
  */
@@ -44,6 +46,11 @@ export function withBuilderForeignKeys(
   const liveColumns = new Set(
     (live?.columns ?? []).map(column => lower(column.name))
   );
+  // Without the recorded field list, every column already in place counts as recorded.
+  const recorded =
+    collection.recordedFields === undefined
+      ? undefined
+      : new Set(collection.recordedFields);
 
   // Kept: every key the live table holds whose columns the table keeps. A key
   // over a column this push drops goes with the column.
@@ -63,7 +70,10 @@ export function withBuilderForeignKeys(
     const described = builder.relationshipForeignKey(spec.name, field, false);
     if (described === null) continue;
     const column = lower(described.columns[0]);
-    if (!columns.has(column) || liveColumns.has(column) || keyed.has(column)) {
+    const addedByThisChange =
+      !liveColumns.has(column) ||
+      (recorded !== undefined && !recorded.has(field.name));
+    if (!columns.has(column) || !addedByThisChange || keyed.has(column)) {
       continue;
     }
     // A key this push creates is judged: what a save asks for has to be

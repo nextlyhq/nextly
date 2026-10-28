@@ -192,6 +192,8 @@ export async function archiveFieldsLeavingTranslation(args: {
   // Before the early return below: a change that only removes and adds translated fields changes
   // no field's translation, and is exactly the one that would drop a column unasked.
   refuseTranslatedFieldsRemovedBesideAdded(args, oldFields);
+  // Before the early return too: a field added as translated changes no field's translation.
+  await refuseCompanionColumnsOfAnotherDefinition(args, oldFields);
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;
@@ -282,6 +284,79 @@ export async function archiveFieldsLeavingTranslation(args: {
       renamedFrom,
     })
   );
+}
+
+/**
+ * Refuses a field this change makes translated, added or joining, whose companion column is
+ * already there with another definition than the field would give it: another type, or NOT NULL,
+ * which a translation never is. An apply MySQL refused part-way leaves such a column with the
+ * field's own definition, and the companion transition takes it as the field's rather than adding
+ * it twice. A column of another definition is not one a save left: taken as the field's, the
+ * field would be recorded over storage that cannot hold its values. Compared as the schema diff
+ * compares a column with what it should be (`typesDiffer`).
+ */
+async function refuseCompanionColumnsOfAnotherDefinition(
+  args: Pick<
+    Parameters<typeof archiveFieldsLeavingTranslation>[0],
+    "adapter" | "entity" | "tableName" | "builtBy" | "newFields"
+  >,
+  oldFields: readonly LeavingFieldLike[]
+): Promise<void> {
+  const translatedBefore = new Set(
+    oldFields.filter(f => isFieldLocalized(f, true)).map(f => f.name)
+  );
+  const becomingTranslated = args.newFields.filter(
+    f => isFieldLocalized(f, true) && !translatedBefore.has(f.name)
+  );
+  if (becomingTranslated.length === 0) return;
+  const dialect = args.adapter.dialect;
+  const companionTable = `${args.tableName}_locales`;
+  const [{ introspectLiveSnapshot }, { typesDiffer }, { ddlType }] =
+    await Promise.all([
+      import("../../schema/pipeline/diff/introspect-live"),
+      import("../../schema/pipeline/diff/declared-size"),
+      import("./ddl-types"),
+    ]);
+  const companion = (
+    await introspectLiveSnapshot(args.adapter.getDrizzle(), dialect, [
+      companionTable,
+    ])
+  ).tables.find(t => t.name === companionTable);
+  if (companion === undefined) return;
+  const refusals = becomingTranslated.flatMap(field => {
+    const spec = fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
+    const column = spec && companion.columns.find(c => c.name === spec.name);
+    if (!spec || !column) return [];
+    const differs =
+      !column.nullable ||
+      typesDiffer(column, {
+        name: column.name,
+        type: ddlType(spec, dialect),
+        nullable: true,
+      });
+    return differs
+      ? [
+          {
+            path: `fields.${field.name}`,
+            code: "COLUMN_ALREADY_EXISTS",
+            message:
+              `The translations table already has a column "${spec.name}" of another ` +
+              `definition, left from an earlier field. Give ${field.name} another name, or ` +
+              "remove that column first.",
+          },
+        ]
+      : [];
+  });
+  if (refusals.length > 0) {
+    throw NextlyError.validation({
+      errors: refusals,
+      logContext: {
+        entity: args.entity,
+        companionTable,
+        fields: refusals.map(r => r.path),
+      },
+    });
+  }
 }
 
 /**

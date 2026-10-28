@@ -918,6 +918,11 @@ const COLLECTIONS_METHODS: Record<
         localized: isLocalized,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        // The fields the registry records before this apply, so a relationship it adds over a
+        // column an earlier apply already added still gets its foreign key.
+        recordedFields: (collection.fields ?? []).flatMap(field =>
+          field.name === undefined ? [] : [field.name]
+        ),
       };
 
       // A field leaving translation has preconditions of its own, asked before the push alters

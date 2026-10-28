@@ -23,12 +23,17 @@ const author = (options: Record<string, unknown>, required = false) => ({
   options: { target: "authors", relationType: "manyToOne", ...options },
 });
 
-function collection(fields: unknown[], builderOwned = true): DesiredCollection {
+function collection(
+  fields: unknown[],
+  builderOwned = true,
+  recordedFields?: readonly string[]
+): DesiredCollection {
   return {
     slug: "posts",
     tableName: TABLE,
     fields: fields as never,
     builderOwned,
+    ...(recordedFields ? { recordedFields } : {}),
   };
 }
 
@@ -76,6 +81,23 @@ describe("withBuilderForeignKeys", () => {
     ]);
     // Added before keys were created this way: no key, and none planned.
     expect(keysFor(collection(fields), live(fields, []))).toEqual([]);
+  });
+
+  // MySQL commits each schema statement, so an apply that added a relationship's column can stop
+  // before its key. The registry still records the fields from before, so the next apply sees a
+  // field it adds over a column that is already there, and creates the key the first one did not.
+  it("adds the key of a relationship this change adds whose column an earlier apply left without one", () => {
+    const fields = [{ name: "title", type: "text" }, author({})];
+    expect(
+      keysFor(collection(fields, true, ["title"]), live(fields, []))
+    ).toEqual([LIVE_KEY]);
+  });
+
+  it("leaves a recorded relationship without a key as it was", () => {
+    const fields = [{ name: "title", type: "text" }, author({})];
+    expect(
+      keysFor(collection(fields, true, ["title", "author"]), live(fields, []))
+    ).toEqual([]);
   });
 
   it("reads a legacy relationship without judging it", () => {

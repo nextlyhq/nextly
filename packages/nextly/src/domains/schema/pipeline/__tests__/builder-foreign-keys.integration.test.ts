@@ -43,6 +43,7 @@ import { getDialectTables } from "../../../../database/index";
 import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
 import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
+import { getColumnDescriptor } from "../../services/field-column-descriptor";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import { introspectLiveSnapshot } from "../diff/introspect-live";
 import { freshPushSchema } from "../fresh-push";
@@ -201,6 +202,39 @@ function desiredFor(
 }
 
 /**
+ * `desired` with the posts' fields as the registry records them before the save, as a Schema
+ * Builder save states them.
+ */
+function recordingPosts(
+  desired: DesiredSchema,
+  recordedFields: readonly string[]
+): DesiredSchema {
+  return {
+    ...desired,
+    collections: {
+      ...desired.collections,
+      posts: { ...desired.collections.posts, recordedFields },
+    },
+  };
+}
+
+/**
+ * The posts' author column, added the way an apply that stopped before the key leaves it: MySQL
+ * commits each schema statement, so the column can land without the key that follows it.
+ */
+function authorColumnWithoutKey(dialect: SupportedDialect, pair: Pair): string {
+  const column = getColumnDescriptor(
+    authorField(pair) as never,
+    dialect,
+    "collection"
+  );
+  if (!column) throw new Error("the relationship has no column");
+  const quote = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  return `ALTER TABLE ${quote(pair.posts)} ADD COLUMN ${quote(column.name)} ${column.dialectType}`;
+}
+
+/**
  * One Schema Builder save, as the Builder's save applies it. With
  * `confirmRenames`, a dropped column and an added one of the same type are
  * paired as a rename and the author confirms it, as the Builder's prompt does.
@@ -337,6 +371,43 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
     expect(
       sqlite.prepare(`SELECT id, lead_author FROM "${pair.posts}"`).all()
     ).toEqual([{ id: "p1", lead_author: null }]);
+  });
+
+  // The change adds the relationship; an earlier apply of it added the column and stopped before
+  // the key. The registry still records the fields from before, so this apply keys the column.
+  it("keys a relationship the change adds whose column an earlier apply left without its key", async () => {
+    createTables(false);
+    sqlite.exec(authorColumnWithoutKey("sqlite", pair));
+    expect(await postKeys(target, pair)).toEqual([]);
+
+    const result = await save(
+      target,
+      recordingPosts(
+        desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+        ["title", "score"]
+      )
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(await postKeys(target, pair)).toEqual([keyTo(pair)]);
+  });
+
+  // The same table, but the registry records the relationship: a column from before keys were
+  // created this way, which is left without one rather than keyed unasked.
+  it("leaves a relationship the registry records without a key as it was", async () => {
+    createTables(false);
+    sqlite.exec(authorColumnWithoutKey("sqlite", pair));
+
+    const result = await save(
+      target,
+      recordingPosts(
+        desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+        ["title", "score", "leadAuthor"]
+      )
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(await postKeys(target, pair)).toEqual([]);
   });
 
   it("keeps a child's rows and key when a type change rebuilds the parent", async () => {
@@ -790,6 +861,67 @@ for (const server of SERVERS) {
         expect(
           preview.operations.filter(op => op.type.endsWith("foreign_key"))
         ).toEqual([]);
+      });
+
+      it("keys a relationship the change adds whose column an earlier apply left without its key", async () => {
+        await dropTables();
+        for (const statement of [
+          ...builderStatements(
+            server.dialect,
+            pair.authors,
+            authorFields("text")
+          ),
+          ...builderStatements(
+            server.dialect,
+            pair.posts,
+            postFields(pair, "text", false)
+          ),
+          authorColumnWithoutKey(server.dialect, pair),
+        ]) {
+          await connection.run(statement);
+        }
+        expect(await postKeys(connection.target, pair)).toEqual([]);
+
+        const result = await save(
+          connection.target,
+          recordingPosts(
+            desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+            ["title", "score"]
+          )
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(await postKeys(connection.target, pair)).toEqual([keyTo(pair)]);
+      });
+
+      it("leaves a relationship the registry records without a key as it was", async () => {
+        await dropTables();
+        for (const statement of [
+          ...builderStatements(
+            server.dialect,
+            pair.authors,
+            authorFields("text")
+          ),
+          ...builderStatements(
+            server.dialect,
+            pair.posts,
+            postFields(pair, "text", false)
+          ),
+          authorColumnWithoutKey(server.dialect, pair),
+        ]) {
+          await connection.run(statement);
+        }
+
+        const result = await save(
+          connection.target,
+          recordingPosts(
+            desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+            ["title", "score", "leadAuthor"]
+          )
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(await postKeys(connection.target, pair)).toEqual([]);
       });
 
       it("keeps a one-to-one column unique when a relationship is added", async () => {
