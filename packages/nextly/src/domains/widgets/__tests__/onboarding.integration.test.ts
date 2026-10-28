@@ -42,14 +42,14 @@ const admin: ReadCaller = {
  *
  * A key rather than a session, because `callerHoldsPermission` judges a key on
  * its OWN stamped grants and a session through the RBAC tables -- and this
- * instance seeds no role holding `manage-settings`, so a session caller answers
+ * instance seeds no role holding `create-settings`, so a session caller answers
  * "no" to both halves of the composition under test and cannot separate them.
  */
 const builder: ReadCaller = {
   user: { id: "builder-1", roles: [] },
   authenticatedScope: {
     actorType: "apiKey",
-    permissions: ["manage-settings"],
+    permissions: ["create-settings", "update-settings", "delete-settings"],
   },
 };
 
@@ -309,7 +309,12 @@ describe("onboarding steps against a real instance", () => {
       user: { id: "key-2", roles: [] },
       authenticatedScope: {
         actorType: "apiKey",
-        permissions: ["manage-settings", "read-reports"],
+        permissions: [
+          "create-settings",
+          "update-settings",
+          "delete-settings",
+          "read-reports",
+        ],
       },
     };
 
@@ -331,7 +336,12 @@ describe("onboarding steps against a real instance", () => {
       user: { id: "key-3", roles: [] },
       authenticatedScope: {
         actorType: "apiKey",
-        permissions: ["manage-settings", "read-settings"],
+        permissions: [
+          "create-settings",
+          "update-settings",
+          "delete-settings",
+          "read-settings",
+        ],
       },
     };
 
