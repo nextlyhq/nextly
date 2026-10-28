@@ -423,6 +423,17 @@ export const SLUG_COLUMNS: readonly SlugColumn[] = [
     onRename: "follow",
   },
   {
+    // Readers' pins of the entity on their dashboards. A pin follows its
+    // target, so every reader keeps what they pinned under the new name.
+    table: "nextly_dashboard_pins",
+    slugColumn: "target_slug",
+    kind: {
+      column: "target_type",
+      values: { collection: ["collection"], single: ["single"] },
+    },
+    onRename: "follow",
+  },
+  {
     // The dashboard's activity feed. Its readers take a NULL kind, which rows
     // written before the kind was recorded carry, to be a collection's.
     table: "activity_log",
