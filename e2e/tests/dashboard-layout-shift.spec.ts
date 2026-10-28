@@ -16,10 +16,11 @@
  * shell around it (the header, the sidebar and its panels) is everything else, reported beside it.
  *
  * The shell holds its own place on a cold load: its navigation and the header's account controls
- * are drawn where they settle, so the shell's share of a cold load is 0 at the four decimals the
- * report prints. That is asserted only against a production build (`E2E_SERVER=production`, how
- * CI runs this suite), because when the shell's pieces arrive depends on bundling and loading
- * order, which `next dev` compiling on request does not share with what ships.
+ * are drawn where they settle, so no element of the shell moves at all, in a shift of its own or
+ * in one that moved the dashboard too. That is asserted only against a production build
+ * (`E2E_SERVER=production`, how CI runs this suite), because when the shell's pieces arrive
+ * depends on bundling and loading order, which `next dev` compiling on request does not share
+ * with what ships.
  *
  * On the e2e dev server, which compiles on first request, the first visit warms the route and
  * only the second is measured; the production server is measured the same way. Each value is
@@ -54,7 +55,14 @@ interface Shift {
   mixed: number;
   /** Entries that moved only the shell. */
   shell: number;
-  /** What each of the shell's entries moved, from where to where, so a red names the element. */
+  /**
+   * Shell elements that moved, counted in EVERY entry: one that moved only the shell, and one
+   * that moved it beside the dashboard. An entry's value cannot be split between the elements it
+   * moved, but the elements can be told apart, so this, not the shell's share, says whether the
+   * shell moved at all.
+   */
+  shellMoves: number;
+  /** What each shell element moved, from where to where, so a red names the element. */
   shellSources: string[];
 }
 
@@ -70,6 +78,7 @@ async function recordShifts(page: Page): Promise<void> {
       dashboard: 0,
       mixed: 0,
       shell: 0,
+      shellMoves: 0,
       shellSources: [] as string[],
     };
     (window as unknown as { __shift: typeof record }).__shift = record;
@@ -117,9 +126,12 @@ async function recordShifts(page: Page): Promise<void> {
             ? "mixed"
             : "shell";
         record[kind] += entry.value;
-        if (kind === "shell") {
+        // The shell's elements in this entry, whichever share its value went to.
+        const shellMoved = entry.sources.filter((_, index) => !inside[index]);
+        record.shellMoves += shellMoved.length;
+        if (shellMoved.length > 0) {
           record.shellSources.push(
-            `${entry.value.toFixed(4)}: ${entry.sources.map(describe).join("; ")}`
+            `${kind} ${entry.value.toFixed(4)}: ${shellMoved.map(describe).join("; ")}`
           );
         }
       }
@@ -139,6 +151,7 @@ const forgetShifts = (page: Page) =>
     record.dashboard = 0;
     record.mixed = 0;
     record.shell = 0;
+    record.shellMoves = 0;
     record.shellSources.length = 0;
   });
 
@@ -148,7 +161,7 @@ function report(
   label: string,
   shift: Shift
 ): void {
-  const line = `${label}: dashboard ${shift.dashboard.toFixed(4)}, mixed ${shift.mixed.toFixed(4)}, shell ${shift.shell.toFixed(4)}`;
+  const line = `${label}: dashboard ${shift.dashboard.toFixed(4)}, mixed ${shift.mixed.toFixed(4)}, shell ${shift.shell.toFixed(4)}, shell elements moved ${shift.shellMoves}`;
   info.annotations.push({ type: "layout-shift", description: line });
   console.log(`LAYOUT-SHIFT ${line}`);
   for (const source of shift.shellSources) {
@@ -202,12 +215,14 @@ for (const size of WIDTHS) {
     report(info, `cold ${size.name} ${size.width}px`, shift);
     expect(shift.dashboard + shift.mixed).toBeLessThan(MAX_COLD_SHIFT);
     if (PRODUCTION_SERVER) {
-      // At the report's four decimals: the shell's regions are drawn at the size they settle
-      // at, so the only way for this to go red is for something already painted to move.
+      // No shell element moved: the shell's regions are drawn at the size they settle at, so the
+      // only way for this to go red is for something already painted to move. Counted by element
+      // rather than read from the shell's share, which leaves out a shift that moved the
+      // dashboard in the same frame.
       expect(
-        shift.shell.toFixed(4),
+        shift.shellMoves,
         `the shell moved: ${shift.shellSources.join(" | ")}`
-      ).toBe("0.0000");
+      ).toBe(0);
     }
   });
 
