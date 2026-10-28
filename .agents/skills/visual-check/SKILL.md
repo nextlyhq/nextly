@@ -28,9 +28,11 @@ touches, read them, and put them in the pull request.
    (`E2E_PROD_PORT`), exactly as the production browser suite does, signs in as
    the seeded user, and stops the server when done. Every route is captured at
    390, 1024 and 1440 px, light and dark, as `<route>-<width>-<scheme>.png` in
-   `e2e/.playwright/visual-check/`. Add `--full` for whole pages rather than
-   the first screen. It shares the production suite's database, build folder
-   and port, so never run the two at once in one checkout.
+   `e2e/.playwright/visual-check/`; a query's keys stay in the name and its
+   values become a short hash, so no token is published. Add `--full` for
+   whole pages rather than the first screen. It shares the production suite's
+   database, build folder and port, so never run the two at once in one
+   checkout.
 
 2. Read what it prints. Each view is checked for sideways scroll, elements
    whose box ends past the right edge (by selector), and axe's serious and

@@ -6,6 +6,7 @@
  * @module scripts/visual-check/options
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
 
 import { DEFAULT_PORTS } from "../worktree.mjs";
@@ -55,16 +56,30 @@ export const USAGE = `Usage: pnpm visual-check <route...> [--full] [--reuse | --
  */
 const TOPIC = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/**
- * A capture's name: the route's path and query as one slug, then width and
- * scheme. The query is kept, since `?tab=fields` is a different screen.
- */
-export function captureName(route, width, scheme) {
-  const slug = route
+/** Lower case, every run of other characters one dash, none at either end. */
+function slugOf(text) {
+  return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return `${slug || "root"}-${width}-${scheme}.png`;
+}
+
+/**
+ * A capture's name: the route's path, its query's keys and a short hash of the
+ * whole query, then width and scheme. The query still tells captures apart,
+ * since `?tab=fields` is a different screen, but its values never appear: the
+ * name is published, in the screenshot branch's history and every raw URL, and
+ * a value can be a credential, such as a reset token.
+ */
+export function captureName(route, width, scheme) {
+  const at = route.indexOf("?");
+  const path = at === -1 ? route : route.slice(0, at);
+  const query = at === -1 ? "" : route.slice(at + 1);
+  const keys = [...new URLSearchParams(query).keys()].join("-");
+  const queryPart = query
+    ? `-${slugOf(keys)}-${createHash("sha256").update(query).digest("hex").slice(0, 8)}`
+    : "";
+  return `${slugOf(path) || "root"}${queryPart.replace(/--+/g, "-")}-${width}-${scheme}.png`;
 }
 
 /** Every capture of every route, route by route, narrowest first, light before dark. */

@@ -59,11 +59,34 @@ describe("what the visual check is asked to do", () => {
       "admin-collections-posts-1440-dark.png"
     );
     expect(captureName("/", 1024, "light")).toBe("root-1024-light.png");
-    expect(captureName("/admin/x?tab=fields", 390, "dark")).toBe(
-      "admin-x-tab-fields-390-dark.png"
+    expect(captureName("/admin/x?tab=fields", 390, "dark")).toMatch(
+      /^admin-x-tab-[0-9a-f]{8}-390-dark\.png$/
     );
     expect(captureName("/admin/x", 390, "dark")).not.toBe(
       captureName("/admin/x?tab=fields", 390, "dark")
+    );
+  });
+
+  /*
+   * A capture's name is published: it is a file in the screenshot branch's
+   * history and part of every raw URL in "The look". A query value such as a
+   * reset token must never be in it, while two values of one key must still
+   * name two captures.
+   */
+  it("keeps a query's values out of the name, and two values apart", () => {
+    // Assembled from pieces, so no credential-shaped text sits in the source.
+    const secret = ["f3a9", "c2e1", "7b64d08"].join("");
+    const name = captureName(
+      `/admin/reset-password?token=${secret}`,
+      390,
+      "light"
+    );
+    expect(name).not.toContain(secret);
+    expect(name).toMatch(
+      /^admin-reset-password-token-[0-9a-f]{8}-390-light\.png$/
+    );
+    expect(captureName("/admin/x?tab=fields", 390, "dark")).not.toBe(
+      captureName("/admin/x?tab=api", 390, "dark")
     );
   });
 
