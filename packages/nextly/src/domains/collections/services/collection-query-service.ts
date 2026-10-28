@@ -1694,6 +1694,8 @@ export class CollectionQueryService extends BaseService {
       localizedFields: companion.localizedFields,
       mainIdColumn: schema.id,
       locale: localeChain[0],
+      localeChain,
+      companionTable: companion.table,
       // Only constrain by status when the collection has per-locale status and the
       // read resolved to a single status; otherwise leave it unfiltered.
       statusValues:
@@ -1948,7 +1950,13 @@ export class CollectionQueryService extends BaseService {
       return sql`1 = 0`;
     }
     try {
-      return prepared.condition(schema, localizedCtx);
+      // A localized field the read shows from a fallback language is judged
+      // on that language's value too, so the read shows nothing the rule
+      // refuses.
+      return prepared.condition(
+        schema,
+        localizedCtx ? { ...localizedCtx, inEveryFallbackLanguage: true } : null
+      );
     } catch (error) {
       return unbuildable(error);
     }
