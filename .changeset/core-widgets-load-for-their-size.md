@@ -50,3 +50,10 @@ A widget declared with `defineWidget` can load for the size its card is drawn at
   collection to set by its label when exactly one the writer may read made it,
   and otherwise "the collection this card showed", never a slug read back from
   its id.
+- **`Widget.FooterLink`** is the one link a card's footer draws: beside a
+  `Widget.List` with `viewAllHref` it takes the place of "View all" rather
+  than sitting beside it, and in development a second FooterLink in one card
+  is named once in the console.
+- **A plugin's attention item** reading a declared collection its reader may
+  not read has each read checked first, so a malformed one fails for every
+  reader alike, and only then is answered as an empty collection.
