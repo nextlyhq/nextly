@@ -154,9 +154,18 @@ describe("looksLikeSecret", () => {
   // Built by joining, so no credential-shaped literal sits in the source for
   // a secret scanner to report; each is the documented shape and nothing more.
   const shaped = (...parts: string[]) => parts.join("");
+  /** A JWT whose header is `header`, written as JSON allows, encoded. */
+  const jwtWithHeader = (header: string) =>
+    shaped(
+      Buffer.from(header).toString("base64url"),
+      ".eyJzdWIiOiJ1MSJ9.c2lnbmF0dXJlLXZhbHVl"
+    );
   it.each([
     ["eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2lnbmF0dXJlLXZhbHVl"],
+    [jwtWithHeader('{ "alg":"HS256"}')],
+    [jwtWithHeader('{\n  "alg": "none"\n}')],
     ["whsec_abcdef123456"],
+    ["whsec_YQ=="],
     [shaped("sk_", "live_", "4eC39HqLyjWDarjtT1zdp7dc")],
     [shaped("rk_", "test_", "4eC39HqLyjWDarjtT1zdp7dc")],
     [shaped("gh", "p_", "a".repeat(36))],
@@ -177,6 +186,15 @@ describe("looksLikeSecret", () => {
     ["first-login"],
     ["a.b.c"],
     [""],
+    // Three long dotted parts, which a JWT has too, but no JOSE header: a
+    // name, and a cursor whose first part is JSON with no `alg`.
+    ["plugin-accounts.identity.unlinked"],
+    [
+      shaped(
+        Buffer.from('{"page":2}').toString("base64url"),
+        ".sortedby.createdat"
+      ),
+    ],
     // Neighbours of the shapes above, which are ordinary words or ids.
     ["sk_other_value"],
     ["ghp"],

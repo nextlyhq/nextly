@@ -535,8 +535,14 @@ const CREDENTIAL_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 /**
  * Credentials before a host in an address, with a scheme or without one:
  * `https://user:password@host` and `//user:password@host`.
+ *
+ * A scheme is read up to 64 characters. A long run of dashed or dotted words
+ * is tried from each word in it, and an unbounded scheme made every try read
+ * the run to its end, so a long line cost its length squared. What is
+ * redacted does not change: the scheme is put back as written, and an
+ * address after a longer run is matched from its `//`.
  */
-const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]*:)?\/\/)[^\s/@"'<>]+@/gi;
+const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
 
 /**
  * The name of a named value in text, in each form an upstream message quotes
@@ -549,7 +555,11 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]*:)?\/\/)[^\s/@"'<>]+@/gi;
  * characters, so a long line costs a bounded step at each quote. It holds no
  * `=` or `:`, though: a name that does (a map keyed by a URL with a `token=`
  * in it) is left to be searched as text, so the parameter inside it is still
- * found. Any other name keeps the identifier grammar.
+ * found. Any other name keeps the identifier grammar, up to 256 characters
+ * too: a long run of dotted or dashed words is tried from each word in it,
+ * and an unbounded name made every try read the run to its end, so a long
+ * line cost its length squared. A longer credential name is still found,
+ * from a word within 256 characters of its separator (`…token=`).
  *
  * Groups: an escaped JSON name's quote and text, a JSON name's quote and
  * text, any other name's quote and text, and the separator. The value is read
@@ -557,7 +567,7 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]*:)?\/\/)[^\s/@"'<>]+@/gi;
  * is searched as ordinary text.
  */
 const TEXT_PARAMETER =
-  /(?:(\\")((?:[^"\\\r\n=:]|\\(?!")[^\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b([A-Za-z_][\w.-]*(?:\[[\w.-]*\])*)\5)(\s*[=:]\s*)/g;
+  /(?:(\\")((?:[^"\\\r\n=:]|\\(?!")[^\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5)(\s*[=:]\s*)/g;
 
 /**
  * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes

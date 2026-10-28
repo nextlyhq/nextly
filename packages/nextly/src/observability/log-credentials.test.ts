@@ -435,6 +435,15 @@ describe("credentials anywhere in a log value", () => {
     expect(note).not.toContain("chain-secret");
   });
 
+  it("reads a credential's name longer than 256 characters by its last words", () => {
+    const name = `${"settings.".repeat(40)}token`;
+    const out = receivedBy({ note: `${name}=long-name-secret kept` });
+    expect(out).not.toContain("long-name-secret");
+    // The control: the words after the value, and the name, remain.
+    expect(out).toContain("kept");
+    expect(out).toContain("settings.settings.token=");
+  });
+
   it.each([
     ['retrying with token="unterminated-secret-1', "unterminated-secret-1"],
     ["retrying with password='unterminated-secret-2", "unterminated-secret-2"],
@@ -717,6 +726,15 @@ describe("credentials known by their shape, under any name", () => {
     "\n-----END ",
     "PRIVATE KEY-----"
   );
+  /** A JWT whose header is `header`, written as JSON allows, encoded. */
+  const jwtWithHeader = (header: string) =>
+    shaped(
+      Buffer.from(header).toString("base64url"),
+      ".",
+      "eyJzdWIiOiJ1c2VyLTEifQ",
+      ".",
+      "c2lnbmF0dXJlLXZhbHVl"
+    );
 
   /**
    * What an app's service logger receives for `message` and `meta`: as Node
@@ -737,8 +755,31 @@ describe("credentials known by their shape, under any name", () => {
     };
   }
 
+  /** The message and fields an app's service logger receives, as values. */
+  function receivedAs(message: string, meta: Record<string, unknown>) {
+    const received: unknown[] = [];
+    maskingServiceLogger({
+      debug: (m: string, fields?: unknown) => received.push(m, fields),
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    }).debug(message, meta);
+    const [text, fields] = received as [string, Record<string, unknown>];
+    return { text, fields };
+  }
+
   it.each([
     ["a JWT", JWT],
+    // A JOSE header is any JSON object, so whitespace may follow its brace:
+    // `{ "` encodes to `eyAi` and `{` then a line break to `ewo`, not `eyJ`.
+    [
+      "a JWT whose header has a space after its brace",
+      jwtWithHeader('{ "alg":"HS256"}'),
+    ],
+    [
+      "a JWT whose header is laid out on lines",
+      jwtWithHeader('{\n  "alg": "HS256",\n  "typ": "JWT"\n}'),
+    ],
     ["a GitHub personal token", GITHUB],
     ["a GitHub OAuth token", shaped("gh", "o_", "c".repeat(36))],
     ["a GitHub user-to-server token", shaped("gh", "u_", "d".repeat(36))],
@@ -751,36 +792,52 @@ describe("credentials known by their shape, under any name", () => {
     ["a Stripe secret key", shaped("sk_", "live_", "h".repeat(24))],
     ["a Stripe restricted key", shaped("rk_", "test_", "i".repeat(24))],
     ["a webhook signing secret", shaped("whsec_", "j".repeat(32))],
+    // The webhook signer takes any `whsec_` whose rest decodes to one byte.
+    ["a one-byte webhook signing secret", shaped("whsec_", "YQ==")],
+    ["a one-byte webhook signing secret, unpadded", shaped("whsec_", "YQ")],
     ["a GitLab token", shaped("gl", "pat-", "k".repeat(20))],
     ["a Slack token", shaped("xo", "xb-", "1234567890-", "l".repeat(24))],
     ["a Google OAuth token", shaped("ya", "29.", "m".repeat(40))],
   ])("takes %s out of a neutral field and out of text", (_, credential) => {
-    const { printed } = logged(`upstream rejected ${credential} today`, {
-      value: credential,
-      note: `retrying after ${credential} was refused`,
+    const { text, fields } = receivedAs(
+      `upstream rejected ${credential} today`,
+      {
+        value: credential,
+        note: `retrying after ${credential} was refused`,
+      }
+    );
+    // Exactly one marker where the token was, and every other character as
+    // it was: a match that left a prefix, a suffix or one character of the
+    // token behind would no longer read like this.
+    expect(text).toBe("upstream rejected [redacted] today");
+    expect(fields).toEqual({
+      value: "[redacted]",
+      note: "retrying after [redacted] was refused",
     });
-    expect(printed).not.toContain(credential);
-    // POPULATION CONTROL: the words around it, and the field, remain.
-    expect(printed).toContain("upstream rejected");
-    expect(printed).toContain("today");
-    expect(printed).toContain("retrying after");
-    expect(printed).toContain("was refused");
-    expect(printed).toContain("value:");
   });
 
   it("takes a stateless GitHub installation token out whole: prefix, app id and JWT", () => {
     // GitHub's stateless installation token, `ghs_<APPID>_<JWT>`.
-    const appPart = shaped("gh", "s_", "123456");
-    const stateless = shaped(appPart, "_", JWT);
-    const { printed } = logged(`upstream rejected ${stateless} today`, {
-      value: stateless,
+    const stateless = shaped("gh", "s_", "123456", "_", JWT);
+    const { text, fields } = receivedAs(
+      `upstream rejected ${stateless} today`,
+      {
+        value: stateless,
+      }
+    );
+    expect(text).toBe("upstream rejected [redacted] today");
+    expect(fields).toEqual({ value: "[redacted]" });
+  });
+
+  it("finds a credential where a JWT-shaped run around it is refused", () => {
+    // `accounts.<header>.<payload>` has a JWT's shape but no JOSE header, and
+    // the real JWT starts at its second part; an npm token followed by two
+    // dotted parts has a JWT's shape too, and is still an npm token.
+    const { text, fields } = receivedAs(`sent accounts.${JWT} upstream`, {
+      value: `${NPM}.segment2.segment3`,
     });
-    expect(printed).not.toContain(appPart);
-    expect(printed).not.toContain(JWT);
-    // POPULATION CONTROL: the words around it, and the field, remain.
-    expect(printed).toContain("upstream rejected");
-    expect(printed).toContain("today");
-    expect(printed).toContain("value:");
+    expect(text).toBe("sent accounts.[redacted] upstream");
+    expect(fields).toEqual({ value: "[redacted].segment2.segment3" });
   });
 
   it("takes a PEM block out whole, its body as well as its header", () => {
@@ -841,6 +898,13 @@ describe("credentials known by their shape, under any name", () => {
       longVersion: "16.2.0-canary.12",
       kind: "plugin-accounts.identity.unlinked",
       modulePath: "observability.instrumentation.register",
+      // Three dotted parts whose first is base64url JSON, as a pagination
+      // cursor is, but not a JOSE header: an object with no `alg`.
+      cursor: shaped(
+        Buffer.from('{"page":2}').toString("base64url"),
+        ".",
+        "sortedby.createdat"
+      ),
       prose: "the token expired, so a new token was requested",
       mention: "signing secrets start with whsec_ and keys with sk_live_",
       word: "xoxo-gossip",
