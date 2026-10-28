@@ -622,6 +622,39 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("follows the collection's revalidate config when it flushes: opted out, nothing; extra tags, with the rest", async () => {
+      // A release is one more way to write a document. A collection that opts
+      // out of revalidation owns its pages' freshness whichever way it is
+      // written, and one that names extra tags has them flushed every time.
+      const app = await boot(dialect);
+      const flushedWith = async (config: {
+        disable?: boolean;
+        tags?: string[];
+      }) => {
+        const flushed: { tags: string[] }[] = [];
+        const repo = new ReleasesRepository(
+          app.adapter,
+          { flush: intents => void flushed.push(...intents) },
+          async () => config
+        );
+        const release = await repo.createRelease({ title: "Configured" });
+        await repo.addMember(
+          { releaseId: release.id, ...ref("e1"), action: "publish" },
+          ANY_EDITABLE_STATE
+        );
+        flushed.length = 0;
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
+        return flushed;
+      };
+
+      expect(await flushedWith({ disable: true })).toEqual([]);
+      const withExtra = await flushedWith({ tags: ["navigation"] });
+      expect(withExtra).toHaveLength(1);
+      expect(withExtra[0]!.tags.sort()).toEqual(
+        ["navigation", "nextly:posts", "nextly:posts:id:e1"].sort()
+      );
+    });
+
     it("flushes them again when the release is CANCELLED", async () => {
       // Cancelling changes what a read returns just as scheduling does: a page
       // cached with a lifetime derived from this release is now bounded by an

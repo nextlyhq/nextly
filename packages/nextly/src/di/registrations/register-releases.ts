@@ -38,6 +38,7 @@ import {
   scopeKeyOf,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors";
+import { readRevalidateConfig } from "../../revalidation/intent-builders";
 import type { CacheRevalidator } from "../../revalidation/types";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
@@ -79,7 +80,25 @@ export function registerReleaseServices({
           adapter,
           container.has("cacheRevalidator")
             ? container.get<CacheRevalidator>("cacheRevalidator")
-            : undefined
+            : undefined,
+          // The opt-out and extra tags a release's flush must honour, read
+          // from the registries per call for the reason the targets below are.
+          async (scopeKind, scopeSlug) => {
+            const key =
+              scopeKind === "single"
+                ? "singleRegistryService"
+                : "collectionRegistryService";
+            if (!container.has(key)) return undefined;
+            const registry = container.get<{
+              getCollectionBySlug?: (slug: string) => Promise<unknown>;
+              getSingleBySlug?: (slug: string) => Promise<unknown>;
+            }>(key);
+            return readRevalidateConfig(
+              await (scopeKind === "single"
+                ? registry.getSingleBySlug?.(scopeSlug)
+                : registry.getCollectionBySlug?.(scopeSlug))
+            );
+          }
         ),
 
         // The system resource, whose three authorities are seeded by

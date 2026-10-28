@@ -15,7 +15,11 @@
  */
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
-import type { CacheRevalidator } from "../../revalidation/types";
+import type {
+  CacheRevalidator,
+  RevalidateConfig,
+  RevalidationIntent,
+} from "../../revalidation/types";
 import { releasesTables } from "../../schemas/releases";
 import {
   RELEASE_CANCELLABLE_FROM,
@@ -635,6 +639,16 @@ async function markMemberApplied(
   );
 }
 
+/** A release flush that failed: never thrown, since the write it follows is committed. */
+function logReleaseFlushFailure(error: unknown): void {
+  getNextlyLogger().warn({
+    kind: "release-cache-flush-failed",
+    message:
+      "A release changed its documents, but their cached reads could not be expired",
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 /** An instant as an event payload keeps it, whatever the driver returned. */
 function isoOf(value: Date | string | number): string {
   return (value instanceof Date ? value : new Date(value)).toISOString();
@@ -929,7 +943,14 @@ export class ReleasesRepository {
 
   constructor(
     private readonly db: ReleasesDbApi,
-    private readonly revalidator?: CacheRevalidator
+    private readonly revalidator?: CacheRevalidator,
+    // Each member's collection or Single `revalidate` config, so a release's
+    // flush skips what opts out and names its extra tags, as any other write
+    // does. Without it every member is flushed with its derived tags alone.
+    private readonly revalidateConfigFor?: (
+      scopeKind: "collection" | "single",
+      slug: string
+    ) => Promise<RevalidateConfig | undefined>
   ) {
     this.lockServer = rowLockServer(db, db.dialect);
     this.notices = new NoticesService({
@@ -973,12 +994,14 @@ export class ReleasesRepository {
 
     if (this.revalidator === undefined) return;
     try {
-      const intent = releaseRevalidationIntent(
+      const intent = await this.revalidationIntentFor(
         await this.listMembers(releaseId)
       );
       if (intent !== null) await this.revalidator.flush([intent]);
-    } catch {
-      // Deliberately swallowed; see the note above.
+    } catch (error) {
+      // Not thrown, for the reason above; logged, so a release whose pages stay
+      // stale says why.
+      logReleaseFlushFailure(error);
     }
   }
 
@@ -1588,11 +1611,37 @@ export class ReleasesRepository {
     invalidateTransitionCacheFor(this.db);
     if (members.length === 0 || this.revalidator === undefined) return;
     try {
-      const intent = releaseRevalidationIntent(members);
+      const intent = await this.revalidationIntentFor(members);
       if (intent !== null) await this.revalidator.flush([intent]);
-    } catch {
-      // Best-effort, as everywhere else this flushes.
+    } catch (error) {
+      // Best-effort, as everywhere else this flushes, and logged.
+      logReleaseFlushFailure(error);
     }
+  }
+
+  /**
+   * The intent a release's members flush, with each scope's `revalidate`
+   * config read once however many of its documents the release holds.
+   */
+  private async revalidationIntentFor(
+    members: readonly ReleaseMemberRow[]
+  ): Promise<RevalidationIntent | null> {
+    const configs = new Map<string, RevalidateConfig | undefined>();
+    if (this.revalidateConfigFor) {
+      for (const member of members) {
+        const kind = member.scopeKind === "single" ? "single" : "collection";
+        const key = `${kind}:${member.scopeSlug}`;
+        if (!configs.has(key)) {
+          configs.set(
+            key,
+            await this.revalidateConfigFor(kind, member.scopeSlug)
+          );
+        }
+      }
+    }
+    return releaseRevalidationIntent(members, (kind, slug) =>
+      configs.get(`${kind}:${slug}`)
+    );
   }
 
   /**
