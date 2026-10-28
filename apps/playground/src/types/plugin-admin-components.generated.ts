@@ -4,6 +4,8 @@
  * without importing the components. Regenerated with it. */
 
 export const registeredComponentPaths = [
+  "@/plugins/block-fixture/editor#blockFixtureEditor",
+  "@/plugins/block-fixture/editor#FixtureInspector",
   "@/plugins/widget-kit-fixture/admin#KitCard",
   "@/plugins/widget-kit-fixture/admin#ThrowingCard",
   "@nextlyhq/plugin-page-builder/admin#BlocksField",

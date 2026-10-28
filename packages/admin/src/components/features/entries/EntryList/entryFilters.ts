@@ -17,6 +17,13 @@ export interface EntryFilterState {
   updatedTo?: string;
   /** The active language filter, if any. */
   translated?: TranslationListFilter | null;
+  /**
+   * Whether the user may read every language's translation state, which a
+   * filter by it reads. Without it no such filter is sent, the list's own or
+   * a link's, since the server refuses the whole list for one. Defaults to
+   * true.
+   */
+  readsTranslationState?: boolean;
 }
 
 /** A filter split into its top-level-only keys and everything else. */
@@ -95,6 +102,24 @@ function joinedFilters(
   return { and: filters };
 }
 
+/**
+ * The top-level keys the list sends: the linked ones, then the language
+ * filter, which wins over a linked `_translated`. Neither language filter is
+ * sent for a user who may not read every language's translation state.
+ */
+function topLevelKeys(
+  linked: Record<string, unknown>,
+  translated: TranslationListFilter | null,
+  readsTranslationState: boolean
+): Record<string, unknown> {
+  if (!readsTranslationState) {
+    return Object.fromEntries(
+      Object.entries(linked).filter(([key]) => key !== "_translated")
+    );
+  }
+  return { ...linked, ...(translated ? { _translated: translated } : {}) };
+}
+
 export function buildEntryWhereFilter({
   whereParam,
   status = "all",
@@ -103,6 +128,7 @@ export function buildEntryWhereFilter({
   updatedFrom = "",
   updatedTo = "",
   translated = null,
+  readsTranslationState = true,
 }: EntryFilterState): Record<string, unknown> | undefined {
   const linked = linkedFilter(whereParam);
   const createdRange = buildDateRangeFilter(createdFrom, createdTo);
@@ -115,12 +141,12 @@ export function buildEntryWhereFilter({
   ].filter((f): f is Record<string, unknown> => f !== undefined);
 
   // The top-level-only keys go back at the TOP level, never nested inside
-  // `and`: the linked ones, then the language filter, which wins over a
-  // linked `_translated`.
-  const topLevel = {
-    ...linked.topLevel,
-    ...(translated ? { _translated: translated } : {}),
-  };
+  // `and`.
+  const topLevel = topLevelKeys(
+    linked.topLevel,
+    translated,
+    readsTranslationState
+  );
   const result = joinedFilters(filters);
   if (Object.keys(topLevel).length === 0) return result;
   return { ...(result ?? {}), ...topLevel };

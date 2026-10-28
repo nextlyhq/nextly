@@ -21,7 +21,6 @@
  *
  * @module components/features/widgets/edit/ArrangedGrid
  */
-import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
 import type { JSX, RefObject } from "react";
 
@@ -32,6 +31,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
   type IsDrawn,
@@ -105,8 +105,8 @@ export interface ArrangedGridProps {
   requested: ReadonlySet<string>;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
-  /** The tier the answer one card shows was fetched at. */
-  fetchedTierFor: (placementId: string) => SizeTier | undefined;
+  /** The size the answer one card shows was fetched at. */
+  fetchedSizeFor: (placementId: string) => AnswerSize | undefined;
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   /** Reload one card's data on its own, from its error state's Retry. */
@@ -217,21 +217,38 @@ function cellSettingsWrite(
 }
 
 /**
- * Whether a card is off the dashboard because its widget hides when empty and its answer is, by
- * the outcome the renderer draws from (`resolveWidgetOutcome`), so the two cannot disagree.
+ * Whether a card is off the dashboard: its widget's own `shows` said no for this person, or it
+ * hides when empty and its answer is. Read from the outcome the renderer draws from
+ * (`resolveWidgetOutcome`), so the two cannot disagree.
  */
 function hiddenWhileEmpty(
   row: ArrangedWidget,
   slots: Record<string, WidgetSlot>,
   cellSlots: CellSlots
 ): boolean {
-  if (row.widget.hidesWhenEmpty !== true) return false;
   const outcome = resolveWidgetOutcome(
     row.widget,
     slots[row.placementId],
     key => cellSlots[row.placementId]?.[key]
   );
-  return outcome.state === "empty";
+  if (outcome.state === "not-shown") return true;
+  return row.widget.hidesWhenEmpty === true && outcome.state === "empty";
+}
+
+/**
+ * How many cards are on show: every one while customising, where a hidden card is shown marked;
+ * at rest, those not taken off the dashboard (`hiddenWhileEmpty`), so a dashboard whose every
+ * card is hidden says it is empty rather than drawing nothing.
+ */
+function shownCount(
+  rows: readonly ArrangedWidget[],
+  isEditing: boolean,
+  answers: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots }
+): number {
+  if (isEditing) return rows.length;
+  return rows.filter(
+    row => !hiddenWhileEmpty(row, answers.slots, answers.cellSlots)
+  ).length;
 }
 
 /**
@@ -270,7 +287,7 @@ export function ArrangedGrid({
   cellSlots,
   requested,
   updatedAtFor,
-  fetchedTierFor,
+  fetchedSizeFor,
   fetchingPlacementIds,
   retry,
   announcement,
@@ -311,7 +328,10 @@ export function ArrangedGrid({
         >
           {announcement}
         </span>
-        <EmptyArrangement count={rows.length} isEditing={isEditing} />
+        <EmptyArrangement
+          count={shownCount(rows, isEditing, { slots, cellSlots })}
+          isEditing={isEditing}
+        />
         <DropLineMark line={drag?.line} />
         {rows.map(row => (
           <ArrangedCell
@@ -339,7 +359,7 @@ export function ArrangedGrid({
               // 🔴 This card's own request, not the batch's: partitions
               // settle independently, and a settled card must not dim.
               isFetching: fetchingPlacementIds.has(row.placementId),
-              answerTier: fetchedTierFor(row.placementId),
+              answerSize: fetchedSizeFor(row.placementId),
               // Retry only for a card in the batch: one rejected before it was asked has no
               // question to ask again, so the button could change nothing.
               onRetry: requested.has(row.placementId)

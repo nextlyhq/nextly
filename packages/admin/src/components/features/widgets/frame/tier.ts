@@ -17,13 +17,15 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import {
   effectiveWidgetLimit,
   GRID_COLUMNS,
-  MAX_WIDGET_ROWS,
+  type ListDensity,
 } from "nextly/config";
 import { createContext, useContext, type RefObject, type Context } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 
 import { columnGapPx, drawnSpan } from "../sizes";
+
+import { listBodyHeight, rowsThatFit, type RowsSize } from "./list-rows";
 
 /** Below this rendered width a card is small: a full grouped figure may not fit. */
 const SMALL_BELOW_PX = 340;
@@ -68,11 +70,10 @@ export function predictedTier(
   return tierForWidth(cardOuterWidth(w, dashboardWidth));
 }
 
-/** The most rows a small card draws: below 340 px a fourth row is a scroll. */
-export const SMALL_TIER_ROWS = 3;
-
 /**
- * The rows a card of `tier` draws when its setting asks for `items`.
+ * The rows a card of `size` (its tier, and its height where it has one) draws at `density` when
+ * its setting asks for `items`: the whole rows its body holds ({@link rowsThatFit}), or fewer
+ * where the setting asks for fewer.
  *
  * One answer for every reader of it: the list and table displays draw this
  * many, the query asks for one more (to learn whether more exist), and the
@@ -83,11 +84,17 @@ export const SMALL_TIER_ROWS = 3;
  * `items` is read through core's own rule, so a missing or garbage setting
  * means what it means to the query: five rows, never NaN.
  */
-export function rowsDrawn(tier: SizeTier, items: unknown): number {
+export function rowsDrawn(
+  size: SizeTier | RowsSize,
+  items: unknown,
+  density: ListDensity = "default",
+  /** Room the body gives something drawn above the rows, in pixels, which no row may take. */
+  reservedPx = 0
+): number {
+  const rows = typeof size === "string" ? { tier: size } : size;
   return Math.min(
     effectiveWidgetLimit(items),
-    MAX_WIDGET_ROWS,
-    tier === "small" ? SMALL_TIER_ROWS : Number.POSITIVE_INFINITY
+    rowsThatFit(listBodyHeight(rows) - reservedPx, density)
   );
 }
 
@@ -175,13 +182,21 @@ export function useCardTier(): SizeTier | undefined {
   return useContext(CardTierContext);
 }
 
+/** The height of the card being drawn, in grid rows; `undefined` for a card with none. */
+export const CardHeightContext: Context<number | undefined> = createContext<
+  number | undefined
+>(undefined);
+
+/** The size an answer was fetched at: the card's tier and height then, and its density. */
+export type AnswerSize = RowsSize & { density?: ListDensity };
+
 /**
- * The tier the answer a card shows was fetched at; `undefined` where it is not known. A card that
+ * The size the answer a card shows was fetched at; `undefined` where it is not known. A card that
  * grew keeps its smaller answer on screen until a larger one lands, and that answer holds only
- * the rows its own tier asked for, and the one more that says more exist.
+ * the rows its own size asked for, and the one more that says more exist.
  */
-export const AnswerTierContext: Context<SizeTier | undefined> = createContext<
-  SizeTier | undefined
+export const AnswerSizeContext: Context<AnswerSize | undefined> = createContext<
+  AnswerSize | undefined
 >(undefined);
 
 const TIER_ORDER: Readonly<Record<SizeTier, number>> = {
@@ -196,16 +211,26 @@ export function drawsFrom(tier: SizeTier, from: SizeTier): boolean {
 }
 
 /**
- * The tier a card's rows are counted at: the card's own, or the tier its answer was fetched at
- * when that is smaller. Counted at the card's tier, a smaller answer would draw its extra row as
- * one more item and lose the sign that more exist.
+ * The rows a card draws (`rowsDrawn`): at its own tier and height, or at the size its answer was
+ * fetched at when that draws fewer. Counted at the card's size, a smaller answer would draw its
+ * extra row as one more item and lose the sign that more exist.
  */
-export function useRowsTier(cardTier: SizeTier): SizeTier {
-  const answerTier = useContext(AnswerTierContext);
-  return answerTier !== undefined &&
-    TIER_ORDER[answerTier] < TIER_ORDER[cardTier]
-    ? answerTier
-    : cardTier;
+export function useRowsDrawn(
+  cardTier: SizeTier,
+  items: unknown,
+  density: ListDensity,
+  /** Room the body gives something drawn above the rows; see `rowsDrawn`. */
+  reservedPx = 0
+): number {
+  const h = useContext(CardHeightContext);
+  const answer = useContext(AnswerSizeContext);
+  const drawn = rowsDrawn({ tier: cardTier, h }, items, density, reservedPx);
+  return answer === undefined
+    ? drawn
+    : Math.min(
+        drawn,
+        rowsDrawn(answer, items, answer.density ?? density, reservedPx)
+      );
 }
 
 /**

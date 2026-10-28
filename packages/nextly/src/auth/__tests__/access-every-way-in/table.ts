@@ -554,17 +554,24 @@ export function rowKey(row: Row): string {
 // The one answer
 // ---------------------------------------------------------------------------
 
-export type Verdict = "allow" | "refuse";
+/**
+ * Allowed, refused, or allowed only for the entries a rule's filter matches:
+ * what a list or a count of a collection whose read rule answers a filter
+ * gives.
+ */
+export type Verdict = "allow" | "refuse" | "matching";
 
 /**
  * What a rule says to a caller for an action: `true` only when it answers
- * exactly `true`, and `null` where it declares nothing for the action.
+ * exactly `true`, `filter` when it answers a well-formed filter, and `null`
+ * where it declares nothing for the action.
  */
-type RuleAnswer = (action: Action, caller: Caller) => boolean | null;
+type RuleAnswer = (action: Action, caller: Caller) => boolean | "filter" | null;
 
 const SAYS_TRUE: RuleAnswer = () => true;
 /** `false`, a non-boolean answer and a throw all count as a refusal. */
 const SAYS_NOT_TRUE: RuleAnswer = () => false;
+const SAYS_FILTER: RuleAnswer = () => "filter";
 
 /** What each rule says, one entry per rule so none is decided by a fallback. */
 const RULE_SAYS: Record<Rule, RuleAnswer> = {
@@ -590,9 +597,10 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "user-is-key-maker": (_action, caller) => MADE_BY_USER_WITH.includes(caller),
   "publish-false": action =>
     action === "publish" || action === "unpublish" ? false : null,
-  // A filter is not `true`, and no door applies one yet, so each refuses.
-  "returns-filter": SAYS_NOT_TRUE,
-  "async-filter": SAYS_NOT_TRUE,
+  // A well-formed filter allows the entries it matches, and one that is not
+  // well formed refuses.
+  "returns-filter": SAYS_FILTER,
+  "async-filter": SAYS_FILTER,
   "returns-empty-in": SAYS_NOT_TRUE,
   "malformed-filter": SAYS_NOT_TRUE,
 };
@@ -644,13 +652,12 @@ const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
 /**
  * The permissions an install seeds for each resource that is not an entry.
  * An action missing here has no permission to tick, so only a super-admin's
- * own session reaches it: there is no `update-email-providers`, and a key
- * holds only rows that exist.
+ * own session reaches it, and a key holds only rows that exist.
  */
 const SEEDED: Partial<Record<Target, readonly Action[]>> = {
   users: ["create", "read", "update", "delete"],
   roles: ["create", "read", "update", "delete"],
-  providers: ["create", "read", "delete"],
+  providers: ["create", "read", "update", "delete"],
 };
 
 /**
@@ -694,14 +701,41 @@ const judgedAs = (action: Action): Action =>
 const isLifecycle = (action: Action) =>
   action === "publish" || action === "unpublish";
 
+/** What the target's rules let through: every entry, those a filter matches, or none. */
+type RulesLet = "all" | "matching" | "none";
+
 /**
- * Whether the target's rules let the action through: its own rule, where the
- * target declares one, answers exactly `true`. A publish or an unpublish is
- * judged by its own rule, as any action is, not the update rule as well.
+ * What the target's rules let through. Its own rule, where the target
+ * declares one, must answer exactly `true`, or for a collection's read a
+ * well-formed filter, which lets through the entries it matches. A filter
+ * from any other rule refuses: a write rule's is not applied yet, and a
+ * create rule or a Single's rule may not answer one. A publish or an
+ * unpublish is judged by its own rule, as any action is, not the update rule
+ * as well.
  */
-function rulesAllow(rule: Rule, action: Action, caller: Caller): boolean {
+function rulesLet(
+  rule: Rule,
+  action: Action,
+  caller: Caller,
+  target: Target
+): RulesLet {
   const says = RULE_SAYS[rule](action, caller);
-  return says === null || says === true;
+  if (says === "filter") {
+    const collection = target !== "single" && target !== "single-pub";
+    return action === "read" && collection ? "matching" : "none";
+  }
+  return says === null || says === true ? "all" : "none";
+}
+
+/**
+ * A row's answer from what the rules let through. A list or a count of a
+ * filtered read returns the matching entries; any other read asks about the
+ * probe entry, which the filter rule kinds match, so it is allowed.
+ */
+function answerFor(row: Row, lets: RulesLet): Verdict {
+  if (lets === "none") return "refuse";
+  if (lets === "all") return "allow";
+  return row.action === "list" || row.action === "count" ? "matching" : "allow";
 }
 
 /**
@@ -753,18 +787,20 @@ export function publicHolds(
 
 /**
  * A visitor's answer: the Public role's permission, then, where the target
- * declares a rule for the action, a rule answering exactly `true`. A rule that
- * reads the caller's permissions sees the Public role's. A visitor never
- * publishes or unpublishes, whatever Public holds.
+ * declares a rule for the action, what the rule lets through, as for a
+ * signed-in user: a rule answering exactly `true` every entry, and a
+ * collection's read rule answering a well-formed filter the entries it
+ * matches. A rule that reads the caller's permissions sees the Public role's.
+ * A visitor never publishes or unpublishes, whatever Public holds.
  */
 function visitorAnswer(row: Row, action: Action): Verdict {
   const { setup, target, rule } = row;
   if (isLifecycle(action)) return "refuse";
-  const held = publicHolds(setup, target, rule, action);
-  if (!held) return "refuse";
-  const says =
-    rule === "role-screen-spelling" ? held : RULE_SAYS[rule](action, "visitor");
-  return says === null || says === true ? "allow" : "refuse";
+  if (!publicHolds(setup, target, rule, action)) return "refuse";
+  // The rule reads the caller's permissions, which are the Public role's,
+  // and Public holds the action.
+  if (rule === "role-screen-spelling") return "allow";
+  return answerFor(row, rulesLet(rule, action, "visitor", target));
 }
 
 /**
@@ -784,6 +820,10 @@ function visitorAnswer(row: Row, action: Action): Verdict {
  *   A `list` and a `count` are reads, judged by the read permission and rule.
  *   A create sent as published is a create and a publish, allowed only where
  *   both are.
+ * - a collection's read rule may answer a well-formed filter instead of
+ *   `true`, which allows the entries it matches: a list or a count returns
+ *   those alone, and a read of the probe entry, which it matches, is allowed.
+ *   A filter from any other rule refuses.
  */
 export function oneAnswer(row: Row): Verdict {
   if (row.action === "new-pub") {
@@ -798,17 +838,18 @@ export function oneAnswer(row: Row): Verdict {
     return visitorAnswer(row, action);
   }
   if (PRINCIPALS.includes(caller)) {
-    const allowed =
-      !isLifecycle(action) && RULE_SAYS[rule](action, caller) === true;
-    return allowed ? "allow" : "refuse";
+    // Judged by the rule alone, so a target that declares none refuses.
+    if (isLifecycle(action) || RULE_SAYS[rule](action, caller) === null) {
+      return "refuse";
+    }
+    return answerFor(row, rulesLet(rule, action, caller, target));
   }
   if (caller === "visitor") return visitorAnswer(row, action);
   if (caller === "super-admin" || caller === "super-admin-inherited") {
     return "allow";
   }
-  const allowed =
-    holdsPermission(caller, action, target) && rulesAllow(rule, action, caller);
-  return allowed ? "allow" : "refuse";
+  if (!holdsPermission(caller, action, target)) return "refuse";
+  return answerFor(row, rulesLet(rule, action, caller, target));
 }
 
 // ---------------------------------------------------------------------------
@@ -816,7 +857,8 @@ export function oneAnswer(row: Row): Verdict {
 // ---------------------------------------------------------------------------
 
 /**
- * One door's answer as the file spells it: `A` allowed, `R` refused, an HTTP
+ * One door's answer as the file spells it: `A` allowed, `M` a list or a count
+ * that returned only the entries a rule's filter matches, `R` refused, an HTTP
  * status for a refusal or failure that carried one, `E` for a failure without
  * one, and `.` where the door does not ask the row. `S` is a media row a read
  * was refused and still populated with its file, its internal columns taken
@@ -830,6 +872,7 @@ export type Answer = string;
 
 export function verdictOf(answer: Answer): Verdict | "error" {
   if (answer === "A") return "allow";
+  if (answer === "M") return "matching";
   if (answer === "R" || answer === "401" || answer === "403") return "refuse";
   if (answer === "S") return "refuse";
   if (answer === "404") return "refuse";

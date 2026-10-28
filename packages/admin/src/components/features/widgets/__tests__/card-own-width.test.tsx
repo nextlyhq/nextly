@@ -2,8 +2,9 @@
  * A card lays itself out by its OWN rendered width, never the window's.
  *
  * Three copies of one list card in one viewport, in containers 300, 500 and 800 px wide: the
- * narrow one is small (three rows, titles only), the middle one medium (its number of items),
- * the wide one large (a table). One window, three layouts: only the card's width decides.
+ * narrow one is small (three rows, titles only), the middle one medium (five rows, each with its
+ * line of detail), the wide one large (a table of ten). One window, three layouts: only the
+ * card's width decides.
  */
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TieredRows } from "../archetypes/tiered-rows";
 import { WidgetCard } from "../WidgetCard";
 
-const items = Array.from({ length: 8 }, (_, i) => ({
+const items = Array.from({ length: 11 }, (_, i) => ({
   title: `Post ${i + 1}`,
   status: "draft",
 }));
@@ -23,7 +24,7 @@ const query = {
   source: "collection:posts",
   op: "list" as const,
   select: ["title", "status"],
-  limit: 5,
+  limit: 10,
 };
 
 beforeEach(() => {
@@ -59,7 +60,6 @@ function cardAt(width: number) {
           items={items}
           columns={columns}
           labelField="title"
-          detailField="status"
           query={query}
         />
       </WidgetCard>
@@ -67,27 +67,40 @@ function cardAt(width: number) {
   );
 }
 
+/** The three cards, each queried within its own container. */
+function drawThree() {
+  render(
+    <>
+      {cardAt(300)}
+      {cardAt(500)}
+      {cardAt(800)}
+    </>
+  );
+  return {
+    narrow: within(screen.getByTestId("at-300")),
+    middle: within(screen.getByTestId("at-500")),
+    wide: within(screen.getByTestId("at-800")),
+  };
+}
+
 describe("one card at three widths in one viewport", () => {
   it("is small, medium and large by its own width", () => {
-    render(
-      <>
-        {cardAt(300)}
-        {cardAt(500)}
-        {cardAt(800)}
-      </>
-    );
+    const { narrow, middle, wide } = drawThree();
 
-    const narrow = within(screen.getByTestId("at-300"));
-    const middle = within(screen.getByTestId("at-500"));
-    const wide = within(screen.getByTestId("at-800"));
+    expect(narrow.getAllByTestId("entity-row")).toHaveLength(3);
 
-    expect(narrow.getAllByTestId("widget-list-row")).toHaveLength(3);
-    expect(narrow.queryByText("draft")).not.toBeInTheDocument();
-
-    expect(middle.getAllByTestId("widget-list-row")).toHaveLength(5);
+    expect(middle.getAllByTestId("entity-row")).toHaveLength(5);
     expect(middle.getAllByText("draft")).toHaveLength(5);
 
-    expect(wide.getByTestId("widget-table")).toBeInTheDocument();
-    expect(wide.queryByTestId("widget-list")).not.toBeInTheDocument();
+    expect(wide.getByTestId("list-card-table")).toBeInTheDocument();
+    expect(wide.getAllByTestId("list-card-table-row")).toHaveLength(10);
+    expect(wide.queryByTestId("list-card-rows")).not.toBeInTheDocument();
+  });
+
+  it("keeps each row's detail when small, in fewer rows", () => {
+    // Below large every card stacks the row's slots; the narrow card differs in how many
+    // rows it draws, not in what a row says.
+    const { narrow } = drawThree();
+    expect(narrow.getAllByText("draft")).toHaveLength(3);
   });
 });

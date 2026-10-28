@@ -37,10 +37,10 @@ test("a row of the card opens the document it lists", async ({ page }) => {
   const card = page.getByTestId(`widget-cell-${CARD}`);
   await expect(card).toBeVisible();
 
-  const row = card.getByTestId("recent-edit").filter({ hasText: title });
+  const row = card.getByTestId("entity-row").filter({ hasText: title });
   await expect(row).toHaveCount(1);
-  // Medium or wider by default, so the row says where it lives and who saved it.
-  await expect(row).toContainText("posts");
+  // The row says where it lives, by the collection's label as the reader is shown it.
+  await expect(row).toContainText(/posts/i);
 
   const link = row.getByRole("link", { name: title });
   await expect(link).toHaveAttribute(

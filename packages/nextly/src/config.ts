@@ -336,6 +336,8 @@ export type {
 export {
   applyWidgetSettings,
   effectiveWidgetSettings,
+  // How many fields a Fields setting may choose: the settings sheet stops at it.
+  MAX_CHOSEN_FIELDS,
   naturalGroupBy,
   resolveWidgetSettings,
   type AppliedQuery,
@@ -419,6 +421,8 @@ export {
   DEFAULT_WIDGET_LIMIT,
   MAX_WIDGET_LIMIT,
   MAX_WIDGET_ROWS,
+  LIST_DENSITIES,
+  type ListDensity,
   effectiveWidgetLimit,
 } from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and

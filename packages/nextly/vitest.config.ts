@@ -5,6 +5,8 @@ import path from "path";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { configDefaults, defineConfig } from "vitest/config";
 
+import { UNIT_FILE } from "./src/__tests__/unit-files";
+
 // Mirror the tsdown `define` so `getCoreVersion()` resolves under test (D6).
 const require = createRequire(import.meta.url);
 const { version: coreVersion } = require("./package.json") as {
@@ -42,8 +44,6 @@ const LEAVES_STATE = new RegExp(
     String.raw`better-sqlite3|createTestNextly|:memory:`,
   ].join("|")
 );
-
-const UNIT_FILE = /\.(?:test|spec)\.ts$/;
 
 /** The unit files that keep a module graph of their own, relative to this folder. */
 function filesThatLeaveState(): string[] {
@@ -137,8 +137,34 @@ const isolatedFiles = [
   ]),
 ];
 
+/** The repository's starter projects, as a path prefix with forward slashes. */
+const TEMPLATES = `${path.resolve(__dirname, "../../templates").split(path.sep).join("/")}/`;
+
+/**
+ * This package's source for the names a template imports nextly by, for files
+ * under `templates/` only. A unit test may load a template's own code (the blog
+ * template's migration guard builds its collections), and a template has no
+ * `node_modules` of its own to find nextly in. A file anywhere else resolves
+ * these names as before.
+ */
+const TEMPLATE_IMPORTS: Record<string, string> = {
+  nextly: path.resolve(__dirname, "./src/index.ts"),
+  "nextly/config": path.resolve(__dirname, "./src/config.ts"),
+};
+
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  plugins: [
+    tsconfigPaths(),
+    {
+      name: "nextly-for-templates",
+      enforce: "pre",
+      resolveId(source, importer) {
+        const from = importer?.split("?")[0].split(path.sep).join("/");
+        if (!from?.startsWith(TEMPLATES)) return null;
+        return TEMPLATE_IMPORTS[source] ?? null;
+      },
+    },
+  ],
   define: {
     __NEXTLY_CORE_VERSION__: JSON.stringify(coreVersion),
   },

@@ -34,8 +34,10 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { VisitorGrantsLoader } from "../../../shared/lib/field-level-registry";
 import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -520,6 +522,9 @@ export class CollectionBulkService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
       // 1. Fetch the source entry with a REAL read check. Duplicating a row is
       // reading it plus creating a copy, and the route only authorized the
@@ -672,6 +677,9 @@ export class CollectionBulkService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Phase 4.5: result carries minimal `{id}` records for delete (the
     // entries are gone; no value in materializing more) and structured
     // per-item failures keyed by canonical NextlyErrorCode.
@@ -775,6 +783,9 @@ export class CollectionBulkService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
     // Per-id updates run concurrently via Promise.allSettled. See
@@ -943,7 +954,11 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
-    await assertCallerFilterReadable(params, this.queryService);
+    await assertCallerFilterReadable(
+      params,
+      this.queryService,
+      this.accessService.fieldRuleVisitor
+    );
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
     // UPDATE access was already checked above, so this runs with overrideAccess
@@ -1129,7 +1144,11 @@ export class CollectionBulkService extends BaseService {
       }
       throw NextlyError.forbidden({ logContext });
     }
-    await assertCallerFilterReadable(params, this.queryService);
+    await assertCallerFilterReadable(
+      params,
+      this.queryService,
+      this.accessService.fieldRuleVisitor
+    );
 
     // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
     // the READ rules (a role allowed to delete but not read must still see its
@@ -1276,6 +1295,9 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1520,6 +1542,9 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -2289,7 +2314,9 @@ async function assertCallerFilterReadable(
     user?: UserContext;
     authenticatedScope?: AuthenticatedScope;
   },
-  queryService: CollectionQueryService
+  queryService: CollectionQueryService,
+  /** Where a visitor's Public grants are read, as the write's gate reads them. */
+  visitor: VisitorGrantsLoader | undefined
 ): Promise<void> {
   // A reserved condition on another table is not a field, so the field check
   // below never sees it. `_pendingChange` and `_inRelease` select rows by what
@@ -2308,6 +2335,7 @@ async function assertCallerFilterReadable(
       caller: {
         user: params.user as Record<string, unknown> | undefined,
         authenticatedScope: params.authenticatedScope,
+        visitor,
       },
     }
   );

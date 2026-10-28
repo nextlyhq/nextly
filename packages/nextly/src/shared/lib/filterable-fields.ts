@@ -23,6 +23,7 @@ import {
   getFieldFunctions,
   readableWithoutEntry,
   type FieldFunctions,
+  type VisitorGrantsLoader,
 } from "./field-level-registry";
 
 type EntityKind = "collection" | "single" | "fieldGroup";
@@ -134,6 +135,11 @@ export interface QueryCaller {
   user?: Record<string, unknown>;
   /** The caller's own grants when they arrived on an API key. */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * Where a visitor's Public grants are read, as the read's own field rules
+   * read them, so a field a query may use is a field the rows show.
+   */
+  visitor?: VisitorGrantsLoader;
 }
 
 /**
@@ -157,7 +163,12 @@ async function unreadableFields(
   names: Iterable<string>,
   caller: QueryCaller,
   /** A resolver shared across several calls, so the caller is read once. */
-  grants = callerAccessGrants(caller.user, caller.authenticatedScope)
+  grants = callerAccessGrants(
+    caller.user,
+    caller.authenticatedScope,
+    undefined,
+    caller.visitor
+  )
 ): Promise<string[]> {
   const fns = getFieldFunctions(kind, slug);
   if (!fns) return [];
@@ -328,7 +339,12 @@ export async function assertFieldGroupPathsFilterable(
   const caller = opts.caller ?? {};
   // One resolver for every target and field group judged, so the caller's
   // roles are read once however many paths the filter names.
-  const grants = callerAccessGrants(caller.user, caller.authenticatedScope);
+  const grants = callerAccessGrants(
+    caller.user,
+    caller.authenticatedScope,
+    undefined,
+    caller.visitor
+  );
   const refused: string[] = [];
   for (const target of targets) {
     for (const slug of target.componentSlugs) {

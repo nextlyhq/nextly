@@ -39,7 +39,7 @@ import { cachedFind } from "../cache/cached-find";
 import { nextlySingleTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
-import { markDynamic } from "./mark-dynamic";
+import { deferToRequest } from "./defer-to-request";
 import { triggerNotFound } from "./not-found";
 
 /** A resolved Single (loose by design — the shape is the app's own). */
@@ -405,17 +405,18 @@ function buildSingleRoute<TNode>(
     // cache nor the route cache: one cached draft is served to everyone who asks
     // next, which turns a link scoped to one reviewer into a site-wide leak of
     // unpublished content. Bypassing the data cache alone does not opt out of
-    // the route cache, which is why this marks the render dynamic as well.
+    // the route cache, which is why this waits for the request as well.
     if (draft !== null) {
-      markDynamic();
+      await deferToRequest();
       return read(draft);
     }
 
     if (!trusted) {
       // An enforced read depends on who is asking, so it must not be frozen
       // into a build-time prerender or held in the route cache. Bypassing the
-      // data cache alone does not opt out of the route cache.
-      markDynamic();
+      // data cache alone does not opt out of the route cache, so this waits
+      // for the request, and the read takes its clock after it.
+      await deferToRequest();
       return read(null);
     }
     // Bounded by the next scheduled release, exactly as the collection route

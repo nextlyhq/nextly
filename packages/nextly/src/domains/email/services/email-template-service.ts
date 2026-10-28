@@ -25,14 +25,15 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, desc, isNull, sql, type Column } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
 import { maskingServiceLogger } from "../../../observability/mask-emails";
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
-import { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
-import { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
-import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
+import type { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
+import type { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
+import type { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
 import type {
   EmailTemplateInsert,
   EmailTemplateRecord,
@@ -502,13 +503,11 @@ export class EmailTemplateService extends BaseService {
 
     switch (this.dialect) {
       case "postgresql":
-        this.emailTemplates = emailTemplatesPg;
-        break;
       case "mysql":
-        this.emailTemplates = emailTemplatesMysql;
-        break;
       case "sqlite":
-        this.emailTemplates = emailTemplatesSqlite;
+        // The loaded dialect's own table, so only that dialect's file is
+        // imported; `createAdapter` loads it.
+        this.emailTemplates = loadedDialect(this.dialect).tables.emailTemplates;
         break;
       default:
         // `this.dialect` is narrowed to `never` after the exhaustive switch;

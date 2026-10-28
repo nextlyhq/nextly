@@ -17,6 +17,9 @@ const COMPOSITES = readdirSync(new URL("../.github/actions/", import.meta.url)).
   name => `.github/actions/${name}/action.yml`
 );
 const STORE = "./.github/actions/pnpm-store";
+// The action, from the job's own checkout or from a checkout of the workflow's commit
+// in a folder of its own (local-actions-match-workflow.test.mjs).
+const isStore = step => step.uses === STORE || /^\.\/[^/]+\/\.github\/actions\/pnpm-store$/.test(String(step.uses ?? ""));
 const INTEGRATION_SETUP = "./.github/actions/integration-setup";
 
 /** Every steps list in a file, as `{ where, steps, push }`: a workflow's jobs, or a composite's steps. */
@@ -56,7 +59,7 @@ describe("the pnpm store cache", () => {
         const install = list.steps.findIndex(isInstall);
         return !list.steps
           .slice(0, install)
-          .some(step => step.uses === STORE && step.with?.save !== "true");
+          .some(step => isStore(step) && step.with?.save !== "true");
       })
       .map(list => list.where);
     expect(unrestored).toEqual([]);
@@ -66,7 +69,7 @@ describe("the pnpm store cache", () => {
     const saves = allLists.flatMap(list =>
       list.steps
         .map((step, index) => ({ step, index }))
-        .filter(({ step }) => step.uses === STORE && step.with?.save === "true")
+        .filter(({ step }) => isStore(step) && step.with?.save === "true")
         .map(({ step, index }) => ({ list, step, install: list.steps.slice(0, index).reverse().find(isInstall) }))
     );
     expect(saves.length).toBeGreaterThan(0);
@@ -81,7 +84,7 @@ describe("the pnpm store cache", () => {
     const mismatched = allLists.flatMap(list =>
       list.steps
         .map((step, index) => ({ step, index }))
-        .filter(({ step }) => step.uses === STORE && step.with?.save !== "true")
+        .filter(({ step }) => isStore(step) && step.with?.save !== "true")
         .filter(({ step, index }) => {
           const setup = list.steps.slice(0, index).reverse().find(entry => String(entry.uses ?? "").startsWith("pnpm/action-setup@"));
           return (setup?.if ?? null) !== (step.if ?? null);

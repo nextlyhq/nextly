@@ -14,20 +14,18 @@ import { z } from "zod";
 
 import { TIMESERIES_INTERVALS } from "../../collections/query/timeseries-interval";
 import {
-  ARCHETYPE_OPS,
+  type ARCHETYPE_OPS,
   DATA_ARCHETYPES,
   type DataWidgetArchetype,
 } from "../definition";
 import type { WidgetResult } from "../result";
 import { WIDGET_SOURCE_FIELD_TYPES, type WidgetOp } from "../sources";
 
-import { quote } from "./quote";
-
 /**
  * Core's displays that draw data: today's data archetypes, so a display is a
  * way of drawing that already exists rather than a new vocabulary.
  */
-export const CORE_DISPLAYS = DATA_ARCHETYPES;
+const CORE_DISPLAYS = DATA_ARCHETYPES;
 
 /** One of core's displays that draws data. */
 export type CoreDisplay = DataWidgetArchetype;
@@ -36,63 +34,6 @@ export type CoreDisplay = DataWidgetArchetype;
 export const isCoreDisplay = (value: unknown): value is CoreDisplay =>
   typeof value === "string" &&
   (CORE_DISPLAYS as readonly string[]).includes(value);
-
-/**
- * Why a core display cannot draw what a query with this op answers, or
- * `undefined` when it can: the run-time half of {@link DisplayOp}, read from
- * the same table, for a declaration no type checked.
- */
-export function displayOpProblem(
-  display: CoreDisplay,
-  op: unknown
-): string | undefined {
-  const ops: readonly string[] = ARCHETYPE_OPS[display];
-  return typeof op === "string" && ops.includes(op)
-    ? undefined
-    : `its query's operation ${quote(op)} is not one the "${display}" display draws (${ops.join(", ")})`;
-}
-
-/**
- * Why a core display that draws rows has nothing to draw in each, or
- * `undefined` when it does: the run-time half of the type requiring a row
- * display's query to select a field (`QueryRequires` in `define-widget.ts`).
- *
- * A row display is one whose query answers a list, read from the same table
- * as {@link displayOpProblem}, so the two checks cannot disagree about which
- * displays draw rows. A list or table whose query selects nothing is refused
- * where it is drawn; for a plain JavaScript declaration no type saw, startup
- * says so first, to the author.
- */
-export function displaySelectProblem(
-  display: CoreDisplay,
-  select: unknown
-): string | undefined {
-  const ops: readonly string[] = ARCHETYPE_OPS[display];
-  if (!ops.includes("list")) return undefined;
-  return Array.isArray(select) && select.length > 0
-    ? undefined
-    : `its query selects no fields, so the "${display}" display has nothing to show in each row`;
-}
-
-/**
- * Why a declared widget's display cannot draw its query, or `undefined` when
- * it can: the operation and the selection, judged together.
- *
- * One check for both places a declared query is built, at startup from the
- * starting settings and for each card from its own, so a query is never
- * accepted by one and refused by the other. A component display draws
- * whatever its component does, so only a core display is judged.
- */
-export function declaredQueryProblem(
-  display: unknown,
-  query: { readonly op?: unknown; readonly select?: unknown }
-): string | undefined {
-  if (!isCoreDisplay(display)) return undefined;
-  return (
-    displayOpProblem(display, query.op) ??
-    displaySelectProblem(display, query.select)
-  );
-}
 
 /**
  * Which query answer each display draws, read from the table registration
@@ -159,6 +100,56 @@ export interface ComponentDisplay {
 export type WidgetDisplay = CoreDisplay | ComponentDisplay;
 
 /**
+ * The core views a declaration names, each drawn by one of core's displays.
+ *
+ * Named for what a reader sees (a figure, a list, a table, bars, a series)
+ * rather than for the archetype that draws it, and mapped onto those displays,
+ * so a declared view is drawn by the renderer that exists.
+ */
+export const CORE_VIEWS = {
+  figure: "metric",
+  list: "list",
+  table: "table",
+  bars: "bars",
+  series: "timeseries",
+} as const satisfies Record<string, CoreDisplay>;
+
+/** One of core's views, by the name a declaration gives it. */
+export type CoreView = keyof typeof CORE_VIEWS;
+
+/** How a widget declares its view: a core view's name, or its own component's path. */
+export type WidgetView = CoreView | ComponentDisplay;
+
+/** The display a view is drawn by: a core view's, or the component itself. */
+export type DisplayOf<View> = View extends CoreView
+  ? (typeof CORE_VIEWS)[View]
+  : View;
+
+/** Whether a value names one of core's views. */
+export const isCoreView = (value: unknown): value is CoreView =>
+  typeof value === "string" && Object.hasOwn(CORE_VIEWS, value);
+
+/** Whether a value is a component view: an object naming its component's path. */
+export const isComponentView = (value: unknown): value is ComponentDisplay =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value) &&
+  typeof (value as { component?: unknown }).component === "string";
+
+/** The view name a core display is declared by, so a fault speaks the author's own word. */
+export function viewOfDisplay(display: string): string {
+  const entry = Object.entries(CORE_VIEWS).find(
+    ([, drawn]) => drawn === display
+  );
+  return entry === undefined ? display : entry[0];
+}
+
+/** The display a declared view is drawn by. */
+export function displayOfView(view: WidgetView): WidgetDisplay {
+  return isCoreView(view) ? CORE_VIEWS[view] : view;
+}
+
+/**
  * The data each core display draws, as a check that runs.
  *
  * The types above say this to a TypeScript author. These say it to everything
@@ -197,6 +188,10 @@ const LIST_DATA = z.looseObject({
   fields: z.array(RESULT_FIELD).optional(),
   // The span the source looked at, in whole days; absent when unbounded.
   window: z.looseObject({ days: z.number().int().positive() }).optional(),
+  // How many rows the read matched in all, which a card's "View all (N)" names: a whole
+  // count of at least zero, and whether it is a floor.
+  total: z.number().int().nonnegative().optional(),
+  atLeast: z.boolean().optional(),
 });
 
 const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {

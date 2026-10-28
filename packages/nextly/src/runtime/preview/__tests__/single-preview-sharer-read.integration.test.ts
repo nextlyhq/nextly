@@ -129,7 +129,7 @@ function gate(token: string) {
   return previewSingleDraftGate({
     secret: SECRET,
     generation: GENERATION,
-    cookies: () => ({
+    cookies: async () => ({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE
           ? { value: encodeURIComponent(token) }
