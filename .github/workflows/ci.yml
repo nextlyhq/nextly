@@ -2160,6 +2160,14 @@ jobs:
       # The playground builds with Cache Components only when asked; this job is
       # what it is turned on for.
       NEXTLY_PLAYGROUND_CACHE_COMPONENTS: "1"
+      # The browser suite's own routes, switched on as `e2e/playwright.config.ts`
+      # switches them, so a harness page that reads the request above a
+      # Suspense boundary fails this build as a content route would.
+      NEXTLY_E2E_BRANDING: "1"
+      NEXTLY_E2E_STYLE_FIXTURE: "1"
+      NEXTLY_E2E_SLOW_WIDGET: "1"
+      NEXTLY_E2E_SHELL_HARNESS: "1"
+      NEXTLY_E2E_CANVAS_HARNESS: "1"
     timeout-minutes: 25
 
     steps:
@@ -2209,6 +2217,16 @@ jobs:
         env:
           DATABASE_URL: file:${{ runner.temp }}/cache-components-empty.db
         run: pnpm --filter playground exec next build
+
+      # `--debug-prerender` prerenders as development does, where the admin
+      # layout boots nextly to check its generated component map: request work
+      # a production build skips, which must sit beneath a Suspense boundary all
+      # the same, or `next dev` fails on the same page.
+      - name: Build with prerender debugging on an empty database
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-debug.db
+        run: pnpm --filter playground exec next build --debug-prerender
 
       - name: Build on seeded content
         if: steps.decide.outputs.inert != 'true'
