@@ -427,6 +427,10 @@ export class MySqlAdapter extends DrizzleAdapter {
     }
 
     try {
+      // Warned once, here, rather than on every session configuration the
+      // standalone connections build: the configuration cannot change
+      // between calls.
+      this.warnOnDriverZoneDisagreement();
       const poolConfig = this.buildPoolConfig();
       const pool = mysql.createPool(poolConfig);
       // Pin the session time zone the moment each pooled connection opens.
@@ -983,9 +987,11 @@ export class MySqlAdapter extends DrizzleAdapter {
    * mysql2's driver-level `timezone` decides how it parses the date strings
    * the pinned session answers with and how it binds raw Date parameters, so
    * a non-UTC spelling there would shift values a round-trip fails to
-   * cancel. The configuration is aligned to the pin (`buildPoolConfig` sets
-   * UTC unconditionally), never rewritten silently: the caller configured a
-   * reading, and this is where that reading is named as lost.
+   * cancel. The configuration is aligned to the pin (`buildConnectionConfig`
+   * sets UTC unconditionally, for pooled and standalone connections alike),
+   * never rewritten silently: the caller configured a reading, and this is
+   * where that reading is named as lost. Runs from `connect`, once per pool
+   * build — the configuration cannot change between calls.
    */
   private warnOnDriverZoneDisagreement(): void {
     // mysql2's own default is `local`, so an unset configuration is judged
@@ -1032,15 +1038,15 @@ export class MySqlAdapter extends DrizzleAdapter {
       config.ssl = this.buildSslConfig(this.config.ssl);
     }
 
-    // MySQL-specific options. The session is pinned to UTC (see the pin in
-    // `connect`), so the driver zone is pinned with it: mysql2 parses the
-    // date strings a pinned session answers with and binds raw Date
-    // parameters, and a driver in one zone beside a session in another
-    // shifts values every time a round-trip fails to cancel. A configured
-    // zone that is not UTC is aligned rather than refused — the pin is the
-    // deliberate boundary — and the warning tells the caller the shift they
-    // configured is gone.
-    this.warnOnDriverZoneDisagreement();
+    // MySQL-specific options. Every connection this adapter opens serves a
+    // UTC session (see the pins in `connect` and `runSession`), so the
+    // driver zone is pinned with them: mysql2 parses the date strings a
+    // pinned session answers with and binds raw Date parameters, and a
+    // driver in one zone beside a session in another shifts values every
+    // time a round-trip fails to cancel. A configured zone that is not UTC
+    // is aligned rather than refused — the pin is the deliberate boundary —
+    // and `connect` warns the caller, once, that the shift they configured
+    // is gone.
     config.timezone = "Z";
 
     if (this.config.charset) {

@@ -86,7 +86,7 @@ afterAll(async () => {
 
 /** A raw session to the provisioned database, outside the app's pool. */
 async function rawSession(zone?: string) {
-  const connection = await createConnection(provisionedUrl);
+  const connection = await createConnection(provisionedUrl!);
   if (zone) await connection.query(`SET time_zone = '${zone}'`);
   return connection;
 }
@@ -113,7 +113,7 @@ describeOrSkip("a MySQL session the adapter opens, on a non-UTC server", () => {
     // server really starts its connections at +05:30. A container whose zone
     // configuration was ignored answers `SYSTEM` while resolving to UTC, and
     // every case below would pass on it for the wrong reason.
-    const control = await createConnection(SERVER_URL);
+    const control = await createConnection(SERVER_URL!);
     try {
       const [rows] = await control.query(
         "SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS offset_seconds"
@@ -177,7 +177,7 @@ describeOrSkip("a MySQL session the adapter opens, on a non-UTC server", () => {
     // a limit of ten cannot be served any other way.
     const beforeKill = new Set(answered.map(row => row.cid));
     const killed = answered[0]!.cid;
-    const control = await createConnection(SERVER_URL);
+    const control = await createConnection(SERVER_URL!);
     try {
       await control.query(`KILL ${killed}`);
     } finally {
