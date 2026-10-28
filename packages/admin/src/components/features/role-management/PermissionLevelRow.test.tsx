@@ -166,6 +166,9 @@ describe("PermissionLevelRow", () => {
       screen.queryByRole("switch", { name: "Post: Create" })
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("switch", { name: "Post: each action" }));
+    expect(
+      screen.getByRole("switch", { name: "Post: each action" })
+    ).toBeChecked();
     await user.click(screen.getByRole("switch", { name: "Post: Create" }));
 
     expect([...saved].sort()).toEqual(

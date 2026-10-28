@@ -140,7 +140,9 @@ test("keeps a Custom row exactly as it was when another row is saved", async ({
 
   await editAndSave(page, roleId, async () => {
     // POPULATION CONTROL: the Posts row reads Custom before the save.
-    await expect(page.getByText("View and create")).toBeVisible();
+    await expect(
+      page.getByText("View and create", { exact: true })
+    ).toBeVisible();
     await page
       .getByRole("radiogroup", { name: "Tag level" })
       .getByRole("radio", { name: "Can view" })
