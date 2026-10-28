@@ -422,6 +422,9 @@ export class MediaService {
         // (which left subscribers seeing the wrong folder and no move event).
         // The legacy insert normalizes a missing folder to null itself.
         folderId: input.folderId ?? undefined,
+        // As `sanitizeMediaInput` left it above, so the stored alt text carries
+        // no markup.
+        altText: input.altText,
         contentDisposition:
           validated.isSvg && this.svgCsp ? "attachment" : undefined,
       },
