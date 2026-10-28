@@ -28,6 +28,7 @@ import {
   applyFieldWriteAccess,
   callerAccessGrants,
 } from "../../shared/lib/field-level-registry";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../i18n/configured-locales";
 import { isValidLocale } from "../i18n/resolve-locale";
@@ -422,6 +423,12 @@ function deepEquals(a: unknown, b: unknown): boolean {
 export async function restoreVersion(
   args: RestoreVersionArgs
 ): Promise<RestoreVersionResult> {
+  // Refused first when the collection or Single is removed from code, before
+  // the version is read or replayed.
+  await refuseHistoryWriteIfRemovedFromCode({
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+  });
   if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
     throw NextlyError.validation({
       errors: [

@@ -16,6 +16,7 @@ const seedSystemPermissions = vi.fn();
 const seedRolePresets = vi.fn();
 const seedPublicRole = vi.fn();
 const seedPublicReadGrants = vi.fn();
+const withdrawUndeclaredPluginGrants = vi.fn();
 const seedPluginRoles = vi.fn();
 
 /** The registered adapter: one object per registration of the services. */
@@ -54,6 +55,7 @@ vi.mock("../../domains/auth/services/public-role", () => ({
 }));
 vi.mock("../../domains/auth/services/public-read-grant", () => ({
   seedPublicReadGrants,
+  withdrawUndeclaredPluginGrants,
 }));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
 
@@ -196,11 +198,11 @@ describe("seedPermissionsAndRolePresets", () => {
     ]);
     // The role visitors are judged by is made whatever the steps before it did.
     expect(seedPublicRole).toHaveBeenCalled();
-    // Its reads wait for it.
+    // Its grants wait for it.
     expect(seedPublicReadGrants).not.toHaveBeenCalled();
   });
 
-  it("logs a failure of the Public role's reads the same way, and goes on", async () => {
+  it("logs a failure of the Public role's grants the same way, and goes on", async () => {
     seedPublicReadGrants.mockRejectedValue(new Error("connection reset"));
 
     await seedPermissionsAndRolePresets();
@@ -208,7 +210,7 @@ describe("seedPermissionsAndRolePresets", () => {
     // The failure logged is the grant step's own.
     expect(seedPublicReadGrants).toHaveBeenCalledTimes(1);
     expect(error.mock.calls.map(call => String(call[0]))).toEqual([
-      expect.stringContaining("Seeding public role's reads failed"),
+      expect.stringContaining("Seeding public role's grants failed"),
     ]);
     expect(seedPluginRoles).toHaveBeenCalled();
   });
@@ -279,6 +281,15 @@ describe("seedPermissionsAndRolePresets", () => {
 
     expect(seedPublicRole).toHaveBeenCalled();
     expect(seedPublicReadGrants).not.toHaveBeenCalled();
+    // A plugin grant no enabled plugin declares is still taken back.
+    expect(withdrawUndeclaredPluginGrants).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes back undeclared plugin grants within the whole grant step when every permission is seeded", async () => {
+    await seedPermissionsAndRolePresets();
+
+    expect(seedPublicReadGrants).toHaveBeenCalledTimes(1);
+    expect(withdrawUndeclaredPluginGrants).not.toHaveBeenCalled();
   });
 
   it("writes nothing during a production build", async () => {

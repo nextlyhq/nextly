@@ -14,12 +14,11 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { NextlyError } from "../../../../errors/nextly-error";
-import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import {
   createTestNextly,
@@ -31,10 +30,10 @@ import {
 } from "../../../../services/widgets/__tests__/layout-rows";
 import { WidgetLayoutService } from "../../../../services/widgets/widget-layout-service";
 import type { WidgetPlacement } from "../../layout";
-import { resolveCardSettings } from "../card-query";
+import { resolveCardSettings } from "../card-settings";
 import { declaredWidget } from "../declared-widgets";
 import { defineWidget } from "../define-widget";
-import { settings } from "../setting-builders";
+import { setting } from "../setting-builders";
 
 const ORDERS = "orders";
 
@@ -61,20 +60,26 @@ function recentOrders(startingItems: number) {
     description: "The newest orders",
     category: "Shop",
     size: { default: { w: 12, h: 4 }, min: { w: 6, h: 4 } },
-    permission: `read-${ORDERS}`,
+    access: `read-${ORDERS}`,
     settings: {
-      collection: settings.collection(),
-      items: settings.items({ default: startingItems }),
-    },
-    data: {
-      query: ({ settings }) => ({
-        collection: settings.collection,
-        op: "list",
-        select: ["state"],
-        limit: settings.items,
+      collection: setting.collection({ label: "Collection" }),
+      items: setting.number({
+        label: "Number of items",
+        defaultValue: startingItems,
+        min: 1,
+        max: 10,
       }),
     },
-    display: "list",
+    load: async ({ settings, services, signal }) => ({
+      items: (
+        await services.find(settings.collection, {
+          select: ["state"],
+          limit: settings.items,
+          signal,
+        })
+      ).items,
+    }),
+    view: "list",
   });
 }
 
@@ -219,92 +224,6 @@ describe("startup with a declaration that cannot work (sqlite)", () => {
     expect(message).toContain(
       'plugin "@test/broken", widget "core/orders": size.min must not be larger than size.default'
     );
-  });
-});
-
-/** A plugin whose one widget lists a collection, sorted by one field. */
-function listingPlugin(name: string, collection: string, sort: string) {
-  return definePlugin({
-    name,
-    version: "1.0.0",
-    nextly: ">=0.0.1",
-    contributes: {
-      collections: [orders],
-      dashboard: {
-        widgets: [
-          defineWidget({
-            id: "acme/listing",
-            title: "Listing",
-            description: "Entries of one collection",
-            category: "Shop",
-            size: { default: { w: 12, h: 4 } },
-            settings: {
-              collection: {
-                ...settings.collection(),
-                defaultValue: collection,
-              },
-            },
-            data: {
-              query: ({ settings }) => ({
-                collection: settings.collection,
-                op: "list",
-                select: [sort],
-                sort,
-              }),
-            },
-            display: "list",
-          }),
-        ],
-      },
-    },
-  });
-}
-
-describe("startup checks what a declared widget's starting query names (sqlite)", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("refuses a field missing from a collection the code defines", async () => {
-    let refused: unknown;
-    try {
-      const handle = await createTestNextly({
-        plugins: [listingPlugin("@test/shop", ORDERS, "missing")],
-      });
-      await handle.destroy();
-    } catch (error) {
-      refused = error;
-    }
-    expect(refused).toBeInstanceOf(NextlyError);
-    expect((refused as NextlyError).logMessage).toContain(
-      'plugin "@test/shop", widget "acme/listing": its query, built from its starting settings, cannot run'
-    );
-  });
-
-  it("starts, and warns, over a collection the code does not define", async () => {
-    // As a collection made in the Schema Builder and since deleted would be:
-    // the database's fact, which must not stop the site from starting.
-    const warn = vi.fn();
-    vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
-      warn,
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
-    const handle = await createTestNextly({
-      plugins: [listingPlugin("@test/shop", "notes", "title")],
-    });
-    try {
-      expect(warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "widget-query-names-missing-content",
-          widget: "acme/listing",
-          source: "collection:notes",
-        })
-      );
-    } finally {
-      await handle.destroy();
-    }
   });
 });
 

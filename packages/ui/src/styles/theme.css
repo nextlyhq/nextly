@@ -869,25 +869,22 @@
   /* Chart colors for data visualization.
    *
    * Held to the 3:1 non-text minimum against --nx-card, the surface a widget
-   * draws on, because a chart mark is a graphical object required to read the
-   * chart. The light ramp sits on near-white, so the mid steps that serve dark
-   * mode do not reach it: slots 2 and 4 measured 2.21:1 and 2.15:1 at cyan-500
-   * and amber-500, and moved down the ramp rather than being re-hued. Dark mode
-   * keeps the lighter steps, where they measure 9.0:1 and 9.3:1 -- the two modes
-   * need different steps of the same ramp, not one shared value. A bar is drawn
-   * over its track (--nx-muted) and a tooltip on --nx-popover, both darker than
-   * the card, so every slot is held there too; slot 3 moved down a step for
-   * them, as 2 and 4 did for the card: at green-600 it measured 3.02:1 on the
-   * track. */
+   * draws on, and against a bar's track (--nx-muted) and the tooltip
+   * (--nx-popover), because a chart mark is a graphical object required to
+   * read the chart. Each pair of slots also stays apart for a reader with
+   * protanopia, deuteranopia or tritanopia: the slots step in LIGHTNESS as
+   * well as hue, since a lightness step survives every kind of colour-vision
+   * deficiency where a hue step alone does not. Slot 4 is the darkest for that
+   * reason, below the green and the red it would otherwise match. Solved as
+   * the nearest values to the cyan, green, amber and red they started from
+   * that pass both; `chart-palette-colour-vision.test.ts` holds the margins.
+   * The two modes need different values, since the light ones sit on
+   * near-white and the dark ones on near-black. */
   --nx-chart-1: var(--nx-primary);
-  --nx-chart-2: oklch(0.6089 0.1109 221.72);
-  /* cyan-600 */
-  --nx-chart-3: oklch(0.527 0.154 150.069);
-  /* green-700 */
-  --nx-chart-4: oklch(0.5553 0.1455 49);
-  /* amber-700 */
-  --nx-chart-5: oklch(0.6368 0.2078 25.33);
-  /* red-500 */
+  --nx-chart-2: oklch(0.6179 0.1124 221.32);
+  --nx-chart-3: oklch(0.5485 0.1626 143.34);
+  --nx-chart-4: oklch(0.4489 0.1281 44.12);
+  --nx-chart-5: oklch(0.6286 0.2113 21.48);
 
   /* Design tokens */
   /* The one corner knob. Every tier below derives from it, so this single
@@ -1127,21 +1124,15 @@
 
   /* Chart colors for data visualization.
    *
-   * NOT the same as light mode, and slots 2 and 4 are where they differ: the
-   * light ramp sits on near-white and needs the deeper steps to stay legible,
-   * while here the lighter ones do that job. Slots 3 and 5 already differed or
-   * already cleared the minimum in both, so they carry one value each. */
+   * NOT the same as light mode: here the slots sit on near-black and need the
+   * lighter values to stay legible. Held to the same minimums as light mode,
+   * against the same three surfaces and the same three colour-vision
+   * deficiencies, by `chart-palette-colour-vision.test.ts`. */
   --nx-chart-1: var(--nx-primary);
-  /* A cyan of its own rather than a step of the Tailwind ramp -- deliberately
-     unnamed here, because naming a step it is not is the annotation this
-     file's own comment guard exists to refuse. */
-  --nx-chart-2: oklch(0.7399 0.1277 209.34);
-  --nx-chart-3: oklch(0.7229 0.1921 149.58);
-  /* green-500 */
-  --nx-chart-4: oklch(0.7686 0.1646 70.11);
-  /* amber-500 */
-  --nx-chart-5: oklch(0.6368 0.2078 25.33);
-  /* red-500 */
+  --nx-chart-2: oklch(0.7717 0.1304 210.71);
+  --nx-chart-3: oklch(0.7031 0.1315 159.76);
+  --nx-chart-4: oklch(0.7676 0.1653 69.92);
+  --nx-chart-5: oklch(0.6348 0.2057 27.82);
 
   /* Sidebar specific colors - dark mode */
   --nx-sidebar-background: oklch(0.18 0 0);

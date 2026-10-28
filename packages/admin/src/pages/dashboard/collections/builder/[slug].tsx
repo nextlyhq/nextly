@@ -37,6 +37,7 @@ import { toast } from "@admin/components/ui";
 import { useCollection, useUpdateCollection } from "@admin/hooks/queries";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
@@ -151,6 +152,9 @@ export default function CollectionBuilderEditPage({
 }: CollectionBuilderEditPageProps): React.ReactElement {
   const slug = params?.slug;
   const { data: collection, isLoading, error } = useCollection(slug);
+  // The tab names the collection being edited, by the name it is listed under.
+  const listedAs = collection ? collectionLabels(collection) : undefined;
+  useDocumentTitle(listedAs?.plural || listedAs?.singular);
 
   const builder = useFieldBuilder<FormData>({
     resolver: zodResolver(collectionFormSchema),

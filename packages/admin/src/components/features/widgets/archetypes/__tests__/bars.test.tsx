@@ -251,7 +251,7 @@ describe("a breakdown names its groups as a person reads them", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps a stored value the field does not name, and the null bucket's placeholder", () => {
+  it("reads a stored value the field does not name as words, and keeps the null bucket's placeholder", () => {
     draw(
       described([
         { value: "archived", count: 2 },
@@ -260,8 +260,9 @@ describe("a breakdown names its groups as a person reads them", () => {
     );
 
     const table = screen.getByRole("table");
+    // A choice field's value with no option is read as a label would be, not as stored.
     expect(
-      within(table).getByRole("row", { name: /archived/ })
+      within(table).getByRole("row", { name: /Archived/ })
     ).toBeInTheDocument();
     // The null bucket is named by what it means, as before the labels existed.
     expect(
@@ -286,5 +287,41 @@ describe("a breakdown names its groups as a person reads them", () => {
     const row = within(table).getByRole("row", { name: /None/ });
     expect(within(row).getByText("4")).toBeInTheDocument();
     expect(screen.queryByText("(empty)")).not.toBeInTheDocument();
+  });
+});
+
+describe("a group's name where its field names no option for it", () => {
+  const withChoices = (buckets: { value: string | null; count: number }[]) =>
+    ({
+      op: "groupBy",
+      buckets,
+      field: {
+        name: "status",
+        label: "Status",
+        type: "string",
+        choices: [{ value: "draft", label: "Draft" }],
+      },
+    }) as WidgetResult;
+
+  it("reads a choice field's unnamed value as words, not as code", () => {
+    draw(withChoices([{ value: "needs_review", count: 2 }]));
+    expect(
+      screen.getByRole("rowheader", { name: "Needs review" })
+    ).toBeInTheDocument();
+  });
+
+  it("still names a value by its option where there is one", () => {
+    draw(withChoices([{ value: "draft", count: 2 }]));
+    expect(
+      screen.getByRole("rowheader", { name: "Draft" })
+    ).toBeInTheDocument();
+  });
+
+  it("draws a value of a field with no choices as it was written", () => {
+    // Text people wrote is drawn as stored: "jane_doe" may be exactly how it is meant.
+    draw(grouped([{ value: "jane_doe", count: 2 }]));
+    expect(
+      screen.getByRole("rowheader", { name: "jane_doe" })
+    ).toBeInTheDocument();
   });
 });

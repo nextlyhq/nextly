@@ -364,6 +364,7 @@ export class MediaService extends BaseService {
         mimeType,
         uploadedBy,
         folderId,
+        altText,
         contentDisposition,
       } = input;
 
@@ -537,7 +538,9 @@ export class MediaService extends BaseService {
         duration: null,
         url: uploadResult.url,
         thumbnailUrl,
-        altText: null,
+        // The upload's own alt text: writing `null` here dropped what every
+        // caller gave.
+        altText: altText ?? null,
         caption: null,
         tags: null,
         focalX: null,

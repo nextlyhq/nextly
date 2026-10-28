@@ -27,13 +27,15 @@ import {
   type SystemColumnEntity,
 } from "../../../lib/system-columns";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
-import {
-  extractFieldGroupReferences,
-  isFieldGroupFieldType,
-} from "../../field-groups/storage/field-group-field-type";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { documentSystemKeys } from "../snapshot-system-keys";
 
+import {
+  isComponentField,
+  isComponentList,
+  isListField,
+} from "./field-cardinality";
 import { maskSecret } from "./mask-secret";
 import { reconcileById, type ItemMatch } from "./reconcile-list";
 import { richTextNode } from "./rich-text-node";
@@ -199,9 +201,6 @@ function componentSlugs(field: FieldConfig): string[] | undefined {
   // whitelist under `fieldGroups`, and reading only `components` would treat
   // that zone as a single-schema field and skip its nested diff entirely.
   return extractFieldGroupReferences(field).many;
-}
-function isRepeatable(field: FieldConfig): boolean {
-  return (field as { repeatable?: boolean }).repeatable === true;
 }
 /**
  * The language a code field declares, which the renderer needs to pick a
@@ -427,23 +426,6 @@ function targetKey(target: RelationTarget): string {
 
 // ---- classification ---------------------------------------------------------
 
-function isComponentField(field: FieldConfig): boolean {
-  return isFieldGroupFieldType(field.type);
-}
-/** Cardinality is decided by `repeatable`; a non-repeatable field holds one value. */
-function isComponentList(field: FieldConfig): boolean {
-  return isComponentField(field) && isRepeatable(field);
-}
-/**
- * Whether a field holds a list of rows, by its cardinality rather than by the
- * shape its value arrives in: a non-repeatable component populated from its
- * own table arrives as a one-element array and still holds one value. Shared
- * with the redaction's path naming, so a path names a row by index exactly
- * where this comparison reads rows.
- */
-export function isListField(field: FieldConfig): boolean {
-  return field.type === "repeater" || isComponentList(field);
-}
 function isGroupField(field: FieldConfig): boolean {
   return (
     field.type === "group" ||
