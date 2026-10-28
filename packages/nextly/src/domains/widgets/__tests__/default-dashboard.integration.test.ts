@@ -32,7 +32,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { ReleasesRepository } from "../../releases/releases-repository";
-import { refreshCollectionWidgets } from "../collection-widgets";
+import { refreshContentSources } from "../content-sources";
 import { setDefaultLayoutPlan } from "../default-layout";
 
 /**
@@ -154,7 +154,7 @@ describe.each(getConfiguredTestDialects())(
       // A code rule only narrows the permission, so the reader holds read on
       // the notes the rule admits them to.
       await grantTo(current, readerId, "read", ["dd_notes"]);
-      await refreshCollectionWidgets();
+      await refreshContentSources();
 
       // Before any release exists, Upcoming releases waits for one.
       expect(await defaultFor(admin)).toEqual(
@@ -192,7 +192,7 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       const admin = await account(current, "admin@example.com");
-      await refreshCollectionWidgets();
+      await refreshContentSources();
       // The default a site's `admin.dashboard.defaultLayout` asks for, as startup sets it.
       setDefaultLayoutPlan({
         cards: [{ widget: "core/content" }, { widget: "core/team", w: 6 }],
@@ -253,7 +253,7 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       const admin = await account(current, "admin@example.com");
-      await refreshCollectionWidgets();
+      await refreshContentSources();
       expect(await defaultFor(admin)).toEqual(
         without("core/content", "core/quick-create", "core/upcoming-releases")
       );

@@ -32,7 +32,7 @@ import {
   clearAttentionItems,
   registerAttentionItems,
 } from "../../../domains/widgets/attention/items";
-import { refreshContentSources } from "../../../domains/widgets/collection-widgets";
+import { refreshContentSources } from "../../../domains/widgets/content-sources";
 import type { AttentionItem } from "../../../domains/widgets/declaration/dashboard";
 import type { WidgetQuery } from "../../../domains/widgets/query";
 import { sourceResolver } from "../../../domains/widgets/resolved-sources";

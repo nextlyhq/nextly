@@ -56,6 +56,22 @@ describe("widget registry", () => {
     expect(() => registerWidget(def("nonamespace"))).toThrow(/namespace\/name/);
   });
 
+  it("refuses an id in a retired namespace, saying what replaced it, and keeps none", () => {
+    // 🔴 Core no longer makes a card per collection or per Single. One
+    // registered there would be offered, then refused by every layout write
+    // and dropped by every read, so the registry refuses it at startup.
+    expect(() => registerWidget(def("collection/x-count"))).toThrow(
+      'Widget "collection/x-count" cannot be registered: "collection/x-count" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to x.'
+    );
+    expect(() => registerWidget(def("single/about-card"))).toThrow(
+      `Widget "single/about-card" cannot be registered: "single/about-card" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
+    );
+    expect(listWidgets()).toEqual([]);
+    // The control: the same definition outside those namespaces registers.
+    registerWidget(def("acme/x-count"));
+    expect(listWidgets().map(w => w.id)).toEqual(["acme/x-count"]);
+  });
+
   it("lets a plugin replace a core widget wholesale", () => {
     registerWidget(def("core/totals", { title: "Totals" }), { source: "core" });
     overrideWidget("core/totals", def("core/totals", { title: "Our totals" }), {
