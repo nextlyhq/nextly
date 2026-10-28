@@ -9,9 +9,9 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { CORE_WIDGETS } from "../../core-widgets";
 import type { WidgetDefinition } from "../../definition";
+import { widgetGateHolds } from "../../gate";
 import { clearWidgets, getWidget } from "../../registry";
 import {
-  cardQueryFor,
   clearDeclaredWidgets,
   declaredWidget,
   registerDashboardWidgets,
@@ -148,6 +148,62 @@ describe("registering declared widgets", () => {
     });
   });
 
+  it("publishes a link action whose JavaScript declaration also carries opens: undefined, as a link", () => {
+    // Read by the key, `opens` with no value was published as a settings action without one, which
+    // the registry refuses at startup; the startup check reads it as the link it is.
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...ordersByState,
+              id: "acme/orders-linked",
+              empty: {
+                message: "No orders yet",
+                action: {
+                  label: "Add an order",
+                  link: "collections/orders/create",
+                  opens: undefined,
+                },
+              },
+            } as unknown as typeof ordersByState,
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/orders-linked")?.empty?.action).toEqual({
+      label: "Add an order",
+      link: "collections/orders/create",
+    });
+  });
+
+  it("publishes an empty action that opens the card's settings as it is, with no gate", () => {
+    // Accepted by the registry's own check too: the registration would refuse an action it read
+    // as having no link.
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...ordersByState,
+              id: "acme/orders-choose",
+              empty: {
+                message: "Pick a collection",
+                action: { label: "Choose", opens: "settings" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/orders-choose")?.empty).toEqual({
+      message: "Pick a collection",
+      action: { label: "Choose", opens: "settings" },
+    });
+  });
+
   it("publishes a widget drawn by its own component as a custom card core answers", () => {
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [revenue] }],
@@ -159,6 +215,8 @@ describe("registering declared widgets", () => {
       archetype: "custom",
       component: revenue.view.component,
       serverData: true,
+      // Who declared it, so a card whose component is missing can say whose it is.
+      owner: SHOP,
     });
     expect(warn).not.toHaveBeenCalled();
   });
@@ -186,6 +244,8 @@ describe("registering declared widgets", () => {
       archetype: "metric",
       category: "Other",
     });
+    // Core draws it, so there is no component, and no owner of one to name.
+    expect(getWidget("acme/figure")?.owner).toBeUndefined();
     // The control: a category the declaration names is kept as written.
     expect(getWidget(ordersByState.id)).toMatchObject({
       archetype: "bars",
@@ -207,6 +267,124 @@ describe("registering declared widgets", () => {
     expect(getWidget(ordersByState.id)?.hidesWhenEmpty).toBeUndefined();
   });
 
+  it("publishes where it is offered as it is declared, and how many it allows whenever it says", () => {
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...recentOrders,
+              id: "acme/per-collection",
+              offered: "per-collection",
+            },
+            { ...ordersByState, id: "acme/on-request", offered: "on-request" },
+            {
+              ...ordersByState,
+              id: "acme/once-on-request",
+              offered: "on-request",
+              several: false,
+            },
+            ordersByState,
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/per-collection")).toMatchObject({
+      offered: "per-collection",
+      allowsSeveral: true,
+    });
+    // Saying nothing leaves the registry's own reading: an offered widget allows several.
+    expect(getWidget("acme/on-request")?.offered).toBe("on-request");
+    expect(getWidget("acme/on-request")?.allowsSeveral).toBeUndefined();
+    // Saying false is published, so an offered widget it limits to one card stays at one.
+    expect(getWidget("acme/once-on-request")?.allowsSeveral).toBe(false);
+    // The control: a widget that names none is offered as one card for the dashboard.
+    expect(getWidget(ordersByState.id)?.offered).toBeUndefined();
+  });
+
+  it("refuses at startup a widget offered per collection with no Collection setting, keeping none", () => {
+    let refusal: unknown;
+    try {
+      registerDashboardWidgets({
+        groups: [
+          {
+            owner: SHOP,
+            declarations: [
+              recentOrders,
+              { ...ordersByState, offered: "per-collection" },
+            ],
+          },
+        ],
+      });
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(NextlyError);
+    expect((refusal as NextlyError).logMessage).toContain(
+      `${SHOP}, widget "${ordersByState.id}": a widget offered per collection needs a Collection setting`
+    );
+    // Refused with the rest, before anything is kept, rather than half way through registering.
+    expect(getWidget(recentOrders.id)).toBeUndefined();
+    expect(getWidget(ordersByState.id)).toBeUndefined();
+  });
+
+  it("publishes each permission gate as the requiredPermission the registry judges, and the other forms as none", () => {
+    const gated = (id: string, access: unknown) => ({
+      ...ordersByState,
+      id: `acme/${id}`,
+      access,
+    });
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            gated("one", "read-orders"),
+            gated("any", { anyOf: ["read-orders", "update-orders"] }),
+            gated("all", {
+              allOf: [
+                "read-orders",
+                { anyOf: ["update-orders", "create-orders"] },
+              ],
+            }),
+            gated("reads", { collections: ["orders"] }),
+            gated("asks", () => true),
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/one")?.requiredPermission).toBe("read-orders");
+    // The registry's any-of spelling: a list.
+    expect(getWidget("acme/any")?.requiredPermission).toEqual([
+      "read-orders",
+      "update-orders",
+    ]);
+    // Each entry a slug, or the registry's any-of list.
+    expect(getWidget("acme/all")?.requiredPermission).toEqual({
+      allOf: ["read-orders", ["update-orders", "create-orders"]],
+    });
+    // Judged per card, with the person: no gate is published for them.
+    expect(getWidget("acme/reads")?.requiredPermission).toBeUndefined();
+    expect(getWidget("acme/asks")?.requiredPermission).toBeUndefined();
+
+    // And each published gate means what was declared, by the one rule the gates apply.
+    const holder =
+      (...held: string[]) =>
+      (slug: string) =>
+        held.includes(slug);
+    const holds = (id: string, ...held: string[]) =>
+      widgetGateHolds(
+        getWidget(`acme/${id}`)?.requiredPermission,
+        holder(...held)
+      );
+    expect(holds("any", "update-orders")).toBe(true);
+    expect(holds("any", "delete-orders")).toBe(false);
+    expect(holds("all", "read-orders", "create-orders")).toBe(true);
+    expect(holds("all", "read-orders")).toBe(false);
+    expect(holds("all", "create-orders")).toBe(false);
+  });
+
   it("keeps each declaration, with its server code, for the server's own use", () => {
     registerDashboardWidgets({
       groups: [{ owner: SHOP, declarations: [recentOrders] }],
@@ -214,43 +392,13 @@ describe("registering declared widgets", () => {
     expect(declaredWidget("acme/recent-orders")).toMatchObject({
       owner: SHOP,
       declaration: recentOrders,
+      display: "list",
     });
-    expect(
-      cardQueryFor("acme/recent-orders", { collection: "orders", items: 3 })
-    ).toMatchObject({ source: "collection:orders", op: "list", limit: 3 });
-    expect(cardQueryFor("acme/unknown", {})).toBeUndefined();
-  });
-
-  it("refuses a card's query its display cannot draw, once the card names its collection", () => {
-    // Plain JavaScript, as no type saw it: a list whose query selects nothing.
-    // Its Collection setting has no default, so startup builds no query and
-    // checks nothing; the first query is this card's own.
-    const unselected = {
-      ...recentOrders,
-      id: "acme/unselected",
-      load: {
-        query: ({ settings }: { settings: Record<string, unknown> }) => ({
-          collection: settings.collection,
-          op: "list",
-          limit: settings.items,
-        }),
-      },
-    } as unknown as typeof recentOrders;
-    registerDashboardWidgets({
-      groups: [{ owner: SHOP, declarations: [unselected] }],
-    });
-
-    expect(cardQueryFor("acme/unselected", {})).toBeUndefined();
-    let refused: unknown;
-    try {
-      cardQueryFor("acme/unselected", { collection: "orders" });
-    } catch (error) {
-      refused = error;
-    }
-    expect(refused).toBeInstanceOf(NextlyError);
-    expect((refused as NextlyError).logMessage).toBe(
-      'Declared widget "acme/unselected" cannot draw its query: its query selects no fields, so the "list" display has nothing to show in each row.'
+    // Its load function is kept as the plugin wrote it, to be run per card.
+    expect(declaredWidget("acme/recent-orders")?.declaration.load).toBe(
+      recentOrders.load
     );
+    expect(declaredWidget("acme/unknown")).toBeUndefined();
   });
 
   it("publishes a size stated by its default alone with every end filled in", () => {

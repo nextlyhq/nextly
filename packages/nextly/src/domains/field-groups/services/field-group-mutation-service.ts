@@ -30,6 +30,7 @@ import {
   callerAccessGrants,
   getFieldFunctions,
   type CallerGrants,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -108,6 +109,11 @@ export interface FieldGroupWriteAccess {
   authenticatedScope?: AuthenticatedScope;
   /** The parent write's grants resolver, shared so roles are read once. */
   grants?: () => Promise<CallerGrants>;
+  /**
+   * Where a visitor's Public grants are read when no `grants` is handed in:
+   * the parent service's, so its gate and these rules read one Public role.
+   */
+  visitor?: VisitorGrantsLoader;
 }
 
 /**
@@ -220,7 +226,12 @@ function newWriteScope(
   // every instance it judges reads the caller's roles once.
   const grants =
     access.grants ??
-    callerAccessGrants(access.user, access.authenticatedScope, executor);
+    callerAccessGrants(
+      access.user,
+      access.authenticatedScope,
+      executor,
+      access.visitor
+    );
   return {
     executor,
     access: { ...access, grants },

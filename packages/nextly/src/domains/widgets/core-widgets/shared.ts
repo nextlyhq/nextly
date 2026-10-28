@@ -5,16 +5,18 @@
  */
 
 import {
+  DATE_RANGE_OPTIONS,
   DENSITY_OPTIONS,
-  settings,
-  type SettingDeclaration,
+  setting,
 } from "../declaration/setting-builders";
 import type { WidgetSetting } from "../definition";
+import { MAX_WIDGET_ROWS } from "../query-limits";
 import type { AnyWidgetSetting } from "../settings";
 
 /**
- * Recent activity's "Number of items": the one offer every card makes, from the
- * builder, named `limit` so it sets the card's query.
+ * Recent activity's "Number of items": the one offer every card makes, named
+ * `limit` so it sets the card's query, from 1 to the most rows a card draws
+ * (`MAX_WIDGET_ROWS`), so the editor never offers rows the card would not draw.
  *
  * Held as the public `WidgetSetting` rather than written into the list: the
  * builder's own type carries a value brand only declarations read, which the
@@ -22,8 +24,12 @@ import type { AnyWidgetSetting } from "../settings";
  */
 export const RECENT_ACTIVITY_ITEMS: WidgetSetting = {
   name: "limit",
-  label: "Number of items",
-  ...settings.items(),
+  ...setting.number({
+    label: "Number of items",
+    defaultValue: 5,
+    min: 1,
+    max: MAX_WIDGET_ROWS,
+  }),
 };
 
 /**
@@ -35,17 +41,13 @@ const NOTE_MAX_LENGTH = 2000;
 
 /**
  * A note's text: Markdown over several lines, empty until its reader writes it.
- *
  * A setting of the note's declaration, which names it by its key (`text`).
- * Its label rides beside the builder's fields: startup holds it to the rules
- * every setting's label is held to, and the settings sheet names it "Note".
  */
-export const NOTE_TEXT: SettingDeclaration<string, "textarea"> & {
-  readonly label: string;
-} = {
-  ...settings.textarea({ default: "", maxLength: NOTE_MAX_LENGTH }),
+export const NOTE_TEXT = setting.textarea({
   label: "Note",
-};
+  defaultValue: "",
+  maxLength: NOTE_MAX_LENGTH,
+});
 
 /** Recent entries' "Number of items", the same offer under the same name. */
 export const RECENT_ENTRIES_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
@@ -75,14 +77,10 @@ export const OVER_TIME_DATE_RANGE: WidgetSetting = {
   type: "select",
   defaultValue: "30d",
   quick: true,
-  // Named for the reader, as the card's header shows them; each value is a
-  // range the query draws (`TIMESERIES_RANGES`).
-  options: [
-    { label: "Last 7 days", value: "7d" },
-    { label: "Last 30 days", value: "30d" },
-    { label: "Last 90 days", value: "90d" },
-    { label: "Last 12 months", value: "12m" },
-  ],
+  // The builders' own, named for the reader as the card's header shows them,
+  // so core's chart and a plugin's offer the same ranges in the same words;
+  // each value is a range the query draws (`TIMESERIES_RANGES`).
+  options: [...DATE_RANGE_OPTIONS],
 };
 
 /** Over time's Chart style: a line, or one bar per interval. */
@@ -107,8 +105,7 @@ export const RECENTLY_EDITED_ITEMS: WidgetSetting = RECENT_ACTIVITY_ITEMS;
  */
 export const RECENTLY_EDITED_ONLY_MINE: WidgetSetting = {
   name: "onlyMine",
-  label: "Only mine",
-  ...settings.onlyMine(),
+  ...setting.checkbox({ label: "Only mine", defaultValue: false }),
 };
 
 /**
@@ -119,6 +116,5 @@ export const RECENTLY_EDITED_ONLY_MINE: WidgetSetting = {
  */
 export const RECENTLY_EDITED_COLLECTION: AnyWidgetSetting = {
   name: "collection",
-  label: "Collection",
-  ...settings.collection(),
+  ...setting.collection({ label: "Collection" }),
 };

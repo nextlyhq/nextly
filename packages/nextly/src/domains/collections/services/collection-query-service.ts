@@ -1307,6 +1307,7 @@ export class CollectionQueryService extends BaseService {
           | Record<string, unknown>
           | undefined,
         authenticatedScope: params.authenticatedScope,
+        visitor: this.accessService.fieldRuleVisitor,
       },
     };
     // `params.where` -- what the CALLER sent -- never the hook-settled
@@ -1444,6 +1445,7 @@ export class CollectionQueryService extends BaseService {
         caller: {
           user: caller.user as Record<string, unknown> | undefined,
           authenticatedScope: caller.authenticatedScope,
+          visitor: this.accessService.fieldRuleVisitor,
         },
       }
     );
@@ -2765,9 +2767,12 @@ export class CollectionQueryService extends BaseService {
     const fieldGroupCaller = {
       user: params.fieldAccessUser ?? params.user,
       authenticatedScope: params.authenticatedScope,
+      // A visitor is handed the Public role the collection gate read.
       grants: callerAccessGrants(
         params.fieldAccessUser ?? params.user,
-        params.authenticatedScope
+        params.authenticatedScope,
+        undefined,
+        this.accessService.fieldRuleVisitor
       ),
     };
     for (const row of finalData) {

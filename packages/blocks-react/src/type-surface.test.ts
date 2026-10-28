@@ -77,6 +77,7 @@ import { describe, expect, it } from "vitest";
 // import the watcher sees no edge and never selects this suite when an entry
 // changes — leaving the guard silent for exactly the edit it exists to catch.
 import * as blocksEntry from "./blocks/index";
+import * as environmentEntry from "./environment";
 import * as rootEntry from "./index";
 import * as nextEntry from "./next";
 
@@ -92,6 +93,7 @@ const SENTINELS: Readonly<Record<string, string>> = {
   ".": "PageRenderer",
   "./next": "createBlocksPage",
   "./blocks": "coreBlocks",
+  "./environment": "useBlockEnvironment",
 };
 
 /** The same entries as modules, keyed the way the manifest spells them. */
@@ -99,7 +101,17 @@ const ENTRY_MODULES: Readonly<Record<string, Record<string, unknown>>> = {
   ".": rootEntry,
   "./next": nextEntry,
   "./blocks": blocksEntry,
+  "./environment": environmentEntry,
 };
+
+/**
+ * Entries whose declarations name no engine type at all, and so owe none.
+ *
+ * Listed rather than inferred, because "derived nothing" is also what a broken
+ * graph walk produces: the loop below asserts these derive NOTHING, so a type
+ * that later reaches one of them puts it back under the obligation.
+ */
+const ENGINE_FREE_ENTRIES: ReadonlySet<string> = new Set(["./environment"]);
 
 /** The root entry, whose exports satisfy every other entry's obligation. */
 const ROOT_SUBPATH = ".";
@@ -615,6 +627,13 @@ describe("the published type surface", () => {
 
       for (const entry of entries) {
         const required = engineTypesNamed(declarationGraph(entry.declaration));
+        if (ENGINE_FREE_ENTRIES.has(entry.subpath)) {
+          expect(
+            [...required],
+            `the "${entry.subpath}" entry now names engine types`
+          ).toEqual([]);
+          continue;
+        }
         // A graph walk that reached no chunk, or a scan that matched no import
         // form, requires nothing and reads as a clean pass.
         expect(

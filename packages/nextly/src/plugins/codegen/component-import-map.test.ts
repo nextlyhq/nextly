@@ -142,6 +142,54 @@ describe("the map's check against the site's config", () => {
     expect(code).not.toMatch(/^import (?!type)[^\n]*nextly\.config/m);
   });
 
+  it("names a widget entry's widget and owner on its own line, where a props error is reported", () => {
+    const withWidget = {
+      name: "@acme/shop",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        admin: {
+          pages: [{ path: "reports", component: "@acme/shop/admin#Reports" }],
+        },
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/revenue",
+              view: { component: "@acme/shop/admin#Revenue" },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+    const code = buildComponentImportMap([withWidget], "../../nextly.config");
+    expect(code).toContain(
+      '"@acme/shop/admin#Revenue": _p0.Revenue, // widget "acme/revenue" of plugin "@acme/shop"\n'
+    );
+    // A page's entry names nothing beside it.
+    expect(code).toContain('"@acme/shop/admin#Reports": _p0.Reports,\n');
+  });
+
+  it("keeps a widget note on its line whatever the plugin is called", () => {
+    const named = {
+      name: "@acme/shop\nconst injected = 1;",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/revenue",
+              view: { component: "@acme/shop/admin#Revenue" },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+    const code = buildComponentImportMap([named], "../../nextly.config");
+    expect(code).not.toMatch(/^const injected = 1;/m);
+    expect(code).toContain('of plugin "@acme/shop const injected = 1;"');
+  });
+
   it("writes the map unchecked, as before, where there is no config file", () => {
     const code = buildComponentImportMap([shop]);
     expect(code).not.toContain("siteConfig");
@@ -363,6 +411,72 @@ describe("block editor components", () => {
         declaringBlocks("nope" as unknown as unknown[]),
       ])
     ).toEqual([]);
+  });
+});
+
+describe("block editor entries", () => {
+  /** A plugin declaring blocks and naming the module that exports them. */
+  function declaringEntry(
+    editorEntry: unknown,
+    enabled?: boolean
+  ): PluginDefinition {
+    return {
+      name: "@acme/blocks",
+      version: "1.0.0",
+      nextly: "*",
+      enabled,
+      contributes: {
+        declarations: {
+          "@nextlyhq/plugin-page-builder": {
+            blocks: [{ name: "acme/hero", version: 1 }],
+            editorEntry,
+          },
+        },
+      },
+    } as unknown as PluginDefinition;
+  }
+
+  const ENTRY = "@acme/blocks/editor#editorBlocks";
+
+  it("lists the entry while the page builder is active, and hands it to the page builder", () => {
+    const plugins = [pageBuilder(), declaringEntry(ENTRY)];
+
+    expect(componentImportMapPaths(plugins)).toContain(ENTRY);
+    const code = buildComponentImportMap(plugins);
+    expect(code).toContain(
+      'import { registerBlockEditorModules } from "@nextlyhq/plugin-page-builder/admin";'
+    );
+    expect(code).toContain(`"${ENTRY}": _p0.editorBlocks`);
+    // Definitions are not a component: the component registry never sees it.
+    expect(code).not.toContain("registerComponents(");
+  });
+
+  it("lists no entry while the page builder is absent or disabled", () => {
+    for (const plugins of [
+      [declaringEntry(ENTRY)],
+      [pageBuilder(false), declaringEntry(ENTRY)],
+    ]) {
+      expect(componentImportMapPaths(plugins)).not.toContain(ENTRY);
+      expect(buildComponentImportMap(plugins)).not.toContain(
+        "registerBlockEditorModules"
+      );
+    }
+  });
+
+  it("skips a malformed entry rather than failing generation", () => {
+    // The page builder refuses it at boot, naming the plugin.
+    for (const malformed of [42, "", "   "]) {
+      expect(
+        componentImportMapPaths([pageBuilder(), declaringEntry(malformed)])
+      ).toEqual([]);
+    }
+  });
+
+  it("leaves a map with no block modules exactly as before", () => {
+    // Every committed map of a site with no contributed blocks is unchanged.
+    expect(buildComponentImportMap([pageBuilder()])).not.toContain(
+      "blockEditorEntries"
+    );
   });
 });
 

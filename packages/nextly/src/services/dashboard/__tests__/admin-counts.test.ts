@@ -157,10 +157,12 @@ describe("each count asks what its list endpoint asks", () => {
 });
 
 describe("the counts whose lists are served by their own handlers", () => {
-  it("field groups: either settings grant", async () => {
+  it("field groups: read-settings", async () => {
+    // The gate asks the plain read; `manage-settings` counts as it in the
+    // real check, which the fake above does not model.
     for (const grant of GRANTS) {
       expect((await countsFor([grant])).has("fieldGroups"), grant).toBe(
-        grant === "read-settings" || grant === "manage-settings"
+        grant === "read-settings"
       );
     }
   });

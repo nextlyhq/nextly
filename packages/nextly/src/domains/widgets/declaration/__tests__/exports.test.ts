@@ -11,14 +11,22 @@ import { describe, expect, it } from "vitest";
 import * as root from "../../../../index";
 
 describe("the widget declaration, from the package root", () => {
-  it("publishes defineWidget and the setting builders as widgetSettings", () => {
+  it("publishes defineWidget, the setting builders and the collections' option", () => {
     expect(typeof root.defineWidget).toBe("function");
-    expect(root.widgetSettings.items()).toEqual({
-      type: "number",
-      defaultValue: 5,
-      min: 1,
-      max: 10,
+    expect(
+      root.setting.select({
+        label: "Currency",
+        options: [root.option("US dollar", "usd")],
+        defaultValue: "usd",
+      })
+    ).toEqual({
+      type: "select",
+      label: "Currency",
+      defaultValue: "usd",
+      options: [{ label: "US dollar", value: "usd" }],
     });
+    // The old name is gone rather than kept beside the new one.
+    expect("widgetSettings" in root).toBe(false);
   });
 
   it("does not publish the startup and server-side internals", () => {
@@ -26,8 +34,8 @@ describe("the widget declaration, from the package root", () => {
     for (const internal of [
       "registerDashboardWidgets",
       "CORE_OWNER",
-      "buildCardQuery",
       "resolveCardSettings",
+      "unsetSetting",
       "assertWidgetDeclarations",
     ]) {
       expect(internal in root, internal).toBe(false);

@@ -22,17 +22,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq } from "drizzle-orm";
 
 import type { FieldConfig } from "@nextly/collections";
-import {
-  dynamicCollectionsMysql,
-  dynamicCollectionsSqlite,
-  dynamicCollectionsPg,
-} from "@nextly/schemas/dynamic-collections";
 import type { CollectionAdminConfig } from "@nextly/schemas/dynamic-collections/types";
-import { dynamicSinglesMysql } from "@nextly/schemas/dynamic-singles/mysql";
-import { dynamicSinglesPg } from "@nextly/schemas/dynamic-singles/postgres";
-import { dynamicSinglesSqlite } from "@nextly/schemas/dynamic-singles/sqlite";
 
 import type { SingleAdminOptions } from "../../../config";
+import { loadedDialect } from "../../../database/dialect-tables";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { simplePluralize } from "../../../shared/lib/pluralization";
 import { consoleLogger } from "../../../shared/types";
@@ -73,6 +66,16 @@ export type {
   SnapshotSingle,
   MigrationSnapshot,
 } from "./snapshot-source";
+
+/**
+ * Whether a collection or Single registered from a migration snapshot has
+ * Draft/Published. A snapshot that leaves `status` out registers it on, so its
+ * table must carry the status columns: a template's hand-written migration is
+ * checked against this same answer.
+ */
+export function registeredStatus(entity: { status?: boolean }): boolean {
+  return entity.status ?? true;
+}
 
 /**
  * Options for registering collections from migrations
@@ -209,28 +212,18 @@ function generateSchemaHash(fields: unknown[]): string {
  * Get the correct dynamic collections schema based on dialect
  */
 function getDynamicCollectionsSchema(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "mysql":
-      return dynamicCollectionsMysql;
-    case "sqlite":
-      return dynamicCollectionsSqlite;
-    case "postgresql":
-      return dynamicCollectionsPg;
-  }
+  // The loaded dialect's own table, so only that dialect's file is imported;
+  // `createAdapter` loads it.
+  return loadedDialect(dialect).tables.dynamicCollections;
 }
 
 /**
  * Get the correct dynamic singles schema based on dialect
  */
 function getDynamicSinglesSchema(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "mysql":
-      return dynamicSinglesMysql;
-    case "sqlite":
-      return dynamicSinglesSqlite;
-    case "postgresql":
-      return dynamicSinglesPg;
-  }
+  // The loaded dialect's own table, so only that dialect's file is imported;
+  // `createAdapter` loads it.
+  return loadedDialect(dialect).tables.dynamicSingles;
 }
 
 /**
@@ -274,7 +267,7 @@ async function registerCollection(
     description: collection.description ?? null,
     fields: (collection.fields ?? []) as FieldConfig[],
     timestamps: collection.timestamps !== false,
-    status: collection.status ?? true,
+    status: registeredStatus(collection),
     admin: (collection.admin ?? {}) as CollectionAdminConfig,
     source: "ui",
     locked: false,
@@ -326,7 +319,7 @@ async function registerSingle(
     tableName: single.tableName,
     description: single.description ?? null,
     fields: (single.fields ?? []) as FieldConfig[],
-    status: single.status ?? true,
+    status: registeredStatus(single),
     admin: (single.admin ?? {}) as SingleAdminOptions,
     source: "ui",
     locked: false,

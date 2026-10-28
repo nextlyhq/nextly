@@ -26,6 +26,7 @@
  * @module shared/lib/field-level-registry
  */
 
+import type { VisitorActor } from "../../auth/access/actor";
 import { actorForVisitor } from "../../auth/access/resolve-actor";
 import {
   buildRuleContext,
@@ -79,6 +80,22 @@ export interface CallerGrants {
 }
 
 /**
+ * Where a visitor's Public grants are read, handed the executor the caller's
+ * own lookups read on (a transaction's, or none for the pool).
+ *
+ * Absent, they are read through the global container, the process's cached
+ * copy. A service holding a database of its own with no access-control
+ * service passes one reading that database, as its collection gate does, so
+ * a field rule and the gate above it are handed one Public role: the
+ * container may be missing in such a setup, or filled for another instance.
+ */
+export type VisitorGrantsLoader = (executor?: unknown) => Promise<VisitorActor>;
+
+/** The process's Public role: the default {@link VisitorGrantsLoader}. */
+const processVisitor: VisitorGrantsLoader = executor =>
+  actorForVisitor({ executor });
+
+/**
  * Resolve the caller's grants once, on the first rule that actually runs.
  *
  * Field access is evaluated on every authenticated write and read, and most
@@ -91,7 +108,8 @@ export interface CallerGrants {
 function grantsResolver(
   userId: string | undefined,
   scope?: AuthenticatedScope,
-  executor?: unknown
+  executor?: unknown,
+  visitor: VisitorGrantsLoader = processVisitor
 ): () => Promise<CallerGrants> {
   let pending: Promise<CallerGrants> | undefined;
   return () => {
@@ -122,13 +140,14 @@ function grantsResolver(
       // A plugin's person holds no role and no permission. A visitor (no
       // user, no person) holds what the Public role grants, read through the
       // same actor the collection and Single rules are handed, so a field
-      // rule and the rule above it answer a visitor alike. A read of Public
-      // that fails rejects, and the rule is denied as a user's would be.
+      // rule and the rule above it answer a visitor alike, from the database
+      // `visitor` reads. A read of Public that fails rejects, and the rule is
+      // denied as a user's would be.
       pending =
         currentPrincipal() !== null
           ? Promise.resolve({ permissions: [], roles: [] })
-          : actorForVisitor({ executor }).then(visitor => ({
-              permissions: visitor.permissions,
+          : visitor(executor).then(actor => ({
+              permissions: actor.permissions,
               roles: [],
             }));
       return pending;
@@ -752,6 +771,11 @@ export async function applyFieldWriteAccess(opts: {
    * builds its own, which is right for a write judged only once.
    */
   grants?: () => Promise<CallerGrants>;
+  /**
+   * Where a visitor's Public grants are read when this pass builds its own
+   * resolver; see {@link VisitorGrantsLoader}.
+   */
+  visitor?: VisitorGrantsLoader;
 }): Promise<void> {
   // Bypass for a caller that has SAID it is trusted, and only that. The read
   // side gates on the same single condition, and the two must agree: a rule
@@ -787,7 +811,9 @@ export async function applyFieldWriteAccess(opts: {
         opts.grants ??
         grantsResolver(
           typeof opts.user?.id === "string" ? opts.user.id : undefined,
-          opts.authenticatedScope
+          opts.authenticatedScope,
+          undefined,
+          opts.visitor
         ),
     },
     asStoredFor(opts.kind, opts.id)
@@ -1014,9 +1040,16 @@ async function applyReadAccessRec(
  */
 export async function resolvedCallerGrants(
   user: Record<string, unknown> | undefined,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  /** Where a visitor's Public grants are read; see {@link VisitorGrantsLoader}. */
+  visitor?: VisitorGrantsLoader
 ): Promise<() => Promise<CallerGrants>> {
-  const grants = await callerAccessGrants(user, authenticatedScope)();
+  const grants = await callerAccessGrants(
+    user,
+    authenticatedScope,
+    undefined,
+    visitor
+  )();
   return () => Promise.resolve(grants);
 }
 
@@ -1038,12 +1071,18 @@ export function callerAccessGrants(
    * its connection: the lookups then read on it, rather than waiting on the
    * pool for the connection the transaction itself is holding.
    */
-  executor?: unknown
+  executor?: unknown,
+  /**
+   * Where a visitor's Public grants are read, handed `executor`; see
+   * {@link VisitorGrantsLoader}.
+   */
+  visitor?: VisitorGrantsLoader
 ): () => Promise<CallerGrants> {
   return grantsResolver(
     typeof user?.id === "string" ? user.id : undefined,
     authenticatedScope,
-    executor
+    executor,
+    visitor
   );
 }
 
@@ -1073,6 +1112,11 @@ export async function applyFieldReadAccess(
      * authority; see {@link callerAccessGrants}.
      */
     grants?: () => Promise<CallerGrants>;
+    /**
+     * Where a visitor's Public grants are read when this pass builds its own
+     * resolver; see {@link VisitorGrantsLoader}.
+     */
+    visitor?: VisitorGrantsLoader;
   },
   redactions?: ReadAccessRedactions
 ): Promise<void> {
@@ -1103,7 +1147,9 @@ export async function applyFieldReadAccess(
         opts.grants ??
         grantsResolver(
           typeof opts.user?.id === "string" ? opts.user.id : undefined,
-          opts.authenticatedScope
+          opts.authenticatedScope,
+          undefined,
+          opts.visitor
         ),
     },
     store,
