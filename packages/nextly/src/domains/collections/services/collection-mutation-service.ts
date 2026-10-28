@@ -8166,13 +8166,6 @@ export class CollectionMutationService extends BaseService {
     return { hold, componentSchemas, draftLocale };
   }
 
-  /**
-   * The document a working draft should now hold, after this save.
-   *
-   * Accumulates onto the draft already stored rather than re-deriving from the
-   * live row: a second status-less save of different fields would otherwise
-   * rebuild from live content and silently revert the first pending edit.
-   */
   /** The live document a held save leaves in place, at a draft's shape. */
   private async liveDocumentOf(
     tx: TransactionContext,
@@ -8191,6 +8184,32 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * The update filter a held edit changes a field of, if any. Judged against
+   * the live document, not the draft it replaces: an edit held before may
+   * already carry a change this save would put on.
+   */
+  private async heldEditRefusedBy(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext,
+    heldBefore: boolean,
+    draftDocument: Record<string, unknown>,
+    replaces: Record<string, unknown>
+  ): Promise<FilteredWriteCheck | undefined> {
+    if (!ctx.updateFilters?.length) return undefined;
+    const live = heldBefore ? await this.liveDocumentOf(tx, ctx) : replaces;
+    return ctx.updateFilters.find(check =>
+      changesFieldFilterNames(check.filter, draftDocument, live, ctx.fields)
+    );
+  }
+
+  /**
+   * The document a working draft should now hold, after this save.
+   *
+   * Accumulates onto the draft already stored rather than re-deriving from the
+   * live row: a second status-less save of different fields would otherwise
+   * rebuild from live content and silently revert the first pending edit.
+   */
   private async buildAccumulatedDraft(
     tx: TransactionContext,
     ctx: WorkingDraftWriteContext,
@@ -8423,17 +8442,16 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
-    // Judged against the live document, not the draft it replaces: an edit
-    // held before may already carry a change this save would put on.
-    if (ctx.updateFilters?.length) {
-      const live = existingDraft
-        ? await this.liveDocumentOf(tx, ctx)
-        : replaces;
-      const refusedBy = ctx.updateFilters.find(check =>
-        changesFieldFilterNames(check.filter, draftDocument, live, fields)
-      );
-      if (refusedBy) return { refusedBy };
-    }
+    // A held edit may not change a field an update filter that judged it
+    // names, or the entry could leave the filter once the edit is put live.
+    const refusedBy = await this.heldEditRefusedBy(
+      tx,
+      ctx,
+      existingDraft !== undefined,
+      draftDocument,
+      replaces
+    );
+    if (refusedBy) return { refusedBy };
     await this.judgeHeldFieldGroups(tx, ctx, draftDocument, replaces);
     // The held component values are judged as the publish would judge them:
     // merged into the draft, since a save carries only the sub-fields it
