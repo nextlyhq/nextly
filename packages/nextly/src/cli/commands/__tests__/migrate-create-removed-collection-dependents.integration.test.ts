@@ -33,7 +33,12 @@ import {
   plainTags,
   settings,
 } from "../../../domains/collections/__tests__/helpers/collection-dependents-fixtures";
-import { defineCollection, relationship, text } from "../../../config";
+import {
+  defineCollection,
+  defineSingle,
+  relationship,
+  text,
+} from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestDialect } from "../../../plugins/test-nextly";
 import { createContext } from "../../program";
@@ -189,6 +194,38 @@ describeEachDialect(
         "Fields that point at it: labels.tag."
       );
       expect(await migrationFiles()).toEqual(before);
+    });
+
+    it("drops a collection whose table's name reads as a surviving collection's slug, while a Single points at the survivor", async () => {
+      // `dc_labels` reads as `labels`, but nothing remaining names the
+      // removed collection: the Single's field points at the surviving
+      // `labels`, which stays, so the drop is no reason to refuse.
+      const labelled = defineCollection({
+        slug: TAGS,
+        dbName: "labels",
+        fields: [text({ name: "label" })],
+      });
+      const survivor = defineCollection({
+        slug: "labels",
+        dbName: "other_labels",
+        fields: [text({ name: "name" })],
+      });
+      const pointsAtSurvivor = defineSingle({
+        slug: SETTINGS,
+        fields: [relationship({ name: "featured", relationTo: "labels" })],
+      });
+      await generate(dialect, "initial", {
+        collections: [labelled, survivor],
+        singles: [pointsAtSurvivor],
+      });
+
+      const run = await generate(dialect, "drop_tags", {
+        collections: [survivor],
+        singles: [pointsAtSurvivor],
+      });
+
+      expect(run).toEqual({ exited: undefined, errors: [] });
+      expect(await migrationFiles()).toHaveLength(2);
     });
 
     it("refuses to drop a collection a plugin's declared foreign key points at", async () => {

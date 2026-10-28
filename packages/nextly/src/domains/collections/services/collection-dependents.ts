@@ -72,9 +72,18 @@ export interface FieldOwner {
 
 /** A collection about to be deleted, and every table it owns. */
 export interface CollectionToDelete {
+  /** What a refusal calls it. */
   readonly slug: string;
   /** Its own table, its translation table and its junction tables. */
   readonly tables: readonly string[];
+  /**
+   * The slug fields name it by, when that is not `slug`; `null` when no field
+   * can name it. A command that knows a removed collection only by its table
+   * calls it by a name read off the table, which may be a surviving
+   * collection's slug: matching fields against it would count the survivor's
+   * references as this collection's.
+   */
+  readonly fieldSlug?: string | null;
 }
 
 /** How a set of deletes is judged. */
@@ -295,7 +304,14 @@ export async function findCollectionDependents(
   for (const collection of collections) {
     const own = new Set(collection.tables);
     const dependents: CollectionDependents = {
-      fields: referencesAmong(records.owners, collection.slug, goingToo),
+      fields:
+        collection.fieldSlug === null
+          ? []
+          : referencesAmong(
+              records.owners,
+              collection.fieldSlug ?? collection.slug,
+              goingToo
+            ),
       foreignKeys: records.keys.filter(key => own.has(key.referencesTable)),
       elements: records.elements.filter(element => own.has(element.table)),
     };

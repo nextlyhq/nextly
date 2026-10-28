@@ -102,7 +102,7 @@ export async function assertRemovedCollectionsUnused(input: {
   // Targets whose table could not be told from their slug: each is one of
   // the removed collections under a name of its own, or nothing at all.
   const unplaced = [...goneTargets].filter(
-    slug => !removed.some(collection => collection.slug === slug)
+    slug => !removed.some(collection => collection.namedBy === slug)
   );
 
   await assertNothingDependsOn(
@@ -112,6 +112,9 @@ export async function assertRemovedCollectionsUnused(input: {
         // A removed collection's fields are gone with its configuration, so
         // its tables are named from its own table alone.
         tables: collectionOwnTables(collection.tableName, []),
+        // Fields are matched only against a slug a remaining field names; a
+        // name read off the table is what the refusal calls it, nothing more.
+        fieldSlug: collection.namedBy,
       })),
       ...unplaced.map(slug => ({ slug, tables: [] })),
     ],
@@ -163,14 +166,20 @@ function targetsNoLongerConfigured(
   return gone;
 }
 
+/** A removed table, what it is called, and the slug remaining fields name it by, if any does. */
+interface NamedRemovedCollection extends RemovedCollectionSeed {
+  readonly namedBy: string | null;
+}
+
 /**
  * Each removed table with the slug it is called by: the target whose table
- * it is, where one is, else one read off the table.
+ * it is, where one is, else one read off the table, which no field is
+ * matched against.
  */
 function namedRemovedCollections(
   removedTables: readonly string[],
   goneTargets: ReadonlySet<string>
-): RemovedCollectionSeed[] {
+): NamedRemovedCollection[] {
   const slugOfTable = new Map<string, string>();
   for (const slug of goneTargets) {
     const table = resolveCollectionTableName(slug);
@@ -183,6 +192,7 @@ function namedRemovedCollections(
       slugOfTable.get(tableName) ??
       tableName.slice(COLLECTION_TABLE_PREFIX.length),
     tableName,
+    namedBy: slugOfTable.get(tableName) ?? null,
   }));
 }
 

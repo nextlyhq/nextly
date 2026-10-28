@@ -133,6 +133,35 @@ describe("findCollectionDependents", () => {
     ).resolves.toEqual(new Map());
   });
 
+  it("matches fields against the slug they name a collection by, and none when nothing can name it", async () => {
+    const single: FieldOwner = {
+      entityType: "single",
+      entitySlug: "settings",
+      fields: [
+        { name: "featured", type: "relationship", relationTo: "labels" },
+      ],
+    };
+    // Called "labels" in the refusal, but no field can name it: a surviving
+    // collection holds that slug.
+    const unnamed = { slug: "labels", tables: ["dc_labels"], fieldSlug: null };
+    const named = { slug: "dc_tags", tables: ["dc_tags"], fieldSlug: "tags" };
+    const pointsAtTags: FieldOwner = {
+      ...single,
+      fields: [{ name: "featured", type: "relationship", relationTo: "tags" }],
+    };
+
+    await expect(
+      findCollectionDependents([unnamed], sources({ owners: [single] }))
+    ).resolves.toEqual(new Map());
+    const found = await findCollectionDependents(
+      [named],
+      sources({ owners: [pointsAtTags] })
+    );
+    expect(found.get("dc_tags")?.fields).toEqual([
+      { entityType: "single", entitySlug: "settings", fieldPath: "featured" },
+    ]);
+  });
+
   it("still counts a Single's or a field group's field when a collection of that slug goes too", async () => {
     // Only a collection goes with the set: a Single sharing the slug stays.
     const single: FieldOwner = { ...posts, entityType: "single" };
