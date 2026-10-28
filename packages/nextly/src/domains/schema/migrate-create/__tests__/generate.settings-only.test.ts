@@ -439,4 +439,29 @@ describe("every snapshot records every entity's full settings", () => {
       "-- Settings: widgets: fields.label.pluginOptions.__proto__.size"
     );
   });
+
+  it("compares a list whose entries share a name as a whole", async () => {
+    // Entries matched by name only when each name is unique: two presets named
+    // alike are not one preset, and matching them by name lost the change.
+    const presets = (sizes: number[]) => ({
+      presets: sizes.map(size => ({ name: "x", size })),
+    });
+    const widget = (sizes: number[]) =>
+      defineCollection({
+        slug: "widgets",
+        fields: [
+          text({ name: "headline" }),
+          { ...text({ name: "label" }), pluginOptions: presets(sizes) },
+        ] as never,
+      });
+    await written(await generate({ collections: [widget([1, 2])] }, "create"));
+
+    const { sql } = await written(
+      await generate({ collections: [widget([2, 2])] })
+    );
+
+    expect(sql).toContain(
+      "-- Settings: widgets: fields.label.pluginOptions.presets"
+    );
+  });
 });

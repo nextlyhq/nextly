@@ -338,20 +338,39 @@ function sameValue(a: SettingsValue, b: SettingsValue): boolean {
 }
 
 /**
- * The key a list of declarations is matched by, when every entry has one:
- * `name` for fields, `slug` for blocks. Null for any other list, which is
- * compared whole.
+ * The key a list of declarations is matched by, when every entry has one and
+ * no two share it: `name` for fields, `slug` for blocks. Null for any other
+ * list, which is compared whole — two entries named alike are not one entry,
+ * and matching them by name would compare each with the wrong one.
  */
 function identityKey(list: readonly SettingsValue[]): "name" | "slug" | null {
   for (const key of ["name", "slug"] as const) {
+    const names = list.map(item =>
+      isObject(item) && typeof item[key] === "string" ? item[key] : undefined
+    );
     if (
       list.length > 0 &&
-      list.every(item => isObject(item) && typeof item[key] === "string")
+      names.every(name => name !== undefined) &&
+      new Set(names).size === names.length
     ) {
       return key;
     }
   }
   return null;
+}
+
+/**
+ * The key two lists are matched by: the one each side is keyed by, or the
+ * other side's when one is empty, so a first field reads as added.
+ */
+function sharedIdentityKey(
+  before: readonly SettingsValue[],
+  after: readonly SettingsValue[]
+): "name" | "slug" | null {
+  if (before.length === 0) return identityKey(after);
+  if (after.length === 0) return identityKey(before);
+  const key = identityKey(before);
+  return key !== null && key === identityKey(after) ? key : null;
 }
 
 function diffSettings(
@@ -382,9 +401,7 @@ function diffSettings(
     });
   }
   if (Array.isArray(before) && Array.isArray(after)) {
-    // Matched by name only when both sides are such lists; an empty side
-    // takes the other's key, so a first field reads as added.
-    const id = identityKey([...before, ...after]);
+    const id = sharedIdentityKey(before, after);
     if (id !== null) return diffDeclarationList(before, after, id, path);
   }
   return [path === "" ? "settings" : path];
