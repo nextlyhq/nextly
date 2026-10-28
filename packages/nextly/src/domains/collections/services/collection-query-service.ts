@@ -33,7 +33,11 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import type { RuleFilter } from "../../../auth/access/rule-answer";
-import { currentRuleLanguage } from "../../../auth/access/rule-language";
+import {
+  currentRuleLanguage,
+  withRuleLanguage,
+  writeLanguagesFor,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -1041,6 +1045,21 @@ function toBuckets(
  */
 type DynamicSchema = Record<string, SQLWrapper | undefined>;
 
+/**
+ * Whether the field rules refuse a caller the promotion of an entry's working
+ * draft: `CollectionMutationService.workingDraftPromotionRefused`, handed in by
+ * the service that holds both, so a read asks the write's own judgement.
+ */
+export type DraftPromotionRefused = (args: {
+  collectionName: string;
+  entryId: string;
+  snapshot: unknown;
+  draftLocale: string | null;
+  locale: string | undefined;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}) => Promise<boolean>;
+
 export class CollectionQueryService extends BaseService {
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
@@ -1068,7 +1087,14 @@ export class CollectionQueryService extends BaseService {
      * A null object by default, so a runtime with no releases wired needs no
      * special case here and cannot silently narrow a read by forgetting one.
      */
-    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY,
+    /**
+     * Whether the field rules refuse a caller the promotion of a working
+     * draft, from the service that writes it. A read shows a pending change to
+     * a caller who may publish and not update only where this says no; absent,
+     * it shows them none.
+     */
+    private readonly draftPromotionRefused?: DraftPromotionRefused
   ) {
     super(adapter, logger);
   }
@@ -4885,6 +4911,9 @@ export class CollectionQueryService extends BaseService {
       // reader the collection's update and publish rules refuse is shown the
       // live document.
       let draftView = false;
+      // Set where the caller is shown a pending change on publish alone. The
+      // change is then shown only where they could put it live, below.
+      let publishOnly = false;
       // Set once a working draft is actually surfaced. When the draft predicate
       // was suppressed but nothing is overlaid, the loaded row is the published
       // one, which an explicit draft filter must not return (see the 404 below).
@@ -4905,10 +4934,30 @@ export class CollectionQueryService extends BaseService {
               routeAuthorized: false,
               authenticatedScope: params.authenticatedScope,
             });
-          draftView = !(await denied("update")) || !(await denied("publish"));
+          const mayUpdate = !(await denied("update"));
+          // Asked as the status write that would put the change live asks it:
+          // in that write's language, not every language this read involves.
+          publishOnly =
+            !mayUpdate &&
+            !(await withRuleLanguage(
+              writeLanguagesFor(this.localization, params.locale),
+              () => denied("publish")
+            ));
+          draftView = mayUpdate || publishOnly;
         }
       }
       if (draftView) {
+        // The same key the store, the promote and the discard derive, from
+        // the same function: an unlocalized document under the `locale IS
+        // NULL` slot, a localized one under the language being read. A read
+        // that looked elsewhere would report no pending change and serve the
+        // published content as though the author had never saved.
+        const draftLocale = workingDraftLocale({
+          documentLocalized:
+            (collection as { localized?: boolean }).localized === true,
+          requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
         const workingDraft = await new VersionsRepository(
           this.adapter
         ).findWorkingDraft(
@@ -4917,17 +4966,7 @@ export class CollectionQueryService extends BaseService {
             scopeSlug: params.collectionName,
             entryId,
           },
-          // The same key the store, the promote and the discard derive, from
-          // the same function: an unlocalized document under the `locale IS
-          // NULL` slot, a localized one under the language being read. A read
-          // that looked elsewhere would report no pending change and serve the
-          // published content as though the author had never saved.
-          workingDraftLocale({
-            documentLocalized:
-              (collection as { localized?: boolean }).localized === true,
-            requestLocale: params.locale ?? null,
-            defaultLocale: this.localization?.defaultLocale ?? null,
-          })
+          draftLocale
         );
         // Mirror the write gate's eligibility check before overlaying: a
         // component that turned localized or unresolvable after this draft was
@@ -4960,7 +4999,25 @@ export class CollectionQueryService extends BaseService {
             requestLocale: params.locale ?? null,
             defaultLocale: this.localization?.defaultLocale ?? null,
           }).overlay;
-        if (workingDraft && draftShowable) {
+        // Shown on publish alone only where the field rules let this caller
+        // put it live, so no pending value they could never publish reaches
+        // them.
+        const shownToCaller =
+          !publishOnly ||
+          (workingDraft !== undefined &&
+            workingDraft !== null &&
+            params.user !== undefined &&
+            this.draftPromotionRefused !== undefined &&
+            !(await this.draftPromotionRefused({
+              collectionName: params.collectionName,
+              entryId,
+              snapshot: workingDraft.snapshot,
+              draftLocale,
+              locale: params.locale,
+              user: params.user,
+              authenticatedScope: params.authenticatedScope,
+            })));
+        if (workingDraft && draftShowable && shownToCaller) {
           const rawSnapshot = workingDraft.snapshot as Record<string, unknown>;
           // Shape the snapshot to the current schema before exposing it. A field
           // removed or renamed while the draft was pending leaves a key the

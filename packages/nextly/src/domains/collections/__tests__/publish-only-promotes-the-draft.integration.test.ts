@@ -24,6 +24,8 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 const SLUG = "draftedpost";
 /** The same, with a publish rule that refuses every caller. */
 const GUARDED = "guardedpost";
+/** The same, with a field the publisher may read and not update. */
+const FIELD_RULED = "fieldruledpost";
 /** May update and publish: writes the draft. */
 const EDITOR = { id: "editor-1", email: "editor@x.test", roles: [] };
 /** May publish, and holds no update. */
@@ -58,9 +60,24 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         access: { publish: () => false },
         fields: [text({ name: "body" })],
       }),
+      defineCollection({
+        slug: FIELD_RULED,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "body" }),
+          text({
+            name: "note",
+            access: {
+              update: ({ req }) =>
+                (req.user as { id?: string } | undefined)?.id !== PUBLISHER.id,
+            },
+          }),
+        ],
+      }),
     ],
   });
-  const both = [SLUG, GUARDED];
+  const both = [SLUG, GUARDED, FIELD_RULED];
   await userWhoMay(current, EDITOR.id, "update", both);
   for (const action of ["read", "publish"]) {
     await grantTo(current, EDITOR.id, action, both);
@@ -146,17 +163,17 @@ describe.each(getConfiguredTestDialects())(
  * Publishes `body` live in `collection` and holds the editor's change to it
  * as a draft; answers the entry's id.
  */
-async function heldDraft(t: TestNextly, collection: string): Promise<string> {
+async function heldDraft(
+  t: TestNextly,
+  collection: string,
+  change: Record<string, unknown> = { body: "finished draft" }
+): Promise<string> {
   const created = await handlerOf(t).createEntry(
     { collectionName: collection, overrideAccess: true },
     { body: "live", status: "published" }
   );
   const id = (created.data as { id?: string }).id as string;
-  await as(EDITOR.id).update({
-    collection,
-    id,
-    data: { body: "finished draft" },
-  } as never);
+  await as(EDITOR.id).update({ collection, id, data: change } as never);
   return id;
 }
 
@@ -195,6 +212,90 @@ describe.each(getConfiguredTestDialects())(
       const read = await readAs(READER.id, SLUG, id);
       expect(read.body).toBe("live");
       expect(read._isWorkingDraft).toBeUndefined();
+    });
+
+    it("hides a change to a field the caller may not update, whose publish the field rule refuses", async () => {
+      const t = await boot(dialect);
+      const id = await heldDraft(t, FIELD_RULED, { note: "held note" });
+      const read = await readAs(PUBLISHER.id, FIELD_RULED, id);
+      expect(read.note).not.toBe("held note");
+      expect(read._isWorkingDraft).toBeUndefined();
+      // POPULATION CONTROL: the change is held, the editor is shown it, and
+      // the publisher's status-only publish of it is refused, so what is
+      // hidden is exactly what they could not put live.
+      expect((await readAs(EDITOR.id, FIELD_RULED, id)).note).toBe("held note");
+      await expect(
+        as(PUBLISHER.id).update({
+          collection: FIELD_RULED,
+          id,
+          data: { status: "published" },
+        } as never)
+      ).rejects.toThrow();
+    });
+
+    it("shows a change only to fields the caller may update", async () => {
+      const t = await boot(dialect);
+      const id = await heldDraft(t, FIELD_RULED);
+      const read = await readAs(PUBLISHER.id, FIELD_RULED, id);
+      expect(read.body).toBe("finished draft");
+      expect(read._isWorkingDraft).toBe(true);
+    });
+  }
+);
+
+/** Its publish rule refuses any publish told it involves French. */
+const LOCALIZED = "frenchwaryposts";
+
+describe.each(getConfiguredTestDialects())(
+  "a pending change in one language (%s)",
+  dialect => {
+    it("is shown to its publisher while the read also asks every language's status", async () => {
+      // The read asks every language's translation state, so its rules hear
+      // every language; the publish that would put the change live writes
+      // English alone, and its rule allows that.
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "fr"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: LOCALIZED,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              publish: ({ locales }: { locales: readonly string[] }) =>
+                !locales.includes("fr"),
+            },
+            fields: [text({ name: "body" })],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, EDITOR.id, "update", [LOCALIZED]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(t, EDITOR.id, action, [LOCALIZED]);
+      }
+      await userWhoMay(t, PUBLISHER.id, "publish", [LOCALIZED]);
+      await grantTo(t, PUBLISHER.id, "read", [LOCALIZED]);
+      const id = await heldDraft(t, LOCALIZED);
+      const read = (states: boolean) =>
+        handlerOf(t)
+          .getEntryService()
+          .getEntry({
+            collectionName: LOCALIZED,
+            entryId: id,
+            user: PUBLISHER,
+            overrideAccess: false,
+            includeWorkingDraft: true,
+            locale: "en",
+            ...(states ? { translationStatus: true } : {}),
+          } as never) as Promise<{ data?: Record<string, unknown> }>;
+
+      // POPULATION CONTROL: asked of English alone, the draft is shown.
+      expect((await read(false)).data?.body).toBe("finished draft");
+      const withStates = (await read(true)).data;
+      expect(withStates?.body).toBe("finished draft");
+      expect(withStates?._isWorkingDraft).toBe(true);
     });
   }
 );
