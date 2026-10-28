@@ -57,23 +57,26 @@ vi.mock("@admin/services/imageSizesApi", () => ({
   deleteImageSize: vi.fn(),
 }));
 
+// One object for every render, for the same reason: the page copies the
+// fields into its own state whenever the data changes.
+const userFields = vi.hoisted(() => ({
+  fields: [
+    {
+      id: "field_1",
+      name: "company",
+      label: "Company",
+      type: "text",
+      required: false,
+      source: "ui",
+      isActive: true,
+      sortOrder: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    },
+  ],
+}));
 vi.mock("@admin/hooks/queries/useUserFields", () => ({
   useUserFields: () => ({
-    data: {
-      fields: [
-        {
-          id: "field_1",
-          name: "company",
-          label: "Company",
-          type: "text",
-          required: false,
-          source: "ui",
-          isActive: true,
-          sortOrder: 1,
-          createdAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-    },
+    data: userFields,
     isLoading: false,
     isError: false,
     error: null,
@@ -163,7 +166,9 @@ describe("User Fields", () => {
     holding("manage-settings");
     render(<UserFieldsPage />);
     expect(screen.getByText("Add Field")).toBeInTheDocument();
-    expect(screen.getByLabelText(/drag to reorder company/i)).toBeInTheDocument();
+    expect(
+      screen.getByLabelText(/drag to reorder company/i)
+    ).toBeInTheDocument();
     expect(screen.getAllByText("Open menu").length).toBeGreaterThan(0);
   });
 });
