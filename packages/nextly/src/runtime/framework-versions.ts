@@ -10,7 +10,7 @@
  * @module runtime/framework-versions
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import semver from "semver";
@@ -130,22 +130,27 @@ export function assertSupportedFrameworkVersions(
 }
 
 /**
- * Whether this process's installed versions passed the check. On `globalThis`
- * so every copy of this module in one process (a server and a rendering layer,
- * a reload in development) shares the answer.
+ * The app roots whose installed versions passed the check, resolved. On
+ * `globalThis` so every copy of this module in one process (a server and a
+ * rendering layer, a reload in development) shares the answer. Per root, not
+ * per process: one process can boot more than one app in turn (the CLI, a
+ * test), and one app passing says nothing about the next.
  */
 const checked = globalThis as unknown as {
-  __nextly_frameworkVersionsChecked?: boolean;
+  __nextly_frameworkVersionsCheckedRoots?: Set<string>;
 };
 
 /**
- * {@link assertSupportedFrameworkVersions} once per process, at the boot
- * boundary every way of starting nextly shares. Marked as checked only once
- * it passes, so a refused start is refused again on every attempt, and a boot
- * after it pays nothing.
+ * {@link assertSupportedFrameworkVersions} once per app root, at the boot
+ * boundary every way of starting nextly shares. A relative root is resolved
+ * against the process's directory first, as the package resolver needs an
+ * absolute one. Marked as checked only once it passes, so a refused root is
+ * refused again on every attempt, and a boot after it pays nothing.
  */
 export function ensureSupportedFrameworkVersions(appRoot: string): void {
-  if (checked.__nextly_frameworkVersionsChecked) return;
-  assertSupportedFrameworkVersions(appRoot);
-  checked.__nextly_frameworkVersionsChecked = true;
+  const root = resolve(appRoot);
+  const roots = (checked.__nextly_frameworkVersionsCheckedRoots ??= new Set());
+  if (roots.has(root)) return;
+  assertSupportedFrameworkVersions(root);
+  roots.add(root);
 }
