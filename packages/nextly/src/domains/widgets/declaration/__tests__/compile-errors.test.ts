@@ -651,6 +651,32 @@ export const components = {
     message: `'"colection"' is not assignable to type '"collection"'`,
   },
   {
+    name: "access written as a bare list of permissions, which is neither any-of nor all-of",
+    ...pair(
+      access =>
+        widget(`  access: ${access}, ${MARK}
+  load: async () => ({ total: 3 }),
+  view: "figure",`),
+      `["read-orders", "update-orders"]`,
+      `{ anyOf: ["read-orders", "update-orders"] }`
+    ),
+    code: 2322,
+    message: "is not assignable to type 'WidgetAccess",
+  },
+  {
+    name: "a series read over a range a series does not draw",
+    ...pair(
+      range =>
+        widget(`  load: async ({ services }) =>
+    services.timeseries("orders", { range: "${range}" }), ${MARK}
+  view: "series",`),
+      "60d",
+      "30d"
+    ),
+    code: 2322,
+    message: `'"60d"' is not assignable to type`,
+  },
+  {
     name: "a size written as a named width",
     ...pair(
       size => `${imports}

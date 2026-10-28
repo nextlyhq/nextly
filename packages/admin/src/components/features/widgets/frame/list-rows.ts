@@ -15,21 +15,14 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import {
-  LIST_DENSITIES,
-  type ListDensity,
-  MAX_WIDGET_ROWS,
-} from "nextly/config";
+import { cardBodyHeightPx, LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
+import { LIST_DENSITIES, type ListDensity } from "nextly/config";
 import { createContext, useContext, type Context } from "react";
 
-import { cardBodyHeightPx } from "./measures";
-
-/** A list row's height at each density, in pixels: the line box every row is drawn in. */
-export const LIST_ROW_HEIGHT_PX: Readonly<Record<ListDensity, number>> =
-  Object.freeze({
-    default: 52,
-    compact: 36,
-  });
+// A list row's height at each density, and the whole rows a body of some height holds at one:
+// core's (`nextly/card-geometry`), the formula a widget's server `load` counts its rows by
+// (`rowsThatFit`), so the rows a load reads and the rows drawn here are one count.
+export { LIST_ROW_HEIGHT_PX, rowsInBody } from "nextly/card-geometry";
 
 /** How many default-density rows a card's body holds at each tier. */
 const TIER_BODY_ROWS: Readonly<Record<SizeTier, number>> = Object.freeze({
@@ -57,19 +50,6 @@ export function listBodyHeight(size: RowsSize): number {
   return size.h === undefined
     ? tierBodyHeight(size.tier)
     : cardBodyHeightPx(size.h);
-}
-
-/**
- * The whole rows a body `bodyHeight` pixels tall holds at `density`: never part of a row, never
- * more than {@link MAX_WIDGET_ROWS}, and none for a body with no room. A height that is not a
- * finite number holds nothing rather than an unbounded list.
- */
-export function rowsThatFit(bodyHeight: number, density: ListDensity): number {
-  if (!Number.isFinite(bodyHeight) || bodyHeight <= 0) return 0;
-  return Math.min(
-    Math.floor(bodyHeight / LIST_ROW_HEIGHT_PX[density]),
-    MAX_WIDGET_ROWS
-  );
 }
 
 /**

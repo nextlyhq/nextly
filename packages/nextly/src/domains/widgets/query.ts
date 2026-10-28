@@ -169,13 +169,25 @@ export const TIMESERIES_RANGES = ["7d", "30d", "90d", "12m"] as const;
 /** @experimental */
 export type TimeseriesRange = (typeof TIMESERIES_RANGES)[number];
 
-/** The interval each range is drawn in. */
-const RANGE_INTERVAL: Readonly<Record<TimeseriesRange, TimeseriesInterval>> = {
+/**
+ * The interval each range is drawn in. Kept literal (`as const`), so the
+ * intervals a range can be drawn in are a type of their own
+ * ({@link RangeInterval}), read from this one table.
+ */
+const RANGE_INTERVAL = {
   "7d": "day",
   "30d": "day",
   "90d": "week",
   "12m": "month",
-};
+} as const satisfies Readonly<Record<TimeseriesRange, TimeseriesInterval>>;
+
+/** The intervals a range is drawn in: a day, a week or a month. @experimental */
+export type RangeInterval = (typeof RANGE_INTERVAL)[TimeseriesRange];
+
+/** Whether an interval is one a range is drawn in ({@link RangeInterval}). @experimental */
+export function isRangeInterval(value: unknown): value is RangeInterval {
+  return (Object.values(RANGE_INTERVAL) as readonly unknown[]).includes(value);
+}
 
 /** Whether a value is one of {@link TIMESERIES_RANGES}. @experimental */
 export function isTimeseriesRange(value: unknown): value is TimeseriesRange {
@@ -190,7 +202,7 @@ export function isTimeseriesRange(value: unknown): value is TimeseriesRange {
  * @experimental
  */
 export interface RangeWindow {
-  interval: TimeseriesInterval;
+  interval: RangeInterval;
   /** The range's first instant: rows from here on are counted. */
   start: Date;
   /**

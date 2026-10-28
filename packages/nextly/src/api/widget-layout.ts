@@ -72,8 +72,12 @@ import {
   type StoredLayout,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
-import { retiredWidgetReplacement } from "../domains/widgets/retired-widget-namespaces";
+import {
+  retiredWidgetReplacement,
+  type NamedCollection,
+} from "../domains/widgets/retired-widget-namespaces";
 import type { TextBound } from "../domains/widgets/settings";
+import { getSource } from "../domains/widgets/sources";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -277,21 +281,41 @@ async function notShownInDefault(
 }
 
 /**
- * The default's cards withheld from what this reader was handed, and the
- * token their write is checked against: none for an arranged row, whose cards
- * answer for themselves.
+ * The default's cards withheld from what this reader was handed (none for an
+ * arranged row, whose cards answer for themselves), the default's own
+ * verdicts, and the token their write or reset is checked against.
  */
 async function readerCards(
   auth: AuthContext,
   view: Awaited<ReturnType<typeof visibleWidgets>>,
   stored: StoredLayout | undefined,
   signal: AbortSignal
-): Promise<{ notShown: ReadonlySet<string>; scope: string }> {
-  const notShown =
-    stored && layoutIsArranged(stored)
-      ? NOTHING_WITHHELD
-      : (await notShownInDefault(auth, view, signal, stored)).forReader;
-  return { notShown, scope: view.scopeWith(notShown) };
+): Promise<{
+  notShown: ReadonlySet<string>;
+  inDefault: ReadonlySet<string>;
+  scope: string;
+}> {
+  const judged = await notShownInDefault(auth, view, signal, stored);
+  const arranged = stored !== undefined && layoutIsArranged(stored);
+  return {
+    notShown: arranged ? NOTHING_WITHHELD : judged.forReader,
+    inDefault: judged.inDefault,
+    scope: view.scopeWith(scopedVerdicts(arranged, judged)),
+  };
+}
+
+/**
+ * The verdicts a reader's token covers: those behind what they were handed.
+ * While they follow the default, the cards of it they were not shown; once
+ * they have arranged their own, the default a reset returns them to, which
+ * the read hands them to stage that reset. A verdict that changes before the
+ * write or reset then makes it a conflict rather than a change nobody saw.
+ */
+function scopedVerdicts(
+  arranged: boolean,
+  judged: { inDefault: ReadonlySet<string>; forReader: ReadonlySet<string> }
+): ReadonlySet<string> {
+  return arranged ? judged.inDefault : judged.forReader;
 }
 
 /**
@@ -547,7 +571,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // Over the cards withheld from what they were handed, so a save staged
       // before one of those verdicts changed is refused rather than dropping
       // a card it never held.
-      scope: view.scopeWith(notShown),
+      scope: view.scopeWith(scopedVerdicts(arranged, judged)),
       // The audience the workspace payload is built for, so the admin can tell
       // the payload it holds apart from the one this reader would be sent now.
       audience: view.audience.token,
@@ -703,22 +727,35 @@ function refuseUnreadableCollections(
   });
 }
 
+/** The collections a reader may read, each by the label its source is listed under. */
+function namedCollections(readable: ReadonlySet<string>): NamedCollection[] {
+  return [...readable].map(slug => ({
+    slug,
+    label: getSource(`collection:${slug}`)?.label ?? slug,
+  }));
+}
+
 /**
  * Refuses a submission naming a widget this caller may not see, a card of a
  * retired per-collection namespace, or a placement id twice.
  */
 function refuseUnknownOrRepeated(
   submitted: readonly WidgetPlacement[],
-  visibleIds: ReadonlySet<string>
+  visibleIds: ReadonlySet<string>,
+  readable: ReadonlySet<string>
 ): void {
   // A card in a namespace core once filled per collection or per Single
   // (`collection/`, `single/`) is refused by its namespace before anything
   // else, and told what replaced it. No widget answers to one (the registry
   // refuses the namespaces), so the check below would refuse it too; this one
   // says why. It discloses nothing: the namespaces are core's, the same for
-  // every install and every reader.
+  // every install and every reader, and the collection it may name is one
+  // this reader may read.
   for (const { widgetId } of submitted) {
-    const replacement = retiredWidgetReplacement(widgetId);
+    const replacement = retiredWidgetReplacement(
+      widgetId,
+      namedCollections(readable)
+    );
     if (replacement === undefined) continue;
     throw NextlyError.validation({
       errors: [
@@ -983,14 +1020,14 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // are carried into the row as cards they may not see are, never dropped.
   // The token covers them, so a write staged against other verdicts is
   // refused before anything is merged.
-  const { notShown, scope } = await readerCards(
-    auth,
-    view,
-    stored.layout,
-    req.signal
+  const cards = await readerCards(auth, view, stored.layout, req.signal);
+  const { notShown } = cards;
+  refuseStaleScope(submittedScope, cards.scope);
+  refuseUnknownOrRepeated(
+    submitted,
+    view.visibleIds,
+    view.audience.readableCollections
   );
-  refuseStaleScope(submittedScope, scope);
-  refuseUnknownOrRepeated(submitted, view.visibleIds);
   refuseUnreadableCollections(submitted, view.withheld);
   refuseUnconfirmedReplacement(
     stored.unreadable,
@@ -1034,9 +1071,10 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       source: "own" satisfies LayoutSource,
       // The token the next write is checked against, from the row as just
       // saved: a setting this write changed may change a card's verdict. An
-      // arranged row's cards answer for themselves, so it covers none.
+      // arranged row's covers the default a reset returns to, which this
+      // write did not change.
       scope: arranged
-        ? view.scope
+        ? view.scopeWith(cards.inDefault)
         : (
             await readerCards(
               auth,

@@ -38,6 +38,10 @@ import type {
   WidgetSourceFieldType,
   WidgetSourceKind,
   WidgetOp,
+  WidgetAccess,
+  WidgetInterval,
+  WidgetAccessGate,
+  WidgetRange,
 } from "@nextlyhq/plugin-sdk";
 
 type _WidgetSurface = [
@@ -103,5 +107,17 @@ const _attention: AttentionItem = defineAttentionItem({
   count: () => Promise.resolve(_count),
 });
 void _attention;
+
+// A declared widget's permission gate and a series read's interval and range, nameable from the
+// SDK as `defineWidget` is, so an author annotating `access` or a series need not reach into core.
+const _gate: WidgetAccessGate = {
+  allOf: ["read-orders", { anyOf: ["update-orders", "create-orders"] }],
+};
+const _access: WidgetAccess = _gate;
+const _range: WidgetRange = "90d";
+const _interval: WidgetInterval = "week";
+void _access;
+void _range;
+void _interval;
 
 export type { _WidgetSurface };

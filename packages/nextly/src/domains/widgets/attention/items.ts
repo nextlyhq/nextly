@@ -304,9 +304,15 @@ async function visibleTo(
 
 /**
  * The read services one item's count is handed: bound to the reader, and for
- * an item with `collections`, limited to those. A declared collection the
- * reader may not read answers empty rather than refusing, so a reader of one
- * of two collections gets the count of the one they read.
+ * an item with `collections`, limited to those.
+ *
+ * 🔴 A declared collection the reader may not read answers "nothing there" to
+ * every kind of read, rather than refusing: no entries, no groups, a series at
+ * zero in every interval. So a reader of one of two collections gets the
+ * numbers of the one they read and the item is never failed for a permission
+ * gap, and nothing is disclosed: the answer is the one an empty collection
+ * gives. Each read is checked first, as any other is (`answersNothing`), so a
+ * malformed one is refused for every reader alike.
  */
 function itemServices(
   entry: RegisteredAttentionItem,
@@ -316,7 +322,7 @@ function itemServices(
   now: Date
 ): ReturnType<typeof bindReadServices> {
   const declared = entry.collections;
-  const bound = bindReadServices({
+  return bindReadServices({
     caller,
     signal,
     now,
@@ -336,22 +342,15 @@ function itemServices(
       }
       return Promise.resolve(query);
     },
+    // A declared collection this reader may not read: each read of it is
+    // checked first, then answered as an empty collection answers it.
+    ...(declared === undefined
+      ? {}
+      : {
+          answersNothing: (slug: string) =>
+            declared.includes(slug) && !readable.has(slug),
+        }),
   });
-  if (declared === undefined) return bound;
-  const unread = (collection: string) => {
-    const slug = renamedCollection(collection, entry.renames);
-    return declared.includes(slug) && !readable.has(slug);
-  };
-  return {
-    count: (collection, options) =>
-      unread(collection)
-        ? Promise.resolve(0)
-        : bound.count(collection, options),
-    find: (collection, options) =>
-      unread(collection)
-        ? Promise.resolve({ items: [] })
-        : bound.find(collection, options),
-  };
 }
 
 /**

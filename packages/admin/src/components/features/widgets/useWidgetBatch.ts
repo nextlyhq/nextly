@@ -59,6 +59,11 @@ export interface BatchCard {
    */
   h?: number;
   /**
+   * The card's width in grid columns, as it is drawn: with its tier and height, the size a card
+   * core answers on the server is loaded for. Absent where its tier is.
+   */
+  w?: number;
+  /**
    * The widget's query as DECLARED, when the card's settings change it: `widget` is then the
    * widget as its settings ask it. The batch keys the card by this and sends `widget.query`, so
    * one card's change of settings is not a new question for the whole dashboard. Absent when
@@ -187,21 +192,33 @@ function worthAsking(widget: DashboardWidget): boolean {
  * How a card core answers on the server is asked for: by its id while it is a
  * stored card with its stored settings, filed under those settings so a saved
  * change of them asks it again alone; with the settings it is drawn with while
- * the dashboard is being customised, when either may not be saved yet. Never
- * sized: core answers it as declared.
+ * the dashboard is being customised, when either may not be saved yet.
+ *
+ * With the size it is drawn at, where the dashboard has a width to predict its
+ * tier from: the widget's `load` is handed it, so a card resized or crossing a
+ * tier is a different question, filed under it and asked again alone
+ * (`cardSize`). Its query is never sized: core answers the card from its
+ * declaration, and the declaration reads the size if it wants it.
  */
 function cardAskFor(card: BatchCard): WidgetQueryRequest {
   const widget = card.widget.id;
+  const { tier, w, h } = card;
+  const size =
+    tier === undefined || w === undefined || h === undefined
+      ? {}
+      : { cardSize: { w, h, tier } };
   if (card.editing === true) {
     return {
       placementId: card.placementId,
       card: { widget, settings: card.config ?? {} },
+      ...size,
     };
   }
   return {
     placementId: card.placementId,
     card: { widget, card: card.placementId },
     ...(card.config === undefined ? {} : { config: card.config }),
+    ...size,
   };
 }
 
