@@ -47,6 +47,7 @@ import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 import { translationCounts } from "../translation-meta";
 
 import { actionsAt } from "./document-actions";
+import { useDocumentBarHeight } from "./document-bar-height";
 import {
   DocumentActionBar,
   WIDE_ONLY,
@@ -65,10 +66,9 @@ import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
 
 /**
- * The bar's height, which content sticky BELOW it offsets by: the document
- * panel sticks under the bar rather than sliding beneath it. 3.25rem is 52px,
- * the bar's one-row height; a bar that wraps to a second row is taller, and
- * then the panel's top tucks under it rather than leaving a gap.
+ * The bar's one-row height: 3.25rem is 52px. A bar that wraps to a second row
+ * is taller, and the bar measures and publishes its real height
+ * (`useDocumentBarHeight`) for the document panel, which sticks under it.
  */
 const DOCUMENT_BAR_MIN_HEIGHT = "min-h-13";
 
@@ -223,6 +223,9 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
   const historyOffered = isHistoryOffered(props, mayReadHistory);
   const { open: historyOpen, setOpen: setHistoryOpen } =
     useHistoryAddress(historyOffered);
+  // Its real height, for the panel that sticks under it. Called before the
+  // early return below, as every hook is.
+  const measureBar = useDocumentBarHeight();
 
   if (!form) {
     return null;
@@ -230,6 +233,7 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
 
   return (
     <div
+      ref={measureBar}
       data-testid="document-bar"
       className={cn(
         TOOLBAR_CONTAINER,

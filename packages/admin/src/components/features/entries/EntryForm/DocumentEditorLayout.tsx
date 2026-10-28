@@ -14,11 +14,17 @@
 
 import type { JSX, ReactNode } from "react";
 
+import { DOCUMENT_EDITOR_FRAME_ATTRIBUTE } from "./document-bar-height";
+
 /**
- * How the document panel's inner column sticks: under the bar (3.25rem, the
- * bar's one-row height) rather than beneath it, and as tall as the scroll area
- * the editor is in, less the document bar. Shared by both editors' panels so
- * they line up with the one bar both draw.
+ * How the document panel's inner column sticks: under the bar rather than
+ * beneath it, and as tall as the scroll area the editor is in, less the bar.
+ * Shared by both editors' panels so they line up with the one bar both draw.
+ *
+ * The bar's height is `--document-bar-height`, which the bar measures and
+ * publishes on this frame (`useDocumentBarHeight`): a bar wrapped to a second
+ * row is taller than one, and a fixed offset would let that row cover the
+ * panel's top. Until the first measurement it is the one-row height, 3.25rem.
  *
  * The scroll area's height is `--editor-scrollport`, declared by whatever
  * scrolls the editor where that is not the page: the translation mode's target
@@ -26,11 +32,11 @@ import type { JSX, ReactNode } from "react";
  * nothing declares it, the editor scrolls with the page, whose scroll area is
  * the window less the admin's top bar (4rem). One rule for both, so the
  * panel's foot is reachable in either without scrolling the page past it.
- * A layout knob rather than a palette token, so it sits outside the theme's
- * `--nx-*` namespace, as `--sidebar-width` does.
+ * Both are layout knobs rather than palette tokens, so they sit outside the
+ * theme's `--nx-*` namespace, as `--sidebar-width` does.
  */
 export const DOCUMENT_PANEL_STICKY =
-  "@4xl/content:sticky @4xl/content:top-13 @4xl/content:h-[calc(var(--editor-scrollport,calc(100vh-4rem))-3.25rem)]";
+  "@4xl/content:sticky @4xl/content:top-[var(--document-bar-height,3.25rem)] @4xl/content:h-[calc(var(--editor-scrollport,calc(100vh-4rem))-var(--document-bar-height,3.25rem))]";
 
 /**
  * The field column's inset, shared by everything drawn in it above the fields
@@ -61,7 +67,11 @@ export function DocumentEditorLayout({
     // Vertical only: from `@4xl` the editor cancels the page's `py-8`, so the
     // bar reaches the top of the scroll area and the panel the bottom. The
     // floor is the scroll area's height (see `DOCUMENT_PANEL_STICKY`).
-    <div className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-4rem))]">
+    // The frame is also where the bar publishes its height for the panel.
+    <div
+      {...{ [DOCUMENT_EDITOR_FRAME_ATTRIBUTE]: "" }}
+      className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-4rem))]"
+    >
       {bar}
       {banners}
       {notices}
