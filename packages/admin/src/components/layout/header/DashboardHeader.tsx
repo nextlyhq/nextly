@@ -40,7 +40,7 @@ export function DashboardHeader({
   const bellOffered =
     !hidden.has("notifications") && branding?.showBuilder !== false;
   // Until the answers that decide the row are in, only the account menu is
-  // drawn, at the row's right end where nothing arriving beside it moves it.
+  // shown, at the row's right end where nothing arriving beside it moves it.
   const controlsSettled = headerControlsSettled(
     { workspace: isWorkspacePending, permissions: isPermissionsLoading },
     bellOffered
@@ -68,13 +68,24 @@ export function DashboardHeader({
           right, so its own box is the same whatever it holds: controls
           arriving at its left end move neither the row nor the menu. */}
       <div className="flex flex-1 items-center justify-end gap-1">
-        {controlsSettled && (
+        {/* The controls mount from the first paint and stay hidden until they
+            settle, rather than mounting late: the bell and plugin controls
+            read the same permissions as the header, and a reader mounted
+            after that answer arrives asks for it again, one round trip later.
+            Mounted early, each joins the request already out. Hidden, the
+            wrapper takes no space; settled, `contents` lays its controls out
+            as the row's own. No display utility while hidden, as one would
+            override the `hidden` attribute's `display: none`. */}
+        <div
+          hidden={!controlsSettled}
+          className={controlsSettled ? "contents" : undefined}
+        >
           <HeaderControls
             hidden={hidden}
             headerSlots={headerSlots}
             bellOffered={bellOffered}
           />
-        )}
+        </div>
         <div className="ml-2">
           <UserProfileDropdown
             user={user}
@@ -89,7 +100,7 @@ export function DashboardHeader({
 }
 
 /**
- * The header's controls left of the account menu, drawn together once what decides them is
+ * The header's controls left of the account menu, shown together once what decides them is
  * known (see `headerControlsSettled`).
  */
 function HeaderControls({

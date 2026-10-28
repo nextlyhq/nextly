@@ -31,7 +31,13 @@ vi.mock("@admin/hooks/useLogout", () => ({
   useLogout: () => () => {},
 }));
 vi.mock("@admin/components/features/notifications", () => ({
-  NotificationBell: () => <div data-testid="bell" />,
+  NotificationBell: () => (
+    <button
+      type="button"
+      data-testid="bell"
+      aria-label="Recent schema changes"
+    />
+  ),
 }));
 vi.mock("../sidebar/UserProfileDropdown", () => ({
   UserProfileDropdown: () => <div data-testid="account-menu" />,
@@ -146,8 +152,10 @@ describe("DashboardHeader default-button visibility", () => {
 
 /**
  * The row is right-aligned: a control appearing after the first paint pushes every control to its
- * left sideways. So the controls beside the account menu are drawn only once the answers deciding
- * them are in, and never on a guess that might be taken back.
+ * left sideways. So the controls beside the account menu are shown only once the answers deciding
+ * them are in, and never on a guess that might be taken back. Until then they are mounted but
+ * hidden, so they are out of the accessibility tree, which the role queries below read: a query by
+ * role skips a hidden element, and the settled cases show the same queries find them once shown.
  */
 describe("DashboardHeader while its answers arrive", () => {
   const BESIDE_THE_MENU = [
@@ -156,26 +164,37 @@ describe("DashboardHeader while its answers arrive", () => {
     "Documentation",
   ];
 
-  it("draws only the account menu while the workspace answer is pending", () => {
+  it("shows only the account menu while the workspace answer is pending", () => {
     mockWorkspacePending = true;
     render(<DashboardHeader />);
-    expect(screen.getByTestId("account-menu")).toBeInTheDocument();
+    expect(screen.getByTestId("account-menu")).toBeVisible();
     for (const title of BESIDE_THE_MENU) {
-      expect(screen.queryByTitle(title)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("link", { name: title })
+      ).not.toBeInTheDocument();
     }
     expect(
       screen.queryByRole("button", { name: "Choose theme" })
     ).not.toBeInTheDocument();
-    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Recent schema changes" })
+    ).not.toBeInTheDocument();
+    // Mounted from the first paint, so it reads the permissions while the first request is out.
+    expect(screen.getByTestId("bell")).not.toBeVisible();
   });
 
   it("holds the row while the permissions that decide the bell load", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     mockPermissionsLoading = true;
     render(<DashboardHeader />);
-    expect(screen.getByTestId("account-menu")).toBeInTheDocument();
-    expect(screen.queryByTitle("GitHub Repository")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+    expect(screen.getByTestId("account-menu")).toBeVisible();
+    expect(
+      screen.queryByRole("link", { name: "GitHub Repository" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Recent schema changes" })
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("bell")).not.toBeVisible();
   });
 
   it("does not wait on permissions where no bell can be offered", () => {
@@ -183,24 +202,23 @@ describe("DashboardHeader while its answers arrive", () => {
     mockPermissionsLoading = true;
     render(<DashboardHeader />);
     for (const title of BESIDE_THE_MENU) {
-      expect(screen.getByTitle(title)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: title })).toBeVisible();
     }
-    expect(
-      screen.getByRole("button", { name: "Choose theme" })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Choose theme" })).toBeVisible();
   });
 
   it("draws the whole row, the menu last, once both answers are in", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     render(<DashboardHeader />);
     const menu = screen.getByTestId("account-menu");
-    const bell = screen.getByTestId("bell");
+    const bell = screen.getByRole("button", { name: "Recent schema changes" });
+    expect(bell).toBeVisible();
     // The bell precedes the menu in the row, so the menu stays its right end.
     expect(
       bell.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
     for (const title of BESIDE_THE_MENU) {
-      expect(screen.getByTitle(title)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: title })).toBeVisible();
     }
   });
 });
