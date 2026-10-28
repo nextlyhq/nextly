@@ -39,7 +39,6 @@ no-service visitor read single returns-null at direct  403 - other  |
 public visitor count collection async-false at direct  403 FORBIDDEN thrown  | You can't see pc async falses.
 public visitor count collection async-false at rest  403 FORBIDDEN error  | You can't see pc async falses.
 public visitor count collection async-false at service  403 FORBIDDEN thrown  | You can't see pc async falses.
-public visitor count collection async-filter at rest  403 FORBIDDEN error  | You can't see pc async filters.
 public visitor count collection async-throws at direct  403 FORBIDDEN thrown  | You can't see pc async throws.
 public visitor count collection async-throws at rest  403 FORBIDDEN error  | You can't see pc async throws.
 public visitor count collection async-throws at service  403 FORBIDDEN thrown  | You can't see pc async throws.
@@ -61,7 +60,6 @@ public visitor count collection returns-empty-in at service  403 FORBIDDEN throw
 public visitor count collection returns-false at direct  403 FORBIDDEN thrown  | You can't see pc returns falses.
 public visitor count collection returns-false at rest  403 FORBIDDEN error  | You can't see pc returns falses.
 public visitor count collection returns-false at service  403 FORBIDDEN thrown  | You can't see pc returns falses.
-public visitor count collection returns-filter at rest  403 FORBIDDEN error  | You can't see pc returns filters.
 public visitor count collection returns-null at direct  403 FORBIDDEN thrown  | You can't see pc returns nulls.
 public visitor count collection returns-null at rest  403 FORBIDDEN error  | You can't see pc returns nulls.
 public visitor count collection returns-null at service  403 FORBIDDEN thrown  | You can't see pc returns nulls.
@@ -185,7 +183,6 @@ public visitor delete users none at rest  401 AUTH_REQUIRED error  | Authenticat
 public visitor list collection async-false at direct  403 FORBIDDEN thrown  | You can't see pc async falses.
 public visitor list collection async-false at rest  403 FORBIDDEN error  | You can't see pc async falses.
 public visitor list collection async-false at service  403 FORBIDDEN thrown  | You can't see pc async falses.
-public visitor list collection async-filter at rest  403 FORBIDDEN error  | You can't see pc async filters.
 public visitor list collection async-throws at direct  403 FORBIDDEN thrown  | You can't see pc async throws.
 public visitor list collection async-throws at rest  403 FORBIDDEN error  | You can't see pc async throws.
 public visitor list collection async-throws at service  403 FORBIDDEN thrown  | You can't see pc async throws.
@@ -207,7 +204,6 @@ public visitor list collection returns-empty-in at service  403 FORBIDDEN thrown
 public visitor list collection returns-false at direct  403 FORBIDDEN thrown  | You can't see pc returns falses.
 public visitor list collection returns-false at rest  403 FORBIDDEN error  | You can't see pc returns falses.
 public visitor list collection returns-false at service  403 FORBIDDEN thrown  | You can't see pc returns falses.
-public visitor list collection returns-filter at rest  403 FORBIDDEN error  | You can't see pc returns filters.
 public visitor list collection returns-null at direct  403 FORBIDDEN thrown  | You can't see pc returns nulls.
 public visitor list collection returns-null at rest  403 FORBIDDEN error  | You can't see pc returns nulls.
 public visitor list collection returns-null at service  403 FORBIDDEN thrown  | You can't see pc returns nulls.

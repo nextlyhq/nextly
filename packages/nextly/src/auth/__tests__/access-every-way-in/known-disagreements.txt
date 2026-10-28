@@ -1007,6 +1007,8 @@ service user-with read collection returns-filter at capabilities  # filter-not-a
 service user-with read collection returns-filter at direct  # filter-not-applied
 service user-with read collection returns-filter at entity  # filter-not-applied
 service user-with read collection returns-filter at rest
+public visitor read collection returns-filter at rest
+public visitor read collection async-filter at rest
 service user-with read collection returns-filter at route  # filter-not-applied
 service user-with read collection returns-filter at service  # filter-not-applied
 public visitor read collection returns-filter at direct  # filter-not-applied

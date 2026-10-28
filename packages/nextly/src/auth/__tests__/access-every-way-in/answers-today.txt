@@ -5394,8 +5394,8 @@ public      visitor                  update     collection  returns-filter      
 public      visitor                  delete     collection  returns-filter        403   403     .        .      .    403      .       .       .           .       .       .     .
 public      visitor                  publish    collection  returns-filter        403   403     .        .      .    403      .       .       .           .       .       .     .
 public      visitor                  unpublish  collection  returns-filter        403   403     .        .      .    403      .       .       .           .       .       .     .
-public      visitor                  list       collection  returns-filter        403   M       .        .      .    M        .       .       .           .       .       .     .
-public      visitor                  count      collection  returns-filter        403   M       .        .      .    M        .       .       .           .       .       .     .
+public      visitor                  list       collection  returns-filter        M     M       .        .      .    M        .       .       .           .       .       .     .
+public      visitor                  count      collection  returns-filter        M     M       .        .      .    M        .       .       .           .       .       .     .
 public      visitor                  new-pub    collection  returns-filter        403   403     .        .      .    403      .       .       .           .       .       .     .
 public      visitor                  read       collection  async-filter          403   403     A        .      .    403      .       .       .           .       .       .     .
 public      visitor                  create     collection  async-filter          403   403     .        .      .    403      .       .       .           .       .       .     .
@@ -5403,8 +5403,8 @@ public      visitor                  update     collection  async-filter        
 public      visitor                  delete     collection  async-filter          403   403     .        .      .    403      .       .       .           .       .       .     .
 public      visitor                  publish    collection  async-filter          403   403     .        .      .    403      .       .       .           .       .       .     .
 public      visitor                  unpublish  collection  async-filter          403   403     .        .      .    403      .       .       .           .       .       .     .
-public      visitor                  list       collection  async-filter          403   M       .        .      .    M        .       .       .           .       .       .     .
-public      visitor                  count      collection  async-filter          403   M       .        .      .    M        .       .       .           .       .       .     .
+public      visitor                  list       collection  async-filter          M     M       .        .      .    M        .       .       .           .       .       .     .
+public      visitor                  count      collection  async-filter          M     M       .        .      .    M        .       .       .           .       .       .     .
 public      visitor                  new-pub    collection  async-filter          403   403     .        .      .    403      .       .       .           .       .       .     .
 public      visitor                  read       collection  returns-empty-in      403   403     R        .      .    403      .       .       .           .       .       .     .
 public      visitor                  create     collection  returns-empty-in      403   403     .        .      .    403      .       .       .           .       .       .     .
