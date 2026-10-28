@@ -14,6 +14,7 @@
 import { expectTypeOf } from "vitest";
 
 import {
+  defineAttentionItem,
   formatWidgetChange,
   formatWidgetNumber,
   WIDGET_CONDITIONS,
@@ -22,6 +23,8 @@ import {
   type WidgetChartSlot,
 } from "@nextlyhq/plugin-sdk";
 import type {
+  AttentionCount,
+  AttentionItem,
   GridSize,
   WidgetLifecycle,
   WidgetCondition,
@@ -87,5 +90,18 @@ expectTypeOf(formatWidgetNumber).returns.toHaveProperty("label");
 expectTypeOf(formatWidgetChange).returns.toHaveProperty("text");
 expectTypeOf(widgetChartColour).parameter(0).toEqualTypeOf<WidgetChartSlot>();
 expectTypeOf<WidgetChartSlot>().toEqualTypeOf<1 | 2 | 3 | 4 | 5>();
+
+// The Needs attention item a plugin lists under `contributes.dashboard.attention`:
+// declared through the SDK's own `defineAttentionItem`, and both of its types
+// nameable, so an author can annotate a count they write as a named function.
+const _count: AttentionCount = { count: 100, atLeast: true };
+const _attention: AttentionItem = defineAttentionItem({
+  id: "overdue-orders",
+  label: "Overdue orders",
+  permission: "read-orders",
+  link: "collections/orders",
+  count: () => Promise.resolve(_count),
+});
+void _attention;
 
 export type { _WidgetSurface };

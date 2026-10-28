@@ -11,7 +11,6 @@ import {
   DASHBOARD_FULL_MESSAGE,
   MAX_PLACEMENTS,
   MAX_STORED_PLACEMENTS,
-  defaultPlacements,
   dismissalsApplied,
   layoutSizeProblem,
   mergePreservingHidden,
@@ -362,11 +361,18 @@ const EARLIER_ROWS: ReadonlyArray<[number, string]> = [
 ];
 
 describe("a row of an earlier format is no saved arrangement", () => {
-  const defaults = defaultPlacements([
-    { id: "core/a", defaultOrder: 1, size: { w: 6, h: 3 } },
-    { id: "core/b", defaultOrder: 2, size: { w: 4, h: 2 } },
-    { id: "core/get-started", defaultOrder: 0, size: { w: 12, h: 4 } },
-  ]);
+  // A default as `defaultLayoutPlacements` builds one: each card named after its widget.
+  const defaults: WidgetPlacement[] = [
+    {
+      id: "core/get-started",
+      widgetId: "core/get-started",
+      w: 12,
+      h: 4,
+      removed: false,
+    },
+    { id: "core/a", widgetId: "core/a", w: 6, h: 3, removed: false },
+    { id: "core/b", widgetId: "core/b", w: 4, h: 2, removed: false },
+  ];
 
   for (const [version, raw] of EARLIER_ROWS) {
     it(`reads a version ${version} row as no row at all`, () => {
@@ -411,69 +417,6 @@ describe("a row of an earlier format is no saved arrangement", () => {
         )
       ).toBeUndefined();
     }
-  });
-});
-
-describe("the default arrangement", () => {
-  /** A widget at one size, with whatever order it states. */
-  const widget = (id: string, defaultOrder?: number) => ({
-    id,
-    size: { w: 6, h: 3 },
-    ...(defaultOrder === undefined ? {} : { defaultOrder }),
-  });
-
-  it("follows the declared order", () => {
-    const placements = defaultPlacements([
-      widget("w/c", 30),
-      widget("w/a", 10),
-      widget("w/b", 20),
-    ]);
-    expect(placements.map(p => p.widgetId)).toEqual(["w/a", "w/b", "w/c"]);
-  });
-
-  it("puts a widget that states no order after every widget that does", () => {
-    const placements = defaultPlacements([
-      widget("w/none"),
-      widget("w/huge", Number.MAX_VALUE),
-      widget("w/first", -5),
-    ]);
-    expect(placements.map(p => p.widgetId)).toEqual([
-      "w/first",
-      "w/huge",
-      "w/none",
-    ]);
-  });
-
-  it("keeps widgets that state NO order in declaration order", () => {
-    const ids = ["w/d", "w/b", "w/a", "w/c"];
-    expect(
-      defaultPlacements(ids.map(id => widget(id))).map(p => p.widgetId)
-    ).toEqual(ids);
-  });
-
-  it("names each default placement after its widget, so reads are identical", () => {
-    const placements = defaultPlacements([widget("w/a"), widget("w/b")]);
-    expect(placements.map(p => p.id)).toEqual(["w/a", "w/b"]);
-    expect(defaultPlacements([widget("w/a"), widget("w/b")])).toEqual(
-      placements
-    );
-  });
-
-  it("places each card at its widget's default size", () => {
-    expect(
-      defaultPlacements([
-        { id: "w/a", size: { w: 3, h: 2 } },
-        { id: "w/b", size: { w: 12, h: 5 } },
-      ]).map(p => [p.w, p.h, p.removed])
-    ).toEqual([
-      [3, 2, false],
-      [12, 5, false],
-    ]);
-  });
-
-  it("survives its own round trip", () => {
-    const placements = defaultPlacements([{ id: "w/a", size: { w: 4, h: 2 } }]);
-    expect(readRow(serializeLayout(placements)).placements).toEqual(placements);
   });
 });
 

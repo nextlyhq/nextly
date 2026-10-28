@@ -66,6 +66,16 @@ export {
 } from "@nextlyhq/ui/format";
 
 /**
+ * @experimental `defineAttentionItem` — declares one line of the Needs
+ * attention card, which a plugin lists under `contributes.dashboard.attention`:
+ * a label, a count taken as the person asking, and where it leads. Who sees it
+ * is a permission, or the collections it counts. `AttentionItem` and
+ * `AttentionCount` are the types it is written in.
+ */
+export { defineAttentionItem } from "nextly";
+export type { AttentionCount, AttentionItem } from "nextly";
+
+/**
  * @experimental `collectionDraftSplit` — whether a collection stores a working
  *   draft beside its published row.
  *

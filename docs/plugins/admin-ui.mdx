@@ -391,7 +391,7 @@ contributes: {
         size: { default: { w: 3, h: 2 } },   // 12-column grid units: w 1–12, h 2–12
         query: { source: "collection:reports", op: "count" },
         requiredPermission: "read-reports",  // client-gated
-        defaultOrder: 40,                    // optional; lower sits higher
+        defaultOrder: 40,                    // optional; orders the suggested cards
       },
     ],
   },
@@ -406,20 +406,52 @@ each with its own count query and an optional link:
 
 ### Where a card sits
 
-`defaultOrder` is optional and sorts ascending; a widget that omits it goes after every
-widget that states one. Leave it off unless you mean it — without it your card keeps its
-declaration order, which is what nearly every widget wants.
+Someone who has never arranged their dashboard sees the **default dashboard**, and there is
+one: the site's `admin.dashboard.defaultLayout`, or core's own when the site gives none.
+Everyone gets the same default, less the cards they may not see: a widget whose permission or
+`access` refuses them, or whose `shows` answers no.
 
-It exists because position would otherwise depend on **how** a widget reached the
-dashboard rather than on anything it said: contributions resolve before registrations, so
-the same card moved across the grid when its author switched channels. Core's own
-dashboard cards state one, which is how they stay above contributed widgets.
+A plugin asks for a place on it with `suggest`, naming its own widgets. Core places them after
+the default's own cards, in the order the site lists its plugins, unless the site turns
+suggestions off:
 
-Numbers, not indexes — core spaces its own ten apart so a card can be placed between two
-without renumbering anything.
+```ts
+contributes: {
+  dashboard: {
+    widgets: [ordersByState, revenue],
+    suggest: ["acme/orders-by-state"],
+  },
+}
+```
 
-A reader's saved layout, once they have arranged their dashboard, wins over this. Think
-of it as where the card starts, not where it stays.
+A suggestion never reaches a dashboard someone has saved: there, the add panel offers the
+widget instead. A widget nobody suggests is offered and never placed.
+
+A site writes its own default as widget ids, or as cards with a size in grid units and
+starting settings. An entry marked `optional` is left out where its widget is not installed,
+such as a plugin's on a site without that plugin; any other entry must name a widget the
+install has, or startup refuses it:
+
+```ts
+admin: {
+  dashboard: {
+    defaultLayout: [
+      "core/needs-attention",
+      { widget: "acme/orders-by-state", w: 6, h: 4, optional: true },
+      "core/recently-edited",
+    ],
+    suggestions: false,
+  },
+}
+```
+
+A widget contributed in the older shape (`contributes.admin.widgets`) is suggested by being
+declared, as it was placed before suggestions existed. These widgets go after the named
+suggestions, ascending by `defaultOrder`, and one that omits it comes after every one that
+states it.
+
+A reader's saved layout, once they have arranged their dashboard, wins over all of this.
+Think of the default as where a card starts, not where it stays.
 
 ### The card frame and its states
 

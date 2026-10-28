@@ -958,7 +958,8 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(
     transformedConfig.plugins ?? [],
-    transformedConfig.admin?.dashboard
+    transformedConfig.admin?.dashboard,
+    resolvedLogger
   );
 
   // Before any step that writes to the database or the registry: the Builder
