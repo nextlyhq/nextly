@@ -200,15 +200,27 @@ function stateName(state: CardState): string {
   return state.kind === "no-access" ? "unavailable" : state.kind;
 }
 
-/** The body's classes: top-aligned, dimmed through a refresh and in customise mode. */
-function bodyClassName(refreshing: boolean, customizing: boolean): string {
+/**
+ * The body's classes: top-aligned, dimmed through a refresh, and an answer dimmed in customise
+ * mode.
+ *
+ * 🔴 Only an ANSWER is dimmed while customising, as out of reach. A state's message (empty, not
+ * available, failed, a setting to choose) is an instruction, and dimmed it fell below the 4.5:1
+ * contrast text needs: "Choose collection in the card's settings." measured 2.65:1 in light and
+ * 3.07:1 in dark at 55% opacity.
+ */
+function bodyClassName(
+  refreshing: boolean,
+  customizing: boolean,
+  answering: boolean
+): string {
   return cn(
     // Top-aligned, not centred: cards in a grid row stretch to the tallest of them, so centring
     // floats a one-line figure in the middle of whatever the tallest card happens to be.
     "flex min-h-0 flex-1 flex-col justify-start overflow-visible p-0",
     FRAME_BODY_GAP.className,
     refreshing && "opacity-60 transition-opacity",
-    customizing && "opacity-55"
+    customizing && answering && "opacity-55"
   );
 }
 
@@ -330,7 +342,11 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 aria-busy={flags.busy}
                 // Customise mode: what the card shows stays visible, but nothing in it can be reached.
                 inert={customizing || undefined}
-                className={bodyClassName(flags.refreshing, customizing)}
+                className={bodyClassName(
+                  flags.refreshing,
+                  customizing,
+                  showsBody(state)
+                )}
               >
                 {flags.markedHidden ? (
                   <p
