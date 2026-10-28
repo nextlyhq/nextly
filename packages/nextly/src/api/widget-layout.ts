@@ -71,7 +71,7 @@ import {
   type StoredLayout,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
-import { inRetiredWidgetNamespace } from "../domains/widgets/retired-widget-namespaces";
+import { retiredWidgetReplacement } from "../domains/widgets/retired-widget-namespaces";
 import type { TextBound } from "../domains/widgets/settings";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
@@ -640,19 +640,19 @@ function refuseUnknownOrRepeated(
 ): void {
   // A card in a namespace core once filled per collection or per Single
   // (`collection/`, `single/`) is refused by its namespace before anything
-  // else, and told what replaced it. No widget answers to one, so the check
-  // below would refuse it too; this one says why. It discloses nothing: the
-  // namespaces are core's, the same for every install and every reader.
-  const retired = submitted.find(placement =>
-    inRetiredWidgetNamespace(placement.widgetId)
-  );
-  if (retired) {
+  // else, and told what replaced it. No widget answers to one (the registry
+  // refuses the namespaces), so the check below would refuse it too; this one
+  // says why. It discloses nothing: the namespaces are core's, the same for
+  // every install and every reader.
+  for (const { widgetId } of submitted) {
+    const replacement = retiredWidgetReplacement(widgetId);
+    if (replacement === undefined) continue;
     throw NextlyError.validation({
       errors: [
         {
           path: "placements",
           code: "INVALID_VALUE",
-          message: `"${retired.widgetId}" is a per-collection card core no longer makes. Add a Content widget set to that collection instead.`,
+          message: `"${widgetId}" is ${replacement}.`,
         },
       ],
     });

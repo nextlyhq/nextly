@@ -13,7 +13,7 @@
 
 import { allWidgets, sizeFacts } from "../canonical";
 // Core's ids and default alone, not the widgets: this check runs wherever a config is read.
-import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_ID } from "../core-widgets/ids";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import type { DefaultLayoutPlan } from "../default-layout";
 import type { WidgetDefinition } from "../definition";
 import {
@@ -29,7 +29,10 @@ import {
 } from "../grid-size";
 import { MAX_PLACEMENTS } from "../layout-limits";
 import { getWidget } from "../registry";
-import { inRetiredWidgetNamespace } from "../retired-widget-namespaces";
+import {
+  inRetiredWidgetNamespace,
+  retiredWidgetReplacement,
+} from "../retired-widget-namespaces";
 import { startingValueProblem, type AnyWidgetSetting } from "../settings";
 
 import type { DefaultLayoutCard } from "./dashboard";
@@ -144,17 +147,6 @@ function editDistance(a: string, b: string): number {
   return previous[b.length] ?? 0;
 }
 
-/**
- * The core widgets that draw one collection, named where the site config names
- * a retired per-collection card: what to use in its place.
- */
-const COLLECTION_WIDGETS = [
-  CORE_WIDGET_ID.count,
-  CORE_WIDGET_ID.breakdown,
-  CORE_WIDGET_ID.overTime,
-  CORE_WIDGET_ID.recentEntries,
-].join(", ");
-
 /** Why `id` names no widget, with its nearest match, or `undefined`. */
 function unknownWidget(
   where: string,
@@ -168,9 +160,9 @@ function unknownWidget(
   // per collection or per Single, so an id there names nothing, and the
   // nearest-match hint would point at an unrelated widget. The author is told
   // what replaced it instead.
-  if (inRetiredWidgetNamespace(id)) {
-    return `${where} names "${id}", a per-collection card core no longer makes; use a core widget with a Collection setting instead (${COLLECTION_WIDGETS}), set to that collection`;
-  }
+  const replacement = retiredWidgetReplacement(id);
+  if (replacement !== undefined)
+    return `${where} names "${id}", ${replacement}`;
   if (ctx.factsOf(id) !== undefined) return undefined;
   const near = nearest(id, ctx.ids);
   return `${where} names "${id}", which no widget declares${near === undefined ? "" : `; did you mean "${near}"?`}`;
@@ -484,10 +476,13 @@ function defaultCardProblems(
   const unknown = unknownWidget("defaultLayout", id, ctx);
   // An optional card names a widget the install may not have, such as a
   // plugin's on a site without the plugin: left out of the default, no fault.
+  // Never a retired card's id, which no install has: that is refused with the
+  // same message whether the card is optional or not.
   if (
     unknown !== undefined &&
     card.optional === true &&
-    typeof id === "string"
+    typeof id === "string" &&
+    !inRetiredWidgetNamespace(id)
   ) {
     return unknownKeys;
   }

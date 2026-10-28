@@ -970,31 +970,35 @@ describe("PUT /api/dashboard/layout", () => {
     ]);
   });
 
-  it("refuses a placement in a retired per-collection namespace, even one a registration claims", async () => {
-    // Registered here so the id IS visible: the refusal is the namespace's,
-    // not the unknown-widget rule's, and it says what replaced the card.
+  it("refuses a placement in a retired namespace, saying what replaced it in each", async () => {
+    // The refusal is the namespace's, not the unknown-widget rule's: it says
+    // what replaced the card, and for a Single never "that collection", since
+    // the widgets with a Collection setting offer collections only.
     registerWidget(widget({ id: "core/a" }));
-    registerWidget(widget({ id: "collection/posts-count" }));
+    const refused = async (widgetId: string) => {
+      const res = await putWidgetLayout(
+        putReq({
+          placements: [
+            ...onePlacement,
+            { id: "p2", widgetId, w: 12, h: 3, removed: false },
+          ],
+          version: 0,
+          scope: scopeFor(),
+        })
+      );
+      expect(res.status).toBe(400);
+      return res.text();
+    };
 
-    const res = await putWidgetLayout(
-      putReq({
-        placements: [
-          ...onePlacement,
-          {
-            id: "p2",
-            widgetId: "collection/posts-count",
-            w: 12,
-            h: 3,
-            removed: false,
-          },
-        ],
-        version: 0,
-        scope: scopeFor(),
-      })
+    const collection = await refused("collection/posts-count");
+    expect(collection).toContain(
+      '\\"collection/posts-count\\" is a per-collection card core no longer makes; use a core widget with a Collection setting instead'
     );
-
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain("core no longer makes");
+    const single = await refused("single/about-card");
+    expect(single).toContain(
+      "a per-Single card core no longer makes; a Single's edits show in core/recently-edited"
+    );
+    expect(single).not.toContain("that collection");
     expect(saved).toBeUndefined();
   });
 

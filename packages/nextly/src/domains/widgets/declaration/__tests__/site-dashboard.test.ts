@@ -134,7 +134,11 @@ describe("a site config that names what exists", () => {
     );
     const told =
       "a per-collection card core no longer makes; use a core widget with a Collection setting instead (core/count, core/breakdown, core/over-time, core/recent-entries), set to that collection";
-    expect(message).toContain(`hide names "single/home-card", ${told}`);
+    // A Single's card is never told to pick "that collection": the widgets with
+    // a Collection setting offer collections only.
+    const toldSingle =
+      "a per-Single card core no longer makes; a Single's edits show in core/recently-edited";
+    expect(message).toContain(`hide names "single/home-card", ${toldSingle}`);
     expect(message).toContain(
       `overrides names "collection/posts-count", ${told}`
     );
@@ -147,6 +151,37 @@ describe("a site config that names what exists", () => {
     expect(
       refusal(() => resetWidgetRegistries([shop], { hide: ["collections/x"] }))
     ).toContain('hide names "collections/x", which no widget declares');
+  });
+
+  it("refuses a retired id in defaultLayout even as an optional card", () => {
+    // An optional card may name a widget the install lacks and is left out
+    // without a word, but no install has a retired card: left out quietly, the
+    // site would never be told what replaced it.
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          { widget: "core/team" },
+          { widget: "collection/posts-count", optional: true },
+          { widget: "single/home-card", optional: true },
+        ],
+      })
+    );
+    expect(message).toContain(
+      'defaultLayout names "collection/posts-count", a per-collection card core no longer makes'
+    );
+    expect(message).toContain(
+      'defaultLayout names "single/home-card", a per-Single card core no longer makes'
+    );
+    // The control: an optional card naming any other absent widget is still
+    // left out without a fault.
+    expect(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          { widget: "core/team" },
+          { widget: "acme/absent", optional: true },
+        ],
+      })
+    ).not.toThrow();
   });
 
   it("says nothing when it sets no key", () => {
