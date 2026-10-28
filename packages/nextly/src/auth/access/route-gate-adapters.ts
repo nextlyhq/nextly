@@ -141,6 +141,17 @@ function keyActorOf(caller: GateCaller, key: AuthenticatedScope): KeyActor {
   });
 }
 
+/**
+ * Whether a key holds every permission by its maker's super-admin authority,
+ * as a super-admin's session does, whatever its stored list names. Asked
+ * first by the single-permission gate and the any-of gate alike, so a key the
+ * one lets through the other does not refuse on a list that lags the
+ * catalogue.
+ */
+function keyHoldsEveryPermission(actor: KeyActor): boolean {
+  return isSuperAdmin(actor);
+}
+
 /** The caller's actor: a key's from its scope, a user's looked up. */
 function actorOf(caller: GateCaller): Promise<Actor> {
   return caller.key
@@ -612,9 +623,7 @@ async function permissionVerdict(
 ): Promise<GateVerdict> {
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
-    // A key carrying its maker's super-admin authority holds every
-    // permission, as a super-admin's session does.
-    if (isSuperAdmin(actor)) return verdictOf(true);
+    if (keyHoldsEveryPermission(actor)) return verdictOf(true);
     const today = storedSlugHolds(caller.key.permissions, action, resource);
     // The decision reads the grant's action and resource, which agree with
     // the stored slug unless a grant was stored under a slug of its own.
@@ -654,6 +663,7 @@ async function anyPermissionVerdictOf(
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
+    if (keyHoldsEveryPermission(actor)) return verdictOf(true);
     const today = permissions.some(({ action, resource }) =>
       storedSlugHolds(key.permissions, action, resource)
     );
