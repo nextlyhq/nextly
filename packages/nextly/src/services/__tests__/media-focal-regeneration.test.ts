@@ -16,10 +16,16 @@ const calls: string[] = [];
 // `filenames` records the destination base names passed to generateImageSizes,
 // so a test can assert regeneration forces a unique destination.
 // `points` records the focus point each regeneration cut the sizes around.
+// `beforeCut`, when set, runs before a cut and may hold it, so a case can let
+// another update run to completion in between. `pathFromPoint` names each
+// variant by the point it was cut around, so a case can read from the stored
+// row which point its variants show.
 const regen = {
   thumbPath: "NEW/thumb.webp",
   filenames: [] as string[],
   points: [] as unknown[],
+  beforeCut: null as (() => Promise<void>) | null,
+  pathFromPoint: false,
 };
 
 const storageMock = {
@@ -51,9 +57,15 @@ vi.mock("@nextly/storage", () => ({
   ) => {
     regen.filenames.push(originalFilename);
     regen.points.push(point);
+    const hold = regen.beforeCut;
+    regen.beforeCut = null;
+    if (hold) await hold();
+    const cut = point as { focalX?: number; focalY?: number };
     return {
       thumbnail: {
-        path: regen.thumbPath,
+        path: regen.pathFromPoint
+          ? `cut-${cut.focalX}-${cut.focalY}.webp`
+          : regen.thumbPath,
         url: "http://x/new",
         width: 100,
         height: 100,
@@ -175,21 +187,21 @@ describe("MediaService focal-point regeneration ordering", () => {
     regen.thumbPath = NEW_PATH;
     regen.filenames.length = 0;
     regen.points.length = 0;
+    regen.beforeCut = null;
+    regen.pathFromPoint = false;
   });
 
   it("cuts the sizes around the stored coordinate an update leaves out", async () => {
     // The row's point is off-centre vertically; the update moves only X. Cut
     // with Y left out, the sizes would centre vertically while the row kept
     // its stored Y, and the crops would disagree with the saved point.
-    const service = makeService("commit");
+    // The same row before the lock and under it: nothing else moved it.
+    const stored = { ...existingMedia, focalX: 50, focalY: 20 };
+    const service = makeService("commit", stored);
     vi.spyOn(
       service as unknown as { getMediaById: () => Promise<unknown> },
       "getMediaById"
-    ).mockResolvedValue({
-      success: true,
-      statusCode: 200,
-      data: { ...existingMedia, focalX: 50, focalY: 20 },
-    });
+    ).mockResolvedValue({ success: true, statusCode: 200, data: stored });
 
     await service.updateMedia("m1", { focalX: 30 });
 
@@ -403,5 +415,161 @@ describe("a superseded file a regeneration cannot remove", () => {
     expect(said).toContain(OLD_PATH);
     expect(said).toContain("m1");
     warn.mockRestore();
+  });
+});
+
+/**
+ * One stored row that every read and write goes through, as a database would,
+ * so two updates can run against each other.
+ */
+function makeStatefulService(
+  row: Record<string, unknown>,
+  // Runs as each write takes the lock: another update landing just before.
+  onLock: () => void = () => undefined
+) {
+  let writes = 0;
+  const tx = {
+    lockRow: async () => {
+      onLock();
+    },
+    select: async () => [{ ...row }],
+    update: async (_table: string, data: Record<string, unknown>) => {
+      writes += 1;
+      Object.assign(row, data);
+    },
+  };
+  const adapter = {
+    dialect: "sqlite" as const,
+    getCapabilities: () => ({ dialect: "sqlite" as const }),
+    getDrizzle: () => ({
+      select: () => ({ from: () => ({ where: async () => [] }) }),
+    }),
+    inTransaction: () => false,
+    afterCommit: async (effect: () => unknown) => {
+      await effect();
+    },
+    transaction: async <T>(fn: (t: typeof tx) => Promise<T>): Promise<T> =>
+      fn(tx),
+  };
+  const logger = {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: () => {},
+  };
+  const service = new MediaService(adapter as never, logger as never);
+  vi.spyOn(
+    service as unknown as { getMediaById: () => Promise<unknown> },
+    "getMediaById"
+  ).mockImplementation(async () => ({
+    success: true,
+    statusCode: 200,
+    data: { ...row },
+  }));
+  return { service, writes: () => writes };
+}
+
+/** The path of the stored row's thumbnail, however the column holds it. */
+function storedThumbnail(row: Record<string, unknown>): unknown {
+  const sizes =
+    typeof row.sizes === "string" ? JSON.parse(row.sizes) : row.sizes;
+  return (sizes as { thumbnail?: { path?: string } } | null)?.thumbnail?.path;
+}
+
+describe("the point an item's sizes are cut around", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    deleteSpy.mockClear();
+    regen.points.length = 0;
+    regen.filenames.length = 0;
+    regen.beforeCut = null;
+    regen.pathFromPoint = true;
+  });
+
+  it("is the point the row ends with when two one-coordinate updates overlap", async () => {
+    const row: Record<string, unknown> = {
+      ...existingMedia,
+      focalX: 50,
+      focalY: 50,
+    };
+    const { service } = makeStatefulService(row);
+
+    // The first update reads the row, then waits at its cut while a second
+    // update, of the other coordinate, runs to the end.
+    let releaseFirst: () => void = () => undefined;
+    let firstIsCutting: () => void = () => undefined;
+    const cutting = new Promise<void>(resolve => {
+      firstIsCutting = resolve;
+    });
+    regen.beforeCut = () =>
+      new Promise<void>(resolve => {
+        releaseFirst = resolve;
+        firstIsCutting();
+      });
+    const first = service.updateMedia("m1", { focalX: 30 });
+    await cutting;
+    await service.updateMedia("m1", { focalY: 70 });
+    releaseFirst();
+    await first;
+
+    // POSITIVE CONTROL: both updates landed on the row.
+    expect([row.focalX, row.focalY]).toEqual([30, 70]);
+    expect(storedThumbnail(row)).toBe("cut-30-70.webp");
+  });
+
+  it("gives up with a conflict, writing nothing and keeping no cut, when the point keeps moving", async () => {
+    const row: Record<string, unknown> = {
+      ...existingMedia,
+      focalX: 50,
+      focalY: 50,
+    };
+    // Every time this update takes the lock, another has just moved Y.
+    const { service, writes } = makeStatefulService(row, () => {
+      row.focalY = (row.focalY as number) + 1;
+    });
+
+    const result = await service.updateMedia("m1", { focalX: 30 });
+
+    expect(result).toMatchObject({ success: false, statusCode: 409 });
+    // POSITIVE CONTROL: it did cut, once per attempt, before giving up.
+    expect(regen.points).toHaveLength(3);
+    expect(writes()).toBe(0);
+    // Each attempt's cut is removed again; the row keeps its own sizes.
+    expect(deleteSpy).toHaveBeenCalledTimes(3);
+    expect(storedThumbnail(row)).toBe(OLD_PATH);
+  });
+
+  it("isn't cut again when an update asks for the point already stored", async () => {
+    const row: Record<string, unknown> = {
+      ...existingMedia,
+      focalX: 30,
+      focalY: 60,
+    };
+    const { service } = makeStatefulService(row);
+
+    const named = await service.updateMedia("m1", { focalX: 30, focalY: 60 });
+    const oneAxis = await service.updateMedia("m1", { focalX: 30 });
+
+    // POSITIVE CONTROL: both updates succeeded and were written.
+    expect(named.success).toBe(true);
+    expect(oneAxis.success).toBe(true);
+    expect(regen.points).toEqual([]);
+    expect(deleteSpy).not.toHaveBeenCalled();
+    expect(storedThumbnail(row)).toBe(OLD_PATH);
+  });
+
+  it("is still cut for a point that differs from the one stored", async () => {
+    // The control for the case above: the same harness does cut when asked
+    // for a new point, so "no cut" there is the comparison, not a harness
+    // that never reaches the cut.
+    const row: Record<string, unknown> = {
+      ...existingMedia,
+      focalX: 30,
+      focalY: 60,
+    };
+    const { service } = makeStatefulService(row);
+    await service.updateMedia("m1", { focalY: 61 });
+    expect(regen.points).toEqual([{ focalX: 30, focalY: 61 }]);
+    expect(storedThumbnail(row)).toBe("cut-30-61.webp");
   });
 });
