@@ -84,9 +84,11 @@ import {
 } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
 import {
+  hookChangedWholeNumberIssues,
   validateEntryData,
   type EntryWriteContext,
   type ValidationIssue,
+  type ValidatableField,
 } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -5283,7 +5285,10 @@ export class CollectionMutationService extends BaseService {
 
       // Collection-level beforeChange hooks, on data the validation gate has
       // just passed. Paired with the field-level phase below so the two
-      // declarations of that name mean the same moment.
+      // declarations of that name mean the same moment. What the hooks leave
+      // behind is judged after the field-level phase — a hook write is a
+      // write the gate never saw.
+      const hookSnapshot = { ...finalData };
       await this.hookService.runBeforeChange({
         collection: params.collectionName,
         operation: "create",
@@ -5305,6 +5310,18 @@ export class CollectionMutationService extends BaseService {
         operation: "create",
         user: params.user,
       });
+
+      // The whole-number floor judges what the hooks changed: a fraction a
+      // hook produced would reach the integer column and let the database
+      // decide, on every verb this gate guards.
+      const hookIssues = hookChangedWholeNumberIssues(
+        hookSnapshot,
+        finalData,
+        fields
+      );
+      if (hookIssues.length > 0) {
+        throw NextlyError.validation({ errors: hookIssues });
+      }
 
       // A beforeChange hook runs after validation and can also set `slug`;
       // re-sanitize once more so the stored value stays URL-safe.
@@ -8669,7 +8686,10 @@ export class CollectionMutationService extends BaseService {
 
       // Collection-level beforeChange hooks, on data the validation gate has
       // just passed. Paired with the field-level phase below so the two
-      // declarations of that name mean the same moment.
+      // declarations of that name mean the same moment. What the hooks leave
+      // behind is judged after the field-level phase — a hook write is a
+      // write the gate never saw.
+      const hookSnapshot = { ...finalData };
       await this.hookService.runBeforeChange({
         collection: params.collectionName,
         operation: "update",
@@ -8692,6 +8712,18 @@ export class CollectionMutationService extends BaseService {
         operation: "update",
         user: params.user,
       });
+
+      // The whole-number floor judges what the hooks changed: a fraction a
+      // hook produced would reach the integer column and let the database
+      // decide, on every verb this gate guards.
+      const hookIssues = hookChangedWholeNumberIssues(
+        hookSnapshot,
+        finalData,
+        fields
+      );
+      if (hookIssues.length > 0) {
+        throw NextlyError.validation({ errors: hookIssues });
+      }
 
       // A password the update leaves out of a container keeps its stored hash.
       const reach = await this.passwordReach(fields);
@@ -11708,6 +11740,7 @@ export class CollectionMutationService extends BaseService {
       // collection-level handler running while the field-level one is skipped
       // would be the gate half-applied.
       if (options.runHooks) {
+        const hookSnapshot = { ...finalData };
         await this.hookService.runBeforeChange({
           collection: params.collectionName,
           operation: "create",
@@ -11727,6 +11760,17 @@ export class CollectionMutationService extends BaseService {
           operation: "create",
           user: params.user,
         });
+        // The whole-number floor judges what the hooks changed: a fraction a
+        // hook produced would reach the integer column and let the database
+        // decide, on every verb this gate guards.
+        const hookIssues = hookChangedWholeNumberIssues(
+          hookSnapshot,
+          finalData,
+          fields
+        );
+        if (hookIssues.length > 0) {
+          throw NextlyError.validation({ errors: hookIssues });
+        }
         // A beforeChange hook can also set `slug`, so re-sanitize before
         // storage.
         await this.reSanitizeSlug(finalData, isSlugTaken);
@@ -12289,6 +12333,7 @@ export class CollectionMutationService extends BaseService {
       // validation gate has just passed. Both sit under the same `skipHooks`
       // gate: the flag means this write runs no user hooks at all.
       if (options.runHooks) {
+        const hookSnapshot = { ...finalData };
         await this.hookService.runBeforeChange({
           collection: params.collectionName,
           operation: "update",
@@ -12309,6 +12354,17 @@ export class CollectionMutationService extends BaseService {
           operation: "update",
           user: params.user,
         });
+        // The whole-number floor judges what the hooks changed: a fraction a
+        // hook produced would reach the integer column and let the database
+        // decide, on every verb this gate guards.
+        const hookIssues = hookChangedWholeNumberIssues(
+          hookSnapshot,
+          finalData,
+          fields
+        );
+        if (hookIssues.length > 0) {
+          throw NextlyError.validation({ errors: hookIssues });
+        }
       }
 
       // Read AFTER every hook that may decide it: a `beforeChange` hook can

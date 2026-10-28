@@ -58,8 +58,10 @@ import {
 } from "../../../shared/lib/case-conversion";
 import { refusalIssues } from "../../../shared/lib/denied-change";
 import {
+  hookChangedWholeNumberIssues,
   validateEntryData,
   type ValidationIssue,
+  type ValidatableField,
 } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -1596,6 +1598,7 @@ export class SingleMutationService extends BaseService {
       // which runs above at step 5 -- before validation -- so the hook that
       // documents itself as the last chance to shape a stored value saw data
       // the rules had not been applied to yet.
+      const hookSnapshot = { ...currentData };
       if (this.hookRegistry.hasHooks("beforeChange", hookCollection)) {
         const beforeChangeResult = await this.hookRegistry.execute(
           "beforeChange",
@@ -1624,6 +1627,19 @@ export class SingleMutationService extends BaseService {
         operation: "update",
         user: options.user,
       });
+
+      // The whole-number floor judges what the hooks changed: a fraction a
+      // hook produced would reach the integer column and let the database
+      // decide. The hooks run after the validation gate, so what they leave
+      // behind is a write the gate never saw.
+      const hookIssues = hookChangedWholeNumberIssues(
+        hookSnapshot,
+        currentData,
+        fieldConfigs
+      );
+      if (hookIssues.length > 0) {
+        throw NextlyError.validation({ errors: hookIssues });
+      }
 
       // 6.35. Authorize a change to the single's published state, judged on the
       // post-hook data. Publishing needs `publish-<slug>` and unpublishing

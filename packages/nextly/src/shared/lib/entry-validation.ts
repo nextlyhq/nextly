@@ -222,6 +222,59 @@ function fieldJudgesFractions(field: ValidatableField): boolean {
 }
 
 /**
+ * The whole-number floor, judged over the keys a beforeChange hook changed.
+ *
+ * The hooks run after the validation gate and may transform or set any
+ * value, so what they leave behind is a write this gate never saw: a hook
+ * that produces a fraction would reach an integer column and let the
+ * database decide — the dialect divergence the whole-number rule exists to
+ * remove. Compared by reference against the snapshot taken before the hooks
+ * ran: a number, string or boolean a hook leaves is always a replacement,
+ * and a container a hook mutates in place is outside this check (the slug
+ * re-sanitize after the same hooks reads the same top level).
+ *
+ * Only number fields are judged — every other rule keeps its pre-hook
+ * verdict — and hasMany elements are judged as values, indexed in the path.
+ */
+export function hookChangedWholeNumberIssues(
+  snapshot: Record<string, unknown>,
+  data: Record<string, unknown>,
+  fields: ValidatableField[]
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const byName = new Map(
+    fields
+      .filter(field => typeof field.name === "string")
+      .map(field => [field.name as string, field])
+  );
+  for (const key of Object.keys(data)) {
+    if (data[key] === snapshot[key]) continue;
+    const field = byName.get(key);
+    // A fraction-capable field (decimal, float) keeps fractions; a
+    // whole-number field is the one the floor judges.
+    if (!field || fieldJudgesFractions(field)) continue;
+    const label = typeof field.label === "string" ? field.label : field.name;
+    const value = data[key];
+    const elements = field.hasMany && Array.isArray(value) ? value : [value];
+    elements.forEach((element, index) => {
+      if (
+        typeof element !== "number" ||
+        Number.isNaN(element) ||
+        Number.isInteger(element)
+      ) {
+        return;
+      }
+      issues.push({
+        path: field.hasMany ? `${key}[${index}]` : key,
+        code: "INVALID_TYPE",
+        message: `${label} must be a whole number.`,
+      });
+    });
+  }
+  return issues;
+}
+
+/**
  * Whether a write is judged against this field at all.
  *
  * A virtual field stores nothing: a value sent for it is dropped before the
