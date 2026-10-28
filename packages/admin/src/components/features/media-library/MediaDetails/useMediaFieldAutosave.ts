@@ -60,10 +60,15 @@ export function useMediaFieldAutosave({
     setState("idle");
   }
 
-  // What is typed and what is stored, written only by events and effects, so
-  // the save on the way out reads the item being left rather than the one
-  // being rendered.
-  const draftRef = React.useRef({ value: savedValue, baseline: savedValue });
+  // What is typed, what is stored, and the value a save already on its way
+  // carries (null when none is), written only by events and effects, so the
+  // save on the way out reads the item being left rather than the one being
+  // rendered, and doesn't send a value that is already being saved again.
+  const draftRef = React.useRef<{
+    value: string;
+    baseline: string;
+    inFlight: string | null;
+  }>({ value: savedValue, baseline: savedValue, inFlight: null });
   // The item on screen, or null once the field is gone: a save that settles
   // after either changes reports nothing to a field that no longer shows it.
   const activeItemRef = React.useRef<string | null>(itemId);
@@ -82,11 +87,14 @@ export function useMediaFieldAutosave({
     draftRef.current = {
       value: savedValueRef.current,
       baseline: savedValueRef.current,
+      inFlight: null,
     };
     return () => {
       activeItemRef.current = null;
-      const { value: pending, baseline } = draftRef.current;
-      if (pending === baseline) return;
+      const { value: pending, baseline, inFlight } = draftRef.current;
+      // A blur's save still on its way carries this value already; its
+      // outcome is reported below even though the field is gone.
+      if (pending === baseline || pending === inFlight) return;
       saveRef.current(itemId, pending).catch(() => {
         toast.error(`${labelRef.current} couldn't be saved.`);
       });
@@ -99,7 +107,7 @@ export function useMediaFieldAutosave({
   React.useEffect(() => {
     const draft = draftRef.current;
     if (draft.value === draft.baseline) {
-      draftRef.current = { value: savedValue, baseline: savedValue };
+      draftRef.current = { ...draft, value: savedValue, baseline: savedValue };
       setValue(savedValue);
     } else {
       draftRef.current = { ...draft, baseline: savedValue };
@@ -114,17 +122,29 @@ export function useMediaFieldAutosave({
   }, [state]);
 
   const commit = React.useCallback(() => {
-    const pending = draftRef.current.value;
-    if (pending === draftRef.current.baseline) return;
+    const { value: pending, baseline, inFlight } = draftRef.current;
+    if (pending === baseline || pending === inFlight) return;
+    draftRef.current = { ...draftRef.current, inFlight: pending };
     setState("saving");
     saveRef.current(itemId, pending).then(
       () => {
         if (activeItemRef.current !== itemId) return;
-        draftRef.current = { ...draftRef.current, baseline: pending };
+        draftRef.current = {
+          ...draftRef.current,
+          baseline: pending,
+          inFlight: null,
+        };
         setState("saved");
       },
       () => {
-        if (activeItemRef.current === itemId) setState("failed");
+        if (activeItemRef.current !== itemId) {
+          // The person has moved on, so the field that would show Retry is
+          // gone; say so as the save on the way out would.
+          toast.error(`${labelRef.current} couldn't be saved.`);
+          return;
+        }
+        draftRef.current = { ...draftRef.current, inFlight: null };
+        setState("failed");
       }
     );
   }, [itemId]);

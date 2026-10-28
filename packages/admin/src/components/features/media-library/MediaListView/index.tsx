@@ -44,6 +44,7 @@ import {
   formatFileSize,
   formatUploadedDate,
   getMediaType,
+  mediaImageSrc,
 } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media } from "@admin/types/media";
@@ -137,9 +138,10 @@ export function MediaListView({
           return (
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-card/50">
+                {/* The grid's tiles choose their image the same way. */}
                 {isImage && (item.thumbnailUrl || item.url) ? (
                   <img
-                    src={item.thumbnailUrl ?? item.url}
+                    src={mediaImageSrc(item, { purpose: "tile" })}
                     alt={item.altText || item.originalFilename}
                     className="block max-h-full max-w-full object-contain"
                     loading="lazy"

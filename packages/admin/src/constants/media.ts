@@ -26,3 +26,13 @@ export const MEDIA_SORT_OPTIONS: ReadonlyArray<{
   { value: "size-desc", label: "Largest First" },
   { value: "size-asc", label: "Smallest First" },
 ];
+
+/**
+ * Red text in the media details: a failed save, the focus point's error, and
+ * Delete. The base destructive token is the reference red, which reads under
+ * the 4.5:1 text minimum on the light surfaces (`contrast/accepted.ts` in the
+ * ui package), so light mode takes its 700 shade; dark mode clears it with the
+ * base token. The ui package's contrast tests hold both pairings.
+ */
+export const MEDIA_DESTRUCTIVE_TEXT_CLASSES =
+  "text-destructive-700 dark:text-destructive" as const;

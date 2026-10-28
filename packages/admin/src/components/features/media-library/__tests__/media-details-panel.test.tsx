@@ -178,6 +178,80 @@ describe("the details panel", () => {
     expect(screen.getByLabelText(/Alt text/)).toHaveValue("");
   });
 
+  it("sends a blurred field's save once, when Next follows before it finishes", async () => {
+    let finishSave: () => void = () => undefined;
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finishSave = resolve;
+        })
+    );
+    const { rerender } = renderPanel({ onSave });
+    const alt = screen.getByLabelText(/Alt text/);
+    fireEvent.change(alt, {
+      target: { value: "Coast at dusk, from the pier" },
+    });
+    fireEvent.blur(alt);
+    // POSITIVE CONTROL: the blur did send the save, and it is still pending.
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <MediaDetailsPanel
+        media={media({ id: "m2", originalFilename: "hills.jpg", altText: "" })}
+        layout="beside"
+        folderName="Blog"
+        readOnly={false}
+        onSave={onSave}
+        onCopyUrl={vi.fn()}
+        onDownload={vi.fn()}
+        onExpand={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    finishSave();
+    await Promise.resolve();
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith("m1", {
+      altText: "Coast at dusk, from the pier",
+    });
+  });
+
+  it("fits its height to the window below where it sits, so its actions stay on screen", () => {
+    const realTop = HTMLElement.prototype.getBoundingClientRect;
+    // Laid out under the breadcrumbs and the toolbar, on a page not yet
+    // scrolled: 212px down a 900px window.
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const rect = realTop.call(this);
+      return this.matches("[data-media-details-panel]")
+        ? ({
+            x: 0,
+            y: 212,
+            left: 0,
+            top: 212,
+            width: 380,
+            height: 600,
+            right: 380,
+            bottom: 812,
+            toJSON: () => ({}),
+          } as DOMRect)
+        : rect;
+    };
+    const innerHeight = window.innerHeight;
+    window.innerHeight = 900;
+    try {
+      renderPanel();
+      const panel = screen.getByRole("complementary", {
+        name: "Media details",
+      });
+      // 900 - 212, less the 16px kept below it.
+      expect(panel.style.maxHeight).toBe("672px");
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = realTop;
+      window.innerHeight = innerHeight;
+    }
+  });
+
   it("moves to the previous and next item with the arrow keys and the buttons", () => {
     const { onPrevious, onNext } = renderPanel();
     const title = screen.getByRole("heading", { name: "coast.jpg" });

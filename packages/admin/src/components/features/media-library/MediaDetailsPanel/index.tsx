@@ -47,6 +47,8 @@ import {
 } from "../MediaDetails";
 import { isFocalPointKeyEvent } from "../MediaFocalPoint";
 
+import { useMediaDetailsPanelHeight } from "./useMediaDetailsPanelHeight";
+
 /** Beside the grid, or over it where the library is too narrow for both. */
 export type MediaDetailsPanelLayout = "beside" | "over";
 
@@ -87,6 +89,8 @@ export function MediaDetailsPanel({
   ...actions
 }: MediaDetailsPanelProps): React.JSX.Element {
   const titleRef = React.useRef<HTMLHeadingElement>(null);
+  const asideRef = React.useRef<HTMLElement>(null);
+  useMediaDetailsPanelHeight(asideRef);
 
   // Beside the grid, opening the panel moves focus to its title, so a person
   // who opened a tile from the keyboard is in the details at once. The panel
@@ -207,11 +211,14 @@ export function MediaDetailsPanel({
 
   return (
     <aside
+      ref={asideRef}
       aria-label="Media details"
       data-media-details-panel=""
       onKeyDown={onKeyDown}
       // Sticks below the top of the page's scroll area, so the details stay in
-      // view while the grid beside them scrolls.
+      // view while the grid beside them scrolls. Its height is held to the
+      // window below it (useMediaDetailsPanelHeight); the class is the bound
+      // until that first measures.
       className="sticky top-4 flex max-h-[calc(100dvh-6rem)] shrink-0 flex-col self-start overflow-hidden rounded-lg border border-border bg-card"
       style={{ width: MEDIA_DETAILS_PANEL_WIDTH }}
     >

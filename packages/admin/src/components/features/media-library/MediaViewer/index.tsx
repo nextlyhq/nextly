@@ -30,6 +30,12 @@ import {
 } from "../MediaDetails";
 import { isFocalPointKeyEvent } from "../MediaFocalPoint";
 
+/**
+ * Below Tailwind's `md`, where the layout below stacks the details under the
+ * image instead of beside it.
+ */
+const VIEWER_STACKED_QUERY = "(max-width: 47.99rem)";
+
 export interface MediaViewerProps extends MediaDetailsActionHandlers {
   open: boolean;
   media: Media;
@@ -59,9 +65,14 @@ export function MediaViewer({
   const openerRef = React.useRef<HTMLElement | null>(null);
 
   React.useLayoutEffect(() => {
-    if (open && document.activeElement instanceof HTMLElement) {
+    if (!open) return;
+    if (document.activeElement instanceof HTMLElement) {
       openerRef.current = document.activeElement;
     }
+    // Info starts open where the details sit beside the image, and closed
+    // where they would stack under it: on a phone they would push the image
+    // to a strip at the top of a viewer opened to look at the image.
+    setInfoOpen(!window.matchMedia?.(VIEWER_STACKED_QUERY).matches);
   }, [open]);
 
   return (
@@ -101,7 +112,11 @@ export function MediaViewer({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <div className="relative flex min-h-[50dvh] min-w-0 flex-1 items-center justify-center bg-muted px-14 py-4 md:min-h-0">
+          {/* Previous and Next sit at the image's sides where there is room
+              for them, and in the bottom corners on a phone, so the image
+              takes the screen's whole width rather than what two buttons
+              beside it leave. */}
+          <div className="relative flex min-h-[50dvh] min-w-0 flex-1 items-center justify-center bg-muted px-4 pb-16 pt-4 md:min-h-0 md:px-14 md:py-4">
             <Button
               type="button"
               variant="outline"
@@ -109,7 +124,7 @@ export function MediaViewer({
               aria-label="Previous file"
               disabled={!onPrevious}
               onClick={onPrevious}
-              className="absolute left-3 top-1/2 -translate-y-1/2"
+              className="absolute bottom-3 left-3 md:bottom-auto md:top-1/2 md:-translate-y-1/2"
             >
               <ChevronLeft className="h-4 w-4" aria-hidden="true" />
             </Button>
@@ -128,7 +143,7 @@ export function MediaViewer({
               aria-label="Next file"
               disabled={!onNext}
               onClick={onNext}
-              className="absolute right-3 top-1/2 -translate-y-1/2"
+              className="absolute bottom-3 right-3 md:bottom-auto md:top-1/2 md:-translate-y-1/2"
             >
               <ChevronRight className="h-4 w-4" aria-hidden="true" />
             </Button>

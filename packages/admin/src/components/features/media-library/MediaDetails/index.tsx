@@ -22,6 +22,7 @@ import {
   Trash2,
   Video,
 } from "@admin/components/icons";
+import { MEDIA_DESTRUCTIVE_TEXT_CLASSES } from "@admin/constants/media";
 import {
   formatFileSize,
   formatUploadedDate,
@@ -157,7 +158,9 @@ function FieldSaveStatus({
       <span
         role="status"
         className={cn(
-          state === "failed" ? "text-destructive" : "text-muted-foreground",
+          state === "failed"
+            ? MEDIA_DESTRUCTIVE_TEXT_CLASSES
+            : "text-muted-foreground",
           state === "saved" && "text-success"
         )}
       >
@@ -408,7 +411,7 @@ export function MediaDetailsActions({
           type="button"
           variant="ghost"
           size="sm"
-          className="gap-1.5 text-destructive"
+          className={cn("gap-1.5", MEDIA_DESTRUCTIVE_TEXT_CLASSES)}
           onClick={() => onDelete(media)}
         >
           <Trash2 className="h-4 w-4" aria-hidden="true" />

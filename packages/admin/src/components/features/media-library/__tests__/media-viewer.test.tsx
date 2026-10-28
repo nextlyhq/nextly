@@ -78,6 +78,30 @@ describe("the media viewer", () => {
     ).toBeNull();
   });
 
+  it("opens with Info closed on a phone, where the details would stack under the image", () => {
+    const matchMedia = window.matchMedia;
+    window.matchMedia = (query: string) =>
+      ({
+        ...matchMedia(query),
+        matches: query.includes("max-width"),
+      }) as MediaQueryList;
+    try {
+      const { viewer } = openViewer();
+      // POSITIVE CONTROL: the viewer and its image are there.
+      expect(
+        within(viewer).getByRole("img", { name: "Coastline at dusk" })
+      ).toBeInTheDocument();
+      expect(
+        within(viewer).queryByRole("complementary", { name: "Media details" })
+      ).toBeNull();
+      expect(
+        within(viewer).getByRole("button", { name: /Info/ })
+      ).toHaveAttribute("aria-pressed", "false");
+    } finally {
+      window.matchMedia = matchMedia;
+    }
+  });
+
   it("moves to the previous and next item with the arrow keys and the buttons", () => {
     const onPrevious = vi.fn();
     const onNext = vi.fn();

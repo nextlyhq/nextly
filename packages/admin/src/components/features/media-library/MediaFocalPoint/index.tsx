@@ -21,6 +21,7 @@
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { MEDIA_DESTRUCTIVE_TEXT_CLASSES } from "@admin/constants/media";
 import { cn } from "@admin/lib/utils";
 
 /** The stored point: whole percentages from the left and from the top. */
@@ -115,6 +116,24 @@ export function MediaFocalPoint({
   // Where focus goes when setting ends: back to the button that started it.
   const returnFocusRef = React.useRef(false);
 
+  // The image on screen. Another one (the panel or the viewer moving to the
+  // next item) ends any placing in progress without saving it, and starts
+  // from the new image's own point: a draft placed on one image and saved
+  // by a Done pressed after the move would land on the other.
+  const [shownSrc, setShownSrc] = React.useState(src);
+  if (shownSrc !== src) {
+    setShownSrc(src);
+    setSetting(false);
+    setSaving(false);
+    setSaveFailed(false);
+    setStored(fromProps);
+    setDraft(fromProps);
+  }
+  // Read by a save still in flight, so one that settles after the image
+  // changed touches nothing on the new one.
+  const srcRef = React.useRef(src);
+  srcRef.current = src;
+
   // A different item, or a saved point arriving from the server, replaces the
   // draft, but never while the person is placing the dot.
   React.useEffect(() => {
@@ -150,17 +169,27 @@ export function MediaFocalPoint({
   };
 
   const done = async () => {
+    // Nothing moved (Done straight after "Set focus point", or Centre on a
+    // point already in the middle): there is nothing to save, and a save
+    // would make the server cut every size of the image again for nothing.
+    if (draft.focalX === stored.focalX && draft.focalY === stored.focalY) {
+      setSaveFailed(false);
+      finish();
+      return;
+    }
+    const savingSrc = src;
     setSaving(true);
     setSaveFailed(false);
     try {
       await onSave(draft);
+      if (srcRef.current !== savingSrc) return;
       setStored(draft);
       finish();
     } catch {
       // The draft stays on screen, so Done can be pressed again.
-      setSaveFailed(true);
+      if (srcRef.current === savingSrc) setSaveFailed(true);
     } finally {
-      setSaving(false);
+      if (srcRef.current === savingSrc) setSaving(false);
     }
   };
 
@@ -292,25 +321,32 @@ export function MediaFocalPoint({
               Click or drag to the part that must stay in view when the image is
               cropped. The arrow keys move it too.
             </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setDraft({ focalX: CENTRE, focalY: CENTRE })}
-              disabled={saving}
-            >
-              Centre
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => void done()}
-              disabled={saving}
-            >
-              Done
-            </Button>
+            {/* One unit, so a narrow row moves both buttons to the next line
+                together rather than leaving Done on a line of its own. */}
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setDraft({ focalX: CENTRE, focalY: CENTRE })}
+                disabled={saving}
+              >
+                Centre
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void done()}
+                disabled={saving}
+              >
+                Done
+              </Button>
+            </div>
             {saveFailed && (
-              <p role="alert" className="w-full text-sm text-destructive">
+              <p
+                role="alert"
+                className={cn("w-full text-sm", MEDIA_DESTRUCTIVE_TEXT_CLASSES)}
+              >
                 The focus point couldn&apos;t be saved. Press Done to try again.
               </p>
             )}

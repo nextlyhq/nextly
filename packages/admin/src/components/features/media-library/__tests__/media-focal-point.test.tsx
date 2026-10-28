@@ -172,3 +172,105 @@ describe("setting the focus point", () => {
     ).toBeNull();
   });
 });
+
+describe("the focus point when nothing changed", () => {
+  it("finishes without saving when Done follows Set focus point at once", () => {
+    const { onSave } = renderLaidOut(box(0, 0, 400, 400), {
+      focalX: 30,
+      focalY: 60,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    // POSITIVE CONTROL: Done did finish, so "not saved" is not a stuck control.
+    expect(
+      screen.getByRole("button", { name: "Set focus point" })
+    ).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("finishes without saving when Centre is pressed on a point already in the middle", () => {
+    const { onSave } = renderLaidOut(box(0, 0, 400, 400));
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    fireEvent.click(screen.getByRole("button", { name: "Centre" }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(
+      screen.getByRole("button", { name: "Set focus point" })
+    ).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+});
+
+describe("the focus point when the image changes", () => {
+  const imageProps = (src: string) => ({
+    src,
+    alt: "A photo",
+    focalX: 50,
+    focalY: 50,
+  });
+
+  it("drops a point being placed on one image when another is shown, and saves only the new image's own", async () => {
+    const onSave = vi.fn(() => Promise.resolve());
+    const { rerender } = render(
+      <MediaFocalPoint {...imageProps("/uploads/a.jpg")} onSave={onSave} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Focus point" }), {
+      key: "ArrowRight",
+      shiftKey: true,
+    });
+
+    // Next, before Done: the panel now shows another image.
+    rerender(
+      <MediaFocalPoint {...imageProps("/uploads/b.jpg")} onSave={onSave} />
+    );
+    expect(screen.queryByRole("slider", { name: "Focus point" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Set focus point" })
+    ).toBeInTheDocument();
+
+    // Placing a point on the new image starts from that image's own point.
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Focus point" }), {
+      key: "ArrowDown",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith({ focalX: 50, focalY: 51 });
+  });
+
+  it("doesn't show a save that finishes after the image changed on the new image", async () => {
+    let resolveSave: () => void = () => undefined;
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          resolveSave = resolve;
+        })
+    );
+    const { rerender } = render(
+      <MediaFocalPoint {...imageProps("/uploads/a.jpg")} onSave={onSave} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Focus point" }), {
+      key: "ArrowRight",
+      shiftKey: true,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(onSave).toHaveBeenCalledWith({ focalX: 60, focalY: 50 });
+
+    rerender(
+      <MediaFocalPoint {...imageProps("/uploads/b.jpg")} onSave={onSave} />
+    );
+    resolveSave();
+    // The new image's point is the middle, which draws no dot at rest; the
+    // first image's saved point would draw one.
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Set focus point" })
+      ).toBeEnabled()
+    );
+    expect(document.querySelector("[data-focal-dot]")).toBeNull();
+  });
+});

@@ -9,6 +9,7 @@
  * the tile of the item on screen when the panel closes.
  */
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "@admin/__tests__/utils";
@@ -135,6 +136,38 @@ describe("the media library toolbar", () => {
   });
 });
 
+describe("the media library toolbar on a narrow row", () => {
+  it("offers type, sort and, in the list view, Columns from one View options menu", async () => {
+    window.localStorage.setItem("nextly:admin:media:view-mode", "list");
+    renderLibrary();
+    const toolbar = await screen.findByRole("group", {
+      name: "Library controls",
+    });
+
+    await userEvent.click(
+      within(toolbar).getByRole("button", { name: "View options" })
+    );
+    expect(
+      screen.getByRole("menuitemradio", { name: "All types" })
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      screen.getByRole("menuitemradio", { name: "Newest First" })
+    ).toHaveAttribute("aria-checked", "true");
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Dimensions" })
+    ).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("menuitemradio", { name: "Images" })
+    );
+    await waitFor(() =>
+      expect(api.fetchMedia).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: "image" })
+      )
+    );
+  });
+});
+
 describe("an item's details in the library", () => {
   it("opens beside the grid, and shows another item without the first being closed", async () => {
     renderLibrary();
@@ -253,4 +286,108 @@ describe("an item's details in the library", () => {
     // Nor can a reader tick tiles for the bulk actions.
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
+});
+
+/** The element in the list view that stands for an item: its row or card. */
+const listEntry = (name: string) => {
+  const entry = screen.getAllByText(name)[0].closest("[role='button']");
+  if (!(entry instanceof HTMLElement)) throw new Error(`no entry for ${name}`);
+  return entry;
+};
+
+describe("an item's details in the list view", () => {
+  beforeEach(() => {
+    window.localStorage.setItem("nextly:admin:media:view-mode", "list");
+  });
+
+  it("returns focus on close to the entry of the item on screen, not the one that opened it", async () => {
+    renderLibrary();
+    await screen.findAllByText("photo-1.jpg");
+
+    const opener = listEntry("photo-1.jpg");
+    opener.focus();
+    fireEvent.click(opener);
+    const panel = screen.getByRole("complementary", { name: "Media details" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Next file" }));
+    // POSITIVE CONTROL: the panel moved on, so the two entries differ.
+    expect(
+      within(panel).getByRole("heading", { name: "photo-2.jpg" })
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Close details" })
+    );
+
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toContain("photo-2.jpg")
+    );
+  });
+
+  it("draws each thumbnail from the same choice the grid's tiles make", async () => {
+    api.fetchMedia.mockResolvedValue({
+      data: [
+        item(1, {
+          thumbnailUrl: "/uploads/thumb_photo-1.jpg",
+          sizes: {
+            small: {
+              url: "/uploads/photo-1-small.jpg",
+              width: 320,
+              height: 180,
+            },
+          },
+        }),
+      ],
+      meta: { total: 1, page: 1, limit: 24, totalPages: 1 },
+    });
+    renderWithProviders(
+      <MediaProvider>
+        <MediaLibrary />
+      </MediaProvider>
+    );
+
+    const thumbnails = await screen.findAllByRole("img", { name: "Photo 1" });
+    // POSITIVE CONTROL: the list did draw the thumbnail.
+    expect(thumbnails.length).toBeGreaterThan(0);
+    for (const thumbnail of thumbnails) {
+      // The whole-image size, not the square thumbnail cut from the middle.
+      expect(thumbnail).toHaveAttribute("src", "/uploads/photo-1-small.jpg");
+    }
+  });
+});
+
+describe("the library with nothing in it", () => {
+  function renderEmpty() {
+    api.fetchMedia.mockResolvedValue({
+      data: [],
+      meta: { total: 0, page: 1, limit: 24, totalPages: 0 },
+    });
+    return renderWithProviders(
+      <MediaProvider>
+        <MediaLibrary />
+      </MediaProvider>
+    );
+  }
+
+  for (const view of ["grid", "list"] as const) {
+    it(`points an uploader at Upload in the ${view} view`, async () => {
+      window.localStorage.setItem("nextly:admin:media:view-mode", view);
+      renderEmpty();
+      const empty = await screen.findByRole("status", {
+        name: "No media files",
+      });
+      expect(empty).toHaveTextContent(/Upload files/);
+    });
+
+    it(`doesn't tell a reader to upload in the ${view} view`, async () => {
+      window.localStorage.setItem("nextly:admin:media:view-mode", view);
+      held.slugs = new Set(["read-media"]);
+      renderEmpty();
+      const empty = await screen.findByRole("status", {
+        name: "No media files",
+      });
+      // POSITIVE CONTROL: the empty state says something.
+      expect(empty).toHaveTextContent(/No media files found/);
+      expect(empty).not.toHaveTextContent(/upload/i);
+    });
+  }
 });

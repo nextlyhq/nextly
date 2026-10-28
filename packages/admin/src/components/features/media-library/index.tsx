@@ -102,6 +102,41 @@ const isViewMode = (value: string): value is "grid" | "list" =>
   value === "grid" || value === "list";
 
 /**
+ * Focuses the entry that stands for an item, in whichever view is showing:
+ * a grid tile, or a list row. Both carry the item's id as `data-row-id`. The
+ * list draws each item twice, as a card for a narrow table and a row for a
+ * wide one, and only the one on screen can take focus, so each is tried in
+ * turn. Returns whether one took it.
+ */
+function focusMediaEntry(container: HTMLElement | null, id: string): boolean {
+  const entries = Array.from(
+    container?.querySelectorAll<HTMLElement>("[data-row-id]") ?? []
+  ).filter(element => element.dataset.rowId === id);
+  for (const entry of entries) {
+    entry.focus();
+    if (document.activeElement === entry) return true;
+  }
+  return false;
+}
+
+/**
+ * What an empty listing says under its heading: why it's empty when a search
+ * or a type narrowed it, and otherwise what to do next, which for a person
+ * who can't upload is nothing.
+ */
+function emptyLibraryMessage({
+  filtered,
+  canUpload,
+}: {
+  filtered: boolean;
+  canUpload: boolean;
+}): string {
+  if (filtered) return "Nothing matches this search or filter.";
+  if (canUpload) return "Add some with Upload files above.";
+  return "Nothing has been added here yet.";
+}
+
+/**
  * MediaLibrary component
  *
  * Complete media management interface.
@@ -398,19 +433,16 @@ export function MediaLibrary({
     }
   }, [openMediaId, items, isPlaceholderData, openIndex, handleCloseDetails]);
 
-  // Focus back to the tile of the item that was on screen when the panel
-  // closed, then to whatever opened it, then to the page title, whichever
-  // still exists.
+  // Focus back to the tile or row of the item that was on screen when the
+  // panel closed, then to whatever opened it, then to the page title,
+  // whichever still exists.
   React.useEffect(() => {
     if (!focusReturnId) return;
     setFocusReturnId(null);
-    const tile = Array.from(
-      libraryRef.current?.querySelectorAll<HTMLElement>("[data-media-id]") ?? []
-    ).find(element => element.dataset.mediaId === focusReturnId);
     const opener = openerRef.current;
     openerRef.current = null;
-    if (tile) tile.focus();
-    else if (opener?.isConnected) opener.focus();
+    if (focusMediaEntry(libraryRef.current, focusReturnId)) return;
+    if (opener?.isConnected) opener.focus();
     else headingRef.current?.focus();
   }, [focusReturnId]);
 
@@ -556,6 +588,11 @@ export function MediaLibrary({
     items && openIndex >= 0 && openIndex < items.length - 1
       ? () => setOpenMediaId(items[openIndex + 1].id)
       : undefined;
+
+  const emptyStateMessage = emptyLibraryMessage({
+    filtered: Boolean(debouncedSearch) || typeFilter !== "all",
+    canUpload,
+  });
 
   // Ticking tiles leads only to Delete and Move, so a person who may do
   // neither is offered no checkboxes.
@@ -717,6 +754,7 @@ export function MediaLibrary({
                     onRetry={() => {
                       void refetch();
                     }}
+                    emptyStateMessage={emptyStateMessage}
                   />
                 </div>
                 {/* Pagination for Grid View */}
@@ -758,6 +796,7 @@ export function MediaLibrary({
                 onRetry={() => {
                   void refetch();
                 }}
+                emptyStateMessage={emptyStateMessage}
                 // The list view is a table, so its pager goes to the table
                 // rather than beside it. The grid branch above keeps its own,
                 // because a grid has no row-versus-card view to place it for.
