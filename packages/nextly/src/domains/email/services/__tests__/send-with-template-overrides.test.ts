@@ -39,18 +39,16 @@ const dbTemplate = {
   replyTo: "template-replies@example.com",
 };
 
-function buildService() {
+function buildService(template: Record<string, unknown> = dbTemplate) {
   const providerService = {
     getDefaultProviderDecrypted: vi.fn().mockResolvedValue(null),
     getProviderDecrypted: vi.fn().mockResolvedValue(null),
   } as unknown as EmailProviderService;
 
   const templateService = {
-    getTemplateBySlug: vi.fn().mockResolvedValue(dbTemplate),
+    getTemplateBySlug: vi.fn().mockResolvedValue(template),
     // The send path asks which version to render; the stored row comes first.
-    resolveForSend: vi
-      .fn()
-      .mockResolvedValue({ template: dbTemplate, preferCode: false }),
+    resolveForSend: vi.fn().mockResolvedValue({ template, preferCode: false }),
     // Sends render through the template service, as the real one does.
     renderStored: (
       template: Parameters<typeof renderTemplate>[0],
@@ -108,5 +106,44 @@ describe("sendWithTemplate from/replyTo overrides", () => {
         replyTo: "template-replies@example.com",
       })
     );
+  });
+});
+
+describe("a test of the editor's draft", () => {
+  const withAttachment = {
+    ...dbTemplate,
+    attachments: [{ mediaId: "stored", filename: "old.pdf" }],
+  };
+
+  it("sends the draft's attachments instead of the stored ones", async () => {
+    const { service, send } = buildService(withAttachment);
+
+    await service.sendTemplateTest(
+      "form-notification",
+      "me@example.com",
+      {},
+      {
+        attachments: [{ mediaId: "added", filename: "new.pdf" }],
+      }
+    );
+
+    expect(send.mock.calls[0]?.[0]).toMatchObject({
+      attachments: [{ mediaId: "added", filename: "new.pdf" }],
+    });
+  });
+
+  it("sends none when the draft removed them", async () => {
+    const { service, send } = buildService(withAttachment);
+
+    await service.sendTemplateTest(
+      "form-notification",
+      "me@example.com",
+      {},
+      {
+        attachments: null,
+      }
+    );
+
+    expect(send.mock.calls[0]?.[0]).toMatchObject({ attachments: undefined });
   });
 });
