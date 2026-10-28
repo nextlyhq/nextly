@@ -28,6 +28,7 @@ import {
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
 import { ServiceContainer } from "../../services/index";
+import { getRBACService } from "../code-access";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 
@@ -126,6 +127,14 @@ async function rest(
 
 const REFUSED = [401, 403];
 
+/** How often the rules of the collection named `settings` were asked. */
+let settingsRuleAsks = 0;
+/** Refuses everything, and counts the asks. */
+const refuseAndCount = () => {
+  settingsRuleAsks += 1;
+  return false;
+};
+
 for (const dialect of getConfiguredTestDialects()) {
   describe(`settings and email, by plain permission — ${dialect}`, () => {
     let t: TestNextly;
@@ -135,6 +144,18 @@ for (const dialect of getConfiguredTestDialects()) {
     let settingsUpdater: Headers;
     /** May read settings. */
     let settingsReader: Headers;
+    /** Each may read settings and do one change, the one named. */
+    const only: Record<"create" | "update" | "delete", Headers> = {
+      create: {},
+      update: {},
+      delete: {},
+    };
+    /** Each holds two of the three schema grants, missing the one named. */
+    const missing: Record<"create" | "update" | "delete", Headers> = {
+      create: {},
+      update: {},
+      delete: {},
+    };
     /** May read and update email providers and templates. */
     let emailUpdater: Headers;
     /** Holds the `manage-` permissions on settings and email. */
@@ -146,6 +167,21 @@ for (const dialect of getConfiguredTestDialects()) {
       t = await createTestNextly({ dialect });
       try {
         const services = new ServiceContainer(t.adapter);
+        // Access rules registered under the settings resource's name, as a
+        // plugin's code could register them: they refuse everything, and a
+        // settings or schema gate never asks them. (A collection or a Single
+        // cannot take the name; it is reserved for the resource.)
+        const rbac = getRBACService();
+        // Without the service there would be nothing to register on, and the
+        // case below would pass for the wrong reason.
+        if (!rbac)
+          throw new Error("the access-control service is not registered");
+        rbac.registerCollectionAccess("settings", {
+          read: refuseAndCount,
+          create: refuseAndCount,
+          update: refuseAndCount,
+          delete: refuseAndCount,
+        });
         await seedAllPermissions();
         // The first user an install makes is its super-admin, who passes
         // every check, so one is made before the users under test.
@@ -167,6 +203,21 @@ for (const dialect of getConfiguredTestDialects()) {
         settingsReader = await sessionFor(t, services, "settings-reader", [
           "read-settings",
         ]);
+        const changes = ["create", "update", "delete"] as const;
+        for (const change of changes) {
+          only[change] = await sessionFor(t, services, `only-${change}`, [
+            "read-settings",
+            `${change}-settings`,
+          ]);
+          missing[change] = await sessionFor(
+            t,
+            services,
+            `missing-${change}`,
+            changes
+              .filter(other => other !== change)
+              .map(other => `${other}-settings`)
+          );
+        }
         emailUpdater = await sessionFor(t, services, "email-updater", [
           "read-email-providers",
           "update-email-providers",
@@ -212,18 +263,44 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     const IMAGE_SIZE_CHANGES: Array<
-      [label: string, method: Method, path: string, body?: unknown]
+      [
+        label: string,
+        change: "create" | "update" | "delete",
+        method: Method,
+        path: string,
+        body?: unknown,
+      ]
     > = [
-      ["creating an image size", "POST", "image-sizes", {}],
-      ["editing an image size", "PATCH", "image-sizes/no-such-size", {}],
-      ["deleting an image size", "DELETE", "image-sizes/no-such-size"],
+      ["creating an image size", "create", "POST", "image-sizes", {}],
+      [
+        "editing an image size",
+        "update",
+        "PATCH",
+        "image-sizes/no-such-size",
+        {},
+      ],
+      [
+        "deleting an image size",
+        "delete",
+        "DELETE",
+        "image-sizes/no-such-size",
+      ],
     ];
 
-    for (const [label, method, path, body] of IMAGE_SIZE_CHANGES) {
+    for (const [label, change, method, path, body] of IMAGE_SIZE_CHANGES) {
       it(`lets a caller who may change settings go on to ${label}`, async () => {
         expect(REFUSED).not.toContain(
           await rest(method, path, settingsWriter, body)
         );
+        // That change's own permission alone lets a caller through, and
+        // either of the other two does not.
+        expect(REFUSED).not.toContain(
+          await rest(method, path, only[change], body)
+        );
+        for (const other of ["create", "update", "delete"] as const) {
+          if (other === change) continue;
+          expect(await rest(method, path, only[other], body), other).toBe(403);
+        }
         // The controls: a reader is refused, a manager let through.
         expect(await rest(method, path, settingsReader, body)).toBe(403);
         expect(REFUSED).not.toContain(await rest(method, path, manager, body));
@@ -252,11 +329,30 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(REFUSED).not.toContain(
           await rest("POST", path, settingsWriter, {})
         );
-        // Updating settings alone does not reach the schema.
+        // Updating settings alone does not reach the schema, nor do any two
+        // of the three.
         expect(await rest("POST", path, settingsUpdater, {})).toBe(403);
+        for (const change of ["create", "update", "delete"] as const) {
+          expect(await rest("POST", path, missing[change], {}), change).toBe(
+            403
+          );
+        }
         expect(REFUSED).not.toContain(await rest("POST", path, manager, {}));
       });
     }
+
+    it("asks a schema change no rule registered under the settings name", async () => {
+      // The schema grants are settings permissions, not the operations of an
+      // entity that shares their name: those rules refuse everything, and are
+      // never asked.
+      settingsRuleAsks = 0;
+      for (const [, path] of SCHEMA_CHANGES) {
+        expect(REFUSED).not.toContain(
+          await rest("POST", path, settingsWriter, {})
+        );
+      }
+      expect(settingsRuleAsks).toBe(0);
+    });
 
     it("lets a caller who may update email providers and templates edit them", async () => {
       for (const path of [

@@ -28,7 +28,7 @@
  * @module domains/widgets/condition-probe
  */
 
-import { callerMayPerform } from "../../auth/access/route-gate-adapters";
+import { callerHoldsAny } from "../../auth/access/route-gate-adapters";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../../auth/collection-definition-policy";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
@@ -164,12 +164,12 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
     // ways nothing reports: a step hidden after it became finishable, or
     // offered after it stopped being.
     createCollection ??= (async () => {
-      // Every grant a definition change asks, each as the routes ask it.
-      for (const { action, resource } of COLLECTION_DEFINITION_PERMISSIONS) {
-        const mayDefine = await callerMayPerform(
+      // Every grant a definition change asks, each by grant as the routes
+      // ask it, no entity's rule read.
+      for (const permission of COLLECTION_DEFINITION_PERMISSIONS) {
+        const mayDefine = await callerHoldsAny(
           caller.authenticatedScope,
-          action,
-          resource,
+          [permission],
           caller.user
         );
         if (!mayDefine) return false;
