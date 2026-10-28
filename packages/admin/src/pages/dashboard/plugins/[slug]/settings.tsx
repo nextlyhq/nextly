@@ -15,7 +15,7 @@ import {
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
-import { UPDATE_SETTINGS } from "@admin/lib/permissions/system-policy";
+import { pluginSettingsPermission } from "@admin/lib/plugins/plugin-settings-permission";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
 
@@ -120,9 +120,7 @@ export function settingsPermissionAt(
   plugins: PluginMetadata[] | undefined,
   activeSlug: string | undefined
 ): string {
-  return (
-    pluginAt(plugins, activeSlug)?.settings?.permission ?? UPDATE_SETTINGS
-  );
+  return pluginSettingsPermission(pluginAt(plugins, activeSlug));
 }
 
 function PluginSettingsContent({ activeSlug }: { activeSlug?: string }) {
