@@ -25,6 +25,7 @@ import {
   PORT,
   productionServerEnv,
 } from "../../production-server";
+import { stop } from "../../support/playground-dev-server";
 
 /**
  * A production build whose committed component map lacks a dashboard widget's
@@ -140,7 +141,7 @@ test.beforeAll(async () => {
       env,
       stdio: ["ignore", log, log],
       shell: starting.shell,
-      // Its own process group on POSIX, so `stopServer` can end pnpm and the
+      // Its own process group on POSIX, so `stop` ends pnpm and the
       // `next start` under it together: a signal to pnpm alone leaves both.
       detached: process.platform !== "win32",
     });
@@ -151,27 +152,20 @@ test.beforeAll(async () => {
   await waitForHealth(FIXTURE_URL, 120_000);
 });
 
-test.afterAll(() => {
-  stopServer();
+test.afterAll(async () => {
+  // Stopped and waited for before its log is removed, so nothing is still
+  // writing to it, or holding the port, when the files go.
+  if (server?.pid !== undefined) {
+    // On Windows the handle is the shell the wrapper asked for, so killing it
+    // alone would leave `next start` holding the port; the tree kill reaches
+    // it. On POSIX, the process group it was started as, by the stop every
+    // spec-run server shares.
+    const treeKill = treeKillCommand(server.pid, process.platform);
+    if (treeKill === null) await stop(server);
+    else spawnSync(treeKill.command, treeKill.args, { stdio: "ignore" });
+  }
   if (logDir !== undefined) rmSync(logDir, { recursive: true, force: true });
 });
-
-function stopServer(): void {
-  if (server?.pid === undefined) return;
-  // On Windows the handle is the shell the wrapper asked for, so killing it
-  // alone would leave `next start` holding the port; the tree kill reaches it.
-  const treeKill = treeKillCommand(server.pid, process.platform);
-  if (treeKill === null) {
-    // The whole group the server was started as, by its negative pid.
-    try {
-      process.kill(-server.pid, "SIGTERM");
-    } catch {
-      // Already gone: nothing is left holding the port.
-    }
-    return;
-  }
-  spawnSync(treeKill.command, treeKill.args, { stdio: "ignore" });
-}
 
 interface Layout {
   version: number;

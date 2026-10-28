@@ -449,6 +449,25 @@ describe("a row of an earlier format is no saved arrangement", () => {
     expect(dismissalsApplied(defaults, row)).not.toEqual(defaults);
   });
 
+  it("keeps each card's own choice where the default places one widget twice", () => {
+    const twice = [card("core/a", "core/a"), card("a-second", "core/a")];
+    const row = readStoredLayout(
+      serializeLayout(
+        [
+          card("core/a", "core/a", { removed: true, config: { range: "7d" } }),
+          card("a-second", "core/a", { config: { range: "30d" } }),
+        ],
+        false
+      )
+    );
+    expect(
+      dismissalsApplied(twice, row).map(each => [each.removed, each.config])
+    ).toEqual([
+      [true, { range: "7d" }],
+      [false, { range: "30d" }],
+    ]);
+  });
+
   it("reads only the version: an earlier row whose content no format allows is still no row", () => {
     // Nothing past the version number is looked at, so content no reader of
     // that format would have accepted cannot make the row unreadable.

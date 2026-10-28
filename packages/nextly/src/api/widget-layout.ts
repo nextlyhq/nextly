@@ -58,6 +58,7 @@ import {
 } from "../domains/widgets/get-started-card";
 import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
 import {
+  LAYOUT_SCHEMA_VERSION,
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
   dismissalsApplied,
@@ -217,8 +218,11 @@ function withheldFrom(
 
 /**
  * The cards of the default this reader would not be shown by their declared
- * widgets' own rules, among those their view lets them see, judged with the
- * default's own settings (`defaultCardsNotShown`).
+ * widgets' own rules, among those their view lets them see: judged with the
+ * default's own settings (`inDefault`, the default a reset returns to), and,
+ * for a reader whose row follows the default, with the settings that row gave
+ * its cards (`forReader`), since each card is drawn with those. Only a card
+ * whose settings the row changed is asked again.
  *
  * Loaded lazily: that judgement is the card endpoint's, which reads this
  * module to know what a caller was handed.
@@ -226,14 +230,68 @@ function withheldFrom(
 async function notShownInDefault(
   auth: AuthContext,
   view: CardView & { reader: ReadCaller },
-  signal: AbortSignal
-): Promise<ReadonlySet<string>> {
+  signal: AbortSignal,
+  stored: StoredLayout | undefined
+): Promise<{
+  inDefault: ReadonlySet<string>;
+  forReader: ReadonlySet<string>;
+}> {
   const { defaultCardsNotShown } = await import("./default-cards-shown");
-  const seen = followedDefault().filter(
-    placement =>
-      view.visibleIds.has(placement.widgetId) && !view.withheld(placement)
+  const seen = (placements: readonly WidgetPlacement[]) =>
+    placements.filter(
+      placement =>
+        view.visibleIds.has(placement.widgetId) && !view.withheld(placement)
+    );
+  const plain = seen(followedDefault());
+  const inDefault = await defaultCardsNotShown(
+    auth,
+    view.reader,
+    plain,
+    signal
   );
-  return defaultCardsNotShown(auth, view.reader, seen, signal);
+  if (stored === undefined || layoutIsArranged(stored)) {
+    return { inDefault, forReader: inDefault };
+  }
+  const startedAs = new Map(
+    plain.map(placement => [placement.id, JSON.stringify(placement.config)])
+  );
+  const changed = seen(followedDefault(stored)).filter(
+    placement =>
+      startedAs.get(placement.id) !== JSON.stringify(placement.config)
+  );
+  if (changed.length === 0) return { inDefault, forReader: inDefault };
+  const judgedAgain = await defaultCardsNotShown(
+    auth,
+    view.reader,
+    changed,
+    signal
+  );
+  const changedIds = new Set(changed.map(placement => placement.id));
+  return {
+    inDefault,
+    forReader: new Set([
+      ...[...inDefault].filter(id => !changedIds.has(id)),
+      ...judgedAgain,
+    ]),
+  };
+}
+
+/**
+ * The default's cards withheld from what this reader was handed, and the
+ * token their write is checked against: none for an arranged row, whose cards
+ * answer for themselves.
+ */
+async function readerCards(
+  auth: AuthContext,
+  view: Awaited<ReturnType<typeof visibleWidgets>>,
+  stored: StoredLayout | undefined,
+  signal: AbortSignal
+): Promise<{ notShown: ReadonlySet<string>; scope: string }> {
+  const notShown =
+    stored && layoutIsArranged(stored)
+      ? NOTHING_WITHHELD
+      : (await notShownInDefault(auth, view, signal, stored)).forReader;
+  return { notShown, scope: view.scopeWith(notShown) };
 }
 
 /**
@@ -337,13 +395,22 @@ async function visibleWidgets(auth: AuthContext) {
     // Over everything that decides what is withheld: the widgets, the gates,
     // the collections this reader may read, and each Collection setting's
     // default, which decides a card that stores no value.
-    scope: visibilityToken(
+    scope: scopeOver([]),
+    // The same token over the default's cards a reader following it is not
+    // shown (`notShown`), which every verb asks of a reader with no arranged
+    // row: none withheld gives `scope` itself.
+    scopeWith: scopeOver,
+  };
+
+  function scopeOver(notShown: Iterable<string>): string {
+    return visibilityToken(
       widgets.map(widget => widget.id),
       audience.heldActionGates,
       readable,
-      collectionSettingsToken(widgets)
-    ),
-  };
+      collectionSettingsToken(widgets),
+      notShown
+    );
+  }
 }
 
 /**
@@ -413,7 +480,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       : "default";
   // Judged for every read, since the default below is handed to a reader
   // with an arrangement of their own too, as the dashboard a reset returns to.
-  const notShown = await notShownInDefault(auth, view, req.signal);
+  const judged = await notShownInDefault(auth, view, req.signal, stored.layout);
+  const arranged =
+    stored.layout !== undefined && layoutIsArranged(stored.layout);
+  const notShown = arranged ? NOTHING_WITHHELD : judged.forReader;
   const arrangement = visibleArrangement(stored.layout, view, notShown);
   // The Get started card is drawn or left dormant from its step answer and its
   // own settings, which is why this is decided here, after the row is read,
@@ -436,7 +506,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       ? null
       : await view.probe.getStarted();
   const defaults = withoutDormantCard(
-    visibleArrangement(undefined, view, notShown),
+    visibleArrangement(undefined, view, judged.inDefault),
     card => steps !== null && getStartedDrawn(steps, card.config)
   );
   const sizes = sizesOf(view.widgets);
@@ -474,7 +544,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       available,
       version: stored.version,
       source,
-      scope: view.scope,
+      // Over the cards withheld from what they were handed, so a save staged
+      // before one of those verdicts changed is refused rather than dropping
+      // a card it never held.
+      scope: view.scopeWith(notShown),
       // The audience the workspace payload is built for, so the admin can tell
       // the payload it holds apart from the one this reader would be sent now.
       audience: view.audience.token,
@@ -904,23 +977,26 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
 
   const service = await getLayoutService();
   const view = await visibleWidgets(auth);
-  refuseStaleScope(submittedScope, view.scope);
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
+  // A reader still following the default was handed it less the cards it
+  // would not show them, and writes back what they were handed: those cards
+  // are carried into the row as cards they may not see are, never dropped.
+  // The token covers them, so a write staged against other verdicts is
+  // refused before anything is merged.
+  const { notShown, scope } = await readerCards(
+    auth,
+    view,
+    stored.layout,
+    req.signal
+  );
+  refuseStaleScope(submittedScope, scope);
   refuseUnknownOrRepeated(submitted, view.visibleIds);
   refuseUnreadableCollections(submitted, view.withheld);
-
-  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
   refuseUnconfirmedReplacement(
     stored.unreadable,
     writeArranges,
     replaceUnreadable
   );
-  // A reader still following the default was handed it less the cards it
-  // would not show them, and writes back what they were handed: those cards
-  // are carried into the row as cards they may not see are, never dropped.
-  const notShown =
-    stored.layout && layoutIsArranged(stored.layout)
-      ? NOTHING_WITHHELD
-      : await notShownInDefault(auth, view, req.signal);
   const shown = visibleArrangement(stored.layout, view, notShown);
   refuseExtraCards(submitted, shown, sizesOf(view.widgets));
   refuseOverlongText(submitted, shown, view.widgets);
@@ -933,15 +1009,16 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     writeArranges ||
     (stored.layout !== undefined && layoutIsArranged(stored.layout));
 
+  const saved = mergePreservingHidden(
+    submitted,
+    wholeArrangement(stored.layout),
+    carriedUnlessSubmitted(submitted, view.visibleIds),
+    withheldFrom(stored.layout, view, notShown)
+  );
   const version = await service.saveLayout(
     SCOPE_KIND,
     view.caller.userId,
-    mergePreservingHidden(
-      submitted,
-      wholeArrangement(stored.layout),
-      carriedUnlessSubmitted(submitted, view.visibleIds),
-      withheldFrom(stored.layout, view, notShown)
-    ),
+    saved,
     expectedVersion,
     arranged
   );
@@ -955,8 +1032,23 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       placements: submitted,
       version,
       source: "own" satisfies LayoutSource,
-      // The token this write was checked against, which is still current.
-      scope: view.scope,
+      // The token the next write is checked against, from the row as just
+      // saved: a setting this write changed may change a card's verdict. An
+      // arranged row's cards answer for themselves, so it covers none.
+      scope: arranged
+        ? view.scope
+        : (
+            await readerCards(
+              auth,
+              view,
+              {
+                schemaVersion: LAYOUT_SCHEMA_VERSION,
+                placements: saved,
+                unarranged: true,
+              },
+              req.signal
+            )
+          ).scope,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
@@ -994,7 +1086,11 @@ export const deleteWidgetLayout = withErrorHandler(async (req: Request) => {
 
   const service = await getLayoutService();
   const view = await visibleWidgets(auth);
-  refuseStaleScope(submittedScope, view.scope);
+  // Checked against the token the read handed out, which covers the
+  // default's cards a reader following it was not shown.
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
+  const { scope } = await readerCards(auth, view, stored.layout, req.signal);
+  refuseStaleScope(submittedScope, scope);
   await service.deleteLayout(SCOPE_KIND, view.caller.userId, expectedVersion);
 
   // No version echoed, because there is no row to hold one: the next read

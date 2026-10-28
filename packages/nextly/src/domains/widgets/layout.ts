@@ -48,9 +48,9 @@
  *
  * A placement is one card with its own identity, so one widget can appear
  * twice with different `config`. The DEFAULT set names each placement after its
- * widget, because that is the one arrangement where the two are one-to-one and
- * a stable id keeps repeated reads identical; a card added later gets a
- * generated id.
+ * widget, a stable id that keeps repeated reads identical, and each further
+ * card of one widget by the id the site config names for it; a card added
+ * later gets a generated id.
  *
  * @module domains/widgets/layout
  */
@@ -443,27 +443,30 @@ export function layoutIsArranged(stored: StoredLayout): boolean {
  * and reading only the removals back dropped it on every read. A setting the
  * default's own entry starts a card with gives way to one stored for it.
  *
- * Keyed by WIDGET, across the whole stored row and whatever its visibility, so
+ * Keyed by CARD, across the whole stored row and whatever its visibility, so
  * a removal or a setting on a card the reader has since lost access to is
  * still honoured the day access returns, and a removed card keeps its settings
  * for when it is put back. `undefined` is a reader with no row.
+ *
+ * 🔴 By placement id, so two cards of one widget the default places keep a
+ * choice each: keyed by widget, the last card's choice was every card's. A
+ * widget the default and the row each hold ONE card of is matched by widget
+ * too, so a row whose card was stored under another id keeps its choice.
  */
 export function dismissalsApplied(
   defaults: readonly WidgetPlacement[],
   stored: StoredLayout | undefined
 ): WidgetPlacement[] {
-  const chosen = new Map<
-    string,
-    { removed: boolean; config?: Record<string, unknown> }
-  >();
-  for (const placement of stored?.placements ?? []) {
-    chosen.set(placement.widgetId, {
-      removed: placement.removed,
-      ...(placement.config === undefined ? {} : { config: placement.config }),
-    });
-  }
+  const placements = stored?.placements ?? [];
+  const byId = new Map(placements.map(placement => [placement.id, placement]));
+  const soleCardOf = soleCardsByWidget(placements);
+  const soleInDefault = soleCardsByWidget(defaults);
   return defaults.map(placement => {
-    const choice = chosen.get(placement.widgetId);
+    const choice =
+      byId.get(placement.id) ??
+      (soleInDefault.has(placement.widgetId)
+        ? soleCardOf.get(placement.widgetId)
+        : undefined);
     if (choice === undefined) return placement;
     return {
       ...placement,
@@ -471,6 +474,20 @@ export function dismissalsApplied(
       ...(choice.config === undefined ? {} : { config: choice.config }),
     };
   });
+}
+
+/** Each widget that `placements` holds exactly one card of, with that card. */
+function soleCardsByWidget(
+  placements: readonly WidgetPlacement[]
+): ReadonlyMap<string, WidgetPlacement> {
+  const sole = new Map<string, WidgetPlacement>();
+  const repeated = new Set<string>();
+  for (const placement of placements) {
+    if (sole.has(placement.widgetId)) repeated.add(placement.widgetId);
+    else sole.set(placement.widgetId, placement);
+  }
+  for (const widgetId of repeated) sole.delete(widgetId);
+  return sole;
 }
 
 /**
@@ -644,7 +661,11 @@ export function visibilityToken(
   readableCollections: Iterable<string> = [],
   // Each Collection setting, as `id=declaration`: a plugin changing one, its
   // name or its default, moves a stored card between withheld and shown.
-  collectionSettings: Iterable<string> = []
+  collectionSettings: Iterable<string> = [],
+  // The default's cards a reader following it was not handed because their
+  // widgets' own rules would not show them: a verdict that changes between a
+  // read and the first save moves a card between carried and dropped.
+  notShown: Iterable<string> = []
 ): string {
   return (
     createHash("sha256")
@@ -656,6 +677,7 @@ export function visibilityToken(
           ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
           ...[...readableCollections].sort().map(slug => `reads:${slug}`),
           ...[...collectionSettings].sort().map(entry => `settings:${entry}`),
+          ...[...notShown].sort().map(id => `hides:${id}`),
         ].join("\n")
       )
       .digest("base64url")

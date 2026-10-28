@@ -106,7 +106,7 @@ const OVERRIDE_KEYS = ["title", "description", "size", "settings"] as const;
 const SIZE_KEYS = ["default", "min", "max"] as const;
 
 /** The keys a `defaultLayout` card takes. */
-const CARD_KEYS = ["widget", "w", "h", "settings", "optional"] as const;
+const CARD_KEYS = ["widget", "id", "w", "h", "settings", "optional"] as const;
 
 /**
  * Each key of `value` that `where` does not take, with the known key it most
@@ -529,6 +529,95 @@ function repeatedFaults(
   return faults;
 }
 
+/**
+ * Each fault in the ids the default's cards are kept under. A card's id is the
+ * one its entry names, or its widget's: so a widget placed more than once names
+ * an id for each further card, which no other card and no widget may share. The
+ * id never depends on another card, or on which a reader may see.
+ */
+function cardIdFaults(
+  cards: readonly Record<string, unknown>[],
+  ctx: SiteDashboardContext
+): WidgetDeclarationFault[] {
+  const widgetIds = new Set(ctx.ids);
+  const taken = new Set<string>();
+  return cards.flatMap((card, index) => {
+    const found = cardIdFault(card, index, { widgetIds, taken, ctx });
+    return found === undefined ? [] : [found];
+  });
+}
+
+/** What one card's id is checked against: the install's widgets, and the ids the cards before it took. */
+interface CardIdContext {
+  readonly widgetIds: ReadonlySet<string>;
+  /** Grows as each card takes its id. */
+  readonly taken: Set<string>;
+  readonly ctx: SiteDashboardContext;
+}
+
+/** The fault in one card's id, if it has one; a card whose id is free takes it. */
+function cardIdFault(
+  card: Record<string, unknown>,
+  index: number,
+  { widgetIds, taken, ctx }: CardIdContext
+): WidgetDeclarationFault | undefined {
+  const { widget, id } = card;
+  if (typeof widget !== "string") return undefined;
+  const problem =
+    cardIdShapeProblem(id, widgetIds) ??
+    takenIdProblem(widget, id, index, taken, ctx);
+  if (problem === undefined) return undefined;
+  return fault(id === undefined ? widget : `${widget} (${quote(id)})`, problem);
+}
+
+/**
+ * Whether a card's id is one a card before it took: a further card of its
+ * widget with no id of its own, or two cards under one id. An id still free is
+ * taken here.
+ */
+function takenIdProblem(
+  widget: string,
+  id: unknown,
+  index: number,
+  taken: Set<string>,
+  ctx: SiteDashboardContext
+): string | undefined {
+  const own = typeof id === "string" ? id : widget;
+  if (!taken.has(own)) {
+    taken.add(own);
+    return undefined;
+  }
+  if (typeof id === "string") {
+    return `defaultLayout names two cards "${own}": each card needs an id of its own`;
+  }
+  // A widget that allows one card is named once, by `repeatedFaults`.
+  return ctx.factsOf(widget)?.allowsSeveral === false
+    ? undefined
+    : `defaultLayout places "${widget}" again (entry ${index + 1}) with no id of its own: name the card, as { widget: "${widget}", id: "${suggestedCardId(widget, taken)}" }`;
+}
+
+/** What is wrong with an id as written, whatever the other cards: not a non-empty string, or a widget's. */
+function cardIdShapeProblem(
+  id: unknown,
+  widgetIds: ReadonlySet<string>
+): string | undefined {
+  if (id === undefined) return undefined;
+  if (typeof id !== "string" || id === "") {
+    return `defaultLayout id must be a non-empty string, got ${quote(id)}`;
+  }
+  return widgetIds.has(id)
+    ? `defaultLayout names a card "${id}", which is a widget's id; give it a name no widget has`
+    : undefined;
+}
+
+/** An id for a further card of `widget` that no card has taken, for a fault to suggest. */
+function suggestedCardId(widget: string, taken: ReadonlySet<string>): string {
+  const name = widget.slice(widget.lastIndexOf("/") + 1);
+  let ordinal = 2;
+  while (taken.has(`${name}-${ordinal}`)) ordinal += 1;
+  return `${name}-${ordinal}`;
+}
+
 function defaultLayoutFaults(
   site: Record<string, unknown>,
   ctx: SiteDashboardContext
@@ -540,16 +629,26 @@ function defaultLayoutFaults(
   const sparse = sparseListProblem(site.defaultLayout, "defaultLayout");
   if (sparse !== undefined) return [fault("(defaultLayout)", sparse)];
   const entries: readonly unknown[] = site.defaultLayout;
+  const cards = entries.map(asCard);
+  // An optional card whose widget the install does not have is left out of
+  // the default (`defaultLayoutPlacements`), so it takes none of its room.
+  const placed = cards.filter(
+    card =>
+      !(
+        card?.optional === true &&
+        typeof card.widget === "string" &&
+        ctx.factsOf(card.widget) === undefined
+      )
+  ).length;
   const over =
-    entries.length > ctx.maxPlacements
+    placed > ctx.maxPlacements
       ? [
           fault(
             "(defaultLayout)",
-            `defaultLayout holds ${entries.length} cards, and a dashboard holds at most ${ctx.maxPlacements}`
+            `defaultLayout places ${placed} cards, and a dashboard holds at most ${ctx.maxPlacements}`
           ),
         ]
       : [];
-  const cards = entries.map(asCard);
   const each = cards.flatMap((card, index) => {
     if (card === undefined) {
       return [
@@ -571,7 +670,12 @@ function defaultLayoutFaults(
   const listed = cards.filter(
     (card): card is Record<string, unknown> => card !== undefined
   );
-  return [...over, ...each, ...repeatedFaults(listed, ctx)];
+  return [
+    ...over,
+    ...each,
+    ...repeatedFaults(listed, ctx),
+    ...cardIdFaults(listed, ctx),
+  ];
 }
 
 function replacementProblem(
