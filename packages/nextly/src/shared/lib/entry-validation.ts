@@ -222,24 +222,50 @@ function fieldJudgesFractions(field: ValidatableField): boolean {
 }
 
 /**
- * The whole-number floor, judged over the keys a beforeChange hook changed.
+ * The whole-number floor, judged over everything a beforeChange hook left
+ * changed — top-level values and numbers inside group and repeater rows.
  *
  * The hooks run after the validation gate and may transform or set any
  * value, so what they leave behind is a write this gate never saw: a hook
  * that produces a fraction would reach an integer column and let the
  * database decide — the dialect divergence the whole-number rule exists to
- * remove. Compared by reference against the snapshot taken before the hooks
- * ran: a number, string or boolean a hook leaves is always a replacement,
- * and a container a hook mutates in place is outside this check (the slug
- * re-sanitize after the same hooks reads the same top level).
+ * remove.
+ *
+ * Top-level scalars are compared by reference against the snapshot taken
+ * before the hooks ran — a number, string or boolean a hook leaves is
+ * always a replacement. Containers are compared by CONTENTS (`group` and
+ * `repeater` rows), because the hook runner recurses into those rows and
+ * its handlers mutate them in place: the parent's reference does not move
+ * even when a nested number did. Rows past the snapshot's own rows are
+ * hook-written whole, and every number in them is judged.
  *
  * Only number fields are judged — every other rule keeps its pre-hook
  * verdict — and hasMany elements are judged as values, indexed in the path.
  */
+/**
+ * The pre-hook copy the hook judgment compares against. Deep on purpose: the
+ * hook runner recurses into group and repeater rows and its handlers mutate
+ * those rows IN PLACE, so a shallow spread shares the nested object and a
+ * content comparison would see the hook's own result as unchanged. A payload
+ * is JSON-shaped, so `structuredClone` answers; the shallow fallback covers
+ * whatever exotic value it refuses, at the cost of nested-in-place visibility
+ * on that corner.
+ */
+export function snapshotForHookJudgment(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  try {
+    return structuredClone(data);
+  } catch {
+    return { ...data };
+  }
+}
+
 export function hookChangedWholeNumberIssues(
-  snapshot: Record<string, unknown>,
+  snapshot: Record<string, unknown> | undefined,
   data: Record<string, unknown>,
-  fields: ValidatableField[]
+  fields: ValidatableField[],
+  path = ""
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const byName = new Map(
@@ -248,11 +274,43 @@ export function hookChangedWholeNumberIssues(
       .map(field => [field.name as string, field])
   );
   for (const key of Object.keys(data)) {
-    if (data[key] === snapshot[key]) continue;
     const field = byName.get(key);
+    if (!field) continue;
+    const childPath = path ? `${path}.${key}` : key;
+
+    // A container's children are judged by CONTENTS, not by reference: the
+    // hook runner recurses into group and repeater rows and its handlers
+    // mutate those rows in place, so the parent's reference does not move
+    // even when a nested number did.
+    if (
+      (field.type === "group" || field.type === "repeater") &&
+      Array.isArray(field.fields)
+    ) {
+      const before = snapshot?.[key];
+      const after = data[key];
+      if (JSON.stringify(before ?? null) === JSON.stringify(after ?? null)) {
+        continue;
+      }
+      const rowsBefore = containerRows(before);
+      containerRows(after).forEach((row, index) => {
+        const rowPath =
+          field.type === "repeater" ? `${childPath}[${index}]` : childPath;
+        issues.push(
+          ...hookChangedWholeNumberIssues(
+            rowsBefore[index],
+            row,
+            field.fields as ValidatableField[],
+            rowPath
+          )
+        );
+      });
+      continue;
+    }
+
+    if (snapshot && data[key] === snapshot[key]) continue;
     // A fraction-capable field (decimal, float) keeps fractions; a
     // whole-number field is the one the floor judges.
-    if (!field || fieldJudgesFractions(field)) continue;
+    if (fieldJudgesFractions(field)) continue;
     const label = typeof field.label === "string" ? field.label : field.name;
     const value = data[key];
     const elements = field.hasMany && Array.isArray(value) ? value : [value];
@@ -265,7 +323,7 @@ export function hookChangedWholeNumberIssues(
         return;
       }
       issues.push({
-        path: field.hasMany ? `${key}[${index}]` : key,
+        path: field.hasMany ? `${childPath}[${index}]` : childPath,
         code: "INVALID_TYPE",
         message: `${label} must be a whole number.`,
       });
@@ -284,6 +342,24 @@ export function hookChangedWholeNumberIssues(
  * not one to refuse. Exported because anything deciding whether a document
  * would pass this validator has to leave the same fields out.
  */
+/**
+ * The row objects a container value holds: a repeater's array filtered to
+ * its object rows, a group's single object, anything else empty. Mirrors
+ * the row walk the hook runner recurses with.
+ */
+function containerRows(value: unknown): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (row): row is Record<string, unknown> =>
+        row !== null && typeof row === "object"
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    return [value as Record<string, unknown>];
+  }
+  return [];
+}
+
 export function isJudgedOnWrite(field: ValidatableField): boolean {
   return !isVirtualField(field);
 }

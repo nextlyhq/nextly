@@ -59,9 +59,9 @@ import {
 import { refusalIssues } from "../../../shared/lib/denied-change";
 import {
   hookChangedWholeNumberIssues,
+  snapshotForHookJudgment,
   validateEntryData,
   type ValidationIssue,
-  type ValidatableField,
 } from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
@@ -1598,7 +1598,7 @@ export class SingleMutationService extends BaseService {
       // which runs above at step 5 -- before validation -- so the hook that
       // documents itself as the last chance to shape a stored value saw data
       // the rules had not been applied to yet.
-      const hookSnapshot = { ...currentData };
+      const hookSnapshot = snapshotForHookJudgment(currentData);
       if (this.hookRegistry.hasHooks("beforeChange", hookCollection)) {
         const beforeChangeResult = await this.hookRegistry.execute(
           "beforeChange",
