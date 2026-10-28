@@ -497,6 +497,65 @@ for (const entry of DIALECTS) {
         }
       );
 
+      it.skipIf(dialect !== "sqlite")(
+        "refuses a SQLite rebuild that would lose AUTOINCREMENT and its sequence",
+        async () => {
+          // AUTOINCREMENT never reuses a key; the rebuilt table, declared without it, would hand
+          // out keys again from the highest one left, and drop the sequence's record.
+          const counters = (columnDefault: string): AppStreamTables => ({
+            owned: [
+              {
+                name: "app_counters",
+                columns: [
+                  {
+                    name: "id",
+                    type: "integer",
+                    nullable: false,
+                    primaryKey: true,
+                    autoIncrement: true,
+                  },
+                  {
+                    name: "label",
+                    type: "text",
+                    nullable: true,
+                    default: columnDefault,
+                  },
+                ],
+                indexes: [],
+              },
+            ],
+            contributed: new Map(),
+            baselines: new Map(),
+          });
+          await migrateCreate(heading("heading"), counters("'draft'"));
+          await migrate();
+          const [table] = await adapter.executeQuery<{ sql: string }>(
+            `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'app_counters'`
+          );
+          expect(table.sql).not.toMatch(/AUTOINCREMENT/i);
+          await exec(`ALTER TABLE "app_counters" RENAME TO "app_counters_old"`);
+          await exec(
+            table.sql.replace("PRIMARY KEY", "PRIMARY KEY AUTOINCREMENT")
+          );
+          await exec(`DROP TABLE "app_counters_old"`);
+          await exec(
+            `INSERT INTO "app_counters" ("id", "label") VALUES (1000, 'kept')`
+          );
+          const before = await definitionOf("app_counters");
+
+          await migrateCreate(heading("heading"), counters("'final'"));
+          await expect(migrate()).rejects.toThrow(
+            /would drop AUTOINCREMENT keys its schema does not track/
+          );
+
+          expect(await definitionOf("app_counters")).toEqual(before);
+          const [sequence] = await adapter.executeQuery<{ seq: number }>(
+            `SELECT seq FROM sqlite_sequence WHERE name = 'app_counters'`
+          );
+          expect(Number(sequence?.seq)).toBe(1000);
+        }
+      );
+
       it.skipIf(dialect !== "sqlite").each(["STRICT", "WITHOUT ROWID"])(
         "refuses a SQLite rebuild that would lose the table option %s",
         async option => {

@@ -33,7 +33,8 @@ function notes(
   dialect: SupportedDialect,
   column: string,
   columnDefault: string,
-  index?: { name: string; unique: boolean }
+  index?: { name: string; unique: boolean },
+  check?: boolean
 ): AppStreamTables {
   const spec: TableSpec = {
     name: "app_notes",
@@ -47,6 +48,13 @@ function notes(
       },
     ],
     indexes: index === undefined ? [] : [{ ...index, columns: [column] }],
+    ...(check === true
+      ? {
+          checks: [
+            { name: "app_notes_short", sql: `char_length(${column}) <= 60` },
+          ],
+        }
+      : {}),
   };
   return { owned: [spec], contributed: new Map(), baselines: new Map() };
 }
@@ -205,6 +213,25 @@ describe.each(DIALECTS)(
         );
       }
     });
+
+    it.skipIf(dialect === "sqlite")(
+      "renames the column before adding a check that names it, when the rename carries its index",
+      async () => {
+        // The kept index's create was the only statement the renames were placed ahead of; without
+        // it they must still come before a check that names the new column.
+        const index = { name: "uq_app_notes_lookup", unique: true };
+        await create({
+          appStream: notes(dialect, "label", "'draft'", index, true),
+        });
+        const { up } = await create({
+          appStream: notes(dialect, "caption", "'draft'", index, true),
+        });
+
+        expect(at(up, rename("app_notes", "label", "caption"))).toBeLessThan(
+          at(up, /ADD CONSTRAINT [`"]app_notes_short[`"] CHECK/)
+        );
+      }
+    );
 
     it.each([
       { name: "uq_app_notes_lookup", unique: true },

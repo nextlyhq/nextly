@@ -1717,17 +1717,18 @@ function applyRenameDecisions(
         : []
     )
   );
-  const tail =
-    keptByRename.size === 0
-      ? remaining
-      : remaining.filter(
-          op =>
-            !(
-              (op.type === "add_index" || op.type === "drop_index") &&
-              keptByRename.has(`${op.tableName}::${op.index.name}`)
-            )
-        );
-  return placeRenames(tail, renames);
+  // Placed first and filtered after: the kept index's create is what the renames are placed ahead
+  // of, so taking it out first would push them past a check that names the new column.
+  const placed = placeRenames(remaining, renames);
+  return keptByRename.size === 0
+    ? placed
+    : placed.filter(
+        op =>
+          !(
+            (op.type === "add_index" || op.type === "drop_index") &&
+            keptByRename.has(`${op.tableName}::${op.index.name}`)
+          )
+      );
 }
 
 /**
