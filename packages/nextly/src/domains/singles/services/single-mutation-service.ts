@@ -73,6 +73,7 @@ import {
   runFieldHooks,
   resolvedCallerGrants,
   type CallerGrants,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -371,6 +372,16 @@ export class SingleMutationService extends BaseService {
     );
   }
 
+  /**
+   * Where this service's Single gate and field rules read a visitor's Public
+   * grants: the read service's, built over the same database and
+   * access-control service, so a Single's writes and reads judge one Public
+   * role.
+   */
+  private get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return this.queryService.fieldRuleVisitor;
+  }
+
   // ============================================================
   // Public API
   // ============================================================
@@ -662,6 +673,7 @@ export class SingleMutationService extends BaseService {
         overrideAccess: params.overrideAccess,
         routeAuthorized: params.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
         authenticatedScope: params.authenticatedScope,
         logger: this.logger,
       });
@@ -678,7 +690,8 @@ export class SingleMutationService extends BaseService {
       // Resolved before the transaction: they take a pooled connection.
       const grants = await resolvedCallerGrants(
         params.user,
-        params.authenticatedScope
+        params.authenticatedScope,
+        this.fieldRuleVisitor
       );
       const took =
         singleMeta && companion
@@ -1046,6 +1059,7 @@ export class SingleMutationService extends BaseService {
         trusted: options.trusted,
         routeAuthorized: false,
         rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
         authenticatedScope: options.authenticatedScope,
         logger: this.logger,
       })
@@ -1175,7 +1189,11 @@ export class SingleMutationService extends BaseService {
     // The caller's grants, resolved before the transaction opens, as the
     // write resolves them: a pooled read issued while the transaction holds a
     // connection waits for that connection on a small pool.
-    const grants = await resolvedCallerGrants(params.user, undefined);
+    const grants = await resolvedCallerGrants(
+      params.user,
+      undefined,
+      this.fieldRuleVisitor
+    );
     // Read in a transaction of its own, which writes nothing: the gate reads
     // the live document through one.
     return this.adapter.transaction(async tx => {
@@ -1431,6 +1449,7 @@ export class SingleMutationService extends BaseService {
             user: options.user,
             overrideAccess: options.overrideAccess,
             rbacAccessControlService: this.rbacAccessControlService,
+            visitor: this.fieldRuleVisitor,
             authenticatedScope: options.authenticatedScope,
             logger: this.logger,
           })
@@ -1442,6 +1461,7 @@ export class SingleMutationService extends BaseService {
             // The route attests only an update it ran itself.
             routeAuthorized: gate === "update" && options.routeAuthorized,
             rbacAccessControlService: this.rbacAccessControlService,
+            visitor: this.fieldRuleVisitor,
             // A scoped API key is judged on its own grants here too, so the session
             // super-admin bypass does not apply to it on the primary update gate.
             authenticatedScope: options.authenticatedScope,
@@ -1578,7 +1598,9 @@ export class SingleMutationService extends BaseService {
       // never by its owner's.
       const writeGrants = callerAccessGrants(
         options.user,
-        options.authenticatedScope
+        options.authenticatedScope,
+        undefined,
+        this.fieldRuleVisitor
       );
       const singleWriteAccess = {
         ...fieldGroupWriteAccessOf(options),
@@ -1733,7 +1755,11 @@ export class SingleMutationService extends BaseService {
         singleMeta.versions?.drafts?.enabled === true &&
         options.overrideAccess !== true;
       const promoteGrants = mayReachPromoteGate
-        ? await resolvedCallerGrants(options.user, options.authenticatedScope)
+        ? await resolvedCallerGrants(
+            options.user,
+            options.authenticatedScope,
+            this.fieldRuleVisitor
+          )
         : undefined;
 
       // 6.25. Single-level beforeChange hooks, on data the validation gate has
@@ -1812,6 +1838,7 @@ export class SingleMutationService extends BaseService {
           // The route admitted a status change, not this edit.
           routeAuthorized: false,
           rbacAccessControlService: this.rbacAccessControlService,
+          visitor: this.fieldRuleVisitor,
           authenticatedScope: options.authenticatedScope,
           logger: this.logger,
         });
@@ -1893,6 +1920,7 @@ export class SingleMutationService extends BaseService {
                 // transition permission must actually run.
                 routeAuthorized: false,
                 rbacAccessControlService: this.rbacAccessControlService,
+                visitor: this.fieldRuleVisitor,
                 // A scoped API key is judged on its own publish/unpublish grant, not
                 // the key owner's — the route only checked `update` against the scope.
                 authenticatedScope: options.authenticatedScope,
@@ -3561,7 +3589,8 @@ export class SingleMutationService extends BaseService {
                   grants: callerAccessGrants(
                     options.user,
                     options.authenticatedScope,
-                    tx.getDrizzle()
+                    tx.getDrizzle(),
+                    this.fieldRuleVisitor
                   ),
                 },
                 // What a stored instance holds in each language: a held draft
@@ -4502,6 +4531,7 @@ export class SingleMutationService extends BaseService {
         entry: updatedDoc,
         user: options.user,
         overrideAccess: options.overrideAccess && !options.routeAuthorized,
+        visitor: this.fieldRuleVisitor,
       });
 
       return {
