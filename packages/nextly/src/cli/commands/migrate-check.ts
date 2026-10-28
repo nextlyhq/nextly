@@ -74,6 +74,7 @@ import {
 import {
   describeSettingsChange,
   settingsChangesFor,
+  type EntitySettingsRecord,
 } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
 import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
@@ -490,30 +491,9 @@ export async function runChecks(args: {
     return;
   }
 
-  // Check 5: settings changed with no migration for them. The delta is the
-  // one `migrate:create` writes a migration for. A newest snapshot written
-  // before settings were recorded says nothing about them, so its silence is
-  // never a difference: there is nothing to compare until the first
-  // `migrate:create` after upgrading records them.
-  const recorded = latest?.data.entities;
-  if (args.entities !== undefined && recorded !== undefined) {
-    const changes = settingsChangesFor(args.entities, recorded);
-    if (changes.length > 0) {
-      logger.error(
-        `SETTINGS_DRIFT: ${changes.length} entit${changes.length === 1 ? "y's" : "ies'"} settings changed with no migration.`
-      );
-      for (const change of changes.slice(0, 10)) {
-        logger.error(`  ~ ${describeSettingsChange(change)}`);
-      }
-      if (changes.length > 10) {
-        logger.error(`  ... and ${changes.length - 10} more`);
-      }
-      logger.error(
-        'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
-      );
-      process.exit(1);
-      return;
-    }
+  if (!settingsInStep(args.entities, latest?.data.entities, logger)) {
+    process.exit(1);
+    return;
   }
 
   logger.success(
@@ -524,6 +504,44 @@ export async function runChecks(args: {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * Check 6: settings changed with no migration for them, reported as errors.
+ * False when there are any.
+ *
+ * The delta is the one `migrate:create` writes a migration for. A newest
+ * snapshot written before settings were recorded says nothing about them, so
+ * its silence is never a difference: there is nothing to compare until the
+ * first `migrate:create` after upgrading records them.
+ */
+function settingsInStep(
+  entities:
+    | {
+        collections: readonly MinimalConfigEntity[];
+        singles: readonly MinimalConfigEntity[];
+        components: readonly MinimalConfigEntity[];
+      }
+    | undefined,
+  recorded: EntitySettingsRecord | undefined,
+  logger: CommandContext["logger"]
+): boolean {
+  if (entities === undefined || recorded === undefined) return true;
+  const changes = settingsChangesFor(entities, recorded);
+  if (changes.length === 0) return true;
+  logger.error(
+    `SETTINGS_DRIFT: ${changes.length} entit${changes.length === 1 ? "y's" : "ies'"} settings changed with no migration.`
+  );
+  for (const change of changes.slice(0, 10)) {
+    logger.error(`  ~ ${describeSettingsChange(change)}`);
+  }
+  if (changes.length > 10) {
+    logger.error(`  ... and ${changes.length - 10} more`);
+  }
+  logger.error(
+    'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
+  );
+  return false;
+}
 
 /**
  * What `nextly migrate` and `migrate:down` would make of each migration

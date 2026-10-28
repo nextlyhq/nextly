@@ -476,22 +476,13 @@ export async function generateMigration(
   //     touches (§4.12.7), and for any whose entity's settings changed: the row
   //     is where a Builder entity's settings live, so it travels with them.
   const touched = new Set(operations.map(operationTableName));
-  const settingsTables = tablesOfSettingsChanges(changedSettings, args);
-  if (args.metadataUpserts && args.metadataUpserts.length > 0) {
-    for (const m of args.metadataUpserts) {
-      if (touched.has(m.tableName) || settingsTables.has(m.tableName)) {
-        sqlStatements.push(m.sql);
-      }
-    }
-  }
-  // A row that travels only because its settings changed goes back with the
-  // rollback: the DOWN writes it as the previous snapshot recorded it. A row
-  // the previous snapshot has no record of has nothing to go back to.
-  for (const m of args.previousMetadataUpserts ?? []) {
-    if (settingsTables.has(m.tableName) && !touched.has(m.tableName)) {
-      downSqlStatements.push(m.sql);
-    }
-  }
+  const rows = registryRowsFor(
+    touched,
+    tablesOfSettingsChanges(changedSettings, args),
+    args
+  );
+  sqlStatements.push(...rows.up);
+  downSqlStatements.push(...rows.down);
 
   /*
    * 8. Compose file content + write both files.
@@ -669,6 +660,28 @@ export async function generateMigration(
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
     settingsChanges: changedSettings,
+  };
+}
+
+/**
+ * The Builder registry-row upserts a migration carries: UP writes the row of
+ * each table it touches and of each entity whose settings changed. A row that
+ * travels only because its settings changed goes back with the rollback, so
+ * DOWN writes it as the previous snapshot recorded it; a row the previous
+ * snapshot has no record of has nothing to go back to.
+ */
+function registryRowsFor(
+  touched: ReadonlySet<string>,
+  settingsTables: ReadonlySet<string>,
+  args: Pick<GenerateArgs, "metadataUpserts" | "previousMetadataUpserts">
+): { up: string[]; down: string[] } {
+  return {
+    up: (args.metadataUpserts ?? [])
+      .filter(m => touched.has(m.tableName) || settingsTables.has(m.tableName))
+      .map(m => m.sql),
+    down: (args.previousMetadataUpserts ?? [])
+      .filter(m => settingsTables.has(m.tableName) && !touched.has(m.tableName))
+      .map(m => m.sql),
   };
 }
 

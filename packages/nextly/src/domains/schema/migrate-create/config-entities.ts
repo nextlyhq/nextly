@@ -81,7 +81,7 @@ export function toMinimalEntities(
  * recorded. One that already carries settings is code-first and is left as it
  * is.
  */
-export function withBuilderSettings(
+function withBuilderSettings(
   merged: readonly MinimalConfigEntity[],
   manifestEntries: readonly { slug: string }[]
 ): MinimalConfigEntity[] {

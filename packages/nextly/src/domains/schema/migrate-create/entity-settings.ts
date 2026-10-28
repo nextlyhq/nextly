@@ -249,7 +249,7 @@ export function settingsRecordOf(entities: {
  * config still declares but whose settings are not known this run is left
  * alone rather than read as gone.
  */
-export function settingsChanges(
+function settingsChanges(
   previous: EntitySettingsRecord | null | undefined,
   desired: EntitySettingsRecord | undefined,
   declared: Record<SettingsEntityKind, ReadonlySet<string>>
