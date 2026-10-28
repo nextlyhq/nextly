@@ -100,6 +100,9 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       consoleLogger.warn(line)
   ) {}
 
+  /** Whether this dispatch has printed its consent notices yet. */
+  private noticed = false;
+
   /**
    * The column drops judged by the data-loss consent (`NEXTLY_ACCEPT_DATA_LOSS`,
    * which `db:sync --accept-data-loss` sets for its run, or the earlier
@@ -113,7 +116,8 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
    * no event of their own, so they are judged here too (`keptDrops`). One the
    * prompt was answered "drop and add" for is agreed to by that answer, unless
    * the consent names its targets, which then has to cover it like any other
-   * drop; one the prompt never showed is judged like any other drop.
+   * drop; one the prompt never showed is judged like any other drop. The
+   * rows a NOT NULL prompt was answered "delete" for come in as answered too.
    */
   private async judgeDrops(
     drops: readonly DestructiveDropEvent[],
@@ -129,7 +133,11 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       env: process.env,
       honours: ["NEXTLY_ALLOW_CODE_FIRST_DROPS"],
     });
-    for (const notice of deprecationNotices(consent)) this.print(notice);
+    // Once per dispatch, however many times its deletions are judged.
+    if (!this.noticed) {
+      for (const notice of deprecationNotices(consent)) this.print(notice);
+      this.noticed = true;
+    }
     const named = consent.given !== null && consent.given.targets !== "all";
     const verdict = await judgeDataLoss({
       deletions: [
@@ -173,6 +181,7 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     channel: "browser" | "terminal";
   }): Promise<PromptDispatchResult> {
     const { candidates, events } = args;
+    this.noticed = false;
 
     // Fast path: nothing to ask, nothing to do.
     if (candidates.length === 0 && events.length === 0) {
@@ -386,6 +395,26 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
       } else {
         resolutions.push({ kind, eventId: event.id });
       }
+    }
+
+    // Removing the rows a NOT NULL answer named is a deletion in their
+    // table, judged like a drop the prompt was answered for: the answer
+    // agrees to it, unless the consent names its targets, which then has to
+    // cover the table. Judged before the outro, so nothing has run.
+    const removedRows: Deletion[] = resolutions.flatMap(resolution => {
+      if (resolution.kind !== "delete_nonconforming") return [];
+      const event = others.find(e => e.id === resolution.eventId);
+      if (event === undefined) return [];
+      return [
+        {
+          kind: "rows" as const,
+          table: event.tableName,
+          count: "tableRowCount" in event ? event.tableRowCount : undefined,
+        },
+      ];
+    });
+    if (removedRows.length > 0) {
+      await this.judgeDrops([], true, { answered: removedRows, unasked: [] });
     }
 
     clack.outro("Resolutions confirmed");

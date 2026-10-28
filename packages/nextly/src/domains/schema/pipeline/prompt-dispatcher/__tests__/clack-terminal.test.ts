@@ -703,6 +703,69 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
     expect(result.proceed).toBe(false);
   });
 
+  /** A NOT NULL change on a table holding rows without a value. */
+  const notNullEvent = (table: string) => ({
+    id: `add_not_null_with_nulls:${table}.summary`,
+    kind: "add_not_null_with_nulls" as const,
+    tableName: table,
+    columnName: "summary",
+    nullCount: 2,
+    tableRowCount: 9,
+    applicableResolutions: [
+      "provide_default",
+      "make_optional",
+      "delete_nonconforming",
+      "abort",
+    ] as ResolutionKind[],
+  });
+
+  it("refuses rows a NOT NULL answer would delete that the consent's list leaves out", async () => {
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_posts.summary";
+    mockSelect.mockResolvedValue("delete_nonconforming");
+    const { dispatcher } = listingDispatcher();
+    await expect(
+      dispatcher.dispatch({
+        candidates: [],
+        events: [notNullEvent("dc_pages")],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).rejects.toThrow(
+      /does not cover 1 deletion:\n {2}- rows of dc_pages \(the table has 9 rows\)/
+    );
+  });
+
+  it("deletes those rows with consent naming their table, or as answered without a list", async () => {
+    mockSelect.mockResolvedValue("delete_nonconforming");
+    const answered = listingDispatcher();
+    const result = await answered.dispatcher.dispatch({
+      candidates: [],
+      events: [notNullEvent("dc_pages")],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.resolutions).toEqual([
+      {
+        kind: "delete_nonconforming",
+        eventId: "add_not_null_with_nulls:dc_pages.summary",
+      },
+    ]);
+    expect(answered.printed).toContain(
+      "  - rows of dc_pages (the table has 9 rows)"
+    );
+
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_pages";
+    const named = listingDispatcher();
+    await expect(
+      named.dispatcher.dispatch({
+        candidates: [],
+        events: [notNullEvent("dc_pages")],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).resolves.toMatchObject({ proceed: true });
+  });
+
   it("refuses, without asking, a drop a consent naming other columns leaves out", async () => {
     process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_posts.byline";
     const { dispatcher } = listingDispatcher();
