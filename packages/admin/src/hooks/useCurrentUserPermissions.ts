@@ -674,7 +674,12 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
     // Kept for the screen; a new screen marks it stale (the effect below).
     staleTime: Infinity,
     refetchOnMount: true,
-    refetchOnWindowFocus: true,
+    // Asked again whenever the admin regains focus or the connection returns,
+    // however fresh: an answer kept for the screen is never stale, so the
+    // default (refetch only when stale) would keep a role changed elsewhere
+    // until the next screen.
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
     // Asked again on the schedule when its own refresh failed with no answer
     // that counts, and while the content answer has none, whose end it
     // would otherwise be told.

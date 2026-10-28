@@ -9,7 +9,11 @@
  * allows. A hook still reading the slugs passes every case where the two
  * agree.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1509,5 +1513,26 @@ describe("one screen's callers", () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(permissionAsks()).toBe(asked + 1);
+  });
+
+  it("ask again when the admin regains focus, on the same screen", async () => {
+    // An answer kept for the screen is never stale, so a focus refetch that
+    // waits for staleness would keep a role granted or revoked elsewhere until
+    // the next screen.
+    const client = newClient();
+    const shell = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
+    const asked = permissionAsks();
+    try {
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
+    } finally {
+      focusManager.setFocused(undefined);
+    }
   });
 });
