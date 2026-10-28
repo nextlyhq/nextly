@@ -200,6 +200,29 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to read system settings",
   },
   {
+    name: "Create Settings",
+    slug: "create-settings",
+    action: "create",
+    resource: "settings",
+    description:
+      "Permission to add settings such as image sizes, user fields and field groups",
+  },
+  {
+    name: "Update Settings",
+    slug: "update-settings",
+    action: "update",
+    resource: "settings",
+    description: "Permission to change system settings",
+  },
+  {
+    name: "Delete Settings",
+    slug: "delete-settings",
+    action: "delete",
+    resource: "settings",
+    description:
+      "Permission to remove settings such as image sizes, user fields and field groups",
+  },
+  {
     name: "Manage Email Providers",
     slug: "manage-email-providers",
     action: "manage",
@@ -219,6 +242,13 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     action: "read",
     resource: "email-providers",
     description: "Permission to read email providers",
+  },
+  {
+    name: "Update Email Providers",
+    slug: "update-email-providers",
+    action: "update",
+    resource: "email-providers",
+    description: "Permission to change email providers",
   },
   {
     name: "Delete Email Providers",
@@ -247,6 +277,13 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     action: "read",
     resource: "email-templates",
     description: "Permission to read email templates",
+  },
+  {
+    name: "Update Email Templates",
+    slug: "update-email-templates",
+    action: "update",
+    resource: "email-templates",
+    description: "Permission to change email templates",
   },
   {
     name: "Delete Email Templates",
