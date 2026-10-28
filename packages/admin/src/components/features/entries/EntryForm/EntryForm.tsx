@@ -98,6 +98,7 @@ import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryMetaStrip } from "./EntryMetaStrip";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
+import { readerStatusWrite, statusWritesHeld } from "./reader-status-write";
 import { deleteHeld, submitHeld } from "./submit-outcome";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
@@ -355,6 +356,7 @@ export function EntryForm({
   const {
     form,
     handleSubmit: submitEntry,
+    writeStatus,
     handleDelete: deleteEntry,
     handleDiscardWorkingDraft: discardWorkingDraft,
     handleCancel,
@@ -644,6 +646,13 @@ export function EntryForm({
   // Changing the content is held for a reader as well. Deleting is not: it
   // follows its own permission, and is offered only with it.
   const editsHeld = writesHeld || !mayEdit;
+  // Publishing every language changes only each language's status, so a
+  // reader whose document nothing else holds is still offered it.
+  const publishAllHeld = statusWritesHeld({
+    editsHeld,
+    refused: readOnlyForReader,
+    writesHeld,
+  });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
   const versionWritesHeld = lock.actionsDisabled || updatesHeld;
@@ -680,7 +689,16 @@ export function EntryForm({
     // default lets the browser submit the form natively — reloading the page
     // and dropping the reader's history state.
     event?.preventDefault();
-    return editsHeld ? Promise.resolve(submitHeld) : submitEntry(event, intent);
+    if (!editsHeld) return submitEntry(event, intent);
+    // A reader's publish and unpublish still go, as the status alone, which
+    // their own permissions judge; everything else stays held.
+    const status = readerStatusWrite(intent, {
+      refused: readOnlyForReader,
+      writesHeld,
+    });
+    return status === undefined
+      ? Promise.resolve(submitHeld)
+      : writeStatus(status);
   };
   const handleDelete = () =>
     writesHeld ? Promise.resolve(deleteHeld) : deleteEntry();
@@ -1219,6 +1237,7 @@ export function EntryForm({
                                       onLocaleChange={onLocaleChange}
                                       hasStatus={hasStatus}
                                       actionsDisabled={editsHeld}
+                                      publishAllDisabled={publishAllHeld}
                                       // A reader may still open the other languages.
                                       navigationDisabled={writesHeld}
                                     />
@@ -1293,6 +1312,7 @@ export function EntryForm({
                                         ? {}
                                         : { onLocaleChange })}
                                       actionsDisabled={editsHeld}
+                                      publishAllDisabled={publishAllHeld}
                                       // A reader may still open the other languages.
                                       navigationDisabled={writesHeld}
                                     />
