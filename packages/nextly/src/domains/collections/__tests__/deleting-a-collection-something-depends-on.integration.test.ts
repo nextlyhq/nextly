@@ -749,7 +749,8 @@ describeEachDialect("deleting a collection something depends on", dialect => {
       registry: registryOf(t),
       adapter: t.adapter,
       currentSlugs,
-      force: true,
+      // Every drop approved, as `--accept-data-loss` approves it.
+      approve: () => Promise.resolve(true),
       extensionSchema: () => Promise.resolve(getActiveExtensionSchema(dialect)),
     });
 
@@ -909,7 +910,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
         registry: registryOf(current),
         adapter: current.adapter,
         currentSlugs: [],
-        force: true,
+        approve: () => Promise.resolve(true),
         extensionSchema: () =>
           Promise.reject(new Error("a plugin's schema hook threw")),
       })

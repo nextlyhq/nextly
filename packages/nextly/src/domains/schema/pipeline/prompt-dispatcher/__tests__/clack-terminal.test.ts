@@ -60,15 +60,47 @@ const lossyCandidate = (): RenameCandidate => ({
   defaultSuggestion: "rename",
 });
 
-const dropEvent = (col: string, type = "text", rows = 5) => ({
+const dropEvent = (col: string, type = "text", rows = 5, values = 3) => ({
   id: `destructive_drop:dc_posts.${col}`,
   kind: "destructive_drop" as const,
   tableName: "dc_posts",
   columnName: col,
   columnType: type,
   tableRowCount: rows,
+  nonEmptyValues: values,
   applicableResolutions: ["confirm_drop", "abort"] as ResolutionKind[],
 });
+
+/** A dispatcher whose listing is collected rather than printed. */
+function listingDispatcher(): {
+  dispatcher: ClackTerminalPromptDispatcher;
+  printed: string[];
+} {
+  const printed: string[] = [];
+  return {
+    dispatcher: new ClackTerminalPromptDispatcher(line => printed.push(line)),
+    printed,
+  };
+}
+
+/** Runs `body` with the environment variables set, restoring them after. */
+async function withEnv(
+  vars: Record<string, string>,
+  body: () => Promise<void>
+): Promise<void> {
+  const before = Object.fromEntries(
+    Object.keys(vars).map(key => [key, process.env[key]])
+  );
+  Object.assign(process.env, vars);
+  try {
+    await body();
+  } finally {
+    for (const [key, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
 
 describe("ClackTerminalPromptDispatcher - non-TTY", () => {
   let originalStdinIsTTY: boolean | undefined;
@@ -245,6 +277,109 @@ describe("ClackTerminalPromptDispatcher - non-TTY", () => {
       { kind: "confirm_drop", eventId: "destructive_drop:dc_posts.excerpt" },
       { kind: "confirm_drop", eventId: "destructive_drop:dc_posts.byline" },
     ]);
+  });
+
+  it("refuses a drop without consent at once, naming the consent that covers it", async () => {
+    const { dispatcher } = listingDispatcher();
+    await expect(
+      dispatcher.dispatch({
+        candidates: [],
+        events: [dropEvent("excerpt"), dropEvent("byline")],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).rejects.toThrow(
+      /column dc_posts\.excerpt \(3 non-empty values\)[\s\S]*NEXTLY_ACCEPT_DATA_LOSS=dc_posts\.excerpt,dc_posts\.byline/
+    );
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it("refuses every drop when the consent names only one, naming the other", async () => {
+    await withEnv({ NEXTLY_ACCEPT_DATA_LOSS: "dc_posts.excerpt" }, async () => {
+      const { dispatcher } = listingDispatcher();
+      const outcome = dispatcher.dispatch({
+        candidates: [],
+        events: [dropEvent("excerpt"), dropEvent("byline")],
+        classification: "interactive",
+        channel: "terminal",
+      });
+      await expect(outcome).rejects.toThrow(
+        /does not cover 1 deletion:\n {2}- column dc_posts\.byline/
+      );
+      await expect(outcome).rejects.not.toThrow(/- column dc_posts\.excerpt/);
+    });
+  });
+
+  it("lets NEXTLY_ALLOW_CODE_FIRST_DROPS widen no consent that names its drops", async () => {
+    await withEnv(
+      {
+        NEXTLY_ACCEPT_DATA_LOSS: "dc_posts.excerpt",
+        NEXTLY_ALLOW_CODE_FIRST_DROPS: "1",
+      },
+      async () => {
+        const { dispatcher, printed } = listingDispatcher();
+        await expect(
+          dispatcher.dispatch({
+            candidates: [],
+            events: [dropEvent("excerpt"), dropEvent("byline")],
+            classification: "interactive",
+            channel: "terminal",
+          })
+        ).rejects.toThrow(
+          /does not cover 1 deletion:\n {2}- column dc_posts\.byline/
+        );
+        expect(printed[0]).toMatch(/NEXTLY_ALLOW_CODE_FIRST_DROPS is ignored/);
+      }
+    );
+  });
+
+  it("drops every column of a table the consent names", async () => {
+    await withEnv({ NEXTLY_ACCEPT_DATA_LOSS: "dc_posts" }, async () => {
+      const { dispatcher } = listingDispatcher();
+      const result = await dispatcher.dispatch({
+        candidates: [],
+        events: [dropEvent("excerpt"), dropEvent("byline")],
+        classification: "interactive",
+        channel: "terminal",
+      });
+      expect(result.resolutions).toHaveLength(2);
+    });
+  });
+
+  it("prints every column the consent without targets drops, with its values", async () => {
+    await withEnv({ NEXTLY_ACCEPT_DATA_LOSS: "1" }, async () => {
+      const { dispatcher, printed } = listingDispatcher();
+      await dispatcher.dispatch({
+        candidates: [],
+        events: [
+          dropEvent("excerpt", "text", 5, 3),
+          dropEvent("byline", "text", 5, 0),
+        ],
+        classification: "interactive",
+        channel: "terminal",
+      });
+      expect(printed).toEqual([
+        "Deleting 2 items, with consent:",
+        "  - column dc_posts.excerpt (3 non-empty values)",
+        "  - column dc_posts.byline (0 non-empty values)",
+      ]);
+    });
+  });
+
+  it("honours NEXTLY_ALLOW_CODE_FIRST_DROPS, naming it deprecated", async () => {
+    await withEnv({ NEXTLY_ALLOW_CODE_FIRST_DROPS: "1" }, async () => {
+      const { dispatcher, printed } = listingDispatcher();
+      const result = await dispatcher.dispatch({
+        candidates: [],
+        events: [dropEvent("excerpt")],
+        classification: "interactive",
+        channel: "terminal",
+      });
+      expect(result.resolutions).toHaveLength(1);
+      expect(printed[0]).toMatch(
+        /NEXTLY_ALLOW_CODE_FIRST_DROPS is deprecated.*NEXTLY_ACCEPT_DATA_LOSS/
+      );
+    });
   });
 
   it("still throws without a TTY when the opt-in batch includes a rename candidate", async () => {
@@ -462,7 +597,7 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
 
   it("user confirms a single drop; emits one confirm_drop resolution", async () => {
     mockConfirm.mockResolvedValue(true);
-    const dispatcher = new ClackTerminalPromptDispatcher();
+    const { dispatcher, printed } = listingDispatcher();
     const result = await dispatcher.dispatch({
       candidates: [],
       events: [dropEvent("excerpt", "text", 5)],
@@ -474,8 +609,10 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
       { kind: "confirm_drop", eventId: "destructive_drop:dc_posts.excerpt" },
     ]);
     expect(mockConfirm).toHaveBeenCalledTimes(1);
-    // The note rendered above the prompt surfaces the type + row count.
-    expect(mockNote).toHaveBeenCalled();
+    // Listed above the question, with what the column holds.
+    expect(printed).toContain(
+      "  - column dc_posts.excerpt (3 non-empty values)"
+    );
   });
 
   it("user declines a drop; proceed=false and the pipeline aborts", async () => {
@@ -491,9 +628,9 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
     expect(result.resolutions).toEqual([]);
   });
 
-  it("prompts once per destructive_drop event", async () => {
+  it("lists every drop, then asks once", async () => {
     mockConfirm.mockResolvedValue(true);
-    const dispatcher = new ClackTerminalPromptDispatcher();
+    const { dispatcher, printed } = listingDispatcher();
     const result = await dispatcher.dispatch({
       candidates: [],
       events: [
@@ -507,7 +644,140 @@ describe("ClackTerminalPromptDispatcher - destructive_drop events", () => {
     expect(result.proceed).toBe(true);
     expect(result.resolutions).toHaveLength(3);
     expect(result.resolutions.every(r => r.kind === "confirm_drop")).toBe(true);
-    expect(mockConfirm).toHaveBeenCalledTimes(3);
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(printed).toEqual([
+      "This deletes 3 items, which cannot be undone:",
+      "  - column dc_posts.excerpt (3 non-empty values)",
+      "  - column dc_posts.byline (3 non-empty values)",
+      "  - column dc_posts.subtitle (3 non-empty values)",
+    ]);
+  });
+
+  it("refuses a drop chosen at a rename prompt that the consent's list leaves out", async () => {
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_posts.summary";
+    mockSelect.mockResolvedValue("drop_and_add");
+    const { dispatcher } = listingDispatcher();
+    await expect(
+      dispatcher.dispatch({
+        candidates: [candidate("title", "name")],
+        events: [],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).rejects.toThrow(
+      /does not cover 1 deletion:\n {2}- column dc_posts\.title/
+    );
+  });
+
+  it("takes a drop chosen at a rename prompt as asked, and lists it", async () => {
+    mockSelect.mockResolvedValue("drop_and_add");
+    const { dispatcher, printed } = listingDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [candidate("title", "name")],
+      events: [],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.proceed).toBe(true);
+    expect(mockConfirm).not.toHaveBeenCalled();
+    expect(printed).toContain("  - column dc_posts.title");
+  });
+
+  it("asks about a drop whose rename prompt was never shown", async () => {
+    // `title` and `body` were both removed and `name` added. Renaming `title`
+    // to `name` consumes `name`, so `body` is never asked about at the rename
+    // prompt, and its drop has to be asked about like any other.
+    mockSelect.mockResolvedValue("rename:name");
+    mockConfirm.mockResolvedValue(false);
+    const { dispatcher, printed } = listingDispatcher();
+    const result = await dispatcher.dispatch({
+      candidates: [candidate("title", "name"), candidate("body", "name")],
+      events: [],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(mockSelect).toHaveBeenCalledTimes(1);
+    expect(mockConfirm).toHaveBeenCalledTimes(1);
+    expect(printed).toContain("  - column dc_posts.body");
+    expect(printed).not.toContain("  - column dc_posts.title");
+    expect(result.proceed).toBe(false);
+  });
+
+  /** A NOT NULL change on a table holding rows without a value. */
+  const notNullEvent = (table: string) => ({
+    id: `add_not_null_with_nulls:${table}.summary`,
+    kind: "add_not_null_with_nulls" as const,
+    tableName: table,
+    columnName: "summary",
+    nullCount: 2,
+    tableRowCount: 9,
+    applicableResolutions: [
+      "provide_default",
+      "make_optional",
+      "delete_nonconforming",
+      "abort",
+    ] as ResolutionKind[],
+  });
+
+  it("refuses rows a NOT NULL answer would delete that the consent's list leaves out", async () => {
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_posts.summary";
+    mockSelect.mockResolvedValue("delete_nonconforming");
+    const { dispatcher } = listingDispatcher();
+    await expect(
+      dispatcher.dispatch({
+        candidates: [],
+        events: [notNullEvent("dc_pages")],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).rejects.toThrow(
+      /does not cover 1 deletion:\n {2}- rows of dc_pages \(the table has 9 rows\)/
+    );
+  });
+
+  it("deletes those rows with consent naming their table, or as answered without a list", async () => {
+    mockSelect.mockResolvedValue("delete_nonconforming");
+    const answered = listingDispatcher();
+    const result = await answered.dispatcher.dispatch({
+      candidates: [],
+      events: [notNullEvent("dc_pages")],
+      classification: "interactive",
+      channel: "terminal",
+    });
+    expect(result.resolutions).toEqual([
+      {
+        kind: "delete_nonconforming",
+        eventId: "add_not_null_with_nulls:dc_pages.summary",
+      },
+    ]);
+    expect(answered.printed).toContain(
+      "  - rows of dc_pages (the table has 9 rows)"
+    );
+
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_pages";
+    const named = listingDispatcher();
+    await expect(
+      named.dispatcher.dispatch({
+        candidates: [],
+        events: [notNullEvent("dc_pages")],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).resolves.toMatchObject({ proceed: true });
+  });
+
+  it("refuses, without asking, a drop a consent naming other columns leaves out", async () => {
+    process.env.NEXTLY_ACCEPT_DATA_LOSS = "dc_posts.byline";
+    const { dispatcher } = listingDispatcher();
+    await expect(
+      dispatcher.dispatch({
+        candidates: [],
+        events: [dropEvent("excerpt")],
+        classification: "interactive",
+        channel: "terminal",
+      })
+    ).rejects.toThrow(/does not cover[\s\S]*column dc_posts\.excerpt/);
+    expect(mockConfirm).not.toHaveBeenCalled();
   });
 
   it("NEXTLY_ALLOW_CODE_FIRST_DROPS=1 auto-confirms every drop with no clack interaction", async () => {
