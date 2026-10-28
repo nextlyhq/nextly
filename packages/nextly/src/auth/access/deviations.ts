@@ -25,9 +25,6 @@ export const DEVIATIONS = [
   // answers `true` alone, where the decision also reads the Public role's
   // permissions.
   "visitor-write-by-rule",
-  // A publish or an unpublish is judged on its own permission and rule, not
-  // on update's as well.
-  "lifecycle-judged-alone",
   // Without the access-control service, no rule is read, and a signed-in
   // user's grants are read only where a way in reads them without it: the
   // collection gate and relationship population judge them alone, while the
@@ -42,10 +39,6 @@ export const DEVIATIONS = [
   // A route that accepts any of several permissions asks no rule, for people
   // or keys, even where the target declares one.
   "any-of-skips-rules",
-  // A route asking one permission on a system resource, and the
-  // system-resource readers, do not count that resource's `manage-`
-  // permission as read, create, update or delete on it.
-  "manage-not-counted",
   // A read with no caller, a visitor or a plugin's person, keeps the media
   // rows it populates, where the decision refuses a caller with no grant.
   "visitor-keeps-media",
@@ -56,7 +49,7 @@ export const DEVIATIONS = [
   // resource, a super-admin's included.
   "can-refuses-empty-action-or-resource",
   // A key holds a named permission by its stored slug alone: the target's
-  // rule is not read, nor, for a publish or an unpublish, update's.
+  // rule is not read.
   "holds-permission-key-skips-rules",
   // The schema list shows a collection to whoever holds its read permission,
   // without reading the collection's read rule.

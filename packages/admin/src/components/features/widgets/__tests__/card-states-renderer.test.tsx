@@ -3,8 +3,8 @@
  * from the plausible wrong one: "not available" drawn as an error with Retry, an empty list
  * drawn as a blank body, a first load drawn as an empty busy card.
  */
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   DashboardWidget,
@@ -14,12 +14,13 @@ import type {
 import { UNAVAILABLE_TITLE } from "../frame/states";
 import { resolveWidgetOutcome } from "../outcome";
 import { WidgetRenderer } from "../WidgetRenderer";
+import { gridBounds } from "./grid-bounds";
 
 const list: DashboardWidget = {
   id: "core/recent-posts",
   title: "Recent posts",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "collection:posts", op: "list", select: ["title"] },
 };
 
@@ -71,6 +72,75 @@ describe("card states from a widget's answer", () => {
     ).toBeInTheDocument();
   });
 
+  it("asks for a setting the widget needs as its empty state, not as an error", () => {
+    const needs: WidgetSlot = {
+      ok: false,
+      error: "No collection chosen yet",
+      code: "needs-setting",
+      setting: "Collection",
+    };
+    expect(resolveWidgetOutcome(list, needs)).toEqual({
+      state: "empty",
+      empty: {
+        title: "No collection chosen yet",
+        action: { label: "Choose collection", opensSettings: true },
+      },
+    });
+    render(
+      <WidgetRenderer definition={list} slot={needs} onRetry={() => {}} />
+    );
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "No collection chosen yet"
+    );
+    // Retrying would ask the same unanswerable question again.
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+    // And with no way to open the card's settings here, no button that would,
+    // but the card still says where the setting is chosen.
+    expect(
+      screen.queryByRole("button", { name: "Choose collection" })
+    ).toBeNull();
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Choose collection in the card's settings."
+    );
+  });
+
+  it("opens the card's settings from a missing setting's empty state, in one click", async () => {
+    const needs: WidgetSlot = {
+      ok: false,
+      error: "No collection chosen yet",
+      code: "needs-setting",
+      setting: "Collection",
+    };
+    const open = vi.fn();
+    render(
+      <WidgetRenderer definition={list} slot={needs} onOpenSettings={open} />
+    );
+    // The button says how, so no sentence beside it says the same.
+    expect(screen.getByTestId("card-empty")).not.toHaveTextContent(
+      "in the card's settings"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Choose collection" }));
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it("takes a card its widget does not show for this person off the dashboard", () => {
+    const notShown: WidgetSlot = {
+      ok: false,
+      error: "Not shown for you",
+      code: "not-shown",
+    };
+    expect(resolveWidgetOutcome(list, notShown)).toEqual({
+      state: "not-shown",
+    });
+    render(
+      <WidgetRenderer definition={list} slot={notShown} onRetry={() => {}} />
+    );
+    expect(
+      screen.getByRole("region", { name: "Recent posts" })
+    ).toHaveAttribute("data-hidden-empty");
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+  });
+
   it("draws a list with no rows as the frame's empty state", () => {
     const empty: WidgetSlot = { ok: true, result: { op: "list", items: [] } };
     expect(resolveWidgetOutcome(list, empty)).toMatchObject({ state: "empty" });
@@ -84,5 +154,45 @@ describe("card states from a widget's answer", () => {
       "data-shape",
       "rows"
     );
+  });
+});
+
+describe("an empty card whose declared action opens its settings", () => {
+  const note: DashboardWidget = {
+    id: "core/note",
+    title: "Note",
+    archetype: "custom",
+    size: gridBounds(4),
+    serverData: true,
+    component: "core#Note",
+    declaredEmpty: {
+      title: "Nothing written yet.",
+      action: { label: "Write a note", opensSettings: true },
+    },
+  };
+  const empty: WidgetSlot = {
+    ok: true,
+    empty: true,
+    result: { op: "data", data: { text: "" } },
+  };
+
+  it("draws a button that opens them, where the card can", () => {
+    const open = vi.fn();
+    render(
+      <WidgetRenderer definition={note} slot={empty} onOpenSettings={open} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Write a note" }));
+    expect(open).toHaveBeenCalledOnce();
+    // A button, not a link somewhere: the settings are the card's own.
+    expect(screen.queryByRole("link", { name: "Write a note" })).toBeNull();
+  });
+
+  it("draws the words alone where the card cannot open them", () => {
+    // A preview, or a reader who cannot change this card: no step they cannot take.
+    render(<WidgetRenderer definition={note} slot={empty} />);
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Nothing written yet."
+    );
+    expect(screen.queryByRole("button", { name: "Write a note" })).toBeNull();
   });
 });

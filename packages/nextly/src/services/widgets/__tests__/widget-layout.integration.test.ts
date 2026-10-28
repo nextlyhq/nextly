@@ -14,6 +14,10 @@
  * - **`id` is `varchar(191)`**, which only MySQL enforces. A scope id that fits
  *   on two dialects and truncates on the third is a reader whose layout lands
  *   on somebody else's row.
+ * - **The format version is read from the stored text**, which each dialect
+ *   holds in its own column type (`text`, `mediumtext`). A row of an earlier
+ *   format is no saved arrangement, and is replaced only by its owner's next
+ *   write; both are proven against a real row's encoding.
  *
  * SQLite runs with no URL; PostgreSQL and MySQL self-skip locally and run in
  * CI's dialect matrix.
@@ -29,6 +33,7 @@ import {
 } from "../../../plugins/test-nextly";
 import {
   layoutIsArranged,
+  serializeLayout,
   type WidgetPlacement,
 } from "../../../domains/widgets/layout";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -60,7 +65,8 @@ function placement(patch: Partial<WidgetPlacement> = {}): WidgetPlacement {
   return {
     id: "p1",
     widgetId: "core/team",
-    width: "full",
+    w: 12,
+    h: 3,
     removed: false,
     ...patch,
   };
@@ -98,14 +104,15 @@ function layoutSuite(
       expect(await countLayoutRows(service)).toBe(startingRows);
     });
 
-    it("round-trips an arrangement", async () => {
+    it("round-trips an arrangement, each card's w and h included", async () => {
       const scope = `u-roundtrip-${label}-${RUN}`;
       const placements = [
-        placement({ id: "a", width: "third" }),
+        placement({ id: "a", w: 4, h: 2 }),
         placement({
           id: "b",
           widgetId: "core/other",
-          width: "quarter",
+          w: 1,
+          h: 11,
           removed: true,
           // Settings are opaque to core and must survive a real write as they
           // were sent: nested values, arrays, and text outside ASCII.
@@ -120,6 +127,28 @@ function layoutSuite(
       expect(read.unreadable).toBe(false);
       expect(read.version).toBe(1);
       expect(read.layout?.placements).toEqual(placements);
+
+      // And the text the database holds is the version 4 shape, a card's size
+      // stored as `w` and `h` and nothing else.
+      const row = await readRawLayout(service, layoutRowId("user", scope));
+      expect(JSON.parse(String(row.layout))).toEqual({
+        schemaVersion: 4,
+        placements: [
+          { id: "a", widgetId: "core/team", w: 4, h: 2, removed: false },
+          {
+            id: "b",
+            widgetId: "core/other",
+            w: 1,
+            h: 11,
+            removed: true,
+            config: {
+              range: 30,
+              labels: ["Ünïcode", "日本"],
+              nested: { a: 1 },
+            },
+          },
+        ],
+      });
     });
 
     it("keeps whether a row was arranged through a real write", async () => {
@@ -168,7 +197,7 @@ function layoutSuite(
       const second = await service.saveLayout(
         "user",
         scope,
-        [placement({ id: "moved", width: "half" })],
+        [placement({ id: "moved", w: 6 })],
         1
       );
 
@@ -275,91 +304,74 @@ function layoutSuite(
       expect(read.version).toBe(1);
     });
 
-    it("converts a columns-format row on read, keeping every card", async () => {
-      // Written as an earlier release wrote it, with every field that format
-      // stored, so the conversion is proven against a real row's encoding.
-      const scope = `u-convert-${label}-${RUN}`;
-      await service.saveLayout("user", scope, [placement()], 0);
-      await writeRawLayout(
-        service,
-        layoutRowId("user", scope),
-        JSON.stringify({
-          schemaVersion: 2,
-          columnCount: 3,
-          placements: [
-            {
-              id: "c1r1",
-              widgetId: "w/a",
-              column: 1,
-              order: 10,
-              hidden: false,
-              size: "sm",
-            },
-            {
-              id: "c0r0",
-              widgetId: "w/b",
-              column: 0,
-              order: 0,
-              hidden: true,
-              size: "xl",
-              height: "tall",
-              config: { range: 7 },
-            },
-            { id: "c1r0", widgetId: "w/c", column: 1, order: 0, hidden: false },
-            {
-              id: "c0r1",
-              widgetId: "w/d",
-              column: 0,
-              order: 10,
-              hidden: false,
-              size: "future-size",
-            },
-          ],
-        })
-      );
+    for (const [version, raw] of EARLIER_ROWS) {
+      it(`reads a version ${version} row as no saved arrangement, keeping the row's version`, async () => {
+        const scope = `u-earlier-${version}-${label}-${RUN}`;
+        await service.saveLayout("user", scope, [placement()], 0);
+        await writeRawLayout(service, layoutRowId("user", scope), raw);
 
-      const read = await service.getLayout("user", scope);
-      expect(read.unreadable).toBe(false);
-      expect(read.layout?.placements).toEqual([
-        {
-          id: "c0r0",
-          widgetId: "w/b",
-          width: "twoThirds",
-          removed: true,
-          config: { range: 7 },
-        },
-        { id: "c1r0", widgetId: "w/c", width: "full", removed: false },
-        { id: "c0r1", widgetId: "w/d", width: "full", removed: false },
-        { id: "c1r1", widgetId: "w/a", width: "quarter", removed: false },
-      ]);
-    });
-
-    it("leaves the row's text and version exactly as they were when it reads", async () => {
-      // 🔴 A read never writes: a converted row is stored at its owner's next
-      // save. A read that wrote would race the version guard and a second tab.
-      const scope = `u-noread-write-${label}-${RUN}`;
-      await service.saveLayout("user", scope, [placement()], 0);
-      const raw = JSON.stringify({
-        schemaVersion: 2,
-        columnCount: 2,
-        placements: [
-          {
-            id: "a",
-            widgetId: "w/a",
-            column: 1,
-            order: 0,
-            hidden: false,
-            size: "lg",
-          },
-        ],
+        const read = await service.getLayout("user", scope);
+        // 🔴 As an absent row reads, but with the row's own version, so the
+        // owner's next write replaces it rather than colliding with it.
+        expect(read).toEqual({
+          layout: undefined,
+          version: 1,
+          unreadable: false,
+        });
       });
-      await writeRawLayout(service, layoutRowId("user", scope), raw);
 
-      await service.getLayout("user", scope);
-      await service.getLayout("user", scope);
+      it(`leaves a version ${version} row's text and version exactly as they were when it reads`, async () => {
+        // 🔴 A read never writes. A read that wrote would race the version
+        // guard and a second tab.
+        const scope = `u-earlier-noread-write-${version}-${label}-${RUN}`;
+        await service.saveLayout("user", scope, [placement()], 0);
+        await writeRawLayout(service, layoutRowId("user", scope), raw);
 
-      const row = await readRawLayout(service, layoutRowId("user", scope));
-      expect(row).toEqual({ layout: raw, version: 1 });
+        await service.getLayout("user", scope);
+        await service.getLayout("user", scope);
+
+        const row = await readRawLayout(service, layoutRowId("user", scope));
+        expect(row).toEqual({ layout: raw, version: 1 });
+      });
+
+      it(`replaces a version ${version} row at the next write with a version 4 row holding only that write`, async () => {
+        const scope = `u-earlier-replaced-${version}-${label}-${RUN}`;
+        await service.saveLayout("user", scope, [placement()], 0);
+        await writeRawLayout(service, layoutRowId("user", scope), raw);
+        const read = await service.getLayout("user", scope);
+
+        // A single-card write: the default with one card removed, unarranged.
+        const written = [
+          placement({ id: "core/team", widgetId: "core/team", removed: true }),
+        ];
+        await service.saveLayout("user", scope, written, read.version, false);
+
+        const row = await readRawLayout(service, layoutRowId("user", scope));
+        expect(row).toEqual({
+          layout: serializeLayout(written, false),
+          version: 2,
+        });
+        expect((await service.getLayout("user", scope)).layout).toEqual({
+          schemaVersion: 4,
+          placements: written,
+          unarranged: true,
+        });
+      });
+    }
+
+    it("reports a row with no version, or one this core never wrote, as unreadable", async () => {
+      // Not an earlier format to reset: those stay on the unreadable path.
+      for (const [name, raw] of UNKNOWN_VERSION_ROWS) {
+        const scope = `u-unknown-${name}-${label}-${RUN}`;
+        await service.saveLayout("user", scope, [placement()], 0);
+        await writeRawLayout(service, layoutRowId("user", scope), raw);
+
+        expect(await service.getLayout("user", scope)).toEqual({
+          layout: undefined,
+          version: 1,
+          unreadable: true,
+        });
+      }
     });
 
     it("removes the row on a reset staged against its version", async () => {
@@ -415,6 +427,74 @@ function layoutSuite(
     });
   });
 }
+
+/**
+ * A row of each earlier format, as those releases wrote it, holding every
+ * field that format stored: cards, sizes, settings, removals, a skipped Get
+ * started step and the unarranged mark.
+ */
+const EARLIER_ROWS: ReadonlyArray<[number, string]> = [
+  [
+    1,
+    JSON.stringify({
+      schemaVersion: 1,
+      placements: [
+        {
+          id: "a",
+          widgetId: "w/a",
+          order: 0,
+          hidden: true,
+          size: "lg",
+          height: "tall",
+          config: { range: 7 },
+        },
+      ],
+    }),
+  ],
+  [
+    2,
+    JSON.stringify({
+      schemaVersion: 2,
+      columnCount: 3,
+      unarranged: true,
+      placements: [
+        {
+          id: "a",
+          widgetId: "w/a",
+          column: 1,
+          order: 10,
+          hidden: false,
+          size: "sm",
+          config: { range: 30 },
+        },
+      ],
+    }),
+  ],
+  [
+    3,
+    JSON.stringify({
+      schemaVersion: 3,
+      unarranged: true,
+      placements: [
+        {
+          id: "core/get-started",
+          widgetId: "core/get-started",
+          width: "full",
+          removed: false,
+          config: { skipped: ["collection"] },
+        },
+        { id: "a", widgetId: "w/a", width: "half", removed: true },
+      ],
+    }),
+  ],
+];
+
+/** Rows that name no version, or a version this core never wrote. */
+const UNKNOWN_VERSION_ROWS: ReadonlyArray<[string, string]> = [
+  ["none", JSON.stringify({ placements: [] })],
+  ["zero", JSON.stringify({ schemaVersion: 0, placements: [] })],
+  ["newer", JSON.stringify({ schemaVersion: 99, placements: [] })],
+];
 
 /** Writes a raw payload, bypassing the service's own encoder. */
 async function writeRawLayout(

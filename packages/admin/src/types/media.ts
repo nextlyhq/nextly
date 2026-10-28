@@ -148,7 +148,8 @@ export interface FolderContentsResponse {
   data: {
     folder: MediaFolder | null; // null for root
     subfolders: MediaFolder[];
-    mediaFiles: Media[];
+    /** The folder's files, under the key the server sends (`files`). */
+    files: Media[];
     breadcrumbs: Array<{ id: string; name: string }>;
   };
 }

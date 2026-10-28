@@ -18,6 +18,7 @@ import { NextlyError } from "../../errors/nextly-error";
 
 import { validateWidgetDefinition, type WidgetDefinition } from "./definition";
 import { detachedSnapshot } from "./detached-snapshot";
+import { retiredWidgetReplacement } from "./retired-widget-namespaces";
 
 /** The fields a plugin may patch on someone else's widget. */
 export type WidgetPatch = Partial<
@@ -27,10 +28,7 @@ export type WidgetPatch = Partial<
     | "description"
     | "icon"
     | "category"
-    | "defaultSize"
-    | "minSize"
-    | "maxSize"
-    | "defaultHeight"
+    | "size"
     | "requiredPermission"
     | "query"
     | "link"
@@ -79,7 +77,7 @@ function snapshot(def: WidgetDefinition): WidgetDefinition {
 }
 
 /**
- * The public doors' refusal of `serverData`.
+ * The public doors' refusal of `serverData`, and of `owner`.
  *
  * Only core may say a card's data is built on the server, because only core
  * holds the declaration that builds it: a definition claiming it through a
@@ -87,14 +85,31 @@ function snapshot(def: WidgetDefinition): WidgetDefinition {
  * answered. Checked on the value, not the type, since a JavaScript caller or a
  * spread of a published definition can carry it.
  */
-function refuseServerData(def: WidgetDefinition, door: string): void {
-  const stated: unknown = (def as { serverData?: unknown }).serverData;
-  if (stated === undefined) return;
-  throw NextlyError.invalidInput({
-    message:
-      `Widget "${def.id}" cannot be given to ${door}() with serverData: core sets it ` +
-      `when it publishes a declared widget. Declare the widget with defineWidget() instead.`,
-  });
+function refuseServerData(
+  def: WidgetDefinition | WidgetPatch,
+  id: string,
+  door: string,
+  spreadWhole = false
+): void {
+  // `owner` likewise: only core knows who declared a widget, and a registration naming one
+  // would put a plugin's name on a card that plugin never declared.
+  // Read as unknown values, not as their types, since a JavaScript caller or a spread can carry
+  // anything under these keys.
+  const carried = def as { serverData?: unknown; owner?: unknown };
+  for (const field of ["serverData", "owner"] as const) {
+    // A patch spread whole over the stored definition overwrites a field with the key alone,
+    // `undefined` included, so there the key is refused; on a whole definition an `undefined`
+    // field is the same as none.
+    const stated = spreadWhole
+      ? Object.hasOwn(carried, field)
+      : carried[field] !== undefined;
+    if (!stated) continue;
+    throw NextlyError.invalidInput({
+      message:
+        `Widget "${id}" cannot be given to ${door}() with ${field}: core sets it ` +
+        `when it publishes a declared widget. Declare the widget with defineWidget() instead.`,
+    });
+  }
 }
 
 /** Register a widget. Throws if the id is taken or the definition is malformed. */
@@ -102,14 +117,14 @@ export function registerWidget(
   def: WidgetDefinition,
   opts: { source?: string } = {}
 ): void {
-  refuseServerData(def, "registerWidget");
+  refuseServerData(def, def.id, "registerWidget");
   addToStore(def, opts.source ?? "unknown");
 }
 
 /**
  * Register a declared widget, as core publishes it: a definition whose data
  * core builds on the server (`serverData: true`), from a declaration only core
- * holds. The one door that admits `serverData`, and it admits nothing else.
+ * holds. The one door that admits `serverData` and `owner`, and it admits nothing else.
  */
 export function registerDeclaredDefinition(
   def: WidgetDefinition,
@@ -132,6 +147,16 @@ export function registerDeclaredDefinition(
 /** Validates and stores a new widget, refusing an id already taken. */
 function addToStore(def: WidgetDefinition, source: string): void {
   validateWidgetDefinition(def);
+  // 🔴 A retired namespace is refused here, where every registration passes,
+  // so the registry and the layout doors give one answer: a card registered
+  // there would be offered, then refused by every write and dropped by every
+  // read. Thrown at startup, where an app registers, with what replaced it.
+  const replacement = retiredWidgetReplacement(def.id);
+  if (replacement !== undefined) {
+    throw NextlyError.invalidInput({
+      message: `Widget "${def.id}" cannot be registered: "${def.id}" ${replacement}`,
+    });
+  }
   const existing = store().get(def.id);
   if (existing) {
     throw NextlyError.conflict({
@@ -162,7 +187,7 @@ export function overrideWidget(
   def: WidgetDefinition,
   opts: { source?: string } = {}
 ): void {
-  refuseServerData(def, "overrideWidget");
+  refuseServerData(def, def.id, "overrideWidget");
   validateWidgetDefinition(def);
   if (def.id !== id) {
     throw NextlyError.invalidInput({
@@ -201,15 +226,20 @@ export function overrideWidget(
  * archetype or inject behaviour. That keeps "customize a core widget"
  * expressible without making core widgets unversionable.
  *
- * Re-validates the MERGED result, not the patch alone: two individually valid
- * values -- a widget's existing `maxSize` and a patch's `minSize` -- can
- * compose into an invalid definition, and that is only visible after merging.
+ * Re-validates the MERGED result, not the patch alone: a patch's value is
+ * judged beside the fields it leaves in place -- a patched `size` replaces the
+ * whole declaration, and a patched `query` must still suit the widget's
+ * archetype -- and a combination is only visible after merging.
  */
 export function extendWidget(
   id: string,
   patch: WidgetPatch,
   opts: { source?: string } = {}
 ): void {
+  // A patch is spread whole into the stored definition, so the fields only core sets are refused
+  // on it as on a whole definition: an untyped patch naming an owner would otherwise put a
+  // plugin's name on a widget that plugin never declared.
+  refuseServerData(patch, id, "extendWidget", true);
   const existing = store().get(id);
   if (!existing) {
     throw NextlyError.notFound({

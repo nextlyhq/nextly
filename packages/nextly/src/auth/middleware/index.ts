@@ -11,6 +11,7 @@ import {
   isTruthyParam,
   parseWhereParam,
 } from "../../dispatcher/helpers/validation";
+import { EVERY_LOCALE } from "../../domains/i18n/locale-selector";
 import {
   genericPublicMessage,
   NEXTLY_ERROR_STATUS,
@@ -30,6 +31,8 @@ import { rememberRouteVerdict } from "../access/request-memo";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
+  routeGrantVerdict,
+  type RouteRules,
 } from "../access/route-gate-adapters";
 import {
   everyLanguage,
@@ -40,7 +43,10 @@ import {
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
-import type { GrantedPermission } from "../authenticated-scope";
+import {
+  apiKeyScopeFrom,
+  type GrantedPermission,
+} from "../authenticated-scope";
 import { getSession } from "../session";
 import { startServicesForAuthentication } from "../session/session-standing";
 
@@ -463,7 +469,7 @@ export async function requirePermission(
  * before it can know which permission to ask for judges the caller it already
  * holds here, so the request is counted once.
  */
-export async function authorizeCaller(
+export function authorizeCaller(
   authResult: AuthContext,
   action: string,
   resource: string,
@@ -476,26 +482,83 @@ export async function authorizeCaller(
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
-  const answered = await routeGateVerdict(
+  // Told whether the route's handler applies a read rule's filter, so a rule
+  // answering one is handed back to be kept rather than refused.
+  return authorizeBy(
+    (auth, asked, slug, rules) =>
+      routeGateVerdict(auth, asked, slug, rules, appliesFilter),
     authResult,
     action,
     resource,
-    getRBACService(),
+    scope,
     appliesFilter
   );
-  // The route keeps its verdict for the request, every entry or the entries
-  // a read rule's filter matches, so the handler it authorizes applies it
-  // without asking the rule again. A request that cannot keep a filter
-  // refuses the caller, as a route that applies no filter does, rather than
-  // let the read run unfiltered.
+}
+
+/**
+ * {@link authorizeCaller} by the grant alone, its rule not read
+ * ({@link routeGrantVerdict}): for a publish or an unpublish of every
+ * language, whose rule the service asks in each language the change puts
+ * live. Refused as `authorizeCaller` refuses, a caller who may not read the
+ * entry it names answered as if it were missing.
+ */
+function authorizeCallerOnGrant(
+  authResult: AuthContext,
+  action: string,
+  resource: string,
+  scope: RefusalScope
+): Promise<AuthContext | ErrorResponse> {
+  return authorizeBy(routeGrantVerdict, authResult, action, resource, scope);
+}
+
+async function authorizeBy(
+  verdictOf: (
+    auth: AuthContext,
+    action: string,
+    resource: string,
+    rules: RouteRules
+  ) => Promise<GateVerdict>,
+  authResult: AuthContext,
+  action: string,
+  resource: string,
+  scope: RefusalScope,
+  // Whether the route's handler applies a read rule's filter: only such a
+  // route keeps its verdict.
+  appliesFilter = false
+): Promise<AuthContext | ErrorResponse> {
+  const answered = await verdictOf(
+    authResult,
+    action,
+    resource,
+    getRBACService()
+  );
+  // A route whose handler applies a read rule's filter keeps its verdict for
+  // the request, every entry or the entries the filter matches, so the read
+  // it authorizes applies it without asking the rule again. A request that
+  // cannot keep a filter refuses the caller, as a route that applies no
+  // filter does, rather than let the read run unfiltered. A route that
+  // applies no filter keeps nothing: its rule is asked afresh, and an allow
+  // kept from it could overwrite a filter another route in the request kept
+  // for the same caller; no kept verdict already means every entry.
   const question = {
     userId: authResult.userId,
+    // A key is kept apart from its user's other keys and sessions by the
+    // scope its rule is told.
+    ...(authResult.authMethod === "api-key"
+      ? { scope: apiKeyScopeFrom(authResult) }
+      : {}),
     slug: resource,
     action,
     language: currentRuleLanguage(),
   };
-  if (answered.allowed) rememberRouteVerdict(question, { all: true });
-  if (!answered.allowed && answered.refusal === "only-matching-entries") {
+  if (appliesFilter && answered.allowed) {
+    rememberRouteVerdict(question, { all: true });
+  }
+  if (
+    appliesFilter &&
+    !answered.allowed &&
+    answered.refusal === "only-matching-entries"
+  ) {
     const kept = rememberRouteVerdict(question, { filter: answered.filter });
     if (kept) return authResult;
   }
@@ -865,6 +928,126 @@ export async function requireCollectionAccess(
       action === "read" && operation?.appliesReadFilter === true
     )
   );
+}
+
+/**
+ * The access check for a route that publishes or unpublishes every language
+ * of an entry or a Single: by the grant alone, since the service asks the
+ * rule once in each language the change puts live, which the route cannot
+ * know. Told every language here, a rule refusing a language that does not go
+ * live would refuse what the service allows.
+ */
+export async function requireLifecycleAccess(
+  req: Request,
+  action: "publish" | "unpublish",
+  collectionSlug: string,
+  operation?: RouteOperation
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  // The languages still matter to the read a refusal is answered by.
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    const scope = operation?.namesOne ? "one" : "all";
+    const onGrant = await authorizeCallerOnGrant(
+      authResult,
+      action,
+      collectionSlug,
+      scope
+    );
+    if (!isErrorResponse(onGrant)) return onGrant;
+    // A target with no lifecycle has nothing to publish, and the service
+    // tells a caller who may update so; one with a lifecycle still asks the
+    // lifecycle gate whoever the route admitted. So update admits too, and a
+    // caller neither admits is refused as the lifecycle grant refuses them.
+    const asUpdate = await authorizeCaller(
+      authResult,
+      "update",
+      collectionSlug,
+      scope
+    );
+    return isErrorResponse(asUpdate) ? onGrant : asUpdate;
+  });
+}
+
+/** The action a write route admitted each caller on, where it accepts several. */
+const admittedActions = new WeakMap<
+  AuthContext,
+  "update" | "publish" | "unpublish"
+>();
+
+/**
+ * The action {@link requireCollectionWriteAccess} admitted `caller` on, or
+ * `undefined` where the route asked one action.
+ */
+export function admittedActionOf(caller: AuthContext): string | undefined {
+  return admittedActions.get(caller);
+}
+
+/**
+ * The access check for a write route a caller may reach on update, or on
+ * publish or unpublish alone. A write that changes only an entry's status is
+ * a publish or an unpublish, which the service judges by that gate, and the
+ * service asks update of any other write, so admitting a caller here on
+ * publish lets them edit nothing. Each action is asked in turn, its rule
+ * included; the first that admits the caller is recorded for the dispatch
+ * ({@link admittedActionOf}). A caller none admits is refused in the words
+ * of the action the write asks, which `actionAsked` reads from the request
+ * only then; without it, or where it names update, as update refuses them.
+ */
+export async function requireCollectionWriteAccess(
+  req: Request,
+  collectionSlug: string,
+  operation?: RouteOperation,
+  actionAsked?: () => Promise<"update" | "publish" | "unpublish">
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    // A route naming one entry is refused about it, as in requireCollectionAccess.
+    const scope = operation?.namesOne ? "one" : "all";
+    const asUpdate = await authorizeCaller(
+      authResult,
+      "update",
+      collectionSlug,
+      scope
+    );
+    if (!isErrorResponse(asUpdate)) {
+      admittedActions.set(asUpdate, "update");
+      return asUpdate;
+    }
+    // A write to every language (`?locale=*`) changes only the status, and
+    // its publish rule is asked by the service in each language it puts live;
+    // here, by the grant alone. Any other write's rule is asked here too.
+    const authorize =
+      operation?.params.locale === EVERY_LOCALE
+        ? authorizeCallerOnGrant
+        : authorizeCaller;
+    const refusals = new Map<"publish" | "unpublish", ErrorResponse>();
+    for (const action of ["publish", "unpublish"] as const) {
+      const answer = await authorize(authResult, action, collectionSlug, scope);
+      if (!isErrorResponse(answer)) {
+        admittedActions.set(answer, action);
+        return answer;
+      }
+      refusals.set(action, answer);
+    }
+    return refusalForActionAsked(asUpdate, refusals, actionAsked);
+  });
+}
+
+/**
+ * The refusal a write every action refused is answered with. A write that
+ * changes only the status asked to publish or unpublish, so it is told that,
+ * with the refusal that action's own check gave; any other write is told it
+ * may not edit.
+ */
+async function refusalForActionAsked(
+  asUpdate: ErrorResponse,
+  refusals: ReadonlyMap<"publish" | "unpublish", ErrorResponse>,
+  actionAsked?: () => Promise<"update" | "publish" | "unpublish">
+): Promise<ErrorResponse> {
+  const asked = actionAsked ? await actionAsked() : "update";
+  return asked === "update" ? asUpdate : (refusals.get(asked) ?? asUpdate);
 }
 
 /**

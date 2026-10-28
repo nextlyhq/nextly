@@ -13,6 +13,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
+import { loadedDialect } from "../../database/dialect-tables";
 import {
   readStoredLayout,
   serializeLayout,
@@ -21,9 +22,9 @@ import {
 } from "../../domains/widgets/layout";
 import { NextlyError } from "../../errors/nextly-error";
 import { layoutRowId, type LayoutScopeKind } from "../../schemas/widget-layout";
-import { nextlyWidgetLayout as layoutMysql } from "../../schemas/widget-layout/mysql";
-import { nextlyWidgetLayout as layoutPg } from "../../schemas/widget-layout/postgres";
-import { nextlyWidgetLayout as layoutSqlite } from "../../schemas/widget-layout/sqlite";
+import type { nextlyWidgetLayout as layoutMysql } from "../../schemas/widget-layout/mysql";
+import type { nextlyWidgetLayout as layoutPg } from "../../schemas/widget-layout/postgres";
+import type { nextlyWidgetLayout as layoutSqlite } from "../../schemas/widget-layout/sqlite";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -34,10 +35,15 @@ export const NO_STORED_LAYOUT_VERSION = 0;
 /**
  * What one scope currently has stored.
  *
- * `layout` is `undefined` both when no row exists and when the row could not be
- * decoded, and `unreadable` is what tells those apart. The caller needs the
- * distinction: the first is an ordinary new reader, the second is a fault an
- * operator should see.
+ * `layout` is `undefined` when no row exists, when the row is of an earlier
+ * format, and when the row could not be decoded, and `unreadable` is what tells
+ * the last apart. The caller needs the distinction: the first two are a reader
+ * with no saved arrangement, who follows the default, and the third is a fault
+ * an operator should see.
+ *
+ * `version` is the row's own whenever there is a row, an earlier-format one
+ * included, so the reader's next write takes the guarded UPDATE that replaces
+ * it rather than an INSERT that would collide with it.
  */
 export interface StoredLayoutRow {
   layout: StoredLayout | undefined;
@@ -66,11 +72,11 @@ type LayoutTable = typeof layoutPg | typeof layoutMysql | typeof layoutSqlite;
 function layoutTableFor(dialect: SupportedDialect): LayoutTable {
   switch (dialect) {
     case "postgresql":
-      return layoutPg;
     case "mysql":
-      return layoutMysql;
     case "sqlite":
-      return layoutSqlite;
+      // The loaded dialect's own table, so only that dialect's file is
+      // imported; `createAdapter` loads it.
+      return loadedDialect(dialect).tables.nextlyWidgetLayout;
     default: {
       const exhaustive: never = dialect;
       throw NextlyError.internal({
@@ -128,6 +134,8 @@ export class WidgetLayoutService extends BaseService {
       typeof row.version === "number" ? row.version : NO_STORED_LAYOUT_VERSION;
 
     try {
+      // `undefined` for a row of an earlier format: no saved arrangement, and
+      // left exactly as it is, since a read never writes.
       const layout = readStoredLayout(String(row.layout));
       // 🔴 The repair is invisible to the reader and must not be invisible to
       // an operator. Resolving the repeat per caller keeps the dashboard whole,
@@ -135,7 +143,7 @@ export class WidgetLayoutService extends BaseService {
       // malformed -- and the row stays malformed until this reader's next save.
       // Whatever wrote the duplicate would otherwise go on writing them
       // unobserved, so the one place the defect can still be found is here.
-      if (layout.duplicatePlacementIds !== undefined) {
+      if (layout?.duplicatePlacementIds !== undefined) {
         this.logger.warn("Stored dashboard layout holds a placement id twice", {
           scopeKind: kind,
           scopeId,

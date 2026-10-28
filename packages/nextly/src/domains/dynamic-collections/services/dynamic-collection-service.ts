@@ -23,18 +23,24 @@ import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import type { LiveLocalization } from "../../i18n/localization-source";
-import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsLeavingTranslationUnder,
+} from "../../i18n/migration/archive-preflight";
+import { companionUniqueIndexStatements } from "../../i18n/migration/companion-unique-indexes";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import {
   buildFieldsJoiningTranslationStatements,
   fieldsJoiningTranslation,
 } from "../../i18n/migration/field-joins-translation";
+import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-translation-rules";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
+  companionIndexFacts,
   type FieldRename,
-  fieldsLeavingTranslation,
 } from "../../i18n/migration/reconcile-companion";
+import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   companionColumnNames,
   companionHasColumn,
@@ -47,6 +53,7 @@ import {
   readColumnNullState,
   readForeignKeyColumns,
   readIndexColumns,
+  readIndexUniqueness,
   readIndexNames,
   readUniqueColumns,
   tableHasRows,
@@ -209,6 +216,10 @@ export interface UpdateCollectionInput {
  * that archives (a field leaving translation) ensures the archive table and writes the archive
  * rows before the shared ALTER: replayed on a database whose archive refuses them, the migration
  * stops before the main table has changed.
+ *
+ * `settings` comes last: the Required and Unique settings of fields leaving translation, whose
+ * shared columns the shared ALTER creates without them so the companion part can copy the default
+ * language's values in first.
  */
 function orderLocalizedMigration(
   isLocalized: boolean,
@@ -217,11 +228,18 @@ function orderLocalizedMigration(
     archive: string;
     beforeMain: string;
     companion: string;
+    settings?: string;
   }
 ): string {
   return (
     isLocalized
-      ? [parts.archive, parts.beforeMain, parts.main, parts.companion]
+      ? [
+          parts.archive,
+          parts.beforeMain,
+          parts.main,
+          parts.companion,
+          parts.settings ?? "",
+        ]
       : [parts.archive, parts.companion, parts.main]
   )
     .filter(sql => sql && sql.trim())
@@ -809,10 +827,30 @@ export class DynamicCollectionService extends BaseService {
       status: opts.status,
     });
     if (!spec) return migrationSQL;
-    // Separate the companion CREATE from the main migration with the breakpoint marker so the
-    // runner executes it as its own statement (a multi-statement chunk is rejected by drivers
-    // with multi-statements disabled, e.g. MySQL).
-    return `${migrationSQL}\n--> statement-breakpoint\n${buildCompanionCreateOnlySql(spec)}`;
+    // A translated field marked unique is unique within each language: its index is created with
+    // the companion, which is new, so none exists yet. Refused first on a server that cannot key it.
+    const unique = refuseUnindexableTranslatedUnique(this.adapter, {
+      entity: slug,
+      builtBy: "collection",
+      oldFields: [],
+      newFields: opts.fields,
+      wasLocalized: false,
+      isLocalized: true,
+    });
+    // Separate each statement with the breakpoint marker so the runner executes it as its own
+    // statement (a multi-statement chunk is rejected by drivers with multi-statements disabled,
+    // e.g. MySQL).
+    return [
+      migrationSQL,
+      buildCompanionCreateOnlySql(spec),
+      ...companionUniqueIndexStatements({
+        dialect: this.adapter.dialect,
+        companionTable: `${tableName}_locales`,
+        wanted: unique,
+        translatedColumns: [],
+        liveIndexNames: new Set(),
+      }),
+    ].join("\n--> statement-breakpoint\n");
   }
 
   /**
@@ -861,7 +899,7 @@ export class DynamicCollectionService extends BaseService {
    * transition differs there.
    */
   private async buildLocalizedMigrationSQL(
-    main: { artefact: string; local?: string },
+    main: { artefact: string; local?: string; settings?: string },
     args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
   ): Promise<{ sql: string; localSql?: string; needsArchive: boolean }> {
     const { sql, localSql, beforeMainSql, localBeforeMainSql, needsArchive } =
@@ -875,6 +913,7 @@ export class DynamicCollectionService extends BaseService {
         archive,
         beforeMain,
         companion,
+        settings: main.settings,
       });
     // What this database runs differs from the file when any part does.
     const differs =
@@ -1189,6 +1228,17 @@ export class DynamicCollectionService extends BaseService {
       liveCompanionColumns: companionExists
         ? await companionColumnNames(this.adapter, args.tableName)
         : undefined,
+      // Its indexes too, so a per-language unique index is created only where it is missing, and
+      // one under its name that is not unique is replaced.
+      ...(companionExists
+        ? companionIndexFacts(
+            await readIndexUniqueness(
+              this.adapter.getDrizzle(),
+              this.adapter.dialect,
+              companionTable
+            )
+          )
+        : {}),
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
@@ -1493,8 +1543,34 @@ export class DynamicCollectionService extends BaseService {
         );
         return fields.filter(f => !translated.has(f.name));
       };
+      // A field that stops being translated while the collection stays translated: main gains its
+      // column in this save, so the companion transition has a shared column to copy the default
+      // language's value into before it drops its own.
+      // Named after the change: a field renamed and made shared leaves under its new name, so its
+      // Required or Unique setting waits for the copy as any other leaving field's does. One
+      // rename rule for every column: the main table's decides a translated field's too.
+      const changeRename = fieldRenameOf(
+        this.schemaService.detectFieldRename(oldUserFields, userDefinedFields)
+      );
+      const leavingTranslation = new Set(
+        collectionWasLocalized && collectionIsLocalized
+          ? fieldsLeavingTranslationUnder(
+              oldUserFields,
+              userDefinedFields,
+              changeRename
+            )
+          : []
+      );
       const mainBefore = onMain(oldUserFields, collectionWasLocalized);
-      const mainAfter = onMain(userDefinedFields, collectionIsLocalized);
+      // Judged in the shape the main diff adds it with: a leaving field's column comes without its
+      // Required or Unique setting and takes it once the default language's values are copied in,
+      // and whether those values can take it is asked by the preflight above
+      // (`archiveFieldsLeavingTranslation`). Judged with the setting, an added Required column
+      // would be checked holding one placeholder in every entry.
+      const mainAfter = withoutLeavingConstraints(
+        onMain(userDefinedFields, collectionIsLocalized),
+        leavingTranslation
+      );
       // A table still to be deployed holds no entries, so there is nothing to check yet.
       const tableDeployed = await this.adapter.tableExists(
         collection.tableName
@@ -1556,14 +1632,6 @@ export class DynamicCollectionService extends BaseService {
             collectionIsLocalized
           ),
         ]);
-        // A field that stops being translated while the collection stays translated is the
-        // exception: main gains its column here, so the companion transition below has a
-        // shared column to copy the default language's value into before it drops its own.
-        const leavingTranslation = new Set(
-          collectionWasLocalized && collectionIsLocalized
-            ? fieldsLeavingTranslation(oldUserFields, userDefinedFields)
-            : []
-        );
         // A field that becomes translated while the collection stays translated: its main column
         // goes, so the main diff has to see it as there before and gone after. Its value moves to
         // the default language's companion row first, ahead of this diff (see the companion
@@ -1606,12 +1674,41 @@ export class DynamicCollectionService extends BaseService {
               ])
             : new Map(),
         };
+        // A Required or Unique field leaving translation gets its shared column without the
+        // setting: created with it, every entry would hold NULL or the same placeholder before the
+        // default language's values arrive. The setting follows the copy (`settings`).
+        const sharedUnconstrained = withoutLeavingConstraints(
+          newShared,
+          leavingTranslation
+        );
         const mainSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldShared,
-          newShared,
+          sharedUnconstrained,
           mainOptions
         );
+        // The settings as their own diff, so each dialect applies them its own way. The live
+        // table's facts describe the columns BEFORE the main diff above creates them, so they are
+        // not passed; what this diff needs instead is the type that diff will have written.
+        // MySQL restates a whole column definition on every MODIFY, and with no type to restate it
+        // falls back to the legacy renderer — which would narrow a float the main diff had just
+        // created `double` down to `decimal(10,2)`, from two diffs that are each correct alone.
+        // Whether the values can take the settings was asked before anything ran.
+        const settingsSQL = sharedUnconstrained.some(
+          (f, i) => f !== newShared[i]
+        )
+          ? this.schemaService.generateAlterTableMigration(
+              collection.tableName,
+              sharedUnconstrained,
+              newShared,
+              {
+                wasStatus: hasStatus,
+                hasStatus,
+                liveColumnTypes:
+                  this.schemaService.plannedColumnTypes(sharedUnconstrained),
+              }
+            )
+          : undefined;
         // A leaving field whose column unattended provisioning left on THIS database's main table.
         // The migration file still adds the column, because a database built from migrations does
         // not have it; this database runs a main diff that treats it as present, and the copy that
@@ -1622,17 +1719,20 @@ export class DynamicCollectionService extends BaseService {
         );
         const localOldShared = [
           ...oldShared,
-          ...userDefinedFields.filter(f => retainedOnMain.has(f.name)),
+          ...withoutLeavingConstraints(
+            userDefinedFields.filter(f => retainedOnMain.has(f.name)),
+            leavingTranslation
+          ),
         ];
         const localMainSQL = this.localAlterSQL(
           collection.tableName,
           localOldShared,
-          newShared,
+          sharedUnconstrained,
           mainOptions,
           mainSQL
         );
         const localizedMigration = await this.buildLocalizedMigrationSQL(
-          { artefact: mainSQL, local: localMainSQL },
+          { artefact: mainSQL, local: localMainSQL, settings: settingsSQL },
           {
             slug: collectionName,
             tableName: collection.tableName,
@@ -1642,13 +1742,7 @@ export class DynamicCollectionService extends BaseService {
             isLocalized: collectionIsLocalized,
             status: hasStatus,
             wasStatus,
-            // One rename rule for every column: the main table's decides a translated field's too.
-            renamed: fieldRenameOf(
-              this.schemaService.detectFieldRename(
-                oldUserFields,
-                userDefinedFields
-              )
-            ),
+            renamed: changeRename,
           }
         );
         migrationSQL = localizedMigration.sql;
@@ -1701,6 +1795,23 @@ export class DynamicCollectionService extends BaseService {
       // the main columns and a disable restores + archives them, even without a field edit. A
       // simultaneous status flip still emits its main ADD/DROP `status` column.
       const oldUserFields = existingUserFieldsForTransition;
+      // The same preconditions a field-changing save is asked, because this save builds the same
+      // companion DDL: an enable creates, seeds, drops main's columns and then creates each
+      // per-language unique index. Skipped here, a field already marked unique reached the index
+      // on a server that cannot key it, or over values a language already holds twice, with the
+      // statements before it committed on MySQL.
+      await archiveFieldsLeavingTranslation({
+        builtBy: "collection",
+        tableName: collection.tableName,
+        defaultLocale: this.defaultLocale,
+        adapter: this.adapter,
+        entity: collectionName,
+        kind: "collection",
+        oldFields: oldUserFields,
+        newFields: oldUserFields,
+        wasLocalized: collectionWasLocalized,
+        isLocalized: collectionIsLocalized,
+      });
       const hasStatus =
         updates.status !== undefined
           ? updates.status === true

@@ -28,6 +28,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { VERSION_VIEWS_TABLE } from "../../schemas/version-views";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 
 import type { VersionsDbApi } from "./db-api";
 import type { VersionRef } from "./versions-repository";
@@ -187,6 +188,12 @@ export async function markVersionSeen(
   versionNo: number,
   now: Date = new Date()
 ): Promise<void> {
+  // Refused first when the document's collection or Single is removed from
+  // code: a "seen" marker is something recorded about the entry. Read on the
+  // caller's transaction.
+  await refuseHistoryWriteIfRemovedFromCode(target.ref, {
+    executor: tx.getDrizzle(),
+  });
   const key = versionViewKey(target);
   const row = await tx.selectOne<ViewRow>(VIEWS_TABLE, {
     columns: [

@@ -223,8 +223,10 @@ see. This is the easiest way to expose data with Nextly.
 </Callout>
 
 Passing a `user` lets a rule decide by who is asking, never by which document. Collection and
-Single rules never see a document: they answer yes or no before any document is read, so no
-rule can limit someone to their own entries (see [Limits](#limits)).
+Single rules never see a document: they answer before any document is read. Most answer yes or
+no. The one exception, experimental, is a collection's `read` rule that answers with a filter,
+which limits some reads to the entries it matches (see [A read rule that answers with a
+filter](#a-read-rule-that-answers-with-a-filter-experimental) and [Limits](#limits)).
 
 Forgetting the `user` is a different and much less dangerous mistake. The caller then has no
 session and holds no permissions, so a rule that checks them refuses the request rather than
@@ -241,9 +243,10 @@ code that genuinely needs to write a protected field says so with `overrideAcces
 ## Limits
 
 - **A grant covers a whole collection or Single.** Grants are per resource and action.
-  Neither a grant nor a code rule can limit a role to some of a collection's documents,
-  such as an author's own posts: a collection's or Single's rule answers yes or no before
-  any document is read, and is never given one.
+  A grant can't limit a role to some of a collection's documents, such as an author's own
+  posts, and a rule is never given a document. Only a collection's `read` rule that answers
+  with a filter limits some reads to the entries it matches, and that is experimental (see
+  [A read rule that answers with a filter](#a-read-rule-that-answers-with-a-filter-experimental)).
 - **Field-level rules are code.** The **Roles** screen assigns grants; it has no field-level
   permissions. A field's `access` is written in your config.
 - **Rules are code.** Access rules can't be set in the admin or in the Visual Schema

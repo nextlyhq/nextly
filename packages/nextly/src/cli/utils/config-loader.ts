@@ -210,6 +210,13 @@ export interface LoadConfigResult {
   configPath?: string;
 
   /**
+   * The project the config was looked for in, as an absolute path: `cwd`
+   * when one was given, otherwise the process's own directory. The app whose
+   * installed packages a boot from this config judges.
+   */
+  projectRoot: string;
+
+  /**
    * List of files that the config depends on.
    * Useful for watch mode to know what files to watch.
    */
@@ -469,7 +476,10 @@ function stopWatching(): void {
 async function loadConfigInternal(
   options: LoadConfigOptions
 ): Promise<LoadConfigResult> {
-  const cwd = options.cwd ?? process.cwd();
+  // Resolved once, before the config's code runs: a config or a `setup`
+  // transformer that changes the process's directory must not move the
+  // project the config was found in.
+  const cwd = resolve(options.cwd ?? process.cwd());
 
   const configPath = options.configPath
     ? resolve(cwd, options.configPath)
@@ -487,6 +497,7 @@ async function loadConfigInternal(
       config: appConfig,
       appConfig,
       configPath: undefined,
+      projectRoot: cwd,
       dependencies: [],
       pluginConsent: NO_PLUGIN_CONSENT,
       // Empty, matching the clear above: work pinned to this result must not
@@ -715,6 +726,7 @@ async function loadConfigInternal(
       config,
       appConfig,
       configPath,
+      projectRoot: cwd,
       dependencies,
       deferredExtends,
       pluginConsent,

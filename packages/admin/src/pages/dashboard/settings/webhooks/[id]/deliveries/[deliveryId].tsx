@@ -21,9 +21,13 @@ import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useDelivery, useRedeliver } from "@admin/hooks/queries";
+import { useWebhook, useWebhooks } from "@admin/hooks/queries/useWebhooks";
 import { useCan } from "@admin/hooks/useCan";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { joinTitleParts } from "@admin/lib/navigation/screen-names";
+import type { WebhookDeliveryDetail } from "@admin/types/webhooks";
 
 /**
  * The engine keeps only the most recent attempts on each delivery row (the
@@ -63,6 +67,34 @@ const MetaRow: React.FC<{ label: string; children: React.ReactNode }> = ({
  * read from the same delivery and must react together: a redelivery invalidates
  * this delivery's cache, so the timeline and status re-render off the refetch.
  */
+/**
+ * Names the delivery in the browser tab: its event and when the event
+ * happened, as this page heads and dates it, then the endpoint it went to.
+ *
+ * This page loads the delivery alone. The endpoint's name is read from what the
+ * endpoint's own pages already loaded (its deliveries list loads the endpoint,
+ * the webhooks list loads them all), observed with fetching off, so naming the
+ * tab sends no request. Opened directly, the tab names the delivery alone.
+ */
+function useDeliveryTitle(
+  webhookId: string,
+  delivery: WebhookDeliveryDetail | undefined
+): void {
+  const { data: endpoint } = useWebhook(webhookId, { enabled: false });
+  const { data: endpoints } = useWebhooks({ enabled: false });
+  const endpointName =
+    endpoint?.name ?? endpoints?.find(e => e.id === webhookId)?.name;
+  useDocumentTitle(
+    delivery
+      ? joinTitleParts([
+          delivery.eventType,
+          formatDeliveryTimestamp(delivery.eventCreatedAt),
+          endpointName,
+        ])
+      : undefined
+  );
+}
+
 const DeliveryDetailContent: React.FC<{
   webhookId: string;
   deliveryId: string;
@@ -74,6 +106,7 @@ const DeliveryDetailContent: React.FC<{
     isError,
     error,
   } = useDelivery(webhookId, deliveryId);
+  useDeliveryTitle(webhookId, delivery);
   const { mutate: doRedeliver, isPending: isRedelivering } = useRedeliver();
 
   const handleRedeliver = useCallback(() => {

@@ -308,7 +308,12 @@ describe("which runs a pull-request workflow's concurrency group cancels", () =>
     expect(closing.permissions).toEqual({});
     const [job] = Object.values(closing.jobs);
     expect(job.permissions).toEqual({ contents: "read", actions: "write" });
-    expect(job.steps.at(-1).run).toBe("node scripts/cancel-closed-pull-request-runs.mjs");
+    // Cancel first, then delete a closed pull request's caches whatever the cancel's verdict.
+    expect(job.steps.filter(step => step.run).map(step => step.run)).toEqual([
+      "node scripts/cancel-closed-pull-request-runs.mjs",
+      "node scripts/delete-closed-pull-request-caches.mjs",
+    ]);
+    expect(job.steps.at(-1).if).toBe("${{ !cancelled() }}");
     // The script holding `actions: write` comes from the default branch, never the closed pull request.
     expect(job.steps.find(step => String(step.uses).startsWith("actions/checkout@")).with.ref).toBe("${{ github.event.repository.default_branch }}");
   });
@@ -2123,9 +2128,16 @@ function runBy(workflow, ids) {
   return { actions, texts: [...steps, ...actions.flatMap(actionSteps)].flatMap(stepTexts) };
 }
 
-/** The local actions a list of steps uses, as the paths of their definitions. */
+/**
+ * The local actions a list of steps uses, as the paths of their definitions.
+ * One used from a checkout of this repository in a folder of its own
+ * (`./<folder>/.github/actions/…`) is the same file at the repository's root.
+ */
 function localActionsOf(steps) {
-  return steps.map(step => String(step.uses ?? "")).filter(uses => uses.startsWith("./")).map(uses => `${uses.slice(2)}/action.yml`);
+  return steps
+    .map(step => String(step.uses ?? ""))
+    .filter(uses => uses.startsWith("./"))
+    .map(uses => `${uses.slice(2).replace(/^[^/]+\/(?=\.github\/actions\/)/, "")}/action.yml`);
 }
 
 /** A composite action's steps, read from its definition, so its name and descriptions are never taken for commands. */

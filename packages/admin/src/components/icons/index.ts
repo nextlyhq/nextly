@@ -78,6 +78,7 @@ export {
   FileJson, // APIPlayground: empty state icon
   FileQuestion,
   FileSpreadsheet,
+  Feather, // Rail: the Content item
   FileText,
   FileVideo, // UploadPreview: video file icon
   Filter, // Table filters

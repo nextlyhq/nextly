@@ -22,22 +22,24 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
+import type { GridSize } from "nextly/config";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { JSX, ReactNode } from "react";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import type {
   DashboardWidget,
   WidgetSlot,
-  WidgetWidth,
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "./archetypes/types";
 import { DeclaredComponent, useComponentDraw } from "./declared-component";
-import { DREW_NOTHING } from "./draw-failures";
+import { DREW_NOTHING, missingComponentMessage } from "./draw-failures";
 import type { CardState } from "./frame/card-state";
-import type { SkeletonShape } from "./frame/states";
+import { listDensityOf } from "./frame/list-rows";
+import type { CardEmptyContent, SkeletonShape } from "./frame/states";
+import type { AnswerSize } from "./frame/tier";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { askableQuery } from "./widget-as-asked";
 import { WidgetCard } from "./WidgetCard";
@@ -87,6 +89,9 @@ function skeletonFor(archetype: string): SkeletonShape {
   }
 }
 
+/** What a card its widget does not show for this person says, where customise mode shows it. */
+const NOT_SHOWN = "Not shown for you right now";
+
 /** Every outcome the frame draws itself, which is all but a plugin's own component. */
 type FramedOutcome = Exclude<
   WidgetOutcome,
@@ -102,6 +107,25 @@ function answeredState(isFetching: boolean): CardState {
 }
 
 /**
+ * An empty card's content as the frame draws it: an action opening the card's settings becomes a
+ * button that does, where the card can open them. Where it cannot (customising, or no settings
+ * write), the button is left out and its words become the detail line, "Choose collection in the
+ * card's settings.", so the card still says where the missing setting is chosen.
+ */
+function drawnEmpty(
+  empty: Extract<WidgetOutcome, { state: "empty" }>["empty"],
+  onOpenSettings: (() => void) | undefined
+): CardEmptyContent {
+  const { action, ...words } = empty;
+  if (action === undefined || !("opensSettings" in action)) {
+    return action === undefined ? words : { ...words, action };
+  }
+  return onOpenSettings === undefined
+    ? { ...words, detail: `${action.label} in the card's settings.` }
+    : { ...words, action: { label: action.label, onSelect: onOpenSettings } };
+}
+
+/**
  * The card's state and body for one outcome.
  *
  * One mapping, so each state's rules sit side by side: only a failure offers Retry, and only an
@@ -109,9 +133,21 @@ function answeredState(isFetching: boolean): CardState {
  */
 function cardForOutcome(
   outcome: FramedOutcome,
-  live: { isFetching: boolean; onRetry?: (() => void) | undefined }
-): { state: CardState; body: ReactNode } {
+  live: {
+    isFetching: boolean;
+    onRetry?: (() => void) | undefined;
+    onOpenSettings?: (() => void) | undefined;
+  }
+): { state: CardState; body: ReactNode; notShown?: true } {
   switch (outcome.state) {
+    case "not-shown":
+      // Drawn as an empty card the frame takes off the dashboard, as it takes a card hidden
+      // while empty, and marks in customise mode instead.
+      return {
+        state: { kind: "empty", empty: { title: NOT_SHOWN } },
+        body: null,
+        notShown: true,
+      };
     case "loading":
       // Data has never arrived: a skeleton shaped like the body, not an empty busy card.
       return { state: { kind: "loading" }, body: null };
@@ -127,7 +163,13 @@ function cardForOutcome(
         body: null,
       };
     case "empty":
-      return { state: { kind: "empty", empty: outcome.empty }, body: null };
+      return {
+        state: {
+          kind: "empty",
+          empty: drawnEmpty(outcome.empty, live.onOpenSettings),
+        },
+        body: null,
+      };
     case "ready":
       return { state: answeredState(live.isFetching), body: outcome.node };
   }
@@ -160,6 +202,12 @@ export interface WidgetRendererProps {
   /** Reload this card only, offered when its data failed to load. */
   onRetry?: () => void;
   /**
+   * Open this card's own settings, with focus on their first field: what a declared empty
+   * action of `opens: "settings"` does. Given only where the reader can change this card's
+   * settings; without it that action is not drawn, so nobody is offered a step they cannot take.
+   */
+  onOpenSettings?: () => void;
+  /**
    * This widget's slot from the batch. `undefined` means the batch has not
    * answered yet — which is why a data widget with no slot is BUSY rather than
    * empty, and a widget that asked for nothing is neither.
@@ -184,10 +232,10 @@ export interface WidgetRendererProps {
    */
   isFetching?: boolean;
   /**
-   * The tier the answer in `slot` was fetched at, when the card has grown past it: a list then
-   * draws only the rows that answer was asked for. See `AnswerTierContext`.
+   * The size the answer in `slot` was fetched at, when the card has grown past it: a list then
+   * draws only the rows that answer was asked for. See `AnswerSizeContext`.
    */
-  answerTier?: SizeTier;
+  answerSize?: AnswerSize;
   /**
    * Which CARD this render is, and what its reader configured.
    *
@@ -211,8 +259,8 @@ export interface WidgetRendererProps {
   placement?: {
     id: string;
     settings: Record<string, unknown>;
-    /** The width the card is drawn at, for the size a declared component is handed. */
-    width?: WidgetWidth;
+    /** The size the card is drawn at, for the size a declared component is handed. */
+    size?: GridSize;
   };
 }
 
@@ -226,7 +274,7 @@ function sharedCardProps(
     | "quick"
     | "leading"
     | "customizing"
-    | "answerTier"
+    | "answerSize"
     | "subtitle"
   >
 ) {
@@ -236,8 +284,12 @@ function sharedCardProps(
     ...controls,
     hidesWhenEmpty: definition.hidesWhenEmpty === true,
     cardId: placement?.id ?? definition.id,
+    // The card's height, which its list rows are counted from.
+    ...(placement?.size === undefined ? {} : { h: placement.size.h }),
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
+    // The density the card's list rows, and the skeleton holding their place, are drawn at.
+    listDensity: listDensityOf(placement?.settings),
     skeletonFields: skeletonFieldsFor(definition),
     // A stats card's labels; a custom card's cells draw no skeleton of their own.
     skeletonCells: definition.cells?.flatMap(cell =>
@@ -379,6 +431,95 @@ function declaredCard(
   );
 }
 
+/**
+ * What a card about to draw its own component says when the admin holds no component at its
+ * path, or `undefined` while it does or will not draw one.
+ *
+ * 🔴 That card draws its error instead, and the grid counts it as failed: never an empty body
+ * that reads as drawn. Only where the component would be drawn, so a card the reader may not
+ * see, or one still loading, says that first.
+ */
+function useMissingComponent(
+  definition: WidgetRendererProps["definition"],
+  outcome: WidgetOutcome
+): string | undefined {
+  // The server's answer to whether it runs in development (`devReload`): this
+  // package's own NODE_ENV says where the library was built, not where it runs.
+  const development = useBranding().devReload === true;
+  return outcome.state === "self-drawn" || outcome.state === "answered"
+    ? missingComponentMessage(definition, development)
+    : undefined;
+}
+
+/**
+ * A card whose component is missing: its error, and no Retry, since drawing again finds the same
+ * registry.
+ */
+function missingCard(
+  shared: ReturnType<typeof sharedCardProps>,
+  message: string,
+  isFetching: boolean
+): JSX.Element {
+  const drawn = cardForOutcome({ state: "failed", message }, { isFetching });
+  return (
+    <WidgetCard {...shared} state={drawn.state}>
+      {drawn.body}
+    </WidgetCard>
+  );
+}
+
+/**
+ * The card for its outcome: its error where its component is missing, the component with no
+ * answer to wait for, a declared widget's component with its answer, or the frame's own state.
+ *
+ * A component drawn with the batch's answer: `custom` may carry a query, which the grid puts in
+ * the batch rather than leaving the component to ask again. `undefined` while that answer is on
+ * the way, which the component reports as loading; a failed answer never reaches it
+ * (`resolveWidgetOutcome`). It is told when a refetch is in flight, because `slot` alone cannot
+ * say it: the slot holds the PREVIOUS answer during a refetch and is indistinguishable from
+ * idle. The frame marks the card busy then, as for any card.
+ */
+function cardFor(
+  definition: WidgetRendererProps["definition"],
+  shared: ReturnType<typeof sharedCardProps>,
+  outcome: WidgetOutcome,
+  live: {
+    missing: string | undefined;
+    draw: ReturnType<typeof useComponentDraw>;
+    componentProps: WidgetComponentProps;
+    placement: WidgetRendererProps["placement"];
+    isFetching: boolean;
+    onRetry: (() => void) | undefined;
+    /** Opens this card's settings from its empty state, where the card can. */
+    onOpenSettings: (() => void) | undefined;
+  }
+): JSX.Element {
+  if (live.missing !== undefined) {
+    return missingCard(shared, live.missing, live.isFetching);
+  }
+  if (outcome.state === "self-drawn") {
+    return selfDrawnCard(
+      definition,
+      shared,
+      live.componentProps,
+      live.isFetching
+    );
+  }
+  if (outcome.state === "answered") {
+    return declaredCard(definition, shared, outcome.data, live.draw, live);
+  }
+  const drawn = cardForOutcome(outcome, live);
+  return (
+    <WidgetCard
+      {...shared}
+      state={drawn.state}
+      {...(drawn.notShown ? { notShown: true } : {})}
+    >
+      {drawn.body}
+    </WidgetCard>
+  );
+}
+
 export function WidgetRenderer({
   definition,
   slot,
@@ -389,8 +530,9 @@ export function WidgetRenderer({
   leading,
   customizing = false,
   onRetry,
+  onOpenSettings,
   isFetching = false,
-  answerTier,
+  answerSize,
   subtitle,
 }: WidgetRendererProps): JSX.Element {
   const shared = sharedCardProps(definition, placement, {
@@ -398,18 +540,20 @@ export function WidgetRenderer({
     quick,
     leading,
     customizing,
-    answerTier,
+    answerSize,
     subtitle,
   });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
-  // Whether a declared widget's own component threw drawing this answer: asked
-  // for every card, as a hook must be, and false for any other.
+  const missing = useMissingComponent(definition, outcome);
+  // Whether a declared widget's own component threw drawing this answer, or is
+  // missing: asked for every card, as a hook must be, and false for any other.
   const draw = useComponentDraw({
     slot,
     isFetching,
     ...(onRetry ? { onRetry } : {}),
     placementId: placement?.id ?? definition.id,
+    missing: missing !== undefined,
   });
   // A custom card that declares several reads is handed each answer by key; a
   // key with no answer yet is left out, as `slot` is.
@@ -422,30 +566,13 @@ export function WidgetRenderer({
     onRetry,
   });
 
-  // A component drawn with the batch's answer: `custom` may carry a query,
-  // which the grid puts in the batch rather than leaving the component to ask
-  // again. `undefined` while that answer is on the way, which the component
-  // reports as loading; a failed answer never reaches it (`resolveWidgetOutcome`).
-  //
-  // It is told when a refetch is in flight, because `slot` alone cannot say it:
-  // the slot holds the PREVIOUS answer during a refetch and is indistinguishable
-  // from idle. The frame marks the card busy then, as for any card.
-  if (outcome.state === "self-drawn") {
-    return selfDrawnCard(definition, shared, componentProps, isFetching);
-  }
-
-  if (outcome.state === "answered") {
-    return declaredCard(definition, shared, outcome.data, draw, {
-      placement,
-      isFetching,
-      onRetry,
-    });
-  }
-
-  const drawn = cardForOutcome(outcome, { isFetching, onRetry });
-  return (
-    <WidgetCard {...shared} state={drawn.state}>
-      {drawn.body}
-    </WidgetCard>
-  );
+  return cardFor(definition, shared, outcome, {
+    missing,
+    draw,
+    componentProps,
+    placement,
+    isFetching,
+    onRetry,
+    onOpenSettings,
+  });
 }

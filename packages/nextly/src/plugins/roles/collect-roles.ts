@@ -1,4 +1,6 @@
 import type { NextlyServiceConfig } from "../../di/register";
+import { PUBLIC_ROLE_SLUG } from "../../domains/auth/services/public-role";
+import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
 import type { PluginRole } from "../contributions";
 import type { PluginDefinition } from "../plugin-context";
 
@@ -14,8 +16,12 @@ export interface CollectedRole {
   owner: string;
 }
 
-/** Role slugs the system owns; a plugin/app may not redeclare them. */
-const RESERVED_ROLE_SLUGS = new Set(["super-admin"]);
+/**
+ * Role slugs the system owns; a plugin/app may not redeclare them. Seeding
+ * skips a role whose slug exists, so one declared under a built-in role's
+ * slug would otherwise never be made, with nothing said.
+ */
+const RESERVED_ROLE_SLUGS = new Set([SUPER_ADMIN_SLUG, PUBLIC_ROLE_SLUG]);
 
 /**
  * Fold every plugin's `contributes.roles` (and app-level `config.roles`) into a
@@ -46,7 +52,9 @@ export function collectRoles(
         `NEXTLY_ROLE_COLLISION: role slug "${slug}" is declared by both "${prev}" and "${owner}". Role slugs must be unique.`
       );
     }
-    if (RESERVED_ROLE_SLUGS.has(slug)) {
+    // In any case: MySQL's collation reads `Public` as `public`, so a role
+    // declared so would meet the built-in role there and be skipped.
+    if (RESERVED_ROLE_SLUGS.has(slug.toLowerCase())) {
       throw new Error(
         `NEXTLY_ROLE_COLLISION: "${owner}" declares role slug "${slug}", which is reserved for a built-in system role.`
       );

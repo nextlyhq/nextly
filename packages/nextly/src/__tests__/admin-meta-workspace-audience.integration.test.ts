@@ -74,7 +74,7 @@ const contributor = definePlugin({
           id: "notes/welcome",
           title: "Welcome",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           content: "Welcome to the notes desk.",
         },
         // Gated on a grant the read-only key HOLDS.
@@ -82,7 +82,7 @@ const contributor = definePlugin({
           id: "notes/runbook",
           title: "Runbook",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `read-${NOTES}`,
           content: RUNBOOK,
         },
@@ -91,7 +91,7 @@ const contributor = definePlugin({
           id: "notes/editors",
           title: "For editors",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `create-${NOTES}`,
           content: EDITORS_ONLY,
         },
@@ -100,7 +100,7 @@ const contributor = definePlugin({
           id: "notes/shortcuts",
           title: "Shortcuts",
           archetype: "actions",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 2 } },
           actions: [
             { label: "All notes", href: "/admin/collections/notes" },
             {
@@ -116,7 +116,7 @@ const contributor = definePlugin({
           id: "notes/pinned",
           title: "Pinned",
           archetype: "metric",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 2 } },
           query: { source: `collection:${NOTES}`, op: "count" },
           settings: [PINNED_TO_EVENTS],
         },
@@ -142,7 +142,7 @@ const impostor = definePlugin({
           id: "notes/welcome",
           title: "Welcome (again)",
           archetype: "text",
-          defaultSize: "md",
+          size: { default: { w: 4, h: 3 } },
           requiredPermission: `create-${NOTES}`,
           content: IMPOSTOR,
         },
@@ -227,7 +227,7 @@ beforeEach(async () => {
       id: "app/ops-notes",
       title: "Ops notes",
       archetype: "text",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       requiredPermission: `create-${NOTES}`,
       content: EDITORS_ONLY,
     },
@@ -238,7 +238,7 @@ beforeEach(async () => {
       id: "app/board",
       title: "Board",
       archetype: "text",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       content: "The board meets on Mondays.",
     },
     { source: "@test/app" }
@@ -248,7 +248,7 @@ beforeEach(async () => {
       id: "app/tools",
       title: "Tools",
       archetype: "actions",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       actions: [
         { label: "Search", href: "/admin/search" },
         {
@@ -376,11 +376,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
       "notes/pinned",
     ]);
     expect(ids(body.widgets)).toEqual(
-      expect.arrayContaining([
-        "app/board",
-        "app/tools",
-        "collection/notes-count",
-      ])
+      expect.arrayContaining(["app/board", "app/tools"])
     );
 
     // Then the absences, and on the CONTENT rather than only the id: the whole
@@ -431,7 +427,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
         id: "notes/editors",
         title: "Editors (registered)",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: {
           source: `collection:${NOTES}`,
           op: "count",
@@ -466,7 +462,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
         id: "app/pinned",
         title: "Pinned",
         archetype: "metric",
-        defaultSize: "sm",
+        size: { default: { w: 3, h: 2 } },
         query: { source: `collection:${NOTES}`, op: "count" },
         settings: [
           {
@@ -555,31 +551,32 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     );
   });
 
-  it("withholds a generated card for a collection the reader may not read", async () => {
-    // A key stamped with nothing about `notes` -- the generated cards name the
-    // collection in their id, title and query, and the layout endpoint would
-    // never offer them to this key. It holds a read on `events` instead, so
-    // the cards for THAT collection are the population: the absence below is
-    // a gate on one collection, not a payload with no generated cards at all.
-    const body = await workspaceFor(await keyHolding([`read-${EVENTS}`]));
+  it("ships no widget per collection, to a reader who may read every collection", async () => {
+    // 🔴 A card about one collection is a core widget set to it, so the
+    // payload names no widget after a collection: none in the per-collection
+    // or per-Single namespaces, whichever collections the reader may read.
+    const body = await workspaceFor(
+      await keyHolding([`read-${NOTES}`, `read-${EVENTS}`])
+    );
 
-    const generated = ids(body.widgets).filter(id =>
-      id.startsWith("collection/")
-    );
-    expect(generated).toContain(`collection/${EVENTS}-count`);
-    expect(generated.some(id => id.startsWith(`collection/${NOTES}-`))).toBe(
-      false
-    );
-    // And the ungated declarations still arrive.
-    expect(ids(everyDeclaration(body))).toEqual(
-      expect.arrayContaining(["notes/welcome", "app/board"])
+    const shipped = ids(everyDeclaration(body));
+    expect(
+      shipped.filter(
+        id => id.startsWith("collection/") || id.startsWith("single/")
+      )
+    ).toEqual([]);
+    // The control: the Content widget a collection is reached through ships,
+    // with the ungated declarations, so the absence above is not an empty
+    // payload.
+    expect(shipped).toEqual(
+      expect.arrayContaining(["core/count", "notes/welcome", "app/board"])
     );
   });
 
   it("offers a card's content settings only the collections the reader may read", async () => {
-    // The same reader as above. The collection it may read is offered, which
-    // is the population: the absence of the other is a gate on one
-    // collection, not a payload that offers none.
+    // A reader who may read `events` alone. The collection it may read is
+    // offered, which is the population: the absence of the other is a gate on
+    // one collection, not a payload that offers none.
     const body = await workspaceFor(await keyHolding([`read-${EVENTS}`]));
 
     const offered = (body.widgetSources ?? []).map(source => source.collection);

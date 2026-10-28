@@ -1,0 +1,46 @@
+{
+  "manifestVersion": 3,
+  "blocks": [
+    {
+      "name": "fixture/custom",
+      "version": 1,
+      "description": "Exists for the e2e suite: a contributed block with its own inspector.",
+      "source": "block-fixture",
+      "example": {
+        "props": {
+          "headline": "Custom fixture"
+        }
+      },
+      "props": {
+        "headline": {
+          "type": "text",
+          "role": "content"
+        }
+      },
+      "supports": {
+        "color": true,
+        "fixtureTone": true
+      }
+    },
+    {
+      "name": "fixture/plain",
+      "version": 1,
+      "description": "Exists for the e2e suite: a contributed block edited through its generated controls.",
+      "source": "block-fixture",
+      "example": {
+        "props": {
+          "label": "Plain fixture"
+        }
+      },
+      "props": {
+        "label": {
+          "type": "text",
+          "role": "content"
+        }
+      },
+      "supports": {
+        "color": true
+      }
+    }
+  ]
+}

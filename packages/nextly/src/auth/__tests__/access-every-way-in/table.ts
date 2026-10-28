@@ -685,8 +685,9 @@ type RulesLet = "all" | "matching" | "none";
  * declares one, must answer exactly `true`, or for a collection's read a
  * well-formed filter, which lets through the entries it matches. A filter
  * from any other rule refuses: a write rule's is not applied yet, and a
- * create rule or a Single's rule may not answer one. For a publish or an
- * unpublish the update rule must let it through as well.
+ * create rule or a Single's rule may not answer one. A publish or an
+ * unpublish is judged by its own rule, as any action is, not the update rule
+ * as well.
  */
 function rulesLet(
   rule: Rule,
@@ -699,19 +700,7 @@ function rulesLet(
     const collection = target !== "single" && target !== "single-pub";
     return action === "read" && collection ? "matching" : "none";
   }
-  if (says !== null && says !== true) return "none";
-  return updateLetsThrough(rule, action, caller) ? "all" : "none";
-}
-
-/**
- * Whether the update rule a publish or an unpublish is judged on top of lets
- * it through: it declares nothing, or answers exactly `true`. Any other
- * action is not judged on update.
- */
-function updateLetsThrough(rule: Rule, action: Action, caller: Caller) {
-  if (!isLifecycle(action)) return true;
-  const update = RULE_SAYS[rule]("update", caller);
-  return update === null || update === true;
+  return says === null || says === true ? "all" : "none";
 }
 
 /**
@@ -740,8 +729,7 @@ function answerFor(row: Row, lets: RulesLet): Verdict {
  *   refused while no Public role exists;
  * - everyone else needs the permission AND, where the target declares a rule
  *   for the action, a rule that answers exactly `true`. A publish or an
- *   unpublish is judged on top of update (`shared/types/access.ts`), so where
- *   the target declares an update rule, it must allow the change as well.
+ *   unpublish is judged by its own permission and its own rule.
  *   A `list` and a `count` are reads, judged by the read permission and rule.
  *   A create sent as published is a create and a publish, allowed only where
  *   both are.

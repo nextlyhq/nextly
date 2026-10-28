@@ -542,6 +542,12 @@ export {
   type PluginMediaService,
   type PluginEmailService,
   type PluginVersionsService,
+  // `ctx.services.versions.pins`: version pins on the plugin's own transaction.
+  type PluginVersionPins,
+  type PluginVersionPinHolder,
+  type PluginVersionPin,
+  type PluginPinOptions,
+  type PluginPinTransaction,
   type PluginInsert,
   type PluginTransaction,
   type PluginHookPointDeclaration,
@@ -634,17 +640,20 @@ export type {
 
 // @experimental Widgets declared once with `defineWidget()`, which a plugin
 // contributes under `contributes.dashboard`: the declaration, its setting
-// builders (as `widgetSettings`, since `settings` alone would read as the
-// site's own settings here), and the types a widget's component is written
-// against. Startup checks every declaration and reports each fault; the data
+// builders (`setting`, the collections' field builders as a card's settings
+// take them, with the collections' own `option` for a select's choices), and
+// the types a widget's component is written against. Startup checks every declaration and reports each fault; the data
 // code stays on the server, and the admin is sent data only.
 export {
+  defineAttentionItem,
   defineWidget,
-  settings as widgetSettings,
+  setting,
   type AnyWidget,
+  type AttentionCount,
+  type AttentionItem,
   type ComponentDisplay,
-  type ContentQuery,
   type CoreDisplay,
+  type CoreView,
   type AdminDashboardConfig,
   type CoreWidgetId,
   type DashboardContribution,
@@ -653,16 +662,24 @@ export {
   type WidgetOverride,
   type WidgetRef,
   type ChartStyle,
+  type WidgetAccess,
+  // The permission gate `access` takes.
+  type WidgetAccessGate,
   type WidgetComponentMap,
   type WidgetData,
   type WidgetDataInput,
   type WidgetDisplay,
   type WidgetEmpty,
   type WidgetFilter,
+  // A series' interval and range.
+  type WidgetInterval,
+  type WidgetPreviewCase,
   type WidgetProps,
+  type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
-  type WidgetWidth,
+  type WidgetSummary,
+  type WidgetView,
 } from "./domains/widgets/declaration/public";
 // @experimental The check a site's generated admin component map applies, and what it reads:
 // the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
@@ -677,16 +694,15 @@ export type {
 // Every contract a published shape NAMES is published beside it. There is no
 // `nextly/widgets` subpath, so this is the only place a plugin author can
 // reach them, and a public property whose type has no public name can be
-// inferred but never annotated: `WidgetDefinition.defaultHeight` is a
-// `WidgetHeight`, and `WidgetSource` is built out of `WidgetSourceField`,
-// `WidgetSourceKind` and `WidgetOp`.
+// inferred but never annotated: `WidgetDefinition.size` is a
+// `WidgetSizeDeclaration` of `GridSize`s, and `WidgetSource` is built out of
+// `WidgetSourceField`, `WidgetSourceKind` and `WidgetOp`.
 // The last three are the data SOURCE contract that `contributes.widgetSources`
 // names: inference covers a resolver written inline, and these are what let an
 // author declare one as a named function instead.
 export {
-  WIDGET_SIZES,
-  WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
+  GRID_COLUMNS,
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
   WIDGET_OPS,
@@ -710,8 +726,9 @@ export {
   type WidgetStatCell,
   type WidgetQuery,
   type WidgetQuerySpec,
-  type WidgetSize,
-  type WidgetHeight,
+  type GridSize,
+  type WidgetSizeDeclaration,
+  type WidgetSizeBounds,
   type WidgetArchetype,
   type DataWidgetArchetype,
   type QuerylessWidgetArchetype,
@@ -929,8 +946,10 @@ export {
   registerVersionPinHolder,
   versionPins,
   type VersionPin,
+  type RegisteredVersionPinHolder,
   type VersionPinHolder,
   type VersionPinHolderDefinition,
+  type VersionPinSlot,
 } from "./domains/versions/version-pins";
 export type { VersionRef } from "./domains/versions/versions-repository";
 

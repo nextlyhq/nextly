@@ -4,24 +4,43 @@
  *
  * Every fault is gathered and refused together with the widget declarations'
  * own, each naming "the site config" and the entry, so one restart shows the
- * author everything to fix (R-4, R-5). Nothing here applies a key; which keys
- * are applied yet is `siteDashboardKeysNotApplied`'s to say.
+ * author everything to fix. `defaultLayout` and `suggestions` are applied
+ * through `siteDefaultLayoutPlan`; which keys are not applied yet is
+ * `siteDashboardKeysNotApplied`'s to say.
  *
  * @module domains/widgets/declaration/site-dashboard
  */
 
-import { allWidgets, widthFacts } from "../canonical";
-import { CORE_WIDGETS } from "../core-widgets";
+import { allWidgets, sizeFacts } from "../canonical";
+// Core's ids and default alone, not the widgets: this check runs wherever a config is read.
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
+import type { DefaultLayoutPlan } from "../default-layout";
 import type { WidgetDefinition } from "../definition";
+import {
+  GRID_COLUMNS,
+  isGridSize,
+  MAX_GRID_ROWS,
+  MIN_GRID_ROWS,
+  narrowedSizeBounds,
+  sizeBounds,
+  type GridSize,
+  type WidgetSizeBounds,
+  type WidgetSizeDeclaration,
+} from "../grid-size";
 import { MAX_PLACEMENTS } from "../layout-limits";
 import { getWidget } from "../registry";
+import {
+  inRetiredWidgetNamespace,
+  retiredWidgetReplacement,
+} from "../retired-widget-namespaces";
 import { startingValueProblem, type AnyWidgetSetting } from "../settings";
-import { isWidgetWidth, WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
+import type { DefaultLayoutCard } from "./dashboard";
 import { quote } from "./quote";
 import {
   descriptionProblem,
   requiredTextProblem,
+  sparseListProblem,
   type WidgetDeclarationFault,
 } from "./validate";
 
@@ -30,7 +49,8 @@ export const SITE_CONFIG = "the site config";
 
 /** What the check needs to know of one widget. */
 export interface SiteWidgetFacts {
-  allowedWidths: readonly WidgetWidth[];
+  /** The sizes its cards may take, every end filled in. */
+  size: WidgetSizeBounds;
   allowsSeveral: boolean;
   /** Its declared settings, or `undefined` where its declaration is not seen. */
   settings?: readonly AnyWidgetSetting[];
@@ -80,16 +100,13 @@ const DASHBOARD_KEYS = [
 ] as const;
 
 /** The keys an `overrides` entry takes. */
-const OVERRIDE_KEYS = [
-  "title",
-  "description",
-  "width",
-  "widths",
-  "settings",
-] as const;
+const OVERRIDE_KEYS = ["title", "description", "size", "settings"] as const;
+
+/** The keys an override's `size` takes. */
+const SIZE_KEYS = ["default", "min", "max"] as const;
 
 /** The keys a `defaultLayout` card takes. */
-const CARD_KEYS = ["widget", "width", "settings"] as const;
+const CARD_KEYS = ["widget", "id", "w", "h", "settings", "optional"] as const;
 
 /**
  * Each key of `value` that `where` does not take, with the known key it most
@@ -130,38 +147,6 @@ function editDistance(a: string, b: string): number {
   return previous[b.length] ?? 0;
 }
 
-/**
- * The namespaces of the cards core generates from the content itself, one per
- * collection or Single. They are derived when the dashboard is first read, after
- * startup checks the site config, so at startup an id in them may name a card
- * that does not exist yet without being a mistake.
- */
-const GENERATED_NAMESPACES = ["collection/", "single/"] as const;
-
-/**
- * What the check assumes of a generated card it cannot see yet: every width
- * and no settings it can judge, so only the config's own shape is checked.
- */
-const NOT_YET_GENERATED: SiteWidgetFacts = {
-  allowedWidths: WIDGET_WIDTHS,
-  allowsSeveral: true,
-};
-
-/**
- * What the check knows of `id`: the install's widget, or, for an id in a
- * generated namespace not derived yet, `NOT_YET_GENERATED`.
- */
-function factsFor(
-  id: string,
-  ctx: SiteDashboardContext
-): SiteWidgetFacts | undefined {
-  const facts = ctx.factsOf(id);
-  if (facts !== undefined) return facts;
-  return GENERATED_NAMESPACES.some(namespace => id.startsWith(namespace))
-    ? NOT_YET_GENERATED
-    : undefined;
-}
-
 /** Why `id` names no widget, with its nearest match, or `undefined`. */
 function unknownWidget(
   where: string,
@@ -171,23 +156,83 @@ function unknownWidget(
   if (typeof id !== "string") {
     return `${where} must name a widget by its id, got ${quote(id)}`;
   }
-  if (factsFor(id, ctx) !== undefined) return undefined;
+  // 🔴 Refused by NAMESPACE, ahead of the lookup: core no longer makes a card
+  // per collection or per Single, so an id there names nothing, and the
+  // nearest-match hint would point at an unrelated widget. The author is told
+  // what replaced it instead.
+  const replacement = retiredWidgetReplacement(id);
+  if (replacement !== undefined)
+    return `${where} names "${id}", which ${replacement}`;
+  if (ctx.factsOf(id) !== undefined) return undefined;
   const near = nearest(id, ctx.ids);
   return `${where} names "${id}", which no widget declares${near === undefined ? "" : `; did you mean "${near}"?`}`;
 }
 
-/** Why `width` is not one `widget` allows within `allowed`, or `undefined`. */
-function widthProblem(
-  where: string,
-  width: unknown,
-  allowed: readonly WidgetWidth[]
+/** A size as an author writes it, `{ w: 6, h: 4 }`. */
+const sized = (size: GridSize): string => `{ w: ${size.w}, h: ${size.h} }`;
+
+/** Whether `a` is at most `b` in both directions. */
+const fitsWithin = (a: GridSize, b: GridSize): boolean =>
+  a.w <= b.w && a.h <= b.h;
+
+/**
+ * Why a default card's `w` and `h` are not a size the widget allows, one
+ * problem per direction.
+ *
+ * Each is judged on its own, against the widget's bounds once the site's own
+ * override narrows them: a card stating only `w` keeps the widget's starting
+ * height, so only the direction it states can be wrong.
+ */
+function cardSizeProblems(
+  card: Record<string, unknown>,
+  bounds: WidgetSizeBounds
+): string[] {
+  const direction = (key: "w" | "h"): string | undefined => {
+    const value = card[key];
+    if (value === undefined) return undefined;
+    return (
+      gridDirectionProblem(key, value) ??
+      boundsDirectionProblem(key, value as number, bounds)
+    );
+  };
+  return [direction("w"), direction("h")].filter(
+    (problem): problem is string => problem !== undefined
+  );
+}
+
+/**
+ * Why one stated direction of a default card is no size the grid can draw:
+ * one to twelve columns, and from the fewest to the most rows a card may span.
+ */
+function gridDirectionProblem(
+  key: "w" | "h",
+  value: unknown
 ): string | undefined {
-  if (width === undefined) return undefined;
-  if (!isWidgetWidth(width))
-    return `${where} is ${quote(width)}, which is not a width`;
-  return allowed.includes(width)
+  const lowest = key === "w" ? 1 : MIN_GRID_ROWS;
+  const highest = key === "w" ? GRID_COLUMNS : MAX_GRID_ROWS;
+  const drawable =
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= lowest &&
+    value <= highest;
+  if (drawable) return undefined;
+  const shape = `a whole number from ${lowest} to ${highest}`;
+  return `defaultLayout ${key} must be ${shape}, got ${quote(value)}`;
+}
+
+/** Why a drawable direction of a default card lies outside the widget's bounds. */
+function boundsDirectionProblem(
+  key: "w" | "h",
+  value: number,
+  bounds: WidgetSizeBounds
+): string | undefined {
+  // Every widget the check knows states its bounds, so each drawable
+  // direction is judged against them.
+  const low = bounds.min[key];
+  const high = bounds.max[key];
+  return value >= low && value <= high
     ? undefined
-    : `${where} is "${width}", which the widget does not allow (${allowed.join(", ")})`;
+    : `defaultLayout ${key} is ${value}, which the widget does not allow (from ${low} to ${high})`;
 }
 
 /** Why each starting value cannot be used, one problem per setting. */
@@ -213,22 +258,43 @@ function settingsProblems(
   });
 }
 
-/** The widths a widget allows once the site's own narrowing applies. */
-function narrowedWidths(
+/**
+ * An override's `size` as the grid reads it, or `undefined` when it is not one:
+ * an object whose every stated end is a size the grid can draw.
+ */
+function overrideSize(
+  size: unknown
+): Partial<WidgetSizeDeclaration> | undefined {
+  if (!isRecord(size)) return undefined;
+  const ends: Partial<WidgetSizeDeclaration> = {};
+  for (const key of SIZE_KEYS) {
+    const end = size[key];
+    if (end === undefined) continue;
+    if (!isGridSize(end)) return undefined;
+    ends[key] = end;
+  }
+  return ends;
+}
+
+/**
+ * The sizes a widget allows once the site's own override narrows them.
+ *
+ * An override that cannot be read, or would widen the widget's bounds, leaves
+ * them as the widget declares them: that override is reported as a fault of
+ * its own, so a default card is not also refused for it.
+ */
+function narrowedBounds(
   id: string,
   site: Record<string, unknown>,
   facts: SiteWidgetFacts
-): readonly WidgetWidth[] {
+): WidgetSizeBounds {
+  // The widget's own bounds are always known: every id the check accepts
+  // names a widget the install declares.
   const overrides = isRecord(site.overrides) ? site.overrides : {};
   const override = overrides[id];
-  if (!isRecord(override) || !Array.isArray(override.widths)) {
-    return facts.allowedWidths;
-  }
-  const narrowed = override.widths.filter(
-    (width): width is WidgetWidth =>
-      isWidgetWidth(width) && facts.allowedWidths.includes(width)
-  );
-  return narrowed.length > 0 ? narrowed : facts.allowedWidths;
+  const size = isRecord(override) ? overrideSize(override.size) : undefined;
+  if (size === undefined) return facts.size;
+  return narrowedSizeBounds(facts.size, size) ?? facts.size;
 }
 
 /** The ids `hide` names, whatever else it holds. */
@@ -248,6 +314,8 @@ function hideFaults(
   if (!Array.isArray(site.hide)) {
     return [fault("(hide)", "hide must be a list of widget ids")];
   }
+  const sparse = sparseListProblem(site.hide, "hide");
+  if (sparse !== undefined) return [fault("(hide)", sparse)];
   return site.hide.flatMap(id => {
     const problem = unknownWidget("hide", id, ctx);
     return problem === undefined
@@ -256,29 +324,91 @@ function hideFaults(
   });
 }
 
-/** Why the narrowed widths widen or empty the widget's, one per problem. */
-function narrowingProblems(widths: unknown, facts: SiteWidgetFacts): string[] {
-  if (widths === undefined) return [];
-  if (!Array.isArray(widths) || widths.length === 0) {
-    return ["overrides.widths must be a non-empty list of widths"];
+/**
+ * Why an override's `size` cannot narrow the widget's, one problem each.
+ *
+ * 🔴 An override narrows and never widens: a widget is never drawn at a size
+ * its author did not allow. `narrowedSizeBounds` is the verdict, the same one
+ * the bounds a default card is checked against come from; what follows it
+ * only names which end is wrong.
+ */
+function sizeOverrideProblems(size: unknown, facts: SiteWidgetFacts): string[] {
+  if (size === undefined) return [];
+  if (!isRecord(size)) {
+    return ["overrides.size must be { default?, min?, max? }, each { w, h }"];
   }
-  return widths.flatMap(width => {
-    if (!isWidgetWidth(width))
-      return [`overrides.widths holds ${quote(width)}, which is not a width`];
-    return facts.allowedWidths.includes(width)
-      ? []
-      : [
-          `overrides.widths adds "${width}", which the widget does not allow; widths may only be narrowed (${facts.allowedWidths.join(", ")})`,
-        ];
-  });
+  const unknownKeys = unknownKeyProblems("overrides.size", size, SIZE_KEYS);
+  const shapes = SIZE_KEYS.filter(
+    key => size[key] !== undefined && !isGridSize(size[key])
+  ).map(
+    key =>
+      `overrides.size.${key} must be { w, h } with w a whole number from 1 to ${GRID_COLUMNS} and h a whole number from ${MIN_GRID_ROWS} to ${MAX_GRID_ROWS}, got ${quote(size[key])}`
+  );
+  const read = overrideSize(size);
+  // Only an override that can be read is judged against the widget's bounds.
+  if (read === undefined) {
+    return [...unknownKeys, ...shapes];
+  }
+  if (narrowedSizeBounds(facts.size, read) !== undefined) return unknownKeys;
+  return [...unknownKeys, ...wideningProblems(facts.size, read)];
 }
 
-function overrideProblems(
-  id: string,
-  override: unknown,
-  site: Record<string, unknown>,
-  facts: SiteWidgetFacts
+/**
+ * Which ends of an override `narrowedSizeBounds` refused leave the widget's
+ * bounds or meet no size between them. Never empty for an override it refused.
+ */
+function wideningProblems(
+  own: WidgetSizeBounds,
+  override: Partial<WidgetSizeDeclaration>
 ): string[] {
+  const allowed = `the widget allows from ${sized(own.min)} to ${sized(own.max)}, and an override may only narrow that`;
+  const widened = widenedEnds(own, override, allowed);
+  if (widened.length > 0) return widened;
+  const min = override.min ?? own.min;
+  const max = override.max ?? own.max;
+  if (!fitsWithin(min, max)) {
+    return [
+      `overrides.size leaves no size between its smallest ${sized(min)} and its largest ${sized(max)}`,
+    ];
+  }
+  if (override.default !== undefined) {
+    return [
+      `overrides.size.default ${sized(override.default)} is not between the smallest size ${sized(min)} and the largest ${sized(max)}`,
+    ];
+  }
+  return [`overrides.size cannot narrow the widget's sizes; ${allowed}`];
+}
+
+/** Each end of an override that reaches past the widget's own bounds. */
+function widenedEnds(
+  own: WidgetSizeBounds,
+  override: Partial<WidgetSizeDeclaration>,
+  allowed: string
+): string[] {
+  const ends = [
+    {
+      key: "min",
+      given: override.min,
+      widens: (given: GridSize) => !fitsWithin(own.min, given),
+      what: "smallest",
+    },
+    {
+      key: "max",
+      given: override.max,
+      widens: (given: GridSize) => !fitsWithin(given, own.max),
+      what: "largest",
+    },
+  ] as const;
+  return ends.flatMap(({ key, given, widens, what }) =>
+    given !== undefined && widens(given)
+      ? [
+          `overrides.size.${key} ${sized(given)} widens the ${what} size; ${allowed}`,
+        ]
+      : []
+  );
+}
+
+function overrideProblems(override: unknown, facts: SiteWidgetFacts): string[] {
   if (!isRecord(override)) return ["overrides entry must be an object"];
   const unknownKeys = unknownKeyProblems(
     "overrides entry",
@@ -300,14 +430,7 @@ function overrideProblems(
     ...unknownKeys,
     ...(title === undefined ? [] : [title]),
     ...(description === undefined ? [] : [description]),
-    ...narrowingProblems(override.widths, facts),
-    ...[
-      widthProblem(
-        "overrides.width",
-        override.width,
-        narrowedWidths(id, site, facts)
-      ),
-    ].filter((problem): problem is string => problem !== undefined),
+    ...sizeOverrideProblems(override.size, facts),
     ...settingsProblems("overrides.settings", override.settings, facts),
   ];
 }
@@ -325,14 +448,12 @@ function overridesFaults(
   return Object.entries(site.overrides).flatMap(([id, override]) => {
     const unknown = unknownWidget("overrides", id, ctx);
     if (unknown !== undefined) return [fault(id, unknown)];
-    const facts = factsFor(id, ctx) as SiteWidgetFacts;
-    return overrideProblems(id, override, site, facts).map(problem =>
-      fault(id, problem)
-    );
+    const facts = ctx.factsOf(id) as SiteWidgetFacts;
+    return overrideProblems(override, facts).map(problem => fault(id, problem));
   });
 }
 
-/** One default card as `{ widget, width, settings }`, whichever way it is written. */
+/** One default card as `{ widget, w, h, settings }`, whichever way it is written. */
 function asCard(entry: unknown): Record<string, unknown> | undefined {
   if (typeof entry === "string") return { widget: entry };
   return isRecord(entry) ? entry : undefined;
@@ -344,23 +465,36 @@ function defaultCardProblems(
   ctx: SiteDashboardContext
 ): string[] {
   const id = card.widget;
-  const unknownKeys = unknownKeyProblems("defaultLayout card", card, CARD_KEYS);
+  const unknownKeys = [
+    ...unknownKeyProblems("defaultLayout card", card, CARD_KEYS),
+    ...(card.optional === undefined || typeof card.optional === "boolean"
+      ? []
+      : [
+          `defaultLayout optional must be true or false, got ${quote(card.optional)}`,
+        ]),
+  ];
   const unknown = unknownWidget("defaultLayout", id, ctx);
+  // An optional card names a widget the install may not have, such as a
+  // plugin's on a site without the plugin: left out of the default, no fault.
+  // Never a retired card's id, which no install has: that is refused with the
+  // same message whether the card is optional or not.
+  if (
+    unknown !== undefined &&
+    card.optional === true &&
+    typeof id === "string" &&
+    !inRetiredWidgetNamespace(id)
+  ) {
+    return unknownKeys;
+  }
   if (unknown !== undefined) return [...unknownKeys, unknown];
   const widget = id as string;
-  const facts = factsFor(widget, ctx) as SiteWidgetFacts;
+  const facts = ctx.factsOf(widget) as SiteWidgetFacts;
   return [
     ...unknownKeys,
     ...(hiddenIds(site).has(widget)
       ? [`defaultLayout places "${widget}", which hide hides`]
       : []),
-    ...[
-      widthProblem(
-        "defaultLayout width",
-        card.width,
-        narrowedWidths(widget, site, facts)
-      ),
-    ].filter((problem): problem is string => problem !== undefined),
+    ...cardSizeProblems(card, narrowedBounds(widget, site, facts)),
     ...settingsProblems("defaultLayout settings", card.settings, facts),
   ];
 }
@@ -395,6 +529,95 @@ function repeatedFaults(
   return faults;
 }
 
+/**
+ * Each fault in the ids the default's cards are kept under. A card's id is the
+ * one its entry names, or its widget's: so a widget placed more than once names
+ * an id for each further card, which no other card and no widget may share. The
+ * id never depends on another card, or on which a reader may see.
+ */
+function cardIdFaults(
+  cards: readonly Record<string, unknown>[],
+  ctx: SiteDashboardContext
+): WidgetDeclarationFault[] {
+  const widgetIds = new Set(ctx.ids);
+  const taken = new Set<string>();
+  return cards.flatMap((card, index) => {
+    const found = cardIdFault(card, index, { widgetIds, taken, ctx });
+    return found === undefined ? [] : [found];
+  });
+}
+
+/** What one card's id is checked against: the install's widgets, and the ids the cards before it took. */
+interface CardIdContext {
+  readonly widgetIds: ReadonlySet<string>;
+  /** Grows as each card takes its id. */
+  readonly taken: Set<string>;
+  readonly ctx: SiteDashboardContext;
+}
+
+/** The fault in one card's id, if it has one; a card whose id is free takes it. */
+function cardIdFault(
+  card: Record<string, unknown>,
+  index: number,
+  { widgetIds, taken, ctx }: CardIdContext
+): WidgetDeclarationFault | undefined {
+  const { widget, id } = card;
+  if (typeof widget !== "string") return undefined;
+  const problem =
+    cardIdShapeProblem(id, widgetIds) ??
+    takenIdProblem(widget, id, index, taken, ctx);
+  if (problem === undefined) return undefined;
+  return fault(id === undefined ? widget : `${widget} (${quote(id)})`, problem);
+}
+
+/**
+ * Whether a card's id is one a card before it took: a further card of its
+ * widget with no id of its own, or two cards under one id. An id still free is
+ * taken here.
+ */
+function takenIdProblem(
+  widget: string,
+  id: unknown,
+  index: number,
+  taken: Set<string>,
+  ctx: SiteDashboardContext
+): string | undefined {
+  const own = typeof id === "string" ? id : widget;
+  if (!taken.has(own)) {
+    taken.add(own);
+    return undefined;
+  }
+  if (typeof id === "string") {
+    return `defaultLayout names two cards "${own}": each card needs an id of its own`;
+  }
+  // A widget that allows one card is named once, by `repeatedFaults`.
+  return ctx.factsOf(widget)?.allowsSeveral === false
+    ? undefined
+    : `defaultLayout places "${widget}" again (entry ${index + 1}) with no id of its own: name the card, as { widget: "${widget}", id: "${suggestedCardId(widget, taken)}" }`;
+}
+
+/** What is wrong with an id as written, whatever the other cards: not a non-empty string, or a widget's. */
+function cardIdShapeProblem(
+  id: unknown,
+  widgetIds: ReadonlySet<string>
+): string | undefined {
+  if (id === undefined) return undefined;
+  if (typeof id !== "string" || id === "") {
+    return `defaultLayout id must be a non-empty string, got ${quote(id)}`;
+  }
+  return widgetIds.has(id)
+    ? `defaultLayout names a card "${id}", which is a widget's id; give it a name no widget has`
+    : undefined;
+}
+
+/** An id for a further card of `widget` that no card has taken, for a fault to suggest. */
+function suggestedCardId(widget: string, taken: ReadonlySet<string>): string {
+  const name = widget.slice(widget.lastIndexOf("/") + 1);
+  let ordinal = 2;
+  while (taken.has(`${name}-${ordinal}`)) ordinal += 1;
+  return `${name}-${ordinal}`;
+}
+
 function defaultLayoutFaults(
   site: Record<string, unknown>,
   ctx: SiteDashboardContext
@@ -403,23 +626,35 @@ function defaultLayoutFaults(
   if (!Array.isArray(site.defaultLayout)) {
     return [fault("(defaultLayout)", "defaultLayout must be a list of cards")];
   }
+  const sparse = sparseListProblem(site.defaultLayout, "defaultLayout");
+  if (sparse !== undefined) return [fault("(defaultLayout)", sparse)];
   const entries: readonly unknown[] = site.defaultLayout;
+  const cards = entries.map(asCard);
+  // An optional card whose widget the install does not have is left out of
+  // the default (`defaultLayoutPlacements`), so it takes none of its room.
+  const placed = cards.filter(
+    card =>
+      !(
+        card?.optional === true &&
+        typeof card.widget === "string" &&
+        ctx.factsOf(card.widget) === undefined
+      )
+  ).length;
   const over =
-    entries.length > ctx.maxPlacements
+    placed > ctx.maxPlacements
       ? [
           fault(
             "(defaultLayout)",
-            `defaultLayout holds ${entries.length} cards, and a dashboard holds at most ${ctx.maxPlacements}`
+            `defaultLayout places ${placed} cards, and a dashboard holds at most ${ctx.maxPlacements}`
           ),
         ]
       : [];
-  const cards = entries.map(asCard);
   const each = cards.flatMap((card, index) => {
     if (card === undefined) {
       return [
         fault(
           `(defaultLayout ${index + 1})`,
-          "a default card is a widget id or { widget, width?, settings? }"
+          "a default card is a widget id or { widget, w?, h?, settings?, optional? }"
         ),
       ];
     }
@@ -435,7 +670,12 @@ function defaultLayoutFaults(
   const listed = cards.filter(
     (card): card is Record<string, unknown> => card !== undefined
   );
-  return [...over, ...each, ...repeatedFaults(listed, ctx)];
+  return [
+    ...over,
+    ...each,
+    ...repeatedFaults(listed, ctx),
+    ...cardIdFaults(listed, ctx),
+  ];
 }
 
 function replacementProblem(
@@ -510,14 +750,7 @@ export function siteDashboardFaults(
 }
 
 /** The keys this version accepts and checks but does not yet apply. */
-const NOT_APPLIED_YET = [
-  "widgets",
-  "hide",
-  "overrides",
-  "defaultLayout",
-  "suggestions",
-  "replace",
-] as const;
+const NOT_APPLIED_YET = ["widgets", "hide", "overrides", "replace"] as const;
 
 /**
  * The keys the site config sets that this version does not apply yet, so
@@ -531,19 +764,22 @@ export function siteDashboardKeysNotApplied(dashboard: unknown): string[] {
 /**
  * The install's widgets as the check reads them: the declarations being
  * registered (`declared`, by id, as their definitions), then core's and the
- * plugins' older-shape widgets from the registry, whose widths come from the
- * one reading every other door uses (`widthFacts`).
+ * plugins' older-shape widgets from the registry, whose sizes come from the
+ * one reading every other door uses (`sizeFacts`).
  */
 export function siteDashboardContext(
   declared: ReadonlyMap<string, WidgetDefinition>,
-  alternatives: ReadonlyMap<string, string>
+  alternatives: ReadonlyMap<string, string>,
+  // Core's ids, derived once where startup registers widgets and handed to
+  // every check that asks whether an id is a built-in.
+  coreIds: ReadonlySet<string>
 ): SiteDashboardContext {
   const registered = new Map(allWidgets().map(widget => [widget.id, widget]));
   const factsOf = (id: string): SiteWidgetFacts | undefined => {
     const definition = declared.get(id);
     if (definition !== undefined) {
       return {
-        allowedWidths: definition.allowedWidths ?? [],
+        size: sizeBounds(definition.size),
         allowsSeveral: definition.allowsSeveral === true,
         ...(definition.settings === undefined
           ? {}
@@ -552,10 +788,10 @@ export function siteDashboardContext(
     }
     const widget = registered.get(id);
     if (widget === undefined) return undefined;
-    const { allowedWidths, allowsSeveral } = widthFacts(widget);
+    const { size, allowsSeveral } = sizeFacts(widget);
     const settings = getWidget(id)?.settings;
     return {
-      allowedWidths,
+      size,
       allowsSeveral,
       // A widget only the registry knows declares its settings there; one
       // contributed in the older shape is seen without them.
@@ -565,7 +801,7 @@ export function siteDashboardContext(
   return {
     ids: [...declared.keys(), ...registered.keys()],
     factsOf,
-    coreIds: new Set(CORE_WIDGETS.map(widget => widget.id)),
+    coreIds,
     alternatives,
     maxPlacements: MAX_PLACEMENTS,
   };
@@ -578,4 +814,31 @@ export function siteDashboardContext(
  */
 export function siteDashboardSnapshot(dashboard: unknown): unknown {
   return isRecord(dashboard) ? { ...dashboard } : dashboard;
+}
+
+/**
+ * The default dashboard the site config asks for, from the copy startup checked:
+ * its `defaultLayout`, or core's own where it gives none, and whether the
+ * plugins' suggestions (`suggested`, in plugin order) are placed after it.
+ * Read only once the config has passed every check, so each entry is a widget
+ * id or a card of the shape the check admits.
+ */
+export function siteDefaultLayoutPlan(
+  dashboard: unknown,
+  suggested: readonly string[]
+): DefaultLayoutPlan {
+  const site = isRecord(dashboard) ? dashboard : {};
+  const given = site.defaultLayout as
+    | readonly (string | DefaultLayoutCard)[]
+    | undefined;
+  return {
+    cards:
+      given === undefined
+        ? CORE_DEFAULT_LAYOUT
+        : given.map(entry =>
+            typeof entry === "string" ? { widget: entry } : { ...entry }
+          ),
+    suggestions: site.suggestions !== false,
+    suggested,
+  };
 }

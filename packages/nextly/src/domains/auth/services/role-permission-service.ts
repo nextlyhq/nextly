@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, getColumns } from "drizzle-orm";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { eq, getColumns } from "drizzle-orm";
 
 import type {
   RBACDatabaseInstance,
@@ -94,20 +95,17 @@ export class RolePermissionService extends BaseService {
       permissionId = String(existing.id);
       await this.healReversedSlug(permissionId, String(existing.slug), perm);
 
-      const id = randomUUID();
-      const rolePermissionData: RolePermissionInsertData = {
-        id,
-        roleId,
-        permissionId,
-      };
-      const insert = (this.db as RBACDatabaseInstance)
-        .insert(this.tables.rolePermissions)
-        .values(rolePermissionData);
-      if (typeof insert.onConflictDoNothing === "function") {
-        await insert.onConflictDoNothing();
-      } else {
-        await insert;
-      }
+      // Under the lock on the role's row that every other writer of its
+      // permissions takes, and only where the role does not hold it yet: a
+      // plain insert of an assignment the role holds fails on MySQL, which
+      // has no conflict clause to fall back on.
+      const assigned = permissionId;
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        if (!(await this.heldIn(tx, roleId)).has(assigned)) {
+          await this.insertAssignments(tx, roleId, [assigned]);
+        }
+      });
     } else {
       const newPermId = randomUUID();
       const rolePermId = randomUUID();
@@ -235,14 +233,18 @@ export class RolePermissionService extends BaseService {
     });
     if (!permission) return;
 
-    await (this.db as RBACDatabaseInstance)
-      .delete(this.tables.rolePermissions)
-      .where(
-        and(
-          eq(this.tables.rolePermissions.roleId, roleId),
-          eq(this.tables.rolePermissions.permissionId, permission.id)
-        )
-      );
+    // Under the lock on the role's row that every other writer of its
+    // permissions takes, so a removal never lands between another writer's
+    // read of what the role holds and its write.
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("roles", roleId);
+      await tx.delete("role_permissions", {
+        and: [
+          { column: "roleId", op: "=", value: roleId },
+          { column: "permissionId", op: "=", value: String(permission.id) },
+        ],
+      });
+    });
 
     await afterRoleGrantsChanged(roleId);
   }
@@ -285,11 +287,8 @@ export class RolePermissionService extends BaseService {
 
     // Each statement binds no more parameters than the adapter says one query
     // may: one per id plus the role's for a removal, and up to one per column
-    // for each inserted row, defaults included.
+    // for each inserted row, defaults included (`insertAssignments`).
     const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
-    const paramsPerRow = Object.keys(
-      getColumns(this.tables.rolePermissions)
-    ).length;
 
     await this.adapter.transaction(async tx => {
       // Serialises writers to this role: a second writer waits, then reads what
@@ -297,14 +296,7 @@ export class RolePermissionService extends BaseService {
       // are named as the schema declares them, which is how the adapter reads a
       // where clause and returns a row.
       await tx.lockRow("roles", roleId);
-      const held = new Set(
-        (
-          await tx.select<{ permissionId: string }>("role_permissions", {
-            columns: ["permissionId"],
-            where: this.whereEq("roleId", roleId),
-          })
-        ).map(row => String(row.permissionId))
-      );
+      const held = await this.heldIn(tx, roleId);
 
       const extra = [...held].filter(id => !desired.has(id));
       for (const ids of batches(extra, maxParams - 1)) {
@@ -338,24 +330,175 @@ export class RolePermissionService extends BaseService {
         });
       }
 
-      // Through Drizzle, on this transaction's connection, so the schema's own
-      // defaults apply: SQLite's `created_at` is filled by the table
-      // definition, which an insert by table name leaves as NULL.
-      const drizzle = tx.getDrizzle<RBACDatabaseInstance>();
-      for (const ids of batches(missing, maxParams / paramsPerRow)) {
-        await drizzle.insert(this.tables.rolePermissions).values(
-          ids.map(permissionId => ({
-            id: randomUUID(),
-            roleId,
-            permissionId,
-          }))
-        );
-      }
+      await this.insertAssignments(tx, roleId, missing);
     });
 
     await afterRoleGrantsChanged(roleId);
 
     return this.listRolePermissions(roleId);
+  }
+
+  /** The permission ids `roleId` holds, read on transaction `tx`. */
+  private async heldIn(
+    tx: TransactionContext,
+    roleId: string
+  ): Promise<Set<string>> {
+    return new Set(
+      (
+        await tx.select<{ permissionId: string }>("role_permissions", {
+          columns: ["permissionId"],
+          where: this.whereEq("roleId", roleId),
+        })
+      ).map(row => String(row.permissionId))
+    );
+  }
+
+  /**
+   * Assigns `permissionIds` to `roleId` on transaction `tx`, each statement
+   * binding no more parameters than the adapter says one query may. Through
+   * Drizzle, on the transaction's connection, so the schema's own defaults
+   * apply: SQLite's `created_at` is filled by the table definition, which an
+   * insert by table name leaves as NULL.
+   */
+  private async insertAssignments(
+    tx: TransactionContext,
+    roleId: string,
+    permissionIds: readonly string[]
+  ): Promise<void> {
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    const paramsPerRow = Object.keys(
+      getColumns(this.tables.rolePermissions)
+    ).length;
+    const drizzle = tx.getDrizzle<RBACDatabaseInstance>();
+    for (const ids of batches(permissionIds, maxParams / paramsPerRow)) {
+      await drizzle.insert(this.tables.rolePermissions).values(
+        ids.map(permissionId => ({
+          id: randomUUID(),
+          roleId,
+          permissionId,
+        }))
+      );
+    }
+  }
+
+  /**
+   * Adds to the role the permissions `pick` chooses among `wanted`, in one
+   * transaction under the lock on the role's row that every writer of its
+   * permissions takes, so none lands between the choice and the add.
+   *
+   * Each wanted permission is named by its id and the action and resource it
+   * is meant to grant. Its row is locked and read again here, and one whose
+   * row is gone or now grants something else is left out: an id looked up
+   * before the transaction may since have been edited into another
+   * permission. `pick` is handed the ids still as wanted and the
+   * transaction's executor, so what it records commits or rolls back with the
+   * add; it returns the ids to add, and one the role holds already is left as
+   * it is rather than added twice.
+   *
+   * @returns The permission ids added
+   */
+  async addRolePermissionsOnce(
+    roleId: string,
+    wanted: ReadonlyArray<{ id: string; action: string; resource: string }>,
+    pick: (
+      ids: readonly string[],
+      executor: unknown
+    ) => Promise<readonly string[]>
+  ): Promise<string[]> {
+    let added: string[] = [];
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("roles", roleId);
+      const held = await this.heldIn(tx, roleId);
+      const asWanted = await this.stillAsWanted(tx, wanted);
+      const picked = new Set(await pick(asWanted, tx.getDrizzle()));
+      added = asWanted.filter(id => picked.has(id) && !held.has(id));
+      await this.insertAssignments(tx, roleId, added);
+    });
+    if (added.length > 0) await afterRoleGrantsChanged(roleId);
+    return added;
+  }
+
+  /**
+   * Takes off the role the permissions `pick` chooses among `unwanted`, in one
+   * transaction under the same lock on the role's row as
+   * {@link addRolePermissionsOnce}, so no edit of its permissions lands
+   * between the choice and the removal.
+   *
+   * Each permission is named by its id and the action and resource it is
+   * taken back for, and its row is locked and read again here, as when adding:
+   * one whose row now grants something else is left on the role, since the id
+   * was looked up before the transaction. `pick` is handed the ids still as
+   * named that the role holds, and the transaction's executor, so what it
+   * records commits or rolls back with the removal; it returns the ids to
+   * remove.
+   *
+   * @returns The permission ids removed
+   */
+  async withdrawRolePermissions(
+    roleId: string,
+    unwanted: ReadonlyArray<{ id: string; action: string; resource: string }>,
+    pick: (
+      held: readonly string[],
+      executor: unknown
+    ) => Promise<readonly string[]>
+  ): Promise<string[]> {
+    let removed: string[] = [];
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("roles", roleId);
+      const held = await this.heldIn(tx, roleId);
+      const holding = (await this.stillAsWanted(tx, unwanted)).filter(id =>
+        held.has(id)
+      );
+      if (holding.length === 0) return;
+      const picked = new Set(await pick(holding, tx.getDrizzle()));
+      removed = holding.filter(id => picked.has(id));
+      const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+      for (const batch of batches(removed, maxParams - 1)) {
+        await tx.delete("role_permissions", {
+          and: [
+            { column: "roleId", op: "=", value: roleId },
+            { column: "permissionId", op: "IN", value: batch },
+          ],
+        });
+      }
+    });
+    if (removed.length > 0) await afterRoleGrantsChanged(roleId);
+    return removed;
+  }
+
+  /**
+   * The ids among `wanted` whose permission row, locked on transaction `tx`,
+   * still grants the action and resource it is named for.
+   */
+  private async stillAsWanted(
+    tx: TransactionContext,
+    wanted: ReadonlyArray<{ id: string; action: string; resource: string }>
+  ): Promise<string[]> {
+    const ids = [...new Set(wanted.map(({ id }) => id))];
+    for (const id of ids) await tx.lockRow("permissions", id);
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    const rows = new Map<string, { action: string; resource: string }>();
+    for (const batch of batches(ids, maxParams)) {
+      for (const row of await tx.select<{
+        id: string;
+        action: string;
+        resource: string;
+      }>("permissions", {
+        columns: ["id", "action", "resource"],
+        where: { and: [{ column: "id", op: "IN", value: batch }] },
+      })) {
+        rows.set(String(row.id), row);
+      }
+    }
+    return ids.filter(id => {
+      const row = rows.get(id);
+      return wanted.some(
+        want =>
+          want.id === id &&
+          row?.action === want.action &&
+          row?.resource === want.resource
+      );
+    });
   }
 
   /**

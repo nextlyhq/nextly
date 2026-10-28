@@ -401,8 +401,6 @@ function useAsTitleOf(collection: RegisteredCollection): string | undefined {
 
 /** What the last registry read said about every collection, beside the sources it built. */
 interface RegistryRecord {
-  /** Every registered collection slug. */
-  slugs: ReadonlySet<string>;
   /** The collections whose definition turns creating entries off (`admin.disableCreate`). */
   createDisabled: ReadonlySet<string>;
 }
@@ -427,7 +425,7 @@ export async function refreshCollectionSources(): Promise<boolean> {
   const collections = await readRegisteredCollections();
   if (!collections) return false;
 
-  // A collection kept off the dashboard gets no source, so no card is generated for it and a
+  // A collection kept off the dashboard gets no source, so no card can be set to it and a
   // query naming it is refused exactly as an unknown name is -- for a super-admin too.
   const named = collections.filter(
     (collection): collection is RegisteredCollection & { slug: string } =>
@@ -465,27 +463,11 @@ export async function refreshCollectionSources(): Promise<boolean> {
       typeof collection.slug === "string" && collection.slug !== ""
   );
   globalForRegistered.__nextly_widgetRegistryRecord = {
-    slugs: new Set(slugged.map(collection => collection.slug)),
     createDisabled: new Set(
       slugged.filter(disablesCreate).map(collection => collection.slug)
     ),
   };
   return true;
-}
-
-/**
- * Every collection slug the registry held at the last refresh, or `undefined`
- * before any refresh could read it.
- *
- * Wider than the sources on purpose: a collection kept off the dashboard, or
- * withheld while its migration is pending, has no source and is still in the
- * install. A saved card's collection is GONE only when it is not here, so a
- * collection briefly without a source never reads as deleted. Recorded from
- * the same read as the sources, and left standing when a refresh cannot reach
- * the registry, as they are.
- */
-export function registeredCollectionSlugs(): ReadonlySet<string> | undefined {
-  return globalForRegistered.__nextly_widgetRegistryRecord?.slugs;
 }
 
 /**

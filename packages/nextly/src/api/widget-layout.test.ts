@@ -23,6 +23,13 @@ vi.mock("./authenticated-read", async importOriginal => {
 });
 
 const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
+
+// Which of the default's cards their declared widgets' own rules would not
+// show the reader: the case states it, since that judgement has its own tests.
+const { defaultCardsNotShown } = vi.hoisted(() => ({
+  defaultCardsNotShown: vi.fn(),
+}));
+vi.mock("./default-cards-shown", () => ({ defaultCardsNotShown }));
 vi.mock("../di", () => ({ container: { get: containerGet } }));
 
 // `callerHoldsPermission` is the seam a caller is put on either side of.
@@ -73,6 +80,11 @@ import {
   registerWidget,
 } from "../domains/widgets/registry";
 import { setContributedWidgets } from "../domains/widgets/canonical";
+import { CORE_DEFAULT_LAYOUT } from "../domains/widgets/core-widgets/ids";
+import {
+  setDefaultLayoutPlan,
+  type DefaultLayoutPlan,
+} from "../domains/widgets/default-layout";
 import { collectionSettingsToken } from "../domains/widgets/collection-cards";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../plugins/validate-admin-widgets";
@@ -140,7 +152,7 @@ function widget(patch: Partial<WidgetDefinition>): WidgetDefinition {
     id: "core/one",
     title: "One",
     archetype: "custom",
-    defaultSize: "full",
+    size: { default: { w: 12, h: 3 } },
     component: "core#One",
     ...patch,
   };
@@ -196,8 +208,6 @@ interface LayoutPayload {
   widgets?: Record<
     string,
     {
-      allowedWidths: string[];
-      defaultWidth: string;
       allowsSeveral: boolean;
       group?: string;
       subgroup?: string;
@@ -239,6 +249,12 @@ beforeEach(() => {
   logged.length = 0;
   clearWidgets();
   setContributedWidgets([]);
+  setDefaultLayoutPlan({
+    cards: CORE_DEFAULT_LAYOUT,
+    suggestions: true,
+    suggested: [],
+  });
+  defaultCardsNotShown.mockResolvedValue(new Set());
   reqAuth.mockResolvedValue({
     userId: "user-1",
     permissions: [],
@@ -304,8 +320,8 @@ describe("GET /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p2", widgetId: "core/b", width: "full", removed: false },
-        { id: "p1", widgetId: "core/a", width: "full", removed: true },
+        { id: "p2", widgetId: "core/b", w: 12, h: 3, removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: true },
       ]),
     };
 
@@ -327,8 +343,8 @@ describe("GET /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "same", widgetId: "core/a", width: "full", removed: false },
-        { id: "same", widgetId: "core/b", width: "full", removed: false },
+        { id: "same", widgetId: "core/a", w: 12, h: 3, removed: false },
+        { id: "same", widgetId: "core/b", w: 12, h: 3, removed: false },
       ]),
     };
 
@@ -345,11 +361,12 @@ describe("GET /api/dashboard/layout", () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
         {
           id: "p2",
           widgetId: "plugin/uninstalled",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
         },
       ]),
@@ -401,7 +418,7 @@ describe("where the add panel lists each widget", () => {
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
-    // Core's group, beside the widths the editor already reads.
+    // Core's group, beside the sizes the editor already reads.
     expect(body.widgets?.["core/team"]).toMatchObject({
       group: "team",
       description: "How many users and roles the project has.",
@@ -447,7 +464,7 @@ describe("where the add panel lists each widget", () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p-team", widgetId: "core/team", width: "full", removed: false },
+        { id: "p-team", widgetId: "core/team", w: 12, h: 3, removed: false },
       ]),
     };
 
@@ -490,7 +507,8 @@ describe("a widget that only CONTRIBUTED", () => {
           {
             id: "p1",
             widgetId: "forms/latest",
-            width: "full",
+            w: 12,
+            h: 3,
             removed: false,
           },
         ],
@@ -509,7 +527,7 @@ describe("a widget that only CONTRIBUTED", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
       ]),
     };
 
@@ -533,20 +551,17 @@ describe("a widget that only CONTRIBUTED", () => {
     );
   });
 
-  it("takes the width it declared, and survives a size it cannot read", async () => {
-    // A contribution may come from a plugin built against a newer core, so an
-    // unrecognised size is drawn full rather than refused; a known one becomes
-    // the width of the same span.
+  it("starts each card at the default size it declared", async () => {
     setContributedWidgets([
-      { id: "forms/latest", defaultSize: "xxl" },
-      { id: "forms/count", defaultSize: "sm" },
+      { id: "forms/latest", size: { default: { w: 8, h: 4 } } },
+      { id: "forms/count", size: { default: { w: 3, h: 2 } } },
     ]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
-    expect(body.placements?.map(p => [p.widgetId, p.width])).toEqual([
-      ["forms/latest", "full"],
-      ["forms/count", "quarter"],
+    expect(body.placements?.map(p => [p.widgetId, p.w, p.h])).toEqual([
+      ["forms/latest", 8, 4],
+      ["forms/count", 3, 2],
     ]);
   });
 });
@@ -560,7 +575,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 3,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
       ]),
     };
 
@@ -579,7 +594,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 3,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
       ]),
     };
 
@@ -599,7 +614,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
       ]),
     };
 
@@ -643,7 +658,7 @@ describe("a row nobody arranged still follows the defaults", () => {
     registerWidget(widget({ id: "core/a" }));
     registerWidget(widget({ id: "core/new" }));
     stored = unarrangedRow([
-      { id: "core/a", widgetId: "core/a", width: "full", removed: true },
+      { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: true },
     ]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
@@ -663,7 +678,7 @@ describe("a row nobody arranged still follows the defaults", () => {
     registerWidget(widget({ id: "core/a" }));
     registerWidget(widget({ id: "core/new" }));
     stored = unarrangedRow([
-      { id: "core/a", widgetId: "core/a", width: "full", removed: true },
+      { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: true },
     ]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
@@ -685,8 +700,8 @@ describe("a row nobody arranged still follows the defaults", () => {
     registerWidget(widget({ id: "core/a", defaultOrder: 20 }));
     registerWidget(widget({ id: "core/b", defaultOrder: 10 }));
     stored = unarrangedRow([
-      { id: "core/a", widgetId: "core/a", width: "full", removed: false },
-      { id: "core/b", widgetId: "core/b", width: "full", removed: false },
+      { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: false },
+      { id: "core/b", widgetId: "core/b", w: 12, h: 3, removed: false },
     ]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
@@ -697,7 +712,7 @@ describe("a row nobody arranged still follows the defaults", () => {
 
 describe("the kind of write a PUT is", () => {
   const onePlacement = (removed: boolean, id = "core/a"): WidgetPlacement[] => [
-    { id, widgetId: "core/a", width: "full", removed },
+    { id, widgetId: "core/a", w: 12, h: 3, removed },
   ];
 
   it("records a dismissal on a reader with no row as unarranged", async () => {
@@ -797,11 +812,12 @@ describe("the kind of write a PUT is", () => {
       widget({ id: "core/gated", requiredPermission: "read-secrets" })
     );
     stored = unarrangedRow([
-      { id: "core/a", widgetId: "core/a", width: "full", removed: false },
+      { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: false },
       {
         id: "core/gated",
         widgetId: "core/gated",
-        width: "full",
+        w: 12,
+        h: 3,
         removed: true,
       },
     ]);
@@ -834,7 +850,8 @@ describe("opaque config survives the response pipeline", () => {
               {
                 id: "p1",
                 widgetId: "core/a",
-                width: "full",
+                w: 12,
+                h: 3,
                 removed: false,
               },
             ],
@@ -860,7 +877,7 @@ describe("opaque config survives the response pipeline", () => {
 
 describe("PUT /api/dashboard/layout", () => {
   const onePlacement: WidgetPlacement[] = [
-    { id: "p1", widgetId: "core/a", width: "full", removed: false },
+    { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
   ];
 
   it("stores what the caller submitted", async () => {
@@ -888,11 +905,12 @@ describe("PUT /api/dashboard/layout", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
         {
           id: "p9",
           widgetId: "core/gated",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
         },
       ]),
@@ -912,6 +930,78 @@ describe("PUT /api/dashboard/layout", () => {
     ]);
   });
 
+  it("reads a retired per-collection card out of the row, and saves without it", async () => {
+    // 🔴 Dropped, unlike the gated card above: core makes no card in the
+    // `collection/` or `single/` namespace any more, so none can come back.
+    // `acme/x`, a card of a plugin this install does not have now, is the
+    // control: an unknown id is carried, so the drop is by namespace and not
+    // by "the registry does not know it".
+    registerWidget(widget({ id: "core/a" }));
+    const row = serializeLayout([
+      { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
+      {
+        id: "p8",
+        widgetId: "collection/posts-count",
+        w: 3,
+        h: 2,
+        removed: false,
+      },
+      { id: "p9", widgetId: "acme/x", w: 12, h: 3, removed: false },
+    ]);
+    stored = { version: 2, layout: row };
+
+    const read = await bodyOf(await getWidgetLayout(getReq()));
+    expect(read.placements?.map(p => p.widgetId)).toEqual(["core/a"]);
+    // The read writes nothing: the row is as it was until the next save.
+    expect(saved).toBeUndefined();
+    expect(stored?.layout).toBe(row);
+
+    await putWidgetLayout(
+      putReq({
+        placements: onePlacement,
+        version: 2,
+        scope: scopeFor(["core/a"]),
+      })
+    );
+
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "acme/x",
+    ]);
+  });
+
+  it("refuses a placement in a retired namespace, saying what replaced it in each", async () => {
+    // The refusal is the namespace's, not the unknown-widget rule's: it says
+    // what replaced the card, and for a Single never "that collection", since
+    // the widgets with a Collection setting offer collections only.
+    registerWidget(widget({ id: "core/a" }));
+    const refused = async (widgetId: string) => {
+      const res = await putWidgetLayout(
+        putReq({
+          placements: [
+            ...onePlacement,
+            { id: "p2", widgetId, w: 12, h: 3, removed: false },
+          ],
+          version: 0,
+          scope: scopeFor(),
+        })
+      );
+      expect(res.status).toBe(400);
+      return res.text();
+    };
+
+    const collection = await refused("collection/posts-count");
+    expect(collection).toContain(
+      '\\"collection/posts-count\\" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.'
+    );
+    const single = await refused("single/about-card");
+    expect(single).toContain(
+      `\\"single/about-card\\" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
+    );
+    expect(single).not.toContain("Collection to");
+    expect(saved).toBeUndefined();
+  });
+
   it("does not echo the carried placement back to the caller", async () => {
     registerWidget(widget({ id: "core/a" }));
     registerWidget(
@@ -924,7 +1014,8 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p9",
           widgetId: "core/gated",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
         },
       ]),
@@ -959,7 +1050,8 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/gated",
-            width: "full",
+            w: 12,
+            h: 3,
             removed: false,
           },
         ],
@@ -981,8 +1073,8 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "dup", widgetId: "core/a", width: "full", removed: false },
-          { id: "dup", widgetId: "core/a", width: "full", removed: false },
+          { id: "dup", widgetId: "core/a", w: 12, h: 3, removed: false },
+          { id: "dup", widgetId: "core/a", w: 12, h: 3, removed: false },
         ],
         version: 0,
         scope: scopeFor(),
@@ -1017,8 +1109,8 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "dup", widgetId: "core/a", width: "full", removed: false },
-          { id: "dup", widgetId: "core/b", width: "full", removed: false },
+          { id: "dup", widgetId: "core/a", w: 12, h: 3, removed: false },
+          { id: "dup", widgetId: "core/b", w: 12, h: 3, removed: false },
         ],
         version: 0,
         scope: scopeFor(),
@@ -1038,8 +1130,8 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "one", widgetId: "core/a", width: "full", removed: false },
-          { id: "two", widgetId: "core/b", width: "full", removed: false },
+          { id: "one", widgetId: "core/a", w: 12, h: 3, removed: false },
+          { id: "two", widgetId: "core/b", w: 12, h: 3, removed: false },
         ],
         version: 0,
         scope: scopeFor(),
@@ -1055,17 +1147,17 @@ describe("PUT /api/dashboard/layout", () => {
      * 🔴 The failure a freshly minted repair id would cause. A client echoes
      * the ids it was handed; if the id it was handed on GET is not the id this
      * PUT's own read produces, the card it sends back is no longer recognised
-     * as the one it was shown, and a width it kept is judged as a change. The
-     * repair id is derived from the id it repeats, so both reads agree.
+     * as the one it was shown, and a setting it kept is judged as a change.
+     * The repair id is derived from the id it repeats, so both reads agree.
      */
     registerWidget(widget({ id: "core/a" }));
-    registerWidget(widget({ id: "core/b", minSize: "full" }));
+    registerWidget(widget({ id: "core/b" }));
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "same", widgetId: "core/a", width: "full", removed: false },
-        // A width core/b no longer allows: kept, because it is unchanged.
-        { id: "same", widgetId: "core/b", width: "quarter", removed: false },
+        { id: "same", widgetId: "core/a", w: 12, h: 3, removed: false },
+        // A size outside core/b's bounds (12 by 3 exactly): kept as stored.
+        { id: "same", widgetId: "core/b", w: 3, h: 2, removed: false },
       ]),
     };
 
@@ -1105,11 +1197,12 @@ describe("PUT /api/dashboard/layout", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
         {
           id: "p9",
           widgetId: "core/gated",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
         },
       ]),
@@ -1146,7 +1239,8 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/gated",
-            width: "full",
+            w: 12,
+            h: 3,
             removed: false,
           },
         ],
@@ -1191,7 +1285,8 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/tools",
-            width: "full",
+            w: 12,
+            h: 3,
             removed: false,
           },
         ],
@@ -1274,7 +1369,8 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/a",
-            width: "full",
+            w: 12,
+            h: 3,
             removed: false,
             config: { blob: "x".repeat(40_000) },
           },
@@ -1386,7 +1482,8 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p9",
           widgetId: "core/gated",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
           config: { blob: "y".repeat(60_000) },
         },
@@ -1402,7 +1499,8 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p9",
           widgetId: "core/gated",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
         },
       ]),
@@ -1465,7 +1563,8 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p1",
           widgetId: "core/a",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
           config: { blob: "z".repeat(200_000) },
         },
@@ -1496,7 +1595,8 @@ describe("PUT /api/dashboard/layout", () => {
     const many = Array.from({ length: 400 }, (_, i) => ({
       id: `p${i}`,
       widgetId: "core/a",
-      width: "full",
+      w: 12,
+      h: 3,
       removed: false,
     }));
 
@@ -1536,7 +1636,7 @@ describe("DELETE /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: true },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: true },
       ]),
     };
 
@@ -1558,7 +1658,7 @@ describe("DELETE /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: true },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: true },
       ]),
     };
 
@@ -1583,7 +1683,7 @@ describe("DELETE /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
       ]),
     };
 
@@ -1693,7 +1793,7 @@ describe("an arrangement the server could not read", () => {
     putWidgetLayout(
       putReq({
         placements: [
-          { id: "core/a", widgetId: "core/a", width: "full", removed: false },
+          { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: false },
         ],
         version: 7,
         scope: scopeFor(),
@@ -1733,19 +1833,168 @@ describe("an arrangement the server could not read", () => {
     stored = {
       version: 7,
       layout: serializeLayout([
-        { id: "core/a", widgetId: "core/a", width: "full", removed: false },
+        { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: false },
       ]),
     };
     expect((await save()).status).toBe(200);
   });
 });
 
-describe("the widths a card may take", () => {
-  const putOne = (width: string, version = 1) =>
+describe("a row of an earlier format", () => {
+  const STARTED = "core/get-started";
+  const open = {
+    unknown: false,
+    steps: [{ key: "invite", kind: "invite", status: "open" }],
+    done: 0,
+    total: 1,
+  };
+  /**
+   * A version 3 row holding every field that format stored, each different
+   * from the default: a moved and resized card, a removal, a setting, a
+   * skipped Get started step and a card of a widget the default never places.
+   */
+  const EARLIER = JSON.stringify({
+    schemaVersion: 3,
+    placements: [
+      {
+        id: "mine-team",
+        widgetId: "core/team",
+        width: "quarter",
+        removed: true,
+        config: { range: "7d" },
+      },
+      {
+        id: "mine-started",
+        widgetId: STARTED,
+        width: "half",
+        removed: false,
+        config: { skipped: ["invite"], acted: true },
+      },
+      { id: "mine-b", widgetId: "core/b", width: "third", removed: false },
+    ],
+  });
+  const DEFAULT: WidgetPlacement[] = [
+    { id: STARTED, widgetId: STARTED, w: 12, h: 3, removed: false },
+    { id: "core/team", widgetId: "core/team", w: 12, h: 3, removed: false },
+  ];
+
+  beforeEach(() => {
+    registerWidget(widget({ id: STARTED, defaultOrder: 0, dismissible: true }));
+    registerWidget(widget({ id: "core/team", defaultOrder: 10 }));
+    getStartedSteps.mockResolvedValue(open);
+    stored = { version: 7, layout: EARLIER };
+  });
+
+  it("is read as the default, with the row's own version, and is not rewritten", async () => {
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // 🔴 Exactly the default: none of the row's cards, sizes, settings,
+    // removals or skips.
+    expect(body.source).toBe("default");
+    expect(body.placements).toEqual(DEFAULT);
+    expect(body.defaultPlacements).toEqual(DEFAULT);
+    // The row's version, so the next write replaces it rather than colliding.
+    expect(body.version).toBe(7);
+    // Not unreadable: nothing is logged and nothing asks for confirmation.
+    expect(logged).toEqual([]);
+    expect(saved).toBeUndefined();
+    expect(stored?.layout).toBe(EARLIER);
+  });
+
+  const singleCardWrites: ReadonlyArray<
+    [string, (placements: WidgetPlacement[]) => WidgetPlacement[]]
+  > = [
+    [
+      "a removal",
+      placements =>
+        placements.map(p =>
+          p.widgetId === "core/team" ? { ...p, removed: true } : p
+        ),
+    ],
+    [
+      "a quick setting",
+      placements =>
+        placements.map(p =>
+          p.widgetId === "core/team" ? { ...p, config: { range: "30d" } } : p
+        ),
+    ],
+    [
+      "a skipped Get started step",
+      placements =>
+        placements.map(p =>
+          p.widgetId === STARTED ? { ...p, config: { skipped: ["invite"] } } : p
+        ),
+    ],
+  ];
+
+  for (const [name, change] of singleCardWrites) {
+    it(`is replaced by ${name}, as an absent row would be created, holding only the new state`, async () => {
+      const body = await bodyOf(await getWidgetLayout(getReq()));
+      const res = await putWidgetLayout(
+        putReq({
+          placements: change(body.placements ?? []),
+          version: body.version,
+          scope: body.scope,
+          arranged: false,
+        })
+      );
+
+      // 🔴 Accepted without asking, where an unreadable row refuses every
+      // single-card write.
+      expect(res.status).toBe(200);
+      expect(saved?.expected).toBe(7);
+      expect(saved?.arranged).toBe(false);
+      // The default with the one change, and nothing of the earlier row.
+      expect(saved?.placements).toEqual(change(DEFAULT));
+    });
+  }
+
+  it("is replaced by a full save without a confirmation", async () => {
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [...(body.placements ?? [])].reverse(),
+        version: body.version,
+        scope: body.scope,
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(saved?.expected).toBe(7);
+    expect(saved?.arranged).toBe(true);
+    expect(saved?.placements).toEqual([...DEFAULT].reverse());
+  });
+
+  it("CONTROL: a row with no version, or a version this core never wrote, still refuses a single-card write", async () => {
+    for (const schemaVersion of [undefined, 0, 99]) {
+      saved = undefined;
+      const layout = JSON.stringify({
+        schemaVersion,
+        placements: JSON.parse(EARLIER).placements,
+      });
+      stored = { version: 7, layout };
+      const body = await bodyOf(await getWidgetLayout(getReq()));
+      expect(body.source).toBe("unreadable");
+      const res = await putWidgetLayout(
+        putReq({
+          placements: body.placements,
+          version: body.version,
+          scope: body.scope,
+          arranged: false,
+        })
+      );
+      expect(res.status).toBe(409);
+      expect(saved).toBeUndefined();
+      expect(stored?.layout).toBe(layout);
+    }
+  });
+});
+
+describe("the sizes a card may take", () => {
+  const putOne = (size: Record<string, unknown>, version = 1) =>
     putWidgetLayout(
       putReq({
         placements: [
-          { id: "p1", widgetId: "core/narrow", width, removed: false },
+          { id: "p1", widgetId: "core/narrow", ...size, removed: false },
         ],
         version,
         scope: scopeFor(),
@@ -1753,34 +2002,33 @@ describe("the widths a card may take", () => {
     );
 
   beforeEach(() => {
-    // Allows a third to two thirds.
+    // From 4 by 2 to 8 by 4, starting at 6 by 3.
     registerWidget(
       widget({
         id: "core/narrow",
-        defaultSize: "md",
-        minSize: "md",
-        maxSize: "xl",
+        size: {
+          default: { w: 6, h: 3 },
+          min: { w: 4, h: 2 },
+          max: { w: 8, h: 4 },
+        },
       })
     );
   });
 
-  it("are answered for every widget the reader may see", async () => {
+  it("are not repeated in the widget facts: the admin reads them from the declaration", async () => {
     registerWidget(widget({ id: "core/any" }));
     const body = await bodyOf(await getWidgetLayout(getReq()));
-    // With where the add panel lists each one: neither is a built-in core
-    // knows, so both are the site's own, under Overview.
+    // Whether a second card may be added, and where the add panel lists each
+    // one: neither is a built-in core knows, so both are the site's own,
+    // under Overview.
     expect(body.widgets).toEqual({
       "core/narrow": {
-        allowedWidths: ["third", "half", "twoThirds"],
-        defaultWidth: "third",
         allowsSeveral: false,
         group: "overview",
         sketch: "custom",
         rank: 0,
       },
       "core/any": {
-        allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
-        defaultWidth: "full",
         allowsSeveral: false,
         group: "overview",
         sketch: "custom",
@@ -1789,55 +2037,67 @@ describe("the widths a card may take", () => {
     });
   });
 
-  it("start a default card at its widget's default width", async () => {
+  it("start a default card at its widget's default size", async () => {
     const body = await bodyOf(await getWidgetLayout(getReq()));
-    expect(body.placements?.[0]?.width).toBe("third");
+    expect(body.placements?.[0]).toMatchObject({ w: 6, h: 3 });
   });
 
-  it("accept a card set to a width its widget allows", async () => {
+  it("store a card resized within its widget's bounds as sent", async () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/narrow", width: "third", removed: false },
+        { id: "p1", widgetId: "core/narrow", w: 6, h: 3, removed: false },
       ]),
     };
-    expect((await putOne("twoThirds")).status).toBe(200);
-    expect(saved?.placements[0]?.width).toBe("twoThirds");
+    expect((await putOne({ w: 8, h: 2 })).status).toBe(200);
+    expect(saved?.placements[0]).toMatchObject({ w: 8, h: 2 });
   });
 
-  it("refuse a card SET to a width its widget does not allow", async () => {
+  it("store a size outside the widget's bounds as sent, rather than refuse or clamp it", async () => {
+    // 🔴 The bounds are applied as a card is drawn, never on the way into the
+    // row: a refused size would make an unrelated change to the dashboard
+    // impossible to save, and a clamped one would lose the stored size the
+    // day the widget's bounds widen again.
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/narrow", width: "third", removed: false },
+        { id: "p1", widgetId: "core/narrow", w: 6, h: 3, removed: false },
       ]),
     };
-    const res = await putOne("full");
-    expect(res.status).toBe(400);
-    expect(saved).toBeUndefined();
+    expect((await putOne({ w: 12, h: 9 })).status).toBe(200);
+    expect(saved?.placements[0]).toMatchObject({ w: 12, h: 9 });
   });
 
-  it("keep a stored width the widget no longer allows when it did not change", async () => {
-    // 🔴 Kept on purpose, drawn at the nearest allowed width. Refusing it
-    // would make every unrelated change to the dashboard impossible to save.
+  it("keep a stored size outside the widget's bounds when it did not change", async () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/narrow", width: "full", removed: false },
+        { id: "p1", widgetId: "core/narrow", w: 1, h: 2, removed: false },
       ]),
     };
-    expect((await putOne("full")).status).toBe(200);
-    expect(saved?.placements[0]?.width).toBe("full");
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    // Handed as stored: drawing it within the bounds is the admin's.
+    expect(body.placements?.[0]).toMatchObject({ w: 1, h: 2 });
+    expect((await putOne({ w: 1, h: 2 })).status).toBe(200);
+    expect(saved?.placements[0]).toMatchObject({ w: 1, h: 2 });
   });
 
-  it("refuse a width that is not one of the five", async () => {
+  it("refuse a size the grid cannot draw, and write nothing", async () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/narrow", width: "third", removed: false },
+        { id: "p1", widgetId: "core/narrow", w: 6, h: 3, removed: false },
       ]),
     };
-    expect((await putOne("wide")).status).toBe(400);
+    for (const size of [
+      { w: 13, h: 3 },
+      { w: 0, h: 3 },
+      { w: 6, h: 0 },
+      { w: 6.5, h: 3 },
+      { w: 6 },
+    ]) {
+      expect((await putOne(size)).status).toBe(400);
+    }
     expect(saved).toBeUndefined();
   });
 });
@@ -1858,9 +2118,24 @@ describe("widgets the reader may still add", () => {
 });
 
 describe("a body in an earlier format", () => {
+  it("is refused when it names a width rather than w and h, and nothing is written", async () => {
+    registerWidget(widget({ id: "core/a" }));
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "core/a", widgetId: "core/a", width: "half", removed: false },
+        ],
+        version: 0,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+
   it("is refused, and nothing is written", async () => {
     // An admin built for the columns format sends column, order, hidden and
-    // size. Stored half-understood, every card would lose its width.
+    // size. Stored half-understood, every card would lose its size.
     registerWidget(widget({ id: "core/a" }));
     const res = await putWidgetLayout(
       putReq({
@@ -1892,9 +2167,9 @@ describe("cards the writer could not see, through a save", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "a", widgetId: "core/a", width: "full", removed: false },
-        { id: "g", widgetId: "core/gated", width: "half", removed: false },
-        { id: "b", widgetId: "core/b", width: "full", removed: false },
+        { id: "a", widgetId: "core/a", w: 12, h: 3, removed: false },
+        { id: "g", widgetId: "core/gated", w: 6, h: 3, removed: false },
+        { id: "b", widgetId: "core/b", w: 12, h: 3, removed: false },
       ]),
     };
     callerHoldsPermission.mockResolvedValue(false);
@@ -1902,8 +2177,8 @@ describe("cards the writer could not see, through a save", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "b", widgetId: "core/b", width: "full", removed: false },
-          { id: "a", widgetId: "core/a", width: "full", removed: false },
+          { id: "b", widgetId: "core/b", w: 12, h: 3, removed: false },
+          { id: "a", widgetId: "core/a", w: 12, h: 3, removed: false },
         ],
         version: 2,
         scope: scopeFor(["core/a", "core/b"]),
@@ -1926,12 +2201,16 @@ describe("the default dashboard, answered beside a reader's own", () => {
       widget({ id: "core/gated", defaultOrder: 5, requiredPermission: "x" })
     );
     registerWidget(
-      widget({ id: "core/b", defaultOrder: 10, defaultSize: "sm" })
+      widget({
+        id: "core/b",
+        defaultOrder: 10,
+        size: { default: { w: 3, h: 2 } },
+      })
     );
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "mine", widgetId: "core/b", width: "full", removed: false },
+        { id: "mine", widgetId: "core/b", w: 12, h: 3, removed: false },
       ]),
     };
     callerHoldsPermission.mockResolvedValue(false);
@@ -1940,47 +2219,16 @@ describe("the default dashboard, answered beside a reader's own", () => {
 
     expect(body.placements?.map(p => p.id)).toEqual(["mine"]);
     expect(body.defaultPlacements).toEqual([
-      { id: "core/a", widgetId: "core/a", width: "full", removed: false },
-      { id: "core/b", widgetId: "core/b", width: "quarter", removed: false },
+      { id: "core/a", widgetId: "core/a", w: 12, h: 3, removed: false },
+      { id: "core/b", widgetId: "core/b", w: 3, h: 2, removed: false },
     ]);
-  });
-});
-
-describe("a placement that changes widget", () => {
-  it("is judged as a new card: it may not keep a width its new widget does not allow", async () => {
-    registerWidget(widget({ id: "core/wide" }));
-    registerWidget(
-      widget({
-        id: "core/narrow",
-        defaultSize: "md",
-        minSize: "md",
-        maxSize: "md",
-      })
-    );
-    stored = {
-      version: 1,
-      layout: serializeLayout([
-        { id: "p1", widgetId: "core/wide", width: "full", removed: false },
-      ]),
-    };
-    const res = await putWidgetLayout(
-      putReq({
-        placements: [
-          { id: "p1", widgetId: "core/narrow", width: "full", removed: false },
-        ],
-        version: 1,
-        scope: scopeFor(),
-      })
-    );
-    expect(res.status).toBe(400);
-    expect(saved).toBeUndefined();
   });
 });
 
 describe("a widget that allows one card", () => {
   const two = (widgetId: string) => [
-    { id: "a", widgetId, width: "full", removed: false },
-    { id: "b", widgetId, width: "full", removed: false },
+    { id: "a", widgetId, w: 12, h: 3, removed: false },
+    { id: "b", widgetId, w: 12, h: 3, removed: false },
   ];
 
   it("is refused a second card", async () => {
@@ -2036,14 +2284,16 @@ describe("the Get started card in the layout read and write", () => {
   ): WidgetPlacement => ({
     id: "started",
     widgetId: STARTED,
-    width: "full",
+    w: 12,
+    h: 3,
     removed: false,
     ...patch,
   });
   const teamCard: WidgetPlacement = {
     id: "team",
     widgetId: "core/team",
-    width: "full",
+    w: 12,
+    h: 3,
     removed: false,
   };
   const getStartedReq = () =>
@@ -2191,7 +2441,8 @@ describe("a card's note", () => {
     {
       id: "n",
       widgetId: "core/notes",
-      width: "full",
+      w: 12,
+      h: 3,
       removed: false,
       config: { text },
     },
@@ -2234,7 +2485,7 @@ describe("a card's note", () => {
                 id: "acme/notes",
                 title: "Notes",
                 archetype: "metric",
-                defaultSize: "full",
+                size: { default: { w: 12, h: 3 } },
                 query: { source: "collection:posts", op: "count" },
                 settings: [
                   {
@@ -2337,7 +2588,7 @@ describe("a card's note", () => {
                 id: "acme/pinned",
                 title: "Pinned",
                 archetype: "metric",
-                defaultSize: "full",
+                size: { default: { w: 12, h: 3 } },
                 query: { source: "collection:posts", op: "count" },
                 settings: [
                   { name: "source", label: "Collection", type: "collection" },
@@ -2362,7 +2613,8 @@ describe("a card's note", () => {
           {
             id: "p",
             widgetId: "acme/pinned",
-            width: "full",
+            w: 12,
+            h: 3,
             removed: false,
             config: { source: "secret" },
           },
@@ -2422,5 +2674,348 @@ describe("a card's note", () => {
     );
     expect(res.status).toBe(400);
     expect(saved).toBeUndefined();
+  });
+});
+
+describe("the one default", () => {
+  const plan = (patch: Partial<DefaultLayoutPlan>) =>
+    setDefaultLayoutPlan({
+      cards: [],
+      suggestions: true,
+      suggested: [],
+      ...patch,
+    });
+
+  it("is the site's defaultLayout, in its order, at its sizes and with its settings", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "site/b" }));
+    plan({
+      cards: [
+        { widget: "site/b", w: 6, h: 4, settings: { top: 5 } },
+        { widget: "site/a" },
+      ],
+      suggestions: false,
+    });
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements).toEqual([
+      {
+        id: "site/b",
+        widgetId: "site/b",
+        w: 6,
+        h: 4,
+        removed: false,
+        config: { top: 5 },
+      },
+      { id: "site/a", widgetId: "site/a", w: 12, h: 3, removed: false },
+    ]);
+    expect(body.defaultPlacements).toEqual(body.placements);
+  });
+
+  it("differs between two people with different permissions only by the cards one may not see", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(
+      widget({ id: "site/gated", requiredPermission: "read-secrets" })
+    );
+    registerWidget(widget({ id: "site/b" }));
+    plan({
+      cards: [
+        { widget: "site/gated" },
+        { widget: "site/a" },
+        { widget: "site/b" },
+      ],
+    });
+
+    const granted = await bodyOf(await getWidgetLayout(getReq()));
+    callerHoldsPermission.mockResolvedValue(false);
+    const refused = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(granted.placements?.map(p => p.widgetId)).toEqual([
+      "site/gated",
+      "site/a",
+      "site/b",
+    ]);
+    expect(refused.placements).toEqual(
+      granted.placements?.filter(p => p.widgetId !== "site/gated")
+    );
+  });
+
+  it("places a plugin's suggestion on the default, never on a saved dashboard, where it is offered", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/suggested" }));
+    plan({ cards: [{ widget: "site/a" }], suggested: ["acme/suggested"] });
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "site/a", w: 12, h: 3, removed: false },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    expect(body.available).toContain("acme/suggested");
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "site/a",
+      "acme/suggested",
+    ]);
+  });
+
+  it("leaves out a card its declared widget would not show this reader, and carries it into the first save", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    // Asked of the default's cards the reader's view lets them see.
+    expect(defaultCardsNotShown).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      [
+        expect.objectContaining({ widgetId: "acme/quiet" }),
+        expect.objectContaining({ widgetId: "site/a" }),
+      ],
+      expect.any(AbortSignal)
+    );
+
+    await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "site/a", widgetId: "site/a", w: 12, h: 3, removed: false },
+        ],
+        version: 0,
+        scope: body.scope,
+      })
+    );
+    // Kept in the row, where the day it is shown it comes back.
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "acme/quiet",
+      "site/a",
+    ]);
+  });
+
+  it("leaves a saved dashboard's cards as the reader arranged them", async () => {
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        {
+          id: "acme/quiet",
+          widgetId: "acme/quiet",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // The card answers for itself; the default handed for a reset leaves it out.
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["acme/quiet"]);
+    expect(body.defaultPlacements).toEqual([]);
+  });
+
+  it("refuses a first save staged before a card's own rule changed its verdict, which would drop the card", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    // Shown from now on: the save below never held it.
+    defaultCardsNotShown.mockResolvedValue(new Set());
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: handed.placements,
+        version: 0,
+        scope: handed.scope,
+      })
+    );
+
+    expect(res.status).toBe(409);
+    expect(saved).toBeUndefined();
+    // The reset checks the same token, and a fresh read's is accepted.
+    const fresh = await bodyOf(await getWidgetLayout(getReq()));
+    expect(fresh.scope).not.toBe(handed.scope);
+    const reset = await deleteWidgetLayout(
+      deleteReq({ version: "0", scope: fresh.scope ?? "" })
+    );
+    expect(reset.status).toBe(200);
+  });
+
+  it("judges a card of a row following the default with the settings the row gave it", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({
+      cards: [
+        { widget: "acme/quiet", settings: { hide: false } },
+        { widget: "site/a" },
+      ],
+    });
+    // The card's own rule reads its setting.
+    defaultCardsNotShown.mockImplementation(
+      async (
+        _auth: unknown,
+        _reader: unknown,
+        placements: readonly WidgetPlacement[]
+      ) =>
+        new Set(
+          placements
+            .filter(placement => placement.config?.hide === true)
+            .map(placement => placement.id)
+        )
+    );
+    stored = unarrangedRow([
+      {
+        id: "acme/quiet",
+        widgetId: "acme/quiet",
+        w: 12,
+        h: 3,
+        removed: false,
+        config: { hide: true },
+      },
+    ]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // Drawn with the stored setting, so judged with it.
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    // The default a reset returns to keeps its own setting, and the card.
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "acme/quiet",
+      "site/a",
+    ]);
+  });
+
+  it("hands a reader who may not see the first card the second under its own id, whatever another reader sees", async () => {
+    registerWidget(widget({ id: "site/many", allowsSeveral: true }));
+    plan({
+      cards: [
+        { widget: "site/many", settings: { top: 5 } },
+        { widget: "site/many", id: "many-2", settings: { top: 10 } },
+      ],
+      suggestions: false,
+    });
+    defaultCardsNotShown.mockResolvedValue(new Set(["site/many"]));
+    const withheld = await bodyOf(await getWidgetLayout(getReq()));
+    defaultCardsNotShown.mockResolvedValue(new Set());
+    const shown = await bodyOf(await getWidgetLayout(getReq()));
+
+    // The second card is "many-2" either way: its id says nothing of the first.
+    expect(withheld.placements?.map(p => p.id)).toEqual(["many-2"]);
+    expect(shown.placements?.map(p => p.id)).toEqual(["site/many", "many-2"]);
+  });
+
+  it("answers a setting change with the token the next write is checked against", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({
+      cards: [
+        { widget: "acme/quiet", settings: { hide: false } },
+        { widget: "site/a" },
+      ],
+    });
+    // The card's own rule reads its setting.
+    defaultCardsNotShown.mockImplementation(
+      async (
+        _auth: unknown,
+        _reader: unknown,
+        placements: readonly WidgetPlacement[]
+      ) =>
+        new Set(
+          placements
+            .filter(placement => placement.config?.hide === true)
+            .map(placement => placement.id)
+        )
+    );
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    const [quiet, a] = handed.placements ?? [];
+
+    // Outside customise mode, a setting its own rule reads: the card is now
+    // one this reader is not shown.
+    const first = await itemOf(
+      await putWidgetLayout(
+        putReq({
+          placements: [{ ...quiet, config: { hide: true } }, a],
+          version: 0,
+          scope: handed.scope,
+          arranged: false,
+        })
+      )
+    );
+    stored = unarrangedRow(saved?.placements ?? []);
+    saved = undefined;
+
+    const second = await putWidgetLayout(
+      putReq({
+        placements: [{ ...a, removed: true }],
+        version: first.version,
+        scope: first.scope,
+        arranged: false,
+      })
+    );
+    expect(second.status).toBe(200);
+    expect(saved).toBeDefined();
+  });
+
+  it("keeps two cards of one widget apart through a save, each with its own settings and removal", async () => {
+    registerWidget(widget({ id: "site/many", allowsSeveral: true }));
+    plan({
+      cards: [
+        { widget: "site/many", settings: { top: 5 } },
+        { widget: "site/many", id: "many-2", settings: { top: 10 } },
+      ],
+      suggestions: false,
+    });
+
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    // Two cards, two identities: one id would make them one card to the admin.
+    expect(handed.placements?.map(p => p.id)).toEqual(["site/many", "many-2"]);
+
+    // A change to the second card alone, outside customise mode: the row
+    // still follows the default.
+    const [first, second] = handed.placements ?? [];
+    await putWidgetLayout(
+      putReq({
+        placements: [first, { ...second, config: { top: 20 } }],
+        version: 0,
+        scope: scopeFor(),
+        arranged: false,
+      })
+    );
+    stored = unarrangedRow(saved?.placements ?? []);
+    const afterChange = await bodyOf(await getWidgetLayout(getReq()));
+    expect(afterChange.placements?.map(p => p.config)).toEqual([
+      { top: 5 },
+      { top: 20 },
+    ]);
+
+    // Then the first removed: the second stays.
+    await putWidgetLayout(
+      putReq({
+        placements: [
+          { ...afterChange.placements?.[0], removed: true },
+          afterChange.placements?.[1],
+        ],
+        version: 1,
+        scope: scopeFor(),
+        arranged: false,
+      })
+    );
+    stored = unarrangedRow(saved?.placements ?? [], 2);
+    const afterRemoval = await bodyOf(await getWidgetLayout(getReq()));
+    expect(
+      afterRemoval.placements?.map(p => [p.id, p.removed, p.config])
+    ).toEqual([
+      ["site/many", true, { top: 5 }],
+      ["many-2", false, { top: 20 }],
+    ]);
   });
 });
