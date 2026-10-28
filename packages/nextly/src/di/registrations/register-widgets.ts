@@ -39,6 +39,11 @@
 
 import { registerReleasesWidgetSource } from "../../domains/releases/releases-widget-source";
 import { registerVersionsWidgetSource } from "../../domains/versions/versions-widget-source";
+import {
+  attentionItemFaults,
+  clearAttentionItems,
+  registerAttentionItems,
+} from "../../domains/widgets/attention/items";
 import { setContributedWidgets } from "../../domains/widgets/canonical";
 import {
   CORE_DECLARATIONS,
@@ -92,6 +97,7 @@ export function resetWidgetRegistries(
   // Cleared with the registry it publishes into, so a reload's declarations
   // are checked against this boot's alone.
   clearDeclaredWidgets();
+  clearAttentionItems();
   clearSources();
   // 🔴 Cleared WITH the source store, never apart from it. The two are halves
   // of one registration and both are pinned to `globalThis`, so a reset that
@@ -165,6 +171,7 @@ export function resetWidgetRegistries(
     legacy: pluginLegacyWidgetIds(plugins),
     references: (declared, groups) => [
       ...pluginSuggestionFaults(dashboards, groups, coreIds),
+      ...attentionItemFaults(dashboards),
       ...siteDashboardFaults(
         site,
         siteDashboardContext(declared, pluginAlternatives(dashboards), coreIds)
@@ -173,6 +180,8 @@ export function resetWidgetRegistries(
     checkedOnly: siteWidgetGroup(site),
     logger,
   });
+  // Only once the check above found no fault, so every item kept is whole.
+  registerAttentionItems(dashboards);
   // The one default dashboard, from the copies just checked: the site's
   // `defaultLayout` or core's, and the plugins' suggestions after it.
   setDefaultLayoutPlan(
