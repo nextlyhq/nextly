@@ -171,7 +171,11 @@ describeOrSkip("a MySQL session the adapter opens, on a non-UTC server", () => {
 
     // A replacement: kill one pooled connection server-side, then load the
     // pool again. The dead connection is discarded and the pool opens a new
-    // one for the requests still waiting — the pin has to survive that.
+    // one for the requests still waiting — the pin has to survive that, and
+    // the proof has to name a connection the pool had never held before the
+    // kill: twelve concurrent requests against nine healthy connections and
+    // a limit of ten cannot be served any other way.
+    const beforeKill = new Set(answered.map(row => row.cid));
     const killed = answered[0]!.cid;
     const control = await createConnection(SERVER_URL);
     try {
@@ -194,6 +198,30 @@ describeOrSkip("a MySQL session the adapter opens, on a non-UTC server", () => {
     expect(survived.length).toBeGreaterThanOrEqual(9);
     expect(survived.every(row => row.tz === "+00:00")).toBe(true);
     expect(survived.every(row => row.cid !== killed)).toBe(true);
+    const replacements = survived.filter(row => !beforeKill.has(row.cid));
+    expect(replacements.length).toBeGreaterThanOrEqual(1);
+    expect(replacements.every(row => row.tz === "+00:00")).toBe(true);
+  });
+
+  it("a withSession of its own serves UTC too, outside the pool", async () => {
+    // R-1 is every session the adapter opens, not only the pooled ones: a
+    // connection `withSession` opens never meets the pool's `connection`
+    // listener, so the adapter pins it itself, before its work runs. Its
+    // driver already parses in UTC; without the pin a session in the
+    // server's zone beside it shifts every value a round-trip fails to
+    // cancel.
+    const rows = await (
+      t!.adapter as unknown as {
+        withSession: <R>(
+          work: (session: {
+            execute: <T = unknown>(sql: string) => Promise<T[]>;
+          }) => Promise<R>
+        ) => Promise<R>;
+      }
+    ).withSession(session =>
+      session.execute<{ tz: string }>("SELECT @@session.time_zone AS tz")
+    );
+    expect(rows[0]?.tz).toBe("+00:00");
   });
 
   it("writes the instant an entry names, so a UTC session reads exactly that", async () => {

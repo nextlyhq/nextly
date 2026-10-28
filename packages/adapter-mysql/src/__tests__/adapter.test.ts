@@ -920,6 +920,56 @@ describe("@nextly/adapter-mysql", () => {
       expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
     });
 
+    it("pins the session time zone before its statements, as the pool pins its own", async () => {
+      // The connection opened outside the pool never meets the pool's
+      // `connection` listener; its driver already parses in UTC, and a
+      // session still in the server's zone would shift every value a
+      // round-trip fails to cancel.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      await adapter.withSession(async session => {
+        await session.execute("INSERT INTO t (v) VALUES (1)");
+      });
+
+      const statements = mockSessionConnection.query.mock.calls.map(
+        ([statement]) => statement as string
+      );
+      const pin = statements.indexOf("SET SESSION time_zone = '+00:00'");
+      const insert = statements.indexOf("INSERT INTO t (v) VALUES (1)");
+      expect(pin).toBeGreaterThanOrEqual(0);
+      expect(insert).toBeGreaterThan(pin);
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes a session whose time-zone pin failed, and runs no work on it", async () => {
+      // A session that could not be pinned would serve in whatever zone the
+      // server started it in, beside a driver parsing in UTC - the same
+      // refusal the pool applies to a connection its listener could not pin.
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      mockSessionConnection.query.mockImplementation((statement: string) => {
+        if (statement === "SET SESSION time_zone = '+00:00'") {
+          return Promise.reject(new Error("zone refused"));
+        }
+        return Promise.resolve([[], []]);
+      });
+      mockSessionConnection.destroy.mockClear();
+
+      let workRan = false;
+      await expect(
+        adapter.withSession(async () => {
+          workRan = true;
+        })
+      ).rejects.toThrow();
+      expect(workRan).toBe(false);
+      expect(mockSessionConnection.destroy).toHaveBeenCalledTimes(1);
+    });
+
     it("is waited for by disconnect, which closes the pool only once the session has ended", async () => {
       const adapter = createMySqlAdapter({
         url: "mysql://localhost:3306/test",

@@ -701,6 +701,11 @@ export class MySqlAdapter extends DrizzleAdapter {
         // A server whose sessions start with autocommit off would otherwise
         // hold every statement in a transaction nobody commits.
         await connection.query("SET SESSION autocommit = 1");
+        // The connection opened outside the pool, so the pool's `connection`
+        // listener never pins it; its driver already parses in UTC, and a
+        // session still in the server's zone would shift every value a
+        // round-trip fails to cancel. The work below never runs unpinned.
+        await connection.query("SET SESSION time_zone = '+00:00'");
         if (options?.strictSqlMode) {
           // Nothing to put back: the connection is closed afterwards.
           await this.enterStrictMode(connection, {});
