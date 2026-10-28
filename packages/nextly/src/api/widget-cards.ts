@@ -27,6 +27,7 @@ import { GRID_COLUMNS, MIN_GRID_ROWS } from "../domains/widgets/grid-size";
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { WidgetQuery } from "../domains/widgets/query";
 import type { WidgetSlot } from "../domains/widgets/result";
+import { withSiteOverride } from "../domains/widgets/site-rules";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getNextlyLogger } from "../observability/logger";
@@ -362,7 +363,9 @@ async function judgeCard(
 ): Promise<CardVerdict> {
   stage.at = "access";
   if (await refusedAccess(declared, batch)) return { kind: "refused" };
-  const { declaration, collections } = declared;
+  const { collections } = declared;
+  // The settings' starting values as the site's `overrides` change them.
+  const declaration = withSiteOverride(declared.declaration);
   const settings = resolveCardSettings(declaration.settings, placement.config);
   const missing = unsetSetting(declaration.settings, settings);
   if (missing !== undefined) {
