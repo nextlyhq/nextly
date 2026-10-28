@@ -33,6 +33,8 @@ import { deleteResourcePermissions } from "./delete-resource-permissions";
 interface DeletedCollectionRow {
   tableName: string;
   fields?: FieldDefinition[];
+  /** Set on a code-first collection's row: its definition is the code's. */
+  locked?: boolean | number | null;
 }
 
 /** Result shape returned by metadata service methods. */
@@ -997,6 +999,23 @@ export class CollectionMetadataService extends BaseService {
             slug
           )) as DeletedCollectionRow
         );
+      }
+
+      // A collection defined in code is the code's to remove: deleted here,
+      // the next start would create it again, empty. Refused for the whole
+      // set, before anything else is asked or removed, as the registry's own
+      // delete refuses it.
+      for (const [index, collection] of collections.entries()) {
+        if (collection.locked === true || collection.locked === 1) {
+          throw NextlyError.definedInCode({
+            thing: "collection",
+            change: "delete",
+            logContext: {
+              reason: "collection-locked-delete",
+              slug: slugs[index],
+            },
+          });
+        }
       }
 
       // Before anything is torn down, and for the whole set, so a refusal

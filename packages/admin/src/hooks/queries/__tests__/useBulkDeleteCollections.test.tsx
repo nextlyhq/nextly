@@ -14,13 +14,32 @@ import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetcherSpy } = vi.hoisted(() => ({ fetcherSpy: vi.fn() }));
+const { fetcherSpy, mirrorSpy, warningSpy } = vi.hoisted(() => ({
+  fetcherSpy: vi.fn(),
+  mirrorSpy: vi.fn(),
+  warningSpy: vi.fn(),
+}));
 
 vi.mock("@admin/lib/api/fetcher", async importOriginal => {
   const actual =
     await importOriginal<typeof import("@admin/lib/api/fetcher")>();
   return { ...actual, fetcher: fetcherSpy };
 });
+
+// The Builder's committed definitions: a delete removes the collection there
+// too, as the single delete does.
+vi.mock("@admin/services/schemaFileApi", () => ({
+  schemaFileApi: { deleteCollection: mirrorSpy },
+}));
+
+vi.mock("@admin/components/ui", () => ({
+  toast: {
+    success: vi.fn(),
+    warning: warningSpy,
+    info: vi.fn(),
+    error: vi.fn(),
+  },
+}));
 
 import { useBulkDeleteCollections } from "../useCollections";
 
@@ -33,6 +52,9 @@ function wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   fetcherSpy.mockReset();
+  mirrorSpy.mockReset();
+  mirrorSpy.mockResolvedValue({ message: "removed", kind: "collection" });
+  warningSpy.mockReset();
 });
 
 describe("useBulkDeleteCollections", () => {
@@ -63,6 +85,42 @@ describe("useBulkDeleteCollections", () => {
       succeededIds: ["tags", "posts", "notes"],
       failedIds: [],
     });
+  });
+
+  it("removes each deleted collection from the committed definitions, as the single delete does", async () => {
+    fetcherSpy.mockResolvedValue({ message: "Collections deleted!", item: {} });
+    const { result } = renderHook(() => useBulkDeleteCollections(), {
+      wrapper,
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync(["tags", "posts"], undefined);
+    });
+
+    expect(mirrorSpy.mock.calls).toEqual([["tags"], ["posts"]]);
+    expect(warningSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns, and still reports the delete, when the definitions cannot be updated", async () => {
+    // The database delete has committed by then: the result says so, and the
+    // drift between the two is named rather than hidden.
+    fetcherSpy.mockResolvedValue({ message: "Collections deleted!", item: {} });
+    mirrorSpy.mockRejectedValueOnce(new Error("ui-schema.json is read-only"));
+    const { result } = renderHook(() => useBulkDeleteCollections(), {
+      wrapper,
+    });
+
+    let outcome: Awaited<ReturnType<typeof result.current.mutateAsync>>;
+    await act(async () => {
+      outcome = await result.current.mutateAsync(["tags", "posts"], undefined);
+    });
+
+    expect(outcome!).toMatchObject({ succeeded: 2, failed: 0 });
+    expect(mirrorSpy).toHaveBeenCalledTimes(2);
+    expect(warningSpy).toHaveBeenCalledTimes(1);
+    expect(String(warningSpy.mock.calls[0][0])).toContain(
+      "ui-schema.json could not be updated for tags: ui-schema.json is read-only"
+    );
   });
 
   it("reports every collection failed with the server's refusal when it refuses", async () => {
@@ -96,5 +154,7 @@ describe("useBulkDeleteCollections", () => {
       })
     );
     expect(result.current.isPending).toBe(false);
+    // Nothing was deleted, so nothing leaves the committed definitions.
+    expect(mirrorSpy).not.toHaveBeenCalled();
   });
 });

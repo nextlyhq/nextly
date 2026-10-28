@@ -553,6 +553,24 @@ async function deleteCollectionsTogether(
 }
 
 /**
+ * Remove deleted collections from `ui-schema.json`, as the single delete does
+ * (best-effort, dev-only API). The database delete has committed by now, so a
+ * failure changes no result; it is named, because a stale entry silently
+ * diverges the committed schema from the database.
+ */
+async function mirrorDeletes(ids: readonly string[]): Promise<void> {
+  for (const id of ids) {
+    try {
+      await schemaFileApi.deleteCollection(id);
+    } catch (mirrorError) {
+      toast.warning(
+        `Collections deleted from the database, but ui-schema.json could not be updated for ${id}: ${mirrorError instanceof Error ? mirrorError.message : String(mirrorError)}`
+      );
+    }
+  }
+}
+
+/**
  * Delete `ids` together, as one result for every collection: the server
  * removed all of them or none.
  */
@@ -565,6 +583,7 @@ async function deleteAllOrNone(
   } catch (error) {
     failure = error instanceof Error ? error : new Error(String(error));
   }
+  if (failure === undefined) await mirrorDeletes(ids);
   const results: BulkMutationItemResult<void, Error>[] = ids.map(id =>
     failure === undefined
       ? { id, status: "fulfilled" as const, data: undefined }
@@ -601,7 +620,8 @@ function reportBulkResult(
  * delete, and collections that point only at one another go together, where
  * deleting each on its own would be refused. So the result is all or
  * nothing: every collection succeeded, or every one failed with the same
- * error, and none was removed.
+ * error, and none was removed. Once deleted, each is removed from
+ * `ui-schema.json` too, as the single delete removes it.
  *
  * Returns the same shape as the other bulk hooks, so callers read
  * `succeeded`, `failed` and the per-collection results as before.

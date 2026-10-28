@@ -42,6 +42,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { resolveFieldGroupRegistryName } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
@@ -92,6 +93,9 @@ async function unlock(t: TestNextly, slug: string): Promise<void> {
     { locked: 0 },
     { and: [{ column: "slug", op: "=", value: slug }] }
   );
+  // Written past the registry, so its cached rows are cleared as every
+  // registry write clears them.
+  clearCollectionRowCache();
 }
 
 /** What a call rejected with, so the assertion reads the refusal itself. */
@@ -368,6 +372,50 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expectNamesTheMarker(String(result.message), before.indexes);
     expect(await markerState(t)).toEqual(before);
     expect(await tagsState(t, false)).toEqual(INTACT);
+  }, 120_000);
+
+  it("refuses the Builder's delete of a collection defined in code, and removes nothing", async () => {
+    // A code-first collection's row is locked: its definition is the code's,
+    // and the code would only create it again.
+    current = await createTestNextly({
+      dialect,
+      collections: [
+        plainTags,
+        defineCollection({ slug: POSTS, fields: [text({ name: "title" })] }),
+      ],
+    });
+    await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
+
+    const result = await handlerOf(current).deleteCollection({
+      collectionName: TAGS,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      statusCode: 403,
+      message:
+        "This collection is defined in code, so it can't be deleted here.",
+    });
+    expect(await tagsState(current, false)).toEqual(INTACT);
+  }, 120_000);
+
+  it("refuses a Builder bulk delete whole when one of the set is defined in code", async () => {
+    current = await createTestNextly({
+      dialect,
+      collections: [
+        plainTags,
+        defineCollection({ slug: POSTS, fields: [text({ name: "title" })] }),
+      ],
+    });
+    await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
+    // POSTS as the Builder leaves one; TAGS still locked.
+    await unlock(current, POSTS);
+
+    const refusal = await refusalOf(builderBulkDelete([POSTS, TAGS]));
+
+    expect(refusal.statusCode).toBe(403);
+    expect(await tagsState(current, false)).toEqual(INTACT);
+    expect(await registryOf(current).getCollectionBySlug(POSTS)).not.toBeNull();
   }, 120_000);
 
   it("deletes a collection whose only reference is to itself", async () => {
