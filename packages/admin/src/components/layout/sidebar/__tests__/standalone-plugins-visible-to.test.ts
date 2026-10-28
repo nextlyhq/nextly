@@ -70,11 +70,7 @@ describe("standalonePluginsVisibleTo", () => {
   });
 
   it("shows a plugin naming no collection with the settings", () => {
-    const withSettings = buildCapabilities(
-      ["manage-settings"],
-      false,
-      undefined
-    );
+    const withSettings = buildCapabilities(["read-settings"], false, undefined);
     const without = buildCapabilities([], false, undefined);
     expect(standalonePluginsVisibleTo([NAMING_NONE], withSettings)).toEqual([
       NAMING_NONE,

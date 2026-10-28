@@ -82,8 +82,8 @@ const LEGACY_MANAGE = "manage";
  * each action had a plain permission. Anywhere else (`background-jobs`, say)
  * `manage` is a permission of its own and stays under the row's switch.
  *
- * A client-safe copy of core's list, which runs in the server; the parity
- * test holds the two together.
+ * The roles screen still reads a stored `manage` row there as Can edit; the
+ * server counts it for nothing until `nextly upgrade` has converted the role.
  */
 export const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set([
   "media",
@@ -91,22 +91,6 @@ export const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set([
   "email-providers",
   "email-templates",
 ]);
-
-/** The actions a bridge resource's `manage` permission stands for. */
-const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
-  "read",
-  "create",
-  "update",
-  "delete",
-]);
-
-/**
- * Whether `manage-<resource>` counts as `action` on `resource`: core's
- * `manageCounts`, client-safe. The parity test holds the two together.
- */
-export function manageCountsFor(action: string, resource: string): boolean {
-  return MANAGE_COUNTS_AS.has(action) && MANAGE_BRIDGE_RESOURCES.has(resource);
-}
 
 /** Whether `manage` on this row is the legacy bridge rather than its own action. */
 function bridgesManage(kind: LevelKind, resource: string | undefined): boolean {

@@ -24,8 +24,7 @@ vi.mock("@admin/lib/navigation", () => ({
 
 function holding(slugs: string[], hasAnswer = true) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
-    // Asked as the product asks: a `manage-` permission counts as the plain
-    // ones it stands for.
+    // Asked as the product asks it.
     hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
     isLoading: !hasAnswer,
     hasAnswer,
@@ -58,7 +57,7 @@ describe("the Email hub's tabs", () => {
   });
 
   it("shows only Messages and Design to someone who may see templates", () => {
-    holding(["manage-email-templates"]);
+    holding(["read-email-templates"]);
     renderHub();
     expect(tabs()).toEqual(["Messages", "Design"]);
   });

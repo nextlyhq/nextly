@@ -9,7 +9,7 @@
  * permission is offered it.
  *
  * The permission hook is replaced by one that checks as the product checks
- * (`holdsPermission`), so `manage-settings` counts as the plain four.
+ * (`holdsPermission`).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -187,9 +187,14 @@ describe("User Fields", () => {
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
   });
 
-  it("offers adding, reordering and the field's menu to a role still holding manage-settings", async () => {
-    // The control: `manage-settings` counts as create, update and delete.
-    holding("manage-settings");
+  it("offers adding, reordering and the field's menu to a role holding every settings permission", async () => {
+    // The control: read, create, update and delete on settings offer it all.
+    holding(
+      "read-settings",
+      "create-settings",
+      "update-settings",
+      "delete-settings"
+    );
     render(<UserFieldsPage />);
     expect(screen.getByText("Add Field")).toBeInTheDocument();
     expect(
