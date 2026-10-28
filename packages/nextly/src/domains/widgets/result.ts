@@ -91,6 +91,25 @@ export type WidgetResult =
        */
       fields?: WidgetResultField[];
       /**
+       * How many rows the read matched in all, of which `items` is the first page.
+       *
+       * Taken from the same read that returned `items` -- its own count under the
+       * same filter and the same caller -- so a card's "View all (N)" names the rows
+       * the list it links to holds, never a second count that could disagree with
+       * the first. Absent from a source that does not count its rows; a card then
+       * says only that more exist, as a floor.
+       *
+       * @experimental
+       */
+      total?: number;
+      /**
+       * Whether `total` is a FLOOR rather than the whole count, as the count arm's
+       * `atLeast` is. Absent means `total` is whole.
+       *
+       * @experimental
+       */
+      atLeast?: boolean;
+      /**
        * The span of time the source looked at, in whole days back from now.
        *
        * A source that keeps rows only for a period answers from that period
@@ -227,6 +246,27 @@ export type WidgetSlot =
        * Absent for every other failure, which the card shows as an error with Retry.
        */
       code?: "unavailable";
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The card's widget cannot be loaded until a setting has a value: its `load` was not
+       * run, and the card asks its reader for the setting rather than showing an error. Not a
+       * failure, so never a Retry.
+       */
+      code: "needs-setting";
+      /** The setting's label, as the card's settings name it. */
+      setting: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The widget's own `shows` answered no for this person: the card is left out of their
+       * dashboard, neither drawn nor counted, and its `load` was not run. Not a failure.
+       */
+      code: "not-shown";
     };
 
 /**

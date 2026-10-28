@@ -2,9 +2,9 @@
  * Which collections and Singles the dashboard leaves out entirely.
  *
  * One rule for every dashboard surface that lists, offers or counts content: the widget sources
- * (so a card cannot query one, and a query naming one is refused as an unknown source), the
- * cards generated from those sources, the conditions that decide whether a content card is
- * offered, the Content card's counts, and the pending-edit counts. Asked here, so those surfaces
+ * (so a card cannot query one, a query naming one is refused as an unknown source, and a
+ * card's Collection setting cannot offer one), the conditions that decide whether a content
+ * card is offered, the Content card's counts, and the pending-edit counts. Asked here, so those surfaces
  * cannot come to disagree about which entities they leave out.
  *
  * The rule is "hidden from the admin's navigation", read from `admin.hidden` on the registry

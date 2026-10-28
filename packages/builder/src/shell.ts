@@ -130,7 +130,10 @@ export type { CanvasPreview, CanvasProps } from "./canvas";
  * with this one about the merge rule for a patch.
  */
 export { InspectorPanel } from "./inspector-panel";
-export type { InspectorPanelProps } from "./inspector-panel";
+export type {
+  BlockInspectorResolver,
+  InspectorPanelProps,
+} from "./inspector-panel";
 
 /**
  * The Style half of the same inspector.

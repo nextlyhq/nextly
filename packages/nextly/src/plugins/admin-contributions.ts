@@ -233,7 +233,8 @@ interface PluginAdminWidgetBase {
   category?: string;
   link?: { label: string; href: string };
   /**
-   * Where this widget sits by default, ascending; omitted means "after
+   * Where this widget sits among the older-shape widgets suggested for the
+   * default dashboard, after its own cards, ascending; omitted means "after
    * everything that states one".
    *
    * On the BASE because position is not an archetype's business -- any widget

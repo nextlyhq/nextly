@@ -1722,6 +1722,32 @@ describe("at one column", () => {
   });
 });
 
+describe("an arrangement whose every card is not shown for its reader", () => {
+  it("tells them their dashboard is empty at rest, and still lists the cards while customising", async () => {
+    // Each card is taken off the dashboard; counted as on show, they left it blank instead.
+    mockBranding = branding(["acme/posts"], {
+      "acme/posts": {
+        archetype: "list",
+        component: undefined,
+        query: { source: "collection:posts", op: "list", select: ["title"] },
+      },
+    });
+    layoutResponse = layout([{ id: "p1", widgetId: "acme/posts" }]);
+    api.post.mockResolvedValue({
+      results: [{ ok: false, error: "Not shown for you", code: "not-shown" }],
+    });
+    renderGrid();
+
+    expect(await screen.findByTestId("widget-grid-empty")).toBeInTheDocument();
+    await beginEditing();
+    // In customise mode the card is on show, marked, so it can be removed.
+    expect(screen.queryByTestId("widget-grid-empty")).toBeNull();
+    expect(screen.getByTestId("hidden-while-empty")).toHaveTextContent(
+      "Not shown for you right now"
+    );
+  });
+});
+
 describe("an arrangement with nothing left on it", () => {
   it("KEEPS the way back when every card is removed", async () => {
     // 🔴 An arrangement must never reach a state it cannot leave: the
@@ -1754,9 +1780,11 @@ describe("an arrangement with nothing left on it", () => {
 
 describe("a card's rows follow its reader's settings", () => {
   it("draws the number of items its reader chose, not the declared number", async () => {
-    // Declared at five, set to eight by the reader. The batch asks for eight and one more; the
-    // card must draw the eight it asked for, not slice to the declaration's five and say more
-    // exist.
+    // Declared at five, set to six by the reader. The batch asks for six and one more; the card
+    // must draw the six it asked for, not slice to the declaration's five and say more exist.
+    // Six grid rows tall, its body holds seven rows, so six is the reader's number and not the
+    // body's.
+    stubDashboardWidth(1200, { cardWidth: 1200 });
     mockBranding = branding(["acme/posts"], {
       "acme/posts": {
         archetype: "list",
@@ -1773,7 +1801,7 @@ describe("a card's rows follow its reader's settings", () => {
       },
     });
     layoutResponse = layout([
-      { id: "p1", widgetId: "acme/posts", config: { limit: 8 } },
+      { id: "p1", widgetId: "acme/posts", h: 6, config: { limit: 6 } },
     ]);
     api.post.mockResolvedValue({
       results: [
@@ -1781,7 +1809,7 @@ describe("a card's rows follow its reader's settings", () => {
           ok: true,
           result: {
             op: "list",
-            items: Array.from({ length: 9 }, (_, i) => ({
+            items: Array.from({ length: 7 }, (_, i) => ({
               title: `Post ${i + 1}`,
             })),
           },
@@ -1791,12 +1819,12 @@ describe("a card's rows follow its reader's settings", () => {
     renderGrid();
 
     await waitFor(() =>
-      expect(screen.getAllByTestId("widget-list-row")).toHaveLength(8)
+      expect(screen.getAllByTestId("entity-row")).toHaveLength(6)
     );
     // The latest request: one may leave before the reader's layout is read, asked as declared.
     const asked = api.post.mock.calls.at(-1)?.[1] as {
       queries: Array<{ limit?: number }>;
     };
-    expect(asked.queries[0].limit).toBe(9);
+    expect(asked.queries[0].limit).toBe(7);
   });
 });

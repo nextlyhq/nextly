@@ -31,12 +31,6 @@ const DASHBOARD_PATH = /\/admin\/?$/;
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 /**
- * The host app's `<title>`, which the playground's client root layout cannot
- * declare. The reason is given in full in `builder-a11y.spec.ts`.
- */
-const HOST_OWNED_RULES = ["document-title"];
-
-/**
  * One known defect outside the dashboard, set aside by rule AND place, as in
  * `dashboard-heading.spec.ts`: `link-name` on the sidebar rail's icon-only
  * links. Every other rule still runs on the rail, and `link-name` still fails
@@ -100,10 +94,7 @@ async function expectNoAxeViolations(page: Page): Promise<void> {
           animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY
       )
   );
-  const results = await new AxeBuilder({ page })
-    .withTags(AA_TAGS)
-    .disableRules(HOST_OWNED_RULES)
-    .analyze();
+  const results = await new AxeBuilder({ page }).withTags(AA_TAGS).analyze();
   // A scan of nothing reports no violations too; enough passing rules shows
   // it looked at a drawn page.
   expect(

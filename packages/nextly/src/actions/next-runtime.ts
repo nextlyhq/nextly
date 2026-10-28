@@ -34,6 +34,8 @@
  */
 import { createRequire } from "node:module";
 
+import { requireNextApi } from "../runtime/next-api";
+
 export type HeadersFn = () => Promise<{ get(name: string): string | null }>;
 export type UnstableRethrow = (err: unknown) => void;
 
@@ -63,26 +65,31 @@ export function getUnstableRethrow(): UnstableRethrow {
 }
 
 /**
- * Next's own `unstable_rethrow` when `load` yields it, else the same check
- * made from the errors' digests.
+ * Next's own `unstable_rethrow`, else the same check made from the errors'
+ * digests when a module `next/navigation` needs is missing.
  *
  * The `createRequire` call is opaque to file tracing, so a host that bundles
  * each function from a trace (Vercel) can ship a bundle in which
- * `next/navigation` loads but a module it requires is missing. This runs only
- * after a handler has caught an error, so a failing lookup here used to turn
- * that error into a crash of its own, and the caller never got the answer the
- * error carried.
+ * `next/navigation` loads but a module it requires is missing. That is a
+ * deployment's context, not a Next.js version, and only that failure falls back:
+ * this runs after a handler has caught an error, so a failing lookup here used to
+ * turn that error into a crash of its own. Any other failure is rethrown.
  */
-function unstableRethrowFrom(load: () => unknown): UnstableRethrow {
+export function unstableRethrowFrom(load: () => unknown): UnstableRethrow {
+  let mod: Record<string, unknown>;
   try {
-    const mod = load() as { unstable_rethrow?: unknown } | null;
-    if (typeof mod?.unstable_rethrow === "function") {
-      return mod.unstable_rethrow as UnstableRethrow;
+    mod = load() as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "MODULE_NOT_FOUND") {
+      return rethrowNextControlFlow;
     }
-  } catch {
-    // Fall through to the digest check below.
+    throw error;
   }
-  return rethrowNextControlFlow;
+  return requireNextApi<UnstableRethrow>(
+    mod,
+    "next/navigation",
+    "unstable_rethrow"
+  );
 }
 
 /**

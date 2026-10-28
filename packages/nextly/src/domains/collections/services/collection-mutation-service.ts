@@ -137,6 +137,7 @@ import {
   type WriteEventInput,
 } from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   applyFieldGroupWriteAccessToDocument,
   applyInlineFieldGroupWriteAccess,
@@ -846,6 +847,50 @@ export class CollectionMutationService extends BaseService {
     private readonly localizationSource?: LocalizationSource
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * The caller's grants resolver for the field rules this service judges
+   * (see `callerAccessGrants`), a visitor's read from the Public role this
+   * service's collection gate reads: every pass builds it here, so none is
+   * handed another database's Public role.
+   */
+  private callerGrants(
+    user: Record<string, unknown> | undefined,
+    authenticatedScope?: AuthenticatedScope,
+    executor?: unknown
+  ): () => Promise<CallerGrants> {
+    return callerAccessGrants(
+      user,
+      authenticatedScope,
+      executor,
+      this.accessService.fieldRuleVisitor
+    );
+  }
+
+  /** {@link callerGrants}, resolved now (see `resolvedCallerGrants`). */
+  private resolvedGrants(
+    user: Record<string, unknown> | undefined,
+    authenticatedScope?: AuthenticatedScope
+  ): Promise<() => Promise<CallerGrants>> {
+    return resolvedCallerGrants(
+      user,
+      authenticatedScope,
+      this.accessService.fieldRuleVisitor
+    );
+  }
+
+  /**
+   * The access a field-group save made as `caller` is handed, its visitor
+   * judged by the same Public role as {@link callerGrants}.
+   */
+  private fieldGroupAccess(
+    caller: Parameters<typeof fieldGroupWriteAccessOf>[0]
+  ): FieldGroupWriteAccess {
+    return {
+      ...fieldGroupWriteAccessOf(caller),
+      visitor: this.accessService.fieldRuleVisitor,
+    };
   }
 
   /**
@@ -2145,7 +2190,7 @@ export class CollectionMutationService extends BaseService {
       fields: args.fields as unknown as FieldConfig[],
       source: this.fieldGroupDataService,
       operation: "create",
-      access: { ...fieldGroupWriteAccessOf(args.params), grants: args.grants },
+      access: { ...this.fieldGroupAccess(args.params), grants: args.grants },
       executor: args.executor,
     });
   }
@@ -2291,12 +2336,12 @@ export class CollectionMutationService extends BaseService {
     // One resolver for the entry's rules and the field groups', read on the
     // write's own connection: inside a transaction, the pool's would wait on
     // the connection the transaction holds and miss its writes.
-    const grants = callerAccessGrants(
+    const grants = this.callerGrants(
       args.params.user,
       args.params.authenticatedScope,
       args.executor
     );
-    const access = { ...fieldGroupWriteAccessOf(args.params), grants };
+    const access = { ...this.fieldGroupAccess(args.params), grants };
     // The parent row alone carries no field-group instance, so what an update
     // removes is read here or judged against nothing: in the write's own
     // language, and in each other one, since a removal removes them all.
@@ -2725,7 +2770,7 @@ export class CollectionMutationService extends BaseService {
     // The author's grants, once for the batch, where a field rule could ask:
     // as the write resolves them, and only where it would.
     const grants = this.promotionRulesCanAsk(params.collectionName)
-      ? await resolvedCallerGrants(params.user, undefined)
+      ? await this.resolvedGrants(params.user, undefined)
       : null;
     const reads = await this.goingLiveReadsOf(params.collectionName, [
       ...rows.keys(),
@@ -3826,6 +3871,9 @@ export class CollectionMutationService extends BaseService {
     actor?: RequestActor;
     user?: UserContext;
   }): Promise<number> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
@@ -3895,6 +3943,9 @@ export class CollectionMutationService extends BaseService {
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<TakenLiveValues>> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
       const accessDenied =
         await this.accessService.checkCollectionAccess<TakenLiveValues>({
@@ -3924,7 +3975,7 @@ export class CollectionMutationService extends BaseService {
         });
       }
       // Resolved before the transaction: they take a pooled connection.
-      const grants = await resolvedCallerGrants(
+      const grants = await this.resolvedGrants(
         params.user,
         params.authenticatedScope
       );
@@ -4668,7 +4719,7 @@ export class CollectionMutationService extends BaseService {
     // travel on its scope and are read from nowhere, so they are not shared.
     const userId = typeof params.user?.id === "string" ? params.user.id : "";
     const makeGrants = () =>
-      callerAccessGrants(params.user, params.authenticatedScope, executor);
+      this.callerGrants(params.user, params.authenticatedScope, executor);
     const grants =
       params.authenticatedScope?.actorType === "apiKey"
         ? makeGrants()
@@ -5046,6 +5097,9 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set once the outbox event is appended (below), so the catch can report a
     // committed-but-hook-failed write as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -5106,7 +5160,7 @@ export class CollectionMutationService extends BaseService {
       // One resolver for both write-access passes over this record, so the
       // caller's roles and permissions are read once and both judge with one
       // authority.
-      const writeGrants = callerAccessGrants(
+      const writeGrants = this.callerGrants(
         params.user,
         params.authenticatedScope
       );
@@ -5567,7 +5621,7 @@ export class CollectionMutationService extends BaseService {
             req: params.user ? { user: params.user } : {},
             // Who the write is made as, for each instance's own field rules: the
             // caller and trust the entry's own fields are judged with.
-            access: fieldGroupWriteAccessOf(params),
+            access: this.fieldGroupAccess(params),
           });
         }
 
@@ -6316,6 +6370,9 @@ export class CollectionMutationService extends BaseService {
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code: publishing or
+    // withdrawing every language is a write to the entry like any other.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set when the publish rule, asked inside the transaction once for each
     // language going live, refuses one of them. Declared out here so the
     // catch can read it: the adapter re-wraps the thrown sentinel in a
@@ -7511,7 +7568,7 @@ export class CollectionMutationService extends BaseService {
           fieldGroupFields: {
             get: slug => args.componentSchemas?.get(slug)?.fields,
           },
-          access: { ...fieldGroupWriteAccessOf(args), grants: args.grants },
+          access: { ...this.fieldGroupAccess(args), grants: args.grants },
           live: args.live,
         });
       },
@@ -8161,9 +8218,9 @@ export class CollectionMutationService extends BaseService {
   ): Promise<void> {
     const { params, splitComponentSchemas } = ctx;
     const access = {
-      ...fieldGroupWriteAccessOf(params),
+      ...this.fieldGroupAccess(params),
       // Still inside the write's transaction.
-      grants: callerAccessGrants(
+      grants: this.callerGrants(
         params.user,
         params.authenticatedScope,
         tx.getDrizzle()
@@ -8270,7 +8327,7 @@ export class CollectionMutationService extends BaseService {
         req: params.user ? { user: params.user } : {},
         // Who the write is made as, for each instance's own field rules: the
         // caller and trust the entry's own fields are judged with.
-        access: fieldGroupWriteAccessOf(params),
+        access: this.fieldGroupAccess(params),
       });
     }
     // The response and hooks see the draft as an ordinary read, so
@@ -8405,6 +8462,9 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", rawParams.collectionName);
     // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale, and the
     // body of this method must never see it as one. Resolved here, once, so the
     // fourteen places below that read `params.locale` keep receiving a real
@@ -9205,7 +9265,7 @@ export class CollectionMutationService extends BaseService {
         params.overrideAccess !== true &&
         this.promotionRulesCanAsk(params.collectionName);
       const promoteGrants = promoteRulesCouldRun
-        ? await resolvedCallerGrants(params.user, params.authenticatedScope)
+        ? await this.resolvedGrants(params.user, params.authenticatedScope)
         : undefined;
       const promoteRestoreCtx = promotePossible
         ? promoteRestoreContext({
@@ -10148,7 +10208,7 @@ export class CollectionMutationService extends BaseService {
                 req: params.user ? { user: params.user } : {},
                 // Who the write is made as, for each instance's own field rules: the
                 // caller and trust the entry's own fields are judged with.
-                access: fieldGroupWriteAccessOf(params),
+                access: this.fieldGroupAccess(params),
               }
             );
           }
@@ -11218,6 +11278,9 @@ export class CollectionMutationService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set once the outbox event is appended (below); lets the catch report a
     // committed-but-hook-failed delete as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -11669,6 +11732,11 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     options: CreateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
+    // Refused first when the collection is removed from code. Read on the
+    // caller's transaction, which every write in it then rolls back with.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Computed right after the row is written (before response redaction can
     // strip the slug, and before the after-hooks run) and carried on every
     // post-write return, so a committed item whose after-hook then throws still
@@ -11829,7 +11897,7 @@ export class CollectionMutationService extends BaseService {
       // stripped (Payload parity); a system write (no user) or an
       // explicit override bypasses. One resolver for this pass and the
       // field groups', read on the caller-owned transaction.
-      const writeGrants = callerAccessGrants(
+      const writeGrants = this.callerGrants(
         params.user,
         params.authenticatedScope,
         tx.getDrizzle()
@@ -12058,7 +12126,7 @@ export class CollectionMutationService extends BaseService {
         fields,
         data: componentFieldData,
         user: params.user,
-        access: fieldGroupWriteAccessOf(params),
+        access: this.fieldGroupAccess(params),
       });
 
       // Junction rows, the version snapshot, the outbox event and the
@@ -12247,6 +12315,10 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     options: UpdateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
+    // Refused first when the collection is removed from code; see createEntryWrite.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Computed right after the row is updated (before redaction can strip the
     // slug and before the after-hooks run) and carried on every post-write
     // return, so a committed item whose after-hook then throws still surfaces
@@ -13088,7 +13160,7 @@ export class CollectionMutationService extends BaseService {
           fields,
           data: componentFieldData,
           user: params.user,
-          access: fieldGroupWriteAccessOf(params),
+          access: this.fieldGroupAccess(params),
         });
       }
 
@@ -13460,6 +13532,10 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     options: DeleteEntryWriteOptions
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
+    // Refused first when the collection is removed from code; see createEntryWrite.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // True only in the window between the row delete and the outbox insert: a
     // failure there has left this shared transaction with a delete but no event,
     // so the catch re-throws to force a rollback. Cleared once the event is

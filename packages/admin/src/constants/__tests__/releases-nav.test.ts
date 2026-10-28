@@ -21,6 +21,7 @@ import {
   MAIN_MENU_ITEMS,
 } from "@admin/components/layout/sidebar/sidebar-types";
 
+import { railItemOf } from "@admin/components/layout/sidebar/lib/content-rail";
 import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import { filterNavigationItems } from "@admin/lib/permissions/authorization";
 import type { AdminCapabilities } from "@admin/types/permissions";
@@ -118,8 +119,14 @@ describe("the rail's coverage of the section vocabulary", () => {
     //
     // Reported as the missing NAMES rather than as a count, so a failure says
     // which section has no way in.
-    const railIds = new Set(MAIN_MENU_ITEMS.map(item => item.id));
-    const unreachable = NAV_SECTIONS.filter(section => !railIds.has(section));
+    //
+    // A section's entry is the rail item it is shown under, read through the
+    // rail's own mapping: `collections` and `singles` share the Content item,
+    // and every other section is its own entry, so a new one still needs one.
+    const railIds = new Set<string>(MAIN_MENU_ITEMS.map(item => item.id));
+    const unreachable = NAV_SECTIONS.filter(
+      section => !railIds.has(railItemOf(section))
+    );
     expect(unreachable).toEqual([]);
   });
 

@@ -27,7 +27,7 @@ import {
   LIST_DETAIL_CLASS,
   LIST_LABEL_CLASS,
   LIST_ROW_CLASS,
-  MORE_LINE_CLASS,
+  LIST_ROW_HEIGHT_CLASS,
   ROWS_STACK_CLASS,
   STATS_CELL_CLASS,
   STATS_GRID_CLASS,
@@ -37,7 +37,9 @@ import {
   TABLE_HEAD_ROW_CLASS,
   TABLE_HEADING_CLASS,
   TABLE_ROW_CLASS,
+  TABLE_ROW_HEIGHT_CLASS,
 } from "./geometry";
+import { useListDensity } from "./list-rows";
 import type { RowsLayout } from "./tier";
 
 /** The kinds of body a skeleton can be shaped like, so it matches what will arrive. */
@@ -69,15 +71,17 @@ function SkeletonLine({
 }
 
 /**
- * The rows a list or table card will draw, in the same line boxes and gaps (`frame/geometry`),
- * and the "More exist" line under them.
+ * The rows a list or table card will draw, in the same fixed-height row boxes at the card's
+ * density (`frame/geometry`).
  *
- * The line is ALWAYS held. Whether more exist is only known from the answer, and holding it
- * makes the only change an answer can bring a shrink: a list that has fewer rows than were held,
- * or no more beyond them, closes up once, and nothing on the dashboard is ever pushed down.
+ * Its "View all" line is not held here: it is drawn in the card's footer, which the frame keeps
+ * whether or not it holds anything, so an answer that brings the line moves nothing.
  */
 function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
   const widths = ["w-full", "w-4/5", "w-3/5"];
+  // The card's density, as the rows that will arrive are drawn at.
+  const density = useListDensity();
+  const rowHeight = LIST_ROW_HEIGHT_CLASS[density];
   return (
     <div className={ROWS_STACK_CLASS}>
       {layout.kind === "table" ? (
@@ -93,7 +97,10 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
           </thead>
           <tbody>
             {Array.from({ length: rows }, (_, r) => (
-              <tr key={r} className={TABLE_ROW_CLASS}>
+              <tr
+                key={r}
+                className={cn(TABLE_ROW_CLASS, TABLE_ROW_HEIGHT_CLASS[density])}
+              >
                 {Array.from({ length: layout.columns }, (_, c) => (
                   <td key={c} className={TABLE_CELL_CLASS}>
                     <Skeleton
@@ -111,7 +118,7 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
       ) : (
         <div className={LIST_CLASS}>
           {Array.from({ length: rows }, (_, r) => (
-            <div key={r} className={LIST_ROW_CLASS}>
+            <div key={r} className={cn(LIST_ROW_CLASS, rowHeight)}>
               <SkeletonLine
                 lineClass={LIST_LABEL_CLASS}
                 width={widths[r % 3]}
@@ -123,7 +130,6 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
           ))}
         </div>
       )}
-      <SkeletonLine lineClass={MORE_LINE_CLASS} width="w-20" />
     </div>
   );
 }
@@ -242,30 +248,71 @@ export interface CardEmptyContent {
   detail?: string;
   /**
    * At most ONE action, and only one the person may take. The caller decides that; the frame
-   * draws what it is given and never a second button.
+   * draws what it is given and never a second button: a link for an `href`, a button for an
+   * `onSelect`, such as one opening the card's own settings.
    */
-  action?: { label: string; href: string };
+  action?:
+    | { label: string; href: string }
+    | { label: string; onSelect: () => void };
 }
 
 /** The frame's own empty state, for a card whose body says nothing more particular. */
 export const EMPTY_DEFAULT: CardEmptyContent = { title: "Nothing to show yet" };
 
+/**
+ * The height an empty state with an action takes stacked: its title's line (`text-sm`, 20 px),
+ * the gap under it (4 px), the action's margin (8 px) and the action (32 px). A body shorter than
+ * this, such as a two-row card's, lays the title and the action in one row instead, so the action
+ * stays inside the body rather than running under the footer's room.
+ */
+export const EMPTY_STACKED_WITH_ACTION_PX: number = 20 + 4 + 8 + 32;
+
 export function CardEmpty({
   title,
   detail,
   action,
-}: CardEmptyContent): JSX.Element {
+  inline = false,
+}: CardEmptyContent & {
+  /** The title and the action in one row, for a body too short to stack them. */
+  inline?: boolean;
+}): JSX.Element {
   return (
-    <div className="grid justify-items-start gap-1" data-testid="card-empty">
+    <div
+      className={
+        inline
+          ? "flex flex-wrap items-center justify-center gap-x-3 gap-y-1"
+          : "grid justify-items-center gap-1"
+      }
+      data-testid="card-empty"
+      data-layout={inline ? "inline" : "stacked"}
+    >
       <p className="text-sm font-semibold text-foreground">{title}</p>
-      {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
-      {action && (
+      {/* A one-row state has no room for a second line; its title says what is missing. */}
+      {detail && !inline && (
+        <p className="text-xs text-muted-foreground">{detail}</p>
+      )}
+      {action && "href" in action && (
         <Link
           href={action.href}
-          className="mt-2 inline-flex h-8 items-center rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-primary/5"
+          className={cn(
+            "inline-flex h-8 items-center rounded-md border border-border px-3 text-sm font-medium text-foreground hover:bg-primary/5",
+            !inline && "mt-2"
+          )}
         >
           {action.label}
         </Link>
+      )}
+      {action && "onSelect" in action && (
+        // The button the link stands beside elsewhere, so the two read as one kind of step.
+        <Button
+          variant="outline"
+          size="sm"
+          className={inline ? undefined : "mt-2"}
+          onClick={action.onSelect}
+          data-testid="card-empty-action"
+        >
+          {action.label}
+        </Button>
       )}
     </div>
   );
@@ -283,7 +330,7 @@ export const UNAVAILABLE_DETAIL =
 export function CardUnavailable(): JSX.Element {
   return (
     <div
-      className="grid justify-items-start gap-1"
+      className="grid justify-items-center gap-1"
       data-testid="card-unavailable"
     >
       <Lock className="mb-1 h-5 w-5 text-muted-foreground" aria-hidden="true" />
@@ -311,7 +358,7 @@ export function CardError({
 }): JSX.Element {
   return (
     <div
-      className="grid justify-items-start gap-1"
+      className="grid justify-items-center gap-1"
       data-testid="widget-card-error"
     >
       <XCircle className="mb-1 h-5 w-5 text-destructive" aria-hidden="true" />

@@ -15,7 +15,6 @@ import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
 import { getWidget, widgetSource } from "../../registry";
 import {
-  cardQueryFor,
   clearDeclaredWidgets,
   declaredWidget,
   resetLegacyIdWarnings,
@@ -95,7 +94,7 @@ describe("startup with plugins that declare widgets", () => {
     ).not.toThrow();
   });
 
-  it("builds a card's query under the slug a site renamed the plugin's collection to", () => {
+  it("keeps the slugs a site renamed the plugin's collections to, for its widgets' reads", () => {
     const shop = definePlugin({
       name: "@acme/shop",
       version: "1.0.0",
@@ -106,9 +105,10 @@ describe("startup with plugins that declare widgets", () => {
       },
     });
     resetWidgetRegistries([shop.rename!({ orders: "sales" })]);
-    expect(
-      cardQueryFor("acme/recent-orders", { collection: "orders" })
-    ).toMatchObject({ source: "collection:sales" });
+    // Kept with the widget, so its load function's reads name the slug the site uses.
+    expect(declaredWidget("acme/recent-orders")?.collections).toEqual({
+      orders: "sales",
+    });
   });
 
   it("registers nothing from a disabled plugin", () => {
@@ -187,5 +187,30 @@ describe("startup with plugins that declare widgets", () => {
     expect(message).toContain(
       'id "acme/revenue" is already used by plugin "@old/stats", which declares it in the old shape'
     );
+  });
+
+  it("stops when a plugin uses one of core's declared ids in today's shape, saying it is core's and what to do", () => {
+    // 🔴 One id has one owner: core declares core/note, so the plugin using it
+    // in the old shape is told to remove it or contribute an id of its own.
+    const message = refusal(() =>
+      resetWidgetRegistries([
+        plugin("@old/notes", {
+          admin: {
+            widgets: [
+              {
+                id: "core/note",
+                title: "Note",
+                component: "@old/notes/admin#Note",
+              },
+            ],
+          },
+        }),
+      ])
+    );
+    expect(message).toContain(
+      'plugin "@old/notes" contributes core/note through contributes.admin.widgets; core owns that id. Remove it, or contribute your own id through contributes.dashboard.'
+    );
+    // Filed under the plugin that has to change, not under core.
+    expect(message).toContain('plugin "@old/notes", widget "core/note"');
   });
 });

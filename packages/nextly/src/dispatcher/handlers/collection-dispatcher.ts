@@ -35,9 +35,13 @@ import type { UserContext } from "../../domains/collections/services/collection-
 import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsAsFirstPushed,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
+import { applyCompanionTransition } from "../../domains/i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -91,6 +95,10 @@ import {
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  isLeavingSettingsRefusal,
+  leavingSettingsStep,
+} from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -616,7 +624,13 @@ const COLLECTIONS_METHODS: Record<
       desired.collections[p.collectionName] = {
         slug: p.collectionName,
         tableName,
-        fields: fields as DesiredCollection["fields"],
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          entity: collection,
+          requestedLocalized: previewLocalized,
+        }) as DesiredCollection["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: collection.status === true,
@@ -779,25 +793,6 @@ const COLLECTIONS_METHODS: Record<
       // candidates for the new collection being saved.
       const desired = await buildFullDesiredSchema();
 
-      // Splice in the user's changes for THIS collection (overwrites
-      // any registry entry for the same slug).
-      desired.collections[p.collectionName] = {
-        slug: p.collectionName,
-        tableName,
-        fields: fields as DesiredCollection["fields"],
-        // Mirror previewSchemaChanges so apply diffs against the same
-        // desired schema preview classified.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff omits translatable
-        // columns from the main table (they live in the companion `_locales`
-        // table, provisioned separately below). Uses the request's flag so a
-        // toggle applies immediately; without this the apply re-adds translatable
-        // columns to the main table.
-        localized: isLocalized,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-      };
-
       // Resolve adapter for the pipeline construction.
       const adapter = getAdapterFromDI();
       if (!adapter) {
@@ -896,6 +891,36 @@ const COLLECTIONS_METHODS: Record<
         builtBy: "collection",
       });
 
+      // A Required or Unique field leaving translation is pushed without its setting first, and
+      // the setting is pushed once the companion transition has copied its values in, before its
+      // companion column is dropped.
+      const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        renamed: companionRename,
+      });
+
+      // Splice in the user's changes for THIS collection (overwrites
+      // any registry entry for the same slug).
+      desired.collections[p.collectionName] = {
+        slug: p.collectionName,
+        tableName,
+        fields: (settingsDeferred ?? fields) as DesiredCollection["fields"],
+        // Mirror previewSchemaChanges so apply diffs against the same
+        // desired schema preview classified.
+        status: collection.status === true,
+        // i18n: carry the localized flag so the push diff omits translatable
+        // columns from the main table (they live in the companion `_locales`
+        // table, provisioned separately below). Uses the request's flag so a
+        // toggle applies immediately; without this the apply re-adds translatable
+        // columns to the main table.
+        localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
+      };
+
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await archiveFieldsLeavingTranslation({
@@ -974,6 +999,7 @@ const COLLECTIONS_METHODS: Record<
             joinedBefore: movedOnto(result, tableName),
             // A translated field the admin renamed: the dialog's answer naming the companion.
             renamed,
+            holdLeavingDrops: settingsDeferred !== undefined,
             // What this database holds now, so a re-apply after a part-applied one finishes it.
             ...(await liveCompanionShape(adapter, {
               tableName,
@@ -983,42 +1009,48 @@ const COLLECTIONS_METHODS: Record<
               companionExists,
             })),
           });
-          // A disable archives non-default translations, so ensure the archive
-          // table exists first. Run each statement individually (executeQuery is
-          // single-statement on some drivers, e.g. sqlite).
-          if (plan.needsArchive) {
-            await ensureI18nArchive(adapter, dialect);
-          }
-          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
-          // would make a half-finished localization ENABLE look like success, because the planner
-          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
-          for (const stmt of plan.statements) {
-            await adapter.executeQuery(stmt);
-          }
-
-          // The transition record describes a companion that no longer exists, so it stops being true
-          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
-          // source locale — the check that protects a live transition would block a legitimate one.
-          if (plan.companionDropped) {
-            // The other half of "this companion is gone": readiness remembers only that one
-            // exists.
-            const { forgetCompanionReadiness } = await import(
-              "../../domains/i18n/runtime/companion-readiness"
-            );
-            forgetCompanionReadiness(adapter, `${tableName}_locales`);
-            const { resolveTransitionStore } = await import(
-              "../../domains/i18n/migration/transition-recorder"
-            );
-            const { forgetI18nTransition } = await import(
-              "../../domains/i18n/migration/transition-state"
-            );
-            await forgetI18nTransition(
-              await resolveTransitionStore(adapter),
-              "collection",
-              String(p.collectionName)
-            );
-          }
+          // The settings the first push left off, once the shared columns hold the default
+          // language's values, and only then the leaving fields' companion columns dropped. A new
+          // desired schema rather than an edit of the first: the pipeline keeps the last one it
+          // applied, by reference, to skip a push that changes nothing.
+          await applyCompanionTransition({
+            adapter,
+            plan,
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: String(p.collectionName),
+                  tableName,
+                  builtBy: "collection",
+                  oldFields,
+                  newFields,
+                  renamed: companionRename,
+                  push: () =>
+                    apply(
+                      {
+                        ...desired,
+                        collections: {
+                          ...desired.collections,
+                          [p.collectionName]: {
+                            ...desired.collections[p.collectionName],
+                            fields: fields as DesiredCollection["fields"],
+                          },
+                        },
+                      },
+                      "ui",
+                      { promptChannel: "auto" }
+                    ),
+                })
+              : undefined,
+            kind: "collection",
+            slug: String(p.collectionName),
+            tableName,
+          });
         } catch (err) {
+          // A refused setting is the dialog's answer to the admin, naming the field, and nothing
+          // has been dropped by then, so it is passed on as it is rather than as a companion out
+          // of step.
+          if (isLeavingSettingsRefusal(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           // Fatal to correctness (translatable values have nowhere to live), but
           // the main-table apply already committed — surface loudly rather than

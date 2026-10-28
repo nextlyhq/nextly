@@ -3,7 +3,7 @@
  * them.
  *
  * Deliberately NOT a restatement of the list. Asserting that a card carries the
- * literal written three lines away in `core-widgets.ts` is a test that can only
+ * literal written three lines away in `core-widgets/` is a test that can only
  * ever agree with itself, and it would go on agreeing while the thing the
  * literal REFERS to was renamed underneath it. What is checked here is each
  * declaration against the module that consumes it.
@@ -14,13 +14,15 @@ import { registerRecentEditsWidgetSource } from "../../../services/dashboard/rec
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import {
   chromeFieldProblem,
   requiredPermissionSlugs,
   validateWidgetDefinition,
 } from "../definition";
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
-import { MAX_WIDGET_LIMIT } from "../query-limits";
+import { DENSITY_OPTIONS } from "../declaration/setting-builders";
+import { LIST_DENSITIES, MAX_WIDGET_LIMIT } from "../query-limits";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
 import { clearSystemResolvers } from "../system-sources";
@@ -136,15 +138,15 @@ describe("core widget definitions", () => {
     expect(card?.lifecycle ?? "always").toBe("always");
     expect(card).not.toHaveProperty("visibleWhen");
     expect(card?.dismissible).toBe(true);
-    // Full width only, and never shorter than its steps: a card does not scroll, so a reader
-    // may make it taller for the Singles they open, never short enough to cut a step off.
+    // Full width only, and compact: its steps fold to the rows it has, so it may be as short
+    // as three rows without a step cut off.
     expect(card && sizeBounds(card.size)).toEqual({
-      default: { w: 12, h: 8 },
-      min: { w: 12, h: 8 },
+      default: { w: 12, h: 4 },
+      min: { w: 12, h: 3 },
       max: { w: 12, h: 12 },
     });
-    const orders = CORE_WIDGETS.map(w => w.defaultOrder ?? Infinity);
-    expect(card?.defaultOrder).toBe(Math.min(...orders));
+    // First on core's default: it addresses a reader who has just arrived.
+    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({ widget: "core/get-started" });
   });
 
   it("no longer declares the two cards Get started replaced", () => {
@@ -225,6 +227,31 @@ describe("core widget definitions", () => {
   });
 });
 
+describe("the list cards' Density", () => {
+  it.each([
+    "core/recent-entries",
+    "core/recently-edited",
+    "core/recent-activity",
+    "core/upcoming-releases",
+  ])("%s offers the shared choice, one option for every density", id => {
+    // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
+    const widget = CORE_WIDGETS.find(w => w.id === id);
+    const density = widget?.settings?.find(
+      setting => setting.name === "density"
+    );
+    expect(density).toMatchObject({
+      type: "select",
+      defaultValue: "default",
+      options: [...DENSITY_OPTIONS],
+    });
+    expect(
+      (density as { options?: { value: string }[] } | undefined)?.options?.map(
+        option => option.value
+      )
+    ).toEqual([...LIST_DENSITIES]);
+  });
+});
+
 describe("the content card", () => {
   it("asks for every collection, not the default five", () => {
     // An omitted limit is materialized as the default 5, which would cut a
@@ -267,23 +294,33 @@ describe("the default dashboard", () => {
   // The agreed cards, in order, each at its agreed size and within its agreed
   // bounds, in grid units: [id, default, min, max].
   const AGREED = [
-    ["core/needs-attention", [8, 3], [4, 3], [12, 6]],
-    ["core/quick-create", [4, 3], [4, 2], [12, 4]],
-    ["core/recently-edited", [6, 4], [4, 3], [12, 6]],
-    ["core/recent-activity", [6, 4], [4, 3], [12, 6]],
+    // Needs attention four rows tall at the least, so each of its three kinds has a row;
+    // Create as tall, beside it.
+    ["core/needs-attention", [8, 4], [4, 4], [12, 6]],
+    ["core/quick-create", [4, 4], [4, 2], [12, 4]],
+    // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
+    // default, but four beside Team, whose row it shares.
+    ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
+    ["core/recent-activity", [6, 5], [4, 4], [12, 8]],
     ["core/content", [12, 4], [6, 3], [12, 6]],
-    ["core/upcoming-releases", [4, 4], [4, 3], [8, 6]],
+    ["core/upcoming-releases", [4, 4], [4, 4], [8, 8]],
     ["core/team", [4, 4], [3, 2], [6, 4]],
   ] as const;
 
   const unit = ([w, h]: readonly [number, number]) => ({ w, h });
 
-  it("orders the agreed cards as agreed", () => {
-    const ordered = CORE_WIDGETS.filter(w => AGREED.some(([id]) => id === w.id))
-      .slice()
-      .sort((a, b) => (a.defaultOrder ?? 0) - (b.defaultOrder ?? 0))
-      .map(w => w.id);
-    expect(ordered).toEqual(AGREED.map(([id]) => id));
+  it("is core's own defaultLayout: the onboarding card, then the agreed cards as agreed", () => {
+    // Each at its widget's starting size: no entry states a size or settings of its own.
+    expect(CORE_DEFAULT_LAYOUT).toEqual([
+      { widget: "core/get-started" },
+      ...AGREED.map(([id]) => ({ widget: id })),
+    ]);
+  });
+
+  it("states no defaultOrder on any of core's widgets: the order is the defaultLayout's", () => {
+    for (const widget of CORE_WIDGETS) {
+      expect([widget.id, widget.defaultOrder]).toEqual([widget.id, undefined]);
+    }
   });
 
   it("gives each its agreed size, within its agreed bounds", () => {

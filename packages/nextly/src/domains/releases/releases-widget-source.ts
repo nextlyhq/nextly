@@ -53,6 +53,9 @@ const DEFAULT_LIMIT = 5;
  * publishing it to every reader who may see the source at all.
  */
 const RELEASE_FIELDS = [
+  // What a row links to: the release itself, which this reader may read, since the service
+  // returned it to them.
+  { name: "id", type: "string" as const, label: "ID" },
   { name: "title", type: "string" as const, label: "Release" },
   { name: "state", type: "string" as const, label: "State" },
   { name: "scheduledAt", type: "date" as const, label: "Scheduled" },
@@ -127,6 +130,7 @@ function actorFor(caller: ReadCaller): ReleaseActor {
 function projected(row: ReleaseRow, names: readonly string[]) {
   const full: Record<string, unknown> = {
     kind: "release",
+    id: row.id,
     title: row.title,
     state: row.state,
     scheduledAt: row.scheduledAt,
@@ -328,6 +332,24 @@ export function callerMayReadAnyRelease(caller: ReadCaller): Promise<boolean> {
 export function overdueReleaseCount(caller: ReadCaller): Promise<number> {
   return service().count(
     { tab: "attention", reason: "overdue" },
+    actorFor(caller)
+  );
+}
+
+/**
+ * How many releases stopped, for this dashboard caller: a scheduled publish
+ * that failed and left the release unpublished. The releases domain's own count
+ * of its Needs attention tab narrowed to stopped, as {@link overdueReleaseCount}
+ * is to overdue, so "stopped" is decided there and nowhere else.
+ *
+ * Refused, as every release read is, for a caller who may not read releases;
+ * ask {@link callerMayReadReleases} first to leave the count out instead.
+ *
+ * @experimental
+ */
+export function stoppedReleaseCount(caller: ReadCaller): Promise<number> {
+  return service().count(
+    { tab: "attention", reason: "stopped" },
     actorFor(caller)
   );
 }

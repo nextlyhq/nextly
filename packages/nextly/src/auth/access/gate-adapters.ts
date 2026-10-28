@@ -14,6 +14,7 @@
 import type { Principal } from "../../plugins/principals/types";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { AccessOperation } from "../../services/access/types";
+import { canonicalJson } from "../../shared/lib/canonical-json";
 import {
   apiKeyWriteAllowed,
   scopeRowsAgree,
@@ -44,6 +45,11 @@ import {
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
 import {
+  JUDGED_OTHERWISE,
+  rememberRuleOutcome,
+  routeVerdictFor,
+} from "./request-memo";
+import {
   actorForKey,
   actorForPrincipal,
   actorForScope,
@@ -52,15 +58,30 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
+import { allowsSome, mayAnswerFilter, type RuleFilter } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
 } from "./rule-answer-log";
-import { askReadAsPlainRead } from "./rule-language";
+import {
+  askReadAsPlainRead,
+  currentRuleLanguage,
+  ruleLanguageKey,
+} from "./rule-language";
 
-/** Allowed, or refused with the kind of refusal the gate words. */
+/**
+ * Allowed, refused with the kind of refusal the gate words, or allowed only
+ * for the entries a read rule's filter matches. The last is handed only to an
+ * asker that applies the filter ({@link GateQuestion.appliesFilter}), and is
+ * not `allowed`, which means every entry.
+ */
 export type GateVerdict =
   | { readonly allowed: true }
+  | {
+      readonly allowed: false;
+      readonly refusal: "only-matching-entries";
+      readonly filter: RuleFilter;
+    }
   | {
       readonly allowed: false;
       /**
@@ -123,6 +144,40 @@ const verdictOf = (allowed: boolean): GateVerdict =>
 const isLifecycle = (action: AccessOperation) =>
   action === "publish" || action === "unpublish";
 
+/**
+ * The filter a collection's read rule answered, where it answered a
+ * well-formed one; `undefined` for any other answer, action or target.
+ */
+function readFilterOf(
+  target: AccessTarget,
+  action: AccessOperation,
+  outcome: RuleOutcome
+): RuleFilter | undefined {
+  if (action !== "read" || !mayAnswerFilter(target.kind, action)) return;
+  if (!outcome.declared || "threw" in outcome) return;
+  const answer = outcomeAnswer(outcome);
+  return answer.kind === "filter" ? answer.filter : undefined;
+}
+
+/**
+ * A read rule's filter as the gate answers it: the filter, to an asker that
+ * applies it, and a refusal to any other. That refusal differs from the
+ * decision, which allows the entries the filter matches to a caller it lets
+ * read the collection (`decisionAllows`), so it is recorded as the deviation
+ * it is.
+ */
+async function onlyMatching(
+  q: GateQuestion,
+  filter: RuleFilter,
+  decisionAllows: boolean
+): Promise<GateVerdict> {
+  if (q.appliesFilter) {
+    return { allowed: false, refusal: "only-matching-entries", filter };
+  }
+  await deviate("filter-not-applied", false, () => decisionAllows);
+  return INSUFFICIENT;
+}
+
 /** Where the gate reads the targets apps declare rules for. */
 interface RuleSource {
   getRegisteredTarget(slug: string): AccessTarget | undefined;
@@ -143,6 +198,12 @@ export interface GateQuestion {
   readonly principal: Principal | null;
   /** The caller's transaction, when the gate is asked inside one. */
   readonly executor?: unknown;
+  /**
+   * The asker applies a collection read rule's filter to the entries it
+   * reads, so the gate hands the filter back. Any other asker is refused it,
+   * as it cannot limit what it reads to the entries the filter matches.
+   */
+  readonly appliesFilter?: boolean;
   /** The access-control service's rules; absent without the service. */
   readonly rules?: RuleSource;
   /**
@@ -150,13 +211,25 @@ export interface GateQuestion {
    * collection, the permission read from the gate's own database.
    */
   readonly permissionWithoutService: () => Promise<boolean>;
+  /**
+   * Without the access-control service, the visitor as the gate's own
+   * database holds it: the Public role read there, as a signed-in user's
+   * permission is. Absent, the Public role is read on the pool.
+   */
+  readonly visitorWithoutService?: () => Promise<VisitorActor>;
 }
 
 /** What the collection gate is asked. */
 export type CollectionQuestion = GateQuestion;
 
-/** What the Single gate is asked. */
-export type SingleQuestion = Omit<GateQuestion, "permissionWithoutService">;
+/**
+ * What the Single gate is asked. It reads a signed-in user's permission on
+ * the pool, and so a visitor's Public role too.
+ */
+export type SingleQuestion = Omit<
+  GateQuestion,
+  "permissionWithoutService" | "visitorWithoutService"
+>;
 
 /**
  * The decision's answer, for a deviation to compare today's against: with the
@@ -168,7 +241,10 @@ const decided = async (
   action: AccessOperation,
   target: AccessTarget
 ): Promise<boolean> =>
-  (await decide(await actor, action, targetAsDeclared(target))).allowed;
+  allowsSome(
+    await decide(await actor, action, targetAsDeclared(target)),
+    action
+  );
 
 export function collectionGateVerdict(
   q: CollectionQuestion
@@ -212,6 +288,7 @@ async function gateVerdict(
   // none, as every target does without the service, refuses them.
   if (q.principal !== null) {
     return answerOf(
+      q,
       await decide(actorForPrincipal(q.principal), q.action, target)
     );
   }
@@ -245,6 +322,29 @@ async function routeAuthorizedVerdict(
   q: GateQuestion,
   target: AccessTarget
 ): Promise<GateVerdict> {
+  if (q.user && readsRouteFilter(kind, q, target)) {
+    // The route's allow said only that the caller may read; the route kept
+    // its verdict for the request, every entry or a read rule's filter, and
+    // the read applies it. The rule is not asked again: the route asked it,
+    // and a rule may call out to a service, whose second answer could differ
+    // from the first.
+    const kept = routeVerdictFor({
+      userId: q.user.id,
+      ...(q.scope ? { scope: q.scope } : {}),
+      slug: q.slug,
+      action: q.action,
+      language: currentRuleLanguage(),
+    });
+    // A route that judged this read only for another caller of the same user,
+    // or only in another language, said nothing of this one.
+    if (kept === JUDGED_OTHERWISE) return INSUFFICIENT;
+    if (kept && "filter" in kept) return onlyMatching(q, kept.filter, true);
+    // `routeAuthorized` is set by server code that has already judged the
+    // caller, never from a request's input. Where no route in this request
+    // kept a verdict, the server code that set it judged the caller as it
+    // always has, and its allow is for every entry.
+    return ALLOWED;
+  }
   if (q.user) return ALLOWED;
   if (kind === "collection") return UNAUTHENTICATED;
   const today = await visitorVerdict(kind, q, target);
@@ -252,8 +352,101 @@ async function routeAuthorizedVerdict(
   return today;
 }
 
-function answerOf(decision: Decision): GateVerdict {
-  return verdictOf(decision.allowed);
+/**
+ * Whether a read the route already authorized reads the filter the route let
+ * its caller through on: where the asker applies the rule's filter and the
+ * collection's read rule is a function, which may answer one. A plain `true`
+ * or `false` was judged by the route, as before.
+ */
+function readsRouteFilter(
+  kind: "collection" | "single",
+  q: GateQuestion,
+  target: AccessTarget
+): boolean {
+  if (!q.appliesFilter || q.action !== "read" || kind !== "collection") {
+    return false;
+  }
+  return (
+    declaresRule(target, "read") && plainRule(target, "read") === undefined
+  );
+}
+
+/**
+ * What a rule is told about an actor (`ruleContext`), as a question kept for
+ * the request names it, and nothing it is not told: a signed-in user and a
+ * key are each the user id, the roles and the grants' slugs; a plugin person
+ * is the whole person, its attributes included, which the rule is told; a
+ * visitor is told nothing. So a narrower scope, or a person whose attributes
+ * changed, never reuses an earlier answer, and two asks that hand the rule
+ * the same context, whichever way they built the actor, share one.
+ * `undefined` for a person no key can name, whose answer is not kept.
+ */
+function ruleContextKeyOf(
+  actor: Exclude<Actor, { kind: "system" }>
+): string | undefined {
+  switch (actor.kind) {
+    case "user":
+    case "key":
+      // In the order the rule is handed them: a rule may read `roles[0]`,
+      // so two scopes holding the same roles in another order are told
+      // different things.
+      return JSON.stringify([
+        "staff",
+        actor.userId,
+        actor.roles,
+        actor.permissions.map(grant => grant.slug),
+      ]);
+    case "principal": {
+      const person = canonicalJson(actor.principal);
+      return person === undefined
+        ? undefined
+        : JSON.stringify(["principal", person]);
+    }
+    case "visitor":
+      return "visitor";
+  }
+}
+
+/**
+ * A read rule's outcome, asked once in a request where the asker applies its
+ * filter, so the route's question and the service's re-ask of the same read
+ * run the rule once. Kept by the target, the actor as its rule is told it
+ * (identity, roles and grants) and the language, which is all a rule's
+ * context is made of in one request. Any other ask asks the rule as before.
+ */
+function askedOnce<T>(
+  q: GateQuestion,
+  actor: Exclude<Actor, { kind: "system" }>,
+  target: AccessTarget,
+  ask: () => Promise<T>,
+  asked: "rule" | "rules"
+): Promise<T> {
+  if (!q.appliesFilter || q.action !== "read") return ask();
+  const context = ruleContextKeyOf(actor);
+  if (context === undefined) return ask();
+  const question = [
+    asked,
+    `${target.kind}:${target.slug}`,
+    context,
+    ruleLanguageKey(),
+  ].join("|");
+  return rememberRuleOutcome(question, ask);
+}
+
+/**
+ * The decision's answer as the gate gives it. A filter it names for a read is
+ * handed to an asker that applies it; a write rule's filter is not applied
+ * yet, so it refuses.
+ */
+function answerOf(q: GateQuestion, decision: Decision): Promise<GateVerdict> {
+  if (
+    !decision.allowed &&
+    decision.reason === "only-matching-entries" &&
+    q.action === "read"
+  ) {
+    return onlyMatching(q, decision.filter, true);
+  }
+  return Promise.resolve(verdictOf(decision.allowed));
 }
 
 async function visitorVerdict(
@@ -265,18 +458,31 @@ async function visitorVerdict(
   if (kind === "single" && isLifecycle(q.action)) return UNAUTHENTICATED;
   let visitor: VisitorActor;
   try {
-    visitor = await actorForVisitor({ executor: q.executor });
+    visitor = await visitorOf(q);
   } catch (error) {
     // The Public role's grants could not be read: refused, never guessed.
     return { allowed: false, refusal: "failed", error };
   }
-  const outcome = await askRule(visitor, q.action, target);
-  // A rule that answers `false` or fails refuses a visitor outright, and a
-  // publish or an unpublish needs a signed-in user whatever the rule says.
+  // Asked in the decision's order, the permission before the rule, and once
+  // per request where the asker applies a filter: a visitor never publishes
+  // or unpublishes, and one the Public role does not grant the action is
+  // refused as needing a signed-in caller before its rule, application code,
+  // is run.
+  const outcomes = await askedOnce(
+    q,
+    visitor,
+    target,
+    () => askRules(visitor, q.action, target),
+    "rules"
+  );
+  if (outcomes === null) return UNAUTHENTICATED;
+  const outcome = outcomes.action;
+  // A rule that answers `false` or fails refuses a visitor outright.
   if (outcome.declared && ("threw" in outcome || outcome.value === false)) {
     return INSUFFICIENT;
   }
-  if (isLifecycle(q.action)) return UNAUTHENTICATED;
+  const filter = readFilterOf(target, q.action, outcome);
+  if (filter) return visitorFilterVerdict(q, outcome, filter);
   // Otherwise a declared rule lets a visitor through only by answering
   // `true`.
   if (!outcomeAllows(outcome)) {
@@ -284,6 +490,35 @@ async function visitorVerdict(
     return INSUFFICIENT;
   }
   return visitorPassVerdict(visitor, q, target, outcome);
+}
+
+/**
+ * The visitor a gate judges. Without the service, as the gate's own database
+ * holds it where it has one, as a signed-in user's permission is read there;
+ * otherwise on the pool, or the caller's transaction.
+ */
+function visitorOf(q: GateQuestion): Promise<VisitorActor> {
+  return !q.rules && q.visitorWithoutService
+    ? q.visitorWithoutService()
+    : actorForVisitor({ executor: q.executor });
+}
+
+/**
+ * A visitor whose read rule answered a filter, and whom the Public role
+ * grants the action. An asker that applies it shows the visitor the entries
+ * it matches; any other asker refuses, as the decision does.
+ */
+function visitorFilterVerdict(
+  q: GateQuestion,
+  outcome: RuleOutcome,
+  filter: RuleFilter
+): Promise<GateVerdict> {
+  // The Public role's permission for the action was asked before the rule,
+  // so the visitor holds it: the filter alone narrows what it is shown.
+  if (!q.appliesFilter) {
+    noticeWhereRuleAllowedBefore(outcome, allowedVisitorBefore, q, "visitor");
+  }
+  return onlyMatching(q, filter, true);
 }
 
 /**
@@ -385,9 +620,15 @@ async function grantJudgedVerdict(
     actor,
     q.action,
     target,
-    await askRules(actor, q.action, target)
+    await askedOnce(
+      q,
+      actor,
+      target,
+      () => askRules(actor, q.action, target),
+      "rules"
+    )
   );
-  if (q.rules) return answerOf(answer);
+  if (q.rules) return answerOf(q, answer);
   // Without the service no rule is read, where the decision reads the rules
   // the target declares.
   return verdictOf(
@@ -546,7 +787,25 @@ async function ruleVerdict({
   if (!holdsPermission(actor, q.action, q.slug)) {
     return refusedWithoutPermission(q);
   }
-  const outcome = await askRule(actor, q.action, target);
+  const outcome = await askedOnce(
+    q,
+    actor,
+    target,
+    () => askRule(actor, q.action, target),
+    "rule"
+  );
+  const filter = readFilterOf(target, q.action, outcome);
+  if (filter) {
+    if (!q.appliesFilter) {
+      noticeWhereRuleAllowedBefore(
+        outcome,
+        allowedUserBefore,
+        q,
+        "signed-in user"
+      );
+    }
+    return onlyMatching(q, filter, true);
+  }
   // The rule then lets the user through only by answering `true`.
   const allowed = outcomeAllows(outcome);
   if (!allowed) {

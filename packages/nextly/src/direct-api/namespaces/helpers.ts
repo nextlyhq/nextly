@@ -22,6 +22,7 @@ import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { visitorReadsSystemResource } from "../../auth/resource-readable";
+import { isAssignableRole } from "../../domains/auth/services/public-role";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
@@ -664,6 +665,9 @@ export function mapRole(role: RawRoleRecord): Role {
     description: role.description ?? null,
     level: role.level,
     isSystem: Boolean(role.isSystem),
+    // Derived here rather than carried from the read, so a role a create or
+    // update returns says it as a listed one does.
+    assignable: isAssignableRole(role),
   };
 }
 

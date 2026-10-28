@@ -21,10 +21,7 @@ import { z } from "zod";
 
 import { schemaListed } from "../auth/access/route-gate-adapters";
 import { getRBACService } from "../auth/code-access";
-import {
-  COLLECTION_DEFINITION_ACTION,
-  COLLECTION_DEFINITION_RESOURCE,
-} from "../auth/collection-definition-policy";
+import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
@@ -39,8 +36,8 @@ import { simplePluralize } from "../shared/lib/pluralization";
 import { assertValidFieldsPayload } from "./fields-payload";
 import { respondList, respondMutation } from "./response-shapes";
 import {
+  requireRouteAllPermissions,
   requireRouteAuthentication,
-  requireRoutePermission,
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -230,8 +227,8 @@ function pageOf<T>(all: T[], limit: number, offset: number) {
 /**
  * POST handler for creating a new UI collection.
  *
- * Requires super-admin or `manage-settings` permission. Creates a new
- * collection with `source="ui"` and `locked=false`.
+ * Requires super-admin, or create, update and delete on settings. Creates a
+ * new collection with `source="ui"` and `locked=false`.
  *
  * Response Codes:
  * - 201 Created: Collection created successfully
@@ -249,13 +246,9 @@ export const POST = withErrorHandler(async (request: Request) => {
   // Initialize services (required for permission check via RBAC tables).
   const registry = await getCollectionRegistry();
 
-  // Authorise: only super-admins or users with manage-settings permission
-  // may create new collections (matches the frontend route guard).
-  await requireRoutePermission(
-    request,
-    COLLECTION_DEFINITION_ACTION,
-    COLLECTION_DEFINITION_RESOURCE
-  );
+  // Authorise: a super-admin, or a caller holding every permission a
+  // collection definition change asks (create, update and delete settings).
+  await requireRouteAllPermissions(request, COLLECTION_DEFINITION_PERMISSIONS);
 
   const body = await request.json();
 
