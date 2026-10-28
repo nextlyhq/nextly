@@ -213,7 +213,10 @@ describe("a site config with faults", () => {
     );
     expect(() =>
       resetWidgetRegistries([shop], {
-        defaultLayout: ["acme/recent-orders", "acme/recent-orders"],
+        defaultLayout: [
+          "acme/recent-orders",
+          { widget: "acme/recent-orders", id: "recent-orders-2" },
+        ],
       })
     ).not.toThrow();
   });
@@ -234,14 +237,44 @@ describe("a site config with faults", () => {
     );
   });
 
+  it("refuses a further card of one widget that names no id of its own, showing the entry to write", () => {
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([shop], {
+          defaultLayout: ["acme/recent-orders", "acme/recent-orders"],
+        })
+      )
+    ).toContain(
+      'the site config, widget "acme/recent-orders": defaultLayout places "acme/recent-orders" again (entry 2) with no id of its own: name the card, as { widget: "acme/recent-orders", id: "recent-orders-2" }'
+    );
+  });
+
+  it("refuses two cards under one id, and a card named after a widget", () => {
+    const message = refusal(() =>
+      resetWidgetRegistries([shop], {
+        defaultLayout: [
+          { widget: "acme/recent-orders", id: "orders" },
+          { widget: "acme/recent-orders", id: "orders" },
+          { widget: "acme/recent-orders", id: "core/team" },
+        ],
+      })
+    );
+    expect(message).toContain(
+      'defaultLayout names two cards "orders": each card needs an id of its own'
+    );
+    expect(message).toContain(
+      'defaultLayout names a card "core/team", which is a widget\'s id; give it a name no widget has'
+    );
+  });
+
   it("refuses a default with more cards than a dashboard holds", () => {
     expect(
       refusal(() =>
         resetWidgetRegistries([shop], {
-          defaultLayout: Array.from(
-            { length: 201 },
-            () => "acme/recent-orders"
-          ),
+          defaultLayout: Array.from({ length: 201 }, (_, index) => ({
+            widget: "acme/recent-orders",
+            id: `orders-${index}`,
+          })),
         })
       )
     ).toContain(
@@ -250,7 +283,10 @@ describe("a site config with faults", () => {
   });
 
   it("counts against that room only the cards it places, never an optional one whose widget is absent", () => {
-    const full = Array.from({ length: 200 }, () => "acme/recent-orders");
+    const full = Array.from({ length: 200 }, (_, index) => ({
+      widget: "acme/recent-orders",
+      id: `orders-${index}`,
+    }));
     expect(() =>
       resetWidgetRegistries([shop], {
         defaultLayout: [

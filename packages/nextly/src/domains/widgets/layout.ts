@@ -43,8 +43,8 @@
  * A placement is one card with its own identity, so one widget can appear
  * twice with different `config`. The DEFAULT set names each placement after its
  * widget, a stable id that keeps repeated reads identical, and each further
- * card of one widget by an id derived from it (`resolvePlacementIds`); a card
- * added later gets a generated id.
+ * card of one widget by the id the site config names for it; a card added
+ * later gets a generated id.
  *
  * @module domains/widgets/layout
  */

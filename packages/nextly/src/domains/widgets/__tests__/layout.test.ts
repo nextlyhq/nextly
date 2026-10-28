@@ -408,12 +408,12 @@ describe("a row of an earlier format is no saved arrangement", () => {
   });
 
   it("keeps each card's own choice where the default places one widget twice", () => {
-    const twice = [card("core/a", "core/a"), card("core/a~2", "core/a")];
+    const twice = [card("core/a", "core/a"), card("a-second", "core/a")];
     const row = readStoredLayout(
       serializeLayout(
         [
           card("core/a", "core/a", { removed: true, config: { range: "7d" } }),
-          card("core/a~2", "core/a", { config: { range: "30d" } }),
+          card("a-second", "core/a", { config: { range: "30d" } }),
         ],
         false
       )

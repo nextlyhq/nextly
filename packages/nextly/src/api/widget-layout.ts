@@ -58,6 +58,7 @@ import {
 } from "../domains/widgets/get-started-card";
 import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
 import {
+  LAYOUT_SCHEMA_VERSION,
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
   dismissalsApplied,
@@ -985,15 +986,16 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     writeArranges ||
     (stored.layout !== undefined && layoutIsArranged(stored.layout));
 
+  const saved = mergePreservingHidden(
+    submitted,
+    wholeArrangement(stored.layout),
+    carriedUnlessSubmitted(submitted, view.visibleIds),
+    withheldFrom(stored.layout, view, notShown)
+  );
   const version = await service.saveLayout(
     SCOPE_KIND,
     view.caller.userId,
-    mergePreservingHidden(
-      submitted,
-      wholeArrangement(stored.layout),
-      carriedUnlessSubmitted(submitted, view.visibleIds),
-      withheldFrom(stored.layout, view, notShown)
-    ),
+    saved,
     expectedVersion,
     arranged
   );
@@ -1007,9 +1009,23 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       placements: submitted,
       version,
       source: "own" satisfies LayoutSource,
-      // The token the next write is checked against: an arranged row's cards
-      // answer for themselves, so it covers no verdict of the default's.
-      scope: arranged ? view.scope : scope,
+      // The token the next write is checked against, from the row as just
+      // saved: a setting this write changed may change a card's verdict. An
+      // arranged row's cards answer for themselves, so it covers none.
+      scope: arranged
+        ? view.scope
+        : (
+            await readerCards(
+              auth,
+              view,
+              {
+                schemaVersion: LAYOUT_SCHEMA_VERSION,
+                placements: saved,
+                unarranged: true,
+              },
+              req.signal
+            )
+          ).scope,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );

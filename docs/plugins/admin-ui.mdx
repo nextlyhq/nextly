@@ -431,7 +431,8 @@ A site writes its own default as widget ids, or as cards with a size in grid uni
 starting settings. An entry marked `optional` is left out where its widget is not installed,
 such as a plugin's on a site without that plugin, and takes none of the dashboard's room; any
 other entry must name a widget the install has, or startup refuses it. A widget that allows
-several cards may be listed more than once, and each card keeps its own settings:
+several cards may be listed more than once: each further card names an `id` of its own, which
+no other card and no widget has, and keeps its own settings under it:
 
 ```ts
 admin: {
@@ -440,6 +441,8 @@ admin: {
       "core/needs-attention",
       { widget: "acme/orders-by-state", w: 6, h: 4, optional: true },
       "core/recently-edited",
+      { widget: "core/count", settings: { collection: "posts" } },
+      { widget: "core/count", id: "pages-count", settings: { collection: "pages" } },
     ],
     suggestions: false,
   },

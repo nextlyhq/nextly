@@ -22,7 +22,7 @@
 import { placedByDefault, sizeFacts, type CanonicalWidget } from "./canonical";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "./core-widgets/ids";
 import type { DefaultLayoutCard } from "./declaration/dashboard";
-import { resolvePlacementIds, type WidgetPlacement } from "./layout";
+import type { WidgetPlacement } from "./layout";
 
 /** What startup read from the site config and the plugins, for the default. */
 export interface DefaultLayoutPlan {
@@ -68,11 +68,11 @@ const CORE_IDS: ReadonlySet<string> = new Set(CORE_WIDGET_IDS);
  * here is an optional plugin widget, or a card core generates for content
  * since deleted.
  *
- * The placement id is the widget id here, and only here, so repeated reads of
- * an unsaved dashboard return identical ids. A widget the base places more than
- * once gets an id of its own for each further card, derived from the widget's
- * as a repeat is everywhere (`resolvePlacementIds`), so each card keeps its own
- * removal and settings in a row that follows the default.
+ * Each card's placement id is the one its entry names, or else its widget's,
+ * so repeated reads of an unsaved dashboard return identical ids. A widget the
+ * base places more than once names an id for each further card (startup
+ * refuses a repeat that does not), so a card's id never depends on another
+ * card, or on which cards a reader may see.
  *
  * 🔴 NOT capped here. The submission limit belongs to what a CALLER may send,
  * and this materialization is caller-independent; capping it would let cards a
@@ -84,12 +84,10 @@ export function defaultLayoutPlacements(
   plan: DefaultLayoutPlan = defaultLayoutPlan()
 ): WidgetPlacement[] {
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
-  const base = resolvePlacementIds(
-    plan.cards.flatMap(card => {
-      const widget = byId.get(card.widget);
-      return widget === undefined ? [] : [placementOf(widget, card)];
-    })
-  ).placements;
+  const base = plan.cards.flatMap(card => {
+    const widget = byId.get(card.widget);
+    return widget === undefined ? [] : [placementOf(widget, card)];
+  });
   if (!plan.suggestions) return base;
   const placed = new Set(base.map(placement => placement.widgetId));
   const suggested = suggestedWidgets(widgets, plan.suggested).filter(
@@ -153,11 +151,11 @@ function byDefaultOrder(a: CanonicalWidget, b: CanonicalWidget): number {
  */
 function placementOf(
   widget: CanonicalWidget,
-  card: Pick<DefaultLayoutCard, "w" | "h" | "settings">
+  card: Pick<DefaultLayoutCard, "id" | "w" | "h" | "settings">
 ): WidgetPlacement {
   const starting = sizeFacts(widget).size.default;
   return {
-    id: widget.id,
+    id: card.id ?? widget.id,
     widgetId: widget.id,
     // The size travels WITH the placement: the first save stores it, so a
     // later change to the widget's default does not resize a saved card.

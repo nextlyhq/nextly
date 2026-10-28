@@ -104,6 +104,13 @@ export type WidgetRef = CoreWidgetId | (string & {});
  */
 export interface DefaultLayoutCard {
   widget: WidgetRef;
+  /**
+   * The card's own id, which a reader's choices about it are kept under. A
+   * widget placed once needs none: its card is named after the widget. Each
+   * further card of a widget placed more than once must name one, and no two
+   * cards, nor a card and a widget, may share one.
+   */
+  id?: string;
   /** Columns, of twelve. */
   w?: number;
   /** Rows. */

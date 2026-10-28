@@ -30,11 +30,12 @@
 ---
 
 Every card of a default dashboard keeps its own identity. A widget a site's `defaultLayout`
-places more than once gets an id for each card, so each card keeps its own settings and
-removal through a save made outside customise mode, where every copy used to take the last
-card's.
+places more than once names an `id` for each further card (`{ widget, id, settings }`), and
+startup refuses a repeat without one, or two cards under one id, showing the entry to write. A
+row following the default keeps each card's removal and settings under that id.
 
 A declared widget's `shows` is now judged with the settings a reader gave its card, and a save
-staged before a card's verdict changed is refused as stale, rather than leaving that card out.
+staged before a card's verdict changed is refused as stale, rather than leaving that card out; a
+save that changes such a setting answers with the token the next save is checked against.
 An optional `defaultLayout` entry whose widget is not installed no longer counts against the
 dashboard's limit. `contributes.dashboard.widgets: null` is refused at startup as not a list.
