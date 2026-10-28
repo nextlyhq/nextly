@@ -34,7 +34,6 @@ export const recentlyEditedWidget = {
     min: { w: 4, h: 4 },
     max: { w: 12, h: 8 },
   },
-  defaultOrder: 30,
   // From the activity trail, one row per document at its latest save the
   // reader may see, across every collection they may read; the same trail
   // Recent activity reads, grouped by document rather than by run. Every

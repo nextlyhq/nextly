@@ -41,6 +41,41 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental The number and change formatters a dashboard card's figures are
+ * written with, and the colour a chart slot is drawn in, for a widget's own view
+ * and for server code alike:
+ *
+ * - `formatWidgetNumber`: a count, total or chart value, as drawn ("1.2k" at a
+ *   small tier, "2,000+" for a floor) and as heard ("2,000 or more").
+ * - `formatWidgetChange`: a change against an earlier period, with its arrow
+ *   and sign, never its colour alone.
+ * - `widgetChartColour`: the token a chart slot is drawn in
+ *   (`var(--nx-chart-N)`), the five colours core's charts use in light and dark.
+ *
+ * Here, at the server-safe root, rather than beside the kit's components in
+ * `./admin`: every module of the admin is a client module, which a Server
+ * Component cannot call. Each is `@nextlyhq/ui`'s own, from its server-safe
+ * entries, so a figure reads the same wherever it is written. The locale is
+ * the `locale` option's, `en-US` when none is given.
+ */
+export {
+  chartColour as widgetChartColour,
+  formatChange as formatWidgetChange,
+  formatCount as formatWidgetNumber,
+  type ChartSlot as WidgetChartSlot,
+} from "@nextlyhq/ui/format";
+
+/**
+ * @experimental `defineAttentionItem` — declares one line of the Needs
+ * attention card, which a plugin lists under `contributes.dashboard.attention`:
+ * a label, a count taken as the person asking, and where it leads. Who sees it
+ * is a permission, or the collections it counts. `AttentionItem` and
+ * `AttentionCount` are the types it is written in.
+ */
+export { defineAttentionItem } from "nextly";
+export type { AttentionCount, AttentionItem } from "nextly";
+
+/**
  * @experimental `collectionDraftSplit` — whether a collection stores a working
  *   draft beside its published row.
  *

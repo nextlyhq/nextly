@@ -757,6 +757,14 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # The playground's committed component map agrees with what its config declares. The map
+      # is written in development and by `generate:types`, and checked here, never at boot: one
+      # that fell behind would ship a dashboard card drawing its error state. Each component's
+      # pairing with its widget's props is the map's own type, judged by Typecheck above.
+      - name: Component map agrees with the config
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        run: pnpm --filter playground exec nextly generate:types --check
+
       # Unit tests. WHAT runs is not written here: `lane:test` in the root
       # manifest holds it, and `check:test-lanes` asks turbo what that script
       # selects rather than reading this file. A workflow is a poor place to

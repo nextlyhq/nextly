@@ -58,6 +58,10 @@ export const NEXTLY_ERROR_STATUS = {
   DATABASE_BUSY: 503,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
+  // The app nextly runs in is set up so nextly cannot work: its config, or the
+  // Next.js and React it installs. 500: nothing about the request is wrong,
+  // and only the operator can change it.
+  CONFIGURATION_ERROR: 500,
   // Outbound-fetch safety (utils/validate-external-url): a URL refused for SSRF
   // safety, and a fetch that timed out / exceeded the size cap / failed to decode.
   EXTERNAL_URL_BLOCKED: 400,
@@ -139,10 +143,6 @@ export const NEXTLY_ERROR_STATUS = {
   // `/api/admin-meta/workspace` payload: a value `JSON.stringify` throws on
   // fails that request for every admin, not just the widget's own card.
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
-  // The admin is not served because a dashboard widget draws with a component
-  // the app's generated component map does not include. Refused when the
-  // admin's server layout renders, so the public site keeps serving.
-  NEXTLY_ADMIN_COMPONENT_MAP_STALE: 500,
   // A plugin's document view cannot be routed: a malformed or reserved path,
   // or one two declarations claim on the same document. Refused at boot.
   NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID: 500,

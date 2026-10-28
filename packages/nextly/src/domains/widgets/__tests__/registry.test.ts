@@ -200,6 +200,20 @@ describe("the doors a widget whose data core builds may come through", () => {
     expect(() => registerWidget(spread)).toThrow(/with serverData/);
   });
 
+  it("is the only door an owner comes in by: a public one refuses a definition naming one", () => {
+    const owned = {
+      ...def("acme/owned"),
+      owner: 'plugin "@acme/shop"',
+    } as unknown as WidgetDefinition;
+    expect(() => registerWidget(owned)).toThrow(
+      /registerWidget\(\) with owner/
+    );
+    expect(getWidget("acme/owned")).toBeUndefined();
+    expect(() => overrideWidget("acme/owned", owned)).toThrow(
+      /overrideWidget\(\) with owner/
+    );
+  });
+
   it("cannot be replaced, since its card is answered from its declaration", () => {
     registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
     expect(() => overrideWidget("acme/orders", def("acme/orders"))).toThrow(

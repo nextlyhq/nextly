@@ -14,8 +14,8 @@ import type * as siteConfig from "../../nextly.config";
 
 const registered = {
   "@/plugins/block-fixture/editor#FixtureInspector": _p0.FixtureInspector,
-  "@/plugins/widget-kit-fixture/admin#KitCard": _p1.KitCard,
-  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p1.ThrowingCard,
+  "@/plugins/widget-kit-fixture/admin#KitCard": _p1.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
+  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p1.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
   "@nextlyhq/plugin-page-builder/admin#BlocksField": _p2.BlocksField,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p2.PageBuilderView,
 } satisfies DeclaredComponentMap<typeof siteConfig>;

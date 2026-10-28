@@ -76,7 +76,7 @@ function snapshot(def: WidgetDefinition): WidgetDefinition {
 }
 
 /**
- * The public doors' refusal of `serverData`.
+ * The public doors' refusal of `serverData`, and of `owner`.
  *
  * Only core may say a card's data is built on the server, because only core
  * holds the declaration that builds it: a definition claiming it through a
@@ -85,13 +85,20 @@ function snapshot(def: WidgetDefinition): WidgetDefinition {
  * spread of a published definition can carry it.
  */
 function refuseServerData(def: WidgetDefinition, door: string): void {
-  const stated: unknown = (def as { serverData?: unknown }).serverData;
-  if (stated === undefined) return;
-  throw NextlyError.invalidInput({
-    message:
-      `Widget "${def.id}" cannot be given to ${door}() with serverData: core sets it ` +
-      `when it publishes a declared widget. Declare the widget with defineWidget() instead.`,
-  });
+  // `owner` likewise: only core knows who declared a widget, and a registration naming one
+  // would put a plugin's name on a card that plugin never declared.
+  // Read as unknown values, not as their types, since a JavaScript caller or a spread can carry
+  // anything under these keys.
+  const carried = def as { serverData?: unknown; owner?: unknown };
+  for (const field of ["serverData", "owner"] as const) {
+    const stated = carried[field];
+    if (stated === undefined) continue;
+    throw NextlyError.invalidInput({
+      message:
+        `Widget "${def.id}" cannot be given to ${door}() with ${field}: core sets it ` +
+        `when it publishes a declared widget. Declare the widget with defineWidget() instead.`,
+    });
+  }
 }
 
 /** Register a widget. Throws if the id is taken or the definition is malformed. */
@@ -106,7 +113,7 @@ export function registerWidget(
 /**
  * Register a declared widget, as core publishes it: a definition whose data
  * core builds on the server (`serverData: true`), from a declaration only core
- * holds. The one door that admits `serverData`, and it admits nothing else.
+ * holds. The one door that admits `serverData` and `owner`, and it admits nothing else.
  */
 export function registerDeclaredDefinition(
   def: WidgetDefinition,
