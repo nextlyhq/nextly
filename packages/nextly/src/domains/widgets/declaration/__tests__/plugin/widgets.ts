@@ -21,8 +21,7 @@ export const ordersByState = defineWidget({
   title: "Orders by state",
   description: "How many orders sit in each state",
   category: "Shop",
-  widths: ["third", "half", "twoThirds"],
-  width: "half",
+  size: { default: { w: 6, h: 4 }, min: { w: 4, h: 3 }, max: { w: 8, h: 6 } },
   permission: "read-orders",
   sketch: "bars",
   settings: {
@@ -46,8 +45,7 @@ export const recentOrders = defineWidget({
   title: "Recent orders",
   description: "The newest orders",
   category: "Shop",
-  widths: ["half", "full"],
-  width: "full",
+  size: { default: { w: 12, h: 5 }, min: { w: 6, h: 4 }, max: { w: 12, h: 8 } },
   several: true,
   settings: {
     collection: settings.collection(),
@@ -72,8 +70,7 @@ export const revenue = defineWidget({
   title: "Revenue",
   description: "Takings per day over the chosen range",
   category: "Shop",
-  widths: ["half", "twoThirds", "full"],
-  width: "twoThirds",
+  size: { default: { w: 8, h: 4 }, min: { w: 6, h: 4 } },
   settings: {
     range: settings.dateRange({ default: "30d" }),
     currency: settings.select({ options: ["usd", "eur"], default: "usd" }),
@@ -102,8 +99,7 @@ export const unpaidCount = defineWidget({
   title: "Unpaid",
   description: "Orders waiting for payment",
   category: "Shop",
-  widths: ["quarter", "third"],
-  width: "quarter",
+  size: { default: { w: 3, h: 2 }, max: { w: 4, h: 2 } },
   settings: { collection: settings.collection() },
   data: {
     query: ({ settings }) => ({ collection: settings.collection, op: "count" }),

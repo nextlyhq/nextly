@@ -10,12 +10,13 @@ import type {
 
 import { resolveWidgetOutcome } from "../outcome";
 import { widgetOutcome } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 const card: DashboardWidget = {
   id: "collection/posts-stats",
   title: "posts health",
   archetype: "stats",
-  size: "md",
+  size: gridBounds(4),
   cells: [
     {
       key: "total",

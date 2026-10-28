@@ -456,14 +456,21 @@ test("a pointer drag shows a line, moves nothing else, and puts the card down af
   await gotoAdmin(page, "/");
   await expect(page.locator(CELLS).nth(2)).toBeVisible();
   await customize(page);
-  // Mixed widths: the first card at the narrowest width it allows (the menu lists them narrowest
-  // first), so rows hold cards of different spans whatever that card is.
+  // Mixed widths: the first card that may change width put at the narrowest its bounds allow
+  // (the menu lists them narrowest first), so rows hold cards of different spans whatever that
+  // card is. A card of one fixed width offers no Width, so the menus are tried in turn.
   // By keyboard: this test is about the drag, and the submenu opens on the arrow with focus on
   // its first width, wherever the pointer is.
-  await page
-    .getByRole("button", { name: /^Card actions for / })
-    .first()
-    .click();
+  const menus = page.getByRole("button", { name: /^Card actions for / });
+  for (let index = 0; ; index += 1) {
+    expect(index, "no card on the dashboard may change width").toBeLessThan(
+      await menus.count()
+    );
+    await menus.nth(index).click();
+    if ((await page.getByTestId("card-width-menu").count()) > 0) break;
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+  }
   await page.getByTestId("card-width-menu").focus();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("menuitemradio").first()).toBeFocused();
@@ -569,9 +576,10 @@ test.describe("on a phone, with touch", () => {
       .poll(() => cardOrder(page))
       .toEqual([before[1], before[0], ...before.slice(2)]);
 
-    // Resize: the widths are listed in place in the card menu, which fits the screen.
+    // Resize: the sizes are listed in place in the card menu, which fits the screen.
     await menu(0).tap();
     await expect(page.getByTestId("card-width-menu")).toHaveCount(0);
+    await expect(page.getByTestId("card-height-menu")).toHaveCount(0);
     const choice = page.getByRole("menuitemradio").first();
     await expect(choice).toBeInViewport({ ratio: 1 });
     await choice.tap();

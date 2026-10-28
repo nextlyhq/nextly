@@ -23,6 +23,7 @@ import { inArray, type AnyColumn } from "drizzle-orm";
 
 import {
   answerForRefusal,
+  holdsGrant,
   singleGateVerdict,
 } from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
@@ -375,6 +376,27 @@ export async function checkSingleAccess(params: {
     // Named by the service's caller, so its slug is the site's own.
     message: await refusalMessageFor(operation, slug, "all", { named: true }),
   };
+}
+
+/**
+ * The refusal for a caller who certainly lacks a Single's lifecycle grant
+ * ({@link holdsGrant}), worded by the full gate, or `null` to go on: asked
+ * before the work only a publish or an unpublish needs, its rule being asked
+ * once the languages going live are known.
+ */
+export async function singleGrantRefusal(
+  params: Omit<Parameters<typeof checkSingleAccess>[0], "operation"> & {
+    operation: "publish" | "unpublish";
+  }
+): Promise<SingleResult | null> {
+  const held = await holdsGrant({
+    action: params.operation,
+    slug: params.slug,
+    user: params.user,
+    overrideAccess: params.overrideAccess,
+    authenticatedScope: params.authenticatedScope,
+  });
+  return held ? null : checkSingleAccess({ ...params, routeAuthorized: false });
 }
 
 // ============================================================

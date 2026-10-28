@@ -10,27 +10,14 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import * as my from "./mysql";
-import * as pg from "./postgres";
-import * as sl from "./sqlite";
-
-export { pg, my, sl };
+import { loadedDialect } from "../../database/dialect-tables";
 
 /**
  * Returns the nextlyMeta Drizzle table for the requested dialect.
  */
 export function nextlyMetaTables(dialect: SupportedDialect) {
-  switch (dialect) {
-    case "postgresql":
-      return { nextlyMeta: pg.nextlyMeta };
-    case "mysql":
-      return { nextlyMeta: my.nextlyMeta };
-    case "sqlite":
-      return { nextlyMeta: sl.nextlyMeta };
-    default: {
-      // Exhaustiveness check — TypeScript flags any missing dialect at compile time.
-      const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
-    }
-  }
+  // The loaded dialect's own tables, so only that dialect's files are
+  // imported; `createAdapter` loads them.
+  const { nextlyMeta } = loadedDialect(dialect).tables;
+  return { nextlyMeta };
 }

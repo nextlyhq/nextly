@@ -307,6 +307,66 @@ describe("useWidgetQueries", () => {
     });
   });
 
+  it("hands a card the SAME slot object on every render while its cached answer is unchanged", async () => {
+    // 🔴 A card keys its component's draw on the slot it is handed: a new object
+    // is a new answer to draw. Rebuilt on every render, a component that throws
+    // was caught, re-rendered the grid by reporting it, met a "new" answer, drew
+    // and threw again until React stopped it, and every component card remounted
+    // whenever the grid re-rendered. An ok slot, a refusal and a short answer
+    // each keep their object.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "count", total: 7 } },
+        { ok: false, error: "Source unavailable." },
+      ],
+    });
+
+    const { result, rerender } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/fine", query: countQuery("collection:posts") },
+          { placementId: "core/broken", query: countQuery("collection:gone") },
+          { placementId: "core/short", query: countQuery("collection:pages") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["core/short"]).toBeDefined()
+    );
+    const first = { ...result.current.slots };
+    rerender();
+    rerender();
+    for (const id of ["core/fine", "core/broken", "core/short"]) {
+      expect(result.current.slots[id]).toBe(first[id]);
+    }
+    // The control: the slots are the answers, not one shared placeholder.
+    expect(first["core/fine"]).toEqual({
+      ok: true,
+      result: { op: "count", total: 7 },
+    });
+    expect(first["core/broken"]).not.toBe(first["core/short"]);
+  });
+
+  it("keeps a whole-request failure's slots the same objects across renders", async () => {
+    vi.mocked(protectedApi.post).mockRejectedValue(new Error("network down"));
+
+    const { result, rerender } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/a", query: countQuery("collection:posts") },
+          { placementId: "core/b", query: countQuery("collection:pages") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    const first = { ...result.current.slots };
+    rerender();
+    expect(result.current.slots["core/a"]).toBe(first["core/a"]);
+    expect(result.current.slots["core/b"]).toBe(first["core/b"]);
+  });
+
   it("says nothing per widget while the request is still being retried", async () => {
     // Absent, not failed: the batch has not settled, so the cards are busy
     // rather than broken.
@@ -1282,6 +1342,6 @@ describe("the tier an answer was fetched at", () => {
 
     answer({ results: [{ ok: true, result: { op: "list", items: [] } }] });
     await waitFor(() => expect(back.result.current.slots.p1).toBeDefined());
-    expect(back.result.current.fetchedTierFor("p1")).toBe("small");
+    expect(back.result.current.fetchedSizeFor("p1")).toEqual({ tier: "small" });
   });
 });

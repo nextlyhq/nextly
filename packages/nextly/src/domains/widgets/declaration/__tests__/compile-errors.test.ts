@@ -71,8 +71,7 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["half", "full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 }, min: { w: 6, h: 4 } },
 ${fields}
 });
 `;
@@ -340,8 +339,7 @@ const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   settings: { range: settings.dateRange() },
   data: async ({ settings }) => ({ range: settings.range }),
   display: { component: "@test/w/admin#Card" },
@@ -367,8 +365,7 @@ const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   settings: { range: settings.dateRange() },
   data: async ({ settings }) => ({ range: settings.range }),
   display: { component: "@test/w/admin#Card" },
@@ -472,8 +469,7 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ total: 3 }),
   display: chosen, ${MARK}
 });
@@ -496,8 +492,7 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ total: 3 }),
   display: ${display}, ${MARK}
 });
@@ -520,8 +515,7 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ total: 3 }),
   display: ${display}, ${MARK}
 });
@@ -558,8 +552,7 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ ${property} }), ${MARK}
   display: { component: "@test/w/admin#Card" },
 });
@@ -598,8 +591,7 @@ const one = defineWidget({
   title: "One",
   description: "The first widget at the shared path",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ one: 1 }),
   display: { component: "@test/w/admin#Shared" },
 });
@@ -609,8 +601,7 @@ const two = defineWidget({
   title: "Two",
   description: "The second widget at the shared path",
   category: "Test",
-  widths: ["full"],
-  width: "full",
+  size: { default: { w: 12, h: 4 } },
   data: async () => ({ two: "2" }),
   display: { component: "@test/w/admin#Shared" },
 });
@@ -646,28 +637,65 @@ export const components = {
     message: `'"colection"' is not assignable to type '"collection"'`,
   },
   {
-    name: "the starting width is not one the widget allows",
+    name: "a size written as a named width",
     ...pair(
-      width => `${imports}
+      size => `${imports}
 export const w = defineWidget({
   id: "test/w",
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["third", "half"],
-  width: "${width}", ${MARK}
+  size: ${size}, ${MARK}
   data: async () => ({ total: 3 }),
   display: "metric",
 });
 `,
-      "full",
-      "half"
+      `"half"`,
+      `{ default: { w: 6, h: 4 } }`
     ),
     code: 2322,
-    message: `Type '"full"' is not assignable to type '"third" | "half"'`,
-    typeScript7: {
-      message: `Type '"full"' is not assignable to type '"half" | "third"'`,
-    },
+    message: `is not assignable to type 'WidgetSizeDeclaration'`,
+  },
+  {
+    name: "a size missing one of its directions",
+    ...pair(
+      start => `${imports}
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  size: { default: ${start} }, ${MARK}
+  data: async () => ({ total: 3 }),
+  display: "metric",
+});
+`,
+      `{ w: 6 }`,
+      `{ w: 6, h: 4 }`
+    ),
+    code: 2741,
+    message: `Property 'h' is missing in type '{ w: number; }' but required in type 'GridSize'`,
+  },
+  {
+    name: "the named width a declaration once stated beside its size",
+    ...pair(
+      line => `${imports}
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  size: { default: { w: 12, h: 4 } },
+${line}
+  data: async () => ({ total: 3 }),
+  display: "metric",
+});
+`,
+      `  width: "full", ${MARK}`,
+      `  several: true,`
+    ),
+    code: 2353,
+    message: `'width' does not exist in type`,
   },
   {
     name: "a plugin offers an alternative to a built-in widget that does not exist",

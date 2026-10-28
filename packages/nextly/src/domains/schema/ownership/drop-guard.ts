@@ -129,7 +129,7 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
-import { CORE_TABLE_NAMES } from "../../../schemas";
+import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import { scanSql, type SqlSegment } from "../migrate/sql-scan";
 import type { ContributedElements, TableSpec } from "../pipeline/diff/types";
 

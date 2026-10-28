@@ -36,7 +36,6 @@ import {
   declaresRule,
   judge,
   outcomeAnswer,
-  ruleLetsThrough,
   plainRule,
   type AccessTarget,
   type Decision,
@@ -617,13 +616,7 @@ async function grantJudgedVerdict(
     // A key without the grant is refused before its rule is read, as today
     // and as the decision does: it lacks the permission either way.
     if (!slugHolds) return INSUFFICIENT;
-    const outcome = await askRule(actor, q.action, target);
-    const today = outcomeAllows(outcome);
-    return verdictOf(
-      await deviate("lifecycle-judged-alone", today, () =>
-        decidedFrom(actor, q.action, target, outcome)
-      )
-    );
+    return verdictOf(outcomeAllows(await askRule(actor, q.action, target)));
   }
   const answer = judge(
     actor,
@@ -687,27 +680,6 @@ const allowedVisitorBefore = (value: unknown): boolean => value !== false;
 /** A signed-in user's rule answer was judged truthy. */
 const allowedUserBefore = (value: unknown): boolean => Boolean(value);
 
-/**
- * The decision's answer from the action rule's outcome the gate has already
- * asked, so the rule runs once however its answer is compared. For a publish
- * or an unpublish its own rule lets through, the update rule, which the gate
- * itself does not ask, is asked here.
- */
-async function decidedFrom(
-  actor: Exclude<Actor, { kind: "system" }>,
-  action: AccessOperation,
-  target: AccessTarget,
-  outcome: RuleOutcome
-): Promise<boolean> {
-  // Asked exactly when the decision itself would ask it, so the outcomes it
-  // is handed are the ones it reads.
-  const update =
-    isLifecycle(action) && ruleLetsThrough(outcome, target, action)
-      ? await askRule(actor, "update", target)
-      : undefined;
-  return judge(actor, action, target, { action: outcome, update }).allowed;
-}
-
 /** How a signed-in user's verdict is asked, by what the target declares. */
 interface UserAsk {
   readonly q: CollectionQuestion;
@@ -758,20 +730,11 @@ async function withoutServiceVerdict({
  * super-admin authority included, so the targeted check answers it without
  * loading the caller's every role and grant.
  */
-async function ruleLessVerdict({
-  q,
-  target,
-  userId,
-  looked,
-}: UserAsk): Promise<GateVerdict> {
-  const holds = await userHoldsPermission(userId, q.action, q.slug, {
-    executor: q.executor,
-  });
-  if (!isLifecycle(q.action)) return verdictOf(holds);
+async function ruleLessVerdict({ q, userId }: UserAsk): Promise<GateVerdict> {
   return verdictOf(
-    await deviate("lifecycle-judged-alone", holds, () =>
-      decided(looked(), q.action, target)
-    )
+    await userHoldsPermission(userId, q.action, q.slug, {
+      executor: q.executor,
+    })
   );
 }
 
@@ -781,7 +744,7 @@ async function ruleLessVerdict({
  * A user named by no id holds nothing.
  */
 async function plainRuleVerdict(
-  { q, target, userId, looked }: UserAsk,
+  { q, userId }: UserAsk,
   plain: boolean
 ): Promise<GateVerdict> {
   if (!userId) return INSUFFICIENT;
@@ -794,14 +757,7 @@ async function plainRuleVerdict(
     executor: q.executor,
   });
   if (!holds) return plain ? refusedWithoutPermission(q) : INSUFFICIENT;
-  if (!isLifecycle(q.action)) return verdictOf(plain);
-  // A publish or an unpublish is judged by its own permission and rule here,
-  // where the decision also asks update's.
-  return verdictOf(
-    await deviate("lifecycle-judged-alone", plain, () =>
-      decided(looked(), q.action, target)
-    )
-  );
+  return verdictOf(plain);
 }
 
 /**
@@ -862,12 +818,41 @@ async function ruleVerdict({
       "signed-in user"
     );
   }
-  if (!isLifecycle(q.action)) return verdictOf(allowed);
-  // A publish or an unpublish is judged by its own permission and rule here,
-  // where the decision also asks update's.
-  return verdictOf(
-    await deviate("lifecycle-judged-alone", allowed, () =>
-      decidedFrom(actor, q.action, target, outcome)
-    )
-  );
+  return verdictOf(allowed);
+}
+
+/**
+ * Whether the caller holds the permission to `action` on `slug`, its rule not
+ * read: asked of a publish or an unpublish of every language before the work
+ * only that change needs, its rule being asked once the languages going live
+ * are known. Trusted work holds it. `false` where the caller certainly lacks
+ * it: no user, who never publishes or unpublishes, a signed-in user without
+ * the permission, or a key whose grants do not hold it. Anything else is left
+ * to the full gate, which a caller refused here is asked too, so the refusal
+ * reads as that gate words it.
+ */
+export async function holdsGrant(params: {
+  action: AccessOperation;
+  slug: string;
+  user?: { id?: string; roles?: readonly string[] } | null;
+  overrideAccess?: boolean;
+  authenticatedScope?: AuthenticatedScope;
+}): Promise<boolean> {
+  if (params.overrideAccess) return true;
+  const userId = params.user?.id;
+  if (!userId) return false;
+  const scope = params.authenticatedScope;
+  if (scope?.actorType === "apiKey") {
+    try {
+      return holdsPermission(
+        actorForScope(scope, { id: userId, roles: params.user?.roles }),
+        params.action,
+        params.slug
+      );
+    } catch {
+      return true;
+    }
+  }
+  if (scope !== undefined && scope.actorType !== "user") return true;
+  return userHoldsPermission(userId, params.action, params.slug);
 }

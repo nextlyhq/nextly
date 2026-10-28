@@ -201,7 +201,7 @@ Configure how the single appears in the admin panel via the `admin` property.
 
 ## Access control
 
-A single's access rules are `read`, `update`, `publish` and `unpublish` — there is no `create` or `delete`, since the document is auto-created on first access and cannot be removed. `publish` and `unpublish` are judged on top of `update`, for a single with `status: true`. Any other key stops startup with `ACCESS_KEY_UNKNOWN`, naming the key; remove it to fix the config.
+A single's access rules are `read`, `update`, `publish` and `unpublish` — there is no `create` or `delete`, since the document is auto-created on first access and cannot be removed. For a single with `status: true`, a write that changes only its status is judged by `publish` or `unpublish` alone, so a publisher sends `{ "status": "published" }`; a write that also edits fields needs `update` too. Any other key stops startup with `ACCESS_KEY_UNKNOWN`, naming the key; remove it to fix the config.
 
 ```typescript
 access: {
