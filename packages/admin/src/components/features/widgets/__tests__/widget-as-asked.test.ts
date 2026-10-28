@@ -15,6 +15,7 @@ import {
   titleAsAsked,
   widgetAsAsked,
 } from "../widget-as-asked";
+import { gridBounds } from "./grid-bounds";
 
 const settings: DashboardWidget["settings"] = [
   {
@@ -30,7 +31,7 @@ const recentlyEdited: DashboardWidget = {
   id: "core/recently-edited",
   title: "Recently edited",
   archetype: "list",
-  size: "md",
+  size: gridBounds(4),
   query: { source: "system:recent-edits", op: "list", limit: 5 },
   settings,
   sourceFilters: ["collection", "onlyMine"],
@@ -83,7 +84,7 @@ describe("a custom card asking through cells", () => {
     id: "core/count",
     title: "Count",
     archetype: "custom",
-    size: "sm",
+    size: gridBounds(3),
     settings: [
       { name: "collection", label: "Collection", type: "collection" },
       { name: "filter", label: "Filter", type: "filter", of: "collection" },
@@ -156,6 +157,49 @@ describe("a custom card asking through cells", () => {
 
   it("is titled as its widget, with no subtitle, when set to no collection", () => {
     expect(titleAsAsked(count, {}, [posts])).toEqual({ title: "Count" });
+  });
+
+  it("names its quick select's choice after its widget's name, so the subtitle says what the control set", () => {
+    const overTime: DashboardWidget = {
+      ...count,
+      id: "core/over-time",
+      title: "Over time",
+      settings: [
+        { name: "collection", label: "Collection", type: "collection" },
+        {
+          name: "dateRange",
+          label: "Date range",
+          type: "select",
+          quick: true,
+          defaultValue: "30d",
+          options: [
+            { label: "Last 30 days", value: "30d" },
+            { label: "Last 90 days", value: "90d" },
+          ],
+        },
+      ],
+    } as DashboardWidget;
+    expect(titleAsAsked(overTime, { collection: "posts" }, [posts])).toEqual({
+      title: "Posts",
+      subtitle: "Over time · last 30 days",
+    });
+    expect(
+      titleAsAsked(overTime, { collection: "posts", dateRange: "90d" }, [posts])
+    ).toEqual({ title: "Posts", subtitle: "Over time · last 90 days" });
+  });
+
+  it("names no quick toggle's On or Off, which says nothing on its own", () => {
+    const toggled: DashboardWidget = {
+      ...count,
+      settings: [
+        { name: "collection", label: "Collection", type: "collection" },
+        { name: "mine", label: "Mine only", type: "checkbox", quick: true },
+      ],
+    } as DashboardWidget;
+    expect(titleAsAsked(toggled, { collection: "posts" }, [posts])).toEqual({
+      title: "Posts",
+      subtitle: "Count",
+    });
   });
 });
 

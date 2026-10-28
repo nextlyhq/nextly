@@ -19,7 +19,8 @@ import {
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { collectionSlugOf } from "./archetypes/more-exist";
+import { quickSettingOf, quickValueLabel } from "./edit/quick-setting";
+import { collectionSlugOf } from "./frame/list-view-href";
 
 /**
  * Whether a query can be asked as it stands: it names what it reads, and a
@@ -224,13 +225,33 @@ export function titleAsAsked(
   const name = widget.settings?.find(
     setting => setting.type === "collection"
   )?.name;
-  const collection =
-    name === undefined
-      ? undefined
-      : effectiveWidgetSettings(widget.settings, config)[name];
-  return typeof collection === "string"
-    ? { title: collectionLabel(collection, sources), subtitle: widget.title }
-    : { title: widget.title };
+  const values = effectiveWidgetSettings(widget.settings, config);
+  const collection = name === undefined ? undefined : values[name];
+  if (typeof collection !== "string") return { title: widget.title };
+  const choice = quickChoiceOf(widget, values);
+  return {
+    title: collectionLabel(collection, sources),
+    subtitle:
+      choice === undefined ? widget.title : `${widget.title} · ${choice}`,
+  };
+}
+
+/**
+ * The option a card's quick select is set to, as its subtitle names it ("Over time · last 30
+ * days"), so the subtitle says what the quick control changed; nothing for a toggle, whose On
+ * or Off says nothing on its own, or for a widget with no quick select.
+ */
+function quickChoiceOf(
+  widget: DashboardWidget,
+  values: Record<string, unknown>
+): string | undefined {
+  const quick = quickSettingOf(widget.settings);
+  if (quick?.type !== "select") return undefined;
+  const label = quickValueLabel(quick, values[quick.name]);
+  // Lowercased to sit inside the subtitle, unless it starts as an acronym does ("UTC day").
+  return /[A-Z]/.test(label.charAt(1))
+    ? label
+    : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
 }
 
 /**

@@ -11,16 +11,19 @@
  * @module components/features/widgets/resolve-widgets
  */
 
-import type {
-  WidgetAction,
-  WidgetArchetype,
-  WidgetHeight,
-  SourcelessWidgetQuery,
-  WidgetQuery,
-  WidgetQueryCell,
-  WidgetSize,
-  WidgetStatCell,
-  AnyWidgetSetting,
+import {
+  sizeBounds,
+  sizeDeclarationProblems,
+  UNSTATED_WIDGET_SIZE,
+  type WidgetAction,
+  type WidgetArchetype,
+  type SourcelessWidgetQuery,
+  type WidgetQuery,
+  type WidgetQueryCell,
+  type WidgetSizeBounds,
+  type WidgetSizeDeclaration,
+  type WidgetStatCell,
+  type AnyWidgetSetting,
 } from "nextly/config";
 import { widgetGateHolds, type WidgetPermissionGate } from "nextly/widget-gate";
 
@@ -32,7 +35,6 @@ import type {
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { coreDraws } from "./outcome";
-import { legacySizeToWidgetSize } from "./sizes";
 
 /**
  * A widget's shortcuts, less the ones this reader may not use.
@@ -88,17 +90,14 @@ export interface ReadableWidgetDeclaration {
    */
   settings?: AnyWidgetSetting[];
   id: string;
-  size?: "full" | "half";
+  /** The sizes its cards may take, in grid units; a widget stating none takes core's `UNSTATED_WIDGET_SIZE`. */
+  size?: WidgetSizeDeclaration;
   requiredPermission?: WidgetPermissionGate;
   title?: string;
   description?: string;
   icon?: string;
   category?: string;
   archetype?: WidgetArchetype;
-  defaultSize?: WidgetSize;
-  defaultHeight?: WidgetHeight;
-  minSize?: WidgetSize;
-  maxSize?: WidgetSize;
   /**
    * Sourceless for a widget offered per collection. Such a query is never
    * asked as it stands: a card is asked only once its Collection setting has
@@ -207,8 +206,34 @@ function resolveTitle(title: string | undefined, id: string): string {
  */
 function declaredWidgets(
   plugins: PluginMetadata[] | undefined
-): ReadableWidgetDeclaration[] {
-  return (plugins ?? []).flatMap(plugin => plugin.widgets ?? []);
+): (ReadableWidgetDeclaration & { owner?: string })[] {
+  // Each carries the plugin that declared it, worded as core's own faults name an owner
+  // (`plugin "<name>"`), so a card whose component is missing can say whose it is.
+  return (plugins ?? []).flatMap(plugin =>
+    (plugin.widgets ?? []).map(widget => ({
+      ...widget,
+      owner: `plugin "${plugin.name}"`,
+    }))
+  );
+}
+
+/**
+ * A widget's size bounds, every end filled in, through core's own `sizeBounds`.
+ *
+ * Read permissively, as everything here is: a declaration arrives over the wire
+ * from a server that may be another version, and from plugins that may not be
+ * TypeScript. A contribution stating none, and one the grid could not use (no
+ * default, a minimum above the default), take core's `UNSTATED_WIDGET_SIZE`,
+ * the size the server gives a widget stating none, rather than sizes no check
+ * ever accepted; the boot check is what refuses a malformed one to its author.
+ */
+function boundsOf(
+  declared: WidgetSizeDeclaration | undefined
+): WidgetSizeBounds {
+  return declared !== undefined &&
+    sizeDeclarationProblems(declared).length === 0
+    ? sizeBounds(declared)
+    : sizeBounds(UNSTATED_WIDGET_SIZE);
 }
 
 /**
@@ -222,7 +247,7 @@ function declaredWidgets(
  * mounted must not cause a request on the user's behalf.
  */
 function resolveOne(
-  meta: ReadableWidgetDeclaration,
+  meta: ReadableWidgetDeclaration & { owner?: string },
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
   if (!widgetGateHolds(meta.requiredPermission, hasPermission)) {
@@ -237,14 +262,13 @@ function resolveOne(
     description: meta.description,
     icon: meta.icon,
     archetype,
-    // `defaultSize` is the enum; `size` is the deprecated two-value alias. The
-    // enum wins where both are declared, because a plugin that adopted the new
-    // field meant it.
-    size: meta.defaultSize ?? legacySizeToWidgetSize(meta.size),
-    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
+    size: boundsOf(meta.size),
     query: meta.query,
     settings: meta.settings,
     component: meta.component,
+    ...(meta.component !== undefined && meta.owner !== undefined
+      ? { owner: meta.owner }
+      : {}),
     actions: readableActions(meta.actions, hasPermission),
     content: meta.content,
     cells: meta.cells,
@@ -294,13 +318,15 @@ function resolveRegistered(
     description: meta.description,
     icon: meta.icon,
     archetype: meta.archetype,
-    size: meta.defaultSize,
-    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
+    // Through the same reading as a contribution's, so a registration whose
+    // size arrived malformed over the wire is drawn the way a contributed one is.
+    size: boundsOf(meta.size),
     query: meta.query,
     ...(meta.serverData === true ? { serverData: true as const } : {}),
     ...declaredEmptyOf(meta.empty),
     settings: meta.settings,
     component: meta.component,
+    ...(meta.owner === undefined ? {} : { owner: meta.owner }),
     actions: readableActions(meta.actions, hasPermission),
     content: meta.content,
     cells: meta.cells,
@@ -353,9 +379,9 @@ function preferRegistered<T>(
 }
 
 function mergeCollision(
-  contribution: ReadableWidgetDeclaration,
+  contribution: ReadableWidgetDeclaration & { owner?: string },
   registration: RegisteredWidgetMeta
-): ReadableWidgetDeclaration {
+): ReadableWidgetDeclaration & { owner?: string } {
   return {
     id: registration.id,
     // Named field by field rather than spread. `{ ...contribution,
@@ -370,20 +396,10 @@ function mergeCollision(
     ),
     icon: preferRegistered(registration.icon, contribution.icon),
     archetype: registration.archetype,
-    defaultSize: registration.defaultSize,
     // The registry wins where it states one, exactly as `defaultOrder` and
-    // `hidesWhenEmpty` do below. Named in this list rather than left out because the
-    // list IS the contract: a field missing from it is dropped silently, and a
-    // merged widget would lose the height its contribution declared.
-    defaultHeight: preferRegistered(
-      registration.defaultHeight,
-      contribution.defaultHeight
-    ),
-    minSize: registration.minSize,
-    maxSize: registration.maxSize,
-    // The contributed size is the FALLBACK, read only when the registration
-    // declares no `defaultSize`. `resolveOne` prefers the enum over this alias.
-    size: contribution.size,
+    // `hidesWhenEmpty` do below, and a registration always states one; the
+    // contribution's is read only if a malformed registration arrived without.
+    size: preferRegistered(registration.size, contribution.size),
     requiredPermission: registration.requiredPermission,
     query: registration.query,
     // 🔴 `preferRegistered`, not the registration alone. Both channels can
@@ -396,6 +412,10 @@ function mergeCollision(
     settings: preferRegistered(registration.settings, contribution.settings),
     link: preferRegistered(registration.link, contribution.link),
     component: preferRegistered(registration.component, contribution.component),
+    // Core's published owner where there is one, else the contributing plugin's.
+    ...((registration.owner ?? contribution.owner) === undefined
+      ? {}
+      : { owner: registration.owner ?? contribution.owner }),
     actions: preferRegistered(registration.actions, contribution.actions),
     // 🔴 NOT `preferRegistered`. The archetype comes from the registration, so
     // a contributed stats card colliding with a registered metric would hand
@@ -414,7 +434,7 @@ function mergeCollision(
     content:
       registration.archetype === "text" ? registration.content : undefined,
     // Both channels can state these, and the registry wins where it does --
-    // the rule `defaultSize` already follows above. Rebuilt field by field
+    // the rule `size` already follows above. Rebuilt field by field
     // here, so a field added to the contract and not to THIS list is dropped
     // silently: the merged widget loses its declared position.
     defaultOrder: preferRegistered(
@@ -472,8 +492,8 @@ function mergeCollision(
  *
  * ORDER stays with the contribution, so a card does not jump across the grid
  * the day someone registers an id that was already contributed. Its SIZE does
- * not: `defaultSize` is a statement the registration made, and the card is as
- * wide as the authoritative definition says.
+ * not: `size` is a statement the registration made, and the card takes the
+ * sizes the authoritative definition says.
  */
 export function resolveDashboardWidgets(
   plugins: PluginMetadata[] | undefined,
@@ -577,20 +597,32 @@ export function resolveDashboardWidgets(
 
 /**
  * A declared widget's empty state as its card draws it: the declared message as
- * the empty state's title, and its action with its link made an href. An action
- * whose link is not a path relative to the admin is not drawn.
+ * the empty state's title, and its action with its link made an href, or the
+ * card's settings. An action whose link is not a path relative to the admin is
+ * not drawn.
  */
+/** A declared empty action as the card offers it, or none when its link leads nowhere here. */
+function declaredActionOf(
+  action: NonNullable<RegisteredWidgetMeta["empty"]>["action"]
+): NonNullable<DashboardWidget["declaredEmpty"]>["action"] {
+  if (action === undefined) return undefined;
+  // By the value, as the server published it; never by the key alone.
+  if ("opens" in action && action.opens === "settings") {
+    return { label: action.label, opensSettings: true };
+  }
+  if (!("link" in action)) return undefined;
+  const href = adminHref(action.link);
+  return href === undefined ? undefined : { label: action.label, href };
+}
+
 function declaredEmptyOf(
   empty: RegisteredWidgetMeta["empty"]
 ): Pick<DashboardWidget, "declaredEmpty"> {
   if (empty === undefined) return {};
-  const href =
-    empty.action === undefined ? undefined : adminHref(empty.action.link);
+  const action = declaredActionOf(empty.action);
   const declared = {
     ...(empty.message === undefined ? {} : { title: empty.message }),
-    ...(empty.action === undefined || href === undefined
-      ? {}
-      : { action: { label: empty.action.label, href } }),
+    ...(action === undefined ? {} : { action }),
   };
   return Object.keys(declared).length === 0 ? {} : { declaredEmpty: declared };
 }

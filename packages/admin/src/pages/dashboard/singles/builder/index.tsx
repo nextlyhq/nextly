@@ -4,8 +4,9 @@
  * Single Builder — Create Page
  *
  * Mirrors the Collection create flow: opens BuilderSettingsModal directly,
- * on Continue creates the Single with its system fields only and navigates
- * to [slug].tsx for field editing. Same modal-host pattern preserves
+ * on Continue creates the Single with its system fields plus the starting
+ * field its "How is this edited?" answer names, and navigates to [slug].tsx
+ * for field editing. Same modal-host pattern preserves
  * backwards-compat with every "New single" link in the admin.
  */
 
@@ -21,6 +22,7 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateSingle } from "@admin/hooks/queries";
 import { toKebabName } from "@admin/lib/builder";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
+import { startingFields } from "@admin/lib/builder/starting-field";
 import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 
@@ -44,6 +46,10 @@ export default function SingleBuilderPage(): React.ReactElement | null {
     // entry-form slug validator). Table name is derived downstream by
     // generateTableName, which converts hyphens to underscores.
     const slug = values.slug?.trim() || toKebabName(singular);
+    // The field the "How is this edited?" answer starts the Single with (the
+    // Page Builder's blocks field, say), or none for standard fields. Sent to
+    // the server and written to ui-schema.json alike, so the two agree.
+    const fields = startingFields(values.startingFieldType ?? null);
 
     createSingle(
       {
@@ -76,13 +82,13 @@ export default function SingleBuilderPage(): React.ReactElement | null {
         // Webhook recording is on by default, so only forward an explicit
         // opt-out; omitting the key leaves the server default (on).
         ...(values.webhooks === false ? { webhooks: false } : {}),
-        // Empty user-fields list — system columns are auto-injected by
-        // the server; user adds custom fields on the next page.
-        fields: [],
+        // System columns are added by the server; this carries only the
+        // starting field, and the user adds the rest on the next page.
+        fields,
       },
       {
         onSuccess: () => {
-          // Mirror the new (field-less) single to ui-schema.json (best-effort;
+          // Mirror the new single to ui-schema.json (best-effort;
           // a file-write failure warns but never blocks navigation). Wrapped in
           // a void IIFE so the mutation callback stays synchronous.
           void (async () => {
@@ -93,7 +99,7 @@ export default function SingleBuilderPage(): React.ReactElement | null {
                   // The name the form collected, which is not yet on `values` at
                   // create time.
                   { ...values, singularName: singular },
-                  []
+                  fields
                 )
               );
             } catch (err) {

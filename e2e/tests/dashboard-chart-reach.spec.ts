@@ -11,6 +11,7 @@ import AxeBuilder from "@axe-core/playwright";
 import {
   expect,
   type APIRequestContext,
+  type Locator,
   type Page,
   type PlaywrightWorkerArgs,
   type TestInfo,
@@ -19,6 +20,7 @@ import {
 import { gotoAdmin } from "./support/admin";
 import { createEntry, expectOk } from "./support/runtime-collection";
 import { fileAccount, test } from "./support/test";
+import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -43,7 +45,8 @@ interface Layout {
   placements: Array<{
     id: string;
     widgetId: string;
-    width: string;
+    w: number;
+    h: number;
     removed?: boolean;
     config?: Record<string, unknown>;
   }>;
@@ -106,15 +109,15 @@ async function placeCharts(page: Page): Promise<void> {
     {
       id: "e2e-breakdown",
       widgetId: BREAKDOWN,
-      // The widest a Breakdown allows; the layout write refuses a new card wider than that.
-      width: "half",
+      // The widest each allows; the layout write holds a card to its widget's bounds.
+      ...(await widestSizeOf(page, BREAKDOWN)),
       removed: false,
       config: POSTS,
     },
     {
       id: "e2e-timeline",
       widgetId: TIMELINE,
-      width: "full",
+      ...(await widestSizeOf(page, TIMELINE)),
       removed: false,
       config: POSTS,
     },
@@ -140,21 +143,28 @@ const chartIn = (page: Page, id: string) =>
   cell(page, id).getByRole("group", { name: /Use the arrow keys/ });
 const tooltipIn = (page: Page, id: string) =>
   cell(page, id).getByTestId("chart-tooltip");
+/** A bar's track, the full width of its row, drawn by the chart engine. */
+const barIn = (page: Page, id: string) =>
+  cell(page, id).locator(".recharts-bar-background-rectangle").first();
+/**
+ * Moves the pointer over `bar`. Forced: the engine's drawing takes no pointer of its own (the
+ * chart reads the pointer around it), so the bar is never the element hit, which is what an
+ * unforced hover waits for.
+ */
+const hoverOver = (bar: Locator) => bar.hover({ force: true });
 
 async function openDashboard(page: Page, theme: "light" | "dark" = "light") {
   await placeCharts(page);
   await gotoAdmin(page, "/", theme);
-  await expect(
-    cell(page, BREAKDOWN).getByTestId("chart-group").first()
-  ).toBeVisible();
+  await expect(barIn(page, BREAKDOWN)).toBeVisible();
 }
 
 test("a hovered bar's tooltip stays while the pointer moves onto it, and goes when it leaves", async ({
   page,
 }) => {
   await openDashboard(page);
-  const bar = cell(page, BREAKDOWN).getByTestId("chart-group").first();
-  await bar.hover();
+  const bar = barIn(page, BREAKDOWN);
+  await hoverOver(bar);
   const tip = tooltipIn(page, BREAKDOWN);
   await expect(tip).toBeVisible();
 
@@ -182,7 +192,7 @@ test("a hovered bar's tooltip stays while the pointer moves onto it, and goes wh
   await expect(tip).toHaveCount(0);
 
   // Hovering again shows it; leaving the chart hides it.
-  await bar.hover();
+  await hoverOver(bar);
   await expect(tip).toBeVisible();
   await page.getByRole("heading", { level: 1 }).hover();
   await expect(tip).toHaveCount(0);
@@ -192,6 +202,10 @@ test("the keyboard reaches each bar from one tab stop, and the live region reads
   page,
 }) => {
   await openDashboard(page);
+  // 🔴 The pointer first: a chart engine that kept the point it was last hovered on would hold
+  // the tooltip there while the keys moved on.
+  await hoverOver(barIn(page, BREAKDOWN));
+  await page.getByRole("heading", { level: 1 }).hover();
   const chart = chartIn(page, BREAKDOWN);
   await chart.focus();
   await expect(chart).toBeFocused();
@@ -202,6 +216,9 @@ test("the keyboard reaches each bar from one tab stop, and the live region reads
 
   await page.keyboard.press("ArrowDown");
   await expect(live).not.toHaveText(first ?? "");
+  // The tooltip moved with the keys: it names the group the live region reads.
+  const second = (await live.textContent())?.split(":")[0] ?? "";
+  await expect(tooltipIn(page, BREAKDOWN)).toContainText(second);
   await page.keyboard.press("Home");
   await expect(live).toHaveText(first ?? "");
 

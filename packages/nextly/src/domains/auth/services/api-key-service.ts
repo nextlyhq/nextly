@@ -41,33 +41,34 @@ import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { accountIsActive } from "../../../auth/session/session-standing";
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
-import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
-import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
-import { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
-import {
+import type { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
+import type { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
+import type { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
+import type {
   permissions as permissionsMysql,
   rolePermissions as rolePermissionsMysql,
   roles as rolesMysql,
   userRoles as userRolesMysql,
 } from "../../../schemas/rbac/mysql";
-import {
+import type {
   permissions as permissionsPg,
   rolePermissions as rolePermissionsPg,
   roles as rolesPg,
   userRoles as userRolesPg,
 } from "../../../schemas/rbac/postgres";
-import {
+import type {
   permissions as permissionsSqlite,
   rolePermissions as rolePermissionsSqlite,
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
-import { users as usersMysql } from "../../../schemas/users/mysql";
-import { users as usersPg } from "../../../schemas/users/postgres";
-import { users as usersSqlite } from "../../../schemas/users/sqlite";
+import type { users as usersMysql } from "../../../schemas/users/mysql";
+import type { users as usersPg } from "../../../schemas/users/postgres";
+import type { users as usersSqlite } from "../../../schemas/users/sqlite";
 // PR 4 migration: switch from legacy ServiceError to NextlyError unified system.
 // ServiceError throw sites are replaced with NextlyError factory calls; identifying
 // info (key id, role id, exceeded permission) moves from public message to logContext
@@ -83,6 +84,9 @@ import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
 import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
+import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
+
+import { refuseLinkingPublicRole } from "./public-role";
 
 /** The three token types that determine how permissions are resolved at request time. */
 export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
@@ -456,29 +460,19 @@ export class ApiKeyService extends BaseService {
 
     switch (this.dialect) {
       case "postgresql":
-        this.apiKeysTable = apiKeysPg;
-        this.rolesTable = rolesPg;
-        this.userRolesTable = userRolesPg;
-        this.rolePermissionsTable = rolePermissionsPg;
-        this.permissionsTable = permissionsPg;
-        this.usersTable = usersPg;
-        break;
       case "mysql":
-        this.apiKeysTable = apiKeysMysql;
-        this.rolesTable = rolesMysql;
-        this.userRolesTable = userRolesMysql;
-        this.rolePermissionsTable = rolePermissionsMysql;
-        this.permissionsTable = permissionsMysql;
-        this.usersTable = usersMysql;
+      case "sqlite": {
+        // The loaded dialect's own tables, so only that dialect's files are
+        // imported; `createAdapter` loads them.
+        const tables = loadedDialect(this.dialect).tables;
+        this.apiKeysTable = tables.apiKeys;
+        this.rolesTable = tables.roles;
+        this.userRolesTable = tables.userRoles;
+        this.rolePermissionsTable = tables.rolePermissions;
+        this.permissionsTable = tables.permissions;
+        this.usersTable = tables.users;
         break;
-      case "sqlite":
-        this.apiKeysTable = apiKeysSqlite;
-        this.rolesTable = rolesSqlite;
-        this.userRolesTable = userRolesSqlite;
-        this.rolePermissionsTable = rolePermissionsSqlite;
-        this.permissionsTable = permissionsSqlite;
-        this.usersTable = usersSqlite;
-        break;
+      }
       default:
         // `this.dialect` is narrowed to `never` here after the exhaustive switch;
         // wrap in String() to satisfy @typescript-eslint/restrict-template-expressions.
@@ -646,6 +640,14 @@ export class ApiKeyService extends BaseService {
           logContext: { tokenType },
         });
       }
+      // The Public role is what visitors hold, never a key's.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        [roleId],
+        "assign",
+        { userId }
+      );
     }
 
     await this.checkPermissionCeiling(userId, tokenType, roleId);

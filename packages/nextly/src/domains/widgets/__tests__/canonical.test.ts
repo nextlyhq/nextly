@@ -2,26 +2,26 @@
  * One answer to "which widgets exist", across two channels that do not share a
  * shape.
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   allWidgets,
   canonicalWidgets,
-  declaredWidgets,
   placedByDefault,
-  widthFacts,
+  sizeFacts,
   type CanonicalWidget,
 } from "../canonical";
-import { setGeneratedWidgets } from "../collection-widgets";
 import type { WidgetDefinition } from "../definition";
+import { sizeBounds } from "../grid-size";
 import { clearWidgets, registerWidget } from "../registry";
+import { UNSTATED_WIDGET_SIZE } from "../unstated-size";
 
 function registered(patch: Partial<WidgetDefinition>): WidgetDefinition {
   const definition = {
     id: "core/a",
     title: "A",
     archetype: "custom",
-    defaultSize: "full",
+    size: { default: { w: 12, h: 4 } },
     component: "core#A",
     ...patch,
   };
@@ -84,13 +84,6 @@ describe("the canonical widget set", () => {
     const merged = canonicalWidgets([{ id: "dup/one", defaultOrder: 99 }]);
     expect(merged).toHaveLength(1);
     expect(merged[0].defaultOrder).toBe(99);
-  });
-
-  it("keeps a CONTRIBUTED height the registration did not state", () => {
-    registerWidget(registered({ id: "dup/one" }));
-    expect(
-      canonicalWidgets([{ id: "dup/one", defaultHeight: "tall" }])[0]
-    ).toHaveProperty("defaultHeight", "tall");
   });
 
   it("keeps a CONTRIBUTED dismissible the registration did not state", () => {
@@ -341,16 +334,14 @@ describe("the canonical widget set", () => {
       registered({
         id: "core/team",
         requiredPermission: "read-users",
-        defaultSize: "md",
-        defaultHeight: "tall",
+        size: { default: { w: 4, h: 4 }, max: { w: 6, h: 4 } },
         defaultOrder: 20,
       })
     );
     expect(canonicalWidgets([])[0]).toEqual({
       id: "core/team",
       requiredPermission: "read-users",
-      defaultSize: "md",
-      defaultHeight: "tall",
+      size: { default: { w: 4, h: 4 }, max: { w: 6, h: 4 } },
       defaultOrder: 20,
       // As the registration states it: the add panel draws its sketch from it.
       archetype: "custom",
@@ -395,13 +386,11 @@ describe("the canonical widget set", () => {
     expect(widget).not.toHaveProperty("defaultOrder");
   });
 
-  it("keeps a contributed size this core has never heard of", () => {
-    // A contribution crosses a version boundary. Refusing an unknown size here
-    // would drop the whole card from the arrangement over a value the admin
-    // already survives by falling back.
-    expect(canonicalWidgets([{ id: "p/w", defaultSize: "xxl" }])[0]).toEqual({
+  it("carries a contributed size as the contribution states it", () => {
+    const size = { default: { w: 6, h: 3 } };
+    expect(canonicalWidgets([{ id: "p/w", size }])[0]).toEqual({
       id: "p/w",
-      defaultSize: "xxl",
+      size,
     });
   });
 
@@ -414,149 +403,72 @@ describe("the canonical widget set", () => {
   });
 });
 
-describe("generated cards in the canonical set", () => {
-  const generated = {
-    id: "collection/posts-count",
-    title: "posts",
-    archetype: "metric",
-    defaultSize: "sm",
-    requiredPermission: "read-posts",
-    query: { source: "collection:posts", op: "count" },
-  } as unknown as Parameters<typeof setGeneratedWidgets>[0][number];
-
-  afterEach(() => setGeneratedWidgets([]));
-
-  it("places and offers a card nobody declared", () => {
-    // 🔴 The whole point of generating them. Without this the layout endpoint
-    // answers "unavailable widget" for every id the picker offers, so the card
-    // is visible and unaddable -- which is the state a contributed widget was
-    // in before `canonicalWidgets` learned about that channel.
-    setGeneratedWidgets([generated]);
-    expect(canonicalWidgets([]).map(w => w.id)).toEqual([
-      "collection/posts-count",
-    ]);
-  });
-
-  it("carries the permission that gates the collection", () => {
-    setGeneratedWidgets([generated]);
-    expect(canonicalWidgets([])[0].requiredPermission).toBe("read-posts");
-  });
-
-  it("LOSES the id to a contribution that already claimed it", () => {
-    // A plugin that declared this widget meant it; core's derived guess must
-    // not displace it. The reader sees the plugin's card, and the server places
-    // the plugin's declaration -- one answer, not two.
-    setGeneratedWidgets([generated]);
-    const merged = canonicalWidgets([
-      { id: "collection/posts-count", defaultOrder: 3 },
-    ]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].defaultOrder).toBe(3);
-  });
-
-  it("is NOT part of the set a default arrangement is built from", () => {
-    // 🔴 The whole "offered, never placed" claim rests on this. `defaultPlacements`
-    // is materialized from `declaredWidgets`, so a generated card appearing there
-    // would be auto-placed for every reader with no stored layout -- forty
-    // collections opening onto eighty cards nobody chose, and past the cap a
-    // dashboard they cannot add to. It still EXISTS, so it can be offered and a
-    // write naming it is accepted.
-    setGeneratedWidgets([generated]);
-    expect(allWidgets().map(w => w.id)).toEqual(["collection/posts-count"]);
-    expect(declaredWidgets()).toEqual([]);
-  });
-
-  it("IS placed once a declaration claims its id", () => {
-    // The control, and the reason the flag describes the surviving declaration
-    // rather than which ids core can generate: an author who declared this
-    // widget gets it placed like any other.
-    setGeneratedWidgets([generated]);
-    registerWidget(registered({ id: "collection/posts-count" }));
-    expect(declaredWidgets().map(w => w.id)).toEqual([
-      "collection/posts-count",
-    ]);
-  });
-
-  it("LOSES the id to an explicit registration too", () => {
-    setGeneratedWidgets([generated]);
-    registerWidget(
-      registered({ id: "collection/posts-count", defaultOrder: 7 })
-    );
-    const merged = canonicalWidgets([]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].defaultOrder).toBe(7);
-  });
-});
-
-describe("a widget's widths", () => {
-  it("are derived from the declared sizes when no width terms are stated", () => {
+describe("a widget's size", () => {
+  it("is the declared size with every end filled in", () => {
     expect(
-      widthFacts({
+      sizeFacts({
         id: "w/a",
-        defaultSize: "lg",
-        minSize: "md",
-        maxSize: "xl",
+        size: {
+          default: { w: 6, h: 4 },
+          min: { w: 4, h: 3 },
+          max: { w: 8, h: 6 },
+        },
       })
     ).toEqual({
-      allowedWidths: ["third", "half", "twoThirds"],
-      defaultWidth: "half",
+      size: {
+        default: { w: 6, h: 4 },
+        min: { w: 4, h: 3 },
+        max: { w: 8, h: 6 },
+      },
       allowsSeveral: false,
     });
   });
 
-  it("allow every width and start full for a widget that declares nothing", () => {
-    expect(widthFacts({ id: "w/a" })).toEqual({
-      allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
-      defaultWidth: "full",
-      allowsSeveral: false,
-    });
-  });
-
-  it("take explicit width terms over the declared sizes", () => {
+  it("fills an unstated minimum with the default and an unstated maximum with the full row at its height", () => {
     expect(
-      widthFacts({
-        id: "w/a",
-        defaultSize: "full",
-        minSize: "sm",
-        allowedWidths: ["half", "full"],
-        defaultWidth: "half",
-        allowsSeveral: true,
-      })
+      sizeFacts({ id: "w/a", size: { default: { w: 4, h: 3 } } }).size
     ).toEqual({
-      allowedWidths: ["half", "full"],
-      defaultWidth: "half",
-      allowsSeveral: true,
+      default: { w: 4, h: 3 },
+      min: { w: 4, h: 3 },
+      max: { w: 12, h: 3 },
     });
   });
 
-  it("read an empty allowed list as no statement, never as no width at all", () => {
-    expect(
-      widthFacts({ id: "w/a", allowedWidths: [], maxSize: "md" }).allowedWidths
-    ).toEqual(["quarter", "third"]);
+  it("reads a widget that states no size as the unstated size, as the admin does", () => {
+    // 🔴 One answer for a contribution with no size: the same constant the
+    // admin reads through `nextly/config`, so the server's default placement
+    // and the grid cannot start the card at two sizes.
+    expect(sizeFacts({ id: "w/a" }).size).toEqual(
+      sizeBounds(UNSTATED_WIDGET_SIZE)
+    );
   });
 
-  it("carry a registration's size range into the canonical summary", () => {
-    registerWidget(
-      registered({ id: "core/a", defaultSize: "lg", minSize: "md" })
-    );
+  it("carries a registration's size into the canonical summary", () => {
+    const size = { default: { w: 6, h: 4 }, min: { w: 4, h: 3 } };
+    registerWidget(registered({ id: "core/a", size }));
     const [summary] = allWidgets();
-    expect(widthFacts(summary as CanonicalWidget).allowedWidths).toEqual([
-      "third",
-      "half",
-      "twoThirds",
-      "full",
-    ]);
+    expect(summary?.size).toEqual(size);
+    expect(sizeFacts(summary as CanonicalWidget).size.min).toEqual({
+      w: 4,
+      h: 3,
+    });
   });
 
-  it("keep a contribution's width terms where the registration states none", () => {
-    registerWidget(registered({ id: "dup/one" }));
+  it("takes a colliding id's size from the registration whole, never mixing in a contributed bound", () => {
+    registerWidget(
+      registered({ id: "dup/one", size: { default: { w: 6, h: 4 } } })
+    );
     const [merged] = canonicalWidgets([
-      { id: "dup/one", allowedWidths: ["half"], allowsSeveral: true },
+      {
+        id: "dup/one",
+        size: { default: { w: 3, h: 2 }, min: { w: 3, h: 2 } },
+        allowsSeveral: true,
+      },
     ]);
-    expect(merged).toMatchObject({
-      allowedWidths: ["half"],
-      allowsSeveral: true,
-    });
+    expect(merged?.size).toEqual({ default: { w: 6, h: 4 } });
+    // The contribution's `allowsSeveral` still stands where the registration
+    // states none.
+    expect(merged?.allowsSeveral).toBe(true);
   });
 });
 
@@ -572,10 +484,10 @@ describe("a widget offered per collection", () => {
   });
 
   it("allows several cards, one per collection, unless it says otherwise", () => {
-    expect(widthFacts(perCollection).allowsSeveral).toBe(true);
-    expect(widthFacts({ id: "core/team" }).allowsSeveral).toBe(false);
+    expect(sizeFacts(perCollection).allowsSeveral).toBe(true);
+    expect(sizeFacts({ id: "core/team" }).allowsSeveral).toBe(false);
     expect(
-      widthFacts({ ...perCollection, allowsSeveral: false }).allowsSeveral
+      sizeFacts({ ...perCollection, allowsSeveral: false }).allowsSeveral
     ).toBe(false);
   });
 });

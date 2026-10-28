@@ -122,26 +122,41 @@ export function withNextly<T extends Record<string, unknown>>(
   // Force-include database packages in Vercel Lambda output.
   // pnpm's strict .pnpm store uses symlinks for peer deps, but
   // Vercel's Lambda filesystem doesn't follow symlink chains.
-  const existingExperimental =
+  //
+  // Next.js reads `outputFileTracingIncludes` at the top level only. Under
+  // `experimental` it warns on every build that the key is unrecognized and
+  // has moved, then copies it to the top level by assignment, replacing the
+  // app's own. So the app's entries, from either place, are merged with
+  // Nextly's at the top level, and none is left under `experimental`.
+  const { outputFileTracingIncludes: experimentalIncludes, ...experimental } =
     (nextConfig.experimental as Record<string, unknown> | undefined) ?? {};
-  const existingIncludes =
-    (existingExperimental.outputFileTracingIncludes as Record<
-      string,
-      string[]
-    >) ?? {};
-  const existingCatchAll = existingIncludes["/**"] ?? [];
+  const includes = mergeIncludes(
+    mergeIncludes(
+      nextConfig.outputFileTracingIncludes as TracingIncludes | undefined,
+      experimentalIncludes as TracingIncludes | undefined
+    ),
+    { "/**": NEXTLY_FILE_TRACING_INCLUDES }
+  );
 
   return {
     ...nextConfig,
     serverExternalPackages: merged,
-    experimental: {
-      ...existingExperimental,
-      outputFileTracingIncludes: {
-        ...existingIncludes,
-        "/**": [
-          ...new Set([...existingCatchAll, ...NEXTLY_FILE_TRACING_INCLUDES]),
-        ],
-      },
-    },
+    ...(nextConfig.experimental === undefined ? {} : { experimental }),
+    outputFileTracingIncludes: includes,
   };
+}
+
+/** Next.js's `outputFileTracingIncludes`: route pattern to file globs. */
+type TracingIncludes = Record<string, string[]>;
+
+/** Both sets of globs for each route pattern, `first`'s before `second`'s, each glob once. */
+function mergeIncludes(
+  first: TracingIncludes | undefined,
+  second: TracingIncludes | undefined
+): TracingIncludes {
+  const merged: TracingIncludes = { ...first };
+  for (const [pattern, globs] of Object.entries(second ?? {})) {
+    merged[pattern] = [...new Set([...(merged[pattern] ?? []), ...globs])];
+  }
+  return merged;
 }

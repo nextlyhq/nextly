@@ -8,25 +8,12 @@
  * go from one card's controls to the next rather than through every link and
  * button inside each card. `inert` does both, for pointer, keyboard and
  * assistive technology alike, and it is applied to the CONTENT only: the drag
- * handle, the width and the card menu are drawn outside it.
+ * handle, the size label and the card menu are drawn outside it.
  *
  * @module components/features/widgets/edit/CustomizingFence
  */
 
 import type { JSX, ReactNode } from "react";
-
-/**
- * Sets `inert` on the element it is attached to.
- *
- * Through the DOM rather than as a prop, because the admin runs on React 18
- * and 19 and they disagree about the attribute: React 18 drops a boolean
- * `inert`, and React 19 reads the string form `""` as false. Attached only
- * while customising, since the fence itself exists only then; the settings
- * sheet's preview uses it too, for a card that is shown and not used.
- */
-export function fenceOff(element: HTMLElement | null): void {
-  element?.setAttribute("inert", "");
-}
 
 export function CustomizingFence({
   children,
@@ -35,7 +22,8 @@ export function CustomizingFence({
 }): JSX.Element {
   return (
     <div
-      ref={fenceOff}
+      // React 19 renders a boolean `inert` as the attribute itself.
+      inert
       data-testid="card-content-fence"
       // The fence stands in the cell where the card used to, so the card still fills the row's
       // height. The card dims its own body and footer in customise mode (`WidgetCard`), so the
@@ -50,16 +38,16 @@ export function CustomizingFence({
 /**
  * Room in a framed card's header for the controls drawn over it.
  *
- * The card's width and menu sit over the header's right end, outside the
+ * The card's size label and menu sit over the header's right end, outside the
  * fence, so the header reserves their space and its title truncates before
- * them rather than running underneath. Sized for the widest label, "Full".
+ * them rather than running underneath. Sized for the widest label, "12×12".
  */
 export function CardControlsSpace(): JSX.Element {
   return <span aria-hidden className="block h-7 w-16" />;
 }
 
 /**
- * The framed card's width and menu, placed over its header's right end.
+ * The framed card's size label and menu, placed over its header's right end.
  *
  * `inset-px` stands in for the card's one-pixel border, so `top-5 right-5`
  * lands exactly where the header's own padding puts its last item. The outer

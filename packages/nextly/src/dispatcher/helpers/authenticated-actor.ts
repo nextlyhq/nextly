@@ -33,3 +33,13 @@ export function readAuthenticatedScope(): AuthenticatedScope | undefined {
   const caller = currentRequestCaller();
   return caller ? { actorType: caller.actor.type, permissions: [] } : undefined;
 }
+
+/**
+ * Whether the route admitted the caller on `update` itself, so a service may
+ * skip that re-check. A write route may also admit a caller on publish or
+ * unpublish alone, and the service then asks its own gate for the write.
+ */
+export function routeAdmittedUpdate(): boolean {
+  const action = currentRequestCaller()?.routeAction;
+  return action === undefined || action === "update";
+}

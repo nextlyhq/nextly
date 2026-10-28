@@ -83,8 +83,9 @@ type TypedWidgets<W> = W extends AnyWidget
  *
  * A typed path may be absent. The config's type includes every branch of the config, a plugin
  * added only when some setting is on among them, while the map holds what the config registered
- * when it was generated. That every declared component is registered is the admin's own check at
- * run time, which refuses to serve without one; this one is about the pairing.
+ * when it was generated. That every declared component is registered is `generate:types --check`
+ * in CI, and a card whose component is missing draws its error state; this one is about the
+ * pairing.
  *
  * ```ts
  * import type * as siteConfig from "../../nextly.config";

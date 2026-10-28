@@ -22,6 +22,15 @@ describe("the SEO issues card", () => {
     expect(card?.cells).toHaveLength(5);
   });
 
+  it("states its size in grid units, at least two rows tall", () => {
+    // One row cannot hold a card's header and a figure under it; the host
+    // refuses a size it cannot draw at boot, and this is the size it gets.
+    const size = seoIssuesWidget(defaultSeoFields())?.size;
+
+    expect(size?.default).toEqual({ w: 6, h: 2 });
+    expect(size?.min?.h ?? size?.default.h).toBeGreaterThanOrEqual(2);
+  });
+
   it("leads with the issues that remove a page from results", () => {
     // Priority, not declaration convenience: an unintended `noindex` and a
     // missing title both take a page out of search, where a missing social

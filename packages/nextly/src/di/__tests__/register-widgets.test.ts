@@ -19,7 +19,10 @@ import {
   canonicalWidgets,
   placedByDefault,
 } from "../../domains/widgets/canonical";
-import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import {
+  CORE_WIDGET_IDS,
+  CORE_WIDGETS,
+} from "../../domains/widgets/core-widgets";
 import {
   deferredEntities,
   setDeferredEntities,
@@ -72,7 +75,7 @@ function seedWidget(id: string): void {
       id,
       title: id,
       archetype: "metric",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       query: { source: "plugin:stripe/revenue", op: "count" },
     },
     { source: "@acme/stripe" }
@@ -208,7 +211,8 @@ describe("resetWidgetRegistries", () => {
 
     const ids = listWidgets().map(widget => widget.id);
     expect(ids).not.toContain("stripe/revenue");
-    expect(ids).toEqual(CORE_WIDGETS.map(widget => widget.id));
+    // Every one of core's, its definitions and its declarations alike.
+    expect([...ids].sort()).toEqual([...CORE_WIDGET_IDS].sort());
     expect(() => seedWidget("stripe/revenue")).not.toThrow();
   });
 
@@ -219,7 +223,7 @@ describe("resetWidgetRegistries", () => {
     // clear in this one function.
     resetWidgetRegistries();
     expect(() => resetWidgetRegistries()).not.toThrow();
-    expect(listWidgets()).toHaveLength(CORE_WIDGETS.length);
+    expect(listWidgets()).toHaveLength(CORE_WIDGET_IDS.length);
   });
 
   it("leaves no core card querying a source nothing serves", () => {

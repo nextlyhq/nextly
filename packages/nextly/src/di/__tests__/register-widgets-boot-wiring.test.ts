@@ -16,7 +16,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import { CORE_WIDGET_IDS } from "../../domains/widgets/core-widgets";
 
 vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
@@ -30,12 +30,14 @@ const { clearWidgets, listWidgets, registerWidget } = await import(
   "../../domains/widgets/registry"
 );
 
-/** Reaches past adapter resolution and schema-registry init (both tolerant
- * of a minimal fake), through the widget wiring, then fails at
- * `publishStoredWebhookRecordingPolicies`'s first real adapter call. */
+/** Reaches past adapter resolution (which loads the dialect it reports) and
+ * schema-registry init (tolerant of a minimal fake), through the widget
+ * wiring, then fails at `publishStoredWebhookRecordingPolicies`'s first real
+ * adapter call. */
 const thinAdapter = {
   connect: () => undefined,
   getDrizzle: () => ({}),
+  getCapabilities: () => ({ dialect: "sqlite" }),
 };
 
 function boot(config: Record<string, unknown>): Promise<unknown> {
@@ -59,7 +61,7 @@ function seedPreviousBoot(): void {
       id: "stripe/revenue",
       title: "Revenue",
       archetype: "metric",
-      defaultSize: "sm",
+      size: { default: { w: 3, h: 2 } },
       query: { source: "plugin:stripe/revenue", op: "count" },
     },
     { source: "@acme/stripe" }
@@ -104,7 +106,8 @@ describe("widget-registry reset at boot", () => {
     // it was would only have held while core declared no widget.
     const ids = listWidgets().map(widget => widget.id);
     expect(ids).not.toContain("stripe/revenue");
-    expect(ids).toEqual(CORE_WIDGETS.map(widget => widget.id));
+    // Every one of core's, its definitions and its declarations alike.
+    expect([...ids].sort()).toEqual([...CORE_WIDGET_IDS].sort());
   });
 
   it("does not publish a collection source from the boot config", async () => {

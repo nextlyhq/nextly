@@ -242,21 +242,21 @@ describe("a signed-in user without the permission", () => {
 describe("a signed-in user's publish", () => {
   const publish = { action: "publish" as const, user: { id: "u1" } };
 
-  it("is recorded where the gate judges it alone and the decision also asks update", async () => {
-    // The user holds publish and not update: the gate allows, the decision
-    // refuses.
+  it("is allowed by its own permission and rule without update, as the decision allows it", async () => {
+    // The user holds publish and not update: a publish is judged by its own
+    // permission and rule, at the gate and in the decision alike.
     callerMayNot("update");
     for (const access of [{ publish: true }, { publish: () => true }]) {
       const { result, deviations } = await recordingDeviations(() =>
         collectionGateVerdict(asked(access, publish))
       );
       expect(result.allowed).toBe(true);
-      expect(deviations).toEqual(["lifecycle-judged-alone"]);
+      expect(deviations).toEqual([]);
     }
   });
 
-  it("is recorded as nothing where the user holds update too", async () => {
-    // The control: the two agree.
+  it("is allowed alike where the user holds update too", async () => {
+    // The control: holding update changes nothing.
     for (const access of [{ publish: true }, { publish: () => true }]) {
       const { result, deviations } = await recordingDeviations(() =>
         collectionGateVerdict(asked(access, publish))
@@ -431,6 +431,45 @@ describe("a read whose route already authorized it", () => {
     expect(verdict).not.toMatchObject({ filter: OWN });
   });
 
+  it("reads a route's verdict only for the key scope it was kept for", async () => {
+    // Two keys of one user in one request: the route kept every entry for
+    // the wider key, and the narrower key's read must not take it.
+    const grant = (resource: string) => ({
+      slug: `read-${resource}`,
+      action: "read",
+      resource,
+    });
+    const wide = apiKeyScope([grant("posts"), grant("secrets")], ["editor"]);
+    const narrow = apiKeyScope([grant("posts")], ["editor"]);
+    const readAs = (scope: typeof wide) =>
+      collectionGateVerdict(
+        asked(
+          { read: filtering() as CollectionAccessControl["read"] },
+          {
+            user: { id: "u1" },
+            scope,
+            routeAuthorized: true,
+            appliesFilter: true,
+          }
+        )
+      );
+    const [asWide, asNarrow] = await runWithAccessMemo(async () => {
+      rememberRouteVerdict(
+        {
+          userId: "u1",
+          scope: wide,
+          slug: "posts",
+          action: "read",
+          language: currentRuleLanguage(),
+        },
+        { all: true }
+      );
+      return [await readAs(wide), await readAs(narrow)];
+    });
+    expect(asWide).toEqual({ allowed: true });
+    expect(asNarrow.allowed).toBe(false);
+  });
+
   /** A route's verdict kept for u1 on posts, as judged in `language`. */
   const keptIn = (
     language: { locale?: string; locales: string[] },
@@ -584,6 +623,36 @@ describe("a read whose route already authorized it", () => {
         asked(
           { read: rule },
           { user: { id: "u1" }, scope: narrow, appliesFilter: true }
+        )
+      ),
+    ]);
+    expect(first).toMatchObject({ filter: OWN });
+    expect(second).toMatchObject({ filter: { author: { equals: "nobody" } } });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a rule again for a key whose scope holds the same roles in another order", async () => {
+    // The rule is handed the roles in the scope's order, so one that reads
+    // the first is told something different by each.
+    const rule = vi.fn(({ roles }: { roles: readonly string[] }) =>
+      roles[0] === "editor"
+        ? (OWN as unknown as boolean)
+        : ({ author: { equals: "nobody" } } as unknown as boolean)
+    );
+    const posts = { slug: "read-posts", action: "read", resource: "posts" };
+    const editorFirst = apiKeyScope([posts], ["editor", "viewer"]);
+    const viewerFirst = apiKeyScope([posts], ["viewer", "editor"]);
+    const [first, second] = await runWithAccessMemo(async () => [
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, scope: editorFirst, appliesFilter: true }
+        )
+      ),
+      await collectionGateVerdict(
+        asked(
+          { read: rule },
+          { user: { id: "u1" }, scope: viewerFirst, appliesFilter: true }
         )
       ),
     ]);

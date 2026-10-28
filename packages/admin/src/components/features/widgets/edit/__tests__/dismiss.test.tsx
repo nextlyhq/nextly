@@ -81,7 +81,7 @@ function branding(
         id: "core/onboarding",
         title: "Set up your project",
         archetype: "custom",
-        defaultSize: "full",
+        size: { default: { w: 12, h: 3 } },
         component: "core#Whatever",
         dismissible: true,
         ...patch["core/onboarding"],
@@ -90,7 +90,7 @@ function branding(
         id: "core/permanent",
         title: "Collections",
         archetype: "custom",
-        defaultSize: "full",
+        size: { default: { w: 12, h: 3 } },
         component: "core#Whatever",
         ...patch["core/permanent"],
       },
@@ -103,8 +103,8 @@ function layout(
 ): DashboardLayoutResponse {
   return {
     placements: [
-      { id: "p1", widgetId: "core/onboarding", width: "full", removed: false },
-      { id: "p2", widgetId: "core/permanent", width: "half", removed: false },
+      { id: "p1", widgetId: "core/onboarding", w: 12, h: 3, removed: false },
+      { id: "p2", widgetId: "core/permanent", w: 6, h: 3, removed: false },
     ],
     widgets: {},
     available: [],
@@ -244,8 +244,8 @@ describe("what a dismiss writes", () => {
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     expect(api.put.mock.calls[0][1]).toEqual({
       placements: [
-        { id: "p1", widgetId: "core/onboarding", width: "full", removed: true },
-        { id: "p2", widgetId: "core/permanent", width: "half", removed: false },
+        { id: "p1", widgetId: "core/onboarding", w: 12, h: 3, removed: true },
+        { id: "p2", widgetId: "core/permanent", w: 6, h: 3, removed: false },
       ],
       // 🔴 From the READ: nothing was being customised.
       version: 7,
@@ -338,10 +338,11 @@ describe("the notice a dismiss leaves", () => {
         {
           id: "p1",
           widgetId: "core/onboarding",
-          width: "full",
+          w: 12,
+          h: 3,
           removed: false,
         },
-        { id: "p2", widgetId: "core/permanent", width: "half", removed: false },
+        { id: "p2", widgetId: "core/permanent", w: 6, h: 3, removed: false },
       ],
       // The version the dismissal produced, read back from the cache.
       version: 8,

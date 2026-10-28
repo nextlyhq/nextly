@@ -188,30 +188,6 @@ service key-role-based read collection async-throws at schema  # schema-list-ign
 service key-super-admin read collection async-throws at schema  # schema-list-ignores-rules
 service user-partial read collection async-throws at schema  # schema-list-ignores-rules
 service key-partial read collection async-throws at schema  # schema-list-ignores-rules
-service user-with publish collection other-operation at route  # lifecycle-judged-alone
-service user-with publish collection other-operation at can  # lifecycle-judged-alone
-service custom-role publish collection other-operation at route  # lifecycle-judged-alone
-service custom-role publish collection other-operation at can  # lifecycle-judged-alone
-service key-full-access publish collection other-operation at route  # lifecycle-judged-alone
-service key-full-access publish collection other-operation at can  # lifecycle-judged-alone
-service key-role-based publish collection other-operation at route  # lifecycle-judged-alone
-service key-role-based publish collection other-operation at can  # lifecycle-judged-alone
-service key-super-admin publish collection other-operation at route  # lifecycle-judged-alone
-service key-super-admin publish collection other-operation at can  # lifecycle-judged-alone
-service user-partial publish collection other-operation at route  # lifecycle-judged-alone
-service user-partial publish collection other-operation at can  # lifecycle-judged-alone
-service key-partial publish collection other-operation at route  # lifecycle-judged-alone
-service key-partial publish collection other-operation at can  # lifecycle-judged-alone
-service user-with unpublish collection other-operation at route  # lifecycle-judged-alone
-service user-with unpublish collection other-operation at can  # lifecycle-judged-alone
-service custom-role unpublish collection other-operation at route  # lifecycle-judged-alone
-service custom-role unpublish collection other-operation at can  # lifecycle-judged-alone
-service key-full-access unpublish collection other-operation at route  # lifecycle-judged-alone
-service key-full-access unpublish collection other-operation at can  # lifecycle-judged-alone
-service key-role-based unpublish collection other-operation at route  # lifecycle-judged-alone
-service key-role-based unpublish collection other-operation at can  # lifecycle-judged-alone
-service key-super-admin unpublish collection other-operation at route  # lifecycle-judged-alone
-service key-super-admin unpublish collection other-operation at can  # lifecycle-judged-alone
 service visitor list collection none at direct  # visitor-public-default
 service visitor list collection none at service  # visitor-public-default
 service visitor count collection none at direct  # visitor-public-default
@@ -232,30 +208,6 @@ service visitor list collection other-operation at direct  # visitor-public-defa
 service visitor list collection other-operation at service  # visitor-public-default
 service visitor count collection other-operation at direct  # visitor-public-default
 service visitor count collection other-operation at service  # visitor-public-default
-service user-with publish single-pub other-operation at route  # lifecycle-judged-alone
-service user-with publish single-pub other-operation at can  # lifecycle-judged-alone
-service custom-role publish single-pub other-operation at route  # lifecycle-judged-alone
-service custom-role publish single-pub other-operation at can  # lifecycle-judged-alone
-service key-full-access publish single-pub other-operation at route  # lifecycle-judged-alone
-service key-full-access publish single-pub other-operation at can  # lifecycle-judged-alone
-service key-role-based publish single-pub other-operation at route  # lifecycle-judged-alone
-service key-role-based publish single-pub other-operation at can  # lifecycle-judged-alone
-service key-super-admin publish single-pub other-operation at route  # lifecycle-judged-alone
-service key-super-admin publish single-pub other-operation at can  # lifecycle-judged-alone
-service user-partial publish single-pub other-operation at route  # lifecycle-judged-alone
-service user-partial publish single-pub other-operation at can  # lifecycle-judged-alone
-service key-partial publish single-pub other-operation at route  # lifecycle-judged-alone
-service key-partial publish single-pub other-operation at can  # lifecycle-judged-alone
-service user-with unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service user-with unpublish single-pub other-operation at can  # lifecycle-judged-alone
-service custom-role unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service custom-role unpublish single-pub other-operation at can  # lifecycle-judged-alone
-service key-full-access unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service key-full-access unpublish single-pub other-operation at can  # lifecycle-judged-alone
-service key-role-based unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service key-role-based unpublish single-pub other-operation at can  # lifecycle-judged-alone
-service key-super-admin unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service key-super-admin unpublish single-pub other-operation at can  # lifecycle-judged-alone
 service custom-role read collection user-is-key-maker at schema  # schema-list-ignores-rules
 service key-super-admin read collection user-is-key-maker at schema  # schema-list-ignores-rules
 service user-partial read collection user-is-key-maker at schema  # schema-list-ignores-rules
@@ -283,9 +235,6 @@ bound visitor read related returns-true at population  # visitor-public-default
 bound visitor read related returns-filter at population  # visitor-public-default
 bound visitor read related async-filter at population  # visitor-public-default
 bound visitor read related true at population  # visitor-public-default
-service key-super-admin update providers none at route  # manage-not-counted
-service key-super-admin update providers none at can  # manage-not-counted
-service key-super-admin update providers none at widget  # manage-not-counted
 service key-read-only read collection false at widget  # holds-permission-key-skips-rules
 service key-full-access read collection false at widget  # holds-permission-key-skips-rules
 service key-role-based read collection false at widget  # holds-permission-key-skips-rules
@@ -488,18 +437,6 @@ service key-full-access update collection other-operation at widget  # holds-per
 service key-role-based update collection other-operation at widget  # holds-permission-key-skips-rules
 service key-super-admin update collection other-operation at widget  # holds-permission-key-skips-rules
 service key-partial update collection other-operation at widget  # holds-permission-key-skips-rules
-service user-with publish collection other-operation at widget  # lifecycle-judged-alone
-service custom-role publish collection other-operation at widget  # lifecycle-judged-alone
-service key-full-access publish collection other-operation at widget  # holds-permission-key-skips-rules
-service key-role-based publish collection other-operation at widget  # holds-permission-key-skips-rules
-service key-super-admin publish collection other-operation at widget  # holds-permission-key-skips-rules
-service user-partial publish collection other-operation at widget  # lifecycle-judged-alone
-service key-partial publish collection other-operation at widget  # holds-permission-key-skips-rules
-service user-with unpublish collection other-operation at widget  # lifecycle-judged-alone
-service custom-role unpublish collection other-operation at widget  # lifecycle-judged-alone
-service key-full-access unpublish collection other-operation at widget  # holds-permission-key-skips-rules
-service key-role-based unpublish collection other-operation at widget  # holds-permission-key-skips-rules
-service key-super-admin unpublish collection other-operation at widget  # holds-permission-key-skips-rules
 service key-role-based read collection role-name at widget  # holds-permission-key-skips-rules
 service key-super-admin read collection role-name at widget  # holds-permission-key-skips-rules
 service key-partial read collection role-name at widget  # holds-permission-key-skips-rules
@@ -715,18 +652,6 @@ service key-partial publish single-pub async-throws at widget  # holds-permissio
 service key-full-access unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
 service key-role-based unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
 service key-super-admin unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
-service user-with publish single-pub other-operation at widget  # lifecycle-judged-alone
-service custom-role publish single-pub other-operation at widget  # lifecycle-judged-alone
-service key-full-access publish single-pub other-operation at widget  # holds-permission-key-skips-rules
-service key-role-based publish single-pub other-operation at widget  # holds-permission-key-skips-rules
-service key-super-admin publish single-pub other-operation at widget  # holds-permission-key-skips-rules
-service user-partial publish single-pub other-operation at widget  # lifecycle-judged-alone
-service key-partial publish single-pub other-operation at widget  # holds-permission-key-skips-rules
-service user-with unpublish single-pub other-operation at widget  # lifecycle-judged-alone
-service custom-role unpublish single-pub other-operation at widget  # lifecycle-judged-alone
-service key-full-access unpublish single-pub other-operation at widget  # holds-permission-key-skips-rules
-service key-role-based unpublish single-pub other-operation at widget  # holds-permission-key-skips-rules
-service key-super-admin unpublish single-pub other-operation at widget  # holds-permission-key-skips-rules
 service key-role-based publish single-pub role-name at widget  # holds-permission-key-skips-rules
 service key-super-admin publish single-pub role-name at widget  # holds-permission-key-skips-rules
 service key-partial publish single-pub role-name at widget  # holds-permission-key-skips-rules
@@ -1019,21 +944,6 @@ no-service key-role-based read collection malformed-filter at widget  # holds-pe
 no-service key-role-based read collection malformed-filter at capabilities  # no-service
 no-service key-role-based read single malformed-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single malformed-filter at capabilities  # no-service
-service user-with new-pub collection other-operation at rest
-service user-with new-pub collection other-operation at direct  # lifecycle-judged-alone
-service user-with new-pub collection other-operation at service  # lifecycle-judged-alone
-service custom-role new-pub collection other-operation at rest
-service custom-role new-pub collection other-operation at direct  # lifecycle-judged-alone
-service custom-role new-pub collection other-operation at service  # lifecycle-judged-alone
-service key-full-access new-pub collection other-operation at rest
-service key-full-access new-pub collection other-operation at direct  # lifecycle-judged-alone
-service key-full-access new-pub collection other-operation at service  # lifecycle-judged-alone
-service key-role-based new-pub collection other-operation at rest
-service key-role-based new-pub collection other-operation at direct  # lifecycle-judged-alone
-service key-role-based new-pub collection other-operation at service  # lifecycle-judged-alone
-service key-super-admin new-pub collection other-operation at rest
-service key-super-admin new-pub collection other-operation at direct  # lifecycle-judged-alone
-service key-super-admin new-pub collection other-operation at service  # lifecycle-judged-alone
 
 # A collection's read rule that answers a well-formed filter allows the
 # entries it matches. Each door below refuses it still, as no read there

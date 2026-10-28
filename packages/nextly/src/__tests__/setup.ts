@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, afterEach, expect } from "vitest";
 
+import { loadDialectTables } from "../database/dialect-tables";
 import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
 import {
@@ -11,26 +12,15 @@ import {
 } from "./transaction-escapes";
 import {
   CLAIMS_ENV,
-  POSTGRES_BASE_ENV,
   claimWorker,
-  integrationWorkers,
+  pointAtWorkerDatabases,
   releaseWorker,
-  workerDatabaseUrl,
-  workerPoolId,
 } from "./worker-database-guard";
 
-// On PostgreSQL with more than one worker, this file's suites connect to its
-// worker's own database, which the run's global setup created. Every suite
-// reads TEST_POSTGRES_URL, so pointing it there before any suite loads moves
-// them all. The URL is derived from the one the run was given (kept apart),
-// never from a value an earlier file in this process already rewrote.
-const postgresBase = process.env[POSTGRES_BASE_ENV];
-if (postgresBase) {
-  process.env.TEST_POSTGRES_URL = workerDatabaseUrl(
-    postgresBase,
-    workerPoolId(process.env.VITEST_POOL_ID, integrationWorkers(process.env))
-  );
-}
+// On PostgreSQL or MySQL with more than one worker, this file's suites connect
+// to its worker's own database, which the run's global setup created. Pointing
+// the URLs there before any suite loads moves every suite that reads them.
+pointAtWorkerDatabases(process.env);
 
 // This file's claim on its worker's pool id, and so on its database, for as
 // long as its tests run. Vitest may start a slot's next process while the last
@@ -69,6 +59,22 @@ process.env.NEXTLY_SECRET ??= "nextly-test-encryption-secret-at-least-32-chars";
 // that supplies its own dialect keeps it, and a file testing the unset case can
 // still delete it.
 process.env.DB_DIALECT ??= "sqlite";
+
+// The tables of that dialect, loaded as `createAdapter` loads them for an app.
+// Unit fixtures read tables without creating an adapter, so the run's dialect
+// is loaded here, before any test file is imported; a file that reads another
+// dialect's tables loads that one itself.
+await loadDialectTables(process.env.DB_DIALECT);
+
+// An integration run boots on every dialect it has a server for, and its
+// fixtures read those dialects' tables over connections of their own, so it
+// loads all three. Only the unit run, which loads one, is the check that
+// product code loads a dialect before reading it.
+if (claims) {
+  await Promise.all(
+    ["postgresql", "mysql", "sqlite"].map(dialect => loadDialectTables(dialect))
+  );
+}
 
 /**
  * Fail any test that leaves a PostgreSQL transaction aborted.

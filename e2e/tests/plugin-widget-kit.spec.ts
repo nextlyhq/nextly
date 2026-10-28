@@ -5,9 +5,11 @@
  * component throws while it draws shows its own error with Retry, and only
  * that card.
  *
- * A card whose widget hides when its data is empty leaves the dashboard at
- * rest and comes back, marked, in customise mode. Every card, plugin or core,
- * wears the same header.
+ * A card whose data function throws on the server shows its own error, and the
+ * cards answered beside it draw. A card whose widget hides when its data is
+ * empty, or whose `shows` leaves it out, leaves the dashboard at rest and comes
+ * back, marked, in customise mode. Every card, plugin or core, wears the same
+ * header.
  *
  * All are the playground's widget-kit fixture, placed by the test through the
  * layout, since a declared widget is never on the default dashboard.
@@ -16,6 +18,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { defaultSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 import { test } from "./support/test";
@@ -27,7 +30,10 @@ const API = "/admin/api";
 const KIT = "widget-kit-fixture/kit";
 const THROWS = "widget-kit-fixture/throws";
 const HIDES = "widget-kit-fixture/hides-when-empty";
-const FIXTURES = [KIT, THROWS, HIDES];
+const LOAD_THROWS = "widget-kit-fixture/load-throws";
+const NOT_SHOWN = "widget-kit-fixture/not-shown";
+const NEEDS = "widget-kit-fixture/needs-collection";
+const FIXTURES = [KIT, THROWS, HIDES, LOAD_THROWS, NOT_SHOWN, NEEDS];
 
 interface Layout {
   version: number;
@@ -45,9 +51,42 @@ async function placeFixtures(page: Page): Promise<void> {
     await page.request.put(`${API}/dashboard/layout`, {
       data: {
         placements: [
-          { id: "e2e-kit", widgetId: KIT, width: "half", removed: false },
-          { id: "e2e-throws", widgetId: THROWS, width: "half", removed: false },
-          { id: "e2e-hides", widgetId: HIDES, width: "half", removed: false },
+          {
+            id: "e2e-kit",
+            widgetId: KIT,
+            ...(await defaultSizeOf(page, KIT)),
+            removed: false,
+          },
+          {
+            id: "e2e-throws",
+            widgetId: THROWS,
+            ...(await defaultSizeOf(page, THROWS)),
+            removed: false,
+          },
+          {
+            id: "e2e-hides",
+            widgetId: HIDES,
+            ...(await defaultSizeOf(page, HIDES)),
+            removed: false,
+          },
+          {
+            id: "e2e-load-throws",
+            widgetId: LOAD_THROWS,
+            ...(await defaultSizeOf(page, LOAD_THROWS)),
+            removed: false,
+          },
+          {
+            id: "e2e-not-shown",
+            widgetId: NOT_SHOWN,
+            ...(await defaultSizeOf(page, NOT_SHOWN)),
+            removed: false,
+          },
+          {
+            id: "e2e-needs",
+            widgetId: NEEDS,
+            ...(await defaultSizeOf(page, NEEDS)),
+            removed: false,
+          },
           ...others,
         ],
         version: layout.version,
@@ -77,6 +116,52 @@ test("a card that throws while it draws shows its own error, and only that card"
   await expect(page.getByTestId("kit-card")).toBeVisible();
 });
 
+test("a card whose data function throws on the server shows its own error, and the cards beside it draw", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await placeFixtures(page);
+  await gotoAdmin(page, "/");
+
+  const failing = page.getByTestId(`widget-cell-${LOAD_THROWS}`);
+  await expect(failing.getByTestId("widget-card-error")).toBeVisible();
+  await expect(
+    failing.getByRole("button", { name: "Retry Test fixture: failing data" })
+  ).toBeVisible();
+  // What the plugin's error said stays in the server's log.
+  await expect(page.getByText("customer 42")).toHaveCount(0);
+  // Answered in the same batch, the cards beside it draw.
+  await expect(page.getByTestId("kit-card")).toBeVisible();
+  await expect(
+    page.getByTestId(`widget-cell-${HIDES}`).locator('[role="region"]')
+  ).toHaveAttribute("data-hidden-empty", "");
+});
+
+test("a card its widget does not show is off the dashboard, and shown marked while customising", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await placeFixtures(page);
+  await gotoAdmin(page, "/");
+
+  await expect(page.getByTestId("kit-card")).toBeVisible();
+  const notShown = page.getByTestId(`widget-cell-${NOT_SHOWN}`);
+  await expect(notShown.locator('[role="region"]')).toHaveAttribute(
+    "data-hidden-empty",
+    ""
+  );
+  await expect(notShown).toBeHidden();
+
+  // Entered as the hidden-while-empty case enters it, so the two differ only in their card.
+  const begin = page.getByTestId("dashboard-edit-begin");
+  await begin.focus();
+  await page.keyboard.press("Enter");
+  await expect(notShown).toBeVisible();
+  await expect(notShown.getByTestId("hidden-while-empty")).toHaveText(
+    "Not shown for you right now"
+  );
+});
+
 for (const theme of ["light", "dark"] as Theme[]) {
   test(`a card built only from the widget kit draws in the frame and passes axe (${theme})`, async ({
     page,
@@ -90,9 +175,12 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await expect(kit.getByText("Test fixture: widget kit")).toBeVisible();
     const body = kit.getByTestId("kit-card");
     await expect(body).toBeVisible();
-    // Handed its size: a half-width card at desktop width is medium.
+    // Handed its size: a card at its default size at desktop width is medium.
     await expect(body).toHaveAttribute("data-size", "medium");
-    await expect(body.getByTestId("chart-group")).toHaveCount(2);
+    // One row per group, each a bar on its track, drawn by the chart engine.
+    await expect(
+      body.locator(".recharts-bar-background-rectangle")
+    ).toHaveCount(2);
     await expectNoAxeViolations(page, {
       include: `[data-testid="widget-cell-${KIT}"]`,
     });
@@ -151,4 +239,23 @@ test("a plugin card and a core card wear the same header", async ({ page }) => {
   await expect(
     page.locator('[data-testid^="widget-cell-"]').getByText(/^Updated /)
   ).toHaveCount(0);
+});
+
+test("a card that needs a setting asks for it, and its button opens the card's settings on that field", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await placeFixtures(page);
+  await gotoAdmin(page, "/");
+
+  const needs = page.getByTestId(`widget-cell-${NEEDS}`);
+  // Named by the setting's label, in sentence case, as every card names a setting it needs.
+  await expect(needs.getByTestId("card-empty")).toContainText(
+    "No collection chosen yet"
+  );
+  await needs.getByRole("button", { name: "Choose collection" }).click();
+  // The card's own settings, with focus on the one field it is missing.
+  const sheet = page.getByRole("dialog", { name: /settings/ });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("combobox").first()).toBeFocused();
 });

@@ -15,15 +15,17 @@ import type {
   WidgetResult,
 } from "@admin/types/dashboard/widgets";
 
-import { timeseriesAccepts, timeseriesBody } from "../timeseries";
+import { sizeChartsInTests } from "../../charts/__tests__/chart-env";
+import { pointLabel, timeseriesAccepts, timeseriesBody } from "../timeseries";
 import { CardEmpty } from "../../frame/states";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 const widget = (): DashboardWidget =>
   ({
     id: "acme/over-time",
     title: "Entries over time",
     archetype: "timeseries",
-    size: "lg",
+    size: gridBounds(6),
     query: {
       source: "collection:posts",
       op: "timeseries",
@@ -49,6 +51,8 @@ function draw(result: WidgetResult, definition = widget()) {
 afterEach(() => {
   setGlobalDateTimeConfig({});
 });
+
+sizeChartsInTests();
 
 describe("the timeseries archetype", () => {
   it("refuses a payload that is not a timeline", () => {
@@ -124,7 +128,7 @@ describe("the timeseries archetype", () => {
     expect(within(table).getByText("0")).toBeInTheDocument();
   });
 
-  it("marks a single interval instead of drawing an invisible line", () => {
+  it("marks a single interval instead of drawing an invisible line", async () => {
     // One point is a legal window and produces no line segment, so without a
     // marker the card renders an empty box that reads as a failure.
     const { container } = render(
@@ -139,10 +143,9 @@ describe("the timeseries archetype", () => {
         })()}
       </>
     );
-    // A circle drawn in HTML over the line, so the stretched drawing cannot make it an ellipse.
-    expect(
-      container.querySelector('[data-testid="chart-latest-point"]')
-    ).not.toBeNull();
+    const drawing = await screen.findByTestId("chart-drawing");
+    expect(container.contains(drawing)).toBe(true);
+    expect(drawing.querySelector(".recharts-reference-dot-dot")).not.toBeNull();
   });
 
   it("says the window is empty rather than drawing nothing at all", () => {
@@ -151,5 +154,32 @@ describe("the timeseries archetype", () => {
     expect(screen.getByTestId("card-empty")).toHaveTextContent(
       /Nothing to plot yet/
     );
+  });
+});
+
+describe("an interval in words", () => {
+  afterEach(() =>
+    setGlobalDateTimeConfig({ timezone: "UTC", locale: "en-US" })
+  );
+
+  it("is a day as the chart writes it, with no year", () => {
+    setGlobalDateTimeConfig({ timezone: "UTC", locale: "en-US" });
+    expect(pointLabel("2026-10-27T00:00:00.000Z", "day")).toBe("Oct 27");
+  });
+
+  it("is a week by the day it starts", () => {
+    setGlobalDateTimeConfig({ timezone: "UTC", locale: "en-US" });
+    expect(pointLabel("2026-10-19T00:00:00.000Z", "week")).toBe(
+      "Week of Oct 19"
+    );
+  });
+
+  it("is a month with its year", () => {
+    setGlobalDateTimeConfig({ timezone: "UTC", locale: "en-US" });
+    expect(pointLabel("2026-10-01T00:00:00.000Z", "month")).toBe("Oct 2026");
+  });
+
+  it("is the instant as stored where it cannot be read as a date", () => {
+    expect(pointLabel("not a date", "day")).toBe("not a date");
   });
 });

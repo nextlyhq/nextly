@@ -307,7 +307,7 @@ export const singleApi: SingleApiType = {
     if (options?.draft) params.set("draft", "1");
     // context is trusted; pass status=all so a freshly-created Single
     // (auto-created with status='draft') is reachable. Without this
-    // the user sees "Failed to load Single: Not found." on the page
+    // the user sees "Not found." on the page
     // they just navigated to from "+ New Single".
     params.set("status", "all");
     const query = params.toString();

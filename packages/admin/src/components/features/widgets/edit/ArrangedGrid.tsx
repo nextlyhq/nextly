@@ -1,6 +1,6 @@
 "use client";
 /**
- * The dashboard's cards, drawn as ONE ordered list on a twelve-track grid.
+ * The dashboard's cards, drawn as ONE ordered list on a twelve-column grid.
  *
  * Lifted out of `WidgetGrid` so the grid component reads as what it
  * orchestrates -- permissions, the arrangement, the batch, the drag context --
@@ -14,28 +14,31 @@
  * wrapper is a separate element because a container query cannot be answered
  * by the element it styles.
  *
- * No dense packing: cards are laid out in list order, so the order a reader
- * arranged is the order they read, left to right and down.
+ * No dense packing: cards are laid out in list order, each spanning its `w`
+ * columns and `h` rows, so the order a reader arranged is the order they read,
+ * left to right and down. A short card beside a tall one can leave a gap below
+ * it; no later card is moved up to fill it.
  *
  * @module components/features/widgets/edit/ArrangedGrid
  */
-import type { SizeTier } from "@nextlyhq/ui/format";
+import type { GridSize } from "nextly/config";
 import type { JSX, RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
+import { cn } from "@admin/lib/utils";
 import type {
   WidgetPlacement,
   WidgetSlot,
-  WidgetWidth,
 } from "@admin/types/dashboard/widgets";
 
+import type { AnswerSize } from "../frame/tier";
 import {
   moveAvailability,
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
 import { resolveWidgetOutcome } from "../outcome";
-import { GRID_GAP_CLASS } from "../sizes";
+import { cardRowStyle, GRID_CLASS } from "../sizes";
 
 import { ArrangedCell } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
@@ -102,8 +105,8 @@ export interface ArrangedGridProps {
   requested: ReadonlySet<string>;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
-  /** The tier the answer one card shows was fetched at. */
-  fetchedTierFor: (placementId: string) => SizeTier | undefined;
+  /** The size the answer one card shows was fetched at. */
+  fetchedSizeFor: (placementId: string) => AnswerSize | undefined;
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   /** Reload one card's data on its own, from its error state's Retry. */
@@ -114,7 +117,7 @@ export interface ArrangedGridProps {
   gridRef: RefObject<HTMLElement | null>;
   on: {
     move: (placementId: string, direction: MoveDirection) => void;
-    setWidth: (placementId: string, width: WidgetWidth) => void;
+    setSize: (placementId: string, size: GridSize) => void;
     remove: (placementId: string) => void;
     /** ABSENT before an arrangement has been read. */
     dismiss?: (placementId: string, title: string) => void;
@@ -136,7 +139,9 @@ function EmptyArrangement({
   return (
     <p
       data-testid="widget-grid-empty"
-      className="col-span-full rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
+      // Two rows, so its sentence fits inside the grid's fixed row height.
+      style={cardRowStyle(2)}
+      className="col-span-full flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground"
     >
       {isEditing
         ? "Every card is removed. Put one back from Add widget, or reset to the default dashboard."
@@ -212,21 +217,38 @@ function cellSettingsWrite(
 }
 
 /**
- * Whether a card is off the dashboard because its widget hides when empty and its answer is, by
- * the outcome the renderer draws from (`resolveWidgetOutcome`), so the two cannot disagree.
+ * Whether a card is off the dashboard: its widget's own `shows` said no for this person, or it
+ * hides when empty and its answer is. Read from the outcome the renderer draws from
+ * (`resolveWidgetOutcome`), so the two cannot disagree.
  */
 function hiddenWhileEmpty(
   row: ArrangedWidget,
   slots: Record<string, WidgetSlot>,
   cellSlots: CellSlots
 ): boolean {
-  if (row.widget.hidesWhenEmpty !== true) return false;
   const outcome = resolveWidgetOutcome(
     row.widget,
     slots[row.placementId],
     key => cellSlots[row.placementId]?.[key]
   );
-  return outcome.state === "empty";
+  if (outcome.state === "not-shown") return true;
+  return row.widget.hidesWhenEmpty === true && outcome.state === "empty";
+}
+
+/**
+ * How many cards are on show: every one while customising, where a hidden card is shown marked;
+ * at rest, those not taken off the dashboard (`hiddenWhileEmpty`), so a dashboard whose every
+ * card is hidden says it is empty rather than drawing nothing.
+ */
+function shownCount(
+  rows: readonly ArrangedWidget[],
+  isEditing: boolean,
+  answers: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots }
+): number {
+  if (isEditing) return rows.length;
+  return rows.filter(
+    row => !hiddenWhileEmpty(row, answers.slots, answers.cellSlots)
+  ).length;
 }
 
 /**
@@ -265,7 +287,7 @@ export function ArrangedGrid({
   cellSlots,
   requested,
   updatedAtFor,
-  fetchedTierFor,
+  fetchedSizeFor,
   fetchingPlacementIds,
   retry,
   announcement,
@@ -290,9 +312,10 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        // The gaps a card's predicted width counts (`GRID_GAP_CLASS`). `relative` so the drop
-        // line is placed from the grid's own corner, where the drag measures from.
-        className={`relative grid grid-cols-12 ${GRID_GAP_CLASS}`}
+        // The grid's columns, rows and gaps (`GRID_CLASS`), the ones a card's predicted width
+        // counts. `relative` so the drop line is placed from the grid's own corner, where the
+        // drag measures from.
+        className={cn("relative", GRID_CLASS)}
         // When the oldest answer on show arrived, for the page's one freshness line: no card
         // says when its own data arrived.
         data-answered-at={answeredAt?.toISOString()}
@@ -305,7 +328,10 @@ export function ArrangedGrid({
         >
           {announcement}
         </span>
-        <EmptyArrangement count={rows.length} isEditing={isEditing} />
+        <EmptyArrangement
+          count={shownCount(rows, isEditing, { slots, cellSlots })}
+          isEditing={isEditing}
+        />
         <DropLineMark line={drag?.line} />
         {rows.map(row => (
           <ArrangedCell
@@ -313,8 +339,8 @@ export function ArrangedGrid({
             row={row}
             isEditing={isEditing}
             highlighted={highlightedId === row.placementId}
-            // At one column each card menu lists its widths in place, where a submenu has no room.
-            widthsInPlace={drag?.oneColumn === true}
+            // At one column each card menu lists its sizes in place, where a submenu has no room.
+            sizesInPlace={drag?.oneColumn === true}
             drag={cellDragFor(drag, focus, row.placementId)}
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
@@ -333,7 +359,7 @@ export function ArrangedGrid({
               // 🔴 This card's own request, not the batch's: partitions
               // settle independently, and a settled card must not dim.
               isFetching: fetchingPlacementIds.has(row.placementId),
-              answerTier: fetchedTierFor(row.placementId),
+              answerSize: fetchedSizeFor(row.placementId),
               // Retry only for a card in the batch: one rejected before it was asked has no
               // question to ask again, so the button could change nothing.
               onRetry: requested.has(row.placementId)
@@ -346,7 +372,7 @@ export function ArrangedGrid({
             }}
             on={{
               move: direction => on.move(row.placementId, direction),
-              setWidth: width => on.setWidth(row.placementId, width),
+              setSize: size => on.setSize(row.placementId, size),
               remove: () => on.remove(row.placementId),
               ...(on.dismiss
                 ? {

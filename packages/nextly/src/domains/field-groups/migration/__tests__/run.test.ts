@@ -9,7 +9,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SQL } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { Logger } from "../../../../shared/types";
@@ -40,6 +40,13 @@ import {
   createLockRow,
   interpretLockStatement,
 } from "./helpers/migration-lock-double";
+import { loadDialectTables } from "../../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 const PRESERVING = identifierCaseRules({ dialect: "postgresql" });
 
@@ -1956,11 +1963,16 @@ describe("a preview that meets a writer mid-run", () => {
         logger,
         direction: "up",
         backupConfirmed: true,
+        // A writing run waits for a held lock as every command-line run does; not waiting keeps
+        // this to the refusal itself.
+        lockWaitMs: 0,
       })
     ).rejects.toSatisfy(
       error =>
         NextlyError.is(error) &&
-        error.logContext?.reason === "migration lock is held elsewhere"
+        error.code === "NEXTLY_MIGRATE_LOCK_BUSY" &&
+        (error.logContext?.holder as { kind?: string } | undefined)?.kind ===
+          "earlier-field-group-lock"
     );
 
     // 🔴 Zero, and that is the assertion. Against the very world a preview re-reads, a run that

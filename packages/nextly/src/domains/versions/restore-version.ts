@@ -28,7 +28,9 @@ import {
   applyFieldWriteAccess,
   callerAccessGrants,
 } from "../../shared/lib/field-level-registry";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
+import { appLocalization } from "../i18n/configured-locales";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
@@ -282,9 +284,11 @@ export async function resolveComponentSchemas(
  */
 function usableLocale(versionLocale: string | null): string | null {
   if (versionLocale === null) return null;
-  const localization = getService("config")?.localization;
-  // Without localization configured there is no locale to validate against, and
-  // nothing reads one either.
+  // The site's languages as they are now, so a site whose languages are stored
+  // rather than declared in its configuration validates against that list too.
+  const localization = appLocalization();
+  // Without languages there is no locale to validate against, and nothing
+  // reads one either.
   if (!localization) return null;
   return isValidLocale(localization, versionLocale) ? versionLocale : null;
 }
@@ -419,6 +423,12 @@ function deepEquals(a: unknown, b: unknown): boolean {
 export async function restoreVersion(
   args: RestoreVersionArgs
 ): Promise<RestoreVersionResult> {
+  // Refused first when the collection or Single is removed from code, before
+  // the version is read or replayed.
+  await refuseHistoryWriteIfRemovedFromCode({
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+  });
   if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
     throw NextlyError.validation({
       errors: [

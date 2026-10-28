@@ -146,7 +146,7 @@ describe("a grouped query that leaves its key to a setting", () => {
       title: "Grouped",
       archetype: "bars",
       offered: "per-collection",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       settings,
       query: grouped,
     }) as WidgetDefinition;
@@ -168,7 +168,7 @@ describe("a grouped query that leaves its key to a setting", () => {
         archetype: "custom",
         component: "core#GroupedCells",
         offered: "per-collection",
-        defaultSize: "md",
+        size: { default: { w: 4, h: 3 } },
         settings: fromCollection,
         cells: [
           { key: "byCollection", query: grouped },

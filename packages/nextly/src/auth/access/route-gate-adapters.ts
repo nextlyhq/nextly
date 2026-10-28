@@ -34,13 +34,8 @@ import {
 import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
-import {
-  holdsPermission,
-  isSuperAdmin,
-  manageCounts,
-  type Actor,
-  type KeyActor,
-} from "./actor";
+import { manageCounts, type Actor, type KeyActor } from "./actor";
+import { answeringPermissions, storedSlugHolds } from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
 import { aboutSubject, deviate } from "./deviations";
@@ -175,6 +170,22 @@ export function routeGateVerdict(
 }
 
 /**
+ * The verdict for one permission by the grant alone, no rule read: what a
+ * route asks of a publish or an unpublish of every language, whose rule the
+ * service asks once in each language the change puts live, which the route
+ * cannot know. Told every language here, a rule refusing a language that
+ * does not go live would refuse what the service allows.
+ */
+export function routeGrantVerdict(
+  auth: AuthContext,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<GateVerdict> {
+  return permissionVerdict(callerOf(auth), action, resource, rules);
+}
+
+/**
  * The actions a collection's capabilities answer: every access operation, so
  * an operation the gates gain is answered here without an edit.
  */
@@ -194,13 +205,6 @@ export const SINGLE_ACTIONS: readonly SingleAction[] = ACCESS_OPERATIONS.filter(
   (operation): operation is SingleAction =>
     !NOT_ON_A_SINGLE.some(missing => missing === operation)
 );
-
-/**
- * The actions a REST request reaches through the entry's update route: a
- * publish is a status change sent as an update, so its route asks update and
- * the publish check comes on top of it.
- */
-const THROUGH_UPDATE: ReadonlySet<string> = new Set(["publish", "unpublish"]);
 
 /**
  * The requests the admin sends whose languages differ from their action's
@@ -383,7 +387,8 @@ const PUBLISH_EVERY_LANGUAGE: Record<"collection" | "single", string> = {
  * What `caller` may do with each of `entities`: the route gate's answer for
  * every action, as a REST request asking it would get, so the admin offers
  * what the server allows and nothing else. A publish or an unpublish is
- * allowed only where the update its request goes through is allowed too.
+ * answered by its own permission and rule: it is what a request changing
+ * only the status needs, while one that also edits fields needs update too.
  * `languageOf` gives the languages the REST operation behind an action is
  * told when its request sends what `sent` names, so a rule hears the
  * languages that request would.
@@ -430,13 +435,6 @@ async function entityCapabilities(
     const actions = kind === "single" ? SINGLE_ACTIONS : COLLECTION_ACTIONS;
     const answered: Record<string, boolean> = {};
     for (const action of actions) {
-      // Update is answered before either lifecycle action in both lists. A
-      // refused update closes the door a publish is sent through, so its own
-      // check, and any rule it would run, is never asked.
-      if (THROUGH_UPDATE.has(action) && answered.update !== true) {
-        answered[action] = false;
-        continue;
-      }
       answered[action] = await withRuleLanguage(
         languageOf(OPERATION_OF[kind][action] ?? action, "as-asked"),
         () => capability(caller, action, slug, rules)
@@ -492,12 +490,14 @@ async function duplicates(
 }
 
 /**
- * Whether `caller` may publish every language of `resource` at once, as that
- * request is judged: its update route in every language, then the publish
- * check once for each configured language, with its rules told that one and
- * all of them. The request itself asks only the languages it puts live, which
- * depend on the document; asking every configured language never allows what
- * one of those would refuse.
+ * Whether `caller` may publish every language of `resource` at once, on the
+ * strict side of how that request is judged: update in every language, then
+ * the publish check once for each configured language, with its rules told
+ * that one and all of them. The route admits a caller holding the publish
+ * grant without update, but a target with no lifecycle asks update of them,
+ * and the request asks only the languages it puts live, which depend on the
+ * document; asking update and every configured language never allows what
+ * the request would refuse.
  */
 async function publishesEveryLanguage(
   caller: GateCaller,
@@ -570,10 +570,28 @@ function gateVerdict(
   });
 }
 
+/** Whether a signed-in user holds any permission holding the action. */
+async function userHoldsAnswering(
+  userId: string,
+  action: string,
+  resource: string
+): Promise<boolean> {
+  for (const permission of answeringPermissions(action, resource)) {
+    if (
+      await userHoldsPermission(userId, permission.action, permission.resource)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * The verdict for an action no rule can name. A key holds it by its stored
  * slug; a session, with the access-control service, by super-admin authority
- * and then the permission, and without it by the permission alone.
+ * and then the permission, and without it by the permission alone. On a
+ * system resource its `manage-` permission holds it too, as it does for the
+ * decision.
  */
 async function permissionVerdict(
   caller: GateCaller,
@@ -583,40 +601,27 @@ async function permissionVerdict(
 ): Promise<GateVerdict> {
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
-    const today = caller.key.permissions.includes(
-      permissionSlug(action, resource)
-    );
+    const today = storedSlugHolds(caller.key.permissions, action, resource);
     // The decision reads the grant's action and resource, which agree with
-    // the stored slug unless a grant was stored under a slug of its own; and
-    // on a system resource it counts the resource's `manage-` permission.
-    const byGrant = holdsPermission(actor, action, resource);
-    await deviate("key-slug-string-match", today, () => byGrant);
+    // the stored slug unless a grant was stored under a slug of its own.
     await deviate(
-      "manage-not-counted",
-      byGrant,
+      "key-slug-string-match",
+      today,
       () => decidePermission(actor, action, resource).allowed
     );
     return verdictOf(today);
   }
-  const today =
-    (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
-    (await userHoldsPermission(caller.userId, action, resource));
-  if (!manageCounts(action, resource)) return verdictOf(today);
   return verdictOf(
-    await deviate(
-      "manage-not-counted",
-      today,
-      async () =>
-        decidePermission(await actorForUser(caller.userId), action, resource)
-          .allowed
-    )
+    (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
+      (await userHoldsAnswering(caller.userId, action, resource))
   );
 }
 
 /**
  * The verdict when any one of several permissions will do. Today a key holds
- * one by its stored slug and a session by its database permissions, and no
- * rule is read for either.
+ * one by its stored slug and a session by its database permissions, a system
+ * resource's `manage-` permission counting on it as the decision counts it,
+ * and no rule is read for either.
  */
 export async function anyPermissionVerdict(
   auth: AuthContext,
@@ -625,29 +630,29 @@ export async function anyPermissionVerdict(
 ): Promise<GateVerdict> {
   const caller = callerOf(auth);
   if (caller.key) {
-    const actor = keyActorOf(caller, caller.key);
-    const stored = caller.key.permissions;
+    const key = caller.key;
+    const actor = keyActorOf(caller, key);
     const today = permissions.some(({ action, resource }) =>
-      stored.includes(permissionSlug(action, resource))
+      storedSlugHolds(key.permissions, action, resource)
     );
-    // Three steps from today's answer to the decision's, each named apart:
-    // the grants rather than the stored slugs, then a system resource's
-    // `manage-` permission counted, then the targets' rules read.
-    const byGrants = permissions.some(({ action, resource }) =>
-      holdsPermission(actor, action, resource)
-    );
+    // Two steps from today's answer to the decision's, each named apart: the
+    // grants rather than the stored slugs, then the targets' rules read.
     const byPermission = permissions.some(
       ({ action, resource }) =>
         decidePermission(actor, action, resource).allowed
     );
-    await deviate("key-slug-string-match", today, () => byGrants);
-    await deviate("manage-not-counted", byGrants, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
     await deviate("any-of-skips-rules", byPermission, () =>
       anyDecided(actor, permissions, rules)
     );
     return verdictOf(today);
   }
-  const today = await hasAnyPermission(auth.userId, [...permissions]);
+  const today = await hasAnyPermission(
+    auth.userId,
+    permissions.flatMap(({ action, resource }) =>
+      answeringPermissions(action, resource)
+    )
+  );
   // The user's actor is resolved only while a test listens, and once.
   let actor: Promise<Actor> | undefined;
   const userActor = () => (actor ??= actorForUser(auth.userId));
@@ -658,7 +663,6 @@ export async function anyPermissionVerdict(
         decidePermission(resolved, action, resource).allowed
     );
   };
-  await deviate("manage-not-counted", today, byPermission);
   // Named only where reading the rules moves the answer past the permissions:
   // the comparison is made against today's answer, so a difference the
   // permissions alone explain is reported as "agrees" here.
@@ -783,14 +787,11 @@ async function heldPermission(
       grants: caller.grants ?? [],
       roles: caller.roles,
     });
-    const today = caller.permissions.includes(slug);
-    // Three steps from today's answer to the decision's, each named apart:
-    // the grant rather than the stored slug, then a system resource's
-    // `manage-` permission counted, then the target's rules read.
-    const byGrant = holdsPermission(actor, action, resource);
+    const today = storedSlugHolds(caller.permissions, action, resource);
+    // Two steps from today's answer to the decision's, each named apart: the
+    // grant rather than the stored slug, then the target's rules read.
     const byPermission = decidePermission(actor, action, resource).allowed;
-    await deviate("key-slug-string-match", today, () => byGrant);
-    await deviate("manage-not-counted", byGrant, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
     await deviate("holds-permission-key-skips-rules", byPermission, () =>
       decidedOne(actor, action, resource, rules)
     );
@@ -873,7 +874,7 @@ export async function schemaListed<T extends ListedCollection>(
         actor,
         slug,
         rules,
-        key.permissions.includes(permissionSlug("read", slug))
+        storedSlugHolds(key.permissions, "read", slug)
       )
     );
   }
@@ -884,13 +885,14 @@ export async function schemaListed<T extends ListedCollection>(
   const actor = await actorForUserFailingClosed(caller.userId);
   // The super-admin authority the actor's roles carry counts too: it is what
   // each collection's permission check passed first, and it holds when the
-  // cached check above failed but the roles were read.
+  // cached check above failed but the roles were read. So does a system
+  // resource's `manage-` permission, as the decision counts it.
   return keptWhere(collections, slug =>
     readByPermission(
       actor,
       slug,
       rules,
-      isSuperAdmin(actor) || holdsPermission(actor, "read", slug)
+      decidePermission(actor, "read", slug).allowed
     )
   );
 }
@@ -922,16 +924,7 @@ async function readByPermission(
 ): Promise<boolean> {
   const byPermission = decidePermission(actor, "read", slug).allowed;
   if (actor.kind === "key") {
-    await deviate("key-slug-string-match", today, () =>
-      holdsPermission(actor, "read", slug)
-    );
-    await deviate(
-      "manage-not-counted",
-      holdsPermission(actor, "read", slug),
-      () => byPermission
-    );
-  } else {
-    await deviate("manage-not-counted", today, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
   }
   await deviate("schema-list-ignores-rules", byPermission, () =>
     decidedOne(actor, "read", slug, rules)
