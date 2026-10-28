@@ -557,7 +557,7 @@ describe("a card's load, judged before it runs", () => {
     expect(answer).toEqual({
       settled: {
         ok: false,
-        error: "Choose collection in the card's settings",
+        error: "No collection chosen yet",
         code: "needs-setting",
         setting: "collection",
       },

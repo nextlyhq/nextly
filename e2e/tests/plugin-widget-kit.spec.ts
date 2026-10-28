@@ -251,7 +251,7 @@ test("a card that needs a setting asks for it, and its button opens the card's s
   const needs = page.getByTestId(`widget-cell-${NEEDS}`);
   // Named by the setting's key while the setting builders give no label of their own.
   await expect(needs.getByTestId("card-empty")).toContainText(
-    "Choose collection in the card's settings"
+    "No collection chosen yet"
   );
   await needs.getByRole("button", { name: "Choose collection" }).click();
   // The card's own settings, with focus on the one field it is missing.

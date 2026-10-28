@@ -245,7 +245,8 @@ function drawsDeclaredComponent(definition: DashboardWidget): boolean {
  */
 function needsSettingEmpty(setting: string): OutcomeEmpty {
   return {
-    title: `Choose ${setting} in the card's settings`,
+    // Says what is missing; the button beside it says how to fix it, so the two never repeat.
+    title: `No ${lowerFirst(setting)} chosen yet`,
     action: { label: `Choose ${lowerFirst(setting)}`, opensSettings: true },
   };
 }
