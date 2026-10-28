@@ -124,4 +124,33 @@ describe("starting nextly on an unsupported Next.js", () => {
       new Set([resolve(process.cwd(), "apps/site")])
     );
   });
+
+  it("tears down the previous app's plugins before refusing the next", async () => {
+    // What `clearServices()` leaves after app A: its plugins still running,
+    // for the next registration to destroy.
+    const destroyed: string[] = [];
+    const registry = globalThis as unknown as {
+      __nextly_pluginTeardown?: Array<{ plugin: unknown; context: unknown }>;
+    };
+    registry.__nextly_pluginTeardown = [
+      {
+        plugin: {
+          name: "@acme/app-a",
+          version: "1.0.0",
+          destroy: () => {
+            destroyed.push("@acme/app-a");
+          },
+        },
+        context: {},
+      },
+    ];
+
+    await expect(
+      registerServices({
+        appRoot: "/projects/app-b",
+        imageProcessor: getImageProcessor(),
+      })
+    ).rejects.toMatchObject(REFUSAL);
+    expect(destroyed).toEqual(["@acme/app-a"]);
+  });
 });

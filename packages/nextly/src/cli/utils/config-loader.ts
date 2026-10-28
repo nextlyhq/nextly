@@ -476,7 +476,10 @@ function stopWatching(): void {
 async function loadConfigInternal(
   options: LoadConfigOptions
 ): Promise<LoadConfigResult> {
-  const cwd = options.cwd ?? process.cwd();
+  // Resolved once, before the config's code runs: a config or a `setup`
+  // transformer that changes the process's directory must not move the
+  // project the config was found in.
+  const cwd = resolve(options.cwd ?? process.cwd());
 
   const configPath = options.configPath
     ? resolve(cwd, options.configPath)
@@ -494,7 +497,7 @@ async function loadConfigInternal(
       config: appConfig,
       appConfig,
       configPath: undefined,
-      projectRoot: resolve(cwd),
+      projectRoot: cwd,
       dependencies: [],
       pluginConsent: NO_PLUGIN_CONSENT,
       // Empty, matching the clear above: work pinned to this result must not
@@ -723,7 +726,7 @@ async function loadConfigInternal(
       config,
       appConfig,
       configPath,
-      projectRoot: resolve(cwd),
+      projectRoot: cwd,
       dependencies,
       deferredExtends,
       pluginConsent,
