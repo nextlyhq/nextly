@@ -36,6 +36,7 @@ const server = vi.hoisted(() => ({
 /** The content language the screen's `?locale=` names, if any. */
 const onScreen = vi.hoisted(() => ({
   locale: undefined as string | undefined,
+  pathname: "/admin",
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
@@ -71,7 +72,10 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
 }));
 
 vi.mock("../useRouter", () => ({
-  useRouter: () => ({ route: { routeType: "private" } }),
+  useRouter: () => ({
+    route: { routeType: "private" },
+    pathname: onScreen.pathname,
+  }),
 }));
 
 vi.mock("../useLocaleParam", () => ({
@@ -86,7 +90,6 @@ import {
 } from "../current-user-access";
 import {
   namedEndsAfter,
-  PERMISSIONS_FRESH_MS,
   useCurrentUserPermissions,
 } from "../useCurrentUserPermissions";
 import { editsOffered, useUpdateAnswer } from "../useUpdateAnswer";
@@ -147,6 +150,7 @@ beforeEach(() => {
   server.capabilitiesGate = null;
   server.permissionsGate = null;
   onScreen.locale = undefined;
+  onScreen.pathname = "/admin";
 });
 
 afterEach(() => {
@@ -1465,10 +1469,12 @@ describe("one screen's callers", () => {
   const permissionAsks = (): number =>
     server.asked.filter(p => p === "/me/permissions").length;
 
-  it("share one answer when they mount within the window, and the next screen asks again", async () => {
+  it("share one answer however late they mount, and the next screen asks once", async () => {
     // 🔴 A screen's callers mount over more than one commit: the dashboard's
-    // cards mount once its layout has answered, after the shell has asked.
-    // Each mount asking again read the list twice on every dashboard load.
+    // cards mount once its layout has answered, after the shell has asked, and
+    // a slow layout answers seconds later. Each mount asking again read the
+    // list twice on every dashboard load; a time window still did whenever the
+    // layout outlasted it.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const client = newClient();
     const shell = renderHook(() => useCurrentUserPermissions(), {
@@ -1477,9 +1483,9 @@ describe("one screen's callers", () => {
     await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
     const asked = permissionAsks();
 
-    // A card mounts a moment later on the same screen: it reads the answer.
+    // A card mounts ten seconds later on the same screen: it reads the answer.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(PERMISSIONS_FRESH_MS / 4);
+      await vi.advanceTimersByTimeAsync(10_000);
     });
     const card = renderHook(() => useCurrentUserPermissions(), {
       wrapper: wrapperFor(client),
@@ -1490,14 +1496,18 @@ describe("one screen's callers", () => {
     });
     expect(permissionAsks()).toBe(asked);
 
-    // The control: a caller mounting once the window has passed, as the next
-    // screen's does, asks again, so a changed role is seen there.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(PERMISSIONS_FRESH_MS);
-    });
+    // The control: the next screen asks again, so a changed role is seen
+    // there, and asks ONCE, however many of its callers see the new pathname.
+    onScreen.pathname = "/admin/collections/posts";
+    shell.rerender();
+    card.rerender();
     renderHook(() => useCurrentUserPermissions(), {
       wrapper: wrapperFor(client),
     });
     await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(permissionAsks()).toBe(asked + 1);
   });
 });
