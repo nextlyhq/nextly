@@ -282,6 +282,28 @@ describe("validateWidgetSettings refuses what an author can fix", () => {
     expect((caught as Error).message).toMatch(/limit/);
   });
 
+  /*
+   * 🔴 The same, for the value no fallback could print: a cycle defeats
+   * `JSON.stringify`, and an object with no prototype has no `toString` for
+   * `String()` to call, so a formatter falling back from one to the other
+   * threw on both and the refusal never reached the author.
+   */
+  it("refuses a cyclic prototype-free default as a NextlyError naming the setting", () => {
+    const cyclic = Object.create(null) as Record<string, unknown>;
+    cyclic.self = cyclic;
+    let caught: unknown;
+    try {
+      validateWidgetSettings(
+        [{ name: "limit", type: "number", defaultValue: cyclic }],
+        "core/x"
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(NextlyError);
+    expect((caught as Error).message).toMatch(/"limit" is typed "number"/);
+  });
+
   it("refuses more settings than the ceiling allows", () => {
     const many = Array.from({ length: MAX_WIDGET_SETTINGS + 1 }, (_, i) => ({
       name: `s${i}`,
@@ -597,7 +619,7 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
   ];
 
   it("passes every rule, each type with its key as its name", () => {
-    // The rule set the declaration's channel reads: all eight types, one table.
+    // The rule set the declaration's channel reads: every type, one table.
     expect(widgetSettingsProblems(content)).toEqual([]);
     for (const setting of content) {
       const set =
@@ -1323,5 +1345,86 @@ describe("the quick setting: at most one sits on the card", () => {
     expect(
       widgetSettingsProblems([{ ...range, quick: "yes" } as never])
     ).toEqual(['setting "range" has quick "yes"; expected true or false']);
+  });
+});
+
+describe("a date setting holds the ISO 8601 date its picker writes", () => {
+  const since: WidgetSetting = {
+    name: "since",
+    type: "date",
+    defaultValue: "2026-01-01",
+  };
+
+  it("takes a date, with or without its time, and refuses anything else as a default", () => {
+    expect(widgetSettingsProblems([since])).toEqual([]);
+    expect(
+      widgetSettingsProblems([
+        { ...since, defaultValue: "2026-10-28T21:00:00.000Z" },
+      ])
+    ).toEqual([]);
+    // 🔴 `Date.parse` alone takes both of these; no picker writes either.
+    for (const loose of ["March 3", "2026", "2026-02-30"]) {
+      expect(
+        widgetSettingsProblems([{ ...since, defaultValue: loose }]),
+        loose
+      ).toEqual([
+        `setting "since" is typed "date" but defaults to ${JSON.stringify(loose)}`,
+      ]);
+    }
+  });
+
+  it("reads a stored value that is no date as its default", () => {
+    expect(resolveWidgetSettings([since], { since: "2026-03-04" })).toEqual({
+      since: "2026-03-04",
+    });
+    // A cleared picker writes null.
+    expect(resolveWidgetSettings([since], { since: null })).toEqual({
+      since: "2026-01-01",
+    });
+  });
+});
+
+describe("a Field setting names one field of the collection it works over", () => {
+  it("passes every rule over a Collection setting", () => {
+    expect(
+      widgetSettingsProblems([
+        { name: "collection", type: "collection" },
+        {
+          name: "column",
+          type: "field",
+          of: "collection",
+          defaultValue: "title",
+        },
+      ])
+    ).toEqual([]);
+  });
+
+  it("is refused over a setting that is not a Collection setting", () => {
+    expect(
+      widgetSettingsProblems([
+        { name: "title", type: "text" },
+        { name: "column", type: "field", of: "title" },
+      ])
+    ).toEqual([
+      'setting "column" depends on "title", which is not a Collection setting of this widget',
+    ]);
+  });
+
+  it("is hidden, and handed its default, while its collection has no value", () => {
+    const settings: AnyWidgetSetting[] = [
+      { name: "collection", type: "collection" },
+      {
+        name: "column",
+        type: "field",
+        of: "collection",
+        defaultValue: "title",
+      },
+    ];
+    expect(resolveWidgetSettings(settings, { column: "price" })).toEqual({
+      column: "title",
+    });
+    expect(
+      resolveWidgetSettings(settings, { collection: "orders", column: "price" })
+    ).toEqual({ collection: "orders", column: "price" });
   });
 });
