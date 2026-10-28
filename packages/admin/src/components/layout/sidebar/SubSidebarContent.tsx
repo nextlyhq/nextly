@@ -1,15 +1,15 @@
 import type { JSX } from "react";
 
-import { DynamicCollectionNav } from "@admin/components/features/dashboard/DynamicCollectionNav";
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
-import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
 import * as Icons from "@admin/components/icons";
 import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import type { ApiCollection } from "@admin/types/entities";
 
+import { ContentPanel } from "./ContentPanel";
+import { isContentSection } from "./lib/content-rail";
 import { visibleSettingsNav } from "./lib/settings-nav";
 import { MediaSidebarContent } from "./MediaSidebarContent";
 import type { MainMenuCategory } from "./sidebar-types";
@@ -20,11 +20,13 @@ import { SidebarMenu, SidebarMenuItem, SidebarMenuButton } from "./index";
 interface SubSidebarContentProps {
   selectedMain: MainMenuCategory;
   standaloneLabel: string;
-  // Search state
-  collectionSearch: string;
-  onCollectionSearchChange: (value: string) => void;
-  singleSearch: string;
-  onSingleSearchChange: (value: string) => void;
+  // Search state: one for both content kinds
+  contentSearch: string;
+  onContentSearchChange: (value: string) => void;
+  /** Whether the reader has collections to list. */
+  hasCollectionsSection: boolean;
+  /** Whether the reader has Singles to list. */
+  hasSinglesSection: boolean;
   pluginSearch: string;
   onPluginSearchChange: (value: string) => void;
   // Navigation — typed with optional href to satisfy child component contracts
@@ -41,10 +43,10 @@ interface SubSidebarContentProps {
 export function SubSidebarContent({
   selectedMain,
   standaloneLabel,
-  collectionSearch,
-  onCollectionSearchChange,
-  singleSearch,
-  onSingleSearchChange,
+  contentSearch,
+  onContentSearchChange,
+  hasCollectionsSection,
+  hasSinglesSection,
   pluginSearch,
   onPluginSearchChange,
   isActive,
@@ -57,46 +59,16 @@ export function SubSidebarContent({
     return <MediaSidebarContent />;
   }
 
-  if (selectedMain === "collections") {
+  if (isContentSection(selectedMain)) {
     return (
-      <div className="space-y-6 px-4 py-6">
-        <SidebarSearch
-          placeholder="Search collection types"
-          value={collectionSearch}
-          onChange={onCollectionSearchChange}
-        />
-        <div className="space-y-1">
-          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-            Collections
-          </p>
-          <SidebarMenu>
-            <DynamicCollectionNav
-              isActive={isActive}
-              search={collectionSearch}
-            />
-          </SidebarMenu>
-        </div>
-      </div>
-    );
-  }
-
-  if (selectedMain === "singles") {
-    return (
-      <div className="space-y-6 px-4 py-6">
-        <SidebarSearch
-          placeholder="Search singles"
-          value={singleSearch}
-          onChange={onSingleSearchChange}
-        />
-        <div className="space-y-1">
-          <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-            Singles
-          </p>
-          <SidebarMenu>
-            <DynamicSingleNav isActive={isActive} search={singleSearch} />
-          </SidebarMenu>
-        </div>
-      </div>
+      <ContentPanel
+        part={selectedMain}
+        search={contentSearch}
+        onSearchChange={onContentSearchChange}
+        hasCollections={hasCollectionsSection}
+        hasSingles={hasSinglesSection}
+        isActive={isActive}
+      />
     );
   }
 

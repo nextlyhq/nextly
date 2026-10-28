@@ -114,6 +114,112 @@ describe("the settings sheet with content settings", () => {
     expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("by");
   });
 
+  it("opens a Fields choice naming a field no longer offered without it, and says so", async () => {
+    const withFields: AnyWidgetSetting[] = [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ];
+    const onSave = open(
+      { collection: "posts", shown: ["headline", "salary"] },
+      withFields
+    );
+    expect(
+      screen.getByText("Fields was reset: salary is no longer available")
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    // 🔴 The field the reader may not see is not saved back for the card to ask for.
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(JSON.stringify(saved(onSave))).not.toContain("salary");
+  });
+
+  it("names a chosen field by its readable name, not its key, where the source gives no label", () => {
+    // 🔴 A field the source publishes without a label read as its key (`publishedAt`), while
+    // the card's own column heading for it reads "Published At".
+    mockBranding.value = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Posts",
+          lifecycle: false,
+          fields: [
+            { name: "title", type: "string", label: "Title" },
+            { name: "publishedAt", type: "date" },
+          ],
+        },
+      ],
+    };
+    open({ collection: "posts", shown: ["publishedAt"] }, [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ]);
+    expect(screen.getByText("Published At")).toBeTruthy();
+    expect(screen.queryByText("publishedAt")).toBeNull();
+  });
+
+  it("offers Fields a row can print, never the title, and stops at the most a row shows", async () => {
+    mockBranding.value = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Posts",
+          lifecycle: false,
+          titleField: "title",
+          fields: [
+            { name: "title", type: "string", label: "Title" },
+            { name: "category", type: "string", label: "Category" },
+            { name: "summary", type: "string", label: "Summary" },
+            { name: "author", type: "string", label: "Author" },
+            { name: "rank", type: "number", label: "Rank" },
+            { name: "tags", type: "string", label: "Tags", presentable: false },
+          ],
+        },
+      ],
+    };
+    const withFields: AnyWidgetSetting[] = [
+      {
+        name: "collection",
+        type: "collection",
+        label: "Collection",
+        rows: "titled",
+      },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ];
+    const { unmount } = render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Recent posts"
+        settings={withFields}
+        config={{ collection: "posts", shown: ["category"] }}
+        onDone={vi.fn()}
+      />
+    );
+    // 🔴 The sheet says how many it takes, and offers neither the title nor
+    // a field a row cannot print.
+    expect(screen.getByText(/Up to 3 fields/)).toBeTruthy();
+    await userEvent.click(screen.getAllByRole("combobox").at(-1)!);
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Summary", "Author", "Rank"]);
+    unmount();
+    // At the most a row shows, nothing more is offered.
+    render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Recent posts"
+        settings={withFields}
+        config={{
+          collection: "posts",
+          shown: ["category", "summary", "author"],
+        }}
+        onDone={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Author")).toBeTruthy();
+    expect(screen.queryByText("Select...")).toBeNull();
+  });
+
   it("says nothing while the sources have not arrived", () => {
     mockBranding.value = {};
     open({ collection: "posts", by: "secret" });
@@ -375,5 +481,63 @@ describe("the settings sheet with a note", () => {
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toMatchObject({ text: "😀😀😀😀😀" });
+  });
+});
+
+describe("the settings sheet drawn from a widget's settings", () => {
+  // One setting of every type a widget can declare, as the builders write them.
+  const every: AnyWidgetSetting[] = [
+    { name: "collection", type: "collection", label: "Collection" },
+    { name: "column", type: "field", of: "collection", label: "Column" },
+    { name: "where", type: "filter", of: "collection", label: "Filter" },
+    { name: "order", type: "sort", of: "collection", label: "Sort" },
+    { name: "by", type: "groupBy", of: "collection", label: "Group by" },
+    { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    { name: "heading", type: "text", label: "Heading" },
+    { name: "body", type: "textarea", label: "Body" },
+    { name: "items", type: "number", label: "Rows", defaultValue: 5, max: 10 },
+    { name: "mine", type: "checkbox", label: "Only mine" },
+    {
+      name: "tone",
+      type: "select",
+      label: "Tone",
+      defaultValue: "calm",
+      options: [
+        { label: "Calm", value: "calm" },
+        { label: "Loud", value: "loud" },
+      ],
+    },
+    { name: "since", type: "date", label: "Since" },
+  ];
+
+  it("draws a control for every setting, each named by its label", () => {
+    open({ collection: "posts" }, every);
+    for (const setting of every) {
+      expect(
+        screen.getAllByText(setting.label ?? "").length,
+        setting.type
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("offers a Field setting every field its collection offers the reader", async () => {
+    open({ collection: "posts" }, every);
+    await userEvent.click(screen.getByRole("combobox", { name: /Column/ }));
+    const offered = screen
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    // A field the read will not group by is still a field a card may read.
+    expect(offered).toEqual(
+      expect.arrayContaining(["Title", "Updated", "Headline", "State"])
+    );
+  });
+
+  it("opens a stored value its setting no longer accepts at the default, and saves nothing for it", async () => {
+    // 🔴 Twenty rows past a bound of ten: opened at the stored value, the
+    // sheet showed a number the card was not using and Done wrote it back.
+    const onSave = open({ collection: "posts", items: 20 }, every);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(saved(onSave)).not.toHaveProperty("items");
   });
 });

@@ -16,7 +16,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import { CORE_WIDGET_IDS } from "../../domains/widgets/core-widgets";
 
 vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
@@ -106,7 +106,8 @@ describe("widget-registry reset at boot", () => {
     // it was would only have held while core declared no widget.
     const ids = listWidgets().map(widget => widget.id);
     expect(ids).not.toContain("stripe/revenue");
-    expect(ids).toEqual(CORE_WIDGETS.map(widget => widget.id));
+    // Every one of core's, its definitions and its declarations alike.
+    expect([...ids].sort()).toEqual([...CORE_WIDGET_IDS].sort());
   });
 
   it("does not publish a collection source from the boot config", async () => {

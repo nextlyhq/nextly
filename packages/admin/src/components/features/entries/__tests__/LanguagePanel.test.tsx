@@ -651,6 +651,55 @@ describe("LanguagePanel", () => {
     expect(screen.getByRole("button", { name: "Open English" })).toBeEnabled();
   });
 
+  it("closes an open publish-all confirmation once the actions are held", async () => {
+    // The confirmation was open when a language switch began: its Confirm is
+    // not left to publish on the answer for the language moved from.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const props = { translations: TRANSLATIONS, hasStatus: true };
+    const { rerender } = renderPanel(props);
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} actionsDisabled />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(publishAll).not.toHaveBeenCalled();
+
+    // Closed, not hidden: the hold ending does not bring it back.
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("closes an open publish-all confirmation once publishing every language is not offered", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const props = { translations: TRANSLATIONS, hasStatus: true };
+    const { rerender } = renderPanel(props);
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    publishState.mockReturnValue({ ...PUBLISH_IDLE, available: false });
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(publishAll).not.toHaveBeenCalled();
+  });
+
   it("warns that any held change goes live where the languages' states were not read", async () => {
     // Without the states, no count of held changes is known: the
     // confirmation does not say every language merely goes live together.

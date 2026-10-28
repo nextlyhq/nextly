@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import {
   NextCacheRevalidator,
+  nextCacheFrom,
   type NextCacheModule,
 } from "../next-cache-revalidator";
 
@@ -77,5 +78,28 @@ describe("NextCacheRevalidator", () => {
     expect(() => revalidator.flush([{ tags: ["a", "b"] }])).not.toThrow();
     // One throwing tag does not stop the rest.
     expect(next.revalidateTag).toHaveBeenCalledTimes(2);
+  });
+
+  // `flush` runs after a write has committed, so resolving `next/cache` is
+  // inside the same never-throw boundary as the calls it makes.
+  it("does not throw when next/cache cannot be resolved", () => {
+    const revalidator = new NextCacheRevalidator(() => {
+      throw Object.assign(
+        new Error("Cannot find module './incremental-cache'"),
+        {
+          code: "MODULE_NOT_FOUND",
+        }
+      );
+    });
+
+    expect(() => revalidator.flush([{ tags: ["a"] }])).not.toThrow();
+  });
+
+  it("does not throw when next/cache lacks an export it calls", () => {
+    const revalidator = new NextCacheRevalidator(() =>
+      nextCacheFrom({ revalidateTag: () => undefined })
+    );
+
+    expect(() => revalidator.flush([{ tags: ["a"] }])).not.toThrow();
   });
 });

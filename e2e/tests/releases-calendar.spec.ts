@@ -280,11 +280,13 @@ test.describe("the Releases calendar", () => {
 
   test("works by keyboard alone, announces today, and passes axe", async ({
     page,
-  }) => {
+  }, testInfo) => {
     test.setTimeout(120_000);
     const stamp = `${Date.now()}`;
     const postId = await post(page, `cal-keys-${stamp}`);
-    const day = dayAhead(4, 9);
+    // A retry takes the next week's day, so the releases an earlier attempt
+    // left are not on the day this one counts. No other test uses this month.
+    const day = dayAhead(4, 9 + 7 * testInfo.retry);
     const titles: string[] = [];
     for (let i = 0; i < 4; i += 1) {
       const title = `Keys ${i + 1} ${stamp}`;
@@ -299,6 +301,17 @@ test.describe("the Releases calendar", () => {
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await gotoAdmin(page, "/releases");
+
+    // Skip the admin's navigation first, as a keyboard user would: the sidebar
+    // lists every collection and Single, so tabbing through it takes as many
+    // stops as the schema has entries. The skip link is the first stop, and
+    // it moves focus into the page.
+    await page.keyboard.press("Tab");
+    await expect(page.locator(":focus")).toHaveAccessibleName(
+      "Skip to content"
+    );
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("main")).toBeFocused();
 
     // Tab to the view switch, and into the grid, as a keyboard user would.
     const reach = async (found: () => Promise<boolean>) => {
