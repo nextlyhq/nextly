@@ -896,6 +896,29 @@ interface FilteredTransactionWrite extends FilteredWriteCheck {
 }
 
 /**
+ * The gate question a release asks of a write it will make: asked of a
+ * named caller, never as route-authorized, and of the key where one adds the
+ * document.
+ */
+function writeFilterQuestion(params: {
+  collectionName: string;
+  action: FilteredWrite;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}) {
+  return {
+    collectionName: params.collectionName,
+    operation: params.action,
+    user: params.user,
+    overrideAccess: false,
+    routeAuthorized: false,
+    ...(params.authenticatedScope
+      ? { authenticatedScope: params.authenticatedScope }
+      : {}),
+  };
+}
+
+/**
  * Whether a held edit changes a field `filter` names, or may: a filter's
  * match moves only through the fields it reads, so an edit leaving each as
  * the live document holds it cannot take the entry out of the filter. A
@@ -11881,16 +11904,27 @@ export class CollectionMutationService extends BaseService {
     | { readonly within: ReadonlySet<string> }
   > {
     const ids = [...new Set(params.entryIds)];
+    // The gate first, before anything of the collection is read: a caller it
+    // refuses, a collection that is gone among them, is answered here.
+    const asked = await this.accessService.checkCollectionWrite(
+      writeFilterQuestion(params)
+    );
+    if (asked.denied !== null) return { denied: asked.denied };
     const schema = await this.fileManager.loadDynamicSchema(
       params.collectionName
     );
     if (params.action !== "publish") {
-      return this.entriesWithinWriteFilterNow(params, schema, ids);
+      return this.entriesWithinWriteFilterNow(params, schema, ids, {
+        asked,
+      });
     }
 
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
+    // The languages going live read the translations' own statuses, which
+    // need the companion's readiness resolved, as the write resolves it.
+    await this.warmCompanionReadiness(params.collectionName);
     const fields = collectionFields(collection);
     const rows: Record<string, unknown>[] =
       ids.length === 0
@@ -11910,6 +11944,12 @@ export class CollectionMutationService extends BaseService {
       string,
       { languages: string[]; ids: string[] }
     >();
+    // An entry with no stored row puts nothing live: it is asked once, in
+    // the rule language now, so a filter leaves it out as a gone one is and
+    // a rule answering none keeps it, as every entry is kept.
+    const stored = new Set(rows.map(row => String(row.id)));
+    const gone = ids.filter(id => !stored.has(id));
+    if (gone.length > 0) byLanguages.set("[]", { languages: [], ids: gone });
     for (const row of rows) {
       const entryId = String(row.id);
       const languages = await this.languagesToPublish({
@@ -11934,7 +11974,7 @@ export class CollectionMutationService extends BaseService {
           params,
           schema,
           [...left],
-          { heldEdits, fields }
+          { promoted: { heldEdits, fields } }
         );
         left = "within" in inLanguage ? inLanguage.within : new Set();
         return null;
@@ -11956,28 +11996,30 @@ export class CollectionMutationService extends BaseService {
     >[0],
     schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
     ids: readonly string[],
-    promoted?: {
-      heldEdits: ReadonlyMap<
-        string,
-        { draft: Record<string, unknown>; live: Record<string, unknown> }
+    given: {
+      /** The gate's answer in this rule language, where it was asked already. */
+      asked?: Awaited<
+        ReturnType<CollectionAccessService["checkCollectionWrite"]>
       >;
-      fields: readonly FieldDefinition[];
-    }
+      promoted?: {
+        heldEdits: ReadonlyMap<
+          string,
+          { draft: Record<string, unknown>; live: Record<string, unknown> }
+        >;
+        fields: readonly FieldDefinition[];
+      };
+    } = {}
   ): Promise<
     | { readonly denied: CollectionServiceResult }
     | { readonly within: ReadonlySet<string> }
   > {
-    const access = await this.accessService.checkCollectionWrite({
-      collectionName: params.collectionName,
-      operation: params.action,
-      user: params.user,
-      overrideAccess: false,
-      routeAuthorized: false,
-      ...(params.authenticatedScope
-        ? { authenticatedScope: params.authenticatedScope }
-        : {}),
-    });
+    const access =
+      given.asked ??
+      (await this.accessService.checkCollectionWrite(
+        writeFilterQuestion(params)
+      ));
     if (access.denied !== null) return { denied: access.denied };
+    const promoted = given.promoted;
     const match = await this.prepareFilteredWrite(
       params.collectionName,
       params.action,
