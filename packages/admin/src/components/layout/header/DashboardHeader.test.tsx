@@ -11,8 +11,18 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 
 let mockBranding: AdminBranding | undefined;
+let mockWorkspacePending = false;
+let mockPermissionsLoading = false;
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useBrandingStatus: () => ({
+    isPending: mockWorkspacePending,
+    isUnavailable: false,
+    isBrandingUnavailable: false,
+  }),
+}));
+vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
+  useCurrentUserPermissions: () => ({ isLoading: mockPermissionsLoading }),
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({ user: null }),
@@ -24,7 +34,7 @@ vi.mock("@admin/components/features/notifications", () => ({
   NotificationBell: () => <div data-testid="bell" />,
 }));
 vi.mock("../sidebar/UserProfileDropdown", () => ({
-  UserProfileDropdown: () => null,
+  UserProfileDropdown: () => <div data-testid="account-menu" />,
 }));
 
 import { DashboardHeader } from "./DashboardHeader";
@@ -32,6 +42,8 @@ import { DashboardHeader } from "./DashboardHeader";
 afterEach(() => {
   clearRegistry();
   mockBranding = undefined;
+  mockWorkspacePending = false;
+  mockPermissionsLoading = false;
   vi.restoreAllMocks();
 });
 
@@ -129,5 +141,66 @@ describe("DashboardHeader default-button visibility", () => {
     } as AdminBranding;
     render(<DashboardHeader />);
     expect(screen.getByText("publish btn")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The row is right-aligned: a control appearing after the first paint pushes every control to its
+ * left sideways. So the controls beside the account menu are drawn only once the answers deciding
+ * them are in, and never on a guess that might be taken back.
+ */
+describe("DashboardHeader while its answers arrive", () => {
+  const BESIDE_THE_MENU = [
+    "GitHub Repository",
+    "Discord Community",
+    "Documentation",
+  ];
+
+  it("draws only the account menu while the workspace answer is pending", () => {
+    mockWorkspacePending = true;
+    render(<DashboardHeader />);
+    expect(screen.getByTestId("account-menu")).toBeInTheDocument();
+    for (const title of BESIDE_THE_MENU) {
+      expect(screen.queryByTitle(title)).not.toBeInTheDocument();
+    }
+    expect(
+      screen.queryByRole("button", { name: "Choose theme" })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+  });
+
+  it("holds the row while the permissions that decide the bell load", () => {
+    mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
+    mockPermissionsLoading = true;
+    render(<DashboardHeader />);
+    expect(screen.getByTestId("account-menu")).toBeInTheDocument();
+    expect(screen.queryByTitle("GitHub Repository")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("bell")).not.toBeInTheDocument();
+  });
+
+  it("does not wait on permissions where no bell can be offered", () => {
+    mockBranding = { plugins: [], showBuilder: false } as AdminBranding;
+    mockPermissionsLoading = true;
+    render(<DashboardHeader />);
+    for (const title of BESIDE_THE_MENU) {
+      expect(screen.getByTitle(title)).toBeInTheDocument();
+    }
+    expect(
+      screen.getByRole("button", { name: "Choose theme" })
+    ).toBeInTheDocument();
+  });
+
+  it("draws the whole row, the menu last, once both answers are in", () => {
+    mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
+    render(<DashboardHeader />);
+    const menu = screen.getByTestId("account-menu");
+    const bell = screen.getByTestId("bell");
+    // The bell precedes the menu in the row, so the menu stays its right end.
+    expect(
+      bell.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    for (const title of BESIDE_THE_MENU) {
+      expect(screen.getByTitle(title)).toBeInTheDocument();
+    }
   });
 });

@@ -4,14 +4,22 @@ import { NotificationBell } from "@admin/components/features/notifications";
 import { Discord, Github, HelpCircle } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { ThemeToggle } from "@admin/components/shared/theme-toggle";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useLogout } from "@admin/hooks/useLogout";
 import { cn } from "@admin/lib/utils";
 
 import { UserProfileDropdown } from "../sidebar/UserProfileDropdown";
 
-import { computeHiddenHeaderButtons } from "./header-visibility";
+import {
+  computeHiddenHeaderButtons,
+  headerControlsSettled,
+  type HeaderButtonId,
+} from "./header-visibility";
 
 interface DashboardHeaderProps {
   className?: string;
@@ -24,6 +32,19 @@ export function DashboardHeader({
   const logout = useLogout();
   const branding = useBranding();
   const hidden = computeHiddenHeaderButtons(branding?.plugins);
+  const { isPending: isWorkspacePending } = useBrandingStatus();
+  // The same answer the bell reads to decide whether it is the reader's.
+  const { isLoading: isPermissionsLoading } = useCurrentUserPermissions();
+  // Where the builder runs and no plugin hides it; the bell itself then shows
+  // for super-admins only. Gated on an explicit `false`, as the bell below is.
+  const bellOffered =
+    !hidden.has("notifications") && branding?.showBuilder !== false;
+  // Until the answers that decide the row are in, only the account menu is
+  // drawn, at the row's right end where nothing arriving beside it moves it.
+  const controlsSettled = headerControlsSettled(
+    { workspace: isWorkspacePending, permissions: isPermissionsLoading },
+    bellOffered
+  );
   // Plugin-contributed header-slot components; each self-gates on
   // permission. Read `header.slot` (current) with `headerSlot` (deprecated)
   // fallback.
@@ -43,65 +64,16 @@ export function DashboardHeader({
         {/* Placeholder for breadcrumbs or page title if needed in future */}
       </div>
 
-      <div className="flex items-center gap-1">
-        {!hidden.has("github") && (
-          <a
-            href="https://github.com/nextlyhq/nextly"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="relative flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
-            title="GitHub Repository"
-          >
-            {/* Muted foreground so this resting icon meets contrast; it brightens to the
-                foreground ink on hover, not to the action token. */}
-            <Github className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-            <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-primary border-2 border-background" />
-          </a>
-        )}
-        {!hidden.has("discord") && (
-          <a
-            href="https://discord.gg/hJUg9AZMn"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
-            title="Discord Community"
-          >
-            {/* Muted foreground so this resting icon meets contrast; it brightens to the
-                foreground ink on hover, not to the action token. */}
-            <Discord className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-          </a>
-        )}
-
-        {!hidden.has("docs") && (
-          <a
-            href="https://nextlyhq.com/docs"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
-            title="Documentation"
-          >
-            {/* Muted foreground so this resting icon meets contrast; it brightens to the
-                foreground ink on hover, not to the action token. */}
-            <HelpCircle className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
-          </a>
-        )}
-
-        {/* Plugin header-slot components, rendered before the bell. */}
-        {headerSlots.map(p => (
-          <PluginSlot key={p.name} path={p.slot} />
-        ))}
-
-        <ThemeToggle />
-
-        {/* Bell renders only for super-admins (self-gated via
-            useCurrentUserPermissions), and only where the builder runs: the
-            dropdown lists schema changes, which are journaled by the builder
-            and the dev-time code-first push. Elsewhere the schema arrives
-            through committed migrations, which write no journal, so the
-            dropdown would have nothing to list. Gated on an explicit `false`
-            so the in-flight `undefined` does not hide it mid-load. */}
-        {!hidden.has("notifications") && branding?.showBuilder !== false && (
-          <NotificationBell />
+      {/* The row fills the bar's free width and packs its controls to the
+          right, so its own box is the same whatever it holds: controls
+          arriving at its left end move neither the row nor the menu. */}
+      <div className="flex flex-1 items-center justify-end gap-1">
+        {controlsSettled && (
+          <HeaderControls
+            hidden={hidden}
+            headerSlots={headerSlots}
+            bellOffered={bellOffered}
+          />
         )}
         <div className="ml-2">
           <UserProfileDropdown
@@ -113,5 +85,81 @@ export function DashboardHeader({
         </div>
       </div>
     </header>
+  );
+}
+
+/**
+ * The header's controls left of the account menu, drawn together once what decides them is
+ * known (see `headerControlsSettled`).
+ */
+function HeaderControls({
+  hidden,
+  headerSlots,
+  bellOffered,
+}: {
+  hidden: ReadonlySet<HeaderButtonId>;
+  headerSlots: readonly { name: string; slot: string }[];
+  bellOffered: boolean;
+}): JSX.Element {
+  return (
+    <>
+      {!hidden.has("github") && (
+        <a
+          href="https://github.com/nextlyhq/nextly"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="relative flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
+          title="GitHub Repository"
+        >
+          {/* Muted foreground so this resting icon meets contrast; it brightens to the
+                foreground ink on hover, not to the action token. */}
+          <Github className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
+          <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-primary border-2 border-background" />
+        </a>
+      )}
+      {!hidden.has("discord") && (
+        <a
+          href="https://discord.gg/hJUg9AZMn"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
+          title="Discord Community"
+        >
+          {/* Muted foreground so this resting icon meets contrast; it brightens to the
+                foreground ink on hover, not to the action token. */}
+          <Discord className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
+        </a>
+      )}
+
+      {!hidden.has("docs") && (
+        <a
+          href="https://nextlyhq.com/docs"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-center h-11 w-11 rounded-md transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary hover-subtle-row group"
+          title="Documentation"
+        >
+          {/* Muted foreground so this resting icon meets contrast; it brightens to the
+                foreground ink on hover, not to the action token. */}
+          <HelpCircle className="h-5 w-5 text-muted-foreground group-hover:text-foreground transition-colors" />
+        </a>
+      )}
+
+      {/* Plugin header-slot components, rendered before the bell. */}
+      {headerSlots.map(p => (
+        <PluginSlot key={p.name} path={p.slot} />
+      ))}
+
+      <ThemeToggle />
+
+      {/* Bell renders only for super-admins (self-gated via
+            useCurrentUserPermissions), and only where the builder runs: the
+            dropdown lists schema changes, which are journaled by the builder
+            and the dev-time code-first push. Elsewhere the schema arrives
+            through committed migrations, which write no journal, so the
+            dropdown would have nothing to list. Gated on an explicit `false`
+            (`bellOffered`), so a server that does not say keeps it. */}
+      {bellOffered && <NotificationBell />}
+    </>
   );
 }

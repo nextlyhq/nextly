@@ -2,7 +2,7 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import type React from "react";
-import { useState, useMemo } from "react";
+import { useCallback, useState, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
@@ -10,7 +10,10 @@ import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { Link } from "@admin/components/ui/link";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
 import {
   NAV_COLLECTIONS_PARAMS,
@@ -52,11 +55,15 @@ import {
   hasSettingsSection as hasSettingsSectionHelper,
 } from "./lib/has-settings-section";
 import { isSubSidebarCategory } from "./lib/has-sub-sidebar";
-import { placeStandalonePlugins } from "./lib/place-standalone-plugins";
+import {
+  placeStandalonePlugins,
+  standaloneEntryId,
+} from "./lib/place-standalone-plugins";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
+import { settledRailItems } from "./lib/settled-rail";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
 import type {
   MainMenuCategory,
@@ -84,6 +91,7 @@ export function DualSidebar({
     content,
   } = useCurrentUserPermissions();
   const branding = useBranding();
+  const { isPending: isWorkspacePending } = useBrandingStatus();
   const showBuilder = branding?.showBuilder ?? true;
 
   // Runtime-controlled builder visibility from /api/admin-meta
@@ -103,12 +111,23 @@ export function DualSidebar({
     [standalonePlugins, capabilities]
   );
 
+  const visibleStandaloneIds = useMemo(
+    () =>
+      new Set<string>(
+        visibleStandalonePlugins.map(p => standaloneEntryId(pluginSlug(p.name)))
+      ),
+    [visibleStandalonePlugins]
+  );
+
   // Standalone plugins take their place in the rail by the anchor they declare.
   // The placement rule lives in `lib/` with the other rail decisions; what stays
-  // here is the icon resolution, which needs this module's icon registry.
+  // here is the icon resolution, which needs this module's icon registry. EVERY
+  // standalone plugin is placed, and the reader's access decides below whether
+  // its entry shows: the rail then knows where an entry would go before the
+  // answer that decides it arrives, so it can hold the entries after it back.
   const filteredMenuItems = useMemo(() => {
     const iconMap = Icons as unknown as Record<string, React.ElementType>;
-    return placeStandalonePlugins(baseMenuItems, visibleStandalonePlugins, {
+    return placeStandalonePlugins(baseMenuItems, standalonePlugins, {
       slugOf: pluginSlug,
       iconFor: plugin => {
         // A menu item stores an ElementType rendered as `<Icon className=… />`,
@@ -122,7 +141,7 @@ export function DualSidebar({
         return iconMap[resolved.name] || Database;
       },
     });
-  }, [baseMenuItems, visibleStandalonePlugins]);
+  }, [baseMenuItems, standalonePlugins]);
 
   // Fetch data for automatic navigation. The shared params keep these on the
   // cache entries the browser tab's title reads its labels from, so naming a
@@ -209,45 +228,51 @@ export function DualSidebar({
   });
   const hasBuildersSection = showBuilder;
 
-  const visibleMenuItems = useMemo(
-    () =>
-      filteredMenuItems.filter(item => {
-        // A slug declared on the entry is a hard gate, ahead of the per-section
-        // cases below: those decide whether a section has anything to SHOW,
-        // which is a different question from whether the reader may see it.
-        //
-        // While the grants are still loading the entry is shown, matching Media
-        // and Settings. The alternative flashes the rail — an item appearing a
-        // moment after the page settles reads as the UI changing its mind, and
-        // the destination refuses on its own anyway.
-        if (item.requiredPermission && !hasPermissionDataPending) {
-          // A LIST is any-of, matching the canonical declaration: that is how an
-          // umbrella permission is written, and treating it as all-of would hide
-          // a section from someone holding one of the grants that reaches it.
-          const needed = Array.isArray(item.requiredPermission)
-            ? item.requiredPermission
-            : [item.requiredPermission];
-          if (!needed.some(slug => hasPermission(slug))) return false;
-        }
-        switch (item.id) {
-          case CONTENT_RAIL_ID:
-            // Shown while either kind has something to list; the panel shows
-            // only the kinds that do.
-            return hasCollectionsSection || hasSinglesSection;
-          case "plugins":
-            return pluginsSectionVisible;
-          case "media":
-            return hasMediaSection;
-          case "settings":
-            return hasSettingsSection;
-          case "builders":
-            return hasBuildersSection;
-          default:
-            return true;
-        }
-      }),
+  // Whether an entry shows, with an answer still loading read as "shown" for
+  // the entries that say so below. The panel and the routes read this; what the
+  // rail DRAWS is held to the entries already decided (`railItems`).
+  const isMenuItemShown = useCallback(
+    (item: MainMenuItem): boolean => {
+      // A slug declared on the entry is a hard gate, ahead of the per-section
+      // cases below: those decide whether a section has anything to SHOW,
+      // which is a different question from whether the reader may see it.
+      //
+      // While the grants are still loading the entry is shown, matching Media
+      // and Settings. The alternative flashes the rail — an item appearing a
+      // moment after the page settles reads as the UI changing its mind, and
+      // the destination refuses on its own anyway.
+      if (item.requiredPermission && !hasPermissionDataPending) {
+        // A LIST is any-of, matching the canonical declaration: that is how an
+        // umbrella permission is written, and treating it as all-of would hide
+        // a section from someone holding one of the grants that reaches it.
+        const needed = Array.isArray(item.requiredPermission)
+          ? item.requiredPermission
+          : [item.requiredPermission];
+        if (!needed.some(slug => hasPermission(slug))) return false;
+      }
+      // A plugin's own entry shows by the access its plugin asks for.
+      if (item.id.startsWith("standalone-")) {
+        return visibleStandaloneIds.has(item.id);
+      }
+      switch (item.id) {
+        case CONTENT_RAIL_ID:
+          // Shown while either kind has something to list; the panel shows
+          // only the kinds that do.
+          return hasCollectionsSection || hasSinglesSection;
+        case "plugins":
+          return pluginsSectionVisible;
+        case "media":
+          return hasMediaSection;
+        case "settings":
+          return hasSettingsSection;
+        case "builders":
+          return hasBuildersSection;
+        default:
+          return true;
+      }
+    },
     [
-      filteredMenuItems,
+      visibleStandaloneIds,
       hasPermission,
       hasPermissionDataPending,
       hasCollectionsSection,
@@ -256,6 +281,36 @@ export function DualSidebar({
       hasMediaSection,
       hasSettingsSection,
       hasBuildersSection,
+    ]
+  );
+
+  const visibleMenuItems = useMemo(
+    () => filteredMenuItems.filter(isMenuItemShown),
+    [filteredMenuItems, isMenuItemShown]
+  );
+
+  // What the rail draws: the entries shown, up to the first one whose answer
+  // has not arrived. An entry arriving later then lands below every entry
+  // already drawn instead of pushing them down. Loading counts here, a failed
+  // answer does not: a failure is decided until a retry, and the visibility
+  // rule above already says what it shows.
+  const railItems = useMemo(
+    () =>
+      settledRailItems(filteredMenuItems, isMenuItemShown, {
+        workspace: isWorkspacePending,
+        permissions: !isHydrated || isPermissionsLoading,
+        content:
+          contentAnswerPending || isCollectionsLoading || isSinglesLoading,
+      }),
+    [
+      filteredMenuItems,
+      isMenuItemShown,
+      isWorkspacePending,
+      isHydrated,
+      isPermissionsLoading,
+      contentAnswerPending,
+      isCollectionsLoading,
+      isSinglesLoading,
     ]
   );
 
@@ -412,7 +467,7 @@ export function DualSidebar({
 
         {/* Main Icons */}
         <nav className="flex-1 flex flex-col gap-4 w-full px-3">
-          {visibleMenuItems.map(item => {
+          {railItems.map(item => {
             const Icon = item.icon;
             const isSelected = railItemOf(shownMain) === item.id;
             const href = resolveItemHref(item);
