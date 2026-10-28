@@ -153,6 +153,13 @@ describe("Image Sizes", () => {
     expect(
       screen.queryByRole("button", { name: "Row actions" })
     ).not.toBeInTheDocument();
+    // The size opens to be seen: its row links to the edit page, which shows
+    // it read-only to this role (below).
+    expect(
+      screen
+        .getAllByRole("link", { name: "Thumbnail" })
+        .map(link => link.getAttribute("href"))
+    ).toContain("/admin/settings/image-sizes/edit/size_1");
   });
 
   it("offers adding a size to a role that may create settings, and no row action", async () => {
