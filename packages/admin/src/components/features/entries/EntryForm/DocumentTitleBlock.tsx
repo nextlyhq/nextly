@@ -23,6 +23,7 @@ import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 
+import { DOCUMENT_COLUMN_INSET } from "./DocumentEditorLayout";
 import { EntryTitleInput } from "./EntryTitleInput";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import type { EntryFormMode } from "./useEntryForm";
@@ -85,7 +86,7 @@ export function DocumentTitleBlock({
   const title = titleFacts(titleField, entryLocale);
 
   return (
-    <div className="pt-6 @4xl/content:px-8 @4xl/content:pt-8">
+    <div className={cn("pt-6 @4xl/content:pt-8", DOCUMENT_COLUMN_INSET)}>
       {/* The title is part of the document, so reading a past version locks
         it with everything else, as a colleague's claim does. Left editable it
         would change the LIVE document while the version on screen cannot be

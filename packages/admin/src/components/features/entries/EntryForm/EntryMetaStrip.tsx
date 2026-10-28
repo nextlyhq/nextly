@@ -4,6 +4,7 @@ import type { JSX } from "react";
 
 import { cn } from "@admin/lib/utils";
 
+import { DOCUMENT_COLUMN_INSET } from "./DocumentEditorLayout";
 import { DocumentIdCopy } from "./DocumentIdCopy";
 
 // Why: the document's id, offered to copy on a quiet line under the title
@@ -37,7 +38,8 @@ export function EntryMetaStrip({
   return (
     <div
       className={cn(
-        "mt-1.5 flex items-center gap-1 text-xs text-muted-foreground @4xl/content:px-8",
+        "mt-1.5 flex items-center gap-1 text-xs text-muted-foreground",
+        DOCUMENT_COLUMN_INSET,
         besidePanel
       )}
     >

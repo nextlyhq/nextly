@@ -93,9 +93,40 @@ describe("DocumentBar language", () => {
   it("says which language a new entry starts in on a localized site", () => {
     localization.enabled = true;
     render(<Harness mode="create" />);
-    expect(
-      screen.getByText(/Creating in English — other languages can be added/)
-    ).toBeInTheDocument();
+    const sentence =
+      "Creating in English — other languages can be added after the first save";
+    const note = screen.getByTestId("document-bar-creating-in");
+    // The whole sentence is what a screen reader hears, at every width, and
+    // what a pointer's tooltip shows where the bar has room only for less.
+    expect(note).toHaveTextContent(sentence);
+    expect(note).toHaveAttribute("title", sentence);
+  });
+
+  it("shortens the note as the bar narrows: the sentence, then the language, then its code", () => {
+    // jsdom lays nothing out, so this reads the classes that hide: the
+    // explanation gives way first, then the words "Creating in English" give
+    // way to the language's code, so a phone's bar keeps to one row.
+    localization.enabled = true;
+    render(<Harness mode="create" />);
+    const note = screen.getByTestId("document-bar-creating-in");
+    const part = (text: string) =>
+      [...note.querySelectorAll("span")].find(
+        span => span.textContent?.trim() === text
+      );
+    const explanation = part(
+      "— other languages can be added after the first save"
+    );
+    const language = part("Creating in English");
+    const code = part("en");
+    expect(explanation?.className).toMatch(/\/toolbar:sr-only/);
+    expect(language?.className).toMatch(/\/toolbar:sr-only/);
+    // The code is drawn only where the words are not, and is not read out
+    // beside them.
+    expect(code?.className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(code).toHaveAttribute("aria-hidden", "true");
+    expect(note.querySelector("svg")?.getAttribute("class")).toMatch(
+      /shrink-0/
+    );
   });
 
   it("says nothing about language when creating on an unlocalized site", () => {

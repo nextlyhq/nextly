@@ -286,6 +286,21 @@ describe("the document bar", () => {
     }
   });
 
+  it("lets History's word step aside for its icon, as the preview's does, keeping its name and a tooltip", () => {
+    // A narrow bar (history open beside it, say) has no width for every
+    // label; History gives up its word like the other supporting action
+    // rather than pushing the bar's content into itself.
+    render(<Harness state={STATES[1]!} />);
+    const history = screen.getByRole("button", { name: "History" });
+    expect(history.querySelector("svg")).not.toBeNull();
+    expect(history).toHaveAttribute("title", "History");
+    const label = [...history.querySelectorAll("span")].find(
+      span => span.textContent === "History"
+    );
+    expect(label).toBeDefined();
+    expect(hides(label!)).toBe(true);
+  });
+
   it("folds History and the preview into the menu on a narrow screen, and hides the panel toggle there", async () => {
     const user = userEvent.setup();
     render(<Harness state={STATES[1]!} share />);

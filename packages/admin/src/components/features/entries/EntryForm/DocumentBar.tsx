@@ -61,7 +61,7 @@ import {
   type PreviewActionsProps,
 } from "./PreviewActions";
 import { SaveStateIndicator } from "./SaveStateIndicator";
-import { TOOLBAR_CONTAINER } from "./toolbar-density";
+import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
 
 /**
@@ -465,9 +465,14 @@ function HistoryButton({
       // document is in as well as offering to change it.
       aria-pressed={open}
       onClick={onOpen}
+      // Named for a pointer once its word has stepped aside for the icon.
+      title="History"
     >
       <History className="h-4 w-4" aria-hidden="true" />
-      History
+      {/* A supporting action like the preview, so its word gives way at the
+          same bar width: with history open beside the editor the bar is
+          narrow, and the version's own actions need the room. */}
+      <ToolbarLabel priority="secondary">History</ToolbarLabel>
     </Button>
   );
 }
@@ -692,10 +697,32 @@ function DocumentBarHistory({
 }
 
 /**
+ * The language code as the bar draws it: small, boxed and in capitals, beside
+ * the status, both for the language being edited and, on a phone, the language
+ * a new document starts in.
+ */
+const LANGUAGE_CODE_CHIP =
+  "rounded border border-border px-1.5 font-mono text-[11px] uppercase text-muted-foreground";
+
+/**
+ * Below this bar width the words "Creating in English" give way to the
+ * language's code. 30rem is a phone's bar: there, the status pill, Save draft
+ * and the primary action leave too little room for the words, and keeping
+ * them would wrap the sticky bar onto a second row.
+ */
+const CREATING_IN_WORDS = "@max-[30rem]/toolbar:sr-only";
+const CREATING_IN_CODE = "hidden @max-[30rem]/toolbar:inline";
+const CREATING_IN_ICON = "@max-[30rem]/toolbar:hidden";
+
+/**
  * The bar's left group: where the document stands. The status pill, then the
  * save state, then the language code off the default language; and while a
  * document is being created in a localized site, the language it is being
  * created in, since it has no translations yet to switch between.
+ *
+ * Never narrower than what it holds (no `min-w-0`): where the actions leave it
+ * too little room, the row wraps rather than letting the actions draw over the
+ * status.
  */
 function DocumentBarState({
   mode,
@@ -715,9 +742,8 @@ function DocumentBarState({
     defaultLocale,
     getLocale,
   } = useLocalization();
-  const defaultLocaleLabel = getLocale(defaultLocale)?.label ?? defaultLocale;
   return (
-    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground">
+    <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground">
       {hasStatus && documentStatus ? (
         <DocumentStatusPill
           status={documentStatus.status}
@@ -727,19 +753,51 @@ function DocumentBarState({
       {saveState}
       {languageCode ? (
         <span
-          className="rounded border border-border px-1.5 font-mono text-[11px] uppercase text-muted-foreground"
+          className={LANGUAGE_CODE_CHIP}
           title={`Editing ${getLocale(languageCode)?.label ?? languageCode}`}
         >
           {languageCode}
         </span>
       ) : null}
       {localizationEnabled && mode === "create" ? (
-        <span className="inline-flex items-center gap-1.5 text-xs">
-          <Globe className="h-3.5 w-3.5" aria-hidden="true" />
-          Creating in {defaultLocaleLabel} — other languages can be added after
-          the first save
-        </span>
+        <CreatingInLanguage
+          code={defaultLocale}
+          label={getLocale(defaultLocale)?.label ?? defaultLocale}
+        />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Which language a new document starts in, said as fully as the bar has room
+ * for: the whole sentence on a wide bar, "Creating in English" on a narrower
+ * one, and the language's code on a phone, so the sticky bar stays one row.
+ * A screen reader hears the whole sentence at every width, and a pointer finds
+ * it in the tooltip.
+ */
+function CreatingInLanguage({ code, label }: { code: string; label: string }) {
+  const explanation = "— other languages can be added after the first save";
+  return (
+    <span
+      data-testid="document-bar-creating-in"
+      className="inline-flex items-center gap-1.5 text-xs"
+      title={`Creating in ${label} ${explanation}`}
+    >
+      <Globe
+        className={cn("h-3.5 w-3.5 shrink-0", CREATING_IN_ICON)}
+        aria-hidden="true"
+      />
+      <span className={CREATING_IN_WORDS}>Creating in {label}</span>
+      {/* The same width at which the preview's and History's words step
+          aside: the explanation is the first thing the bar gives up. */}
+      <ToolbarLabel priority="secondary"> {explanation}</ToolbarLabel>
+      <span
+        className={cn(LANGUAGE_CODE_CHIP, CREATING_IN_CODE)}
+        aria-hidden="true"
+      >
+        {code}
+      </span>
+    </span>
   );
 }

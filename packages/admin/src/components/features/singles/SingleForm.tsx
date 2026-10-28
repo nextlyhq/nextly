@@ -39,6 +39,7 @@ import {
 import { DocumentBanners } from "@admin/components/features/entries/EntryForm/DocumentBanners";
 import { DocumentBar } from "@admin/components/features/entries/EntryForm/DocumentBar";
 import {
+  DOCUMENT_COLUMN_INSET,
   DOCUMENT_PANEL_STICKY,
   DocumentEditorLayout,
 } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
@@ -319,7 +320,14 @@ function SingleFormLanguagePanel({
 }) {
   if (!enabled) return null;
   return (
-    <div className={cn("px-6 pt-4", !railCollapsed && "@4xl/content:hidden")}>
+    // In line with the title and the fields, not indented past them.
+    <div
+      className={cn(
+        "pt-4",
+        DOCUMENT_COLUMN_INSET,
+        !railCollapsed && "@4xl/content:hidden"
+      )}
+    >
       <DocumentLanguagePanel
         translations={translations}
         locale={locale}

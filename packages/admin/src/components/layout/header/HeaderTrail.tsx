@@ -132,13 +132,20 @@ export function HeaderTrail(): JSX.Element | null {
             <li
               key={`${index}:${step.href}`}
               className={cn(
-                "flex shrink-0 items-center gap-1.5",
+                "flex items-center gap-1.5",
+                // The list's step may shrink and truncate: below 600px it is
+                // the trail's only item, and a collection's label has no
+                // length limit, so held whole it would run into the controls
+                // on the right. The outer steps are short and keep their size.
+                isList ? "min-w-0" : "shrink-0",
                 !isList && NARROW_HIDDEN
               )}
             >
               <Link
                 href={step.href}
-                className="inline-flex items-center gap-1 whitespace-nowrap underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                className="inline-flex min-w-0 items-center gap-1 whitespace-nowrap underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                // The whole label for a pointer, where it is cut short.
+                {...(isList ? { title: step.label } : {})}
               >
                 {isList ? (
                   <ChevronLeft
@@ -146,13 +153,16 @@ export function HeaderTrail(): JSX.Element | null {
                     aria-hidden="true"
                   />
                 ) : null}
-                {step.label}
+                <span className="truncate">{step.label}</span>
               </Link>
               {/* The muted token at full strength: faded, it falls below the
                   contrast the admin holds every text colour to. */}
               <span
                 aria-hidden="true"
-                className={cn("text-muted-foreground", isList && NARROW_HIDDEN)}
+                className={cn(
+                  "shrink-0 text-muted-foreground",
+                  isList && NARROW_HIDDEN
+                )}
               >
                 /
               </span>

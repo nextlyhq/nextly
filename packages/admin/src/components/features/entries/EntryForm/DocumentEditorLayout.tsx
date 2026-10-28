@@ -16,12 +16,27 @@ import type { JSX, ReactNode } from "react";
 
 /**
  * How the document panel's inner column sticks: under the bar (3.25rem, the
- * bar's one-row height) rather than beneath it, and as tall as the window
- * less the admin's top bar (4rem) and the document bar. Shared by both
- * editors' panels so they line up with the one bar both draw.
+ * bar's one-row height) rather than beneath it, and as tall as the scroll area
+ * the editor is in, less the document bar. Shared by both editors' panels so
+ * they line up with the one bar both draw.
+ *
+ * The scroll area's height is `--nx-editor-scrollport`, declared by whatever
+ * scrolls the editor where that is not the page: the translation mode's target
+ * pane, which sits under the mode's own bar as well as the top bar. Where
+ * nothing declares it, the editor scrolls with the page, whose scroll area is
+ * the window less the admin's top bar (4rem). One rule for both, so the
+ * panel's foot is reachable in either without scrolling the page past it.
  */
 export const DOCUMENT_PANEL_STICKY =
-  "@4xl/content:sticky @4xl/content:top-13 @4xl/content:h-[calc(100vh-7.25rem)]";
+  "@4xl/content:sticky @4xl/content:top-13 @4xl/content:h-[calc(var(--nx-editor-scrollport,calc(100vh-4rem))-3.25rem)]";
+
+/**
+ * The field column's inset, shared by everything drawn in it above the fields
+ * (the title, the id line, the inline language panel) so each starts where the
+ * fields' card does: on the page's own gutter below `@4xl`, and 2rem in from
+ * the column's edge from there, where the column runs edge to edge.
+ */
+export const DOCUMENT_COLUMN_INSET = "@4xl/content:px-8";
 
 export interface DocumentEditorLayoutProps {
   /** The document bar. */
@@ -43,8 +58,8 @@ export function DocumentEditorLayout({
   return (
     // Vertical only: from `@4xl` the editor cancels the page's `py-8`, so the
     // bar reaches the top of the scroll area and the panel the bottom. The
-    // floor is the window less the admin's top bar.
-    <div className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[calc(100vh-4rem)]">
+    // floor is the scroll area's height (see `DOCUMENT_PANEL_STICKY`).
+    <div className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--nx-editor-scrollport,calc(100vh-4rem))]">
       {bar}
       {banners}
       {notices}

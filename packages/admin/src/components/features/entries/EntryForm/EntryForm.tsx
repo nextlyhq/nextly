@@ -72,6 +72,7 @@ import {
 import { DocumentBanners } from "./DocumentBanners";
 import { DocumentBar } from "./DocumentBar";
 import {
+  DOCUMENT_COLUMN_INSET,
   DOCUMENT_PANEL_STICKY,
   DocumentEditorLayout,
 } from "./DocumentEditorLayout";
@@ -1193,7 +1194,10 @@ export function EntryForm({
                                 {localizationEnabled && (
                                   <div
                                     className={cn(
-                                      "px-6 pt-4",
+                                      // In line with the title and the
+                                      // fields, not indented past them.
+                                      "pt-4",
+                                      DOCUMENT_COLUMN_INSET,
                                       mode === "edit" &&
                                         !railCollapsed &&
                                         "@4xl/content:hidden"

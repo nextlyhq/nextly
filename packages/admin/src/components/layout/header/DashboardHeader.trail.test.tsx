@@ -154,6 +154,24 @@ describe("the top bar's trail", () => {
     expect(screen.getByRole("banner").className).toContain("@container/topbar");
   });
 
+  it("lets a long list name shrink and truncate rather than push into the controls, keeping it whole in the tooltip", () => {
+    // On a phone the list step is the trail's only item, and beside a plugin's
+    // controls on any bar a long label would otherwise overflow them.
+    const long = "Quarterly investor relations announcements";
+    renderHeader(
+      <Editor trail={{ ...ENTRY, pluralLabel: long }} title="Spring is here" />
+    );
+    const toList = within(trail()).getByRole("link", { name: long });
+    expect(toList).toHaveAttribute("title", long);
+    expect(toList.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+    const step = toList.closest("li")!;
+    expect(step.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+    expect(step.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+    expect(within(toList).getByText(long).className).toMatch(
+      /(^|\s)truncate(\s|$)/
+    );
+  });
+
   it("draws nothing where no document is open", () => {
     renderHeader(null);
     expect(
