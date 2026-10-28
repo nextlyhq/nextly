@@ -19,9 +19,10 @@
  * Control: with an access-control service the gate and the field rules read
  * Public on the pool, so production keeps the process's cached read.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
+import { loadDialectTables } from "../../../database/dialect-tables";
 import {
   clearFieldFunctions,
   registerFieldFunctions,
@@ -52,6 +53,12 @@ vi.mock("../../../services/lib/permissions", async importOriginal => ({
     own === undefined ? publicRole.process : publicRole.ownDatabase
   ),
 }));
+
+// The postgresql tables the service's own database is read with; the unit
+// setup loads only the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await loadDialectTables("postgresql");
+});
 
 const READ_SITE_SETTINGS: GrantedPermission = {
   slug: "read-site-settings",
