@@ -17,6 +17,7 @@ vi.mock("./useDashboardLayout", async importOriginal => ({
   fetchGetStartedOnRestore,
 }));
 
+import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
 import { useGetStarted } from "./useGetStarted";
 
 const open = {
@@ -55,6 +56,35 @@ beforeEach(() => {
 });
 
 describe("the Get started steps", () => {
+  it("read the layout the grid has just read, asking for it again only when there is none", async () => {
+    // 🔴 The card mounts once the grid's layout read has answered. Asking again as it mounts
+    // read the layout twice on every dashboard load.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    client.setQueryData(
+      DASHBOARD_LAYOUT_KEY,
+      layoutWith({ drawn: true, answer: open })
+    );
+    const { result } = renderHook(() => useGetStarted("started"), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    });
+    expect(result.current.answer).toEqual(open);
+    // Let a mount's read, were there one, be asked.
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+    expect(fetchDashboardLayout).not.toHaveBeenCalled();
+
+    // The control: with nothing in the cache, the card still asks, once.
+    fetchDashboardLayout.mockResolvedValue(
+      layoutWith({ drawn: true, answer: open })
+    );
+    const alone = renderHook(() => useGetStarted("started"), { wrapper });
+    await waitFor(() => expect(alone.result.current.answer).toEqual(open));
+    expect(fetchDashboardLayout).toHaveBeenCalledOnce();
+  });
+
   it("are the layout read's, with no second request", async () => {
     fetchDashboardLayout.mockResolvedValue(
       layoutWith({ drawn: true, answer: open }, { acted: true })

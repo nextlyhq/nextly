@@ -8,10 +8,11 @@
 import type { WidgetDefinition } from "../definition";
 import { RELEASES_SOURCE_ID } from "../system-source-ids";
 
+import { CORE_WIDGET_ID } from "./ids";
 import { LIST_DENSITY } from "./shared";
 
 export const upcomingReleasesWidget = {
-  id: "core/upcoming-releases",
+  id: CORE_WIDGET_ID.upcomingReleases,
   title: "Upcoming releases",
   description: "Scheduled releases that have not shipped yet, soonest first.",
   // Its own component, so the line naming releases that need attention can sit above the
@@ -27,7 +28,6 @@ export const upcomingReleasesWidget = {
     min: { w: 4, h: 4 },
     max: { w: 8, h: 8 },
   },
-  defaultOrder: 60,
   // Beside its gate: offered once a release exists that the reader may
   // read, not as an empty card on a site that has never made one.
   lifecycle: "conditional",

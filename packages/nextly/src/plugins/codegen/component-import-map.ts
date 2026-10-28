@@ -42,12 +42,13 @@ export type ComponentMapUse =
   | "document view"
   | "slot"
   | "field type"
-  | "block editor";
+  | "block editor"
+  | "block editor entry";
 
 /**
  * One component the generated map registers: its path, who declared it, and
- * what it is for. A widget's entry also names the widget, so a refusal can
- * say which card is affected.
+ * what it is for. A widget's entry also names the widget, so a warning, the
+ * CI check and the map itself can say which card is affected.
  */
 export interface ComponentMapEntry {
   readonly path: string;
@@ -56,6 +57,16 @@ export interface ComponentMapEntry {
   readonly use: ComponentMapUse;
   /** The widget's id, for a `widget` entry. */
   readonly widget?: string;
+}
+
+/**
+ * A component as a warning or a check names it: whose it is, and the widget or the use it is
+ * for. One wording for the development check and `generate:types --check` alike.
+ */
+export function describeComponentUse(each: ComponentMapEntry): string {
+  return each.use === "widget"
+    ? `${each.owner}, widget "${each.widget ?? "?"}": ${each.path}`
+    : `${each.owner}, ${each.use}: ${each.path}`;
 }
 
 /** Filename of the generated admin component import map. */
@@ -283,10 +294,19 @@ function collectWidgetEntries(
 export function collectBlockEditorComponentPaths(
   plugins: readonly PluginDefinition[]
 ): string[] {
-  return collectBlockEditorEntries(plugins).map(each => each.path);
+  return collectBlockEditorEntries(plugins)
+    .filter(each => each.use === "block editor")
+    .map(each => each.path);
 }
 
-/** The block editors with who declared each, read as the paths above are. */
+/**
+ * The block editors with who declared each, read as the paths above are, and
+ * each declaration's `editorEntry`: the module exporting the declared block
+ * definitions themselves, which is how the editor in the browser receives
+ * them. The server registers a declaration at boot, in its own process, and
+ * nothing a server registers reaches the admin's bundle; only an import the
+ * bundler can see does.
+ */
 function collectBlockEditorEntries(
   plugins: readonly PluginDefinition[]
 ): ComponentMapEntry[] {
@@ -297,6 +317,16 @@ function collectBlockEditorEntries(
   // apps from one config.
   if (!isPageBuilderActive(plugins)) return paths;
   for (const declaration of collectDeclarations(plugins, PAGE_BUILDER_PLUGIN)) {
+    const editorEntry = declaredEditorEntry(declaration.value);
+    if (editorEntry !== undefined) {
+      paths.push(
+        entry(
+          editorEntry,
+          `plugin "${declaration.source}"`,
+          "block editor entry"
+        )
+      );
+    }
     for (const block of declaredBlocks(declaration.value)) {
       const component = blockEditorComponent(block);
       if (component !== undefined) {
@@ -316,6 +346,23 @@ function declaredBlocks(value: unknown): readonly unknown[] {
   }
   const blocks = (value as { blocks?: unknown }).blocks;
   return Array.isArray(blocks) ? blocks : [];
+}
+
+/**
+ * The `editorEntry` a page-builder declaration names, or `undefined`.
+ *
+ * Skipped rather than refused when malformed, as a block's editor component
+ * is: the page builder refuses a malformed entry at boot, naming the plugin,
+ * which is where a declaration's faults are reported.
+ */
+function declaredEditorEntry(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const editorEntry = (value as { editorEntry?: unknown }).editorEntry;
+  return typeof editorEntry === "string" && editorEntry.trim() !== ""
+    ? editorEntry
+    : undefined;
 }
 
 /** A block's editor component path, or `undefined` when it names none. */
@@ -349,9 +396,9 @@ function parsePath(path: string): ParsedPath {
  * contributions, declared widgets, then block editor components. A path two
  * contributions share appears once for each.
  *
- * The richer list, kept whole for the check: two widgets drawn with one
- * missing component are two cards that draw empty, and the refusal names and
- * counts both. The map's own entries are derived from it.
+ * The richer list, kept whole for the development check: two widgets drawn
+ * with one missing component are two cards that draw their error state, and
+ * its warning names both. The map's own entries are derived from it.
  */
 export function componentUses(
   plugins: readonly PluginDefinition[]
@@ -375,9 +422,9 @@ export function componentUses(
  * widget's.
  *
  * 🔴 A widget's use wins over any other. One path may serve a page and a
- * widget alike, and the check refuses only over a missing widget component:
- * kept as the page's, that path would only be warned about, and production
- * would serve the widget with an empty card.
+ * widget alike, and a missing widget component is the one that turns a card
+ * into its error state: kept as the page's, that path would be named as a
+ * page by the CI check, hiding which card it breaks.
  */
 export function componentImportMapEntries(
   plugins: readonly PluginDefinition[]
@@ -408,6 +455,89 @@ export function componentImportMapPaths(
  */
 const pathListExport = (paths: readonly string[]): string =>
   `export const registeredComponentPaths = ${JSON.stringify(paths)} as const;`;
+
+/** A JSON string literal, read at one position (`y`): a `]` or `}` inside it is part of it. */
+const JSON_STRING = /"(?:[^"\\]|\\.)*"/y;
+
+/**
+ * The paths a generated list holds, read back from {@link pathListExport}'s line as written or
+ * as a formatter lays it out (one path a line, a trailing comma), or `undefined` for a list in
+ * any other shape.
+ *
+ * 🔴 Read string by string, never by matching up to the first `]`: a component path is any
+ * string, and a route folder such as `[slug]` puts one inside it.
+ */
+export function listedPathsOf(listCode: string): string[] | undefined {
+  const opening = "export const registeredComponentPaths = [";
+  const from = listCode.indexOf(opening);
+  if (from === -1) return undefined;
+  const paths: string[] = [];
+  let at = from + opening.length;
+  while (at < listCode.length) {
+    const char = listCode.charAt(at);
+    if (/[\s,]/.test(char)) {
+      at += 1;
+      continue;
+    }
+    if (char === "]") {
+      return listCode.startsWith("] as const;", at) ? paths : undefined;
+    }
+    JSON_STRING.lastIndex = at;
+    const literal = JSON_STRING.exec(listCode)?.[0];
+    if (literal === undefined) return undefined;
+    paths.push(JSON.parse(literal) as string);
+    at += literal.length;
+  }
+  return undefined;
+}
+
+/**
+ * The paths a generated map registers, read back from its `registered` object, one entry a line
+ * as {@link buildComponentImportMap} writes it (`"<path>": _p0.Member,` and any note after it),
+ * and from its `blockEditorEntries` where it has one: the page builder's editor modules, which
+ * the map holds to its list beside its components. `undefined` for a map without its
+ * `registered` object or its check against its list: one emptied or edited into another shape
+ * registers nothing, whatever its list says.
+ */
+export function mapRegisteredPathsOf(mapCode: string): string[] | undefined {
+  if (!mapCode.includes("export const componentMapAgreesWithList")) {
+    return undefined;
+  }
+  const registered = objectKeysOf(mapCode, "registered");
+  if (registered === undefined) return undefined;
+  if (!mapCode.includes(objectOpening("blockEditorEntries"))) return registered;
+  const editorEntries = objectKeysOf(mapCode, "blockEditorEntries");
+  return editorEntries === undefined
+    ? undefined
+    : [...registered, ...editorEntries];
+}
+
+/** The line a generated map opens its object `name` with. */
+const objectOpening = (name: string): string => `\nconst ${name} = {\n`;
+
+/**
+ * The keys of the map's object `name`, read one entry a line, or `undefined` where the object is
+ * missing or holds a line of another shape.
+ */
+function objectKeysOf(mapCode: string, name: string): string[] | undefined {
+  const opening = mapCode.indexOf(objectOpening(name));
+  if (opening === -1) return undefined;
+  const paths: string[] = [];
+  for (const line of mapCode
+    .slice(opening + 1)
+    .split("\n")
+    .slice(1)) {
+    if (line.startsWith("}")) return paths;
+    const entry = /^\s*("(?:[^"\\]|\\.)*")\s*:\s*_p\d+\.(.*)$/.exec(line);
+    if (entry === null) return undefined;
+    const path = JSON.parse(entry[1]) as string;
+    // The member the generator writes for that path, read back as written rather than as an
+    // ASCII identifier: an export named in any script (`#Résumé`) is one the generator emits.
+    if (!entry[2].startsWith(`${parsePath(path).member},`)) return undefined;
+    paths.push(path);
+  }
+  return undefined;
+}
 
 /**
  * How the map holds itself to its list.
@@ -449,6 +579,18 @@ const AGREEMENT_CHECK = [
 /** The line the map imports the site's config with, written and read as one: see `configImportOf`. */
 const SITE_CONFIG_IMPORT = "import type * as siteConfig from ";
 
+/** The line that holds the map's components to the config's widgets, written and read as one. */
+const SITE_CONFIG_CHECK =
+  "} satisfies DeclaredComponentMap<typeof siteConfig>;";
+
+/**
+ * Whether a generated map still holds its components to the config it imports: the import alone
+ * checks nothing, so a map that kept it but lost the `satisfies` line checks against no config.
+ */
+export function mapChecksAgainstConfig(mapCode: string): boolean {
+  return mapCode.split("\n").some(each => each === SITE_CONFIG_CHECK);
+}
+
 /**
  * The config import a generated map names, as `buildComponentImportMap` wrote it; undefined when it
  * names none or the line cannot be read. A rewrite keeps it, so the map goes on checking against
@@ -480,15 +622,34 @@ export function buildComponentImportMap(
   plugins: PluginDefinition[],
   configImport?: string
 ): string {
-  const paths = componentImportMapPaths(plugins);
+  const entries = componentImportMapEntries(plugins);
+  const blockEditor = blockEditorHandOff(plugins, entries);
+  // An editor entry exports block definitions, not a component, so it is
+  // handed to the page builder alone and never put in the component registry,
+  // whose type would refuse it in the site's build.
+  const registeredEntries = entries.filter(
+    each => each.use !== "block editor entry"
+  );
+  const paths = registeredEntries.map(each => each.path);
   const parsed = paths.map(parsePath);
-  const modules = Array.from(new Set(parsed.map(p => p.module))).sort();
+  const handedOff = [...blockEditor.entries, ...blockEditor.components].map(
+    parsePath
+  );
+  const modules = Array.from(
+    new Set([...parsed, ...handedOff].map(p => p.module))
+  ).sort();
   const alias = new Map<string, string>();
   modules.forEach((m, i) => alias.set(m, `_p${i}`));
+  const reference = (p: ParsedPath) => `${alias.get(p.module)}.${p.member}`;
 
   const lines: string[] = [HEADER, ""];
   if (paths.length > 0) {
     lines.push('import { registerComponents } from "@nextlyhq/admin";');
+  }
+  if (blockEditor.used) {
+    lines.push(
+      `import { ${BLOCK_EDITOR_REGISTRAR} } from "${PAGE_BUILDER_ADMIN_MODULE}";`
+    );
   }
   for (const m of modules) {
     lines.push(`import * as ${alias.get(m)} from "${m}";`);
@@ -504,25 +665,107 @@ export function buildComponentImportMap(
   }
   lines.push("");
   lines.push("const registered = {");
-  for (const p of parsed) {
+  parsed.forEach((p, index) => {
     lines.push(
-      `  ${JSON.stringify(p.path)}: ${alias.get(p.module)}.${p.member},`
+      `  ${JSON.stringify(p.path)}: ${reference(p)},${widgetNote(registeredEntries[index])}`
     );
-  }
+  });
   // Each component registered under a typed widget's path must take that widget's props, or
   // the site's build fails here; every other path is left as it was.
+  lines.push(configImport === undefined ? "};" : SITE_CONFIG_CHECK);
+  lines.push("");
+  if (blockEditor.used) {
+    lines.push(
+      "/** The modules exporting each plugin's block definitions, for the page builder's editor. */"
+    );
+    lines.push("const blockEditorEntries = {");
+    for (const p of blockEditor.entries.map(parsePath)) {
+      lines.push(`  ${JSON.stringify(p.path)}: ${reference(p)},`);
+    }
+    lines.push("};");
+    lines.push("");
+  }
   lines.push(
-    configImport === undefined
-      ? "};"
-      : "} satisfies DeclaredComponentMap<typeof siteConfig>;"
+    blockEditor.used
+      ? AGREEMENT_CHECK.replace(
+          "type Registered = keyof typeof registered;",
+          "type Registered =\n  | keyof typeof registered\n  | keyof typeof blockEditorEntries;"
+        ).replace(
+          "JSON.stringify(Object.keys(registered).sort())",
+          "JSON.stringify(\n    [...Object.keys(registered), ...Object.keys(blockEditorEntries)].sort()\n  )"
+        )
+      : AGREEMENT_CHECK
   );
   lines.push("");
-  lines.push(AGREEMENT_CHECK);
-  lines.push("");
   if (paths.length > 0) lines.push("registerComponents(registered);");
+  if (blockEditor.used) {
+    // The block inspectors are in `registered` too, which keeps them
+    // resolvable by path like any component; they are handed over here as
+    // well because the editor reaches no component registry of the admin's.
+    lines.push(`${BLOCK_EDITOR_REGISTRAR}({`);
+    lines.push("  entries: blockEditorEntries,");
+    lines.push("  components: {");
+    for (const p of blockEditor.components.map(parsePath)) {
+      lines.push(`    ${JSON.stringify(p.path)}: ${reference(p)},`);
+    }
+    lines.push("  },");
+    lines.push("});");
+  }
   lines.push("export const registeredComponentPaths = listed;");
   lines.push("");
   return lines.join("\n");
+}
+
+/**
+ * A widget's entry names its widget and owner on its own line, where the site's build reports a
+ * component whose props do not take that widget's (`DeclaredComponentMap`), so the error reads
+ * which card it is about. Nothing for any other entry.
+ */
+function widgetNote(entry: ComponentMapEntry | undefined): string {
+  // On one line whatever a plugin is called: a line break in its name would end the comment and
+  // leave the rest of the name as source.
+  const owner = entry?.owner.replace(/[\r\n\u2028\u2029]+/g, " ");
+  return entry?.use === "widget"
+    ? ` // widget ${JSON.stringify(entry.widget ?? "?")} of ${owner}`
+    : "";
+}
+
+/**
+ * The page builder's admin entry, and the function there the map hands block
+ * modules to. Stated here rather than imported, as the declaration key is, so
+ * core carries no dependency on the page builder; the page builder's
+ * `admin/registration.test.ts` holds its entry to both.
+ */
+const PAGE_BUILDER_ADMIN_MODULE = `${PAGE_BUILDER_PLUGIN}/admin`;
+const BLOCK_EDITOR_REGISTRAR = "registerBlockEditorModules";
+
+/**
+ * What the map hands the page builder: each declared editor entry and each
+ * declared block inspector, by path, and whether there is anything to hand
+ * over at all. Nothing when the page builder is inactive, since the uses are
+ * collected only while it is active. An inspector is handed over whichever
+ * use kept its path in the registry, so a component a page also uses still
+ * reaches the editor.
+ */
+function blockEditorHandOff(
+  plugins: readonly PluginDefinition[],
+  kept: readonly ComponentMapEntry[]
+): { entries: string[]; components: string[]; used: boolean } {
+  const editorEntries = kept
+    .filter(each => each.use === "block editor entry")
+    .map(each => each.path);
+  const components = [
+    ...new Set(
+      collectBlockEditorEntries(plugins)
+        .filter(each => each.use === "block editor")
+        .map(each => each.path)
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+  return {
+    entries: editorEntries,
+    components,
+    used: editorEntries.length > 0 || components.length > 0,
+  };
 }
 
 /** Filename of the generated list of the paths the map registers. */

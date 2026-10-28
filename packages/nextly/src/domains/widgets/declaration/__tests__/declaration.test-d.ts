@@ -17,7 +17,7 @@ import { expectTypeOf } from "vitest";
 import type { WidgetSizeDeclaration } from "../../grid-size";
 import type { WidgetRenderSize, WidgetResultField } from "../../result";
 import type { WidgetScope } from "../../resolved-sources";
-import type { CoreView, QueryAnswer } from "../displays";
+import type { CoreView } from "../displays";
 import {
   defineWidget,
   type WidgetAccess,
@@ -27,8 +27,9 @@ import {
   type WidgetProps,
   type WidgetSettingValues,
 } from "../define-widget";
+import { option } from "../../../../collections/fields/helpers";
 import {
-  settings,
+  setting,
   type ChartStyle,
   type DateRange,
   type WidgetFilter,
@@ -37,7 +38,7 @@ import {
 import type { RevenueCard } from "./plugin/admin";
 import type { ordersByState, revenue, unpaidCount } from "./plugin/widgets";
 
-// Every builder, standard and custom, and a dependent setting, in one widget.
+// Every builder, field and picker, and each dependent setting, in one widget.
 // The data function asserts what it is handed; the declaration below it asserts
 // that a component would be handed the same.
 const everySetting = defineWidget({
@@ -47,18 +48,28 @@ const everySetting = defineWidget({
   category: "Test",
   size: { default: { w: 12, h: 4 } },
   settings: {
-    collection: settings.collection(),
-    filter: settings.filter({ of: "collection" }),
-    sort: settings.sort({ of: "collection" }),
-    groupBy: settings.groupBy({ of: "collection" }),
-    items: settings.items({ default: 5 }),
-    range: settings.dateRange(),
-    style: settings.chartStyle(),
-    mine: settings.onlyMine(),
-    note: settings.text({ default: "" }),
-    limit: settings.number({ default: 3, min: 1 }),
-    compact: settings.toggle({ default: false }),
-    tone: settings.select({ options: ["calm", "loud"], default: "calm" }),
+    collection: setting.collection({ label: "Collection" }),
+    filter: setting.filter({ of: "collection", label: "Filter" }),
+    sort: setting.sort({ of: "collection", label: "Sort" }),
+    groupBy: setting.groupBy({ of: "collection", label: "Group by" }),
+    columns: setting.fields({ of: "collection", label: "Fields" }),
+    field: setting.fieldOf({ of: "collection", label: "Field" }),
+    range: setting.dateRange({ label: "Date range" }),
+    style: setting.select({
+      label: "Chart style",
+      options: [option("Line", "line"), option("Bars", "bars")],
+      defaultValue: "line",
+    }),
+    mine: setting.checkbox({ label: "Only mine", defaultValue: false }),
+    note: setting.text({ label: "Note", defaultValue: "" }),
+    body: setting.textarea({ label: "Body", maxLength: 200 }),
+    since: setting.date({ label: "Since" }),
+    limit: setting.number({ label: "Rows", defaultValue: 3, min: 1 }),
+    tone: setting.select({
+      label: "Tone",
+      options: [option("Calm", "calm"), option("Loud", "loud")],
+      defaultValue: "calm",
+    }),
   },
   load: async ({ settings }) => {
     // 🔴 In the data function: each setting at its exact type.
@@ -66,15 +77,17 @@ const everySetting = defineWidget({
     expectTypeOf(settings.filter).toEqualTypeOf<WidgetFilter>();
     expectTypeOf(settings.sort).toEqualTypeOf<string>();
     expectTypeOf(settings.groupBy).toEqualTypeOf<string>();
-    expectTypeOf(settings.items).toEqualTypeOf<number>();
+    expectTypeOf(settings.columns).toEqualTypeOf<string[]>();
+    expectTypeOf(settings.field).toEqualTypeOf<string>();
     expectTypeOf(settings.range).toEqualTypeOf<DateRange>();
     expectTypeOf(settings.style).toEqualTypeOf<ChartStyle>();
     expectTypeOf(settings.mine).toEqualTypeOf<boolean>();
     expectTypeOf(settings.note).toEqualTypeOf<string>();
+    expectTypeOf(settings.body).toEqualTypeOf<string>();
+    expectTypeOf(settings.since).toEqualTypeOf<string>();
     expectTypeOf(settings.limit).toEqualTypeOf<number>();
-    expectTypeOf(settings.compact).toEqualTypeOf<boolean>();
     expectTypeOf(settings.tone).toEqualTypeOf<"calm" | "loud">();
-    return { total: settings.items };
+    return { total: settings.limit };
   },
   view: "figure",
 });
@@ -87,38 +100,17 @@ expectTypeOf<WidgetSettingValues<typeof everySetting>>().toEqualTypeOf<{
   readonly filter: WidgetFilter;
   readonly sort: string;
   readonly groupBy: string;
-  readonly items: number;
+  readonly columns: string[];
+  readonly field: string;
   readonly range: DateRange;
   readonly style: ChartStyle;
   readonly mine: boolean;
   readonly note: string;
+  readonly body: string;
+  readonly since: string;
   readonly limit: number;
-  readonly compact: boolean;
   readonly tone: "calm" | "loud";
 }>();
-
-// 🔴 In a query core runs: the builder reads the same settings, typed.
-defineWidget({
-  id: "test/query-reads-settings",
-  title: "Query",
-  description: "A query written from its settings",
-  category: "Test",
-  size: { default: { w: 12, h: 4 } },
-  settings: {
-    collection: settings.collection(),
-    items: settings.items(),
-    range: settings.dateRange(),
-  },
-  load: {
-    query: ({ settings }) => {
-      expectTypeOf(settings.collection).toEqualTypeOf<string>();
-      expectTypeOf(settings.items).toEqualTypeOf<number>();
-      expectTypeOf(settings.range).toEqualTypeOf<DateRange>();
-      return { collection: settings.collection, op: "count" };
-    },
-  },
-  view: "figure",
-});
 
 // 🔴 In a component, through `import type` of the declaration: its settings
 // and its data, both props typed by the same widget. The component file (`plugin/admin.ts`) compiles against these
@@ -180,17 +172,16 @@ expectTypeOf<
   >
 >();
 
-// Who may be offered it: a permission today, and the two forms typed for the
-// release that judges them (startup refuses them until then).
+// Who may be offered it: a permission, the collections it reads, or a
+// function of the person, each judged per card before its data function runs.
 expectTypeOf<(typeof ordersByState)["access"]>().toEqualTypeOf<
   WidgetAccess | undefined
 >();
 
-// A component over a query core runs is handed that query's answer, the wire
-// shape for its op.
-expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<
-  QueryAnswer<"count">
->();
+// A component is handed exactly what its widget's data function answers.
+expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<{
+  total: number;
+}>();
 
 // A widget drawn by a core view has that view's data, whatever its own
 // function's literal answer was.

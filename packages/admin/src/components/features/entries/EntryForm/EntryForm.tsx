@@ -15,7 +15,7 @@
  * @since 1.0.0
  */
 
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
@@ -179,6 +179,14 @@ export interface EntryFormProps {
    */
   documentActions?: readonly ContributedAction[];
   /**
+   * A strip about the whole document, such as its scheduled release, drawn in
+   * the editor's column directly under the header. Given here rather than
+   * placed above the form by the page: the editor's row pulls itself up over
+   * the page's top inset, so anything placed before it slides under the
+   * sticky header.
+   */
+  documentBanner?: ReactNode;
+  /**
    * @experimental A plugin's document view to draw in place of the form body,
    * when the route names one. Standalone only: an embedded editor has no
    * address for a view to live at.
@@ -301,6 +309,7 @@ export function EntryForm({
   className,
   onViewApi,
   documentActions,
+  documentBanner,
   documentView,
 }: EntryFormProps): JSX.Element {
   /*
@@ -1011,6 +1020,10 @@ export function EntryForm({
                         recovery={recovery}
                         viewingVersion={viewingVersion}
                         fields={getCollectionFields(collection)}
+                        // A document view has no header, so the banner goes
+                        // in among its own: an author working in the view
+                        // still sees the document is in a scheduled release.
+                        banner={documentBanner}
                       />
                     ) : (
                       <div className={cn("space-y-0", className)}>
@@ -1137,6 +1150,7 @@ export function EntryForm({
                                     mode === "edit" ? toggleRail : undefined
                                   }
                                 />
+                                {documentBanner}
                                 {/* First of the strips: a document somebody else is in
                       changes what every affordance below it means, so it is read
                       before the offer to restore work into it. */}

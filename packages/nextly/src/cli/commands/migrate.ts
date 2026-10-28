@@ -77,6 +77,10 @@ import {
   type PluginMigrationSet,
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
+import {
+  findRegistryDisagreements,
+  registryDisagreementLines,
+} from "../../domains/schema/migrate/registry-consistency";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
@@ -397,7 +401,12 @@ export async function runMigrate(
         migrationsDir: appMigrationsDir,
         logger,
         ...(await pluginMigrationArgs(configResult.config.plugins ?? [])),
-        lockMode: "fail-fast",
+        // A run that finds the schema lock held waits about a minute for it, then stops naming
+        // what holds it.
+        lockMode: "wait",
+        // The command's interrupt ends the process, so the lock is released first rather than
+        // left for the next run to wait out.
+        lockReleaseOnInterrupt: true,
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
         // A custom `options.junctionTable` name cannot be inferred from any
         // convention, and such a table is in no snapshot — so the drift check
@@ -497,6 +506,28 @@ export async function runMigrate(
     } catch (err) {
       logger.error(describeError(err));
       process.exit(1);
+    }
+
+    // Read-only, once the run has done its own work: name every registry row
+    // whose table or recorded field's column does not exist, and every
+    // declared entity with no row. A production start compares none of this,
+    // so this is where a deploy hears of it. A comparison that cannot run
+    // never fails a migrate that succeeded.
+    try {
+      for (const line of registryDisagreementLines(
+        await findRegistryDisagreements({
+          adapter: adapter as unknown as DrizzleAdapter,
+          dialect,
+          declared: resolvedSchema.entities,
+          logger,
+        })
+      )) {
+        logger.warn(line);
+      }
+    } catch (err) {
+      logger.warn(
+        `Could not compare the registry with the tables: ${describeError(err)}`
+      );
     }
 
     // Read-only: accounts an earlier release left holding a password as given
@@ -620,8 +651,26 @@ export interface MigrateCoreDeps {
   adapter: CLIDatabaseAdapter;
   migrationsDir: string;
   logger: CommandContext["logger"];
+  /**
+   * What a held schema lock does to this run: `wait` (the default) waits about a minute and then
+   * stops naming the holder; `fail-fast` stops at once.
+   */
   lockMode?: "fail-fast" | "wait";
+  /** The schema lock's lease, in seconds (`db.migrateLockTtlSeconds`). */
   ttlSeconds?: number;
+  /** How long `wait` waits for a held lock, in milliseconds. Default about a minute. */
+  lockWaitMs?: number;
+  /**
+   * What holds the lock while this runs, as the refusal another run prints names it. Default
+   * `nextly migrate`; the boot migrate step names itself.
+   */
+  lockCommand?: string;
+  /**
+   * Release the lock on an interrupt. Asked for by the command, whose interrupt ends the process.
+   * Off by default, for the boot migrate step, production or development: it runs inside a server
+   * whose shutdown may let the work run on, so it leaves the lock to lapse instead.
+   */
+  lockReleaseOnInterrupt?: boolean;
   isSettled?: () => Promise<boolean>;
   allowDestructive?: boolean;
   /** NEXTLY_DROP_RETIRED_AUTH_TABLES=1: drop the retired auth tables. */
@@ -1389,7 +1438,7 @@ export async function migrateCore(
   };
 
   const outcome = await lock(
-    deps.db,
+    deps.adapter as unknown as DrizzleAdapter,
     deps.dialect,
     async () => {
       // Before anything changes the database, the core reconcile included:
@@ -1526,8 +1575,13 @@ export async function migrateCore(
       }
     },
     {
-      mode: deps.lockMode ?? "fail-fast",
+      command: deps.lockCommand ?? "nextly migrate",
+      mode: deps.lockMode ?? "wait",
       ttlSeconds: deps.ttlSeconds,
+      waitMs: deps.lockWaitMs,
+      // Off unless the caller asks: a boot, production or development, runs inside a server whose
+      // shutdown may let the migration run on, and the lock must not be freed under it.
+      releaseOnInterrupt: deps.lockReleaseOnInterrupt === true,
       isSettled: deps.isSettled,
       logger: {
         warn: m => deps.logger.warn(m),

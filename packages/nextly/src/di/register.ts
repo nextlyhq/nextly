@@ -130,7 +130,6 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { WebhookDeliveryQueryService } from "../domains/webhooks/services/webhook-delivery-query-service";
 import type { WebhookEndpointService } from "../domains/webhooks/services/webhook-endpoint-service";
 import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/stored-recording-policy";
-import { checkDeclaredWidgetReferences } from "../domains/widgets/declaration/references";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { registerResolvedSource } from "../domains/widgets/resolved-sources";
 import {
@@ -228,6 +227,7 @@ import {
   type CollectedWidgetSource,
 } from "../plugins/widgets/collect-widget-sources";
 import { setBootedConfig } from "../route-handler/auth-handler";
+import { ensureSupportedFrameworkVersions } from "../runtime/framework-versions";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -326,6 +326,15 @@ import { getService } from "./service-access";
  * `DB_DIALECT` and `DATABASE_URL`.
  */
 export interface NextlyServiceConfig {
+  /**
+   * The directory of the app nextly runs in, whose installed Next.js, React
+   * and React DOM the start check judges. A relative path is resolved against
+   * `process.cwd()`. Defaults to the process's own directory, which is the
+   * app's for a server; the CLI passes the project it was pointed at with
+   * `--cwd`.
+   */
+  appRoot?: string;
+
   /**
    * Database adapter for multi-database support.
    * If not provided, created automatically from environment variables.
@@ -795,6 +804,15 @@ async function runRegistrationAttempt(
     globalForReg.__nextly_servicesInTeardown = undefined;
     if (inTeardown !== undefined) container.withdraw(inTeardown.restored);
   }
+  // Next.js / React version gate, here because every way of starting nextly
+  // registers services through `registerServices()`, whose every attempt runs
+  // this: `getNextly()`, a route handler's request-path boot and the CLI. nextly imports the supported
+  // releases' APIs directly and carries no code for older ones, so an app
+  // outside the ranges is refused before an adapter connects, naming each
+  // installed version, rather than failing later at whichever API it lacks.
+  // After the teardown above, so a refused app never leaves the previous
+  // registration's plugins running.
+  ensureSupportedFrameworkVersions(config.appRoot ?? process.cwd());
   try {
     await registerServicesOnce(config);
   } catch (error) {
@@ -912,7 +930,8 @@ async function registerServicesOnce(
 
   const schemaRegistry = await initializeSchemaRegistry(
     adapter,
-    bootExtensionSchema
+    bootExtensionSchema,
+    transformedConfig
   );
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
@@ -939,7 +958,8 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(
     transformedConfig.plugins ?? [],
-    transformedConfig.admin?.dashboard
+    transformedConfig.admin?.dashboard,
+    resolvedLogger
   );
 
   // Before any step that writes to the database or the registry: the Builder
@@ -1077,22 +1097,12 @@ async function registerServicesOnce(
       judgeWorkflows(transformedConfig, changedComponents),
   });
 
-  const { databaseNotSetUp } = await syncCodeFirstEntities(
+  await syncCodeFirstEntities(
     adapter,
     resolvedLogger,
     transformedConfig,
     workflows
   );
-
-  // Declared widgets' starting queries, against the content just synced: the
-  // first point in boot where the collections, Singles and their fields exist.
-  // Refused only over what the deployed code defines; a query over the
-  // database's own content is warned about, and its card errors when it runs.
-  await checkDeclaredWidgetReferences({
-    collections: collectSlugs(transformedConfig.collections),
-    singles: collectSlugs(transformedConfig.singles),
-    databaseNotSetUp,
-  });
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
     adapter,
@@ -2769,9 +2779,14 @@ async function resolveAdapter(
  */
 async function initializeSchemaRegistry(
   adapter: DrizzleAdapter,
-  extensionSchema?: ExtensionSchema
+  extensionSchema: ExtensionSchema | undefined,
+  /** What the configuration declares, so an entity removed from code is told apart. */
+  declared: Pick<NextlyServiceConfig, "collections" | "singles">
 ): Promise<SchemaRegistry | undefined> {
   try {
+    const { declaredSlugsOf } = await import(
+      "../domains/dynamic-collections/services/removed-from-code"
+    );
     const { SchemaRegistry } = await import("../database/schema-registry");
     const { getDialectTables } = await import("../database/index");
     const { getFieldGroupRegistryAliases } = await import(
@@ -2842,7 +2857,10 @@ async function initializeSchemaRegistry(
           localized,
           builderOwned,
         });
-      }
+      },
+      // A collection removed from code is registered only while its tables
+      // stand, so this boot does not create its dropped translation table.
+      { declaredSlugs: declaredSlugsOf(declared.collections) }
     );
 
     // Step 3: Dynamic singles — the same registration as collections above,
@@ -2865,7 +2883,9 @@ async function initializeSchemaRegistry(
           localized,
           builderOwned,
         });
-      }
+      },
+      // The same rule for a Single removed from code.
+      { declaredSlugs: declaredSlugsOf(declared.singles) }
     );
 
     // Step 3.5: Plugin and app extension tables. Without this they reached
@@ -4079,9 +4099,18 @@ async function reconcileSingleTablesForBoot(
       );
     };
 
+    // The configuration's own Singles: a code-first one it no longer declares
+    // is left out of the reconcile, so its dropped table is not built again.
+    const { declaredSlugsOf } = await import(
+      "../domains/dynamic-collections/services/removed-from-code"
+    );
     let builderCreatedCount = 0;
     await reconcileSingleTables({
-      ...singleTableSources(singleRegistry, () => adapter.listTables()),
+      ...singleTableSources(
+        singleRegistry,
+        () => adapter.listTables(),
+        declaredSlugsOf(transformedConfig.singles)
+      ),
       createTable: async single => {
         const codeFirstConfig = transformedConfig.singles?.find(
           s => s.slug === single.slug

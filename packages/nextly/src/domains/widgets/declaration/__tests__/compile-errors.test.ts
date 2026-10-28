@@ -60,7 +60,7 @@ interface Case {
 }
 
 const imports = `import { defineWidget } from "../define-widget";
-import { settings } from "../setting-builders";
+import { setting } from "../setting-builders";
 `;
 
 /** A widget with every field a case does not care about filled in. */
@@ -101,16 +101,6 @@ const SHAPES: Record<CoreDisplayName, string> = {
   timeseries: `{ points: [{ start: "2026-10-01", count: 3 }], interval: "day" }`,
 };
 
-/** The query each core display draws, as a widget writes it. */
-const QUERIES: Record<CoreDisplayName, string> = {
-  metric: `op: "count"`,
-  // A row display's query names the fields its rows are drawn from.
-  list: `op: "list", select: ["title"]`,
-  table: `op: "list", select: ["title"]`,
-  bars: `op: "groupBy", groupBy: "state"`,
-  timeseries: `op: "timeseries", dateField: "createdAt", interval: "day"`,
-};
-
 /** A shape no display draws in the form its neighbour does. */
 const WRONG_SHAPE: Record<CoreDisplayName, string> = {
   metric: SHAPES.bars,
@@ -128,15 +118,6 @@ const DRAWN_FIELD: Record<CoreDisplayName, string> = {
   table: "items",
   bars: "buckets",
   timeseries: "points",
-};
-
-/** A query whose op answers what the display does not draw. */
-const WRONG_QUERY: Record<CoreDisplayName, string> = {
-  metric: `op: "list"`,
-  list: `op: "count"`,
-  table: `op: "count"`,
-  bars: `op: "count"`,
-  timeseries: `op: "list"`,
 };
 
 /** A site whose one typed plugin contributes the example widgets. */
@@ -161,7 +142,7 @@ const CASES: Case[] = [
     name: "a data function reads a setting as the wrong type",
     ...pair(
       t =>
-        widget(`  settings: { items: settings.items({ default: 5 }) },
+        widget(`  settings: { items: setting.number({ label: "Items", defaultValue: 5 }) },
   load: async ({ settings }) => {
     const items: ${t} = settings.items; ${MARK}
     return { total: Number(items) };
@@ -173,23 +154,33 @@ const CASES: Case[] = [
     code: 2322,
     message: "Type 'number' is not assignable to type 'string'",
   },
+  // ---- A widget's data comes from a function: the `{ query }` form is gone.
   {
-    name: "a query core runs reads a setting as the wrong type",
+    name: "a widget's load is a function, not a query for core to run",
     ...pair(
-      t =>
-        widget(`  settings: { collection: settings.collection() },
-  load: {
-    query: ({ settings }) => {
-      const slug: ${t} = settings.collection; ${MARK}
-      return { collection: String(slug), op: "count" };
-    },
-  },
+      load =>
+        widget(`  settings: { collection: setting.collection({ label: "Collection" }) },
+  load: ${load}, ${MARK}
   view: "figure",`),
-      "number",
-      "string"
+      // No parameter: one the form no longer types would add an implicit-any error of its own.
+      `{ query: () => ({ collection: "orders", op: "count" }) }`,
+      `async ({ services, settings }) => ({ total: await services.count(settings.collection) })`
     ),
-    code: 2322,
-    message: "Type 'string' is not assignable to type 'number'",
+    code: 2353,
+    message: "'query' does not exist in type",
+  },
+  {
+    name: "the package root no longer publishes the query a widget handed core",
+    ...pair(
+      name => `import type { ${name} } from "../../../../index"; ${MARK}
+
+export type Published = ${name};
+`,
+      "ContentQuery",
+      "WidgetAccess"
+    ),
+    code: 2305,
+    message: "has no exported member 'ContentQuery'",
   },
   {
     name: "a component reads a setting as the wrong type, through import type",
@@ -255,21 +246,6 @@ export function Card({ data }: WidgetProps<typeof revenue>) {
       ),
       code: 2322,
       message: `Property '${DRAWN_FIELD[display]}' is missing`,
-    })
-  ),
-  ...VIEWS.map(
-    ([view, display]): Case => ({
-      name: `the ${view} view refuses a query whose answer it does not draw`,
-      ...pair(
-        query =>
-          widget(`  settings: { collection: settings.collection() },
-  load: { query: ({ settings }) => ({ collection: settings.collection, ${query} }) }, ${MARK}
-  view: "${view}",`),
-        WRONG_QUERY[display],
-        QUERIES[display]
-      ),
-      code: 2322,
-      message: "is not assignable to type",
     })
   ),
 
@@ -340,7 +316,7 @@ export function Card({ data }: WidgetProps<typeof revenue>) {
     name: "a core view refuses a preview case drawn with a setting value the widget does not offer",
     ...pair(
       range =>
-        widget(`  settings: { range: settings.dateRange() },
+        widget(`  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async () => ({ total: 3 }),
   view: "figure",
   preview: [{ name: "Year", data: { total: 3 }, settings: { range: "${range}" } }], ${MARK}`),
@@ -361,7 +337,7 @@ const w = defineWidget({
   description: "A widget under test",
   category: "Test",
   size: { default: { w: 12, h: 4 } },
-  settings: { range: settings.dateRange() },
+  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async ({ settings }) => ({ range: settings.range }),
   view: { component: "@test/w/admin#Card" },
   isEmpty: () => false,
@@ -389,7 +365,7 @@ const w = defineWidget({
   description: "A widget under test",
   category: "Test",
   size: { default: { w: 12, h: 4 } },
-  settings: { range: settings.dateRange() },
+  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async ({ settings }) => ({ range: settings.range }),
   view: { component: "@test/w/admin#Card" },
   isEmpty: () => false,
@@ -416,7 +392,7 @@ export function Card(props: WidgetProps<typeof w>) { ${MARK}
     name: "a widget's empty test reads its data as the wrong type",
     ...pair(
       t =>
-        widget(`  settings: { range: settings.dateRange() },
+        widget(`  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async ({ settings }) => ({ days: [settings.range] }),
   view: { component: "@test/w/admin#Card" },
   isEmpty: data => { const days: ${t} = data.days; return days.length === 0; }, ${MARK}`),
@@ -563,21 +539,6 @@ export const w = defineWidget({
     code: 2322,
     message: "a component view's path must be written as a literal string",
   },
-  ...(["list", "table"] as const).map(
-    (view): Case => ({
-      name: `the ${view} view refuses a query that selects no fields`,
-      ...pair(
-        select =>
-          widget(`  settings: { collection: settings.collection() },
-  load: { query: ({ settings }) => ({ collection: settings.collection, op: "list"${select} }) }, ${MARK}
-  view: "${view}",`),
-        "",
-        `, select: ["title"]`
-      ),
-      code: 2322,
-      message: "Property 'select' is missing",
-    })
-  ),
   {
     name: "a data function's answer may not hold a symbol-keyed property",
     ...pair(
@@ -661,12 +622,25 @@ export const components = {
 
   // ---- What else the declaration checks where it is written.
   {
+    name: "a setting is declared without a label",
+    ...pair(
+      config =>
+        widget(`  settings: { items: setting.number(${config}) }, ${MARK}
+  load: async () => ({ total: 3 }),
+  view: "figure",`),
+      `{ defaultValue: 5 }`,
+      `{ label: "Items", defaultValue: 5 }`
+    ),
+    code: 2345,
+    message: "Property 'label' is missing",
+  },
+  {
     name: "a dependent setting names no Collection setting of the widget's",
     ...pair(
       on =>
         widget(`  settings: {
-    collection: settings.collection(),
-    sort: settings.sort({ of: "${on}" }), ${MARK}
+    collection: setting.collection({ label: "Collection" }),
+    sort: setting.sort({ of: "${on}", label: "Sort" }), ${MARK}
   },
   load: async () => ({ total: 3 }),
   view: "figure",`),

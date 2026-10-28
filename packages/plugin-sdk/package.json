@@ -78,13 +78,14 @@
     "node": "^22.12.0 || >=24.0.0"
   },
   "dependencies": {
-    "@nextlyhq/blocks-engine": "workspace:*"
+    "@nextlyhq/blocks-engine": "workspace:*",
+    "@nextlyhq/ui": "workspace:*"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "workspace:*",
     "nextly": "workspace:*",
-    "react": "^18.0.0 || ^19.0.0",
-    "react-dom": "^18.0.0 || ^19.0.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "peerDependenciesMeta": {
     "@nextlyhq/admin": {

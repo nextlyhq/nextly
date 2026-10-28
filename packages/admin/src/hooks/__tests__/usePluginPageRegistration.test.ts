@@ -27,19 +27,22 @@ afterEach(() => {
 describe("usePluginPageRegistration", () => {
   it("registers plugin pages from branding into the route registry", () => {
     renderHook(() =>
-      usePluginPageRegistration([
-        {
-          name: "@acme/p",
-          collections: [],
-          pages: [
-            {
-              path: "reports",
-              component: "@acme/p/admin#Reports",
-              requiredPermission: "read-reports",
-            },
-          ],
-        },
-      ] satisfies PluginMetadata[])
+      usePluginPageRegistration(
+        [
+          {
+            name: "@acme/p",
+            collections: [],
+            pages: [
+              {
+                path: "reports",
+                component: "@acme/p/admin#Reports",
+                requiredPermission: "read-reports",
+              },
+            ],
+          },
+        ] satisfies PluginMetadata[],
+        true
+      )
     );
 
     expect(matchPluginPage("/admin/plugins/acme-p/reports")).toMatchObject({
@@ -54,7 +57,7 @@ describe("usePluginPageRegistration", () => {
   it("clears stale pages when plugins change", () => {
     const { rerender } = renderHook(
       ({ plugins }: { plugins: PluginMetadata[] }) =>
-        usePluginPageRegistration(plugins),
+        usePluginPageRegistration(plugins, plugins !== undefined),
       {
         initialProps: {
           plugins: [
@@ -77,19 +80,22 @@ describe("usePluginPageRegistration", () => {
     // A plugin contributing only a document view has nothing else whose
     // import would register the view's component.
     renderHook(() =>
-      usePluginPageRegistration([
-        {
-          name: "@acme/pb",
-          collections: [],
-          documentViews: [
-            {
-              slug: "pages",
-              path: "builder",
-              component: "@acme/pb/admin#Builder",
-            },
-          ],
-        },
-      ] satisfies PluginMetadata[])
+      usePluginPageRegistration(
+        [
+          {
+            name: "@acme/pb",
+            collections: [],
+            documentViews: [
+              {
+                slug: "pages",
+                path: "builder",
+                component: "@acme/pb/admin#Builder",
+              },
+            ],
+          },
+        ] satisfies PluginMetadata[],
+        true
+      )
     );
 
     expect(matchDocumentView("collection", "pages", "builder")).toMatchObject({
@@ -112,7 +118,7 @@ describe("usePluginPageRegistration", () => {
     ];
     const { rerender } = renderHook(
       ({ plugins }: { plugins: PluginMetadata[] }) =>
-        usePluginPageRegistration(plugins),
+        usePluginPageRegistration(plugins, plugins !== undefined),
       {
         initialProps: { plugins: initial },
       }
@@ -125,13 +131,16 @@ describe("usePluginPageRegistration", () => {
 
   it("feeds header.slot paths into auto-registration", () => {
     renderHook(() =>
-      usePluginPageRegistration([
-        {
-          name: "@acme/plugin-toolbar",
-          collections: [],
-          header: { slot: "@acme/plugin-toolbar/admin#ToolbarButton" },
-        },
-      ] satisfies PluginMetadata[])
+      usePluginPageRegistration(
+        [
+          {
+            name: "@acme/plugin-toolbar",
+            collections: [],
+            header: { slot: "@acme/plugin-toolbar/admin#ToolbarButton" },
+          },
+        ] satisfies PluginMetadata[],
+        true
+      )
     );
     expect(autoRegister).toHaveBeenCalledWith(
       expect.arrayContaining(["@acme/plugin-toolbar/admin#ToolbarButton"])
@@ -140,13 +149,16 @@ describe("usePluginPageRegistration", () => {
 
   it("falls back to the deprecated headerSlot path", () => {
     renderHook(() =>
-      usePluginPageRegistration([
-        {
-          name: "@acme/p",
-          collections: [],
-          headerSlot: "@acme/p/admin#Badge",
-        },
-      ] satisfies PluginMetadata[])
+      usePluginPageRegistration(
+        [
+          {
+            name: "@acme/p",
+            collections: [],
+            headerSlot: "@acme/p/admin#Badge",
+          },
+        ] satisfies PluginMetadata[],
+        true
+      )
     );
     expect(autoRegister).toHaveBeenCalledWith(
       expect.arrayContaining(["@acme/p/admin#Badge"])
