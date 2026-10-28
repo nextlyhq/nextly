@@ -245,6 +245,12 @@ describe.each(getConfiguredTestDialects())(
 
 /** Its publish rule refuses any publish told it involves French. */
 const LOCALIZED = "frenchwaryposts";
+/** Its field's update rule refuses any write told it involves French. */
+const FIELD_LOCALIZED = "frenchwaryfields";
+
+/** A rule that refuses whatever is told it involves French. */
+const frenchRefused = ({ locales }: { locales?: readonly string[] }) =>
+  !(locales ?? []).includes("fr");
 
 describe.each(getConfiguredTestDialects())(
   "a pending change in one language (%s)",
@@ -283,6 +289,55 @@ describe.each(getConfiguredTestDialects())(
           .getEntryService()
           .getEntry({
             collectionName: LOCALIZED,
+            entryId: id,
+            user: PUBLISHER,
+            overrideAccess: false,
+            includeWorkingDraft: true,
+            locale: "en",
+            ...(states ? { translationStatus: true } : {}),
+          } as never) as Promise<{ data?: Record<string, unknown> }>;
+
+      // POPULATION CONTROL: asked of English alone, the draft is shown.
+      expect((await read(false)).data?.body).toBe("finished draft");
+      const withStates = (await read(true)).data;
+      expect(withStates?.body).toBe("finished draft");
+      expect(withStates?._isWorkingDraft).toBe(true);
+    });
+
+    it("is shown to its publisher when its field rules allow the write's language, whatever the read asks", async () => {
+      // The promotion's field rules are judged as the status write judges
+      // them, in English alone, not in every language the read involves.
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "fr"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: FIELD_LOCALIZED,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({
+                name: "body",
+                access: { update: frenchRefused as never },
+              }),
+            ],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, EDITOR.id, "update", [FIELD_LOCALIZED]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(t, EDITOR.id, action, [FIELD_LOCALIZED]);
+      }
+      await userWhoMay(t, PUBLISHER.id, "publish", [FIELD_LOCALIZED]);
+      await grantTo(t, PUBLISHER.id, "read", [FIELD_LOCALIZED]);
+      const id = await heldDraft(t, FIELD_LOCALIZED);
+      const read = (states: boolean) =>
+        handlerOf(t)
+          .getEntryService()
+          .getEntry({
+            collectionName: FIELD_LOCALIZED,
             entryId: id,
             user: PUBLISHER,
             overrideAccess: false,

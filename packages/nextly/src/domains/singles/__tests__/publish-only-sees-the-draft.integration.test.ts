@@ -177,3 +177,63 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+/** Its field's update rule refuses any write told it involves French. */
+const FIELD_LOCALIZED = "frenchwaryhome";
+
+describe.each(getConfiguredTestDialects())(
+  "a Single's pending change in one language (%s)",
+  dialect => {
+    it("is shown to its publisher when its field rules allow the write's language, whatever the read asks", async () => {
+      // The promotion's field rules are judged as the status write judges
+      // them, in English alone, not in every language the read involves.
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "fr"], defaultLocale: "en" },
+        singles: [
+          defineSingle({
+            slug: FIELD_LOCALIZED,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({
+                name: "siteName",
+                access: {
+                  update: (({ locales }: { locales?: readonly string[] }) =>
+                    !(locales ?? []).includes("fr")) as never,
+                },
+              }),
+            ],
+          }),
+        ],
+      });
+      await userWhoMay(current, EDITOR.id, "update", [FIELD_LOCALIZED]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(current, EDITOR.id, action, [FIELD_LOCALIZED]);
+      }
+      await userWhoMay(current, PUBLISHER.id, "publish", [FIELD_LOCALIZED]);
+      await grantTo(current, PUBLISHER.id, "read", [FIELD_LOCALIZED]);
+      const singles = current.getService(
+        "singleEntryService"
+      ) as SingleEntryService;
+      await heldDraft(singles, FIELD_LOCALIZED);
+      const read = async (states: boolean) =>
+        ((
+          await singles.get(FIELD_LOCALIZED, {
+            user: PUBLISHER,
+            overrideAccess: false,
+            includeWorkingDraft: true,
+            locale: "en",
+            ...(states ? { translationStatus: true } : {}),
+          } as never)
+        ).data ?? {}) as Record<string, unknown>;
+
+      // POPULATION CONTROL: asked of English alone, the draft is shown.
+      expect((await read(false)).siteName).toBe("Finished draft");
+      const withStates = await read(true);
+      expect(withStates.siteName).toBe("Finished draft");
+      expect(withStates._isWorkingDraft).toBe(true);
+    });
+  }
+);
