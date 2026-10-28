@@ -7,10 +7,11 @@
 
 import type { WidgetDefinition } from "../definition";
 
+import { CORE_WIDGET_ID } from "./ids";
 import { LIST_DENSITY, RECENT_ENTRIES_ITEMS } from "./shared";
 
 export const recentEntriesWidget = {
-  id: "core/recent-entries",
+  id: CORE_WIDGET_ID.recentEntries,
   title: "Recent entries",
   description:
     "A collection's entries changed most recently, each linking to its entry.",
@@ -45,6 +46,14 @@ export const recentEntriesWidget = {
       of: "collection",
       label: "Sort",
       defaultValue: "-updatedAt",
+    },
+    // The fields each row shows after its title, chosen from the ones the
+    // reader may read; unset, its status and when it was updated.
+    {
+      name: "fields",
+      type: "fields",
+      of: "collection",
+      label: "Fields on each row",
     },
     RECENT_ENTRIES_ITEMS,
     LIST_DENSITY,

@@ -1016,10 +1016,6 @@ no-service user-with read collection returns-filter at can  # can-no-service-ref
 no-service user-with read collection returns-filter at capabilities  # no-service
 no-service user-with read collection returns-filter at entity  # no-service
 no-service user-with read collection returns-filter at widget  # can-no-service-refuses-people
-service custom-role count collection async-filter at rest
-service custom-role count collection returns-filter at rest
-service custom-role list collection async-filter at rest
-service custom-role list collection returns-filter at rest
 service custom-role read collection async-filter at can  # filter-not-applied
 service custom-role read collection async-filter at capabilities  # filter-not-applied
 service custom-role read collection async-filter at direct  # filter-not-applied
@@ -1038,10 +1034,6 @@ service custom-role read collection returns-filter at service  # filter-not-appl
 service custom-role read collection returns-filter at widget  # filter-not-applied
 service custom-role read related async-filter at population  # filter-not-applied
 service custom-role read related returns-filter at population  # filter-not-applied
-service key-full-access count collection async-filter at rest
-service key-full-access count collection returns-filter at rest
-service key-full-access list collection async-filter at rest
-service key-full-access list collection returns-filter at rest
 service key-full-access read collection async-filter at can  # filter-not-applied
 service key-full-access read collection async-filter at capabilities  # filter-not-applied
 service key-full-access read collection async-filter at direct  # filter-not-applied
@@ -1058,10 +1050,6 @@ service key-full-access read collection returns-filter at route  # filter-not-ap
 service key-full-access read collection returns-filter at service  # filter-not-applied
 service key-full-access read related async-filter at population  # filter-not-applied
 service key-full-access read related returns-filter at population  # filter-not-applied
-service key-partial count collection async-filter at rest
-service key-partial count collection returns-filter at rest
-service key-partial list collection async-filter at rest
-service key-partial list collection returns-filter at rest
 service key-partial read collection async-filter at can  # filter-not-applied
 service key-partial read collection async-filter at capabilities  # filter-not-applied
 service key-partial read collection async-filter at direct  # filter-not-applied
@@ -1078,14 +1066,6 @@ service key-partial read collection returns-filter at route  # filter-not-applie
 service key-partial read collection returns-filter at service  # filter-not-applied
 service key-partial read related async-filter at population  # filter-not-applied
 service key-partial read related returns-filter at population  # filter-not-applied
-service key-read-only count collection async-filter at rest
-service key-read-only-super-admin count collection async-filter at rest
-service key-read-only count collection returns-filter at rest
-service key-read-only-super-admin count collection returns-filter at rest
-service key-read-only list collection async-filter at rest
-service key-read-only-super-admin list collection async-filter at rest
-service key-read-only list collection returns-filter at rest
-service key-read-only-super-admin list collection returns-filter at rest
 service key-read-only read collection async-filter at can  # filter-not-applied
 service key-read-only-super-admin read collection async-filter at can  # filter-not-applied
 service key-read-only read collection async-filter at capabilities  # filter-not-applied
@@ -1118,14 +1098,6 @@ service key-read-only read related async-filter at population  # filter-not-appl
 service key-read-only-super-admin read related async-filter at population  # filter-not-applied
 service key-read-only read related returns-filter at population  # filter-not-applied
 service key-read-only-super-admin read related returns-filter at population  # filter-not-applied
-service key-role-based count collection async-filter at rest
-service key-role-based-super-admin count collection async-filter at rest
-service key-role-based count collection returns-filter at rest
-service key-role-based-super-admin count collection returns-filter at rest
-service key-role-based list collection async-filter at rest
-service key-role-based-super-admin list collection async-filter at rest
-service key-role-based list collection returns-filter at rest
-service key-role-based-super-admin list collection returns-filter at rest
 service key-role-based read collection async-filter at can  # filter-not-applied
 service key-role-based-super-admin read collection async-filter at can  # filter-not-applied
 service key-role-based read collection async-filter at capabilities  # filter-not-applied
@@ -1174,10 +1146,6 @@ service principal-other read collection returns-filter at direct  # filter-not-a
 service principal-other read collection returns-filter at service  # filter-not-applied
 service principal-other read related async-filter at population  # visitor-keeps-media, filter-not-applied
 service principal-other read related returns-filter at population  # visitor-keeps-media, filter-not-applied
-service user-partial count collection async-filter at rest
-service user-partial count collection returns-filter at rest
-service user-partial list collection async-filter at rest
-service user-partial list collection returns-filter at rest
 service user-partial read collection async-filter at can  # filter-not-applied
 service user-partial read collection async-filter at capabilities  # filter-not-applied
 service user-partial read collection async-filter at direct  # filter-not-applied
@@ -1196,10 +1164,6 @@ service user-partial read collection returns-filter at service  # filter-not-app
 service user-partial read collection returns-filter at widget  # filter-not-applied
 service user-partial read related async-filter at population  # filter-not-applied
 service user-partial read related returns-filter at population  # filter-not-applied
-service user-with count collection async-filter at rest
-service user-with count collection returns-filter at rest
-service user-with list collection async-filter at rest
-service user-with list collection returns-filter at rest
 service user-with read collection async-filter at can  # filter-not-applied
 service user-with read collection async-filter at capabilities  # filter-not-applied
 service user-with read collection async-filter at direct  # filter-not-applied

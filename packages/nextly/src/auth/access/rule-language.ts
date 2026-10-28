@@ -35,6 +35,8 @@ import {
 } from "../../domains/i18n/resolve-locale";
 import type { AccessRuleTarget } from "../../shared/types/access";
 
+import { ruleLanguageKeyOf } from "./rule-language-key";
+
 /** The languages an operation involves, and the one judged where it is one. */
 export interface RuleLanguage {
   readonly locale?: string;
@@ -313,6 +315,14 @@ export async function askEachLanguage<R>(
  */
 export function currentRuleLanguage(): RuleLanguage {
   return ruleLanguage.getStore() ?? everyLanguage();
+}
+
+/**
+ * The languages rules are told now, as one key: the language judged and every
+ * one involved. Two questions with the same key tell a rule the same language.
+ */
+export function ruleLanguageKey(): string {
+  return ruleLanguageKeyOf(currentRuleLanguage());
 }
 
 /**

@@ -182,6 +182,14 @@ export interface SingleFormProps {
    * which an author cannot tell from a feature that does not exist.
    */
   documentActions?: readonly ContributedAction[];
+  /**
+   * A strip about the whole document, such as its scheduled release, drawn in
+   * the editor's column directly under the header. Given here rather than
+   * placed above the form by the page: the editor's row pulls itself up over
+   * the page's top inset, so anything placed before it slides under the
+   * sticky header.
+   */
+  documentBanner?: React.ReactNode;
   /** Single schema with field definitions */
   schema: SingleSchema;
   /** Current document data */
@@ -462,6 +470,7 @@ export function SingleForm({
   sourceValues,
   className,
   documentActions,
+  documentBanner,
   documentView,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
@@ -1084,6 +1093,10 @@ export function SingleForm({
                         recovery={recovery}
                         viewingVersion={viewingVersion}
                         fields={schema.fields}
+                        // A document view has no header, so the banner goes
+                        // in among its own: an author working in the view
+                        // still sees the document is in a scheduled release.
+                        banner={documentBanner}
                       />
                     ) : (
                       <div className={cn("space-y-0", className)}>
@@ -1180,6 +1193,10 @@ export function SingleForm({
                                   isRailCollapsed={railCollapsed}
                                   onToggleRail={toggleRail}
                                 />
+                                {/* Directly under the header, as in the entry
+                                    editor: a fact about the whole Single is
+                                    read before the details of its address. */}
+                                {documentBanner}
                                 <EntryMetaStrip
                                   slugField={slugField}
                                   hasStatus={hasStatus}

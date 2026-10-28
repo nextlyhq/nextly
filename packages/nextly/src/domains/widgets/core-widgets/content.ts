@@ -9,8 +9,10 @@ import type { WidgetDefinition } from "../definition";
 import { MAX_WIDGET_LIMIT } from "../query-limits";
 import { CONTENT_SOURCE_ID } from "../system-source-ids";
 
+import { CORE_WIDGET_ID } from "./ids";
+
 export const contentWidget = {
-  id: "core/content",
+  id: CORE_WIDGET_ID.content,
   title: "Content",
   description:
     "Each collection and Single this reader may see, with its entries and drafts.",
@@ -21,7 +23,6 @@ export const contentWidget = {
     min: { w: 6, h: 3 },
     max: { w: 12, h: 6 },
   },
-  defaultOrder: 50,
   component: "core#CollectionQuickLinks",
   // Each collection's entries and drafts, and each Single, counted as the reader, in the batch
   // like every card. Asked the most any widget query may return: an omitted limit is the

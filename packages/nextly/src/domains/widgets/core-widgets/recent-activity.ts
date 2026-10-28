@@ -8,10 +8,11 @@
 import type { WidgetDefinition } from "../definition";
 import { ACTIVITY_SOURCE_ID } from "../system-source-ids";
 
+import { CORE_WIDGET_ID } from "./ids";
 import { LIST_DENSITY, RECENT_ACTIVITY_ITEMS } from "./shared";
 
 export const recentActivityWidget = {
-  id: "core/recent-activity",
+  id: CORE_WIDGET_ID.recentActivity,
   title: "Recent activity",
   description: "Who changed what, most recent first.",
   // Its own component, because a row is a sentence with an avatar, a badge and
@@ -27,7 +28,6 @@ export const recentActivityWidget = {
     min: { w: 4, h: 4 },
     max: { w: 12, h: 8 },
   },
-  defaultOrder: 40,
   component: "core#RecentActivity",
   query: { source: ACTIVITY_SOURCE_ID, op: "list" },
   // Asked like core's own lists: the rows its size draws and one more, so the

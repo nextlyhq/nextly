@@ -156,10 +156,21 @@ export function routeGateVerdict(
   auth: AuthContext,
   action: string,
   resource: string,
-  rules: RouteRules
+  rules: RouteRules,
+  /**
+   * The route's handler applies a collection read rule's filter to what it
+   * reads, so the filter is handed back rather than refused. Only the
+   * entry list and count routes do.
+   */
+  appliesFilter = false
 ): Promise<GateVerdict> {
-  return gateVerdict(callerOf(auth), action, resource, rules, () =>
-    hasPermission(auth.userId, action, resource)
+  return gateVerdict(
+    callerOf(auth),
+    action,
+    resource,
+    rules,
+    () => hasPermission(auth.userId, action, resource),
+    appliesFilter
   );
 }
 
@@ -543,7 +554,8 @@ function gateVerdict(
   action: string,
   resource: string,
   rules: RouteRules,
-  permissionWithoutService: () => Promise<boolean>
+  permissionWithoutService: () => Promise<boolean>,
+  appliesFilter = false
 ): Promise<GateVerdict> {
   const registered =
     resource === "" ? undefined : rules?.getRegisteredTarget(resource);
@@ -565,6 +577,7 @@ function gateVerdict(
     principal: null,
     rules,
     permissionWithoutService,
+    appliesFilter,
   });
 }
 

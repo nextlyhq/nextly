@@ -640,16 +640,18 @@ export type {
 
 // @experimental Widgets declared once with `defineWidget()`, which a plugin
 // contributes under `contributes.dashboard`: the declaration, its setting
-// builders (as `widgetSettings`, since `settings` alone would read as the
-// site's own settings here), and the types a widget's component is written
-// against. Startup checks every declaration and reports each fault; the data
+// builders (`setting`, the collections' field builders as a card's settings
+// take them, with the collections' own `option` for a select's choices), and
+// the types a widget's component is written against. Startup checks every declaration and reports each fault; the data
 // code stays on the server, and the admin is sent data only.
 export {
+  defineAttentionItem,
   defineWidget,
-  settings as widgetSettings,
+  setting,
   type AnyWidget,
+  type AttentionCount,
+  type AttentionItem,
   type ComponentDisplay,
-  type ContentQuery,
   type CoreDisplay,
   type CoreView,
   type AdminDashboardConfig,
@@ -661,14 +663,19 @@ export {
   type WidgetRef,
   type ChartStyle,
   type WidgetAccess,
+  // The permission gate `access` takes.
+  type WidgetAccessGate,
   type WidgetComponentMap,
   type WidgetData,
   type WidgetDataInput,
   type WidgetDisplay,
   type WidgetEmpty,
   type WidgetFilter,
+  // A series' interval and range.
+  type WidgetInterval,
   type WidgetPreviewCase,
   type WidgetProps,
+  type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
   type WidgetSummary,

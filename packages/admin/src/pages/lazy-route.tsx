@@ -11,6 +11,10 @@
  * route whose chunk already arrived starts at the page, not the spinner.
  * The shell and navigation live outside the page, so all three states leave
  * them untouched.
+ *
+ * A route can also be fetched ahead with `preload()`, which a link calls on
+ * hover or focus: the visit then joins that fetch rather than starting its
+ * own, so the click doesn't wait for the download.
  */
 
 import { Button } from "@nextlyhq/ui";
@@ -26,17 +30,34 @@ type RouteLoadState =
   | { status: "error" }
   | { status: "ok"; Page: ComponentType<PageProps> };
 
+/** How long a fetch runs before its spinner is drawn. */
+const SPINNER_DELAY_MS = 200;
+
+/**
+ * The loading state: announced at once, drawn only once the fetch has taken
+ * 200 ms, so a chunk that arrives quickly (from cache, or fetched ahead)
+ * shows no flash of a spinner. The space is held from the start, so the
+ * page doesn't move when the spinner appears.
+ */
 function RouteLoading() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), SPINNER_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
   return (
     <div
       role="status"
       className="flex h-full min-h-64 w-full items-center justify-center"
       data-testid="route-loading"
     >
-      <Loader2
-        className="h-6 w-6 animate-spin text-muted-foreground"
-        aria-hidden="true"
-      />
+      {slow ? (
+        <Loader2
+          className="h-6 w-6 animate-spin text-muted-foreground"
+          aria-hidden="true"
+          data-testid="route-spinner"
+        />
+      ) : null}
       <span className="sr-only">Loading</span>
     </div>
   );
@@ -73,14 +94,38 @@ function RouteLoadError({
   );
 }
 
+/** A lazily fetched route, and the way to fetch it ahead of a visit. */
+export type LazyRouteComponent = ComponentType<PageProps> & {
+  /** Starts fetching the page's code if nothing has yet; never throws. */
+  preload: () => void;
+};
+
 export function lazyRoute(
   load: () => Promise<RouteModule>
-): ComponentType<PageProps> {
+): LazyRouteComponent {
   // The browser keeps every fetched module until a full reload, so the
   // resolved page component is remembered here and this route's next mount
   // starts at `ok` — returning to a visited page shows the page, not the
   // spinner again. This holds the component function, never a mounted page.
   let loaded: ComponentType<PageProps> | null = null;
+  // The fetch in flight, shared by a preload and a visit so the two never
+  // download the chunk twice. Cleared when it fails, so the next attempt (a
+  // retry, or a visit after a failed preload) issues a fresh import().
+  let pending: Promise<ComponentType<PageProps>> | null = null;
+
+  function fetchPage(): Promise<ComponentType<PageProps>> {
+    pending ??= load().then(
+      module => {
+        loaded = module.default;
+        return module.default;
+      },
+      (error: unknown) => {
+        pending = null;
+        throw error;
+      }
+    );
+    return pending;
+  }
 
   function LazyRoute(props: PageProps) {
     const [attempt, setAttempt] = useState(0);
@@ -99,12 +144,15 @@ export function lazyRoute(
       }
       let live = true;
       setState({ status: "loading" });
-      load()
-        .then(module => {
-          loaded = module.default;
-          if (live) setState({ status: "ok", Page: module.default });
+      fetchPage()
+        .then(Page => {
+          if (live) setState({ status: "ok", Page });
         })
-        .catch(() => {
+        .catch((error: unknown) => {
+          // Said where a developer looks before the message replaces it: a
+          // missing chunk after a deploy and a module that throws while
+          // loading read the same on screen and differ only here.
+          console.error("[admin] This page's code could not be loaded:", error);
           if (live) setState({ status: "error" });
         });
       return () => {
@@ -132,5 +180,11 @@ export function lazyRoute(
 
   // The route table's entries are ComponentType<PageProps>; the wrapper takes
   // the same props and renders nothing but the page once loaded.
-  return LazyRoute;
+  return Object.assign(LazyRoute, {
+    preload: () => {
+      // A failed preload says nothing: the visit fetches again, and that is
+      // where a failure is logged and shown.
+      if (!loaded) fetchPage().catch(() => {});
+    },
+  });
 }

@@ -36,6 +36,50 @@ const REGISTERED_SHARED = {
 } as unknown as RegisteredWidgetMeta;
 
 describe("resolveDashboardWidgets", () => {
+  it("names the plugin that contributed a widget drawn by its own component, and none for any other", () => {
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "acme/own",
+          title: "Own",
+          archetype: "custom",
+          component: "@acme/admin#Own",
+        },
+        { id: "acme/count", title: "Count", archetype: "metric" },
+      ]),
+      [],
+      allow
+    );
+    expect(widgets.find(each => each.id === "acme/own")?.owner).toBe(
+      'plugin "@acme"'
+    );
+    expect(
+      widgets.find(each => each.id === "acme/count")?.owner
+    ).toBeUndefined();
+  });
+
+  it("keeps the contributing plugin's owner when a registration naming none collides with it", () => {
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "shared",
+          title: "Own",
+          archetype: "custom",
+          component: "@acme/admin#Own",
+        },
+      ]),
+      [
+        {
+          ...REGISTERED_SHARED,
+          archetype: "custom",
+          component: "@acme/admin#Own",
+        } as RegisteredWidgetMeta,
+      ],
+      allow
+    );
+    expect(widgets[0]?.owner).toBe('plugin "@acme"');
+  });
+
   it("draws a colliding id from the registered definition, not the contribution", () => {
     const widgets = resolveDashboardWidgets(
       contributing([

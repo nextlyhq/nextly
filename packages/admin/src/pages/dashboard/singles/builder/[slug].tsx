@@ -30,6 +30,7 @@ import { toast } from "@admin/components/ui";
 import { useSingleSchema, useUpdateSingle } from "@admin/hooks/queries";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
 import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
@@ -106,6 +107,8 @@ export default function SingleBuilderEditPage({
 }: SingleBuilderEditPageProps): React.ReactElement {
   const slug = params?.slug;
   const { data: single, isLoading, error } = useSingleSchema(slug);
+  // The tab names the Single being edited once it has arrived.
+  useDocumentTitle(single ? singleName(single) : undefined);
 
   const builder = useFieldBuilder<FormData>({
     resolver: zodResolver(singleFormSchema),

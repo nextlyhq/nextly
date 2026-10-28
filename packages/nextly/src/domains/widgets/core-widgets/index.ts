@@ -10,10 +10,9 @@
  *
  * They go through `registerWidget`, the same door a plugin uses, rather than an
  * admin-side list the server cannot see. That is what lets a plugin
- * `extendWidget("core/team", ...)` to tighten a permission or relabel a card --
- * and it is why `defaultOrder` exists: registrations resolve after
- * contributions, so without a declared position core's cards would sit BELOW
- * every plugin's, which is not the dashboard anyone has today.
+ * `extendWidget("core/team", ...)` to tighten a permission or relabel a card.
+ * Which of them the default dashboard holds, and in what order, is
+ * `CORE_DEFAULT_LAYOUT` in `./ids`, written as a site writes its own `defaultLayout`.
  *
  * Collections, Singles and Team draw inside the shared frame like every other
  * card, so they read as one product. The other `custom` ones still carry
@@ -75,33 +74,6 @@ import { teamWidget } from "./team";
 import { upcomingReleasesWidget } from "./upcoming-releases";
 
 /**
- * The agreed default dashboard, in `defaultOrder`: Needs attention, Create,
- * Recently edited, Recent activity, Content, Upcoming releases and Team, each
- * at its agreed size, after the onboarding cards. The cards that share a row
- * share a height, so the default dashboard tiles: Needs attention and Create
- * at 3 rows, the two activity lists at 4, Upcoming releases and Team at 4.
- *
- * Spaced by ten rather than numbered one-by-one, so a card can be placed
- * between two of these later without renumbering the rest -- the reason
- * `defaultOrder` is a number and not an index.
- */
-const CORE_ORDER = [
-  getStartedWidget,
-  contentWidget,
-  quickCreateWidget,
-  teamWidget,
-  needsAttentionWidget,
-  recentlyEditedWidget,
-  upcomingReleasesWidget,
-  recentActivityWidget,
-  countWidget,
-  breakdownWidget,
-  noteWidget,
-  recentEntriesWidget,
-  overTimeWidget,
-] as const;
-
-/**
  * Core's widgets declared with `defineWidget`, as a plugin declares its own.
  * Registered through the same call as everyone's declarations, under core.
  */
@@ -134,21 +106,6 @@ const CORE_WIDGET_LITERALS = [
  */
 export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
 
-/**
- * The id of one of core's widgets.
- *
- * Read from the list itself, kept literal by `as const` above, so a widget
- * added, renamed or removed there changes this with no second edit: a plugin
- * offering an alternative to a built-in is checked against the widgets core
- * actually has.
- */
-export type CoreWidgetId = (typeof CORE_ORDER)[number]["id"];
-
-/**
- * Every one of core's widget ids, definitions and declarations alike, in
- * core's order: the one list of what is core's, for every reader asking
- * whether an id is a built-in and where it sorts.
- */
-export const CORE_WIDGET_IDS: readonly CoreWidgetId[] = CORE_ORDER.map(
-  widget => widget.id
-);
+// Core's widget ids, and their order, live in `./ids`, which imports nothing:
+// re-exported for the readers that load the widgets anyway.
+export { CORE_WIDGET_IDS } from "./ids";

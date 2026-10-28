@@ -28,6 +28,7 @@ import type {
 } from "./query";
 import {
   drivesQuery,
+  fieldsSettingQueryProblem,
   isLimitSetting,
   settingsSourceOf,
   validateWidgetSettings,
@@ -354,8 +355,10 @@ export interface WidgetDefinition {
   sketch?: DataWidgetArchetype;
   /**
    * What a declared widget's empty state says and offers in place of the
-   * frame's own: one line, and one action, a path relative to the admin,
-   * offered only to a reader holding its `requiredPermission`.
+   * frame's own: one line, and one action: a path relative to the admin,
+   * offered only to a reader holding its `requiredPermission`, or the card's
+   * own settings (`opens: "settings"`), offered where the reader can change
+   * them.
    *
    * 🔴 Published by core for a declared widget alone (with `serverData`), from
    * a declaration startup already held to the empty state's rules. Whether
@@ -363,7 +366,9 @@ export interface WidgetDefinition {
    */
   empty?: {
     message?: string;
-    action?: { label: string; link: string; requiredPermission?: string };
+    action?:
+      | { label: string; link: string; requiredPermission?: string }
+      | { label: string; opens: "settings" };
   };
   /**
    * The settings the widget's source narrows by rather than being replaced by
@@ -378,8 +383,10 @@ export interface WidgetDefinition {
    */
   sourceFilters?: readonly WidgetSourceFilter[];
   /**
-   * Where this widget sits by default, ascending. Omitted means "after
-   * everything that states one".
+   * Where this widget sits among the older-shape widgets suggested for the
+   * default dashboard, after its own cards (`default-layout.ts`), ascending.
+   * Omitted means "after everything that states one". Core's own widgets state
+   * none: their place is core's `defaultLayout`.
    *
    * The DECLARED default, not the reader's own arrangement -- a stored layout
    * carries its own order per placement and wins over this. It exists because
@@ -524,6 +531,15 @@ export interface WidgetDefinition {
   serverData?: true;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
+  /**
+   * Who declared a widget drawn by its own component, as faults name an owner (`plugin "name"`),
+   * so its card can say whose component is missing in development.
+   *
+   * 🔴 Published by core for a declared widget alone, as `serverData` is: the public
+   * registration doors refuse it, since a registration naming an owner would claim a plugin's
+   * name for a card that plugin never declared.
+   */
+  owner?: string;
   /** Required for `actions`; forbidden otherwise. */
   actions?: WidgetAction[];
   /**
@@ -1457,12 +1473,19 @@ function validateEmpty(d: Partial<WidgetDefinition>): void {
 const isText = (value: unknown) =>
   typeof value === "string" && value.trim() !== "";
 
-/** An empty state's action, when stated: a label and a link, each of them text. */
+/**
+ * An empty state's action, when stated: a label, each of them text, and either a link that is
+ * text or `opens: "settings"`.
+ */
 function emptyActionIsText(action: unknown): boolean {
   if (action === undefined) return true;
   if (typeof action !== "object" || action === null) return false;
-  const { label, link } = action as { label?: unknown; link?: unknown };
-  return isText(label) && isText(link);
+  const { label, link, opens } = action as {
+    label?: unknown;
+    link?: unknown;
+    opens?: unknown;
+  };
+  return isText(label) && (opens === "settings" || isText(link));
 }
 
 /**
@@ -1616,24 +1639,35 @@ const OFFERED_MODES = [
 ] as const satisfies readonly NonNullable<WidgetDefinition["offered"]>[];
 
 /**
- * Refuses an `offered` mode outside its closed list, and a widget offered per
- * collection that declares no Collection setting:
- * its add-panel rows each start a card set to a collection, so without one the
- * widget could be added nowhere.
+ * Why an `offered` mode cannot work, or `undefined`: a mode outside its closed
+ * list, or a widget offered per collection that declares no Collection
+ * setting: its add-panel rows each start a card set to a collection, so
+ * without one the widget could be added nowhere.
+ *
+ * Exported so a declared widget is judged at startup by this same rule, before
+ * any widget is kept, rather than refused half way through registering.
  */
-function validateOffered(d: Partial<WidgetDefinition>): void {
+export function offeredProblem(d: {
+  offered?: unknown;
+  settings?: unknown;
+}): string | undefined {
   // An untyped registration with a misspelt mode would otherwise be read as an
   // ordinary widget: placed by default, perhaps with no collection to read.
   const outside = closedValueProblem("offered", d.offered, OFFERED_MODES);
-  if (outside !== undefined) fail(`${d.id}: ${outside}`);
+  if (outside !== undefined) return outside;
   if (
     d.offered === "per-collection" &&
     !declaresCollectionSetting(d.settings)
   ) {
-    fail(
-      `${d.id}: a widget offered per collection needs a Collection setting, which each card starts set to`
-    );
+    return "a widget offered per collection needs a Collection setting, which each card starts set to";
   }
+  return undefined;
+}
+
+/** Refuses a definition whose `offered` mode cannot work (`offeredProblem`). */
+function validateOffered(d: Partial<WidgetDefinition>): void {
+  const problem = offeredProblem(d);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
 /** Throws with a named reason if `def` is not a usable definition. */
@@ -1660,6 +1694,8 @@ export function validateWidgetDefinition(
   validateCells(d);
   const rangedLimit = rangedLimitSettingProblem(d);
   if (rangedLimit !== undefined) fail(`${d.id}: ${rangedLimit}`);
+  const fieldsQuery = fieldsSettingQueryProblem(d);
+  if (fieldsQuery !== undefined) fail(`${d.id}: ${fieldsQuery}`);
   validateOffered(d);
   validateDefaultOrder(d);
   // Judged on what the widget asks, with the filters each source declares: a

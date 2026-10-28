@@ -129,29 +129,27 @@ describe("runProdMigrationsIfEnabled", () => {
   });
 
   /**
-   * `forceUnlock` deletes the Postgres lock ROW and returns immediately for
-   * every other dialect, so telling a MySQL operator to run it during an
-   * incident sends them to a no-op. MySQL's lock is session-scoped and dies
-   * with its connection, which makes restarting the holder the real recovery.
+   * The schema lock is a row on every dialect, renewed by its holder, so the
+   * recovery is the same everywhere: a holder that stopped lets it lapse, and
+   * `--force-unlock` clears it at once. Advice that differed by dialect would
+   * now be wrong on one of them.
    */
-  it("gives dialect-appropriate recovery guidance", async () => {
+  it("gives the same recovery guidance on every dialect", async () => {
     process.env.NODE_ENV = "production";
     const notRun = () => ({ applied: 0, coreChanged: false, ran: false });
 
     const pg = args({ migrateCore: vi.fn(async () => notRun()) });
-    await expect(runProdMigrationsIfEnabled(pg as never)).rejects.toMatchObject(
-      {
-        publicMessage: expect.stringContaining("--force-unlock"),
-      }
-    );
+    const pgErr = await runProdMigrationsIfEnabled(pg as never).catch(e => e);
 
     _resetBootMigrationsGateForTest();
 
     const my = args({ migrateCore: vi.fn(async () => notRun()) });
     my.adapter.dialect = "mysql";
-    const err = await runProdMigrationsIfEnabled(my as never).catch(e => e);
-    expect(err.publicMessage).not.toContain("--force-unlock");
-    expect(err.publicMessage).toContain("released when that connection ends");
+    const myErr = await runProdMigrationsIfEnabled(my as never).catch(e => e);
+
+    expect(pgErr.publicMessage).toContain("--force-unlock");
+    expect(pgErr.publicMessage).toContain("lapse on its own");
+    expect(myErr.publicMessage).toBe(pgErr.publicMessage);
   });
 
   /**
