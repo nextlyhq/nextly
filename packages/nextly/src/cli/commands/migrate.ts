@@ -794,18 +794,14 @@ export async function previewMigrate(args: {
   const pendingModules = modules.filter(module => !module.recorded);
 
   const appStep = appStepAfter(args.step, pendingModules.length);
-  const pendingFiles =
-    appStep === 0
-      ? []
-      : (
-          await findPendingFiles(
-            adapter,
-            db,
-            dialect,
-            args.migrationsDir,
-            logger
-          )
-        ).slice(0, appStep);
+  const allPendingFiles = await findPendingFiles(
+    adapter,
+    db,
+    dialect,
+    args.migrationsDir,
+    logger
+  );
+  const pendingFiles = appStep === 0 ? [] : allPendingFiles.slice(0, appStep);
 
   logger.newline();
   logger.keyValue(
@@ -825,6 +821,18 @@ export async function previewMigrate(args: {
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
+      );
+    }
+  }
+  // A real run refuses a snapshotless Builder file among ALL its pending files
+  // before it applies any, whatever `--step` allows, so one the step leaves
+  // out of the preview is named too.
+  const previewed = new Set(pendingFiles.map(m => m.name));
+  for (const m of allPendingFiles) {
+    if (previewed.has(m.name)) continue;
+    if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
+      logger.info(
+        `  • ${m.name}.sql (beyond --step) ✖ a real run would refuse it before applying anything: ${builderMigrationRemedy(`${m.name}.sql`)}`
       );
     }
   }
