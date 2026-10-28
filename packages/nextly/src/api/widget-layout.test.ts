@@ -2798,6 +2798,30 @@ describe("the one default", () => {
     ]);
   });
 
+  it("refuses a reset staged before a card of the default changed its verdict, which would reset to a dashboard nobody saw", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "site/a", w: 12, h: 3, removed: false },
+      ]),
+    };
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+    const staged = await bodyOf(await getWidgetLayout(getReq()));
+    // The default the reset was staged against left the card out.
+    expect(staged.defaultPlacements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    defaultCardsNotShown.mockResolvedValue(new Set());
+
+    const res = await deleteWidgetLayout(
+      deleteReq({ version: "2", scope: staged.scope ?? "" })
+    );
+
+    expect(res.status).toBe(409);
+    expect(deleted).toBeUndefined();
+  });
+
   it("leaves a saved dashboard's cards as the reader arranged them", async () => {
     registerWidget(widget({ id: "acme/quiet" }));
     plan({ cards: [{ widget: "acme/quiet" }] });
