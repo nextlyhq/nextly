@@ -22,9 +22,10 @@ export { definePlugin } from "nextly";
  * component is handed `WidgetProps<typeof widget>`; the types are here and in
  * `./widgets`. Its `size` is a `WidgetSizeDeclaration` of `GridSize`s, `{ w, h }`
  * on a grid twelve columns wide, the one way a card's size is stated. The
- * types its other fields are written in (`view`, `access`, `preview`,
- * `summary`) come from here too, so an author annotating one imports it from
- * where `defineWidget` came from.
+ * types its other fields are written in (`view`, `access` and its
+ * `WidgetAccessGate`, `preview`, `summary`) come from here too, and so do
+ * `WidgetInterval` and `WidgetRange`, a series read's interval and range, so
+ * an author annotating one imports it from where `defineWidget` came from.
  */
 export { defineWidget } from "nextly";
 /**
@@ -41,9 +42,12 @@ export type {
   CoreView,
   GridSize,
   WidgetAccess,
+  WidgetAccessGate,
   WidgetData,
+  WidgetInterval,
   WidgetPreviewCase,
   WidgetProps,
+  WidgetRange,
   WidgetRenderSize,
   WidgetSizeDeclaration,
   WidgetSummary,

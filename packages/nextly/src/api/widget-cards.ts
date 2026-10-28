@@ -192,9 +192,11 @@ type CardInput = Parameters<ReadyCardData["answer"]>[0];
 
 /**
  * Whether this person fails the widget's `access`, judged with them before
- * `load` runs: a permission name was judged already, when the card was handed
- * (`askableCards`); the collections it reads, through the batch's own check,
- * the one gate every collection read passes; a predicate, with the person.
+ * `load` runs: a permission gate (a name, `{ anyOf }` or `{ allOf }`) was
+ * judged already, when the card was handed (`askableCards`), by the
+ * `requiredPermission` it was published as, and is not judged a second time
+ * here; the collections it reads, through the batch's own check, the one gate
+ * every collection read passes; a predicate, with the person.
  *
  * 🔴 A predicate that throws refuses: it is the plugin's own code deciding who
  * may see data, and a decision that could not be made is no. It runs within
@@ -214,7 +216,13 @@ async function refusedAccess(
       return true;
     }
   }
-  if (typeof access === "object" && access !== null) {
+  // Only the collections form is judged here: the gate forms are objects too,
+  // and carry no collections to read.
+  if (
+    typeof access === "object" &&
+    access !== null &&
+    "collections" in access
+  ) {
     for (const collection of access.collections) {
       try {
         await batch.check({

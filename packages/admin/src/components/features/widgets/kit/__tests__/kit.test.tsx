@@ -13,8 +13,11 @@ import { describe, expect, it, vi } from "vitest";
 import { GroupsChart } from "../../charts/groups-chart";
 import { OverTimeChart } from "../../charts/over-time-chart";
 import { CardFigure } from "../../frame/figure";
+import { CARD_FOOTER_LINK_CLASS } from "../../frame/footer-slot";
 import { CardTierContext, rowsDrawn } from "../../frame/tier";
+import { WidgetCard } from "../../WidgetCard";
 import { Widget } from "..";
+import { WidgetFooterLink } from "../footer-link";
 
 interface Order {
   id: string;
@@ -66,18 +69,59 @@ const table = (
 );
 
 describe("the parts of Widget", () => {
-  it("is exactly the five parts, each the component core's own cards use", () => {
+  it("is exactly the six parts, each the component core's own cards use", () => {
     expect(Object.keys(Widget).sort()).toEqual([
       "BarChart",
       "Figure",
+      "FooterLink",
       "List",
       "SeriesChart",
       "Table",
     ]);
     expect(Widget.Figure).toBe(CardFigure);
+    expect(Widget.FooterLink).toBe(WidgetFooterLink);
     expect(Widget.BarChart).toBe(GroupsChart);
     expect(Widget.SeriesChart).toBe(OverTimeChart);
     expect(Object.isFrozen(Widget)).toBe(true);
+  });
+});
+
+describe("Widget.FooterLink", () => {
+  it("draws its link in the card's own footer, never in the body", () => {
+    render(
+      <WidgetCard title="Orders">
+        <p>12 orders</p>
+        <Widget.FooterLink
+          href="/admin/collections/orders"
+          label="All orders"
+        />
+      </WidgetCard>
+    );
+    const footer = screen.getByTestId("widget-card-footer");
+    const link = within(footer).getByRole("link", { name: "All orders" });
+    expect(link).toHaveAttribute("href", "/admin/collections/orders");
+    // Styled as every card's footer link is.
+    expect(link).toHaveClass(...CARD_FOOTER_LINK_CLASS.split(" "));
+    expect(
+      within(screen.getByTestId("widget-card-body")).queryByRole("link")
+    ).toBeNull();
+  });
+
+  it("takes the place of the widget's own link, so the footer holds one link", () => {
+    render(
+      <WidgetCard
+        title="Orders"
+        link={{ label: "Open orders", href: "/orders" }}
+      >
+        <Widget.FooterLink
+          href="/admin/collections/orders"
+          label="All orders"
+        />
+      </WidgetCard>
+    );
+    const footer = screen.getByTestId("widget-card-footer");
+    expect(within(footer).getAllByRole("link")).toHaveLength(1);
+    expect(within(footer).getByRole("link")).toHaveTextContent("All orders");
   });
 });
 

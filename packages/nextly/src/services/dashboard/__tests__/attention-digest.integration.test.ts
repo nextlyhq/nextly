@@ -248,6 +248,62 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(true);
     });
 
+    it("answers every read of a declared collection the reader may not read with nothing, so the item counts the other", async () => {
+      // 🔴 As a count of it is zero: its groups are none and its series is the
+      // range's intervals at zero, the answer an empty collection gives, so a
+      // reader of one of two collections gets that one's numbers, the item is
+      // not failed, and nothing about the other is disclosed.
+      const t = await boot();
+      const seen: Record<string, { buckets: number; points: number[] }> = {};
+      declare([
+        {
+          id: "acme/spread",
+          label: "Notes and tasks, grouped and over time",
+          collections: [NOTES, TASKS],
+          count: async ({ services, signal }) => {
+            let total = 0;
+            for (const collection of [NOTES, TASKS]) {
+              const { buckets } = await services.groupBy(collection, {
+                field: "title",
+                signal,
+              });
+              const { points } = await services.timeseries(collection, {
+                range: "7d",
+                signal,
+              });
+              seen[collection] = {
+                buckets: buckets.length,
+                points: points.map(point => point.count),
+              };
+              total +=
+                10 * buckets.reduce((sum, bucket) => sum + bucket.count, 0) +
+                points.reduce((sum, point) => sum + point.count, 0);
+            }
+            return total;
+          },
+          link: "collections/ad_notes",
+        },
+      ]);
+      const admin: ReadCaller = {
+        user: { id: await superAdminUser(t, "ad-admin") },
+      };
+      const notesOnly: ReadCaller = {
+        user: { id: await userWhoMay(t, "ad-notes", "read", [NOTES]) },
+      };
+
+      // The population: both collections read, two notes and one task.
+      expect(brief(await digestFor(admin))).toEqual(["acme/spread=33"]);
+      expect(brief(await digestFor(notesOnly))).toEqual(["acme/spread=22"]);
+      const notes = seen[NOTES];
+      const tasks = seen[TASKS];
+      expect(notes?.buckets).toBe(2);
+      expect(tasks?.buckets).toBe(0);
+      // The same intervals as a series read of the readable collection, each
+      // at zero: an empty collection's answer, not an empty list.
+      expect(tasks?.points).toEqual(notes?.points.map(() => 0));
+      expect(notes?.points.length).toBeGreaterThan(1);
+    });
+
     it("fails an item alone when it reads a collection it did not declare", async () => {
       const t = await boot();
       declare([
