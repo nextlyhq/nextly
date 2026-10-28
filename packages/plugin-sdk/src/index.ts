@@ -27,6 +27,16 @@ export { definePlugin } from "nextly";
  * where `defineWidget` came from.
  */
 export { defineWidget } from "nextly";
+/**
+ * @experimental `setting` and `option` — a widget's settings, written with the
+ * collections' field builders: `setting.select({ label, options: [option("US
+ * dollar", "usd")], defaultValue: "usd" })` takes the config `select()` takes
+ * in a collection, less the `name` the setting's key gives, with a `label`
+ * required. Beside them, the dashboard's pickers: `setting.collection`,
+ * `setting.fieldOf`, `setting.dateRange` and the list card's `filter`,
+ * `sort`, `groupBy` and `fields`. `option` is the collections' own.
+ */
+export { option, setting } from "nextly";
 export type {
   CoreView,
   GridSize,

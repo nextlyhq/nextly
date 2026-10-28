@@ -41,7 +41,7 @@ export type {
   WidgetView,
 } from "./displays";
 export {
-  settings,
+  setting,
   type ChartStyle,
   type DateRange,
   type WidgetFilter,
