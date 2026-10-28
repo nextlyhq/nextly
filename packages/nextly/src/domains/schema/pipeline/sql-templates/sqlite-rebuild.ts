@@ -349,11 +349,21 @@ export function untrackedConstraintCounts(
       ? ` WHERE lower("table" || '.' || "from") NOT IN (${declaredPairs.join(", ")})`
       : "") +
     ")";
-  const folded =
-    "replace(replace(replace(replace(replace(upper(sql), char(10), ' '), char(13), ' '), char(9), ' '), '  ', ' '), '  ', ' ')";
+  // Every whitespace character SQLite accepts becomes a space, and runs of spaces are halved eight
+  // times, which brings any run of up to 256 down to one. A longer run still beside CHECK cannot be
+  // read, and counts as a check of its own: refused rather than missed.
+  const spaced = [10, 13, 9, 11, 12].reduce(
+    (text, code) => `replace(${text}, char(${code}), ' ')`,
+    "upper(sql)"
+  );
+  const folded = Array.from({ length: 8 }).reduce<string>(
+    text => `replace(${text}, '  ', ' ')`,
+    spaced
+  );
   const clauses =
     `((length(${folded}) - length(replace(${folded}, 'CHECK (', ''))) / 7 + ` +
-    `(length(${folded}) - length(replace(${folded}, 'CHECK(', ''))) / 6)`;
+    `(length(${folded}) - length(replace(${folded}, 'CHECK(', ''))) / 6 + ` +
+    `(instr(${folded}, 'CHECK  ') > 0))`;
   const declared = knownChecks.map(
     check =>
       `(instr(sql, ${literalOf(`"${check.name}"`)}) > 0 OR instr(sql, ${literalOf(`\`${check.name}\``)}) > 0)`

@@ -188,14 +188,15 @@ function renameKeepingChecks(
   // The column's name is replaced wherever the clause quotes it, so a string literal that happens
   // to hold the quoted name would change too, and the check would then test something else. The
   // literals are taken out to count the name outside them; a check that names the column inside
-  // one, or holds a quote the count cannot pair, is not rewritten.
+  // one, holds a quote the count cannot pair, or holds a backslash (MySQL prints a quote inside a
+  // literal as `\'`, which the count would read as the literal's end), is not rewritten.
   const clause = decoded("cc.CHECK_CLAUSE");
   const literalFree = `REGEXP_REPLACE(${clause}, ${literal("'[^']*'")}, '')`;
   const namings = (text: string) =>
     `(LENGTH(${text}) - LENGTH(REPLACE(${text}, ${from}, '')))`;
   const unsafe =
     `(SELECT COUNT(*) ${checksOnColumn} AND (${namings(clause)} <> ${namings(literalFree)} ` +
-    `OR INSTR(${literalFree}, ${literal("'")}) > 0 OR ${unreadableHere(clause)})) > 0`;
+    `OR INSTR(${literalFree}, ${literal("'")}) > 0 OR INSTR(${clause}, ${BACKSLASH}) > 0)) > 0`;
   return runBuilt(
     `IF(${tooLong}, ${literal(`the checks on ${op.tableName} are too long to restate around a rename`)}, ` +
       `IF(${unsafe}, ${literal(`cannot rename ${op.tableName}.${op.fromColumn}: a check names it inside a string`)}, ${statement}))`

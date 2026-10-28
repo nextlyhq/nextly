@@ -456,13 +456,43 @@ for (const entry of DIALECTS) {
         }
       );
 
-      it.skipIf(dialect !== "mysql")(
-        "refuses to rewrite a MySQL check that names the renamed column inside a string",
+      it.skipIf(dialect !== "sqlite")(
+        "refuses a SQLite rebuild that would lose a check written with a long run of spaces",
         async () => {
+          await migrateCreate(heading("heading"));
+          await migrate();
+          await exec(`ALTER TABLE "dc_posts" DROP COLUMN "views"`);
+          await exec(
+            `ALTER TABLE "dc_posts" ADD COLUMN "views" integer CHECK        ("views" >= 0)`
+          );
+          const before = await definitionOf("dc_posts");
+
+          await migrateCreate(heading("heading", { required: true }));
+          await expect(migrate()).rejects.toThrow(
+            /would drop checks its schema does not track/
+          );
+
+          expect(await definitionOf("dc_posts")).toEqual(before);
+        }
+      );
+
+      it.skipIf(dialect !== "mysql").each([
+        {
+          shape: "names the renamed column inside a string",
+          checkOf: (column: string) => `${q(column)} <> '${q(column)}'`,
+        },
+        {
+          // MySQL prints the quotes inside this literal with backslashes, which a count of literals
+          // would read as their ends, leaving the name inside it looking like a column.
+          shape: "holds a string with escaped quotes",
+          checkOf: (column: string) =>
+            `${q(column)} <> 'it''s ${q(column)}, isn''t it'`,
+        },
+      ])(
+        "refuses to rewrite a MySQL check that $shape",
+        async ({ checkOf }) => {
           // Rewriting the quoted name everywhere would change the string too, and the check with it.
-          await seededPosts({
-            checkOf: column => `${q(column)} <> '${q(column)}'`,
-          });
+          await seededPosts({ checkOf });
 
           await migrateCreate(heading("title2"));
           await expect(migrate()).rejects.toThrow(
