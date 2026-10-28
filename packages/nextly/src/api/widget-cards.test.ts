@@ -176,6 +176,10 @@ const declarations: Record<string, unknown> = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Their implementations too, which clearing keeps: a test that makes either say no must not
+  // leave it saying no for the next.
+  accessPredicate.mockImplementation(() => true);
+  showsPredicate.mockImplementation(() => true);
   vi.mocked(declaredWidget).mockImplementation(id => declarations[id] as never);
   vi.mocked(askableCards).mockResolvedValue({
     handed: new Map([
@@ -553,7 +557,7 @@ describe("a card's load, judged before it runs", () => {
     expect(answer).toEqual({
       settled: {
         ok: false,
-        error: "Choose collection in the card's settings",
+        error: "No collection chosen yet",
         code: "needs-setting",
         setting: "collection",
       },
@@ -763,9 +767,9 @@ describe("whether a card is shown to the person asking, without its load", () =>
     }
   });
 
-  it("is not shown when shows does not settle within the card's budget", async () => {
+  /** A card judged against a fake clock, its budget run out, and what was logged. */
+  async function timedOut(widget: string) {
     vi.useFakeTimers();
-    showsPredicate.mockImplementation(() => new Promise(() => {}));
     const logger = {
       warn: vi.fn(),
       error: vi.fn(),
@@ -778,19 +782,36 @@ describe("whether a card is shown to the person asking, without its load", () =>
         logger as unknown as ReturnType<typeof loggerModule.getNextlyLogger>
       );
     try {
-      const judging = shown("acme/maybe");
+      const judging = shown(widget);
       await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
-      await expect(judging).resolves.toBe(false);
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          logContext: expect.objectContaining({
-            reason: "widget-shows-timed-out",
-          }),
-        })
-      );
+      return { shown: await judging, warned: logger.warn.mock.calls };
     } finally {
       spy.mockRestore();
       vi.useRealTimers();
     }
+  }
+
+  it("is not shown when shows does not settle within the card's budget, naming shows", async () => {
+    showsPredicate.mockImplementation(() => new Promise(() => {}));
+    const { shown: answer, warned } = await timedOut("acme/maybe");
+    expect(answer).toBe(false);
+    expect(warned[0]?.[0]).toMatchObject({
+      logContext: {
+        owner: "plugin @acme/shop",
+        widget: "acme/maybe",
+        reason: "widget-judging-timed-out",
+        stage: "shows",
+      },
+    });
+  });
+
+  it("names its access as the stage when the access predicate is what does not settle", async () => {
+    // The budget bounds the whole judgement; the log says which part of it hung.
+    accessPredicate.mockImplementation(() => new Promise(() => {}));
+    const { shown: answer, warned } = await timedOut("acme/gated");
+    expect(answer).toBe(false);
+    expect(warned[0]?.[0]).toMatchObject({
+      logContext: { reason: "widget-judging-timed-out", stage: "access" },
+    });
   });
 });

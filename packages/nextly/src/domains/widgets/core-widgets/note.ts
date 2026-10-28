@@ -38,5 +38,9 @@ export const noteWidget = defineWidget({
   view: { component: "core#Note" },
   // Blank as well as absent is an empty note: whitespace alone draws nothing.
   isEmpty: data => data.text.trim() === "",
-  empty: { message: "Nothing written yet. Write it in the card's settings." },
+  // The way to write one is the card's own settings, so its empty state opens them there.
+  empty: {
+    message: "Nothing written yet.",
+    action: { label: "Write a note", opens: "settings" },
+  },
 });

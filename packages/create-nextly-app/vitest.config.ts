@@ -3,8 +3,14 @@ import { fileURLToPath } from "node:url";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
+// The supported ranges, as the build inlines them.
+import { frameworkRanges } from "../../scripts/framework-ranges.mjs";
+
 export default defineConfig({
   plugins: [tsconfigPaths()],
+  define: {
+    __NEXTLY_FRAMEWORK_RANGES__: JSON.stringify(frameworkRanges()),
+  },
   // Template components are written for Next.js, which compiles JSX with the
   // automatic runtime and never imports React for it.
   esbuild: { jsx: "automatic" },

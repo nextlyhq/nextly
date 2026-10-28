@@ -47,18 +47,29 @@ types (D60):
 
 The app commits both. `nextly generate:types` writes them, and `next dev` rewrites them when
 they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, for a read-only
-checkout or CI. A production build whose map lacks a dashboard widget's component does not serve
-the admin: its server log names the plugin, the widget and the command that fixes it, and the
-public site keeps serving. Other components missing from the map are logged.
+checkout or a test run, and the server log then names each missing component and the switch.
+
+Check the committed map in CI with `nextly generate:types --check`. It writes nothing, and
+exits 1 naming each missing component and each path no longer declared, or 2 when it cannot
+load the config:
+
+```bash
+npx nextly generate:types --check
+```
+
+Production never reads, checks or writes the map. A dashboard widget whose component is missing
+from it draws its own card's error state, and every other card and page draws as usual. In
+development the error names the widget, its owner and the missing path; in production it says
+only that the card could not be drawn. Other components missing from the map draw empty.
 
 After a map change in development, the request that finds the map out of date is already
 being served when the map is rewritten, so that one render can still draw the new widget's
-card empty. The rewritten map is what the next render loads.
+card in its error state. The rewritten map is what the next render loads.
 
-**The check runs once the admin layout calls it.** New apps import the map in their admin
-page; the layout's call is two lines to add. An app made from an older template has neither,
-and keeps drawing a missing component as an empty card, with a console warning, until it adds
-them:
+**`next dev` keeps the map current once the admin layout calls the check.** New apps import the
+map in their admin page; the layout's call is two lines to add. An app made from an older
+template has neither, so a plugin's components are not registered: its widget cards draw their
+error state, and its other components draw empty, until it adds them:
 
 ```tsx
 // src/app/admin/[[...params]]/page.tsx: with the other imports
@@ -380,7 +391,7 @@ contributes: {
         size: { default: { w: 3, h: 2 } },   // 12-column grid units: w 1–12, h 2–12
         query: { source: "collection:reports", op: "count" },
         requiredPermission: "read-reports",  // client-gated
-        defaultOrder: 40,                    // optional; lower sits higher
+        defaultOrder: 40,                    // optional; orders the suggested cards
       },
     ],
   },
@@ -395,20 +406,52 @@ each with its own count query and an optional link:
 
 ### Where a card sits
 
-`defaultOrder` is optional and sorts ascending; a widget that omits it goes after every
-widget that states one. Leave it off unless you mean it — without it your card keeps its
-declaration order, which is what nearly every widget wants.
+Someone who has never arranged their dashboard sees the **default dashboard**, and there is
+one: the site's `admin.dashboard.defaultLayout`, or core's own when the site gives none.
+Everyone gets the same default, less the cards they may not see: a widget whose permission or
+`access` refuses them, or whose `shows` answers no.
 
-It exists because position would otherwise depend on **how** a widget reached the
-dashboard rather than on anything it said: contributions resolve before registrations, so
-the same card moved across the grid when its author switched channels. Core's own
-dashboard cards state one, which is how they stay above contributed widgets.
+A plugin asks for a place on it with `suggest`, naming its own widgets. Core places them after
+the default's own cards, in the order the site lists its plugins, unless the site turns
+suggestions off:
 
-Numbers, not indexes — core spaces its own ten apart so a card can be placed between two
-without renumbering anything.
+```ts
+contributes: {
+  dashboard: {
+    widgets: [ordersByState, revenue],
+    suggest: ["acme/orders-by-state"],
+  },
+}
+```
 
-A reader's saved layout, once they have arranged their dashboard, wins over this. Think
-of it as where the card starts, not where it stays.
+A suggestion never reaches a dashboard someone has saved: there, the add panel offers the
+widget instead. A widget nobody suggests is offered and never placed.
+
+A site writes its own default as widget ids, or as cards with a size in grid units and
+starting settings. An entry marked `optional` is left out where its widget is not installed,
+such as a plugin's on a site without that plugin; any other entry must name a widget the
+install has, or startup refuses it:
+
+```ts
+admin: {
+  dashboard: {
+    defaultLayout: [
+      "core/needs-attention",
+      { widget: "acme/orders-by-state", w: 6, h: 4, optional: true },
+      "core/recently-edited",
+    ],
+    suggestions: false,
+  },
+}
+```
+
+A widget contributed in the older shape (`contributes.admin.widgets`) is suggested by being
+declared, as it was placed before suggestions existed. These widgets go after the named
+suggestions, ascending by `defaultOrder`, and one that omits it comes after every one that
+states it.
+
+A reader's saved layout, once they have arranged their dashboard, wins over all of this.
+Think of the default as where a card starts, not where it stays.
 
 ### The card frame and its states
 

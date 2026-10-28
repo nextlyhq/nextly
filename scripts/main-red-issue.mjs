@@ -35,6 +35,7 @@ export const ADVISORY = {
   e2e: "Browser tests",
   "e2e-production": "Production browser tests",
   "dev-reload": "Dev reload applies a saved schema edit",
+  "cache-components": "Playground builds and serves under Cache Components",
   "scaffold-smoke": "Scaffold smoke",
   "dev-script-smoke": "Dev script starts every watcher",
 };

@@ -16,6 +16,9 @@
 // Through the plugin SDK, as a plugin imports them, so this fixture proves
 // the SDK's own exports.
 import { definePlugin, defineWidget } from "@nextlyhq/plugin-sdk";
+// The setting builders are not re-exported by the SDK yet, so the one widget with a setting takes
+// them from core, as an app may.
+import { widgetSettings } from "nextly";
 
 /** The two components, as the generated component map imports them. */
 const KIT_CARD_COMPONENT = "@/plugins/widget-kit-fixture/admin#KitCard";
@@ -123,6 +126,24 @@ const notShownWidget = defineWidget({
   view: "figure",
 });
 
+/**
+ * A card whose one setting, its collection, has no starting value: until its reader picks one it
+ * answers that it needs it, and its empty state's button opens the card's settings to do so.
+ */
+const needsCollectionWidget = defineWidget({
+  id: "widget-kit-fixture/needs-collection",
+  title: "Test fixture: needs a collection",
+  description:
+    "Exists for the e2e suite: asks for its collection before it shows anything.",
+  category: "Fixtures",
+  size: { default: { w: 6, h: 2 }, min: { w: 6, h: 2 } },
+  settings: { collection: widgetSettings.collection() },
+  load: async ({ settings, services }) => ({
+    total: await services.count(settings.collection),
+  }),
+  view: "figure",
+});
+
 export const widgetKitFixturePlugin = definePlugin({
   name: "widget-kit-fixture",
   version: "0.0.0",
@@ -136,6 +157,7 @@ export const widgetKitFixturePlugin = definePlugin({
         fullWidthWidget,
         loadThrowsWidget,
         notShownWidget,
+        needsCollectionWidget,
       ],
     },
   },

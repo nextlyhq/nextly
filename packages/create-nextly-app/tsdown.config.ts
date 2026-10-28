@@ -7,6 +7,8 @@ import { defineConfig } from "tsdown";
 // The repository's own skill check, so the build bundles exactly the skills
 // it holds to be for people building with Nextly.
 import { userSkillSeparation } from "../../scripts/agent-skills.mjs";
+// The supported ranges, from the nextly package's own peers.
+import { frameworkRanges } from "../../scripts/framework-ranges.mjs";
 
 import {
   copyBundledSkills,
@@ -83,6 +85,11 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   treeshake: true,
+  // Inlined at build, so the published CLI carries the ranges and never
+  // loads the nextly package to read them.
+  define: {
+    __NEXTLY_FRAMEWORK_RANGES__: JSON.stringify(frameworkRanges()),
+  },
   target: "node18",
   platform: "node",
   // Bundle all dependencies so the CLI is self-contained and works
