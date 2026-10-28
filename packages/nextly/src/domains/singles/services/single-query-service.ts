@@ -102,6 +102,7 @@ import {
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { recordWriteEvent } from "../../content-events/write-event";
+import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
@@ -1015,7 +1016,12 @@ export class SingleQueryService extends BaseService {
     slug: string,
     options: GetSingleOptions = {}
   ): Promise<SingleResult> {
-    this.logger.debug("Getting Single document", { slug, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Getting Single document", {
+      slug,
+      locale: options.locale,
+    });
 
     // ONE instant for this read. Both visibility checks below resolve releases
     // against it, so a release becoming due between them cannot admit the row
@@ -1107,6 +1113,12 @@ export class SingleQueryService extends BaseService {
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
+        // A Single removed from code is not given a document by a read:
+        // creating one is a write, which it refuses. It answers as a Single
+        // holding no document does.
+        if (await entityRemovedFromCode("single", slug)) {
+          return singleAbsentResult(slug);
+        }
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocumentOnce(singleMeta);
       }

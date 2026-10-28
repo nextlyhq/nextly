@@ -74,7 +74,7 @@ afterEach(async () => {
 
 /** A cookie jar holding one preview token, or nothing at all. */
 function cookies(token?: string) {
-  return () => ({
+  return async () => ({
     get: (name: string) =>
       name === PREVIEW_SCOPE_COOKIE && token !== undefined
         ? { value: encodeURIComponent(token) }

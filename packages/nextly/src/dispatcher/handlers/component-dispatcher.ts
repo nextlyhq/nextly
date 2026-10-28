@@ -47,10 +47,11 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+// From the types module, not the barrel, which loads every dialect's tables.
 import {
   FIELD_GROUP_MIGRATION_STATUSES,
   type FieldGroupMigrationStatus,
-} from "../../schemas/dynamic-field-groups";
+} from "../../schemas/dynamic-field-groups/types";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";

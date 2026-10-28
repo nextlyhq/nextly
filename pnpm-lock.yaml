@@ -1671,6 +1671,9 @@ importers:
       '@nextlyhq/blocks-engine':
         specifier: workspace:*
         version: link:../blocks-engine
+      '@nextlyhq/ui':
+        specifier: workspace:*
+        version: link:../ui
     devDependencies:
       '@nextlyhq/admin':
         specifier: workspace:*

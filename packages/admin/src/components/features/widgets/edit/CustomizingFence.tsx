@@ -15,19 +15,6 @@
 
 import type { JSX, ReactNode } from "react";
 
-/**
- * Sets `inert` on the element it is attached to.
- *
- * Through the DOM rather than as a prop, because the admin runs on React 18
- * and 19 and they disagree about the attribute: React 18 drops a boolean
- * `inert`, and React 19 reads the string form `""` as false. Attached only
- * while customising, since the fence itself exists only then; the settings
- * sheet's preview uses it too, for a card that is shown and not used.
- */
-export function fenceOff(element: HTMLElement | null): void {
-  element?.setAttribute("inert", "");
-}
-
 export function CustomizingFence({
   children,
 }: {
@@ -35,7 +22,8 @@ export function CustomizingFence({
 }): JSX.Element {
   return (
     <div
-      ref={fenceOff}
+      // React 19 renders a boolean `inert` as the attribute itself.
+      inert
       data-testid="card-content-fence"
       // The fence stands in the cell where the card used to, so the card still fills the row's
       // height. The card dims its own body and footer in customise mode (`WidgetCard`), so the
