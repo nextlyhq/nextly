@@ -77,7 +77,11 @@ const mapOf = (paths: readonly string[]) =>
     "export const componentMapAgreesWithList = true;",
     "",
     "const registered = {",
-    ...paths.map((path, index) => `  ${JSON.stringify(path)}: _p0.C${index},`),
+    // Each under the member the generator writes for its path: what follows its `#`.
+    ...paths.map(
+      path =>
+        `  ${JSON.stringify(path)}: _p0.${path.split("#")[1] ?? "default"},`
+    ),
     "};",
     "",
   ].join("\n");
@@ -112,6 +116,24 @@ describe("the check's verdict", () => {
       "- no longer declared: @gone/old/admin#Chart",
       "Run `npx nextly generate:types` and commit both files.",
     ]);
+  });
+
+  it("exits 1 when the map checks its widgets against another config than the one loaded", async () => {
+    vi.mocked(loadConfig).mockResolvedValueOnce({
+      config: {
+        plugins: [shop],
+        typescript: { outputFile: `./${DIR}/nextly-types.ts` },
+      },
+      configPath: join(root, "nextly.config.ts"),
+    } as unknown as Awaited<ReturnType<typeof loadConfig>>);
+    // The map the helper commits imports no config at all.
+    await list(["@acme/shop/admin#Revenue"]);
+    expect(await runComponentMapCheck({ cwd: root }, context())).toBe(
+      COMPONENT_MAP_CHECK_EXIT.outOfDate
+    );
+    expect(lines.error).toContain(
+      `- checks its widgets against no config, not ../../../nextly.config: ${DIR}/${COMPONENT_IMPORT_MAP_FILENAME}`
+    );
   });
 
   it("exits 2 when the config does not load, never reading as an answer about the map", async () => {

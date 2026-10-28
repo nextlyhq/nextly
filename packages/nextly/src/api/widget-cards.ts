@@ -408,7 +408,7 @@ async function answerCard(
       return {
         settled: {
           ok: false,
-          error: `Choose ${verdict.label} in the card's settings`,
+          error: `No ${verdict.label} chosen yet`,
           code: "needs-setting",
           setting: verdict.label,
         },
@@ -437,8 +437,9 @@ async function answerCard(
  * leaves out the cards they would not be shown.
  *
  * - Refused by its `access`: no.
- * - A setting it needs has no value: YES. The card asks for that setting itself ("Choose ...
- *   in the card's settings"), and leaving it out would hide the one step that fixes it.
+ * - A setting it needs has no value: YES. The card asks for that setting itself ("No ...
+ *   chosen yet", with a button to choose it), and leaving it out would hide the one step that
+ *   fixes it.
  * - Its `shows`, as the person: only `true` is yes.
  * - No `shows`: yes.
  *

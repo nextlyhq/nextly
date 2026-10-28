@@ -59,13 +59,15 @@ expectTypeOf<DashboardContribution["widgets"]>().toEqualTypeOf<
 >();
 
 // A default card's size is `w` and `h` in grid units, each optional; it takes
-// no named width. `optional` leaves it out where its widget is not installed.
+// no named width. `optional` leaves it out where its widget is not installed,
+// and `id` names a further card of a widget placed more than once.
 expectTypeOf<keyof DefaultLayoutCard>().toEqualTypeOf<
-  "widget" | "w" | "h" | "settings" | "optional"
+  "widget" | "id" | "w" | "h" | "settings" | "optional"
 >();
 expectTypeOf<DefaultLayoutCard["optional"]>().toEqualTypeOf<
   boolean | undefined
 >();
+expectTypeOf<DefaultLayoutCard["id"]>().toEqualTypeOf<string | undefined>();
 expectTypeOf<DefaultLayoutCard["w"]>().toEqualTypeOf<number | undefined>();
 expectTypeOf<DefaultLayoutCard["h"]>().toEqualTypeOf<number | undefined>();
 

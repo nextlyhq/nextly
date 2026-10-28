@@ -130,11 +130,10 @@ describe("the plugins' suggestions", () => {
     ).toEqual(["acme/revenue", "core/team"]);
   });
 
-  it("leave out what is offered and never placed: a declared widget no plugin suggests, a generated card, one offered per collection", () => {
+  it("leave out what is offered and never placed: a declared widget no plugin suggests, one offered per collection", () => {
     const widgets = [
       ...core,
       declared,
-      widget("collection/posts-count", { generated: true }),
       widget("acme/per-collection", { offered: "per-collection" }),
     ];
     expect(ids(widgets, plan({ cards }))).toEqual(["core/team"]);
@@ -181,5 +180,28 @@ describe("one default for everyone", () => {
     expect(defaultLayoutPlacements(core, p)).toEqual(
       defaultLayoutPlacements(core, p)
     );
+  });
+
+  it("keeps each card under the id its entry names, a card that names none under its widget's", () => {
+    const p = plan({
+      cards: [
+        { widget: "site/many" },
+        { widget: "site/one" },
+        { widget: "site/many", id: "pages-count" },
+        { widget: "site/many", id: "posts-count" },
+      ],
+    });
+    const widgets = [widget("site/many"), widget("site/one")];
+    expect(defaultLayoutPlacements(widgets, p).map(each => each.id)).toEqual([
+      "site/many",
+      "site/one",
+      "pages-count",
+      "posts-count",
+    ]);
+    // Named, never derived from a position: a card left out changes no other.
+    const withoutFirst = plan({ cards: p.cards.slice(1) });
+    expect(
+      defaultLayoutPlacements(widgets, withoutFirst).map(each => each.id)
+    ).toEqual(["site/one", "pages-count", "posts-count"]);
   });
 });
