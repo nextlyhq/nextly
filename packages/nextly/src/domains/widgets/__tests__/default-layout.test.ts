@@ -130,11 +130,10 @@ describe("the plugins' suggestions", () => {
     ).toEqual(["acme/revenue", "core/team"]);
   });
 
-  it("leave out what is offered and never placed: a declared widget no plugin suggests, a generated card, one offered per collection", () => {
+  it("leave out what is offered and never placed: a declared widget no plugin suggests, one offered per collection", () => {
     const widgets = [
       ...core,
       declared,
-      widget("collection/posts-count", { generated: true }),
       widget("acme/per-collection", { offered: "per-collection" }),
     ];
     expect(ids(widgets, plan({ cards }))).toEqual(["core/team"]);

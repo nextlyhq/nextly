@@ -693,6 +693,15 @@ async function handleSchemaRequest(
  * Exported so the route-parser suite can assert every entry route's method
  * against it rather than restating the list.
  */
+/**
+ * The collection entry methods whose dispatcher handler reads through the
+ * query service's filtered read: a list and a count.
+ */
+const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
+  "listEntries",
+  "countEntries",
+]);
+
 export const COLLECTION_ENTRY_METHODS = new Set([
   "listEntries",
   "createEntry",
@@ -962,6 +971,10 @@ async function resolveAuthorization(
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
+        // A list and a count read through the query service's filtered read,
+        // which applies a read rule's filter; every other entry route refuses
+        // a caller whose rule answers one.
+        appliesReadFilter: FILTERED_READ_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
         return requireCollectionWriteAccess(
@@ -1937,7 +1950,6 @@ async function serveServiceRequest(
 const NO_WIDGETS: WidgetAudience = {
   visible: [],
   declared: new Set(),
-  generated: [],
   holds: () => false,
   heldActionGates: new Set(),
   token: visibilityToken([], []),
@@ -2205,17 +2217,11 @@ async function buildAdminMeta(
   // is a whole declaration -- a `text` widget's prose, an `actions` widget's
   // links -- so shipping every one and leaving the browser to hide the gated
   // cards hands a reader the contents of a card they may not see.
-  const widgets = [
-    ...publishableWidgets()
-      .filter(widget => audience.declared.has(widget.id))
-      .map(widget =>
-        collectionDefaultForReader(
-          actionsForAudience(widget, audience),
-          readable
-        )
-      ),
-    ...audience.generated,
-  ];
+  const widgets = publishableWidgets()
+    .filter(widget => audience.declared.has(widget.id))
+    .map(widget =>
+      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+    );
   if (widgets.length > 0) {
     workspace.widgets = widgets;
   }
@@ -2390,14 +2396,14 @@ async function handleAdminMetaWorkspaceRequest(
   // 🔴 Which widgets this reader may be told about is decided HERE rather than
   // inside `buildAdminMeta`, and by the SAME implementation the layout endpoint
   // places and offers with, so the two cannot disagree about what a reader may
-  // see. A declaration is its whole content -- a generated card's id, title and
-  // query all name a COLLECTION, a `text` widget carries its prose -- so
-  // publishing the whole set and leaving the browser to hide the gated ones
-  // would disclose every collection in the install and the body of every gated
-  // card to any authenticated caller. That the admin would not draw the card
+  // see. A declaration is its whole content -- a Collection setting's default
+  // names a COLLECTION, a `text` widget carries its prose -- so publishing the
+  // whole set and leaving the browser to hide the gated ones would disclose
+  // collections the reader may not read and the body of every gated card to
+  // any authenticated caller. That the admin would not draw the card
   // is not a control; the payload is JSON, and reading it is the bypass.
   //
-  // `widgetAudience` re-derives the generated cards per request, which is why
+  // `widgetAudience` refreshes the content sources per request, which is why
   // it runs on this route and not in the shared builder: the PUBLIC branding
   // handler deliberately does not initialise services, and refreshing there
   // asked an empty container for the collection registry on every anonymous

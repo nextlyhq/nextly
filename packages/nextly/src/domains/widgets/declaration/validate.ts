@@ -18,9 +18,15 @@ import { z } from "zod";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { isAdminRelativePath } from "../admin-path";
-import { isValidWidgetId } from "../definition";
+import { isValidWidgetId, offeredProblem } from "../definition";
 import { sizeDeclarationProblems } from "../grid-size";
-import { SETTING_NOT_AN_OBJECT, widgetSettingsProblems } from "../settings";
+import { RETIRED_WIDGET_NAMESPACES } from "../retired-widget-namespaces";
+import {
+  SETTING_NOT_AN_OBJECT,
+  startingValueProblem,
+  widgetSettingsProblems,
+  type AnyWidgetSetting,
+} from "../settings";
 
 import { cardAnswerProblem } from "./card-answer";
 import {
@@ -59,11 +65,13 @@ export interface WidgetDeclarationGroup {
 }
 
 /**
- * Namespaces core keeps for itself: its own widgets, and the cards it generates
- * per collection and per Single. A declared widget there would take an id core
- * may hand out tomorrow.
+ * Namespaces core keeps for itself: its own widgets, and the namespaces of the
+ * per-collection and per-Single cards it once made. A declared widget in
+ * `core/` would take an id core may hand out tomorrow; one in a retired
+ * namespace would be dropped from every saved layout that held it, since a
+ * layout read drops those cards by namespace.
  */
-const RESERVED_NAMESPACES = ["core", "collection", "single"] as const;
+const RESERVED_NAMESPACES = ["core", ...RETIRED_WIDGET_NAMESPACES] as const;
 
 /** The fields a declaration may carry. Anything else is named as a mistake. */
 const FIELDS = new Set([
@@ -74,6 +82,7 @@ const FIELDS = new Set([
   "category",
   "size",
   "access",
+  "offered",
   "shows",
   "several",
   "hidesWhenEmpty",
@@ -167,6 +176,7 @@ const CHECKS: readonly ((
   d => optionalTextProblem("category", d.category),
   d => sizeProblems(d.size),
   d => accessProblem(d.access),
+  d => declaredOfferedProblem(d.offered, d.settings),
   d =>
     d.shows === undefined || isFunction(d.shows)
       ? undefined
@@ -184,7 +194,7 @@ const CHECKS: readonly ((
   d => viewProblem(d.view),
   d => isEmptyProblem(d.isEmpty, d.view),
   d => emptyProblems(d.empty, d.settings),
-  d => previewProblems(d.preview, d.view),
+  d => previewProblems(d.preview, d.view, d.settings),
   d => summaryProblems(d.summary),
 ];
 
@@ -221,39 +231,128 @@ function optionalTextProblem(
     : `${field} must be a non-empty string when given`;
 }
 
+/** The keys that each name one of `access`'s object forms. */
+const ACCESS_FORMS = ["collections", "anyOf", "allOf"] as const;
+
 /**
- * Who may be offered the widget: a permission name today. The collections it
- * reads and a predicate of the person are typed, and refused at startup until
- * they are applied, so a declared rule is never silently ignored and the card
- * shown to everyone.
- */
-/**
- * Why `access` is none of its three forms, or `undefined`: a permission name,
- * the collections the widget reads (each judged with the person through the
- * batch's own check), or a predicate of the person.
+ * Why `access` is none of its forms, or `undefined`: a permission gate (a
+ * permission name, `{ anyOf }` or `{ allOf }`), the collections the widget
+ * reads (each judged with the person through the batch's own check), or a
+ * predicate of the person.
  */
 function accessProblem(access: unknown): string | undefined {
   if (access === undefined || isPermissionName(access) || isFunction(access)) {
     return undefined;
   }
-  if (isRecord(access) && "collections" in access) {
-    const { collections } = access;
-    return Array.isArray(collections) &&
-      collections.length > 0 &&
-      collections.every(slug => nonBlank.safeParse(slug).success)
-      ? undefined
-      : "access.collections must be a list of the collections the widget reads, each named by its slug";
+  // 🔴 A bare list is refused rather than read as one of the two gates: an
+  // author writing one means "any of these" or "all of these", and whichever
+  // was guessed would gate the widget for people its author did not intend.
+  if (Array.isArray(access)) {
+    return "access cannot be a list: write { anyOf: [...] } for any one of several permissions, or { allOf: [...] } for every one of them";
   }
-  return `access must be a permission name such as "read-orders", { collections }, or a function of the person, got ${quote(access)}`;
+  if (isRecord(access)) {
+    const forms = ACCESS_FORMS.filter(form => form in access);
+    if (forms.length > 1) {
+      return `access must take one form, but names ${forms.join(" and ")}`;
+    }
+    if ("collections" in access) return collectionsAccessProblem(access);
+    if ("anyOf" in access || "allOf" in access) return gateProblem(access);
+  }
+  return `access must be a permission name such as "read-orders", { anyOf }, { allOf }, { collections }, or a function of the person, got ${quote(access)}`;
+}
+
+function collectionsAccessProblem(
+  access: Record<string, unknown>
+): string | undefined {
+  const { collections } = access;
+  return Array.isArray(collections) &&
+    collections.length > 0 &&
+    collections.every(slug => nonBlank.safeParse(slug).success)
+    ? undefined
+    : "access.collections must be a list of the collections the widget reads, each named by its slug";
+}
+
+/**
+ * Why an `{ anyOf }` or `{ allOf }` gate cannot be used, or `undefined`.
+ *
+ * Every list must name at least one permission, each as stored: "any of
+ * nothing" admits nobody and "all of nothing" everybody, each reading to its
+ * author like the opposite. The gate the registry judges refuses both as
+ * unusable (`requiredPermissionGroups`); refused here, the author is told at
+ * startup which list is wrong rather than finding the widget offered to
+ * nobody.
+ */
+function gateProblem(gate: Record<string, unknown>): string | undefined {
+  const extra = Object.keys(gate).filter(
+    key => key !== "anyOf" && key !== "allOf"
+  );
+  if (extra.length > 0) {
+    return `access takes no ${extra.map(quote).join(", ")} beside its ${"anyOf" in gate ? "anyOf" : "allOf"}`;
+  }
+  if ("anyOf" in gate) return anyOfProblem(gate.anyOf, "access.anyOf");
+  const { allOf } = gate;
+  if (!Array.isArray(allOf) || allOf.length === 0) {
+    return "access.allOf must be a non-empty list, each entry a permission name or { anyOf: [...] }";
+  }
+  // A stray comma's empty slot is named as one, not as an entry that is no permission.
+  const sparse = sparseListProblem(allOf, "access.allOf");
+  if (sparse !== undefined) return sparse;
+  for (const [index, entry] of allOf.entries()) {
+    const problem = allOfEntryProblem(entry, `access.allOf[${index}]`);
+    if (problem !== undefined) return problem;
+  }
+  return undefined;
+}
+
+/** Why one `allOf` entry is neither a permission name nor `{ anyOf }`, or `undefined`. */
+function allOfEntryProblem(entry: unknown, at: string): string | undefined {
+  if (isPermissionName(entry)) return undefined;
+  if (isRecord(entry) && Object.keys(entry).join() === "anyOf") {
+    return anyOfProblem(entry.anyOf, `${at}.anyOf`);
+  }
+  return `${at} must be a permission name such as "read-orders" or { anyOf: [...] }, got ${quote(entry)}`;
+}
+
+/** Why an any-of list is not a non-empty list of permission names, or `undefined`. */
+function anyOfProblem(list: unknown, at: string): string | undefined {
+  // `every` skips an empty slot, so a list with one would pass as if the
+  // entry were never written: refused by the declarations' own rule instead.
+  const sparse = Array.isArray(list) ? sparseListProblem(list, at) : undefined;
+  if (sparse !== undefined) return sparse;
+  return Array.isArray(list) && list.length > 0 && list.every(isPermissionName)
+    ? undefined
+    : `${at} must be a non-empty list of permission names such as "read-orders"`;
+}
+
+/**
+ * Why `offered` cannot work, or `undefined`: judged by the registry's own rule
+ * (`offeredProblem`), so a declaration it would refuse when published stops
+ * startup with every other fault, before any widget is kept. The registry
+ * reads settings as a list, so the declaration's are handed over as one.
+ */
+function declaredOfferedProblem(
+  offered: unknown,
+  settings: unknown
+): string | undefined {
+  return offeredProblem({
+    offered,
+    settings: isRecord(settings) ? Object.values(settings) : settings,
+  });
 }
 
 /**
  * Every problem with a widget's preview cases. Each is drawn as the card's
  * ready state on the preview page, so its data is held to the rule every
  * card's data is held to (`cardAnswerProblem`): it reaches the browser as
- * itself, and a core view's data has the shape that view draws.
+ * itself, and a core view's data has the shape that view draws. Its settings
+ * are what the case is drawn with, so each must be one the widget declares,
+ * with a value that setting accepts (`previewSettingsProblems`).
  */
-function previewProblems(preview: unknown, view: unknown): string[] {
+function previewProblems(
+  preview: unknown,
+  view: unknown,
+  settings: unknown
+): string[] {
   if (preview === undefined) return [];
   if (!Array.isArray(preview)) {
     return ["preview must be a list of cases, each { name, data, settings? }"];
@@ -272,6 +371,10 @@ function previewProblems(preview: unknown, view: unknown): string[] {
     } else names.add(name.data);
     if (entry.settings !== undefined && !isRecord(entry.settings)) {
       problems.push(`${at}.settings must be an object of setting values`);
+    } else if (entry.settings !== undefined) {
+      problems.push(
+        ...previewSettingsProblems(`${at}.settings`, entry.settings, settings)
+      );
     }
     const problem = cardAnswerProblem(display, entry.data);
     if (problem !== undefined) {
@@ -282,6 +385,41 @@ function previewProblems(preview: unknown, view: unknown): string[] {
       );
     }
     return problems;
+  });
+}
+
+/**
+ * Why each of a preview case's setting values cannot be drawn: a name the
+ * widget does not declare, or a value its setting would refuse as a starting
+ * value (`startingValueProblem`), the rule a site dashboard's starting values
+ * are held to, so a case never shows a card no reader could set up.
+ *
+ * Judged only once the widget's own settings are sound: their faults are
+ * reported as themselves, and a value cannot be judged against a setting
+ * that is not one.
+ */
+function previewSettingsProblems(
+  where: string,
+  values: Record<string, unknown>,
+  settings: unknown
+): string[] {
+  const declared = isRecord(settings) ? settings : {};
+  const named = Object.entries(declared).map(([name, setting]) =>
+    isRecord(setting) ? { ...setting, name } : setting
+  );
+  // The shared rules passing is what makes each entry a setting.
+  const sound =
+    widgetSettingsProblems(named).length === 0
+      ? (named as AnyWidgetSetting[])
+      : undefined;
+  return Object.entries(values).flatMap(([name, value]) => {
+    if (!Object.hasOwn(declared, name)) {
+      return [`${where} sets "${name}", which the widget does not declare`];
+    }
+    const setting = sound?.find(candidate => candidate.name === name);
+    if (setting === undefined) return [];
+    const problem = startingValueProblem(setting, value);
+    return problem === undefined ? [] : [`${where}: ${problem}`];
   });
 }
 
@@ -319,7 +457,7 @@ function idProblem(id: unknown, inCore: boolean): string | undefined {
   }
   const namespace = id.slice(0, id.indexOf("/"));
   // Core's own widgets live in `core/`, and only there: the per-collection and
-  // per-Single namespaces are for the cards core generates.
+  // per-Single namespaces are retired, and nobody's.
   if (inCore) {
     return namespace === "core"
       ? undefined
@@ -365,12 +503,14 @@ const optional = (problem: string | undefined): string[] =>
 /**
  * Every problem with a declaration's settings.
  *
- * Judged by the registry's own rules (`widgetSettingsProblems`), all eight
- * types alike, each setting with its key as its name: a declaration and a
- * stored definition cannot be judged by two rules, the dependency rule (a
- * filter, sort or grouping names one of the widget's own Collection settings)
- * included. What only a declaration can get wrong, a setting that is not an
- * object at all, is named here first.
+ * Judged by the registry's own rules (`widgetSettingsProblems`), every type
+ * alike, each setting with its key as its name: a declaration and a stored
+ * definition cannot be judged by two rules, the dependency rule (a filter,
+ * sort or grouping names one of the widget's own Collection settings)
+ * included. What only a declaration can get wrong is named here first: a
+ * setting that is not an object at all, and one without a label. The builders'
+ * types require a label, so this is the refusal plain JavaScript meets; a
+ * stored definition may still omit one, and its sheet falls back to the name.
  */
 function settingsProblems(settings: unknown): string[] {
   if (settings === undefined) return [];
@@ -381,6 +521,15 @@ function settingsProblems(settings: unknown): string[] {
   const malformed = entries
     .filter(([, setting]) => !isRecord(setting))
     .map(([name]) => `setting "${name}" must be a setting declaration`);
+  const unlabelled = entries
+    .filter(
+      ([, setting]) =>
+        isRecord(setting) && !nonBlank.safeParse(setting.label).success
+    )
+    .map(
+      ([name]) =>
+        `setting "${name}" needs a label: the settings sheet names every setting by what its label says, never by its key`
+    );
   /*
    * 🔴 Every entry goes to the shared rules, the malformed ones included, so
    * the limit on how many there are and every well-formed sibling are still
@@ -392,7 +541,7 @@ function settingsProblems(settings: unknown): string[] {
       isRecord(setting) ? { ...setting, name } : setting
     )
   ).filter(problem => problem !== SETTING_NOT_AN_OBJECT);
-  return [...malformed, ...shared];
+  return [...malformed, ...unlabelled, ...shared];
 }
 
 /**

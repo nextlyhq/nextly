@@ -21,7 +21,7 @@ import {
   validateWidgetDefinition,
 } from "../definition";
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
-import { settings } from "../declaration/setting-builders";
+import { DENSITY_OPTIONS } from "../declaration/setting-builders";
 import { LIST_DENSITIES, MAX_WIDGET_LIMIT } from "../query-limits";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
@@ -234,13 +234,16 @@ describe("the list cards' Density", () => {
     "core/recent-activity",
     "core/upcoming-releases",
   ])("%s offers the shared choice, one option for every density", id => {
-    // 🔴 Restated by hand, a density added to the list would reach a plugin's list cards and
-    // not core's.
+    // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
     const widget = CORE_WIDGETS.find(w => w.id === id);
     const density = widget?.settings?.find(
       setting => setting.name === "density"
     );
-    expect(density).toMatchObject(settings.density());
+    expect(density).toMatchObject({
+      type: "select",
+      defaultValue: "default",
+      options: [...DENSITY_OPTIONS],
+    });
     expect(
       (density as { options?: { value: string }[] } | undefined)?.options?.map(
         option => option.value

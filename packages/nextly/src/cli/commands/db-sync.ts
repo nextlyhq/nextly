@@ -49,8 +49,9 @@
  * # Disable auto-sync (use migrations)
  * nextly db:sync --no-auto-sync
  *
- * # Auto-confirm destructive column drops (non-interactive runs)
+ * # Consent to dropping columns, every one or only those named
  * nextly db:sync --accept-data-loss
+ * nextly db:sync --accept-data-loss=dc_posts.summary
  *
  * # Custom config path
  * nextly db:sync --config ./custom/nextly.config.ts
@@ -68,6 +69,11 @@ import { withMigrationExcluded } from "../../domains/field-groups/migration/sync
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
+import {
+  ACCEPT_DATA_LOSS_ENV,
+  ACCEPT_DATA_LOSS_HELP,
+  resolveDataLossConsent,
+} from "../../domains/schema/migrate/data-loss-consent";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
@@ -465,6 +471,23 @@ export async function runDbSync(
 // What: registers `nextly db:sync` (with `nextly sync` as a shorter alias).
 // also dropped the `--seed` flag — demo seeding is now Payload-style and
 // runs from the project's auth-gated POST route.
+/**
+ * Hands `--accept-data-loss` to the push as `NEXTLY_ACCEPT_DATA_LOSS`, the
+ * spelling the schema prompt reads, for the rest of the run: `true` as the
+ * consent without targets, a list as itself. The flag replaces whatever the
+ * variable held, so the run is covered by what was typed for it. A list is
+ * read first, so a malformed one is refused before the sync starts rather
+ * than at the first drop. Absent, the variable is left as it is.
+ */
+export function exportDataLossConsent(
+  flag: string | boolean | undefined,
+  env: Record<string, string | undefined> = process.env
+): void {
+  if (flag === undefined || flag === false) return;
+  resolveDataLossConsent({ flag, env: {} });
+  env[ACCEPT_DATA_LOSS_ENV] = flag === true ? "1" : flag;
+}
+
 export function registerDbSyncCommand(program: Command): void {
   program
     .command("db:sync")
@@ -486,9 +509,10 @@ export function registerDbSyncCommand(program: Command): void {
       "Disable auto-sync of schema changes (use migrations instead)"
     )
     // Deprecated no-op: the schema pipeline handles destructive ops via
-    // interactive prompts (or --accept-data-loss / NEXTLY_ACCEPT_DATA_LOSS=1
-    // in non-interactive runs). Kept registered so existing scripts passing
-    // it keep working; the runtime emits a deprecation warning instead.
+    // interactive prompts (or the data-loss consent, --accept-data-loss or
+    // NEXTLY_ACCEPT_DATA_LOSS, in non-interactive runs). Kept registered so
+    // existing scripts passing it keep working; the runtime emits a
+    // deprecation warning instead.
     .option(
       "-f, --force",
       "(deprecated, no effect) Destructive ops are prompted; use --accept-data-loss for non-interactive runs",
@@ -510,21 +534,16 @@ export function registerDbSyncCommand(program: Command): void {
       "--demote <slug>",
       "Move a code-owned collection to UI (writes to dynamic_collections)"
     )
-    // Sets NEXTLY_ACCEPT_DATA_LOSS=1 for the rest of the run so the prompt
-    // dispatcher auto-confirms destructive column drops instead of refusing
-    // in non-TTY runs. Only drops: renames and type changes still need a
-    // terminal to answer their prompts.
-    .option(
-      "--accept-data-loss",
-      "Auto-confirm destructive column drops without prompting (dangerous; other destructive changes still prompt)",
-      false
-    )
+    // The data-loss consent for the push's column drops, handed on as
+    // NEXTLY_ACCEPT_DATA_LOSS (`exportDataLossConsent`). Only drops: renames
+    // and type changes still need a terminal to answer their prompts.
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .action(
       async (
         cmdOptions: DbSyncCommandOptions & {
           promote?: string;
           demote?: string;
-          acceptDataLoss?: boolean;
+          acceptDataLoss?: string | boolean;
         },
         cmd: Command
       ) => {
@@ -534,8 +553,11 @@ export function registerDbSyncCommand(program: Command): void {
         // Surface the flag as an env var so downstream modules (the
         // schema-change prompt, the auto-sync path) pick it up without
         // needing to thread the option through every function call.
-        if (cmdOptions.acceptDataLoss) {
-          process.env.NEXTLY_ACCEPT_DATA_LOSS = "1";
+        try {
+          exportDataLossConsent(cmdOptions.acceptDataLoss);
+        } catch (error) {
+          context.logger.error(describeError(error));
+          process.exit(1);
         }
 
         // Promote / demote short-circuit the full db:sync flow because
