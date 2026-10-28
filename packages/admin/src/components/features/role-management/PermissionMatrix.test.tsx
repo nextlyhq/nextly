@@ -60,6 +60,61 @@ describe("PermissionMatrix", () => {
     expect(onChange).toHaveBeenCalledWith([]);
   });
 
+  it("clears only its own permissions, leaving those set elsewhere on the screen", async () => {
+    // The roles screen sets collections and Singles by level above the grid,
+    // so the role's value holds ids the grid does not show.
+    const onChange = vi.fn();
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={["p1", "pages-read"]}
+        onChange={onChange}
+      />
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Clear all permissions" })
+    );
+
+    expect(onChange).toHaveBeenCalledWith(["pages-read"]);
+  });
+
+  it("has nothing to clear while it holds none of its own", () => {
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={["pages-read"]}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Clear all permissions" })
+    ).toBeDisabled();
+  });
+
+  it("offers only the tabs it has permissions in", () => {
+    render(
+      <PermissionMatrix
+        permissions={[
+          {
+            id: "s1",
+            name: "Read settings",
+            resource: "settings",
+            action: "read",
+            category: "settings",
+          },
+        ]}
+        value={[]}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByRole("tab").map(tab => tab.textContent)).toEqual([
+      "Settings",
+    ]);
+  });
+
   it("has nothing to clear once the role holds nothing itself", () => {
     render(
       <PermissionMatrix

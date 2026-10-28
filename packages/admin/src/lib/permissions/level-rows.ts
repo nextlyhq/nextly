@@ -145,6 +145,27 @@ export function withLevel(
 }
 
 /**
+ * {@link withLevel} for a role whose list holds only its own permissions, a
+ * base role's being shown beside them and never saved as the role's: `own`
+ * with `row` set to `level`, read together with `lockedIds` and returned
+ * without them. An id the role holds itself stays its own, even where the
+ * base gives it too.
+ */
+export function ownWithLevel(
+  own: readonly string[],
+  row: LevelRow,
+  level: AccessLevel,
+  lockedIds: readonly string[] = []
+): string[] {
+  const owned = new Set(own);
+  const locked = new Set(lockedIds);
+  const inherited = lockedIds.filter(id => !owned.has(id));
+  return withLevel([...own, ...inherited], row, level, lockedIds).filter(
+    id => owned.has(id) || !locked.has(id)
+  );
+}
+
+/**
  * The levels `row` offers a role whose base roles give it `lockedIds`.
  *
  * A level is offered when setting it keeps the row at that level: one whose

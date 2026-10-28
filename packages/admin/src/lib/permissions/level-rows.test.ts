@@ -14,6 +14,7 @@ import type { Permission } from "../../types/ui/form";
 import {
   levelRows,
   offeredLevels,
+  ownWithLevel,
   rowLevel,
   screenEntitiesFrom,
   withLevel,
@@ -204,6 +205,38 @@ describe("withLevel", () => {
     const value = withLevel(custom, homepage, "view");
     expect(value.filter(id => id.endsWith("-posts"))).toEqual(custom);
     expect(rowLevel(posts, value)).toBe("custom");
+  });
+});
+
+describe("ownWithLevel", () => {
+  it("saves the level's ids the base does not give, and none it does", () => {
+    const { posts } = rows();
+    const value = ownWithLevel(["pages-read"], posts, "edit", ["read-posts"]);
+    expect([...value].sort()).toEqual(
+      ["pages-read", "create-posts", "update-posts", "delete-posts"].sort()
+    );
+  });
+
+  it("reads the base's ids with the role's own, so a level they make is kept", () => {
+    const { posts } = rows();
+    // Can view comes from the base alone: the role adds nothing of its own.
+    expect(ownWithLevel([], posts, "view", ["read-posts"])).toEqual([]);
+  });
+
+  it("keeps an id the role holds itself that the base gives too", () => {
+    const { posts } = rows();
+    expect(ownWithLevel(["read-posts"], posts, "view", ["read-posts"])).toEqual(
+      ["read-posts"]
+    );
+  });
+
+  it("takes away the role's own ids above the level", () => {
+    const { posts } = rows();
+    expect(
+      ownWithLevel(["update-posts", "export-posts"], posts, "view", [
+        "read-posts",
+      ])
+    ).toEqual(["export-posts"]);
   });
 });
 

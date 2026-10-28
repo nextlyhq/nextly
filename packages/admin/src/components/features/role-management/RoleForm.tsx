@@ -39,7 +39,8 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
   const {
     form,
     role,
-    allPermissions,
+    levelRows,
+    otherPermissions,
     allRoles,
     isLoading,
     error,
@@ -55,6 +56,10 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
     handleCancel,
     formRef,
   } = useRoleForm(roleId);
+  // A role has one base at most; its name marks the rows it gives to.
+  const baseName = allRoles.find(
+    candidate => candidate.id === selectedBaseRoleIds[0]
+  )?.name;
 
   // The tab names the role being edited by its name as loaded, which is also
   // its name as last saved, not by the name field: a tab that followed the
@@ -147,13 +152,15 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
             <SettingsSection label="Permissions">
               <div className="-mx-6">
                 <p className="px-6 text-sm text-muted-foreground mb-4">
-                  Choose what this role can do. Each tab groups a kind of
-                  resource, and each column is an action it allows.
+                  Choose a level for each collection and Single, or turn on Each
+                  action to choose its actions one by one.
                 </p>
                 <RolePermissionsSection
                   form={form}
-                  allPermissions={allPermissions}
+                  levelRows={levelRows}
+                  otherPermissions={otherPermissions}
                   lockedPermissionIds={lockedPermissionIds}
+                  baseName={baseName}
                   isLoading={isLoading}
                 />
               </div>
