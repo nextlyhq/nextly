@@ -144,7 +144,8 @@ describe("a visitor at the Single gate with no access-control service", () => {
 
     const result = await visitorReadsSiteSettings();
 
-    expect(result.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(result.statusCode).toBe(401);
     expect(result.refusalReason).toBe(
       'read on single "site-settings" requires an authenticated user'
     );
