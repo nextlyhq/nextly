@@ -266,7 +266,8 @@ export function MediaLibrary({
   };
 
   // TanStack Query: Fetch media
-  const { data, isLoading, isFetching, error, refetch } = useMedia(queryParams);
+  const { data, isLoading, isFetching, isPlaceholderData, error, refetch } =
+    useMedia(queryParams);
 
   // TanStack Query: Delete single item
   const { mutate: deleteMedia, isPending: isDeleting } = useDeleteMedia();
@@ -296,15 +297,11 @@ export function MediaLibrary({
   }, []);
 
   // Handlers: Upload
-  const handleUploadComplete = React.useCallback(
-    (_media: Media[]) => {
-      // Refetch to show new uploads
-      void refetch();
-      // Clear selection
-      setSelectedIds(new Set());
-    },
-    [refetch]
-  );
+  const handleUploadComplete = React.useCallback((_media: Media[]) => {
+    // The dropzone has already invalidated the media lists, which refetches
+    // the one on screen; asking again here would fetch it twice.
+    setSelectedIds(new Set());
+  }, []);
 
   // Collapse the drop target as soon as files start uploading; the dropzone's
   // queue keeps rendering while collapsed, so progress stays visible.
@@ -790,6 +787,10 @@ export function MediaLibrary({
                   pageSize={pageSize}
                   pageSizeOptions={[12, 24, 48, 96]}
                   showPageSizeSelector
+                  // Held while the rows on screen stand in for a result still
+                  // loading: their page count is the old result's, and a page
+                  // picked from it could be one the new result doesn't have.
+                  isLoading={isPlaceholderData}
                   onPageChange={handlePageChange}
                   onPageSizeChange={setPageSize}
                   // This page renders TWO pagers -- one per view -- and they
@@ -828,6 +829,8 @@ export function MediaLibrary({
                         pageSize,
                         pageSizeOptions: [12, 24, 48, 96],
                         showPageSizeSelector: true,
+                        // Held for the same reason as the grid's pager.
+                        isLoading: isPlaceholderData,
                         onPageChange: handlePageChange,
                         onPageSizeChange: setPageSize,
                         // The other half of the pair above: same props, other

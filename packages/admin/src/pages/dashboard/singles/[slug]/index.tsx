@@ -53,6 +53,7 @@ import {
   useSharedFieldsRecovery,
 } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 
@@ -305,9 +306,10 @@ export default function SingleEditPage({
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
+          {/* The server's message as it is: it already says what went wrong
+              ("Not found.", "You can't see Home."). */}
           <AlertDescription>
-            Failed to load Single:{" "}
-            {error instanceof Error ? error.message : "Unknown error"}
+            {apiErrorMessage(error, "The Single couldn't be loaded.")}
           </AlertDescription>
         </Alert>
         <div className="mt-6">
@@ -390,17 +392,24 @@ export default function SingleEditPage({
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
         <MeasuredPageFrame>
-          {/* Full width and first, for the reason the entry editor gives. */}
-          <ScheduledReleaseBanner
-            document={
-              slug
-                ? { scopeKind: "single", scopeSlug: slug, entryId: document.id }
-                : undefined
-            }
-            onDefaultLocale={!isNonDefaultLocale}
-          />
           {release.dialog}
           <SingleForm
+            /* Under the editor's header, for the reason the entry editor
+             gives. */
+            documentBanner={
+              <ScheduledReleaseBanner
+                document={
+                  slug
+                    ? {
+                        scopeKind: "single",
+                        scopeSlug: slug,
+                        entryId: document.id,
+                      }
+                    : undefined
+                }
+                onDefaultLocale={!isNonDefaultLocale}
+              />
+            }
             // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
             // expects FieldConfig[] (discriminated). The runtime payload is the
             // same; widening here until the schema layer unifies on FieldConfig.

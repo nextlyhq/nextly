@@ -97,6 +97,7 @@ import {
   recordTransitionEvents,
   recordWriteEvent,
 } from "../../content-events/write-event";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   keepDeniedAtStoredOnUpdate,
   keepDeniedFieldGroupsInDraft,
@@ -650,6 +651,9 @@ export class SingleMutationService extends BaseService {
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<SingleResult<TakenLiveValues>> {
+    // Refused first when the Single is removed from code, before any hook or
+    // read of its document, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("single", params.slug);
     try {
       const accessDenied = await checkSingleAccess({
         slug: params.slug,
@@ -748,6 +752,9 @@ export class SingleMutationService extends BaseService {
      */
     entryId?: string;
   }): Promise<number> {
+    // Refused first when the Single is removed from code, before any hook or
+    // read of its document, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("single", params.slug);
     const singleMeta = await resolveSingleForRequest(
       this.adapter,
       this.singleRegistryService,
@@ -1254,6 +1261,9 @@ export class SingleMutationService extends BaseService {
     // is resolved away into `options` immediately below. See there.
     rawOptions: UpdateSingleOptions = {}
   ): Promise<SingleResult> {
+    // Refused first when the Single is removed from code, before any hook or
+    // read of its document, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("single", slug);
     // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale. Resolved
     // once, here, so the twenty-odd places below that derive from
     // `options.locale` — `writeLocale`, the snapshot locale, the event payloads
@@ -1269,7 +1279,12 @@ export class SingleMutationService extends BaseService {
       ? { ...rawOptions, locale: undefined }
       : rawOptions;
 
-    this.logger.debug("Updating Single document", { slug, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Updating Single document", {
+      slug,
+      locale: options.locale,
+    });
 
     // The wildcard moves a LIFECYCLE and nothing else — see the same guard on
     // `updateEntry` for why Strapi withholds `"*"` from its update method and

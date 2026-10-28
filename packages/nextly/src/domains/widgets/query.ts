@@ -1156,13 +1156,12 @@ function assertTimeseriesAgreesWithOp(
  * target carries no status column, so both selectors reach the same rows and
  * two mutually exclusive questions come back with one answer. A card asking for
  * drafts would report the published count and say nothing about having been
- * ignored, which is the failure `statsWidget` already refuses to GENERATE --
- * this is the same refusal at the door, where a hand-written or plugin query
- * arrives.
+ * ignored, so it is refused at the door, wherever the query comes from: a
+ * core widget's card, a site's own widget or a plugin's.
  *
  * `all` stays legal for every source. It is not a claim that a lifecycle
  * exists, it is a statement that this read is not bounded by one, and it is
- * what the generated count, recent and timeline cards already send.
+ * what a card counting or listing every entry sends.
  */
 function assertValidStatus(
   source: WidgetSource,

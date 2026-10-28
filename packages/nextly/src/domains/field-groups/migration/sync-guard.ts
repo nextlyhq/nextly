@@ -18,8 +18,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { Logger } from "../../../shared/types";
 import { MetaService } from "../../meta/services/meta-service";
+import { withSchemaLock } from "../../schema/pipeline/schema-lock";
 
-import { withMigrationSession } from "./session";
 import { readMigrationState } from "./state";
 
 /** The key/value table the migration marker lives in. */
@@ -82,10 +82,10 @@ export async function assertNoMigrationInFlight(args: {
  * has already decided what exists — with `--remove-orphaned`, deciding to delete
  * it. Exclusion has to be *held*, not sampled.
  *
- * The migration's own lock is what it is held with, so the two exclude each
- * other through one mechanism rather than two that must agree. A run in flight
- * holds it and this refuses; a run that died holds it still, by design, because
- * there is no trustworthy clock to expire it with.
+ * It is held with the schema lock, the one every schema change takes, so a sync
+ * and a migration of any kind exclude each other through one mechanism rather
+ * than two that must agree. A run in flight holds it and this waits or refuses;
+ * a run that died lets it lapse within one lease.
  *
  * The marker is then checked inside the lock, because holding it is necessary
  * and not sufficient: an operator who cleared a dead run's lock row without
@@ -128,19 +128,32 @@ export async function withMigrationExcluded<T>(
      * killed process leaves a claim for an operator, which is the trade a migration already makes.
      */
     releaseOnInterrupt: boolean;
+    /**
+     * What a held lock does to this caller.
+     *
+     * `wait` for a command-line run (`db:sync`), which waits about a minute and then stops naming
+     * the holder. `refuse` (the default) for work inside a running server — a Schema Builder save,
+     * a development reload — which is refused at once rather than holding a request open.
+     */
+    whenHeld?: "wait" | "refuse";
+    /** How `refuse` is worded: for an operator (the default), or for a Builder user. */
+    refusal?: "command" | "editor";
+    /** How long `wait` waits, in milliseconds; a test shortens it. */
+    waitMs?: number;
   },
   work: () => Promise<T>
 ): Promise<T> {
-  return withMigrationSession(
+  const outcome = await withSchemaLock(
     {
       adapter: args.adapter,
-      dialect: args.adapter.getCapabilities().dialect,
-      label: args.label,
-      requireExistingLock: !args.mayCreateLock,
+      command: args.label,
+      whenHeld: args.whenHeld ?? "refuse",
+      ...(args.waitMs !== undefined ? { waitMs: args.waitMs } : {}),
+      refusal: args.refusal ?? "command",
+      mayCreateTables: args.mayCreateLock,
       releaseOnInterrupt: args.releaseOnInterrupt,
-      // Without this the session has nowhere to report a lock it had to skip, and a downgrade from
-      // excluded to unexcluded happens in silence — which is the one outcome that makes skipping
-      // dangerous rather than merely tolerant. Every caller here already has a logger.
+      // Without this the session has nowhere to report a lock it had to fall back on, and a
+      // downgrade from excluded to less excluded happens in silence.
       logger: args.logger,
     },
     async () => {
@@ -152,4 +165,14 @@ export async function withMigrationExcluded<T>(
       return work();
     }
   );
+  // `ran: false` comes only from an `isSettled` wait, which this never asks for.
+  if (!outcome.ran) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "schema lock settled without a settle check",
+        label: args.label,
+      },
+    });
+  }
+  return outcome.value;
 }

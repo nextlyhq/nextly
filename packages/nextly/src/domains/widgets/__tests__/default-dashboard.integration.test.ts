@@ -22,7 +22,7 @@ vi.mock("../../../auth/middleware", async importOriginal => ({
 }));
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
-import { getWidgetLayout } from "../../../api/widget-layout";
+import { getWidgetLayout, putWidgetLayout } from "../../../api/widget-layout";
 import { requireAuthentication } from "../../../auth/middleware";
 import { defineCollection, text } from "../../../config";
 import {
@@ -32,7 +32,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { ReleasesRepository } from "../../releases/releases-repository";
-import { refreshCollectionWidgets } from "../collection-widgets";
+import { refreshContentSources } from "../content-sources";
+import { setDefaultLayoutPlan } from "../default-layout";
 
 /**
  * The agreed default, in order, each at its agreed size, `w` by `h` in grid units. A list card is
@@ -78,14 +79,42 @@ async function account(t: TestNextly, email: string): Promise<string> {
   return created.item.id;
 }
 
-/** The R-11 cards of the default `userId` is handed, in order, with their sizes. */
-async function defaultFor(userId: string): Promise<string[][]> {
+/** Every request from here on is `userId`'s. */
+function signedInAs(userId: string): void {
   vi.mocked(requireAuthentication).mockResolvedValue({
     userId,
     permissions: [],
     roles: [],
     authMethod: "session",
   });
+}
+
+interface LayoutRead {
+  placements: Array<{ id: string; widgetId: string; w: number; h: number }>;
+  defaultPlacements: Array<{ widgetId: string; w: number; h: number }>;
+  version: number;
+  scope: string;
+  source: string;
+}
+
+/** `userId`'s dashboard as the layout endpoint answers it. */
+async function layoutOf(userId: string): Promise<LayoutRead> {
+  signedInAs(userId);
+  const res = await getWidgetLayout(
+    new Request("http://localhost/api/dashboard/layout")
+  );
+  expect(res.status).toBe(200);
+  return (await res.json()) as LayoutRead;
+}
+
+/** Cards as `[widget, "wxh"]`, in order. */
+const sized = (
+  cards: ReadonlyArray<{ widgetId: string; w: number; h: number }>
+) => cards.map(p => [p.widgetId, `${p.w}x${p.h}`]);
+
+/** The R-11 cards of the default `userId` is handed, in order, with their sizes. */
+async function defaultFor(userId: string): Promise<string[][]> {
+  signedInAs(userId);
   const res = await getWidgetLayout(
     new Request("http://localhost/api/dashboard/layout")
   );
@@ -125,7 +154,7 @@ describe.each(getConfiguredTestDialects())(
       // A code rule only narrows the permission, so the reader holds read on
       // the notes the rule admits them to.
       await grantTo(current, readerId, "read", ["dd_notes"]);
-      await refreshCollectionWidgets();
+      await refreshContentSources();
 
       // Before any release exists, Upcoming releases waits for one.
       expect(await defaultFor(admin)).toEqual(
@@ -151,6 +180,67 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("hands the site's defaultLayout to a person following the default, and leaves a saved layout as it was saved", async () => {
+      current = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        // A collection the administrator may read, so Content has one to list.
+        collections: [
+          defineCollection({
+            slug: "dd_posts",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const admin = await account(current, "admin@example.com");
+      await refreshContentSources();
+      // The default a site's `admin.dashboard.defaultLayout` asks for, as startup sets it.
+      setDefaultLayoutPlan({
+        cards: [{ widget: "core/content" }, { widget: "core/team", w: 6 }],
+        suggestions: true,
+        suggested: [],
+      });
+
+      const following = await layoutOf(admin);
+      expect(following.source).toBe("default");
+      expect(sized(following.placements)).toEqual([
+        ["core/content", "12x4"],
+        ["core/team", "6x4"],
+      ]);
+
+      signedInAs(admin);
+      const save = await putWidgetLayout(
+        new Request("http://localhost/api/dashboard/layout", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            placements: [
+              { id: "mine", widgetId: "core/team", w: 4, h: 4, removed: false },
+            ],
+            version: following.version,
+            scope: following.scope,
+          }),
+        })
+      );
+      expect(save.status).toBe(200);
+
+      // The site's default changes; the saved dashboard does not.
+      setDefaultLayoutPlan({
+        cards: [{ widget: "core/team" }, { widget: "core/content" }],
+        suggestions: true,
+        suggested: [],
+      });
+      const saved = await layoutOf(admin);
+      expect(saved.source).toBe("own");
+      expect(
+        saved.placements.map(p => [p.id, p.widgetId, `${p.w}x${p.h}`])
+      ).toEqual([["mine", "core/team", "4x4"]]);
+      // What a reset would return to is the new default.
+      expect(sized(saved.defaultPlacements)).toEqual([
+        ["core/team", "4x4"],
+        ["core/content", "12x4"],
+      ]);
+    });
+
     it("gives a super-admin who may read only internal collections no Content and no Create", async () => {
       current = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
@@ -163,7 +253,7 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       const admin = await account(current, "admin@example.com");
-      await refreshCollectionWidgets();
+      await refreshContentSources();
       expect(await defaultFor(admin)).toEqual(
         without("core/content", "core/quick-create", "core/upcoming-releases")
       );

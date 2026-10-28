@@ -16,12 +16,6 @@ import { expect, type Page } from "@playwright/test";
 const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 /**
- * The host app's `<title>`, which the playground's client root layout cannot
- * declare. The reason is given in full in `builder-a11y.spec.ts`.
- */
-const HOST_OWNED_RULES = ["document-title"];
-
-/**
  * One known defect in the shared chrome, set aside by rule AND place.
  *
  * The sidebar's icon rail shows an icon only on each link, with the name in a
@@ -85,9 +79,9 @@ export async function expectNoAxeViolations(
   page: Page,
   scope?: { include: string }
 ): Promise<void> {
-  let builder = new AxeBuilder({ page })
-    .withTags(AA_TAGS)
-    .disableRules(HOST_OWNED_RULES);
+  // Every AA rule runs, `document-title` included: the admin names the tab
+  // for each screen, so the page under test always has a title.
+  let builder = new AxeBuilder({ page }).withTags(AA_TAGS);
   if (scope) {
     // At least one of them drawn: a screen can hold a hidden copy of a part
     // (a table and its narrow-screen cards), which axe rightly skips.

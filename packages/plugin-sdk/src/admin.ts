@@ -362,7 +362,7 @@ export type {
 /**
  * @experimental The widget kit: the parts core's own dashboard cards are drawn
  * from, for a widget's own component (`defineWidget` with
- * `display: { component }`). The host always draws the card's frame and every
+ * `view: { component }`). The host always draws the card's frame and every
  * state; these are the body-level parts, reading the card's size tier and the
  * admin's theme tokens, so a plugin card matches core's beside it in light and
  * dark.
@@ -370,34 +370,40 @@ export type {
  * - `FrameState`: what a component returns when its own data says the card is
  *   not ready (empty, not available, an error, or still loading), which the
  *   frame then draws in its place, as on every other card.
- * - A figure and the number formatter behind it: `CardFigure`, `cardNumber`,
- *   `cardChange`, in the site's locale.
- * - Charts that take plain series: `GroupsChart`, `OverTimeChart`, drawn in the
- *   shared chart colours.
+ * - `Widget`: the parts of a card's body core's own cards are drawn with.
+ *   `Widget.Figure` (one number, written for the card's tier), `Widget.List`
+ *   (rows with one action each), `Widget.Table` (rows across named columns, a
+ *   table on a wide card), `Widget.BarChart` and `Widget.SeriesChart` (charts
+ *   that take plain data, drawn in the shared chart colours, with an optional
+ *   `unit` for their tooltips).
+ *
+ * The number and change formatters and the chart colour accessor are exported
+ * from this package's root, not here: every module of the admin is a client
+ * module, and the root is server-safe, so a Server Component can call them.
  *
  * Import them from here, never from `@nextlyhq/admin` directly: the admin is the
  * host's single copy, and a plugin that bundled its own would draw its parts
  * outside the card it sits in.
  */
-export {
-  CardFigure,
-  FrameState,
-  cardChange,
-  cardNumber,
-  GroupsChart,
-  OverTimeChart,
-} from "@nextlyhq/admin";
+export { FrameState, Widget } from "@nextlyhq/admin";
 export type {
   CardEmptyContent,
   CardState,
-  GroupsChartGroup,
-  GroupsChartProps,
-  OverTimeChartProps,
-  OverTimeInterval,
-  OverTimePoint,
-  OverTimeSeries,
   SkeletonShape,
+  WidgetBarChartGroup,
+  WidgetBarChartProps,
+  WidgetChartUnit,
+  WidgetFigureProps,
+  WidgetListProps,
+  WidgetListTotal,
   WidgetRenderSize,
+  WidgetRowAction,
+  WidgetSeries,
+  WidgetSeriesChartProps,
+  WidgetSeriesInterval,
+  WidgetSeriesPoint,
+  WidgetTableColumn,
+  WidgetTableProps,
 } from "@nextlyhq/admin";
 
 /**
@@ -417,9 +423,10 @@ export type {
  * a smaller event than a name withdrawn.
  *
  * Routed through `@nextlyhq/admin` rather than `@nextlyhq/ui`, as every block
- * in this file is. That is not a formality — `plugin-sdk` peers on `admin` and
- * does not depend on `ui` at all, and `ui`'s root barrel carries a
- * `"use client"` banner that the layering guard admits only by subpath.
+ * in this file is. That is not a formality — `plugin-sdk` peers on `admin`, and
+ * takes from `ui` only its server-safe subpaths, for its root; `ui`'s root
+ * barrel carries a `"use client"` banner that the layering guard admits only
+ * by subpath.
  */
 export {
   Button,

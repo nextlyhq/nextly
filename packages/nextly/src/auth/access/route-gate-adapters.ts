@@ -34,13 +34,8 @@ import {
 import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
-import {
-  holdsPermission,
-  isSuperAdmin,
-  manageCounts,
-  type Actor,
-  type KeyActor,
-} from "./actor";
+import { manageCounts, type Actor, type KeyActor } from "./actor";
+import { answeringPermissions, storedSlugHolds } from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
 import { aboutSubject, deviate } from "./deviations";
@@ -57,6 +52,7 @@ import {
   userIsSuperAdmin,
   withHeldPermissions,
 } from "./resolve-actor";
+import { allowsSome } from "./rule-answer";
 import {
   askEachLanguage,
   withRuleLanguage,
@@ -561,10 +557,28 @@ function gateVerdict(
   });
 }
 
+/** Whether a signed-in user holds any permission holding the action. */
+async function userHoldsAnswering(
+  userId: string,
+  action: string,
+  resource: string
+): Promise<boolean> {
+  for (const permission of answeringPermissions(action, resource)) {
+    if (
+      await userHoldsPermission(userId, permission.action, permission.resource)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * The verdict for an action no rule can name. A key holds it by its stored
  * slug; a session, with the access-control service, by super-admin authority
- * and then the permission, and without it by the permission alone.
+ * and then the permission, and without it by the permission alone. On a
+ * system resource its `manage-` permission holds it too, as it does for the
+ * decision.
  */
 async function permissionVerdict(
   caller: GateCaller,
@@ -574,40 +588,27 @@ async function permissionVerdict(
 ): Promise<GateVerdict> {
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
-    const today = caller.key.permissions.includes(
-      permissionSlug(action, resource)
-    );
+    const today = storedSlugHolds(caller.key.permissions, action, resource);
     // The decision reads the grant's action and resource, which agree with
-    // the stored slug unless a grant was stored under a slug of its own; and
-    // on a system resource it counts the resource's `manage-` permission.
-    const byGrant = holdsPermission(actor, action, resource);
-    await deviate("key-slug-string-match", today, () => byGrant);
+    // the stored slug unless a grant was stored under a slug of its own.
     await deviate(
-      "manage-not-counted",
-      byGrant,
+      "key-slug-string-match",
+      today,
       () => decidePermission(actor, action, resource).allowed
     );
     return verdictOf(today);
   }
-  const today =
-    (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
-    (await userHoldsPermission(caller.userId, action, resource));
-  if (!manageCounts(action, resource)) return verdictOf(today);
   return verdictOf(
-    await deviate(
-      "manage-not-counted",
-      today,
-      async () =>
-        decidePermission(await actorForUser(caller.userId), action, resource)
-          .allowed
-    )
+    (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
+      (await userHoldsAnswering(caller.userId, action, resource))
   );
 }
 
 /**
  * The verdict when any one of several permissions will do. Today a key holds
- * one by its stored slug and a session by its database permissions, and no
- * rule is read for either.
+ * one by its stored slug and a session by its database permissions, a system
+ * resource's `manage-` permission counting on it as the decision counts it,
+ * and no rule is read for either.
  */
 export async function anyPermissionVerdict(
   auth: AuthContext,
@@ -616,29 +617,29 @@ export async function anyPermissionVerdict(
 ): Promise<GateVerdict> {
   const caller = callerOf(auth);
   if (caller.key) {
-    const actor = keyActorOf(caller, caller.key);
-    const stored = caller.key.permissions;
+    const key = caller.key;
+    const actor = keyActorOf(caller, key);
     const today = permissions.some(({ action, resource }) =>
-      stored.includes(permissionSlug(action, resource))
+      storedSlugHolds(key.permissions, action, resource)
     );
-    // Three steps from today's answer to the decision's, each named apart:
-    // the grants rather than the stored slugs, then a system resource's
-    // `manage-` permission counted, then the targets' rules read.
-    const byGrants = permissions.some(({ action, resource }) =>
-      holdsPermission(actor, action, resource)
-    );
+    // Two steps from today's answer to the decision's, each named apart: the
+    // grants rather than the stored slugs, then the targets' rules read.
     const byPermission = permissions.some(
       ({ action, resource }) =>
         decidePermission(actor, action, resource).allowed
     );
-    await deviate("key-slug-string-match", today, () => byGrants);
-    await deviate("manage-not-counted", byGrants, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
     await deviate("any-of-skips-rules", byPermission, () =>
       anyDecided(actor, permissions, rules)
     );
     return verdictOf(today);
   }
-  const today = await hasAnyPermission(auth.userId, [...permissions]);
+  const today = await hasAnyPermission(
+    auth.userId,
+    permissions.flatMap(({ action, resource }) =>
+      answeringPermissions(action, resource)
+    )
+  );
   // The user's actor is resolved only while a test listens, and once.
   let actor: Promise<Actor> | undefined;
   const userActor = () => (actor ??= actorForUser(auth.userId));
@@ -649,7 +650,6 @@ export async function anyPermissionVerdict(
         decidePermission(resolved, action, resource).allowed
     );
   };
-  await deviate("manage-not-counted", today, byPermission);
   // Named only where reading the rules moves the answer past the permissions:
   // the comparison is made against today's answer, so a difference the
   // permissions alone explain is reported as "agrees" here.
@@ -695,7 +695,10 @@ async function decidedOne(
     kind: "collection",
     slug: resource,
   };
-  return (await decide(actor, action as AccessOperation, target)).allowed;
+  return allowsSome(
+    await decide(actor, action as AccessOperation, target),
+    action
+  );
 }
 
 /**
@@ -771,14 +774,11 @@ async function heldPermission(
       grants: caller.grants ?? [],
       roles: caller.roles,
     });
-    const today = caller.permissions.includes(slug);
-    // Three steps from today's answer to the decision's, each named apart:
-    // the grant rather than the stored slug, then a system resource's
-    // `manage-` permission counted, then the target's rules read.
-    const byGrant = holdsPermission(actor, action, resource);
+    const today = storedSlugHolds(caller.permissions, action, resource);
+    // Two steps from today's answer to the decision's, each named apart: the
+    // grant rather than the stored slug, then the target's rules read.
     const byPermission = decidePermission(actor, action, resource).allowed;
-    await deviate("key-slug-string-match", today, () => byGrant);
-    await deviate("manage-not-counted", byGrant, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
     await deviate("holds-permission-key-skips-rules", byPermission, () =>
       decidedOne(actor, action, resource, rules)
     );
@@ -861,7 +861,7 @@ export async function schemaListed<T extends ListedCollection>(
         actor,
         slug,
         rules,
-        key.permissions.includes(permissionSlug("read", slug))
+        storedSlugHolds(key.permissions, "read", slug)
       )
     );
   }
@@ -872,13 +872,14 @@ export async function schemaListed<T extends ListedCollection>(
   const actor = await actorForUserFailingClosed(caller.userId);
   // The super-admin authority the actor's roles carry counts too: it is what
   // each collection's permission check passed first, and it holds when the
-  // cached check above failed but the roles were read.
+  // cached check above failed but the roles were read. So does a system
+  // resource's `manage-` permission, as the decision counts it.
   return keptWhere(collections, slug =>
     readByPermission(
       actor,
       slug,
       rules,
-      isSuperAdmin(actor) || holdsPermission(actor, "read", slug)
+      decidePermission(actor, "read", slug).allowed
     )
   );
 }
@@ -910,16 +911,7 @@ async function readByPermission(
 ): Promise<boolean> {
   const byPermission = decidePermission(actor, "read", slug).allowed;
   if (actor.kind === "key") {
-    await deviate("key-slug-string-match", today, () =>
-      holdsPermission(actor, "read", slug)
-    );
-    await deviate(
-      "manage-not-counted",
-      holdsPermission(actor, "read", slug),
-      () => byPermission
-    );
-  } else {
-    await deviate("manage-not-counted", today, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
   }
   await deviate("schema-list-ignores-rules", byPermission, () =>
     decidedOne(actor, "read", slug, rules)

@@ -46,6 +46,32 @@ describe("ruleAnswer", () => {
       answer.kind === "malformed-filter" ? answer.problems.length : 0
     ).toBeGreaterThan(0);
   });
+
+  it.each([
+    ["near", { place: { near: "-74.006,40.7128,10000" } }],
+    ["within", { place: { within: "-74.006,40.7128,5000" } }],
+    [
+      "near inside an or",
+      { or: [OWN, { place: { near: "-74.006,40.7128,10000" } }] },
+    ],
+  ])(
+    "reads a filter using a geo operator as not well formed: %s",
+    (_name, value) => {
+      // No read can apply one: it is not expressed in SQL, and a count has no
+      // rows to test it on.
+      const answer = ruleAnswer(value);
+      expect(answer.kind).toBe("malformed-filter");
+      expect(
+        answer.kind === "malformed-filter"
+          ? answer.problems.map(p => p.code)
+          : []
+      ).toContain("FILTER_GEO_IN_RULE");
+    }
+  );
+
+  it("does not mistake a field named like a geo operator for one", () => {
+    expect(ruleAnswer({ near: { equals: "x" } }).kind).toBe("filter");
+  });
 });
 
 describe("ruleAnswer, for an answer that is not plain data", () => {
@@ -96,6 +122,16 @@ describe("ruleAnswer, for an answer that is not plain data", () => {
     const read = ruleAnswer(shared);
     shared.slug.equals = "b";
     expect(read).toEqual({ kind: "filter", filter: { slug: { equals: "a" } } });
+  });
+
+  it("copies a date it reads, so a rule that changes its date afterwards changes nothing", () => {
+    const cutoff = new Date("2026-10-26T00:00:00Z");
+    const read = ruleAnswer({ publishAt: { less_than: cutoff } });
+    cutoff.setUTCFullYear(2099);
+    expect(read).toEqual({
+      kind: "filter",
+      filter: { publishAt: { less_than: new Date("2026-10-26T00:00:00Z") } },
+    });
   });
 });
 

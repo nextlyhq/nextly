@@ -15,7 +15,7 @@
  * @since 1.0.0
  */
 
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
@@ -45,8 +45,8 @@ import {
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { useReadOnlyForReader } from "@admin/hooks/useReadOnlyForReader";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
+import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -184,6 +184,14 @@ export interface EntryFormProps {
    */
   documentActions?: readonly ContributedAction[];
   /**
+   * A strip about the whole document, such as its scheduled release, drawn in
+   * the editor's column directly under the header. Given here rather than
+   * placed above the form by the page: the editor's row pulls itself up over
+   * the page's top inset, so anything placed before it slides under the
+   * sticky header.
+   */
+  documentBanner?: ReactNode;
+  /**
    * @experimental A plugin's document view to draw in place of the form body,
    * when the route names one. Standalone only: an embedded editor has no
    * address for a view to live at.
@@ -306,6 +314,7 @@ export function EntryForm({
   className,
   onViewApi,
   documentActions,
+  documentBanner,
   documentView,
 }: EntryFormProps): JSX.Element {
   /*
@@ -597,8 +606,15 @@ export function EntryForm({
    */
   // A user who may read this entry but not change it gets the same page,
   // read-only, with no claim made on the document.
-  const readOnlyForReader =
-    useReadOnlyForReader(collectionSlug) && mode === "edit";
+  const updateAnswer = useUpdateAnswer(collectionSlug);
+  const readOnlyForReader = updateAnswer === "refused" && mode === "edit";
+  // While a language switch's answer is on its way, nothing that saves is
+  // offered and a submit is held, though the page is not read-only.
+  const mayEdit = mode === "create" || editsOffered(updateAnswer);
+  // What changing the entry needs is held with it: previewing and sharing a
+  // preview (minting a link needs it on the server) and a version's restore,
+  // for a reader and while a language switch's answer is on its way.
+  const updatesHeld = !mayEdit;
   // While a refused publish's recovery runs, every field it reaches is
   // read-only, as it is while someone else holds the entry.
   const lockSurface = useDocumentLockSurface({
@@ -647,13 +663,12 @@ export function EntryForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well. Deleting is not: it
   // follows its own permission, and is offered only with it.
-  const editsHeld = writesHeld || readOnlyForReader;
+  const editsHeld = writesHeld || !mayEdit;
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
   // A refused publish's recovery holds them too, until its reloaded entry is
   // on screen.
-  const versionWritesHeld =
-    lock.actionsDisabled || readOnlyForReader || recovering;
+  const versionWritesHeld = lock.actionsDisabled || updatesHeld || recovering;
   // And the language panel's copies into the form, as it holds the fields.
   const contentHeld = editsHeld || recovering;
   // Delete is offered only to a caller who may delete in this collection.
@@ -737,9 +752,9 @@ export function EntryForm({
      * the reading describes work against a document nobody is tending. The
      * shared predicate states the rule once for both editors.
      */
-    // Nor is a reader's form recorded: it cannot change the document.
-    enabled:
-      !readOnlyForReader && mayRecordRecovery(isSubmitting, viewingVersion),
+    // Nor is a reader's form recorded, which cannot change the document, nor
+    // one whose language's answer is on its way, which may not yet.
+    enabled: !updatesHeld && mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
   });
@@ -759,7 +774,7 @@ export function EntryForm({
   // Withheld from a reader too, so the share popover cannot stay mounted
   // once the user may no longer change the entry.
   const shareDocument: PreviewLinkDocument | undefined =
-    readOnlyForReader || savedEntryId === "" || linkLocale.kind === "unresolved"
+    updatesHeld || savedEntryId === "" || linkLocale.kind === "unresolved"
       ? undefined
       : {
           collection: collection.name,
@@ -816,7 +831,7 @@ export function EntryForm({
   // Previewing, and sharing a preview, are offered only to a user who may
   // change the entry: minting a link needs that on the server.
   const canPreview =
-    !readOnlyForReader &&
+    !updatesHeld &&
     entryPreview.isPreviewAvailable &&
     savedEntryId !== "" &&
     linkLocale.kind !== "unresolved";
@@ -857,7 +872,7 @@ export function EntryForm({
     // A colleague's claim, which withholds every write: a reader's read-only
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
-    canEdit: !readOnlyForReader,
+    canEdit: mayEdit,
     contributedActions: documentActions,
     ...(onViewApi === undefined ? {} : { onViewApi }),
     ...storingHandlers(handleSubmit),
@@ -983,7 +998,7 @@ export function EntryForm({
                 previewOpen &&
                 translationMode.source === undefined &&
                 !documentView &&
-                !readOnlyForReader
+                !updatesHeld
               }
               onClose={() => setPreviewOpen(false)}
               scope={{
@@ -1038,6 +1053,10 @@ export function EntryForm({
                         viewingVersion={viewingVersion}
                         recovering={recovering}
                         fields={getCollectionFields(collection)}
+                        // A document view has no header, so the banner goes
+                        // in among its own: an author working in the view
+                        // still sees the document is in a scheduled release.
+                        banner={documentBanner}
                       />
                     ) : (
                       <div className={cn("space-y-0", className)}>
@@ -1151,7 +1170,7 @@ export function EntryForm({
                                   // locale is either refused by the mint route or, if the claim
                                   // were dropped to avoid that, a grant over every translation.
                                   isLinkAvailable={
-                                    !readOnlyForReader &&
+                                    !updatesHeld &&
                                     savedEntryId !== "" &&
                                     linkLocale.kind !== "unresolved"
                                   }
@@ -1170,6 +1189,7 @@ export function EntryForm({
                                     mode === "edit" ? toggleRail : undefined
                                   }
                                 />
+                                {documentBanner}
                                 {/* First of the strips: a document somebody else is in
                       changes what every affordance below it means, so it is read
                       before the offer to restore work into it. */}

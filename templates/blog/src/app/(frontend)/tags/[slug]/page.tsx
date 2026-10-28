@@ -16,14 +16,16 @@ import { Pagination } from "@/components/Pagination";
 import { PostGrid } from "@/components/PostGrid";
 import { getAllTagSlugs, getPostsByTag, getTagBySlug } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
+import { archiveStaticParams, isArchivePlaceholder } from "@/lib/static-params";
 
 // Pre-render known tag pages at build time. Freshness afterward is
 // tag-based: the query helpers tag their reads (src/lib/queries), so a tag
 // or post change busts the tag and this page regenerates on the next
 // request — no time-based `revalidate`. New tags render on demand.
 export async function generateStaticParams() {
-  const slugs = await getAllTagSlugs();
-  return slugs.map(slug => ({ slug }));
+  // Never empty, so the build learns this page reads the request: see
+  // archiveStaticParams.
+  return archiveStaticParams(await getAllTagSlugs());
 }
 
 export async function generateMetadata({
@@ -32,6 +34,8 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
+  // The build-time placeholder has no metadata of its own.
+  if (isArchivePlaceholder(slug)) return {};
   const tag = await getTagBySlug(slug);
   if (!tag) return { title: "Tag Not Found" };
 
@@ -57,6 +61,9 @@ export default async function TagPage({
 }) {
   const { slug } = await params;
   const { page: pageParam } = await searchParams;
+  // Read before this, so the build learns the page reads the request; the
+  // placeholder stops here, before any database read.
+  if (isArchivePlaceholder(slug)) notFound();
   const currentPage = Math.max(1, Number(pageParam) || 1);
 
   const tag = await getTagBySlug(slug);

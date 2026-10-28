@@ -9,7 +9,11 @@
  * allows. A hook still reading the slugs passes every case where the two
  * agree.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,6 +40,7 @@ const server = vi.hoisted(() => ({
 /** The content language the screen's `?locale=` names, if any. */
 const onScreen = vi.hoisted(() => ({
   locale: undefined as string | undefined,
+  pathname: "/admin",
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
@@ -71,7 +76,10 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
 }));
 
 vi.mock("../useRouter", () => ({
-  useRouter: () => ({ route: { routeType: "private" } }),
+  useRouter: () => ({
+    route: { routeType: "private" },
+    pathname: onScreen.pathname,
+  }),
 }));
 
 vi.mock("../useLocaleParam", () => ({
@@ -88,6 +96,7 @@ import {
   namedEndsAfter,
   useCurrentUserPermissions,
 } from "../useCurrentUserPermissions";
+import { editsOffered, useUpdateAnswer } from "../useUpdateAnswer";
 
 function wrapperFor(client: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -145,6 +154,7 @@ beforeEach(() => {
   server.capabilitiesGate = null;
   server.permissionsGate = null;
   onScreen.locale = undefined;
+  onScreen.pathname = "/admin";
 });
 
 afterEach(() => {
@@ -946,6 +956,270 @@ describe("useCurrentUserPermissions", () => {
       expect(server.asked).toContain("/me/capabilities?locale=fr")
     );
   });
+
+  it("keeps the language moved from on screen while the next is asked, and grants nothing on its word", async () => {
+    // A role that may edit English and only read German.
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const { result, rerender } = renderHook(
+      () => ({
+        access: useCurrentUserPermissions(),
+        edits: editsOffered(useUpdateAnswer("posts")),
+      }),
+      { wrapper: wrapperFor(newClient()) }
+    );
+    await waitFor(() =>
+      expect(result.current.access.content.hasAnswer).toBe(true)
+    );
+    expect(result.current.edits).toBe(true);
+
+    // Switching to German: its answer is held back, so the English one stays
+    // on screen meanwhile.
+    let release!: () => void;
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
+    });
+    server.capabilities = answering({ read: true, update: false });
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+    // The page stays (a placeholder), and nothing is granted on its word:
+    // no update, and no edit offered, though English allowed both.
+    expect(result.current.access.content).toMatchObject({
+      isPlaceholder: true,
+      hasAnswer: false,
+    });
+    expect(result.current.access.canAccessCollection("posts", "update")).toBe(
+      false
+    );
+    expect(result.current.edits).toBe(false);
+
+    // German's own answer arrives, and it refuses.
+    release();
+    await waitFor(() =>
+      expect(result.current.access.content).toMatchObject({
+        isPlaceholder: false,
+        hasAnswer: true,
+      })
+    );
+    expect(result.current.edits).toBe(false);
+    expect(result.current.access.canAccessCollection("posts", "read")).toBe(
+      true
+    );
+  });
+
+  it("offers no edit to an editor mounted while the next language is asked", async () => {
+    // The entry page shows its skeleton while the document loads in the new
+    // language, so the editor mounts again during the switch, with no answer
+    // of its own to keep. It reads the English answer as a placeholder too.
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const client = newClient();
+    // The route guard, which stays mounted through the switch.
+    const guard = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() =>
+      expect(guard.result.current.content.hasAnswer).toBe(true)
+    );
+
+    let release!: () => void;
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
+    });
+    server.capabilities = answering({ read: true, update: false });
+    onScreen.locale = "de";
+    const editor = renderHook(
+      () => ({
+        access: useCurrentUserPermissions(),
+        edits: editsOffered(useUpdateAnswer("posts")),
+      }),
+      { wrapper: wrapperFor(client) }
+    );
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+    expect(editor.result.current.access.content).toMatchObject({
+      isPlaceholder: true,
+      hasAnswer: false,
+    });
+    expect(editor.result.current.edits).toBe(false);
+
+    release();
+    await waitFor(() =>
+      expect(editor.result.current.access.content.hasAnswer).toBe(true)
+    );
+    expect(editor.result.current.edits).toBe(false);
+  });
+});
+
+describe("returning to a language another has answered since", () => {
+  it("waits on the language's own answer while it is asked again, rather than keeping it", async () => {
+    // An answer for the language on screen that no longer holds may have
+    // stopped holding because access changed, so it is not kept as another
+    // language's would be: the page waits for the current one.
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    // A cache that keeps a language's answer once nothing reads it, as the
+    // admin's does; with none kept, returning would read as a first visit.
+    const caching = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result, rerender } = renderHook(
+      () => ({
+        access: useCurrentUserPermissions(),
+        edits: editsOffered(useUpdateAnswer("posts")),
+      }),
+      { wrapper: wrapperFor(caching) }
+    );
+    await waitFor(() =>
+      expect(result.current.access.content.hasAnswer).toBe(true)
+    );
+
+    // German answers, which leaves the English answer in the cache no longer
+    // current.
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=de")
+    );
+    await waitFor(() =>
+      expect(result.current.access.content).toMatchObject({
+        hasAnswer: true,
+        isPlaceholder: false,
+      })
+    );
+
+    // Back to English: its own answer is asked again, and held back here.
+    let release!: () => void;
+    server.capabilitiesGate = new Promise(done => {
+      release = done;
+    });
+    onScreen.locale = "en";
+    rerender();
+    await waitFor(() =>
+      expect(
+        server.asked.filter(p => p === "/me/capabilities?locale=en")
+      ).toHaveLength(2)
+    );
+    expect(result.current.access.content).toMatchObject({
+      isPlaceholder: false,
+      hasAnswer: false,
+      isLoading: true,
+    });
+
+    release();
+    await waitFor(() =>
+      expect(result.current.access.content).toMatchObject({
+        hasAnswer: true,
+        isPlaceholder: false,
+      })
+    );
+    expect(result.current.edits).toBe(true);
+  });
+});
+
+describe("switching language after a change to access", () => {
+  it("keeps no invalidated answer on screen for the next language", async () => {
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result, rerender } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // A change to roles invalidates the answer; its refresh is held back.
+    server.capabilitiesGate = new Promise(() => {});
+    await act(async () => {
+      invalidateCurrentUserAccess(client);
+    });
+    await waitFor(() =>
+      expect(
+        server.asked.filter(p => p === "/me/capabilities?locale=en")
+      ).toHaveLength(2)
+    );
+
+    // On to French, whose answer is held back too: the English answer, which
+    // may no longer describe the user's access, is no placeholder for it.
+    server.capabilitiesGate = new Promise(() => {});
+    onScreen.locale = "fr";
+    rerender();
+    await waitFor(() =>
+      expect(server.asked).toContain("/me/capabilities?locale=fr")
+    );
+    expect(result.current.content).toMatchObject({
+      isPlaceholder: false,
+      hasAnswer: false,
+      isLoading: true,
+    });
+  });
+});
+
+describe("a placeholder past its end", () => {
+  it("keeps no answer the end of a role has left behind, before it is asked again", async () => {
+    // The English answer is in the cache, not yet invalidated, from before the
+    // role assignment it was read under ended. German is opened and its own
+    // answer is held back: the English one is no placeholder for it.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const ended = Date.now() - 60_000;
+    client.setQueryData(
+      currentUserCapabilitiesKey("en"),
+      answering({ read: true, update: true }, ended),
+      { updatedAt: ended - 60_000 }
+    );
+    server.capabilitiesGate = new Promise(() => {});
+    onScreen.locale = "de";
+
+    const { result } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+
+    // The first render, before anything is asked again.
+    expect(result.current.content).toMatchObject({
+      isPlaceholder: false,
+      hasAnswer: false,
+    });
+  });
+});
+
+describe("a change to access during a language switch", () => {
+  it("stops keeping the language moved from once a change invalidates it", async () => {
+    onScreen.locale = "en";
+    server.capabilities = answering({ read: true, update: true });
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result, rerender } = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.content.hasAnswer).toBe(true));
+
+    // On to German, held back: the English answer is the placeholder.
+    server.capabilitiesGate = new Promise(() => {});
+    onScreen.locale = "de";
+    rerender();
+    await waitFor(() =>
+      expect(result.current.content.isPlaceholder).toBe(true)
+    );
+
+    // A change to roles invalidates every answer while German is still
+    // asked: the English one may no longer describe the user's access.
+    server.capabilitiesGate = new Promise(() => {});
+    await act(async () => {
+      invalidateCurrentUserAccess(client);
+    });
+    await waitFor(() =>
+      expect(result.current.content.isPlaceholder).toBe(false)
+    );
+    expect(result.current.content.hasAnswer).toBe(false);
+  });
 });
 
 describe("invalidateCurrentUserAccess", () => {
@@ -1191,5 +1465,74 @@ describe("the end the permission list names", () => {
     expect(
       namedEndsAfter([], [{ validUntil: 9_000, answeredAt: 300 }], now)
     ).toEqual([{ end: 9_000, namedAt: 300 }]);
+  });
+});
+
+describe("one screen's callers", () => {
+  /** How many times the permission list was asked for. */
+  const permissionAsks = (): number =>
+    server.asked.filter(p => p === "/me/permissions").length;
+
+  it("share one answer however late they mount, and the next screen asks once", async () => {
+    // 🔴 A screen's callers mount over more than one commit: the dashboard's
+    // cards mount once its layout has answered, after the shell has asked, and
+    // a slow layout answers seconds later. Each mount asking again read the
+    // list twice on every dashboard load; a time window still did whenever the
+    // layout outlasted it.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const client = newClient();
+    const shell = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
+    const asked = permissionAsks();
+
+    // A card mounts ten seconds later on the same screen: it reads the answer.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    const card = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    expect(card.result.current.hasPermission("read-posts")).toBe(true);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(permissionAsks()).toBe(asked);
+
+    // The control: the next screen asks again, so a changed role is seen
+    // there, and asks ONCE, however many of its callers see the new pathname.
+    onScreen.pathname = "/admin/collections/posts";
+    shell.rerender();
+    card.rerender();
+    renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(permissionAsks()).toBe(asked + 1);
+  });
+
+  it("ask again when the admin regains focus, on the same screen", async () => {
+    // An answer kept for the screen is never stale, so a focus refetch that
+    // waits for staleness would keep a role granted or revoked elsewhere until
+    // the next screen.
+    const client = newClient();
+    const shell = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
+    const asked = permissionAsks();
+    try {
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+      await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
+    } finally {
+      focusManager.setFocused(undefined);
+    }
   });
 });
