@@ -2877,6 +2877,13 @@ export class CollectionQueryService extends BaseService {
     /** When true, bypass all access control checks (collection-level, field permissions) */
     overrideAccess?: boolean;
     /**
+     * A write rule's filter the list is narrowed to, matched as the read's
+     * own rule filter is. A bulk write lists through a trusted read
+     * (`overrideAccess`), which asks no read rule, and this keeps that list to
+     * the entries the caller's write rule matches.
+     */
+    writeRuleFilter?: RuleFilter;
+    /**
      * Enforce FIELD-level read rules even on a read that is otherwise trusted.
      *
      * `overrideAccess` governs two different trusts with one boolean — "you may
@@ -3089,7 +3096,8 @@ export class CollectionQueryService extends BaseService {
         localeChain,
         // This path has rows to evaluate them over.
         extractGeo: true,
-        ruleFilter: access.filter,
+        // A trusted list asks no read rule; a bulk write's narrows it instead.
+        ruleFilter: access.filter ?? params.writeRuleFilter,
       });
       const hasGeoFilters = geoFilters.length > 0;
 

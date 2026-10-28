@@ -919,7 +919,10 @@ export class CollectionBulkService extends BaseService {
     const gate = await writeGateFor(data, "collection", () =>
       this.mutationService.hasLifecycle(params.collectionName)
     );
-    const accessDenied = await this.accessService.checkCollectionAccess({
+    // A rule answering a filter allows the write for the entries it matches:
+    // the list below is narrowed to them, and each is judged again as it is
+    // written.
+    const access = await this.accessService.checkCollectionWrite({
       collectionName: params.collectionName,
       operation: gate,
       user: accessUser,
@@ -930,6 +933,7 @@ export class CollectionBulkService extends BaseService {
       // super-admin bypass does not apply to it on the collection-level gate.
       authenticatedScope: params.authenticatedScope,
     });
+    const accessDenied = access.denied;
     if (accessDenied) {
       const logContext = {
         op: "bulkUpdateByQuery",
@@ -958,6 +962,11 @@ export class CollectionBulkService extends BaseService {
       collectionName: params.collectionName,
       where: updateEnumerationWhere,
       overrideAccess: true,
+      // Only the entries the caller's write rule matches, in the default
+      // language the per-row write matches them in. The limit counts these.
+      ...(access.filter === undefined
+        ? {}
+        : { writeRuleFilter: access.filter }),
       status: "all",
       context: params.context,
       request: params.request,
@@ -1106,7 +1115,10 @@ export class CollectionBulkService extends BaseService {
     // 1. Check collection-level access FIRST. Phase 4.5: collection-wide
     // access denial is a request-level error, not a per-item failure;
     // throw so the dispatcher emits a 403 error envelope.
-    const accessDenied = await this.accessService.checkCollectionAccess({
+    // A rule answering a filter allows the delete for the entries it matches:
+    // the list below is narrowed to them, and each is judged again as it is
+    // deleted.
+    const access = await this.accessService.checkCollectionWrite({
       collectionName: params.collectionName,
       operation: "delete",
       user: accessUser,
@@ -1116,6 +1128,7 @@ export class CollectionBulkService extends BaseService {
       // super-admin-owned key without delete fails fast rather than enumerating.
       authenticatedScope: params.authenticatedScope,
     });
+    const accessDenied = access.denied;
     if (accessDenied) {
       const logContext = {
         op: "bulkDeleteByQuery",
@@ -1143,6 +1156,11 @@ export class CollectionBulkService extends BaseService {
       collectionName: params.collectionName,
       where: deleteEnumerationWhere,
       overrideAccess: true,
+      // Only the entries the caller's delete rule matches, in the default
+      // language the per-row delete matches them in. The limit counts these.
+      ...(access.filter === undefined
+        ? {}
+        : { writeRuleFilter: access.filter }),
       status: "all",
       context: params.context,
       request: params.request,

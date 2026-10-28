@@ -706,8 +706,9 @@ const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
 
 /**
  * The entry writes whose service matches the entry against a write rule's
- * filter: an update, a delete, and the writes an editor makes through an
- * entry's versions, each judged as an update of the entry.
+ * filter: an update, a delete, the writes an editor makes through an entry's
+ * versions, each judged as an update of the entry, and the bulk writes, which
+ * judge each entry they name or match as the single writes do.
  */
 const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
   "updateEntry",
@@ -716,6 +717,9 @@ const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
   "discardWorkingDraft",
   "takeLiveSharedValues",
   "autosaveEntry",
+  "bulkUpdateEntries",
+  "bulkDeleteEntries",
+  "bulkUpdateByQuery",
 ]);
 
 export const COLLECTION_ENTRY_METHODS = new Set([
