@@ -105,7 +105,8 @@ created — and only to a reader who may read that collection or single.
 
 A site declares widgets of its own in its config, with `defineWidget` as a plugin does. They are
 checked, registered and offered in the add panel like a plugin's, and `defaultLayout` may place
-them. A widget drawn by its own component names it relative to the config file:
+them. A widget drawn by its own component names it relative to the config file, and says when
+its data is empty, since core cannot tell that for a component it does not draw:
 
 ```ts
 import { defineWidget } from "nextly";
@@ -114,9 +115,11 @@ import { defineConfig } from "nextly/config";
 const notes = defineWidget({
   id: "site/notes",
   title: "Notes",
+  description: "The team's notes for this week.",
   size: { default: { w: 6, h: 3 } },
   load: async () => ({ notes: ["Ship the release notes"] }),
   view: { component: "./dashboard/notes#NotesCard" },
+  isEmpty: data => data.notes.length === 0,
 });
 
 export default defineConfig({ admin: { dashboard: { widgets: [notes] } } });

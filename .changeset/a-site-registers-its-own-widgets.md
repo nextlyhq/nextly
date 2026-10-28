@@ -35,4 +35,6 @@ are checked but not applied. Their components are listed in the generated compon
 `next dev`, `nextly generate:types` and its `--check`, under the site config's name. A site names
 a component relative to its config file (`"./dashboard/notes#NotesCard"`), which the map imports
 from its own folder, or by a package name; a path alias is refused at startup with the relative
-spelling to write instead.
+spelling to write instead. Widgets a plugin's `setup()` adds to the site's dashboard are listed
+too, as the running server registers them. In development a map whose config has moved is
+written again, so a component named relative to the config resolves from its new folder.
