@@ -26,6 +26,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import type { AccessControlContext } from "../../../shared/types/access";
 
 // Integration files share fixed system-table names, so this file keeps its
 // own collection slug.
@@ -417,6 +419,171 @@ describe.each(getConfiguredTestDialects())(
         `publish-${PLAIN}`
       );
       expect(await add(t, UPDATER, key)).toBe("FORBIDDEN");
+    });
+  }
+);
+
+// The publish rule matches each language's own title: "english" in English,
+// "deutsch" in German.
+const BY_TITLE = "releasefilter_by_title";
+// Published entries whose edits are held as a pending change, published by
+// their owner only.
+const DRAFTED = "releasefilter_drafted";
+
+describe.each(getConfiguredTestDialects())(
+  "readiness asked as the run's publish of every language is (%s)",
+  dialect => {
+    async function bootWithLanguages(): Promise<TestNextly> {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: BY_TITLE,
+            status: true,
+            localized: true,
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: (context: AccessControlContext) =>
+                ({
+                  title: {
+                    equals: context.locale === "de" ? "deutsch" : "english",
+                  },
+                }) as unknown as boolean,
+            },
+            fields: [text({ name: "title" })],
+          }),
+          defineCollection({
+            slug: DRAFTED,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: ownEntries,
+            },
+            fields: [text({ name: "title" }), text({ name: "owner" })],
+          }),
+        ],
+      });
+      await userWhoMay(current, AUTHOR, "read", [BY_TITLE, DRAFTED]);
+      await grantTo(current, AUTHOR, "publish", [BY_TITLE, DRAFTED]);
+      return current;
+    }
+
+    const entries = (t: TestNextly) =>
+      t
+        .getService("collectionsHandler")
+        .getEntryService() as CollectionEntryService;
+
+    /** The release's write of `id`: a publish of every language, as the author. */
+    const runsWrite = (t: TestNextly, collection: string, id: string) =>
+      entries(t).updateEntry(
+        {
+          collectionName: collection,
+          entryId: id,
+          locale: "*",
+          user: { id: AUTHOR },
+          overrideAccess: false,
+        } as never,
+        { status: "published" }
+      );
+
+    /** The members of a new release, added on a trusted call as the author's. */
+    async function releaseOf(
+      t: TestNextly,
+      collection: string,
+      entryIds: readonly string[]
+    ): Promise<{ releaseId: string; memberIds: string[] }> {
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      const memberIds: string[] = [];
+      for (const entryId of entryIds) {
+        const member = await t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: collection,
+          entryId,
+          locale: null,
+          action: "publish",
+          userId: AUTHOR,
+          overrideAccess: true,
+        });
+        memberIds.push(member.id);
+      }
+      return { releaseId: release.id, memberIds };
+    }
+
+    async function flaggedIn(t: TestNextly, releaseId: string) {
+      const readiness = await t.nextly.releases.readiness({ releaseId });
+      return readiness.hard
+        .filter(finding => finding.code === "AUTHOR_MAY_NOT_ACT")
+        .map(finding => finding.memberId);
+    }
+
+    it("flags a member the filter matches in English but not in German, which the publish puts live", async () => {
+      const t = await bootWithLanguages();
+      const seed = async (german: string) => {
+        const created = await entries(t).createEntry(
+          { collectionName: BY_TITLE, overrideAccess: true, locale: "en" },
+          { title: "english", status: "draft" }
+        );
+        const id = String((created.data as { id: unknown }).id);
+        await entries(t).updateEntry(
+          {
+            collectionName: BY_TITLE,
+            entryId: id,
+            overrideAccess: true,
+            locale: "de",
+          },
+          { title: german, status: "draft" }
+        );
+        return id;
+      };
+      const matched = await seed("deutsch");
+      const unmatched = await seed("anders");
+      const {
+        releaseId,
+        memberIds: [matchedMember, unmatchedMember],
+      } = await releaseOf(t, BY_TITLE, [matched, unmatched]);
+
+      const flagged = await flaggedIn(t, releaseId);
+
+      expect(flagged).toEqual([unmatchedMember]);
+      expect(flagged).not.toContain(matchedMember);
+      // POPULATION CONTROL: the run's own write refuses the flagged member,
+      // and publishes the other.
+      expect((await runsWrite(t, BY_TITLE, unmatched)).statusCode).toBe(403);
+      expect((await runsWrite(t, BY_TITLE, matched)).success).toBe(true);
+    });
+
+    it("flags a member whose held edit, which the publish puts live, takes it out of the filter", async () => {
+      const t = await bootWithLanguages();
+      const seed = async (edit: Record<string, unknown>) => {
+        const created = await t.nextly.create({
+          collection: DRAFTED,
+          data: { title: "mine", owner: AUTHOR, status: "published" },
+        });
+        const id = String(created.item.id);
+        // Held as a pending change: the entry is live.
+        await t.nextly.update({ collection: DRAFTED, id, data: edit } as never);
+        return id;
+      };
+      const givenAway = await seed({ owner: OTHER });
+      const retitled = await seed({ title: "retitled" });
+      const {
+        releaseId,
+        memberIds: [givenAwayMember, retitledMember],
+      } = await releaseOf(t, DRAFTED, [givenAway, retitled]);
+
+      const flagged = await flaggedIn(t, releaseId);
+
+      expect(flagged).toEqual([givenAwayMember]);
+      expect(flagged).not.toContain(retitledMember);
+      // POPULATION CONTROL: the run's own write refuses the flagged member,
+      // and publishes the other.
+      expect((await runsWrite(t, DRAFTED, givenAway)).statusCode).toBe(403);
+      expect((await runsWrite(t, DRAFTED, retitled)).success).toBe(true);
     });
   }
 );
