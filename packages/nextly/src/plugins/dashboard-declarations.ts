@@ -120,9 +120,10 @@ export function pluginWidgetDeclarationGroups(
 ): DeclaredWidgetGroup[] {
   return dashboards.map(({ owner, widgets, collections }) => ({
     owner,
-    // None at all is a plugin that adds only Needs attention items: it
-    // declares no widget, rather than a list that is not one.
-    declarations: widgets ?? [],
+    // Left out is a plugin that adds only Needs attention items: it declares
+    // no widget. Only `undefined` reads so; `null` is a list that is not one,
+    // and goes on to the shape check to be refused.
+    declarations: widgets === undefined ? [] : widgets,
     ...(collections === undefined ? {} : { collections }),
   }));
 }
