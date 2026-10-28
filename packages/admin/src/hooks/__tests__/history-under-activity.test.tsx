@@ -19,9 +19,9 @@ import { useUnsavedChanges } from "../useUnsavedChanges";
 
 vi.mock("../useHydration", () => ({ useHydration: () => true }));
 
-// The browser's own methods, before any admin code patched them.
-// eslint-disable-next-line @typescript-eslint/unbound-method
-const { pushState, replaceState } = window.history;
+// The browser's own methods live on the prototype; a patch is an own property
+// of `window.history`, and putting the browser's back assigns the prototype's.
+const { pushState, replaceState } = History.prototype;
 
 function Form({ dirty }: { dirty: boolean }) {
   useUnsavedChanges({ isDirty: dirty });
