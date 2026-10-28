@@ -138,7 +138,6 @@ jobs:
             Integration (mysql) shard (3)
             Integration (sqlite) shard (1)
             Integration (sqlite) shard (2)
-            Integration (sqlite) shard (3)
           token: ${{ github.token }}
       - name: Decide
         id: decide
@@ -206,9 +205,10 @@ jobs:
       # count is read from `strategy.job-total`; the `changes` job's list and
       # scripts/main-catch-up.mjs name each shard, and tests hold both to this.
       #
-      # Three, because two were not enough on any leg: MySQL shards ran into
-      # INTEGRATION_SUITE_BUDGET, postgres shards took 32 to 53 minutes of it,
-      # and the core suite only grows (its files run one at a time on purpose).
+      # Three, because two are not enough here: on a database per worker, two
+      # shards project to 43 minutes on the slowest run measured, inside
+      # INTEGRATION_SUITE_BUDGET but without the quarter of it every leg keeps
+      # spare (the rule is beside the sqlite leg's matrix, below).
       matrix:
         shard: [1, 2, 3]
     # A BACKSTOP now, not the bound that should ever fire.
@@ -363,8 +363,12 @@ jobs:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
       TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     strategy:
-      # The same split as the postgres leg, for the same reasons.
+      # Each shard's verdict is its own, as on the postgres leg.
       fail-fast: false
+      # Three, because two are not enough here: on a database per worker, the
+      # slowest shard of three still took 27 to 34 minutes, so two would project
+      # to about 45, past the quarter of INTEGRATION_SUITE_BUDGET every leg
+      # keeps spare (the rule is beside the sqlite leg's matrix, below).
       matrix:
         shard: [1, 2, 3]
     # The same backstop as the postgres leg, for the same reasons.
@@ -545,8 +549,8 @@ jobs:
   integration-sqlite-shards:
     # Not a required check: `Integration (sqlite)` below is, and it passes
     # only when every shard did. GitHub appends the matrix value to a name
-    # with no expression in it, so the shards report as `... shard (1)` to
-    # `... shard (3)`, and a skipped run as one `... shard`.
+    # with no expression in it, so the shards report as `... shard (1)` and
+    # `... shard (2)`, and a skipped run as one `... shard`.
     name: Integration (sqlite) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
@@ -566,12 +570,19 @@ jobs:
       TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
       TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
     strategy:
-      # The same split as the postgres leg, for the same reasons: run whole,
-      # this leg's suite ran past INTEGRATION_SUITE_BUDGET on main and on pull
-      # requests alike, so a run ended red with files still to go.
+      # Each shard's verdict is its own, as on the postgres leg.
       fail-fast: false
+      # Each leg takes the fewest shards that keep two things true: its slowest
+      # shard stays a quarter under INTEGRATION_SUITE_BUDGET, so variance does
+      # not fire it, and stays shorter than the slowest shard of the leg that
+      # finishes last, so a pull request never waits longer for a runner start
+      # saved. Measured over 65 runs of this leg on two workers (2026-10-25 to
+      # 10-27), its whole suite took 22 to 40 minutes: two shards project to
+      # about 19 minutes typically and 27 at the slowest, under the postgres
+      # leg's 21 typical. One shard would fit the budget but become the slowest
+      # job of every run.
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2]
     # The same backstop as the database legs, for the same reasons: the bound
     # that should ever fire is INTEGRATION_SUITE_BUDGET on the step, which
     # reports as a failure. It moves with its siblings so there is one rule to

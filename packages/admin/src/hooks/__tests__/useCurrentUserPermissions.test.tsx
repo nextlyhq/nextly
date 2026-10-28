@@ -86,6 +86,7 @@ import {
 } from "../current-user-access";
 import {
   namedEndsAfter,
+  PERMISSIONS_FRESH_MS,
   useCurrentUserPermissions,
 } from "../useCurrentUserPermissions";
 import { editsOffered, useUpdateAnswer } from "../useUpdateAnswer";
@@ -1456,5 +1457,47 @@ describe("the end the permission list names", () => {
     expect(
       namedEndsAfter([], [{ validUntil: 9_000, answeredAt: 300 }], now)
     ).toEqual([{ end: 9_000, namedAt: 300 }]);
+  });
+});
+
+describe("one screen's callers", () => {
+  /** How many times the permission list was asked for. */
+  const permissionAsks = (): number =>
+    server.asked.filter(p => p === "/me/permissions").length;
+
+  it("share one answer when they mount within the window, and the next screen asks again", async () => {
+    // 🔴 A screen's callers mount over more than one commit: the dashboard's
+    // cards mount once its layout has answered, after the shell has asked.
+    // Each mount asking again read the list twice on every dashboard load.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const client = newClient();
+    const shell = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(shell.result.current.hasAnswer).toBe(true));
+    const asked = permissionAsks();
+
+    // A card mounts a moment later on the same screen: it reads the answer.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PERMISSIONS_FRESH_MS / 4);
+    });
+    const card = renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    expect(card.result.current.hasPermission("read-posts")).toBe(true);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(permissionAsks()).toBe(asked);
+
+    // The control: a caller mounting once the window has passed, as the next
+    // screen's does, asks again, so a changed role is seen there.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PERMISSIONS_FRESH_MS);
+    });
+    renderHook(() => useCurrentUserPermissions(), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(permissionAsks()).toBe(asked + 1));
   });
 });

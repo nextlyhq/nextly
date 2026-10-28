@@ -32,7 +32,8 @@ const THROWS = "widget-kit-fixture/throws";
 const HIDES = "widget-kit-fixture/hides-when-empty";
 const LOAD_THROWS = "widget-kit-fixture/load-throws";
 const NOT_SHOWN = "widget-kit-fixture/not-shown";
-const FIXTURES = [KIT, THROWS, HIDES, LOAD_THROWS, NOT_SHOWN];
+const NEEDS = "widget-kit-fixture/needs-collection";
+const FIXTURES = [KIT, THROWS, HIDES, LOAD_THROWS, NOT_SHOWN, NEEDS];
 
 interface Layout {
   version: number;
@@ -78,6 +79,12 @@ async function placeFixtures(page: Page): Promise<void> {
             id: "e2e-not-shown",
             widgetId: NOT_SHOWN,
             ...(await defaultSizeOf(page, NOT_SHOWN)),
+            removed: false,
+          },
+          {
+            id: "e2e-needs",
+            widgetId: NEEDS,
+            ...(await defaultSizeOf(page, NEEDS)),
             removed: false,
           },
           ...others,
@@ -232,4 +239,23 @@ test("a plugin card and a core card wear the same header", async ({ page }) => {
   await expect(
     page.locator('[data-testid^="widget-cell-"]').getByText(/^Updated /)
   ).toHaveCount(0);
+});
+
+test("a card that needs a setting asks for it, and its button opens the card's settings on that field", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await placeFixtures(page);
+  await gotoAdmin(page, "/");
+
+  const needs = page.getByTestId(`widget-cell-${NEEDS}`);
+  // Named by the setting's key while the setting builders give no label of their own.
+  await expect(needs.getByTestId("card-empty")).toContainText(
+    "No collection chosen yet"
+  );
+  await needs.getByRole("button", { name: "Choose collection" }).click();
+  // The card's own settings, with focus on the one field it is missing.
+  const sheet = page.getByRole("dialog", { name: /settings/ });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("combobox").first()).toBeFocused();
 });

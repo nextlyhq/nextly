@@ -259,6 +259,19 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 export const logger = createLogger();
 
 /**
+ * A command's warnings, after a blank line: how many, then each indented. Nothing when there
+ * are none. One wording for every command that ends by listing what it warned about.
+ */
+export function logWarnings(log: Logger, warnings: readonly string[]): void {
+  if (warnings.length === 0) return;
+  log.newline();
+  log.warn(`${warnings.length} warning(s):`);
+  for (const warning of warnings) {
+    log.item(warning, 1);
+  }
+}
+
+/**
  * Format a duration in milliseconds to a human-readable string
  *
  * @param ms - Duration in milliseconds

@@ -64,6 +64,52 @@ function recording() {
 }
 
 describe("a declared widget drawn by its own component", () => {
+  it("is called only while its card is ready or refreshing, across every state the frame draws", () => {
+    // One card taken through each state in turn: the calls each state added are counted, so a
+    // component drawn under the frame's own states shows up as calls where there should be none.
+    const seen = recording();
+    const calls: Record<string, number> = {};
+    const { rerender } = render(
+      <WidgetRenderer definition={declared} slot={undefined} />
+    );
+    calls.loading = seen.length;
+    const steps: [string, WidgetSlot, boolean][] = [
+      ["ready", dataSlot(3), false],
+      ["refreshing", dataSlot(3), true],
+      [
+        "empty",
+        { ok: true, empty: true, result: { op: "data", data: 0 } },
+        false,
+      ],
+      ["error", { ok: false, error: "The store did not answer." }, false],
+      [
+        "no-access",
+        { ok: false, code: "unavailable", error: "forbidden" },
+        false,
+      ],
+    ];
+    for (const [state, slot, isFetching] of steps) {
+      const before = seen.length;
+      rerender(
+        <WidgetRenderer
+          definition={declared}
+          slot={slot}
+          isFetching={isFetching}
+          onRetry={() => {}}
+        />
+      );
+      calls[state] = seen.length - before;
+    }
+    expect(calls.loading).toBe(0);
+    expect(calls.ready).toBeGreaterThan(0);
+    expect(calls.refreshing).toBeGreaterThan(0);
+    expect(calls.empty).toBe(0);
+    expect(calls.error).toBe(0);
+    expect(calls["no-access"]).toBe(0);
+    // Refreshing, it is handed the data it already had, marked as refreshing.
+    expect(seen.at(-1)).toMatchObject({ data: 3, refreshing: true });
+  });
+
   it("is drawn by the frame while its data is coming, and the component is not called", () => {
     const seen = recording();
     render(<WidgetRenderer definition={declared} slot={undefined} />);

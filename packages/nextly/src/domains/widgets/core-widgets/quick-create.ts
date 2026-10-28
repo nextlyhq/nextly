@@ -7,8 +7,10 @@
 
 import type { WidgetDefinition } from "../definition";
 
+import { CORE_WIDGET_ID } from "./ids";
+
 export const quickCreateWidget = {
-  id: "core/quick-create",
+  id: CORE_WIDGET_ID.quickCreate,
   title: "Create",
   description:
     "One click to an empty entry form, for the collections this reader may create in.",
@@ -21,7 +23,6 @@ export const quickCreateWidget = {
     min: { w: 4, h: 2 },
     max: { w: 12, h: 4 },
   },
-  defaultOrder: 20,
   component: "core#QuickCreate",
   // Offered only to a reader who could create an entry somewhere: every
   // button on it would otherwise open onto a refusal.

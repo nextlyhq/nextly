@@ -7,8 +7,10 @@ import { expectTypeOf } from "vitest";
 
 import type { AdminConfig } from "../../../../shared/types/config";
 import type { WidgetSizeDeclaration } from "../../grid-size";
+import type { AnyWidget } from "../define-widget";
 import type {
   AdminDashboardConfig,
+  AttentionItem,
   CoreWidgetId,
   DashboardContribution,
   DefaultLayoutCard,
@@ -48,10 +50,21 @@ expectTypeOf<keyof DashboardContribution>().toEqualTypeOf<
   "widgets" | "suggest" | "alternatives" | "attention"
 >();
 
+// A plugin that adds only Needs attention items declares no widgets.
+expectTypeOf<{
+  attention: readonly AttentionItem[];
+}>().toMatchTypeOf<DashboardContribution>();
+expectTypeOf<DashboardContribution["widgets"]>().toEqualTypeOf<
+  readonly AnyWidget[] | undefined
+>();
+
 // A default card's size is `w` and `h` in grid units, each optional; it takes
-// no named width.
+// no named width. `optional` leaves it out where its widget is not installed.
 expectTypeOf<keyof DefaultLayoutCard>().toEqualTypeOf<
-  "widget" | "w" | "h" | "settings"
+  "widget" | "w" | "h" | "settings" | "optional"
+>();
+expectTypeOf<DefaultLayoutCard["optional"]>().toEqualTypeOf<
+  boolean | undefined
 >();
 expectTypeOf<DefaultLayoutCard["w"]>().toEqualTypeOf<number | undefined>();
 expectTypeOf<DefaultLayoutCard["h"]>().toEqualTypeOf<number | undefined>();
