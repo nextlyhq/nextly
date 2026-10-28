@@ -71,8 +71,9 @@ function ImageSizesContent({
   search: string;
   setSearch: (val: string) => void;
 }) {
-  // Each change is offered only to a reader holding the permission it asks;
-  // a read-only reader sees the sizes and nothing to change them with.
+  // Each change is offered only to a reader holding the permission it asks.
+  // Every reader may open a size to see it: the edit page shows it read-only
+  // to one who may not update it.
   const { hasPermission } = useCurrentUserPermissions();
   const changes = settingsChangesAllowed(hasPermission);
   const [sizes, setSizes] = React.useState<ImageSize[]>([]);
@@ -284,11 +285,8 @@ function ImageSizesContent({
       columns={columns}
       rows={paginatedSizes}
       loading={isLoading}
-      rowHref={
-        changes.update
-          ? size =>
-              buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id })
-          : undefined
+      rowHref={size =>
+        buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id })
       }
       primaryColumn="name"
       rowActions={rowActions}
