@@ -528,11 +528,13 @@ function objectKeysOf(mapCode: string, name: string): string[] | undefined {
     .split("\n")
     .slice(1)) {
     if (line.startsWith("}")) return paths;
-    const key = /^\s*("(?:[^"\\]|\\.)*")\s*:\s*_p\d+\.[A-Za-z_$][\w$]*,/.exec(
-      line
-    )?.[1];
-    if (key === undefined) return undefined;
-    paths.push(JSON.parse(key) as string);
+    const entry = /^\s*("(?:[^"\\]|\\.)*")\s*:\s*_p\d+\.(.*)$/.exec(line);
+    if (entry === null) return undefined;
+    const path = JSON.parse(entry[1]) as string;
+    // The member the generator writes for that path, read back as written rather than as an
+    // ASCII identifier: an export named in any script (`#Résumé`) is one the generator emits.
+    if (!entry[2].startsWith(`${parsePath(path).member},`)) return undefined;
+    paths.push(path);
   }
   return undefined;
 }

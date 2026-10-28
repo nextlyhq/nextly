@@ -26,6 +26,8 @@ import {
   COMPONENT_PATHS_FILENAME,
   componentImportMapEntries,
   type ComponentMapEntry,
+  configImportOf,
+  configImportSpecifier,
   listedPathsOf,
   mapRegisteredPathsOf,
 } from "./component-import-map";
@@ -47,6 +49,17 @@ export interface ComponentMapAgreement {
   readonly missing: readonly ComponentMapEntry[];
   /** Paths the committed list holds that nothing declares any more. */
   readonly obsolete: readonly string[];
+  /**
+   * The config the map checks each widget component against, as it imports it, and the import
+   * the checked config needs, where the two differ; `undefined` where they agree or there is no
+   * map. A map written for another config passes its widgets' props against that one.
+   */
+  readonly otherConfig:
+    | {
+        readonly written: string | undefined;
+        readonly expected: string | undefined;
+      }
+    | undefined;
 }
 
 /** Whether the committed map agrees with the declarations: nothing absent, missing or obsolete. */
@@ -56,19 +69,22 @@ export function componentMapAgrees(found: ComponentMapAgreement): boolean {
     found.listReadable &&
     found.mapMatchesList &&
     found.missing.length === 0 &&
-    found.obsolete.length === 0
+    found.obsolete.length === 0 &&
+    found.otherConfig === undefined
   );
 }
 
 /**
  * Compares the map committed beside the generated types file, resolved against `cwd`, with
- * what `plugins` declare. Throws only when a file that is there cannot be read, which is a
- * question the check could not ask rather than an answer.
+ * what `plugins` declare, and with `configFile`, the config they were loaded from (none for a
+ * site on the default config), whose type the map must import. Throws only when a file that is
+ * there cannot be read, which is a question the check could not ask rather than an answer.
  */
 export async function checkComponentMapFiles(
   plugins: readonly PluginDefinition[],
   typesOutputPath: string,
-  cwd: string
+  cwd: string,
+  configFile: string | undefined
 ): Promise<ComponentMapAgreement> {
   const dir = resolve(cwd, dirname(typesOutputPath));
   const files = [
@@ -88,7 +104,27 @@ export async function checkComponentMapFiles(
       map === undefined || sameSet(mapRegisteredPathsOf(map), listed),
     missing: declared.filter(each => !held.has(each.path)),
     obsolete: (listed ?? []).filter(path => !declaredPaths.has(path)),
+    otherConfig:
+      map === undefined ? undefined : otherConfigOf(map, dir, cwd, configFile),
   };
+}
+
+/**
+ * The map's config import beside the one `configFile` needs, worked out as the generator works it
+ * out, where they differ; `undefined` where they agree.
+ */
+function otherConfigOf(
+  map: string,
+  dir: string,
+  cwd: string,
+  configFile: string | undefined
+): ComponentMapAgreement["otherConfig"] {
+  const written = configImportOf(map);
+  const expected =
+    configFile === undefined
+      ? undefined
+      : configImportSpecifier(dir, resolve(cwd, configFile));
+  return written === expected ? undefined : { written, expected };
 }
 
 /** Whether two path lists hold the same paths; never for a list that could not be read. */

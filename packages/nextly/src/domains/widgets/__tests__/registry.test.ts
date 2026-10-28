@@ -10,6 +10,7 @@ import {
   overrideWidget,
   registerDeclaredDefinition,
   registerWidget,
+  type WidgetPatch,
 } from "../registry";
 
 const def = (
@@ -212,6 +213,20 @@ describe("the doors a widget whose data core builds may come through", () => {
     expect(() => overrideWidget("acme/owned", owned)).toThrow(
       /overrideWidget\(\) with owner/
     );
+  });
+
+  it("is refused on a patch too, which is spread whole into the stored definition", () => {
+    registerWidget(def("acme/patched"));
+    for (const field of ["owner", "serverData"]) {
+      const patch = {
+        [field]: 'plugin "@acme/other"',
+      } as unknown as WidgetPatch;
+      expect(() => extendWidget("acme/patched", patch)).toThrow(
+        new RegExp(`extendWidget\\(\\) with ${field}`)
+      );
+    }
+    expect(getWidget("acme/patched")).not.toHaveProperty("owner");
+    expect(getWidget("acme/patched")?.serverData).toBeUndefined();
   });
 
   it("cannot be replaced, since its card is answered from its declaration", () => {
