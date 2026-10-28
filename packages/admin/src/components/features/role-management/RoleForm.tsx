@@ -10,6 +10,7 @@ import { FormProvider } from "react-hook-form";
 
 import { SettingsSection } from "@admin/components/features/settings";
 import { Loader2, AlertTriangle } from "@admin/components/icons";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRoleForm } from "@admin/hooks/useRoleForm";
 import type { RoleFormProps } from "@admin/types/ui/form";
 
@@ -37,6 +38,7 @@ export const ROLE_FORM_ID = "role-form";
 export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
   const {
     form,
+    role,
     allPermissions,
     allRoles,
     isLoading,
@@ -53,6 +55,12 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
     handleCancel,
     formRef,
   } = useRoleForm(roleId);
+
+  // The tab names the role being edited by its name as loaded, which is also
+  // its name as last saved, not by the name field: a tab that followed the
+  // field would rename itself on every keystroke of an edit not yet saved.
+  // A new role has none yet, so the create screen keeps the screen's name.
+  useDocumentTitle(role?.name);
 
   return (
     <>

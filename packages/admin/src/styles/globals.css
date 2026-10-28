@@ -9,7 +9,11 @@
  * 2. Use CSS @layer to control cascade order
  * 3. Wrap utilities with .nextly-admin scope in build-css.mjs post-processing
  */
-@import "tailwindcss";
+/* No automatic detection: every source is named below. Tailwind reads
+ * class-shaped words from any file it scans, prose included, so scanning the
+ * whole package let a Markdown note quoting `[var(...)]` become invalid CSS
+ * and take down every admin route. */
+@import "tailwindcss" source(none);
 
 /* Design-system source of truth: tokens, @theme mappings, dark variant, base reset. */
 @import "../../../ui/src/styles/theme.css";
@@ -18,6 +22,9 @@
  * compiled sheet so third-party plugin components can use them with no build
  * step (they cannot add themselves to the @source scans below). */
 @import "./plugin-safelist.css";
+
+/* The admin's own source code. */
+@source "..";
 
 /* Scan @nextlyhq/ui source so Tailwind includes utility classes used by extracted components */
 @source "../../../ui/src";

@@ -19,14 +19,16 @@ import {
   getPostsByCategory,
 } from "@/lib/queries";
 import { absoluteUrl } from "@/lib/site-url";
+import { archiveStaticParams, isArchivePlaceholder } from "@/lib/static-params";
 
 // Pre-render known category pages at build time. Freshness afterward is
 // tag-based: the query helpers tag their reads (src/lib/queries), so a
 // category or post change busts the tag and this page regenerates on the
 // next request — no time-based `revalidate`. New categories render on demand.
 export async function generateStaticParams() {
-  const slugs = await getAllCategorySlugs();
-  return slugs.map(slug => ({ slug }));
+  // Never empty, so the build learns this page reads the request: see
+  // archiveStaticParams.
+  return archiveStaticParams(await getAllCategorySlugs());
 }
 
 export async function generateMetadata({
@@ -35,6 +37,8 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
+  // The build-time placeholder has no metadata of its own.
+  if (isArchivePlaceholder(slug)) return {};
   const category = await getCategoryBySlug(slug);
   if (!category) return { title: "Category Not Found" };
 
@@ -60,6 +64,9 @@ export default async function CategoryPage({
 }) {
   const { slug } = await params;
   const { page: pageParam } = await searchParams;
+  // Read before this, so the build learns the page reads the request; the
+  // placeholder stops here, before any database read.
+  if (isArchivePlaceholder(slug)) notFound();
   const currentPage = Math.max(1, Number(pageParam) || 1);
 
   const category = await getCategoryBySlug(slug);

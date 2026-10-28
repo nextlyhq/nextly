@@ -10,7 +10,8 @@
 //   {
 //     "version": 1,
 //     "migrationHash": "<sha256 of paired .sql file content>",
-//     "snapshot": { "tables": [ ... ] }
+//     "snapshot": { "tables": [ ... ] },
+//     "entities": { "collections": {...}, "singles": {...}, "fieldGroups": {...} }
 //   }
 //
 // JSON is written deterministically (sorted keys + 2-space indent) so
@@ -27,6 +28,11 @@ import type {
   NextlySchemaSnapshot,
 } from "../pipeline/diff/types";
 
+import {
+  isEntitySettingsRecord,
+  type EntitySettingsRecord,
+} from "./entity-settings";
+
 export interface SnapshotFile {
   version: 1;
   migrationHash: string;
@@ -42,6 +48,17 @@ export interface SnapshotFile {
    * to one written before this field existed.
    */
   contributions?: Record<string, ContributedElements>;
+  /**
+   * Every collection's, Single's and field group's settings at this point:
+   * labels, description, admin options, versioning, Draft/Published, the
+   * localisation flag and each field's declaration (`entity-settings.ts`).
+   *
+   * Recorded whole in every snapshot, whatever its migration changed, so a
+   * snapshot alone says what the settings were. Absent from a snapshot written
+   * before settings were recorded, which says nothing about them: a reader
+   * must never take the absence as settings cleared.
+   */
+  entities?: EntitySettingsRecord;
 }
 
 /** Empty snapshot used for "first migration" (no prior state). */
@@ -150,6 +167,12 @@ export function parseSnapshotFile(
       "expected contributions to map table names to their contributed element names"
     );
   }
+  if (obj.entities !== undefined && !isEntitySettingsRecord(obj.entities)) {
+    throw new SnapshotFileError(
+      filename,
+      "expected entities to record each collection's, single's and field group's settings by slug"
+    );
+  }
   return obj as unknown as SnapshotFile;
 }
 
@@ -164,7 +187,9 @@ export async function writeSnapshot(
   baseName: string,
   snapshot: NextlySchemaSnapshot,
   sqlContent: string,
-  contributions: Readonly<Record<string, ContributedElements>> = {}
+  contributions: Readonly<Record<string, ContributedElements>> = {},
+  /** Every entity's settings; omitted only by a caller that has none to record. */
+  entities?: EntitySettingsRecord
 ): Promise<string> {
   await mkdir(metaDir, { recursive: true });
   const byName = (a: { name: string }, b: { name: string }) =>
@@ -177,6 +202,9 @@ export async function writeSnapshot(
           contributions: normalizeContributions(contributions),
         }
       : {}),
+    // Key order is sorted by the replacer below, so the record is written the
+    // same way whatever order the config declares its entities in.
+    ...(entities !== undefined ? { entities } : {}),
     // Sort tables by name for reproducibility across machines.
     snapshot: {
       tables: [...snapshot.tables]
@@ -312,8 +340,9 @@ function sortedKeysReplacer(_key: string, value: unknown): unknown {
     !Array.isArray(value) &&
     !(value instanceof Date)
   ) {
-    // After narrowing, Object.keys accepts `value` directly.
-    const sorted: Record<string, unknown> = {};
+    // After narrowing, Object.keys accepts `value` directly. A null prototype
+    // keeps an own `__proto__` key (plugin options can hold one) a key.
+    const sorted = Object.create(null) as Record<string, unknown>;
     for (const k of Object.keys(value).sort()) {
       sorted[k] = (value as Record<string, unknown>)[k];
     }

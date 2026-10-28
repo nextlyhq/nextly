@@ -4748,7 +4748,7 @@ service     super-admin-inherited    update     providers   none                
 service     key-read-only            update     providers   none                  403   .       .        403    R    .        .       .       .           .       R       .     .
 service     key-full-access          update     providers   none                  403   .       .        403    R    .        .       .       .           .       R       .     .
 service     key-role-based           update     providers   none                  403   .       .        403    R    .        .       .       .           .       R       .     .
-service     key-super-admin          update     providers   none                  A     .       .        403    R    .        .       .       .           .       R       .     .
+service     key-super-admin          update     providers   none                  A     .       .        A      A    .        .       .       .           .       A       .     .
 service     user-partial             update     providers   none                  403   .       .        403    R    .        .       .       .           .       R       .     .
 service     key-partial              update     providers   none                  403   .       .        403    R    .        .       .       .           .       R       .     .
 service     visitor                  delete     providers   none                  401   .       .        401    .    .        .       .       .           .       .       .     .

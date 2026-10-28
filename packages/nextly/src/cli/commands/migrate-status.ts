@@ -47,6 +47,12 @@ import {
   orderedMigrations,
   qualifiedFilename,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  findRegistryDisagreements,
+  registryDisagreementLines,
+  type RegistryDisagreements,
+} from "../../domains/schema/migrate/registry-consistency";
+import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import { marksNoTransaction } from "../../domains/schema/migrate/split-sql";
 import { describeError } from "../../errors/index";
 import type { PluginDefinition } from "../../plugins/plugin-context";
@@ -69,6 +75,7 @@ import {
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
+import { installRegistryResolver } from "../utils/registry-resolver";
 
 import {
   NO_TRANSACTION_ROLLBACK_NOTE,
@@ -195,6 +202,16 @@ interface MigrateStatusResult {
   /** Applied migrations whose latest rollback attempt failed. */
   failedRollbacks: FailedRollback[];
   collections: CollectionPendingChange[];
+  /**
+   * Where the registry and the tables disagree; null when the database has
+   * no registry yet.
+   */
+  registry: RegistryDisagreements | null;
+  /**
+   * Why the registry could not be compared with the tables, when it could
+   * not; `registry` is then null.
+   */
+  registryError?: string;
   summary: {
     applied: number;
     pending: number;
@@ -328,6 +345,14 @@ export async function runMigrateStatus(
       dialect
     );
 
+    const { registry, registryError } = await compareRegistry(
+      adapter as unknown as DrizzleAdapter,
+      dialect,
+      cwd,
+      configResult,
+      logger
+    );
+
     // F11: include the new status variants in the applied bucket so the
     // summary count reflects "actually-applied rows" regardless of whether
     // the file was modified or missing post-apply.
@@ -350,12 +375,15 @@ export async function runMigrateStatus(
         migrations: migrationStatuses,
         failedRollbacks,
         collections: pendingCollections,
+        registry,
+        ...(registryError !== undefined ? { registryError } : {}),
         summary,
       };
       console.log(JSON.stringify(result, null, 2));
     } else {
       displayStatus(migrationStatuses, pendingCollections, summary, context);
       displayFailedRollbacks(failedRollbacks, context);
+      displayRegistryDisagreements(registry, registryError, context);
     }
   } finally {
     await adapter.disconnect();
@@ -921,6 +949,68 @@ function formatDate(date: Date): string {
   const seconds = String(date.getSeconds()).padStart(2, "0");
 
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+/**
+ * The registry rows against the tables they name, and the declared entities
+ * against the rows: the comparison `nextly migrate` makes when it finishes.
+ *
+ * A comparison that cannot run is reported, not raised, so the migration
+ * listing above it still prints: it is the part of this command a deploy
+ * script reads first. The registry services read their tables by name, so the
+ * resolver a CLI run has no boot to install is installed here.
+ */
+async function compareRegistry(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  cwd: string,
+  configResult: LoadConfigResult,
+  logger: CommandContext["logger"]
+): Promise<{
+  registry: RegistryDisagreements | null;
+  registryError?: string;
+}> {
+  try {
+    installRegistryResolver(adapter);
+    const { entities } = await resolveDeclaredSchema({
+      projectRoot: cwd,
+      config: configResult.config,
+      deferredExtends: configResult.deferredExtends,
+    });
+    return {
+      registry: await findRegistryDisagreements({
+        adapter,
+        dialect,
+        declared: entities,
+        logger,
+      }),
+    };
+  } catch (error) {
+    return { registry: null, registryError: describeError(error) };
+  }
+}
+
+/** Warns about each place the registry and the tables disagree. */
+function displayRegistryDisagreements(
+  registry: RegistryDisagreements | null,
+  registryError: string | undefined,
+  context: CommandContext
+): void {
+  if (registryError !== undefined) {
+    context.logger.warn(
+      `Could not compare the registry with the tables: ${registryError}`
+    );
+    return;
+  }
+  const lines = registryDisagreementLines(registry);
+  if (lines.length === 0) return;
+  const { logger } = context;
+  logger.newline();
+  logger.divider();
+  logger.newline();
+  logger.info("Registry and Tables");
+  logger.newline();
+  for (const line of lines) logger.warn(line);
 }
 
 /**

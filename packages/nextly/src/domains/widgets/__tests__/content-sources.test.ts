@@ -40,6 +40,9 @@ beforeEach(() => {
         // Readable, so offered to filter and sort, but its values live per
         // language, so the read will not group by it.
         { name: "headline", type: "text", localized: true },
+        // Values a row cannot print: many strings, and a boolean.
+        { name: "tags", type: "text", hasMany: true },
+        { name: "done", type: "checkbox" },
       ],
       timestamps: false,
     },
@@ -77,6 +80,16 @@ describe("the content sources a card's settings may offer", () => {
     expect(byName.get("headline")).toMatchObject({ groupable: false });
     // The control: a plain field carries no mark, so it stays groupable.
     expect(byName.get("title")).not.toHaveProperty("groupable");
+  });
+
+  it("marks a field no row can print, and only those", () => {
+    // 🔴 Unmarked, a Fields setting offered them, and the row drew an empty place.
+    const [posts] = offeredFor("posts");
+    const byName = new Map(posts?.fields.map(field => [field.name, field]));
+    expect(byName.get("tags")).toMatchObject({ presentable: false });
+    expect(byName.get("done")).toMatchObject({ presentable: false });
+    // The control: a plain text field carries no mark.
+    expect(byName.get("title")).not.toHaveProperty("presentable");
   });
 
   it("never offers a field a read rule could refuse", () => {
