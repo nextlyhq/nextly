@@ -14,28 +14,44 @@ import { Dialog, DialogContent, DialogTitle } from "@nextlyhq/ui";
 
 function page(mode: "visible" | "hidden") {
   return (
-    <Activity mode={mode}>
-      <Dialog open>
-        <DialogContent>
-          <DialogTitle>Delete entry</DialogTitle>
-        </DialogContent>
-      </Dialog>
-    </Activity>
+    <>
+      <button type="button">Site</button>
+      <Activity mode={mode}>
+        <Dialog open>
+          <DialogContent>
+            <DialogTitle>Delete entry</DialogTitle>
+          </DialogContent>
+        </Dialog>
+      </Activity>
+    </>
   );
 }
 
 describe("a dialog under Activity", () => {
-  it("is hidden with the page that opened it, and gives the body back", () => {
+  it("locks the page while shown, and is hidden with its page, giving the body and focus back", () => {
     const { rerender, unmount } = render(page("visible"));
     const dialog = screen.getByRole("dialog");
     expect(dialog).toBeVisible();
+    // What a modal dialog takes from the page, so its release can be seen.
+    expect(document.body.style.pointerEvents).toBe("none");
+    // Its focus trap holds: the page's own control cannot take focus.
+    const site = screen.getByRole("button", { name: "Site", hidden: true });
+    site.focus();
+    expect(dialog.contains(document.activeElement)).toBe(true);
 
     rerender(page("hidden"));
     expect(dialog).not.toBeVisible();
     expect(document.body.style.pointerEvents).not.toBe("none");
+    // The trap is gone with it, so the page showing in its place has focus
+    // back. (Moving focus off an element display:none hides is the browser's
+    // own rule, which jsdom does not apply; a trap left behind is the
+    // dialog's, and is what this can see.)
+    site.focus();
+    expect(document.activeElement).toBe(site);
 
     rerender(page("visible"));
     expect(screen.getByRole("dialog")).toBeVisible();
+    expect(document.body.style.pointerEvents).toBe("none");
     unmount();
   });
 });

@@ -14,6 +14,11 @@ import { render } from "@testing-library/react";
 import { Activity } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  entryBehindIsAdmin,
+  forgetEntryBehind,
+} from "@admin/lib/admin-history";
+
 import { useRouter } from "../useRouter";
 import { useUnsavedChanges } from "../useUnsavedChanges";
 
@@ -41,6 +46,21 @@ function page(mode: "visible" | "hidden", dirty: boolean) {
   );
 }
 
+/** Whether a move now records the page left, as the router's patch does. */
+function routerPatched(): boolean {
+  forgetEntryBehind();
+  window.history.pushState(null, "", "/admin/collections/tags");
+  const recorded = entryBehindIsAdmin() === true;
+  window.history.replaceState(null, "", "/admin/collections/posts/1");
+  return recorded;
+}
+
+/** Whether a move away from the edited entry is held, as the guard's patch does. */
+function guardHolds(): boolean {
+  window.history.pushState(null, "", "/admin/collections/posts/2");
+  return window.location.pathname === "/admin/collections/posts/1";
+}
+
 function expectBrowserHistory() {
   expect(window.history.pushState).toBe(pushState);
   expect(window.history.replaceState).toBe(replaceState);
@@ -53,15 +73,25 @@ afterEach(() => {
 });
 
 describe("the admin's history patches under Activity", () => {
-  it("leave the browser's methods while a page with a form made dirty after it opened is hidden", () => {
+  it("are installed while shown, gone while hidden, and back when shown again", () => {
     window.history.replaceState(null, "", "/admin/collections/posts/1");
     const { rerender, unmount } = render(page("visible", false));
+    const routerPatch = window.history.pushState;
+    expect(routerPatch).not.toBe(pushState);
+    expect(routerPatched()).toBe(true);
+
     // The guard patches over the router's patch, as when the reader edits.
     rerender(page("visible", true));
+    expect(window.history.pushState).not.toBe(routerPatch);
+    expect(window.history.pushState).not.toBe(pushState);
+    expect(guardHolds()).toBe(true);
+
     for (let shown = 0; shown < 2; shown += 1) {
       rerender(page("hidden", true));
       expectBrowserHistory();
       rerender(page("visible", true));
+      expect(window.history.pushState).not.toBe(pushState);
+      expect(guardHolds()).toBe(true);
     }
     unmount();
     expectBrowserHistory();
@@ -70,10 +100,13 @@ describe("the admin's history patches under Activity", () => {
   it("leave the browser's methods while a page dirty from the start is hidden", () => {
     window.history.replaceState(null, "", "/admin/collections/posts/1");
     const { rerender, unmount } = render(page("visible", true));
+    expect(window.history.pushState).not.toBe(pushState);
+    expect(guardHolds()).toBe(true);
     for (let shown = 0; shown < 2; shown += 1) {
       rerender(page("hidden", true));
       expectBrowserHistory();
       rerender(page("visible", true));
+      expect(guardHolds()).toBe(true);
     }
     unmount();
     expectBrowserHistory();

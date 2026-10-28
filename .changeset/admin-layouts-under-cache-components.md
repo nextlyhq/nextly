@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-An app scaffolded with `create-nextly-app` renders its admin for each request, never from a cache another user's request filled. Its admin layout renders its shell statically and awaits `connection()` beneath a Suspense boundary, so with Cache Components on the build still prerenders the shell, and nothing the admin reads is shared between users. The plugin template's development app gets the same admin layout.
+An app scaffolded with `create-nextly-app`, or one it adds Nextly to, renders its admin for each request, never from a cache another user's request filled. Its admin layout renders its shell statically and awaits `connection()` beneath a Suspense boundary, so with Cache Components on the build still prerenders the shell, and nothing the admin reads is shared between users. Adding Nextly to an existing app writes the base template's own admin layout, so it renders the same way as a new project. The plugin template's development app gets the same admin layout.
