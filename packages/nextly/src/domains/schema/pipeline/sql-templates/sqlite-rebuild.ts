@@ -56,6 +56,7 @@
  *   the counts above (`commentsIn`).
  * - A table option, `STRICT` or `WITHOUT ROWID`, which the rebuilt table
  *   would not carry (`tableOptionsOf`).
+ * - A generated column, which no spec declares (`generatedColumnsOf`).
  *
  * The same rebuild changes a column's nullability or default in a migration
  * file, which SQLite cannot do in place; the rebuilt column takes both from
@@ -245,6 +246,7 @@ export function sqliteTableRebuildStatements(
       `"untracked_collations" INTEGER NOT NULL, ` +
       `"untracked_indexes" INTEGER NOT NULL, ` +
       `"table_options" INTEGER NOT NULL, ` +
+      `"generated_columns" INTEGER NOT NULL, ` +
       `"comments" INTEGER NOT NULL, ` +
       `CONSTRAINT ${q(needsForeignKeysOff)} CHECK ("foreign_keys" = 0), ` +
       `CONSTRAINT ${q(wouldDropTriggers)} CHECK ("triggers" = 0), ` +
@@ -253,12 +255,13 @@ export function sqliteTableRebuildStatements(
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "collations"))} CHECK ("untracked_collations" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "indexes"))} CHECK ("untracked_indexes" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "table options"))} CHECK ("table_options" = 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "generated columns"))} CHECK ("generated_columns" = 0), ` +
       `CONSTRAINT ${q(unreadable)} CHECK ("comments" = 0))`,
     `INSERT INTO ${q(guard)} ("foreign_keys", "triggers", ` +
-      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "table_options", "comments") ` +
+      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "table_options", "generated_columns", "comments") ` +
       `SELECT (SELECT "foreign_keys" FROM pragma_foreign_keys), ` +
       `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${literal}), ` +
-      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${tableOptionsOf(table)}, ${commentsIn(table)}`,
+      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${tableOptionsOf(table)}, ${generatedColumnsOf(table)}, ${commentsIn(table)}`,
     `DROP TABLE ${q(guard)}`,
     `CREATE TABLE ${q(rebuilt)} (\n${createTableBody(table, q, "  ", "sqlite")}\n)`,
     `INSERT INTO ${q(rebuilt)} (${columns}) SELECT ${columns} FROM ${q(name)}`,
@@ -287,6 +290,7 @@ export function untrackedConstraintRefusal(
     | "collations"
     | "indexes"
     | "table options"
+    | "generated columns"
 ): string {
   return `rebuilding ${table} would drop ${kind} its schema does not track: write this change as a manual migration (nextly migrate:create --blank) that recreates ${table} with its ${kind}`;
 }
@@ -451,6 +455,17 @@ function tableOptionsOf(table: TableSpec): string {
     `COALESCE((SELECT "strict" + "wr" FROM pragma_table_list(${literalOf(table.name)}) ` +
     `WHERE "schema" = 'main'), 0)`
   );
+}
+
+/**
+ * A SQL expression counting the live table's generated columns, which the
+ * rebuild would drop: no snapshot declares one, `pragma_table_info` (and so
+ * the introspection the drift check reads) leaves them out, and the rebuilt
+ * table is declared from the spec's columns alone. `pragma_table_xinfo` marks
+ * each with `hidden` 2 (virtual) or 3 (stored).
+ */
+function generatedColumnsOf(table: TableSpec): string {
+  return `(SELECT COUNT(*) FROM pragma_table_xinfo(${literalOf(table.name)}) WHERE "hidden" IN (2, 3))`;
 }
 
 /**

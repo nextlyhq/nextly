@@ -476,6 +476,27 @@ for (const entry of DIALECTS) {
         }
       );
 
+      it.skipIf(dialect !== "sqlite")(
+        "refuses a SQLite rebuild that would lose a generated column the schema does not track",
+        async () => {
+          // `pragma_table_info` leaves a generated column out, so nothing that reads the table that
+          // way sees it; the rebuild declares the table from the snapshot and would drop it.
+          await migrateCreate(heading("heading"));
+          await migrate();
+          await exec(
+            `ALTER TABLE "dc_posts" ADD COLUMN "normalized" text GENERATED ALWAYS AS (lower("heading")) VIRTUAL`
+          );
+          const before = await definitionOf("dc_posts");
+
+          await migrateCreate(heading("heading", { required: true }));
+          await expect(migrate()).rejects.toThrow(
+            /would drop generated columns its schema does not track/
+          );
+
+          expect(await definitionOf("dc_posts")).toEqual(before);
+        }
+      );
+
       it.skipIf(dialect !== "sqlite").each(["STRICT", "WITHOUT ROWID"])(
         "refuses a SQLite rebuild that would lose the table option %s",
         async option => {
