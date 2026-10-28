@@ -31,7 +31,7 @@
     "node": "^22.12.0 || >=24.0.0"
   },
   "dependencies": {
-    "@vercel/blob": "^2.0.0"
+    "@vercel/blob": "^2.8.2"
   },
   "devDependencies": {
     "@nextlyhq/tsconfig": "workspace:*",
@@ -39,7 +39,7 @@
     "@vitest/coverage-v8": "^5.0.5",
     "@vitest/ui": "^5.0.5",
     "nextly": "workspace:*",
-    "tsdown": "^0.23.1",
+    "tsdown": "^0.23.2",
     "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
