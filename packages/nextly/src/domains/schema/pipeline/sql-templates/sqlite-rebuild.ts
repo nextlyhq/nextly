@@ -52,6 +52,8 @@
  *   instead, with nothing to say so.
  * - An index or UNIQUE constraint the target spec does not declare, which the
  *   rebuild would not recreate (`untrackedIndexCount`).
+ * - A comment in the table's stored statement, which can hide a clause from
+ *   the counts above (`commentsIn`).
  *
  * The same rebuild changes a column's nullability or default in a migration
  * file, which SQLite cannot do in place; the rebuilt column takes both from
@@ -231,6 +233,7 @@ export function sqliteTableRebuildStatements(
   const untracked = untrackedConstraintCounts(table, ops);
   const collations = untrackedCollationCount(table);
   const indexes = untrackedIndexCount(table);
+  const unreadable = `rebuilding ${name} cannot read its definition past a comment: write this change as a manual migration (nextly migrate:create --blank) that recreates ${name}`;
   return [
     // The guard: one row, checked on insert, before anything is dropped.
     `CREATE TABLE ${q(guard)} ("foreign_keys" INTEGER NOT NULL, ` +
@@ -239,17 +242,19 @@ export function sqliteTableRebuildStatements(
       `"untracked_checks" INTEGER NOT NULL, ` +
       `"untracked_collations" INTEGER NOT NULL, ` +
       `"untracked_indexes" INTEGER NOT NULL, ` +
+      `"comments" INTEGER NOT NULL, ` +
       `CONSTRAINT ${q(needsForeignKeysOff)} CHECK ("foreign_keys" = 0), ` +
       `CONSTRAINT ${q(wouldDropTriggers)} CHECK ("triggers" = 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "foreign keys"))} CHECK ("untracked_foreign_keys" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "checks"))} CHECK ("untracked_checks" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "collations"))} CHECK ("untracked_collations" <= 0), ` +
-      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "indexes"))} CHECK ("untracked_indexes" <= 0))`,
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "indexes"))} CHECK ("untracked_indexes" <= 0), ` +
+      `CONSTRAINT ${q(unreadable)} CHECK ("comments" = 0))`,
     `INSERT INTO ${q(guard)} ("foreign_keys", "triggers", ` +
-      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes") ` +
+      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "comments") ` +
       `SELECT (SELECT "foreign_keys" FROM pragma_foreign_keys), ` +
       `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${literal}), ` +
-      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}`,
+      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${commentsIn(table)}`,
     `DROP TABLE ${q(guard)}`,
     `CREATE TABLE ${q(rebuilt)} (\n${createTableBody(table, q, "  ", "sqlite")}\n)`,
     `INSERT INTO ${q(rebuilt)} (${columns}) SELECT ${columns} FROM ${q(name)}`,
@@ -411,6 +416,22 @@ function untrackedIndexCount(table: TableSpec): string {
     `COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'UNIQUE', ''))) / 6 ` +
     `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0)`;
   return `(${created} + ${inline})`;
+}
+
+/**
+ * A SQL expression that is 1 when the live table's stored CREATE statement
+ * holds a comment (`/*` or `--`), and 0 otherwise. Every count above reads the
+ * statement as text, and SQLite accepts a comment between the words of a
+ * clause (`CHECK/*c*\/(...)`), which none of them would see; Nextly never
+ * writes a comment there, so one is read as something the rebuild might drop.
+ * Either marker inside a string literal counts too, which refuses rather than
+ * risks a false "none".
+ */
+function commentsIn(table: TableSpec): string {
+  return (
+    `COALESCE((SELECT instr(sql, '/*') > 0 OR instr(sql, '--') > 0 ` +
+    `FROM sqlite_master WHERE type = 'table' AND name = ${literalOf(table.name)}), 0)`
+  );
 }
 
 /** Every table name an operation reads or writes. */

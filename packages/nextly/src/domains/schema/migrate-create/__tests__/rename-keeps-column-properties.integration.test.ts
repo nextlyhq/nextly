@@ -435,6 +435,27 @@ for (const entry of DIALECTS) {
         }
       );
 
+      it.skipIf(dialect !== "sqlite")(
+        "refuses a SQLite rebuild of a table whose definition hides a check behind a comment",
+        async () => {
+          // SQLite reads `CHECK/*...*/(...)` as a check, which no count over the text would see.
+          await migrateCreate(heading("heading"));
+          await migrate();
+          await exec(`ALTER TABLE "dc_posts" DROP COLUMN "views"`);
+          await exec(
+            `ALTER TABLE "dc_posts" ADD COLUMN "views" integer CHECK/*hidden*/("views" >= 0)`
+          );
+          const before = await definitionOf("dc_posts");
+
+          await migrateCreate(heading("heading", { required: true }));
+          await expect(migrate()).rejects.toThrow(
+            /cannot read its definition past a comment/
+          );
+
+          expect(await definitionOf("dc_posts")).toEqual(before);
+        }
+      );
+
       it.skipIf(dialect !== "mysql")(
         "refuses to rewrite a MySQL check that names the renamed column inside a string",
         async () => {
