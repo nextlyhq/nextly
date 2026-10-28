@@ -556,18 +556,20 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * `=` or `:`, though: a name that does (a map keyed by a URL with a `token=`
  * in it) is left to be searched as text, so the parameter inside it is still
  * found. Any other name keeps the identifier grammar, up to 256 characters
- * too: a long run of dotted or dashed words is tried from each word in it,
- * and an unbounded name made every try read the run to its end, so a long
- * line cost its length squared. A longer credential name is still found,
- * from a word within 256 characters of its separator (`…token=`).
+ * too, and is read from its first word only: the first that starts with a
+ * letter or `_`, after any words that start with a digit (`token` in
+ * `2fa.token`, or in `--token`). Tried from every word in a long run of
+ * dotted or dashed words, an unbounded name read the run to its end each
+ * time, so a long line cost its length squared; and a bounded name tried
+ * from a word near the separator would be judged by that word alone.
  *
- * A name longer than either bound with no word starting near its end (one
- * long word, bare or quoted) is judged by its last 256 characters instead:
- * at a separator no other form reached, the name is read backwards from it,
- * through an optional closing quote and any bracketed parts, so a name
- * ending in `password` or `token` is judged by that ending. It is read only
- * where a separator could follow and only back to the start of the name, so
- * each name is read once and a long line still costs its length.
+ * A name longer than either bound is read backwards instead, whole: at a
+ * separator no other form reached, from the separator through an optional
+ * closing quote and any bracketed parts, back to the start of the name, so
+ * it is judged as a name of any length would be (`password…=` as well as
+ * `…password=`), bare, quoted or escaped. It is read only where a separator
+ * could follow, and only back to the start of the name, so each name is
+ * read once and a long line still costs its length.
  *
  * An escaped JSON name is a JSON string inside another one, so it is read
  * as the outer quoting wrote the inner one's characters: a plain character,
@@ -577,13 +579,13 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * and a name ending in an inner backslash still ends at its own `\"`.
  *
  * Groups: an escaped JSON name's quote and text, a JSON name's quote and
- * text, any other name's quote and text, a long name's last 256 characters
- * and the quote after them, and the separator. The value is read
+ * text, any other name's quote and text, a long name and the quote after
+ * it, and the separator. The value is read
  * only after a credential's name (`TEXT_PARAMETER_VALUE`), so any other value
  * is searched as ordinary text.
  */
 const TEXT_PARAMETER =
-  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5|(?=[\s=:])(?<=[\w.-]([\w.-]{256}(?:\[[\w.-]*\])*)(\\?["']?)))(\s*[=:]\s*)/g;
+  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b(?=[A-Za-z_])(?<=(?:^|[^\w.-])[.-]*(?:[0-9]\w*[.-]+)*)([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5|(?=[\s=:])(?<=(?<![\w.-])([\w.-]{257,}(?:\[[\w.-]*\])*)(\\?["']?)))(\s*[=:]\s*)/g;
 
 /**
  * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes
@@ -607,8 +609,10 @@ function parameterName(match: RegExpExecArray): {
   if (jsonQuote !== undefined) {
     return { nameQuote: jsonQuote, name: decodedJsonName(jsonName ?? "") };
   }
-  const [, , , , , , , tail, tailQuote] = match;
-  if (tail !== undefined) return { nameQuote: tailQuote ?? "", name: tail };
+  const [, , , , , , , longName, longNameQuote] = match;
+  if (longName !== undefined) {
+    return { nameQuote: longNameQuote ?? "", name: longName };
+  }
   return { nameQuote: quote ?? "", name: name ?? "" };
 }
 

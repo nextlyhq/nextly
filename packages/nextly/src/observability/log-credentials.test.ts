@@ -470,10 +470,14 @@ describe("credentials anywhere in a log value", () => {
     expect(out).toContain("settings.settings.token=");
   });
 
-  it("judges a single word longer than 256 characters by its tail", () => {
-    // No word starts inside it, so it can only be judged by the characters
-    // nearest its separator: bare, as a JSON name, and as an escaped one.
+  it("judges a name longer than 256 characters whole", () => {
+    // Too long to be read forwards within the bound, so it is read back from
+    // its separator to its start: bare, as a JSON name, and as an escaped one,
+    // with the credential word at its end, at its start, or at the start of a
+    // dotted name, where a word near the separator must not decide.
     const name = `${"a".repeat(292)}password`;
+    const first = `password${"a".repeat(300)}`;
+    const dotted = `password.${"x.".repeat(150)}end`;
     const ordinary = "a".repeat(300);
     const received: unknown[] = [];
     maskingServiceLogger({
@@ -485,6 +489,9 @@ describe("credentials anywhere in a log value", () => {
       bare: `${name}=opaque-long-value next=1`,
       json: `{"${name}":"opaque-json-value","page":2}`,
       escaped: `{\\"${name}\\":\\"opaque-escaped-value\\",\\"page\\":2}`,
+      first: `${first}=opaque-first-value next=1`,
+      firstJson: `{"${first}":"opaque-first-json","page":2}`,
+      dotted: `${dotted}=opaque-dotted-value next=1`,
       // The control: a long name that says nothing keeps its value.
       kept: `${ordinary}=kept-value next=1`,
     });
@@ -492,6 +499,9 @@ describe("credentials anywhere in a log value", () => {
       bare: `${name}=[redacted] next=1`,
       json: `{"${name}":"[redacted]","page":2}`,
       escaped: `{\\"${name}\\":\\"[redacted]\\",\\"page\\":2}`,
+      first: `${first}=[redacted] next=1`,
+      firstJson: `{"${first}":"[redacted]","page":2}`,
+      dotted: `${dotted}=[redacted] next=1`,
       kept: `${ordinary}=kept-value next=1`,
     });
   });
