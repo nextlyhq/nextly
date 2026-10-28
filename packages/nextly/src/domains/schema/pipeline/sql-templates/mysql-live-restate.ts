@@ -234,12 +234,19 @@ export function plainMysqlEquivalents(statements: readonly string[]): string[] {
   return out;
 }
 
+/**
+ * A name as the run spells it inside a SQL string literal, read back: `literal` doubles each
+ * apostrophe, so `app_o''brien` is the table `app_o'brien`. Read as written, the name would be
+ * rendered with its apostrophes doubled twice and never match the run.
+ */
+const unliteral = (spelled: string): string => spelled.replace(/''/g, "'");
+
 /** The plain statement a four-statement run amounts to, when it is exactly one of this module's. */
 function plainEquivalentOf(run: readonly string[]): string | undefined {
   const first = run[0] ?? "";
   const rename = RENAME_RUN.exec(first);
   if (rename !== null) {
-    const [, tableName, fromColumn, toColumn] = rename;
+    const [tableName, fromColumn, toColumn] = rename.slice(1).map(unliteral);
     return sameRun(
       run,
       renameKeepingChecks({ tableName, fromColumn, toColumn })
@@ -249,7 +256,8 @@ function plainEquivalentOf(run: readonly string[]): string | undefined {
   }
   const nullability = NULLABILITY_RUN.exec(first);
   if (nullability !== null) {
-    const [, tableName, columnName, setting] = nullability;
+    const [tableName, columnName] = nullability.slice(1, 3).map(unliteral);
+    const setting = nullability[3];
     const toNullable = setting === "NULL";
     const op: ChangeColumnNullableOp = {
       type: "change_column_nullable",

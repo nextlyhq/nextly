@@ -64,6 +64,31 @@ describe("reading Nextly's own MySQL runs as plain statements", () => {
     expect(plainMysqlEquivalents(cut)).toEqual(cut);
   });
 
+  it("reads a run on a table whose name holds an apostrophe", () => {
+    // The run spells the name inside SQL string literals, where the apostrophe is doubled; read
+    // back as written, it would render the name doubled again and never match.
+    const table = "app_o'brien";
+    const renamed = mysqlLiveStatements({
+      type: "rename_column",
+      tableName: table,
+      fromColumn: "label",
+      toColumn: "caption",
+      fromType: "text",
+      toType: "text",
+    })!;
+    const nullable = mysqlLiveStatements({
+      type: "change_column_nullable",
+      tableName: table,
+      columnName: "caption",
+      fromNullable: false,
+      toNullable: true,
+    })!;
+    expect(plainMysqlEquivalents([...renamed, ...nullable])).toEqual([
+      "ALTER TABLE `app_o'brien` RENAME COLUMN `label` TO `caption`",
+      "ALTER TABLE `app_o'brien` MODIFY COLUMN `caption` text NULL",
+    ]);
+  });
+
   it("leaves a hand-written PREPARE as written", () => {
     const handWritten = [
       "SET @nextly_ddl = 'DROP TABLE `dc_posts`'",

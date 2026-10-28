@@ -54,6 +54,8 @@
  *   rebuild would not recreate (`untrackedIndexCount`).
  * - A comment in the table's stored statement, which can hide a clause from
  *   the counts above (`commentsIn`).
+ * - A table option, `STRICT` or `WITHOUT ROWID`, which the rebuilt table
+ *   would not carry (`tableOptionsOf`).
  *
  * The same rebuild changes a column's nullability or default in a migration
  * file, which SQLite cannot do in place; the rebuilt column takes both from
@@ -242,6 +244,7 @@ export function sqliteTableRebuildStatements(
       `"untracked_checks" INTEGER NOT NULL, ` +
       `"untracked_collations" INTEGER NOT NULL, ` +
       `"untracked_indexes" INTEGER NOT NULL, ` +
+      `"table_options" INTEGER NOT NULL, ` +
       `"comments" INTEGER NOT NULL, ` +
       `CONSTRAINT ${q(needsForeignKeysOff)} CHECK ("foreign_keys" = 0), ` +
       `CONSTRAINT ${q(wouldDropTriggers)} CHECK ("triggers" = 0), ` +
@@ -249,12 +252,13 @@ export function sqliteTableRebuildStatements(
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "checks"))} CHECK ("untracked_checks" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "collations"))} CHECK ("untracked_collations" <= 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "indexes"))} CHECK ("untracked_indexes" <= 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "table options"))} CHECK ("table_options" = 0), ` +
       `CONSTRAINT ${q(unreadable)} CHECK ("comments" = 0))`,
     `INSERT INTO ${q(guard)} ("foreign_keys", "triggers", ` +
-      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "comments") ` +
+      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "table_options", "comments") ` +
       `SELECT (SELECT "foreign_keys" FROM pragma_foreign_keys), ` +
       `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${literal}), ` +
-      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${commentsIn(table)}`,
+      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${tableOptionsOf(table)}, ${commentsIn(table)}`,
     `DROP TABLE ${q(guard)}`,
     `CREATE TABLE ${q(rebuilt)} (\n${createTableBody(table, q, "  ", "sqlite")}\n)`,
     `INSERT INTO ${q(rebuilt)} (${columns}) SELECT ${columns} FROM ${q(name)}`,
@@ -276,7 +280,13 @@ export function sqliteTableRebuildStatements(
  */
 export function untrackedConstraintRefusal(
   table: string,
-  kind: "foreign keys" | "checks" | "triggers" | "collations" | "indexes"
+  kind:
+    | "foreign keys"
+    | "checks"
+    | "triggers"
+    | "collations"
+    | "indexes"
+    | "table options"
 ): string {
   return `rebuilding ${table} would drop ${kind} its schema does not track: write this change as a manual migration (nextly migrate:create --blank) that recreates ${table} with its ${kind}`;
 }
@@ -426,6 +436,21 @@ function untrackedIndexCount(table: TableSpec): string {
     `COALESCE((SELECT (length(upper(sql)) - length(replace(upper(sql), 'UNIQUE', ''))) / 6 ` +
     `FROM sqlite_master WHERE type = 'table' AND name = ${name}), 0)`;
   return `(${created} + ${inline})`;
+}
+
+/**
+ * A SQL expression counting the table options the live table was created with
+ * — `STRICT` and `WITHOUT ROWID` — which the rebuilt table, declared from the
+ * spec's columns alone, would not have. No snapshot records either, and losing
+ * one changes what the table accepts (`STRICT` refuses a value of the wrong
+ * type) or how it stores its rows. Read from `pragma_table_list`, which SQLite
+ * has reported both in since 3.37, below this codebase's minimum.
+ */
+function tableOptionsOf(table: TableSpec): string {
+  return (
+    `COALESCE((SELECT "strict" + "wr" FROM pragma_table_list(${literalOf(table.name)}) ` +
+    `WHERE "schema" = 'main'), 0)`
+  );
 }
 
 /**

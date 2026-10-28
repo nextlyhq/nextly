@@ -476,6 +476,36 @@ for (const entry of DIALECTS) {
         }
       );
 
+      it.skipIf(dialect !== "sqlite").each(["STRICT", "WITHOUT ROWID"])(
+        "refuses a SQLite rebuild that would lose the table option %s",
+        async option => {
+          // A table option sits after the column list, where no snapshot records it; the rebuild
+          // declares the table without it.
+          await migrateCreate(heading("heading"));
+          await migrate();
+          const [table] = await adapter.executeQuery<{ sql: string }>(
+            `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dc_posts'`
+          );
+          const indexes = await adapter.executeQuery<{ sql: string }>(
+            `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dc_posts' AND sql IS NOT NULL`
+          );
+          await exec(`ALTER TABLE "dc_posts" RENAME TO "dc_posts_old"`);
+          await exec(`${table.sql} ${option}`);
+          await exec(`INSERT INTO "dc_posts" SELECT * FROM "dc_posts_old"`);
+          await exec(`DROP TABLE "dc_posts_old"`);
+          for (const index of indexes) await exec(index.sql);
+          const before = await definitionOf("dc_posts");
+          expect(before.options.tail).toBe(option);
+
+          await migrateCreate(heading("heading", { required: true }));
+          await expect(migrate()).rejects.toThrow(
+            /would drop table options its schema does not track/
+          );
+
+          expect(await definitionOf("dc_posts")).toEqual(before);
+        }
+      );
+
       it.skipIf(dialect !== "mysql").each([
         {
           shape: "names the renamed column inside a string",
