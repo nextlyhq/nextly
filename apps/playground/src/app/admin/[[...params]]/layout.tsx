@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { getBrandingCss } from "nextly/config";
 import { checkAdminComponents } from "nextly/runtime";
 
@@ -16,6 +17,10 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // The admin renders for each request, never from a cache another user's
+  // request filled: under Cache Components a layout that reads no request data
+  // would otherwise be prerendered once and served to everyone.
+  await connection();
   // Before any admin page, as in an app's admin: in development, the generated
   // component map is written again when it falls behind the config.
   await checkAdminComponents({ config, registeredComponentPaths });
