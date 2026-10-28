@@ -47,7 +47,7 @@ export type WidgetInterval = RangeInterval;
 
 /**
  * The ranges a series reads back over, from the instant that far before the
- * batch's: the ones `settings.dateRange()` offers, so a card's Date range
+ * batch's: the ones `setting.dateRange()` offers, so a card's Date range
  * setting is handed to `timeseries` as it is. Kept to those a series query
  * draws, so the two lists cannot part without this type saying so.
  *

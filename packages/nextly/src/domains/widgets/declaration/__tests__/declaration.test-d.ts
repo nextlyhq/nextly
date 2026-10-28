@@ -296,7 +296,7 @@ defineWidget({
   description: "Answers a series read as it comes",
   category: "Test",
   size: { default: { w: 12, h: 4 } },
-  settings: { range: settings.dateRange() },
+  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async ({ services, settings }) =>
     services.timeseries("orders", { range: settings.range, status: "all" }),
   view: "series",

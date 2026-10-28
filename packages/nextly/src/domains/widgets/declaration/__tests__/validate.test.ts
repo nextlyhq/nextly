@@ -334,7 +334,7 @@ describe("a widget declaration as startup receives it", () => {
   it("refuses a widget offered per collection with no Collection setting, by the registry's own rule", () => {
     // No Collection, and so no grouping setting that names one: offered's fault is the only one.
     const settings = {
-      top: { type: "number", defaultValue: 5, min: 1, max: 25 },
+      top: { type: "number", label: "Top", defaultValue: 5, min: 1, max: 25 },
     };
     expect(problemsOf(valid({ settings, offered: "on-request" }))).toEqual([]);
     expect(problemsOf(valid({ settings, offered: "per-collection" }))).toEqual([

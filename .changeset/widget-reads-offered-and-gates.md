@@ -40,7 +40,7 @@ it is `@experimental`.
   by setting does.
 - **`services.timeseries(collection, { range, dateField?, where?, status? })`**
   answers `{ points, interval }`, the data the `series` view draws. `range` is
-  `"7d"`, `"30d"`, `"90d"` or `"12m"`, the values `settings.dateRange()` offers;
+  `"7d"`, `"30d"`, `"90d"` or `"12m"`, the values `setting.dateRange()` offers;
   the range picks the interval (a day, a week or a month), and `interval` says
   which one the points were counted in. Entries are placed by `createdAt` unless
   `dateField` names another date.
