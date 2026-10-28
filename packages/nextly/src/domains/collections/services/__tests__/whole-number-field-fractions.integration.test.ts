@@ -37,6 +37,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defineCollection, number, text } from "../../../../config";
 import type { NumberFieldConfig } from "../../../../collections/fields/types/number";
 import { NextlyError } from "../../../../errors";
+import { getHookRegistry } from "../../../../hooks/hook-registry";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -98,6 +99,25 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       collections = handle.getService("collectionService") as CollectionService;
+
+      // A beforeChange hook that transforms a whole value into a fraction —
+      // the case the gate before the hooks cannot see. It fires only for the
+      // titles the hook tests below use, so no other case meets it; a title
+      // on the allow-list gets a whole value instead, the pass-through leg.
+      getHookRegistry().register("beforeChange", SLUG, context => {
+        const data = context.data as Record<string, unknown>;
+        if (
+          typeof data.title === "string" &&
+          data.title.startsWith("hookfrac")
+        ) {
+          if (data.title === "hookfrac-whole") {
+            data.quantity = 3;
+          } else if (data.quantity === 2) {
+            data.quantity = 2.5;
+          }
+        }
+        return data;
+      });
     });
 
     afterAll(async () => {
@@ -267,6 +287,55 @@ describe.each(getConfiguredTestDialects())(
         CONTEXT
       )) as unknown as Record<string, unknown>;
       expect(Number(entry.measure)).toBe(2.5);
+    });
+
+    it("a beforeChange hook that turns a whole value into a fraction is refused", async () => {
+      // The hooks run after the validation gate, so the fraction they leave
+      // behind is a write the gate never saw — judged after the last
+      // transforming hook, before any row is written.
+      const error = await refusalOf(
+        collections.createEntry(
+          SLUG,
+          { title: "hookfrac-create", quantity: 2 },
+          CONTEXT
+        )
+      );
+      expectFractionRefusal(error, "quantity");
+
+      const listed = await collections.listEntries(SLUG, {}, CONTEXT);
+      expect(
+        listed.data.filter(entry => entry.title === "hookfrac-create")
+      ).toEqual([]);
+    });
+
+    it("a beforeChange hook that turns an update's whole value into a fraction is refused", async () => {
+      // Created under a title the hook ignores, so the fixture itself is
+      // whole; the hook's transform happens on the update below.
+      const entry = (await collections.createEntry(
+        SLUG,
+        { title: "update-target", quantity: 2 },
+        CONTEXT
+      )) as unknown as Record<string, unknown>;
+
+      const error = await refusalOf(
+        collections.updateEntry(
+          SLUG,
+          entry.id as string,
+          { title: "hookfrac-update", quantity: 2 },
+          CONTEXT
+        )
+      );
+      expectFractionRefusal(error, "quantity");
+      expect((await readEntry(entry.id as string)).quantity).toBe(2);
+    });
+
+    it("a beforeChange hook that sets a whole value passes", async () => {
+      const entry = (await collections.createEntry(
+        SLUG,
+        { title: "hookfrac-whole", quantity: 2 },
+        CONTEXT
+      )) as unknown as Record<string, unknown>;
+      expect(entry.quantity).toBe(3);
     });
 
     it("a legacy fractional row reads and publishes unchanged", async () => {
