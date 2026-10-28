@@ -7,6 +7,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -267,6 +268,61 @@ describe("the config a map checks its widgets against", () => {
       expected: undefined,
     });
   });
+
+  it("reads an import the map no longer checks against as no config at all", async () => {
+    await generate([shop], importOf("nextly.config.ts"));
+    const file = join(root, DIR, COMPONENT_IMPORT_MAP_FILENAME);
+    const kept = (await readFile(file, "utf8")).replace(
+      "} satisfies DeclaredComponentMap<typeof siteConfig>;",
+      "};"
+    );
+    await writeFile(file, kept);
+    expect(
+      (await checkComponentMapFiles([shop], TYPES, root, config())).otherConfig
+    ).toEqual({ written: undefined, expected: "../../../nextly.config" });
+  });
+
+  it("asks for no config import where nothing declares a widget, whose props are all it checks", async () => {
+    const pagesOnly = {
+      ...shop,
+      contributes: { admin: shop.contributes?.admin },
+    } as PluginDefinition;
+    await generate([pagesOnly]);
+    const found = await checkComponentMapFiles(
+      [pagesOnly],
+      TYPES,
+      root,
+      config()
+    );
+    expect(found.otherConfig).toBeUndefined();
+    expect(componentMapAgrees(found)).toBe(true);
+  });
+
+  // The maps a scaffold ships are written before its layout fixes where its config sits, so they
+  // import none; a project made from either must pass the check it is told to run.
+  it.each([
+    ["base", "templates/base/src/types/generated"],
+    ["plugin", "templates/plugin/dev/src/types/generated"],
+  ])(
+    "holds the %s template's shipped map to a loaded config",
+    async (_, dir) => {
+      const shipped = fileURLToPath(
+        new URL(`../../../../../${dir}/`, import.meta.url)
+      );
+      for (const name of [
+        COMPONENT_IMPORT_MAP_FILENAME,
+        COMPONENT_PATHS_FILENAME,
+      ]) {
+        await writeFile(
+          join(root, DIR, name),
+          await readFile(join(shipped, name), "utf8")
+        );
+      }
+      expect(
+        (await checkComponentMapFiles([], TYPES, root, config())).otherConfig
+      ).toBeUndefined();
+    }
+  );
 });
 
 describe("a map whose components are exported under names in any script", () => {

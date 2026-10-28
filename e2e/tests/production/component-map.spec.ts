@@ -140,6 +140,9 @@ test.beforeAll(async () => {
       env,
       stdio: ["ignore", log, log],
       shell: starting.shell,
+      // Its own process group on POSIX, so `stopServer` can end pnpm and the
+      // `next start` under it together: a signal to pnpm alone leaves both.
+      detached: process.platform !== "win32",
     });
   } finally {
     // The server holds its own copy of the descriptor.
@@ -159,7 +162,12 @@ function stopServer(): void {
   // alone would leave `next start` holding the port; the tree kill reaches it.
   const treeKill = treeKillCommand(server.pid, process.platform);
   if (treeKill === null) {
-    server.kill("SIGTERM");
+    // The whole group the server was started as, by its negative pid.
+    try {
+      process.kill(-server.pid, "SIGTERM");
+    } catch {
+      // Already gone: nothing is left holding the port.
+    }
     return;
   }
   spawnSync(treeKill.command, treeKill.args, { stdio: "ignore" });

@@ -30,5 +30,7 @@
 ---
 
 `nextly generate:types --check` now also fails a component map that checks widget props against
-a different config file from the one it loaded, and names both. It accepts components exported
-under non-ASCII names. `extendWidget` refuses a patch that sets `owner` or `serverData`.
+a different config file from the one it loaded, or against none, and names both. A map whose
+declarations hold no widget needs no config import, so a freshly scaffolded project passes as
+shipped. It accepts components exported under non-ASCII names. `extendWidget` refuses a patch
+that carries `owner` or `serverData`, even with no value.

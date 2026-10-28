@@ -579,6 +579,18 @@ const AGREEMENT_CHECK = [
 /** The line the map imports the site's config with, written and read as one: see `configImportOf`. */
 const SITE_CONFIG_IMPORT = "import type * as siteConfig from ";
 
+/** The line that holds the map's components to the config's widgets, written and read as one. */
+const SITE_CONFIG_CHECK =
+  "} satisfies DeclaredComponentMap<typeof siteConfig>;";
+
+/**
+ * Whether a generated map still holds its components to the config it imports: the import alone
+ * checks nothing, so a map that kept it but lost the `satisfies` line checks against no config.
+ */
+export function mapChecksAgainstConfig(mapCode: string): boolean {
+  return mapCode.split("\n").some(each => each === SITE_CONFIG_CHECK);
+}
+
 /**
  * The config import a generated map names, as `buildComponentImportMap` wrote it; undefined when it
  * names none or the line cannot be read. A rewrite keeps it, so the map goes on checking against
@@ -660,11 +672,7 @@ export function buildComponentImportMap(
   });
   // Each component registered under a typed widget's path must take that widget's props, or
   // the site's build fails here; every other path is left as it was.
-  lines.push(
-    configImport === undefined
-      ? "};"
-      : "} satisfies DeclaredComponentMap<typeof siteConfig>;"
-  );
+  lines.push(configImport === undefined ? "};" : SITE_CONFIG_CHECK);
   lines.push("");
   if (blockEditor.used) {
     lines.push(

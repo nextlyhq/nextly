@@ -29,6 +29,7 @@ import {
   configImportOf,
   configImportSpecifier,
   listedPathsOf,
+  mapChecksAgainstConfig,
   mapRegisteredPathsOf,
 } from "./component-import-map";
 
@@ -51,8 +52,9 @@ export interface ComponentMapAgreement {
   readonly obsolete: readonly string[];
   /**
    * The config the map checks each widget component against, as it imports it, and the import
-   * the checked config needs, where the two differ; `undefined` where they agree or there is no
-   * map. A map written for another config passes its widgets' props against that one.
+   * the checked config needs, where the two differ; `undefined` where they agree, where there is
+   * no map, or where nothing declares a widget. A map written for another config passes its
+   * widgets' props against that one. An import without the `satisfies` line reads as none.
    */
   readonly otherConfig:
     | {
@@ -104,8 +106,12 @@ export async function checkComponentMapFiles(
       map === undefined || sameSet(mapRegisteredPathsOf(map), listed),
     missing: declared.filter(each => !held.has(each.path)),
     obsolete: (listed ?? []).filter(path => !declaredPaths.has(path)),
+    // Only a widget's component is checked against the config, so a map declaring none needs no
+    // config import: a scaffold's map, made before its project's layout fixed the config's path.
     otherConfig:
-      map === undefined ? undefined : otherConfigOf(map, dir, cwd, configFile),
+      map === undefined || !declared.some(each => each.use === "widget")
+        ? undefined
+        : otherConfigOf(map, dir, cwd, configFile),
   };
 }
 
@@ -119,7 +125,8 @@ function otherConfigOf(
   cwd: string,
   configFile: string | undefined
 ): ComponentMapAgreement["otherConfig"] {
-  const written = configImportOf(map);
+  // An import the map no longer checks against is no config at all.
+  const written = mapChecksAgainstConfig(map) ? configImportOf(map) : undefined;
   const expected =
     configFile === undefined
       ? undefined

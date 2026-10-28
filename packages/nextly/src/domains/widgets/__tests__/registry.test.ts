@@ -229,6 +229,19 @@ describe("the doors a widget whose data core builds may come through", () => {
     expect(getWidget("acme/patched")?.serverData).toBeUndefined();
   });
 
+  it("is refused on a patch that carries the key with no value, which the spread would still write", () => {
+    registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
+    for (const field of ["owner", "serverData"]) {
+      const patch = { [field]: undefined } as unknown as WidgetPatch;
+      expect(() => extendWidget("acme/orders", patch)).toThrow(
+        new RegExp(`extendWidget\\(\\) with ${field}`)
+      );
+    }
+    // Still built on the server: an `undefined` written over the flag would
+    // make it a card the admin draws without asking for its data.
+    expect(getWidget("acme/orders")?.serverData).toBe(true);
+  });
+
   it("cannot be replaced, since its card is answered from its declaration", () => {
     registerDeclaredDefinition(declared("acme/orders"), "plugin @acme/shop");
     expect(() => overrideWidget("acme/orders", def("acme/orders"))).toThrow(
