@@ -1639,24 +1639,35 @@ const OFFERED_MODES = [
 ] as const satisfies readonly NonNullable<WidgetDefinition["offered"]>[];
 
 /**
- * Refuses an `offered` mode outside its closed list, and a widget offered per
- * collection that declares no Collection setting:
- * its add-panel rows each start a card set to a collection, so without one the
- * widget could be added nowhere.
+ * Why an `offered` mode cannot work, or `undefined`: a mode outside its closed
+ * list, or a widget offered per collection that declares no Collection
+ * setting: its add-panel rows each start a card set to a collection, so
+ * without one the widget could be added nowhere.
+ *
+ * Exported so a declared widget is judged at startup by this same rule, before
+ * any widget is kept, rather than refused half way through registering.
  */
-function validateOffered(d: Partial<WidgetDefinition>): void {
+export function offeredProblem(d: {
+  offered?: unknown;
+  settings?: unknown;
+}): string | undefined {
   // An untyped registration with a misspelt mode would otherwise be read as an
   // ordinary widget: placed by default, perhaps with no collection to read.
   const outside = closedValueProblem("offered", d.offered, OFFERED_MODES);
-  if (outside !== undefined) fail(`${d.id}: ${outside}`);
+  if (outside !== undefined) return outside;
   if (
     d.offered === "per-collection" &&
     !declaresCollectionSetting(d.settings)
   ) {
-    fail(
-      `${d.id}: a widget offered per collection needs a Collection setting, which each card starts set to`
-    );
+    return "a widget offered per collection needs a Collection setting, which each card starts set to";
   }
+  return undefined;
+}
+
+/** Refuses a definition whose `offered` mode cannot work (`offeredProblem`). */
+function validateOffered(d: Partial<WidgetDefinition>): void {
+  const problem = offeredProblem(d);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
 /** Throws with a named reason if `def` is not a usable definition. */

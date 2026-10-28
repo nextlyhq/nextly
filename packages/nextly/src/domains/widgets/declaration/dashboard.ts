@@ -39,9 +39,13 @@ export type AttentionCount = number | { count: number; atLeast: true };
 export type AttentionItem = {
   id: string;
   label: string;
-  /** Counts as the person asking, through services bound to them. */
+  /**
+   * Counts as the person asking, through services bound to them. Handed no
+   * `size`: an item is one line of the Needs attention card, not a card of
+   * its own, so it has no size to be loaded for.
+   */
   count: (
-    input: Omit<WidgetDataInput<never>, "settings">
+    input: Omit<WidgetDataInput<never>, "settings" | "size">
   ) => Promise<AttentionCount>;
   /** A path relative to the admin, which core resolves. */
   link: string;

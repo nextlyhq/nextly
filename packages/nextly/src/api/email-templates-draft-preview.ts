@@ -25,6 +25,7 @@
 import { z } from "zod";
 
 import { container } from "../di";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { draftPreviewSchema } from "../domains/email/draft-preview-request";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
@@ -65,10 +66,7 @@ async function getEmailTemplateService(): Promise<EmailTemplateService> {
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
-      { action: "create", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
-    ]);
+    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailTemplates.preview.anyOf]);
 
     const service = await getEmailTemplateService();
     const body = await readJsonBody(request);

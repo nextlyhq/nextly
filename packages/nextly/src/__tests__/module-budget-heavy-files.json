@@ -1,5 +1,6 @@
 {
   "files": [
+    "src/__tests__/boot-refuses-unsupported-framework.test.ts",
     "src/__tests__/cache-components.test.ts",
     "src/__tests__/init-awaits-seeding.test.ts",
     "src/__tests__/init.test.ts",
@@ -15,7 +16,9 @@
     "src/__tests__/routeHandler-version-seen-permission.test.ts",
     "src/__tests__/routeHandler-workspace-widgets.test.ts",
     "src/cli/commands/__tests__/generate-types.import-map.test.ts",
+    "src/cli/commands/__tests__/migrate-check-settings-drift.test.ts",
     "src/cli/commands/__tests__/migrate-create-plugin-closure.test.ts",
+    "src/cli/commands/__tests__/migrate-create-site-settings.test.ts",
     "src/cli/commands/__tests__/migrate-field-groups.test.ts",
     "src/cli/commands/__tests__/plugin-lifecycle-runner-teardown.test.ts",
     "src/cli/utils/config-loader-app-config.test.ts",
