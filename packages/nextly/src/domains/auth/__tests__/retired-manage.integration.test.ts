@@ -21,6 +21,7 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { runUpgrade, type UpgradeAdapter } from "../../../cli/commands/upgrade";
@@ -258,6 +259,30 @@ describe.each(getConfiguredTestDialects())(
       it("stays converted across a reboot", async () => {
         await seedPermissionsAndRolePresets();
         expect(await retiredHolders()).toEqual([]);
+      });
+    });
+
+    // Last: it removes a plain permission the cases above rely on.
+    describe("where a plain permission on the resource is missing", () => {
+      it("keeps manage-<resource>, so the role loses nothing", async () => {
+        const ids = await idsBySlug();
+        const { permissions } = getDialectTables();
+        const db = t.adapter.getDrizzle() as unknown as {
+          delete: (table: unknown) => {
+            where: (condition: unknown) => Promise<unknown>;
+          };
+        };
+        await db
+          .delete(permissions)
+          .where(eq(permissions.id, ids.get("create-email-templates")!));
+        const role = await services().roles.createRole({
+          name: "Missing plain",
+          slug: "missing-plain",
+          permissionIds: [ids.get("manage-email-templates")!],
+        });
+        expect(await holds(String(role.id))).toEqual([
+          "manage-email-templates",
+        ]);
       });
     });
   }
