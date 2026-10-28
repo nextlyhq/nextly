@@ -132,6 +132,24 @@ describe("a visitor, without the access-control service", () => {
     ).resolves.toBe(false);
   });
 
+  it("is judged by the Public role its own database records, not the process's", async () => {
+    // The process's Public role reads the posts; the database the reading
+    // service holds grants nothing. The visitor is judged by the latter.
+    visitorSpy.mockResolvedValue(
+      visitorActor([{ slug: "read-posts", action: "read", resource: "posts" }])
+    );
+    const own = vi.fn(async () => visitorActor([]));
+    await expect(
+      relatedRowReads(
+        "posts",
+        { principal: null, visitorWithoutService: own },
+        undefined
+      )
+    ).resolves.toBe(false);
+    expect(own).toHaveBeenCalledTimes(1);
+    expect(visitorSpy).not.toHaveBeenCalled();
+  });
+
   it("is shown the rows where the Public role holds the read", async () => {
     // The control: only what Public holds differs.
     visitorSpy.mockResolvedValue(
