@@ -15,7 +15,12 @@ const calls: string[] = [];
 // deterministic-key adapter that reuses the existing path (new === old).
 // `filenames` records the destination base names passed to generateImageSizes,
 // so a test can assert regeneration forces a unique destination.
-const regen = { thumbPath: "NEW/thumb.webp", filenames: [] as string[] };
+// `points` records the focus point each regeneration cut the sizes around.
+const regen = {
+  thumbPath: "NEW/thumb.webp",
+  filenames: [] as string[],
+  points: [] as unknown[],
+};
 
 const storageMock = {
   getAdapterForCollection: () => ({
@@ -37,8 +42,15 @@ vi.mock("@nextly/storage", () => ({
   // default; a test can point it at the existing path to model a deterministic
   // adapter that overwrites in place). The destination base name is recorded so
   // a test can assert regeneration forces a unique destination.
-  generateImageSizes: async (_buffer: unknown, originalFilename: string) => {
+  generateImageSizes: async (
+    _buffer: unknown,
+    originalFilename: string,
+    _configs: unknown,
+    _upload: unknown,
+    point: unknown
+  ) => {
     regen.filenames.push(originalFilename);
+    regen.points.push(point);
     return {
       thumbnail: {
         path: regen.thumbPath,
@@ -162,6 +174,26 @@ describe("MediaService focal-point regeneration ordering", () => {
     deleteSpy.mockClear();
     regen.thumbPath = NEW_PATH;
     regen.filenames.length = 0;
+    regen.points.length = 0;
+  });
+
+  it("cuts the sizes around the stored coordinate an update leaves out", async () => {
+    // The row's point is off-centre vertically; the update moves only X. Cut
+    // with Y left out, the sizes would centre vertically while the row kept
+    // its stored Y, and the crops would disagree with the saved point.
+    const service = makeService("commit");
+    vi.spyOn(
+      service as unknown as { getMediaById: () => Promise<unknown> },
+      "getMediaById"
+    ).mockResolvedValue({
+      success: true,
+      statusCode: 200,
+      data: { ...existingMedia, focalX: 50, focalY: 20 },
+    });
+
+    await service.updateMedia("m1", { focalX: 30 });
+
+    expect(regen.points).toEqual([{ focalX: 30, focalY: 20 }]);
   });
 
   it("regenerates onto a unique destination base, never the item's stored filename", async () => {

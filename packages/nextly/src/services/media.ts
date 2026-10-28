@@ -697,7 +697,13 @@ export class MediaService extends BaseService {
         uniqueBase,
         sizeConfigs,
         uploadFn,
-        { focalX: changes.focalX, focalY: changes.focalY }
+        // The whole point the row will hold: a coordinate the update leaves
+        // out keeps its stored value, so the sizes are cut around the same
+        // point the row records rather than the middle on that axis.
+        {
+          focalX: changes.focalX ?? media.focalX ?? undefined,
+          focalY: changes.focalY ?? media.focalY ?? undefined,
+        }
       );
 
       updateData.sizes = newSizes;

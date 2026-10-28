@@ -490,6 +490,13 @@ describe.each(getConfiguredTestDialects())(
         expect(
           (await trusted.media.findByID({ id: uploaded.id }))?.focalX
         ).toBe(25);
+
+        // An update naming one coordinate moves that one and keeps the other
+        // as stored, rather than putting it back in the middle.
+        await trusted.media.update({ id: uploaded.id, data: { focalX: 40 } });
+        const moved = await trusted.media.findByID({ id: uploaded.id });
+        expect(moved?.focalX).toBe(40);
+        expect(moved?.focalY).toBe(70);
       });
     });
   }
