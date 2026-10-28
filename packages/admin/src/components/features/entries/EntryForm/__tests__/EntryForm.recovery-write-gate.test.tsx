@@ -15,9 +15,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, createTestQueryClient } from "@admin/__tests__/utils";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 
-const { useDocumentLock, updateOptions, autosaveOffer, update } = vi.hoisted(
-  () => ({
+const { useDocumentLock, updateOptions, autosaveOffer, update, answer } =
+  vi.hoisted(() => ({
     useDocumentLock: vi.fn(),
+    // The server's answer on changing the entry in the language on screen.
+    answer: { current: "allowed" as "allowed" | "switching" },
     // The entry's update, where a save leaves the editor.
     update: vi.fn(),
     // A recovery point the editor offers back, when a test sets one.
@@ -27,8 +29,7 @@ const { useDocumentLock, updateOptions, autosaveOffer, update } = vi.hoisted(
     updateOptions: {
       current: undefined as { refusedForm?: RefusedForm } | undefined,
     },
-  })
-);
+  }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 // The form the editor hands its update mutation, which the recovery uses.
@@ -64,6 +65,10 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
+  useUpdateAnswer: () => answer.current,
+}));
 
 import { EntryForm } from "../EntryForm";
 
@@ -105,6 +110,7 @@ function lockedBy(status: "held-by-me" | "held-by-other") {
 beforeEach(() => {
   vi.clearAllMocks();
   update.mockResolvedValue({ item: entry });
+  answer.current = "allowed";
   updateOptions.current = undefined;
   autosaveOffer.current = null;
 });
@@ -435,6 +441,34 @@ describe("the entry editor's recovery from a refused publish", () => {
       }
     }
   );
+
+  it("stores and takes nothing while a language switch's answer is on its way, when no Save is offered", async () => {
+    lockedBy("held-by-me");
+    const { rerender } = render(
+      <EntryForm collection={collection} entry={entry} mode="edit" />,
+      { wrapper: Providers }
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Summary" }), {
+      target: { value: "Edited" },
+    });
+    expect(updateOptions.current?.refusedForm?.mayWrite()).toBe(true);
+
+    // The author switches language; until the new one is answered, nothing
+    // that saves is offered.
+    answer.current = "switching";
+    rerender(<EntryForm collection={collection} entry={entry} mode="edit" />);
+    const take = vi.fn(async () => undefined);
+
+    // Asked before the take as well: no.
+    expect(updateOptions.current?.refusedForm?.mayWrite()).toBe(false);
+    await act(async () => {
+      await expect(
+        updateOptions.current?.refusedForm?.recover(take)
+      ).rejects.toThrow();
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(take).not.toHaveBeenCalled();
+  });
 });
 
 /** The document's Save and Publish controls, wherever they are drawn. */
