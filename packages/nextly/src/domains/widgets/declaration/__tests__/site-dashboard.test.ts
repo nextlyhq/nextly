@@ -19,6 +19,7 @@ import {
 } from "../../../../plugins/plugin-context";
 import { CORE_DEFAULT_LAYOUT } from "../../core-widgets/ids";
 import { defaultLayoutPlan } from "../../default-layout";
+import { siteDashboardRules } from "../../site-rules";
 import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
 import { siteDashboardContext } from "../site-dashboard";
 
@@ -68,7 +69,7 @@ beforeEach(() => {
 });
 
 describe("a site config that names what exists", () => {
-  it("starts, and says which keys it accepts but does not apply yet", () => {
+  it("starts, and applies what it hides, replaces and overrides, warning of none of them", () => {
     expect(() =>
       resetWidgetRegistries([shop], {
         hide: ["core/team"],
@@ -95,12 +96,24 @@ describe("a site config that names what exists", () => {
         replace: { "core/recently-edited": "acme/recent-orders" },
       })
     ).not.toThrow();
-    expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "site-dashboard-keys-not-applied",
-        keys: ["hide", "overrides", "replace"],
-      })
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "site-dashboard-keys-not-applied" })
     );
+    // The rules every reading of a widget takes, from the copy checked.
+    const rules = siteDashboardRules();
+    expect([...rules.hidden]).toEqual(["core/team"]);
+    expect([...rules.replaced]).toEqual([
+      ["core/recently-edited", "acme/recent-orders"],
+    ]);
+    expect([...rules.alternatives]).toEqual(["acme/recent-orders"]);
+    expect(rules.overrides.get("core/recently-edited")).toEqual({
+      title: "Latest edits",
+      description: "What changed most recently",
+    });
+    // The alternative takes the built-in's place, at its own starting size.
+    expect(defaultLayoutPlan().cards[0]).toEqual({
+      widget: "acme/recent-orders",
+    });
   });
 
   it("checks the site's own widgets with the plugins', which the rest may name, and registers none yet", () => {
@@ -270,6 +283,19 @@ describe("a site config with faults", () => {
     ).toContain(
       'the site config, widget "acme/recent-orders": defaultLayout places "acme/recent-orders" again (entry 2) with no id of its own: name the card, as { widget: "acme/recent-orders", id: "recent-orders-2" }'
     );
+  });
+
+  it("refuses a card id with no text in it, as a save would refuse it", () => {
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([shop], {
+          defaultLayout: [
+            "acme/recent-orders",
+            { widget: "acme/recent-orders", id: "   " },
+          ],
+        })
+      )
+    ).toContain('defaultLayout id must be a non-empty string, got "   "');
   });
 
   it("refuses two cards under one id, and a card named after a widget", () => {
@@ -688,10 +714,14 @@ describe("a plugin that adds only Needs attention items", () => {
 describe("startup's warnings", () => {
   it("go through the registration's logger, and never the process-wide one", () => {
     const registration = { warn: vi.fn() };
-    resetWidgetRegistries([shop], { hide: ["core/team"] }, registration);
+    resetWidgetRegistries(
+      [shop],
+      { widgets: [{ ...revenue, id: "site/revenue" }] },
+      registration
+    );
     expect(registration.warn).toHaveBeenCalledWith(
-      "admin.dashboard.hide is accepted but not applied yet in this version.",
-      { kind: "site-dashboard-keys-not-applied", keys: ["hide"] }
+      "admin.dashboard.widgets is accepted but not applied yet in this version.",
+      { kind: "site-dashboard-keys-not-applied", keys: ["widgets"] }
     );
     expect(warn).not.toHaveBeenCalled();
   });

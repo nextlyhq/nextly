@@ -9,6 +9,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { CORE_WIDGETS } from "../../core-widgets";
 import type { WidgetDefinition } from "../../definition";
+import { widgetGateHolds } from "../../gate";
 import { clearWidgets, getWidget } from "../../registry";
 import {
   clearDeclaredWidgets,
@@ -264,6 +265,124 @@ describe("registering declared widgets", () => {
     expect(getWidget("acme/revenue")?.hidesWhenEmpty).toBe(true);
     // The control: a widget that says nothing is not published as hiding.
     expect(getWidget(ordersByState.id)?.hidesWhenEmpty).toBeUndefined();
+  });
+
+  it("publishes where it is offered as it is declared, and how many it allows whenever it says", () => {
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            {
+              ...recentOrders,
+              id: "acme/per-collection",
+              offered: "per-collection",
+            },
+            { ...ordersByState, id: "acme/on-request", offered: "on-request" },
+            {
+              ...ordersByState,
+              id: "acme/once-on-request",
+              offered: "on-request",
+              several: false,
+            },
+            ordersByState,
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/per-collection")).toMatchObject({
+      offered: "per-collection",
+      allowsSeveral: true,
+    });
+    // Saying nothing leaves the registry's own reading: an offered widget allows several.
+    expect(getWidget("acme/on-request")?.offered).toBe("on-request");
+    expect(getWidget("acme/on-request")?.allowsSeveral).toBeUndefined();
+    // Saying false is published, so an offered widget it limits to one card stays at one.
+    expect(getWidget("acme/once-on-request")?.allowsSeveral).toBe(false);
+    // The control: a widget that names none is offered as one card for the dashboard.
+    expect(getWidget(ordersByState.id)?.offered).toBeUndefined();
+  });
+
+  it("refuses at startup a widget offered per collection with no Collection setting, keeping none", () => {
+    let refusal: unknown;
+    try {
+      registerDashboardWidgets({
+        groups: [
+          {
+            owner: SHOP,
+            declarations: [
+              recentOrders,
+              { ...ordersByState, offered: "per-collection" },
+            ],
+          },
+        ],
+      });
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(NextlyError);
+    expect((refusal as NextlyError).logMessage).toContain(
+      `${SHOP}, widget "${ordersByState.id}": a widget offered per collection needs a Collection setting`
+    );
+    // Refused with the rest, before anything is kept, rather than half way through registering.
+    expect(getWidget(recentOrders.id)).toBeUndefined();
+    expect(getWidget(ordersByState.id)).toBeUndefined();
+  });
+
+  it("publishes each permission gate as the requiredPermission the registry judges, and the other forms as none", () => {
+    const gated = (id: string, access: unknown) => ({
+      ...ordersByState,
+      id: `acme/${id}`,
+      access,
+    });
+    registerDashboardWidgets({
+      groups: [
+        {
+          owner: SHOP,
+          declarations: [
+            gated("one", "read-orders"),
+            gated("any", { anyOf: ["read-orders", "update-orders"] }),
+            gated("all", {
+              allOf: [
+                "read-orders",
+                { anyOf: ["update-orders", "create-orders"] },
+              ],
+            }),
+            gated("reads", { collections: ["orders"] }),
+            gated("asks", () => true),
+          ],
+        },
+      ],
+    });
+    expect(getWidget("acme/one")?.requiredPermission).toBe("read-orders");
+    // The registry's any-of spelling: a list.
+    expect(getWidget("acme/any")?.requiredPermission).toEqual([
+      "read-orders",
+      "update-orders",
+    ]);
+    // Each entry a slug, or the registry's any-of list.
+    expect(getWidget("acme/all")?.requiredPermission).toEqual({
+      allOf: ["read-orders", ["update-orders", "create-orders"]],
+    });
+    // Judged per card, with the person: no gate is published for them.
+    expect(getWidget("acme/reads")?.requiredPermission).toBeUndefined();
+    expect(getWidget("acme/asks")?.requiredPermission).toBeUndefined();
+
+    // And each published gate means what was declared, by the one rule the gates apply.
+    const holder =
+      (...held: string[]) =>
+      (slug: string) =>
+        held.includes(slug);
+    const holds = (id: string, ...held: string[]) =>
+      widgetGateHolds(
+        getWidget(`acme/${id}`)?.requiredPermission,
+        holder(...held)
+      );
+    expect(holds("any", "update-orders")).toBe(true);
+    expect(holds("any", "delete-orders")).toBe(false);
+    expect(holds("all", "read-orders", "create-orders")).toBe(true);
+    expect(holds("all", "read-orders")).toBe(false);
+    expect(holds("all", "create-orders")).toBe(false);
   });
 
   it("keeps each declaration, with its server code, for the server's own use", () => {

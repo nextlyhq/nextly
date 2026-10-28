@@ -11,6 +11,7 @@ import * as loggerModule from "../observability/logger";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
+import { setSiteDashboardRules } from "../domains/widgets/site-rules";
 
 import { cardIsShownTo, prepareCards } from "./widget-cards";
 import { askableCards } from "./widget-layout";
@@ -93,6 +94,30 @@ const declarations: Record<string, unknown> = {
       size: { default: { w: 12, h: 3 } },
       access: { collections: ["orders", "customers"] },
       load: readsLoad,
+      view: "figure",
+    },
+  },
+  // Gated on permissions, any of several and all of several: judged when the card is handed, by
+  // the requiredPermission each was published as, so nothing here asks again.
+  "acme/any-of": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/any-of",
+      size: { default: { w: 12, h: 3 } },
+      access: { anyOf: ["read-orders", "update-orders"] },
+      load: gatedLoad,
+      view: "figure",
+    },
+  },
+  "acme/all-of": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/all-of",
+      size: { default: { w: 12, h: 3 } },
+      access: { allOf: ["read-orders", { anyOf: ["update-orders"] }] },
+      load: gatedLoad,
       view: "figure",
     },
   },
@@ -203,6 +228,26 @@ beforeEach(() => {
         { id: "c-reads", widgetId: "acme/reads", w: 12, h: 3, removed: false },
       ],
       [
+        "c-any-of",
+        {
+          id: "c-any-of",
+          widgetId: "acme/any-of",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+      ],
+      [
+        "c-all-of",
+        {
+          id: "c-all-of",
+          widgetId: "acme/all-of",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+      ],
+      [
         "c-needs",
         { id: "c-needs", widgetId: "acme/needs", w: 12, h: 3, removed: false },
       ],
@@ -244,6 +289,8 @@ beforeEach(() => {
       "acme/orders",
       "acme/gated",
       "acme/reads",
+      "acme/any-of",
+      "acme/all-of",
       "acme/needs",
       "acme/maybe",
       "acme/throws",
@@ -551,6 +598,18 @@ describe("a card's load, judged before it runs", () => {
     expect(readsLoad).toHaveBeenCalledOnce();
   });
 
+  it("is run for a card gated on permissions it was handed, which are not judged a second time", async () => {
+    // Handed means the gate held: a card's permission gate is judged where the cards are handed,
+    // by its published requiredPermission, and here neither re-judged nor read as collections.
+    for (const widget of ["acme/any-of", "acme/all-of"]) {
+      await expect(answered(widget), widget).resolves.toMatchObject({
+        result: { total: 1 },
+      });
+    }
+    expect(gatedLoad).toHaveBeenCalledTimes(2);
+    expect(check).not.toHaveBeenCalled();
+  });
+
   it("is not run while a setting has no value, and the card asks for it", async () => {
     const answer = await answered("acme/needs");
     expect(needsLoad).not.toHaveBeenCalled();
@@ -586,6 +645,27 @@ describe("a card's load, judged before it runs", () => {
       settings: { items: 5 },
       user: { id: "reader" },
     });
+  });
+
+  it("is handed the starting value the site's override gives a setting the card leaves unset", async () => {
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([["acme/maybe", { settings: { items: 7 } }]]),
+    });
+    try {
+      await answered("acme/maybe");
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
+    const [shown] = showsPredicate.mock.calls[0] as [Record<string, unknown>];
+    expect(shown).toMatchObject({ settings: { items: 7 } });
   });
 });
 

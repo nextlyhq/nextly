@@ -5,7 +5,7 @@ import type { JSX } from "react";
 import { DocumentPanel } from "./panels";
 import type { EntryFormMode, EntryData } from "./useEntryForm";
 
-// into DocumentPanel as a Status row; RevisionsPanel and ActivityPanel were
+// into DocumentPanel; RevisionsPanel and ActivityPanel were
 // "Coming soon" placeholders and removed entirely until those features ship
 // with their own real surfaces.
 
@@ -17,8 +17,8 @@ export interface EntryFormSidebarProps {
   entry?: EntryData | null;
   /** Whether sidebar should be hidden (embedded mode or rail collapsed). */
   hidden?: boolean;
-  /** Whether this collection has Draft/Published status enabled. Drives
-   *  whether the Status row renders inside DocumentPanel. */
+  /** Whether this collection has Draft/Published status enabled, which the
+   *  panel's language section reads. */
   hasStatus?: boolean;
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
@@ -30,9 +30,6 @@ export interface EntryFormSidebarProps {
   navigationDisabled?: boolean;
   /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
   publishAllDisabled?: boolean;
-  /** Whether the form has unsaved local changes. Forwarded to DocumentPanel
-   *  so it can render the "Modified" pill state on a dirty published entry. */
-  isDirty?: boolean;
 }
 
 export function EntryFormSidebar({
@@ -45,7 +42,6 @@ export function EntryFormSidebar({
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
   publishAllDisabled = actionsDisabled,
-  isDirty = false,
 }: EntryFormSidebarProps): JSX.Element | null {
   if (hidden) return null;
 
@@ -60,7 +56,6 @@ export function EntryFormSidebar({
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
-        isDirty={isDirty}
       />
     </div>
   );
