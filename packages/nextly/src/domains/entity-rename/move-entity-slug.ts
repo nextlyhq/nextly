@@ -34,6 +34,7 @@ import { getDialectTables } from "../../database/index";
 import { resolveRelations } from "../../database/resolve-relations";
 import { NextlyError } from "../../errors";
 
+import { manyToManyLinks } from "./many-to-many-links";
 import {
   jsonSlugColumns,
   renamedSlugColumns,
@@ -89,6 +90,9 @@ export async function slugKeyedTablesPresent(db: {
  * would be written to (`permissions.resource` holds 50 characters), by the
  * narrowest width any dialect declares, so a rename one database would take
  * is refused by every one alike rather than by some of them part-way.
+ *
+ * And refuses, with a CONFLICT naming the fields, to rename a collection on
+ * either side of a many-to-many relationship (see `refuseManyToManyLinks`).
  */
 export async function moveEntitySlug(
   tx: TransactionContext,
@@ -100,6 +104,7 @@ export async function moveEntitySlug(
 ): Promise<void> {
   const { dialect, present, move } = input;
   if (move.from === move.to) return;
+  await refuseManyToManyLinks(tx, move);
   // The width refusal below measures every dialect's declared columns, and a
   // process loads only its own dialect's tables when its adapter is created,
   // so the others are loaded here. Renames are rare; later ones reuse the load.
@@ -138,6 +143,53 @@ export async function moveEntitySlug(
         break;
     }
   }
+}
+
+/**
+ * Refuse to rename a collection that a many-to-many relationship uses, as the
+ * collection declaring the field or as its target.
+ *
+ * The relationship's links live in a junction table whose name and columns are
+ * spelled from both collections' current slugs, and a rename keeps every
+ * physical name: after it, the relationship looks for a junction under the new
+ * slug, finds none, and reads every link as empty. Refused instead, naming the
+ * fields, so the links stay readable and the caller knows what to change.
+ *
+ * Read inside the rename's transaction, after the registry row was written,
+ * so the renamed collection's own fields are found under the new slug.
+ */
+async function refuseManyToManyLinks(
+  tx: TransactionContext,
+  move: EntitySlugMove
+): Promise<void> {
+  if (move.kind !== "collection") return;
+  const rows = await tx.select<{ slug: unknown; fields: unknown }>(
+    "dynamic_collections",
+    { columns: ["slug", "fields"] }
+  );
+  const stranded = manyToManyLinks(rows).filter(
+    link =>
+      link.collection === move.from ||
+      link.collection === move.to ||
+      link.target === move.from
+  );
+  if (stranded.length === 0) return;
+  const named = stranded
+    .map(link => {
+      // The renamed collection's own fields are read back under the new slug.
+      const owner = link.collection === move.to ? move.from : link.collection;
+      return `${owner}.${link.field}`;
+    })
+    .sort();
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `This collection can't be renamed while a many-to-many relationship uses it: ${named.join(", ")}. Remove those fields, or keep the collection's name.`,
+    logContext: {
+      reason: "rename-collection-has-many-to-many",
+      slug: move.from,
+      fields: named,
+    },
+  });
 }
 
 /** SQL column name to the Drizzle property the adapter addresses it by. */

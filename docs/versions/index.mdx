@@ -346,6 +346,10 @@ and nothing changes. Moving one entity's records in beside another's would merge
 A new slug longer than 50 characters is refused too, on every database, with a validation error
 that names the limit: a permission's resource holds 50 characters.
 
+A collection on either side of a many-to-many relationship can't be renamed either. Its links live
+in a junction table named after both collections, and a rename keeps that name, so the relationship
+would no longer find them. The refusal names the fields; remove them, or keep the collection's name.
+
 <Callout type="info">
   Changing the `slug` of a code-first collection or Single in your config is not
   a rename. Nextly cannot tell it from removing one entity and adding another,
