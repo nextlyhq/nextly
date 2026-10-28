@@ -18,9 +18,10 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "@admin/__tests__/utils";
+import { TOAST_OFFSET_BOTTOM_PROPERTY } from "@admin/constants/ui";
 
 const MB = 1024 * 1024;
 
@@ -172,6 +173,10 @@ const liveRegion = () =>
   screen
     .getAllByRole("status")
     .find(element => element.getAttribute("aria-live") === "polite")!;
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -404,6 +409,59 @@ describe("the upload tray", () => {
       )
     );
     expect(within(row("photo-1.png")).getByText("Done")).toBeVisible();
+  });
+
+  it("stays until it is closed, by a Close the keyboard reaches, and lifts the toasts above it meanwhile", async () => {
+    // A clock the test moves, installed before any timer a closing tray
+    // could set; it still runs on its own, so the page's waits keep working.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderLibrary();
+    const heading = await screen.findByRole("heading", {
+      name: "Media Library",
+    });
+    const toastOffset = () =>
+      document.documentElement.style.getPropertyValue(
+        TOAST_OFFSET_BOTTOM_PROPERTY
+      );
+    expect(toastOffset()).toBe("");
+
+    await dropOn(heading, [png("a.png"), png("b.png")]);
+    // While the tray is open the toaster's bottom edge clears it.
+    expect(toastOffset()).toMatch(/^calc\(\d+(\.\d+)?px \+ 1\.5rem\)$/);
+    await waitFor(() => expect(uploads).toHaveLength(2));
+    for (const upload of uploads) {
+      act(() => upload.resolve(media(upload.file)));
+    }
+    await waitFor(() =>
+      expect(liveRegion()).toHaveTextContent("Upload finished. 2 uploaded.")
+    );
+
+    // Well past any moment a tray might close itself, it is still there,
+    // saying how it went.
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(
+      within(tray()).getByRole("heading", { name: "2 uploaded" })
+    ).toBeVisible();
+
+    // Close is the last stop in the page's tab order: Shift+Tab from the
+    // start of the document lands on it, and it carries the focus ring.
+    const close = within(tray()).getByRole("button", { name: "Close uploads" });
+    expect(close.className).toMatch(/focus-visible:ring/);
+    const user = userEvent.setup({
+      advanceTimers: vi.advanceTimersByTime,
+    });
+    (document.activeElement as HTMLElement | null)?.blur();
+    await user.tab({ shift: true });
+    expect(close).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByRole("region", { name: "Uploads" })).toBeNull();
+    // Focus goes to the page's heading rather than being dropped, and the
+    // toasts go back to their corner.
+    expect(heading).toHaveFocus();
+    expect(toastOffset()).toBe("");
   });
 
   it("takes files chosen with Upload the same way", async () => {

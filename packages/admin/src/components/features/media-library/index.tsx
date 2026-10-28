@@ -951,7 +951,11 @@ export function MediaLibrary({
         />
       )}
 
-      <UploadTray queue={uploadQueue} placement="floating" />
+      <UploadTray
+        queue={uploadQueue}
+        placement="floating"
+        returnFocusRef={headingRef}
+      />
     </div>
   );
 }

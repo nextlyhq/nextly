@@ -11,7 +11,11 @@
  *
  * In the library the tray floats over the page's corner, so it stays in view
  * while the person goes on browsing; in the media picker it sits inline under
- * the drop area, inside the dialog.
+ * the drop area, inside the dialog. It stays until the person closes it, even
+ * once everything has uploaded, so the outcome can't vanish unread.
+ *
+ * The floating tray shares its corner with the admin's toasts, so while it is
+ * open it lifts them above itself (see {@link useToastClearance}).
  *
  * The queue itself is {@link useUploadQueue}; this only draws it.
  */
@@ -21,6 +25,7 @@ import * as React from "react";
 
 import { Check, RefreshCw, X } from "@admin/components/icons";
 import { MEDIA_DESTRUCTIVE_TEXT_CLASSES } from "@admin/constants/media";
+import { TOAST_OFFSET_BOTTOM_PROPERTY } from "@admin/constants/ui";
 import { formatFileSize } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 
@@ -30,7 +35,42 @@ export interface UploadTrayProps {
   queue: UploadQueue;
   /** `floating` over the page's corner (the library), or `inline` (the picker). */
   placement: "floating" | "inline";
+  /**
+   * Where focus goes when Close takes the tray away, so it isn't dropped on
+   * the page's body. The library passes its heading.
+   */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
   className?: string;
+}
+
+/**
+ * While the floating tray is open, sets the toaster's bottom offset so toasts
+ * sit just above the tray instead of over it: the tray's height, plus its own
+ * 1rem from the window's edge and a 0.5rem gap. Followed as rows come and go,
+ * and removed when the tray closes, which puts toasts back in their corner.
+ */
+function useToastClearance(
+  trayRef: React.RefObject<HTMLElement | null>,
+  active: boolean
+): void {
+  React.useEffect(() => {
+    const tray = trayRef.current;
+    if (!active || !tray) return;
+    const root = document.documentElement;
+    const clear = () =>
+      root.style.setProperty(
+        TOAST_OFFSET_BOTTOM_PROPERTY,
+        `calc(${tray.offsetHeight}px + 1.5rem)`
+      );
+    clear();
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(clear);
+    observer?.observe(tray);
+    return () => {
+      observer?.disconnect();
+      root.style.removeProperty(TOAST_OFFSET_BOTTOM_PROPERTY);
+    };
+  }, [trayRef, active]);
 }
 
 /**
@@ -138,9 +178,20 @@ function UploadTrayRow({
 export function UploadTray({
   queue,
   placement,
+  returnFocusRef,
   className,
 }: UploadTrayProps): React.JSX.Element {
   const { rows, summary, isUploading } = queue;
+  const trayRef = React.useRef<HTMLElement>(null);
+  useToastClearance(trayRef, placement === "floating" && rows.length > 0);
+
+  // Close clears every row, since it is offered only once nothing is moving,
+  // so the tray and the button go; focus moves on rather than being lost.
+  const close = () => {
+    queue.dismiss();
+    returnFocusRef?.current?.focus();
+  };
+
   return (
     <>
       {/* The single live region for uploads: always mounted, and separate
@@ -157,6 +208,7 @@ export function UploadTray({
 
       {rows.length > 0 && (
         <section
+          ref={trayRef}
           aria-label="Uploads"
           className={cn(
             "flex flex-col overflow-hidden rounded-lg border border-border bg-card text-foreground",
@@ -170,12 +222,13 @@ export function UploadTray({
               {summary}
             </h2>
             {/* Closing while files still move would hide them; it clears the
-                finished rows once everything has finished. */}
+                finished rows once everything has finished. A native button,
+                so Tab reaches it and it shows the shared focus ring. */}
             {!isUploading && (
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={queue.dismiss}
+                onClick={close}
                 aria-label="Close uploads"
                 title="Close uploads"
               >

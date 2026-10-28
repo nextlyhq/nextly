@@ -32,13 +32,6 @@ import type { Media, UploadProgress } from "@admin/types/media";
 const UPLOAD_CONCURRENCY = 3;
 
 /**
- * How long a tray in which every file uploaded stays before closing itself.
- * A tray with any failure or refusal stays until it is closed, so a reason is
- * never lost.
- */
-const ALL_UPLOADED_DISMISS_MS = 4000;
-
-/**
  * One file in the queue: the shared upload progress shape, with an id the row
  * is updated by and the folder it was dropped into. The folder is fixed when
  * the file is added, so a retry lands where the person dropped it even after
@@ -263,15 +256,6 @@ export function useUploadQueue(options?: {
 
   const counts = React.useMemo(() => countUploads(rows), [rows]);
   const isUploading = counts.waiting + counts.uploading > 0;
-
-  // A tray in which everything uploaded closes itself after a moment.
-  const allUploaded =
-    counts.total > 0 && counts.uploaded === counts.total && !isUploading;
-  React.useEffect(() => {
-    if (!allUploaded) return;
-    const timer = setTimeout(dismiss, ALL_UPLOADED_DISMISS_MS);
-    return () => clearTimeout(timer);
-  }, [allUploaded, dismiss]);
 
   return {
     rows,
