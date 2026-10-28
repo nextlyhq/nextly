@@ -35,10 +35,7 @@ import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
 import { manageCounts, type Actor, type KeyActor } from "./actor";
-import {
-  answeringPermissions,
-  storedSlugHolds,
-} from "./answering-permissions";
+import { answeringPermissions, storedSlugHolds } from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
 import { aboutSubject, deviate } from "./deviations";
@@ -47,6 +44,7 @@ import {
   type CollectionQuestion,
   type GateVerdict,
 } from "./gate-adapters";
+import { MANAGE_BRIDGED_ACTIONS, isRetiredManage } from "./manage-bridge";
 import {
   actorForKey,
   actorForUser,
@@ -589,6 +587,17 @@ async function permissionVerdict(
   resource: string,
   rules: RouteRules
 ): Promise<GateVerdict> {
+  // A retired `manage-` permission, asked by a gate written before it was
+  // retired, is held only by holding all four plain permissions it stood
+  // for, each asked here as any other: the decision answers it the same way.
+  if (isRetiredManage(action, resource)) {
+    for (const plain of MANAGE_BRIDGED_ACTIONS) {
+      if (!(await permissionVerdict(caller, plain, resource, rules)).allowed) {
+        return verdictOf(false);
+      }
+    }
+    return verdictOf(true);
+  }
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
     const today = storedSlugHolds(caller.key.permissions, action, resource);

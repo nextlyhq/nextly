@@ -11,7 +11,7 @@ import type {
 
 import {
   MANAGE_BRIDGED_ACTIONS,
-  MANAGE_BRIDGED_RESOURCES,
+  isRetiredManage,
 } from "../../../auth/access/manage-bridge";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
@@ -566,11 +566,6 @@ function named(
 }
 
 /** `items` in runs of at most `size`, and never less than one per run. */
-/** Whether a permission is a retired `manage-` one: bridged, and stored as the plain four. */
-function isRetiredManage(action: string, resource: string): boolean {
-  return action === "manage" && MANAGE_BRIDGED_RESOURCES.includes(resource);
-}
-
 /** Where `storedAsPlain` reads permission rows: an adapter or a transaction. */
 type PermissionReader = Pick<TransactionContext, "select">;
 
