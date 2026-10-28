@@ -210,7 +210,15 @@ export async function ruleFilterCondition(
     return sql`1 = 0`;
   }
   try {
-    return prepared.condition(params.schema, params.localizedCtx);
+    // A localized field the read shows from a fallback language is judged
+    // on that language's value too, so the read shows nothing the rule
+    // refuses.
+    return prepared.condition(
+      params.schema,
+      params.localizedCtx
+        ? { ...params.localizedCtx, inEveryFallbackLanguage: true }
+        : null
+    );
   } catch (error) {
     return unbuildable(error);
   }
@@ -235,6 +243,8 @@ export function localizedFilterContext(
     localizedFields: companion.localizedFields,
     mainIdColumn: schema.id,
     locale: localeChain[0],
+    localeChain,
+    companionTable: companion.table,
     // Only constrain by status when the collection has per-locale status and the
     // read resolved to a single status; otherwise leave it unfiltered.
     statusValues:
