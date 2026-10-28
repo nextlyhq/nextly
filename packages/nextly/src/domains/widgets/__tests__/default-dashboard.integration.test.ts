@@ -192,7 +192,7 @@ describe.each(getConfiguredTestDialects())(
         ],
       });
       const admin = await account(current, "admin@example.com");
-      await refreshCollectionWidgets();
+      await refreshContentSources();
       // The default a site's `admin.dashboard.defaultLayout` asks for, as startup sets it.
       setDefaultLayoutPlan({
         cards: [{ widget: "core/content" }, { widget: "core/team", w: 6 }],
