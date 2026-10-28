@@ -87,6 +87,18 @@ describe("the lock surface of a reader", () => {
     await waitFor(() => expect(result.current.actionsDisabled).toBe(true));
   });
 
+  it("says who is editing in words that hold for a colleague with no name, and promises no action", async () => {
+    get.mockResolvedValue({ holder: { ...other, ownerLabel: null } });
+    const { result } = asReader();
+
+    await waitFor(() =>
+      expect(result.current.notice?.message).toMatch(/is editing/)
+    );
+    expect(result.current.notice?.message).not.toContain("null");
+    // A reader may hold no publish either, so nothing is promised them.
+    expect(result.current.notice?.message).not.toMatch(/publish/i);
+  });
+
   it("leaves an editor claiming the document as before", async () => {
     // POPULATION CONTROL: only the reader observes instead of claiming.
     const { result } = renderHook(() => useDocumentLockSurface(ref));

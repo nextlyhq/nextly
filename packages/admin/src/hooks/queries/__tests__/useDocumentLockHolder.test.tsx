@@ -97,4 +97,48 @@ describe("useDocumentLockHolder", () => {
     expect(get).not.toHaveBeenCalled();
     expect(result.current).toBeNull();
   });
+
+  it("keeps the newest read's answer when an older read returns after it", async () => {
+    let finishFirst: (answer: unknown) => void = () => {};
+    get.mockReturnValueOnce(
+      new Promise(resolve => {
+        finishFirst = resolve;
+      })
+    );
+    get.mockResolvedValueOnce({ holder: other });
+    const { result } = renderHook(() => useDocumentLockHolder(ref));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+    await waitFor(() => expect(result.current).toEqual(other));
+    // The first read, sent before the colleague claimed it, answers last.
+    await act(async () => {
+      finishFirst({ holder: null });
+    });
+
+    expect(result.current).toEqual(other);
+  });
+
+  it("is unknown for another document until that document's own read answers", async () => {
+    get.mockResolvedValueOnce({ holder: null });
+    const seen: Array<[string, unknown]> = [];
+    const { result, rerender } = renderHook(
+      ({ entryId }: { entryId: string }) => {
+        const holder = useDocumentLockHolder({ ...ref, entryId });
+        seen.push([entryId, holder]);
+        return holder;
+      },
+      { initialProps: { entryId: "42" } }
+    );
+    await waitFor(() => expect(result.current).toBeNull());
+
+    get.mockReturnValue(new Promise(() => {}));
+    rerender({ entryId: "43" });
+
+    // Not one render of the new document reads the last one's "nobody".
+    expect(seen.filter(([id]) => id === "43").map(([, h]) => h)).not.toContain(
+      null
+    );
+  });
 });
