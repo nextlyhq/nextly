@@ -285,6 +285,7 @@ function ListTable<Row>({
         {rows.map((row, index) => {
           const href = model.hrefOf?.(row);
           const title = model.titleOf(row);
+          const spoken = model.spokenOf?.(row);
           const leading = model.leadingOf?.(row);
           const titleBody = (
             <span className="flex min-w-0 items-center gap-2">
@@ -311,11 +312,11 @@ function ListTable<Row>({
               {/* `max-w-0` lets the widest column shorten its title with "…" rather than push. */}
               <td className="w-full max-w-0 pr-4 align-middle">
                 {href === undefined ? (
-                  titleBody
+                  <PlainTitle title={titleBody} spoken={spoken} />
                 ) : (
                   <Link
                     href={href}
-                    aria-label={model.spokenOf?.(row)}
+                    aria-label={spoken}
                     className="font-medium text-foreground hover:underline"
                   >
                     {titleBody}
@@ -344,6 +345,28 @@ function ListTable<Row>({
         })}
       </tbody>
     </table>
+  );
+}
+
+/**
+ * An unlinked row's title cell: what assistive technology hears is the spoken form where the row
+ * has one, read in place of the visible title, as the stacked row reads it.
+ */
+function PlainTitle({
+  title,
+  spoken,
+}: {
+  title: ReactNode;
+  spoken: string | undefined;
+}) {
+  if (spoken === undefined) return <>{title}</>;
+  return (
+    <>
+      <span aria-hidden="true" className="contents">
+        {title}
+      </span>
+      <span className="sr-only">{spoken}</span>
+    </>
   );
 }
 

@@ -24,17 +24,18 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, getTableName, inArray, sql } from "drizzle-orm";
 import type { AnyColumn, SQL } from "drizzle-orm";
 
-import { dynamicCollectionsMysql } from "../../../schemas/dynamic-collections/mysql";
-import { dynamicCollectionsPg } from "../../../schemas/dynamic-collections/postgres";
-import { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
-import {
+import { loadedDialect } from "../../../database/dialect-tables";
+import type { dynamicCollectionsMysql } from "../../../schemas/dynamic-collections/mysql";
+import type { dynamicCollectionsPg } from "../../../schemas/dynamic-collections/postgres";
+import type { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
+import type {
   buildDynamicFieldGroupsMysql,
   buildDynamicFieldGroupsPg,
   buildDynamicFieldGroupsSqlite,
 } from "../../../schemas/dynamic-field-groups";
-import { dynamicSinglesMysql } from "../../../schemas/dynamic-singles/mysql";
-import { dynamicSinglesPg } from "../../../schemas/dynamic-singles/postgres";
-import { dynamicSinglesSqlite } from "../../../schemas/dynamic-singles/sqlite";
+import type { dynamicSinglesMysql } from "../../../schemas/dynamic-singles/mysql";
+import type { dynamicSinglesPg } from "../../../schemas/dynamic-singles/postgres";
+import type { dynamicSinglesSqlite } from "../../../schemas/dynamic-singles/sqlite";
 import {
   nextlyI18nArchiveTables,
   UNKNOWN_ARCHIVE_KIND,
@@ -92,24 +93,13 @@ async function registries(
   adapter: LabelArchiveAdapter
 ): Promise<{ kind: I18nTransitionKind; table: RegistryTable }[]> {
   const fieldGroupRegistry = await resolveFieldGroupRegistryName(adapter);
-  const byDialect = {
-    postgresql: () => [
-      dynamicCollectionsPg,
-      dynamicSinglesPg,
-      buildDynamicFieldGroupsPg(fieldGroupRegistry),
-    ],
-    mysql: () => [
-      dynamicCollectionsMysql,
-      dynamicSinglesMysql,
-      buildDynamicFieldGroupsMysql(fieldGroupRegistry),
-    ],
-    sqlite: () => [
-      dynamicCollectionsSqlite,
-      dynamicSinglesSqlite,
-      buildDynamicFieldGroupsSqlite(fieldGroupRegistry),
-    ],
-  } as const;
-  const [collections, singles, fieldGroups] = byDialect[adapter.dialect]();
+  // The loaded dialect's own tables and builder, so only that dialect's files
+  // are imported; `createAdapter` loads them.
+  const loaded = loadedDialect(adapter.dialect);
+  const collections = loaded.tables.dynamicCollections;
+  const singles = loaded.tables.dynamicSingles;
+  const fieldGroups =
+    loaded.builders.buildDynamicFieldGroups(fieldGroupRegistry);
   return [
     { kind: "collection", table: collections },
     { kind: "single", table: singles },

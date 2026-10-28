@@ -143,8 +143,8 @@ export {
   type NextlyRobotsOptions,
 } from "./runtime/routing";
 
-// @experimental Checks the app's generated component map before the admin is
-// served. Call it from the admin's server layout, with the list the map's
+// @experimental Keeps the app's generated component map up to date in
+// development. Call it from the admin's server layout, with the list the map's
 // strings-only companion exports:
 //
 //   import { checkAdminComponents } from "nextly/runtime";
@@ -156,9 +156,11 @@ export {
 //     return children;
 //   }
 //
-// In development a map that is out of date is written again; in production the
-// admin is refused while a dashboard widget's component is missing from it,
-// naming each widget and the command that fixes it. Here rather than on
+// In development a map that is out of date is written again, or warned about
+// where it cannot be; in production it does nothing. It never refuses the
+// admin: a widget whose component is missing draws its card's error state, and
+// `nextly generate:types --check` holds the committed map to the config in CI.
+// Here rather than on
 // `nextly/next`: that entry is client-safe, and the check reads the boot's
 // plugins and writes files, which only a request on the server may do.
 export {

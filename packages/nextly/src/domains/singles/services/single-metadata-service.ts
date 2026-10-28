@@ -46,6 +46,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { FieldConfig } from "@nextly/collections";
+
 import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -58,13 +60,21 @@ import type { Logger } from "../../../shared/types";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { appLocalization } from "../../i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsLeavingTranslationUnder,
+} from "../../i18n/migration/archive-preflight";
+import {
+  leavingFieldConstraints,
+  withoutLeavingConstraints,
+} from "../../i18n/migration/field-leaves-translation-rules";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -183,6 +193,34 @@ export interface UpdateSingleSchemaInput {
 export interface UpdateSingleSchemaResult {
   record: DynamicSingleRecord;
   migrationStatus: SingleMigrationStatus;
+  /**
+   * The Required and Unique settings of fields leaving translation that the database refused, so
+   * the fields were recorded without them; empty when they were applied or none was asked for.
+   */
+  refusedSettings: { field: string; setting: "required" | "unique" }[];
+}
+
+/** One Required or Unique setting of a field leaving translation, and the SQL that undoes it. */
+interface LeavingSettingStep {
+  field: string;
+  setting: "required" | "unique";
+  forward: string;
+  inverse: string;
+}
+
+/**
+ * `fields` without the settings `refused` names, each field keeping any other: the list a Single's
+ * save records when the database refused those settings, as the table then holds the fields.
+ */
+function withoutRefusedSettings<F extends { name: string }>(
+  fields: readonly F[],
+  refused: readonly Pick<LeavingSettingStep, "field" | "setting">[]
+): F[] {
+  return fields.map(f =>
+    refused
+      .filter(r => r.field === f.name)
+      .reduce<F>((field, r) => ({ ...field, [r.setting]: false }), f)
+  );
 }
 
 /**
@@ -200,6 +238,13 @@ interface UpdateDdlPlan {
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
   previousFields: FieldDefinition[];
+  /**
+   * The Required and Unique settings of fields leaving translation, one step per setting, run
+   * after the companion reconcile has copied their default language's values in. `migrationSQL`
+   * creates their shared columns without the settings, since every entry would otherwise hold NULL
+   * or one placeholder before the copy. Empty when no such field leaves.
+   */
+  leavingSettings: LeavingSettingStep[];
   /**
    * Whether the statements describe the WHOLE table rather than a change to it.
    *
@@ -679,13 +724,34 @@ export class SingleMetadataService {
     // migration reached, because this request neither confirmed nor changed it.
     let migrationStatus = input.existing.migrationStatus;
     const updateData = { ...input.updateData };
+    let refusedSettings: UpdateSingleSchemaResult["refusedSettings"] = [];
 
     if (plan) {
       // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below).
-      const applied = await this.applyUpdateDdl(input, plan);
+      const { status: applied, refused } = await this.applyUpdateDdl(
+        input,
+        plan
+      );
       if (applied !== undefined) {
         updateData.migrationStatus = applied;
         migrationStatus = applied;
+      }
+      // Leaving settings the database refused: the fields are recorded as the table holds them,
+      // without the settings, and hashed as recorded, so the version moves on and the next save
+      // sees the settings as a change and applies them.
+      if (refused.length > 0 && Array.isArray(updateData.fields)) {
+        const recorded = withoutRefusedSettings(
+          updateData.fields as FieldDefinition[],
+          refused
+        );
+        updateData.fields = recorded;
+        updateData.schemaHash = calculateSchemaHash(
+          recorded as unknown as FieldConfig[]
+        );
+        refusedSettings = refused.map(({ field, setting }) => ({
+          field,
+          setting,
+        }));
       }
     }
 
@@ -694,7 +760,7 @@ export class SingleMetadataService {
       source: "ui",
     });
 
-    return { record, migrationStatus };
+    return { record, migrationStatus, refusedSettings };
   }
 
   /**
@@ -829,6 +895,7 @@ export class SingleMetadataService {
 
     if (fields === undefined) {
       return {
+        leavingSettings: [],
         migrationSQL: "",
         fields: previousFields,
         previousFields,
@@ -851,6 +918,7 @@ export class SingleMetadataService {
     // records `pending`, which is what the migration runner looks for.
     if (!adapter) {
       return {
+        leavingSettings: [],
         migrationSQL: "",
         fields,
         previousFields,
@@ -867,6 +935,7 @@ export class SingleMetadataService {
       return {
         // i18n: a fresh (re)create omits translatable columns when localized; they belong to the
         // companion.
+        leavingSettings: [],
         migrationSQL: schemaService.generateMigrationSQL(tableName, fields, {
           isSingle: true,
           hasStatus,
@@ -941,11 +1010,18 @@ export class SingleMetadataService {
       fields
     );
 
+    const deferred = this.withLeavingSettingsDeferred(
+      input,
+      alterInput.newFields,
+      schemaService
+    );
+
     return {
+      leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
         tableName,
         alterInput.oldFields,
-        alterInput.newFields,
+        deferred.newFields,
         {
           wasStatus,
           hasStatus,
@@ -1140,6 +1216,85 @@ export class SingleMetadataService {
     const from = getColumnDescriptor(rename.from, dialect, "collection")?.name;
     const to = getColumnDescriptor(rename.to, dialect, "collection")?.name;
     return from && to && from !== to ? { from, to } : undefined;
+  }
+
+  /**
+   * `newFields` with the Required and Unique settings of fields leaving translation taken off, and
+   * the steps that put them back. Their shared columns are created without the settings, since
+   * every entry would otherwise hold NULL or one placeholder until the companion reconcile copies
+   * the default language's values in; the settings follow the copy. Each step puts back one
+   * setting, from the state the step before it leaves, with the SQL that takes it off again, so a
+   * step that committed can be undone on its own. A step the dialect renders nothing for (SQLite
+   * modifies no column here) is left out. The SQL is planned without the live table's facts, which
+   * describe the columns before the migration creates them.
+   */
+  private withLeavingSettingsDeferred(
+    input: UpdateSingleSchemaInput,
+    newFields: FieldDefinition[],
+    schemaService: Pick<
+      DynamicCollectionSchemaService,
+      "generateAlterTableMigration" | "plannedColumnTypes" | "detectFieldRename"
+    >
+  ): { newFields: FieldDefinition[]; leavingSettings: LeavingSettingStep[] } {
+    const { wasLocalized, isLocalized, hasStatus } = input;
+    const previousFields = (input.existing.fields ??
+      []) as unknown as FieldDefinition[];
+    // Named after the change, by the main table's rename rule, so a field renamed and made shared
+    // leaves under its new name and its setting waits for the copy too.
+    const rename = schemaService.detectFieldRename(
+      previousFields,
+      input.fields ?? []
+    );
+    const leaving = new Set(
+      wasLocalized && isLocalized
+        ? fieldsLeavingTranslationUnder(
+            previousFields,
+            input.fields ?? [],
+            rename ? { from: rename.from.name, to: rename.to.name } : null
+          )
+        : []
+    );
+    const unconstrained = withoutLeavingConstraints(newFields, leaving);
+    const alter = (from: FieldDefinition[], to: FieldDefinition[]) =>
+      schemaService.generateAlterTableMigration(
+        input.existing.tableName,
+        from,
+        to,
+        {
+          wasStatus: hasStatus,
+          hasStatus,
+          // The type the diff BEFORE this one writes, not the live table's: MySQL restates a
+          // whole column definition on every MODIFY, and with none to restate it falls back to
+          // the legacy renderer, narrowing a float that diff had just created `double` down to
+          // `decimal(10,2)`.
+          liveColumnTypes: schemaService.plannedColumnTypes(from),
+        }
+      );
+    const leavingSettings: LeavingSettingStep[] = [];
+    let state = unconstrained;
+    newFields.forEach((field, i) => {
+      if (unconstrained[i] === field) return;
+      for (const setting of leavingFieldConstraints(field, undefined)) {
+        const next = state.map((f, j) =>
+          j !== i
+            ? f
+            : setting === "required"
+              ? { ...f, required: field.required }
+              : { ...f, unique: field.unique }
+        );
+        const forward = alter(state, next);
+        if (forward.trim() !== "") {
+          leavingSettings.push({
+            field: field.name,
+            setting,
+            forward,
+            inverse: alter(next, state),
+          });
+        }
+        state = next;
+      }
+    });
+    return { newFields: unconstrained, leavingSettings };
   }
 
   /**
@@ -1548,7 +1703,11 @@ export class SingleMetadataService {
   private async applyUpdateDdl(
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan
-  ): Promise<SingleMigrationStatus | undefined> {
+  ): Promise<{
+    status: SingleMigrationStatus | undefined;
+    /** The leaving settings refused, so the fields are recorded without them; else empty. */
+    refused: LeavingSettingStep[];
+  }> {
     const adapter = this.adapter;
     const tableName = input.existing.tableName;
 
@@ -1556,7 +1715,10 @@ export class SingleMetadataService {
       this.logger.warn(
         "[Singles] No adapter registered, migration not executed"
       );
-      return plan.ownsMigrationStatus ? "pending" : undefined;
+      return {
+        status: plan.ownsMigrationStatus ? "pending" : undefined,
+        refused: [],
+      };
     }
 
     // A field becoming translated takes its value to the default language's companion row first:
@@ -1585,7 +1747,7 @@ export class SingleMetadataService {
         this.logger.error(
           `[Singles] Table "${tableName}" not found after migration update`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
 
       // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
@@ -1641,8 +1803,18 @@ export class SingleMetadataService {
               : String(companionError)
           }`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
+
+      // The Required and Unique settings of fields leaving translation, now that their shared
+      // columns hold the default language's values: all of them or none. Refused, the fields are
+      // recorded as the table then holds them, without the settings, and the runtime shape is
+      // bound from the same list, so the next save sees the settings as a change and applies them.
+      const refused = await this.applyLeavingSettings(adapter, tableName, plan);
+      const recorded = {
+        ...plan,
+        fields: withoutRefusedSettings(plan.fields, refused),
+      };
 
       // 🔴 Registered only once the companion has been reconciled, never before it.
       //
@@ -1658,10 +1830,12 @@ export class SingleMetadataService {
       // in the same way it was before the save, and the lazy rebuild can still correct it.
       await this.registerUpdatedRuntimeSchema(
         input,
-        plan,
+        recorded,
         adapter,
         input.isLocalized
       );
+
+      if (refused.length > 0) return { status: "failed", refused };
 
       // 🔴 Only a plan that describes the WHOLE table may clear a durable `failed`.
       //
@@ -1691,10 +1865,10 @@ export class SingleMetadataService {
           `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
             `describes a change to it, so its status is left as failed`
         );
-        return "failed";
+        return { status: "failed", refused: [] };
       }
 
-      return "applied";
+      return { status: "applied", refused: [] };
     } catch (error) {
       // 🔴 Everything inside this block is recorded, including a `NextlyError`, and the error TYPE
       // is deliberately not consulted.
@@ -1721,10 +1895,78 @@ export class SingleMetadataService {
       if (plan.migrationSQL) {
         this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
       }
-      return "failed";
+      return { status: "failed", refused: [] };
     }
   }
 
+  /**
+   * Applies the plan's leaving settings, all of them or none, and returns those refused: every one
+   * of them, or none.
+   * The statements themselves refuse values that cannot take a setting, a value written since the
+   * save's first check included. PostgreSQL and SQLite run the steps in one transaction. MySQL
+   * commits each schema statement, so a step it refuses has itself and every step before it
+   * undone, newest first.
+   */
+  private async applyLeavingSettings(
+    adapter: DrizzleAdapter,
+    tableName: string,
+    plan: UpdateDdlPlan
+  ): Promise<LeavingSettingStep[]> {
+    const steps = plan.leavingSettings;
+    if (steps.length === 0) return [];
+    const dialect = adapter.getCapabilities().dialect;
+    const run = (migrationSQL: string) =>
+      applyMigrationWhole({
+        db: adapter.getDrizzle(),
+        dialect,
+        migrationSQL,
+        entity: "single",
+      });
+    try {
+      if (dialect !== "mysql") {
+        await run(
+          steps.map(step => step.forward).join("\n--> statement-breakpoint\n")
+        );
+        return [];
+      }
+      for (const [i, step] of steps.entries()) {
+        try {
+          await run(step.forward);
+        } catch (error) {
+          await this.undoLeavingSettings(adapter, steps.slice(0, i + 1));
+          throw error;
+        }
+      }
+      return [];
+    } catch (error) {
+      this.logger.error(
+        `[Singles] The Required and Unique settings of fields leaving translation on ` +
+          `"${tableName}" were refused, so the fields are recorded without them: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+      );
+      return steps;
+    }
+  }
+
+  /** Takes off again the leaving settings `steps` applied, newest first. Each is safe to repeat. */
+  private async undoLeavingSettings(
+    adapter: DrizzleAdapter,
+    steps: readonly LeavingSettingStep[]
+  ): Promise<void> {
+    for (const step of [...steps].reverse()) {
+      try {
+        await applyMigrationStatements(adapter, step.inverse);
+      } catch (error) {
+        this.logger.error(
+          `[Singles] Could not take the ${step.setting} setting of "${step.field}" off again ` +
+            `after its settings were refused: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+        );
+      }
+    }
+  }
   /**
    * Forget the main table's registered shape, so the next read rebuilds it from the database.
    *

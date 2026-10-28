@@ -3,7 +3,7 @@
  *
  * 🔴 The two halves live in packages that do not depend on each other. A core
  * card declares its body as a string in `packages/nextly`
- * (`core-widgets.ts`), and the component behind that string is bound here
+ * (`core-widgets/`), and the component behind that string is bound here
  * (`core-components.ts`) -- so no type, no import and no build step can notice
  * that one names something the other never registered. That is the same
  * two-halves-of-one-name hazard `system-source-ids.ts` exists to manage for a
@@ -48,7 +48,10 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { CORE_WIDGETS } from "../../../../../../nextly/src/domains/widgets/core-widgets";
+import {
+  CORE_DECLARATIONS,
+  CORE_WIDGETS,
+} from "../../../../../../nextly/src/domains/widgets/core-widgets";
 import { LIST_RENDERED_FIELDS } from "../archetypes/list";
 
 /**
@@ -61,15 +64,19 @@ const CORE_COMPONENTS = join(
 );
 
 /**
- * The paths core's cards NAME, read off the definitions rather than matched out
- * of their source text.
+ * The paths core's cards NAME, read off the definitions and the declarations
+ * rather than matched out of their source text.
  *
- * A `custom` card is the only kind that names one; the archetype-drawn cards
- * carry a `query` instead and are correctly absent here.
+ * A `custom` definition names one, and so does a declaration whose view is a
+ * component of core's own; the archetype-drawn cards carry a `query`, and a
+ * core view no path, so they are correctly absent here.
  */
-const named = CORE_WIDGETS.map(widget => widget.component).filter(
-  (path): path is string => typeof path === "string"
-);
+const named = [
+  ...CORE_WIDGETS.map(widget => widget.component),
+  ...CORE_DECLARATIONS.map(widget =>
+    typeof widget.view === "object" ? widget.view.component : undefined
+  ),
+].filter((path): path is string => typeof path === "string");
 
 /**
  * The paths this package REGISTERS.

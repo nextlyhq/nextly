@@ -12,12 +12,17 @@
  * Outside a frame (a preview, a test drawing a body alone) there is no footer to draw into, and
  * the content is drawn where it stands.
  *
+ * A footer holds ONE link. What a body hands it takes the place of the widget's own `link` while
+ * it is there (`CardFooterClaim`), so a list's "View all" never sits beside a second call to
+ * action.
+ *
  * @module components/features/widgets/frame/footer-slot
  */
 
 import {
   createContext,
   useContext,
+  useEffect,
   type JSX,
   type Provider,
   type ReactNode,
@@ -35,6 +40,18 @@ export const CardFooterSlotProvider: Provider<HTMLElement | null | undefined> =
   CardFooterSlot.Provider;
 
 /**
+ * How a body tells the frame its footer holds the body's own link, so the frame draws none of
+ * its own: called while that link is drawn, it answers the call that gives the footer back.
+ */
+const CardFooterClaim = createContext<(() => () => void) | undefined>(
+  undefined
+);
+
+/** Provided by the frame, around its body, beside the footer's element. */
+export const CardFooterClaimProvider: Provider<(() => () => void) | undefined> =
+  CardFooterClaim.Provider;
+
+/**
  * A card footer's link, the frame's own and a body's alike: foreground, with the brand on the
  * underline. A brand primary is any colour its owner picked, and small text in it can fall under
  * AA contrast.
@@ -42,13 +59,18 @@ export const CardFooterSlotProvider: Provider<HTMLElement | null | undefined> =
 export const CARD_FOOTER_LINK_CLASS =
   "text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary";
 
-/** Draws `children` in the card's footer, or where it stands outside a frame. */
+/**
+ * Draws `children` in the card's footer, or where it stands outside a frame, in place of the
+ * widget's own link while it is drawn.
+ */
 export function CardFooterContent({
   children,
 }: {
   children: ReactNode;
 }): JSX.Element | null {
   const slot = useContext(CardFooterSlot);
+  const claim = useContext(CardFooterClaim);
+  useEffect(() => claim?.(), [claim]);
   if (slot === undefined) return <>{children}</>;
   if (slot === null) return null;
   return createPortal(children, slot);

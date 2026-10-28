@@ -96,12 +96,17 @@ function declaredSources(css: string): string[] {
 }
 
 function scannedRoots(): string[] {
-  const declared = declaredSources(readFileSync(GLOBALS_CSS, "utf8"));
+  const css = readFileSync(GLOBALS_CSS, "utf8");
+  const declared = declaredSources(css).map(spec =>
+    resolve(dirname(GLOBALS_CSS), spec)
+  );
+  // With automatic detection on, Tailwind also reads the package it runs in,
+  // whose source is the admin's own; with `source(none)` only what is declared.
+  const automatic = !/@import\s+["']tailwindcss["']\s+source\(none\)/.test(css);
 
   return [
-    ADMIN_SRC,
-    ...declared.map(spec => resolve(dirname(GLOBALS_CSS), spec)),
-  ].map(toPosix);
+    ...new Set([...(automatic ? [ADMIN_SRC] : []), ...declared].map(toPosix)),
+  ];
 }
 
 /** Every `.ts`/`.tsx` under `root`, as absolute paths. */

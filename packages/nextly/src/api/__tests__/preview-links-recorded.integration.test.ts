@@ -383,7 +383,7 @@ async function revokeDocument(caller: Caller, doc: Doc): Promise<Response> {
 async function opens(token: string): Promise<boolean> {
   const res = await createPreviewRoute({
     redirectTo: () => "/preview-landing",
-    draftMode: () => ({ enable: () => {} }),
+    draftMode: async () => ({ enable: () => {} }),
   }).GET(
     new Request(
       `https://site.example/api/preview?token=${encodeURIComponent(token)}`
@@ -397,7 +397,7 @@ async function opens(token: string): Promise<boolean> {
 /** A page RENDERED in a session the link already opened. */
 async function renders(token: string): Promise<boolean> {
   const session = await readPreviewSession({
-    cookies: () => ({
+    cookies: async () => ({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE
           ? { value: encodeURIComponent(token) }
