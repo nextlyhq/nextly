@@ -787,7 +787,9 @@ jobs:
       # Then, with the server running, it adds a category, a tag and ten posts in both, as
       # an editor would after deploying, and asks for each archive's two pages: nine posts
       # on the first, the tenth on `?page=2`, so the new archives render on request and
-      # read their pagination.
+      # read their pagination. It also adds a category and a tag whose slug is the one the
+      # build used as its placeholder, `__none__`, with a post in both: a slug is free text,
+      # so on a request that archive is a real one, and lists its post.
       - name: Check the blog answers unknown and new categories and tags
         if: matrix.template == 'blog'
         shell: bash
@@ -844,6 +846,21 @@ jobs:
               },
             });
           }
+          const named = { title: "None", name: "None", slug: "__none__" };
+          const namedCategory = await nextly.create({ collection: "categories", data: named });
+          const namedTag = await nextly.create({ collection: "tags", data: named });
+          await nextly.create({
+            collection: "posts",
+            data: {
+              title: "In the placeholder's slug",
+              slug: "in-the-placeholder-slug",
+              excerpt: "A post in the archives named __none__.",
+              categories: [namedCategory.item.id],
+              tags: [namedTag.item.id],
+              status: "published",
+              publishedAt: new Date().toISOString(),
+            },
+          });
           process.exit(0);
           TS
           cp package.json /tmp/package.json.bak
@@ -865,6 +882,15 @@ jobs:
                 exit 1
               }
             done
+          done
+          for archive in /categories/__none__ /tags/__none__; do
+            fetch "$archive"
+            if grep -q 'NEXT_HTTP_ERROR_FALLBACK;404' /tmp/archive.html ||
+              ! grep -q 'href="/blog/in-the-placeholder-slug"' /tmp/archive.html; then
+              echo "$archive did not list its post"
+              tail -40 /tmp/blog-start.log
+              exit 1
+            fi
           done
 
       # A build proves the app compiles; this proves it serves. The existing-app installer
