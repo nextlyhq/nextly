@@ -98,12 +98,21 @@ export function unreadableCollectionCard(
  * between withheld and shown with no widget id, gate or readable collection
  * changing, and a snapshot taken before must be refused. Hashing the whole
  * declaration needs no list of the properties that matter to stay current.
+ *
+ * EVERY declared Collection setting, including one no query of its widget
+ * drives (a registration that replaced the query with one the setting does
+ * not reach). Such a setting decides no withholding, but the workspace payload
+ * and the settings sheet still show it, so a change to it must still refuse a
+ * snapshot taken before; filtered as `collectionWidgets` is, it changed nothing
+ * the token held.
  */
 export function collectionSettingsToken(
   widgets: readonly { id: string; collectionSetting?: AnyWidgetSetting }[]
 ): string[] {
-  return [...collectionWidgets(widgets)].map(
-    ([id, setting]) => `${id}=${JSON.stringify(setting)}`
+  return widgets.flatMap(({ id, collectionSetting }) =>
+    collectionSetting === undefined
+      ? []
+      : [`${id}=${JSON.stringify(collectionSetting)}`]
   );
 }
 

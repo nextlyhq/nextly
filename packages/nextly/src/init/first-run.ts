@@ -449,7 +449,9 @@ async function runCoreSchemaChecks(
   const [{ introspectLiveSnapshot }, { getCoreSchema, getCoreTableNames }] =
     await Promise.all([
       import("../domains/schema/pipeline/diff/introspect-live"),
-      import("../schemas/index"),
+      // The core schema itself, not the public entry, which also loads
+      // PostgreSQL's tables for its re-exports.
+      import("../schemas/core-schema"),
     ]);
   const {
     findCoreSchemaDrift,

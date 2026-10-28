@@ -9,8 +9,10 @@
  *   are safe to repeat (`buildFieldLeavesTranslationArchiveStatement`). Its DOWN keeps the archived
  *   copies, which a restore may still read.
  * - **shared**, after it: the default language's value copied onto the main table's new column,
- *   then the companion column dropped. Its DOWN puts the companion column back and refills it, the
- *   default language from the main table and every other language from its newest archive row.
+ *   then the column's Required and Unique settings applied (the main migration creates it without
+ *   them, since every row would hold NULL or one placeholder before the copy), then the companion
+ *   column dropped. Its DOWN puts the companion column back and refills it, the default language
+ *   from the main table and every other language from its newest archive row.
  *
  * Re-running is the runner's: a file runs in one transaction on PostgreSQL and SQLite, so a failed
  * one leaves nothing behind, and on MySQL a failed file is refused rather than run again over what
@@ -68,7 +70,17 @@ function fromArchivedText(
  * being translated in this migration.
  */
 export function planFieldLeavesTranslationMigration(
-  spec: CompanionMigrationSpec
+  spec: CompanionMigrationSpec,
+  /**
+   * The main table's settings the fields take on once their values are copied: `up` runs between
+   * the copy and the companion column's drop, so a value the database refuses is still on the
+   * companion; `down` runs first on the way back, undoing what the main migration's DOWN cannot
+   * (SQLite drops no column an index covers).
+   */
+  settings: { up: readonly string[]; down: readonly string[] } = {
+    up: [],
+    down: [],
+  }
 ): FieldLeavesMigrationPlan {
   const {
     dialect,
@@ -100,6 +112,7 @@ export function planFieldLeavesTranslationMigration(
   // default), and the copy runs before the drop, so the value stays where it was.
   const sharedUp = [
     ...buildDefaultLocaleRestoreStatements(ref, names),
+    ...settings.up,
     ...names.map(name => `ALTER TABLE ${comp} DROP COLUMN ${q(name, dialect)}`),
   ];
 
@@ -122,6 +135,7 @@ export function planFieldLeavesTranslationMigration(
     status: spec.status,
   });
   const sharedDown = [
+    ...settings.down,
     ...spec.columns.map(
       column =>
         `ALTER TABLE ${comp} ADD COLUMN ${q(column.name, dialect)} ${ddlType(column, dialect)}`

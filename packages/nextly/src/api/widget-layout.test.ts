@@ -23,6 +23,13 @@ vi.mock("./authenticated-read", async importOriginal => {
 });
 
 const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
+
+// Which of the default's cards their declared widgets' own rules would not
+// show the reader: the case states it, since that judgement has its own tests.
+const { defaultCardsNotShown } = vi.hoisted(() => ({
+  defaultCardsNotShown: vi.fn(),
+}));
+vi.mock("./default-cards-shown", () => ({ defaultCardsNotShown }));
 vi.mock("../di", () => ({ container: { get: containerGet } }));
 
 // `callerHoldsPermission` is the seam a caller is put on either side of.
@@ -73,6 +80,11 @@ import {
   registerWidget,
 } from "../domains/widgets/registry";
 import { setContributedWidgets } from "../domains/widgets/canonical";
+import { CORE_DEFAULT_LAYOUT } from "../domains/widgets/core-widgets/ids";
+import {
+  setDefaultLayoutPlan,
+  type DefaultLayoutPlan,
+} from "../domains/widgets/default-layout";
 import { collectionSettingsToken } from "../domains/widgets/collection-cards";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../plugins/validate-admin-widgets";
@@ -237,6 +249,12 @@ beforeEach(() => {
   logged.length = 0;
   clearWidgets();
   setContributedWidgets([]);
+  setDefaultLayoutPlan({
+    cards: CORE_DEFAULT_LAYOUT,
+    suggestions: true,
+    suggested: [],
+  });
+  defaultCardsNotShown.mockResolvedValue(new Set());
   reqAuth.mockResolvedValue({
     userId: "user-1",
     permissions: [],
@@ -910,6 +928,78 @@ describe("PUT /api/dashboard/layout", () => {
       "core/a",
       "core/gated",
     ]);
+  });
+
+  it("reads a retired per-collection card out of the row, and saves without it", async () => {
+    // 🔴 Dropped, unlike the gated card above: core makes no card in the
+    // `collection/` or `single/` namespace any more, so none can come back.
+    // `acme/x`, a card of a plugin this install does not have now, is the
+    // control: an unknown id is carried, so the drop is by namespace and not
+    // by "the registry does not know it".
+    registerWidget(widget({ id: "core/a" }));
+    const row = serializeLayout([
+      { id: "p1", widgetId: "core/a", w: 12, h: 3, removed: false },
+      {
+        id: "p8",
+        widgetId: "collection/posts-count",
+        w: 3,
+        h: 2,
+        removed: false,
+      },
+      { id: "p9", widgetId: "acme/x", w: 12, h: 3, removed: false },
+    ]);
+    stored = { version: 2, layout: row };
+
+    const read = await bodyOf(await getWidgetLayout(getReq()));
+    expect(read.placements?.map(p => p.widgetId)).toEqual(["core/a"]);
+    // The read writes nothing: the row is as it was until the next save.
+    expect(saved).toBeUndefined();
+    expect(stored?.layout).toBe(row);
+
+    await putWidgetLayout(
+      putReq({
+        placements: onePlacement,
+        version: 2,
+        scope: scopeFor(["core/a"]),
+      })
+    );
+
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "acme/x",
+    ]);
+  });
+
+  it("refuses a placement in a retired namespace, saying what replaced it in each", async () => {
+    // The refusal is the namespace's, not the unknown-widget rule's: it says
+    // what replaced the card, and for a Single never "that collection", since
+    // the widgets with a Collection setting offer collections only.
+    registerWidget(widget({ id: "core/a" }));
+    const refused = async (widgetId: string) => {
+      const res = await putWidgetLayout(
+        putReq({
+          placements: [
+            ...onePlacement,
+            { id: "p2", widgetId, w: 12, h: 3, removed: false },
+          ],
+          version: 0,
+          scope: scopeFor(),
+        })
+      );
+      expect(res.status).toBe(400);
+      return res.text();
+    };
+
+    const collection = await refused("collection/posts-count");
+    expect(collection).toContain(
+      '\\"collection/posts-count\\" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.'
+    );
+    const single = await refused("single/about-card");
+    expect(single).toContain(
+      `\\"single/about-card\\" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
+    );
+    expect(single).not.toContain("Collection to");
+    expect(saved).toBeUndefined();
   });
 
   it("does not echo the carried placement back to the caller", async () => {
@@ -2584,5 +2674,372 @@ describe("a card's note", () => {
     );
     expect(res.status).toBe(400);
     expect(saved).toBeUndefined();
+  });
+});
+
+describe("the one default", () => {
+  const plan = (patch: Partial<DefaultLayoutPlan>) =>
+    setDefaultLayoutPlan({
+      cards: [],
+      suggestions: true,
+      suggested: [],
+      ...patch,
+    });
+
+  it("is the site's defaultLayout, in its order, at its sizes and with its settings", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "site/b" }));
+    plan({
+      cards: [
+        { widget: "site/b", w: 6, h: 4, settings: { top: 5 } },
+        { widget: "site/a" },
+      ],
+      suggestions: false,
+    });
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements).toEqual([
+      {
+        id: "site/b",
+        widgetId: "site/b",
+        w: 6,
+        h: 4,
+        removed: false,
+        config: { top: 5 },
+      },
+      { id: "site/a", widgetId: "site/a", w: 12, h: 3, removed: false },
+    ]);
+    expect(body.defaultPlacements).toEqual(body.placements);
+  });
+
+  it("differs between two people with different permissions only by the cards one may not see", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(
+      widget({ id: "site/gated", requiredPermission: "read-secrets" })
+    );
+    registerWidget(widget({ id: "site/b" }));
+    plan({
+      cards: [
+        { widget: "site/gated" },
+        { widget: "site/a" },
+        { widget: "site/b" },
+      ],
+    });
+
+    const granted = await bodyOf(await getWidgetLayout(getReq()));
+    callerHoldsPermission.mockResolvedValue(false);
+    const refused = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(granted.placements?.map(p => p.widgetId)).toEqual([
+      "site/gated",
+      "site/a",
+      "site/b",
+    ]);
+    expect(refused.placements).toEqual(
+      granted.placements?.filter(p => p.widgetId !== "site/gated")
+    );
+  });
+
+  it("places a plugin's suggestion on the default, never on a saved dashboard, where it is offered", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/suggested" }));
+    plan({ cards: [{ widget: "site/a" }], suggested: ["acme/suggested"] });
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "site/a", w: 12, h: 3, removed: false },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    expect(body.available).toContain("acme/suggested");
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "site/a",
+      "acme/suggested",
+    ]);
+  });
+
+  it("leaves out a card its declared widget would not show this reader, and carries it into the first save", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    // Asked of the default's cards the reader's view lets them see.
+    expect(defaultCardsNotShown).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      [
+        expect.objectContaining({ widgetId: "acme/quiet" }),
+        expect.objectContaining({ widgetId: "site/a" }),
+      ],
+      expect.any(AbortSignal)
+    );
+
+    await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "site/a", widgetId: "site/a", w: 12, h: 3, removed: false },
+        ],
+        version: 0,
+        scope: body.scope,
+      })
+    );
+    // Kept in the row, where the day it is shown it comes back.
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "acme/quiet",
+      "site/a",
+    ]);
+  });
+
+  it("refuses a reset staged before a card of the default changed its verdict, which would reset to a dashboard nobody saw", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "site/a", w: 12, h: 3, removed: false },
+      ]),
+    };
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+    const staged = await bodyOf(await getWidgetLayout(getReq()));
+    // The default the reset was staged against left the card out.
+    expect(staged.defaultPlacements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    defaultCardsNotShown.mockResolvedValue(new Set());
+
+    const res = await deleteWidgetLayout(
+      deleteReq({ version: "2", scope: staged.scope ?? "" })
+    );
+
+    expect(res.status).toBe(409);
+    expect(deleted).toBeUndefined();
+  });
+
+  it("leaves a saved dashboard's cards as the reader arranged them", async () => {
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        {
+          id: "acme/quiet",
+          widgetId: "acme/quiet",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // The card answers for itself; the default handed for a reset leaves it out.
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["acme/quiet"]);
+    expect(body.defaultPlacements).toEqual([]);
+  });
+
+  it("refuses a first save staged before a card's own rule changed its verdict, which would drop the card", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    defaultCardsNotShown.mockResolvedValue(new Set(["acme/quiet"]));
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    // Shown from now on: the save below never held it.
+    defaultCardsNotShown.mockResolvedValue(new Set());
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: handed.placements,
+        version: 0,
+        scope: handed.scope,
+      })
+    );
+
+    expect(res.status).toBe(409);
+    expect(saved).toBeUndefined();
+    // The reset checks the same token, and a fresh read's is accepted.
+    const fresh = await bodyOf(await getWidgetLayout(getReq()));
+    expect(fresh.scope).not.toBe(handed.scope);
+    const reset = await deleteWidgetLayout(
+      deleteReq({ version: "0", scope: fresh.scope ?? "" })
+    );
+    expect(reset.status).toBe(200);
+  });
+
+  it("judges a card of a row following the default with the settings the row gave it", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({
+      cards: [
+        { widget: "acme/quiet", settings: { hide: false } },
+        { widget: "site/a" },
+      ],
+    });
+    // The card's own rule reads its setting.
+    defaultCardsNotShown.mockImplementation(
+      async (
+        _auth: unknown,
+        _reader: unknown,
+        placements: readonly WidgetPlacement[]
+      ) =>
+        new Set(
+          placements
+            .filter(placement => placement.config?.hide === true)
+            .map(placement => placement.id)
+        )
+    );
+    stored = unarrangedRow([
+      {
+        id: "acme/quiet",
+        widgetId: "acme/quiet",
+        w: 12,
+        h: 3,
+        removed: false,
+        config: { hide: true },
+      },
+    ]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // Drawn with the stored setting, so judged with it.
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["site/a"]);
+    // The default a reset returns to keeps its own setting, and the card.
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "acme/quiet",
+      "site/a",
+    ]);
+  });
+
+  it("hands a reader who may not see the first card the second under its own id, whatever another reader sees", async () => {
+    registerWidget(widget({ id: "site/many", allowsSeveral: true }));
+    plan({
+      cards: [
+        { widget: "site/many", settings: { top: 5 } },
+        { widget: "site/many", id: "many-2", settings: { top: 10 } },
+      ],
+      suggestions: false,
+    });
+    defaultCardsNotShown.mockResolvedValue(new Set(["site/many"]));
+    const withheld = await bodyOf(await getWidgetLayout(getReq()));
+    defaultCardsNotShown.mockResolvedValue(new Set());
+    const shown = await bodyOf(await getWidgetLayout(getReq()));
+
+    // The second card is "many-2" either way: its id says nothing of the first.
+    expect(withheld.placements?.map(p => p.id)).toEqual(["many-2"]);
+    expect(shown.placements?.map(p => p.id)).toEqual(["site/many", "many-2"]);
+  });
+
+  it("answers a setting change with the token the next write is checked against", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({
+      cards: [
+        { widget: "acme/quiet", settings: { hide: false } },
+        { widget: "site/a" },
+      ],
+    });
+    // The card's own rule reads its setting.
+    defaultCardsNotShown.mockImplementation(
+      async (
+        _auth: unknown,
+        _reader: unknown,
+        placements: readonly WidgetPlacement[]
+      ) =>
+        new Set(
+          placements
+            .filter(placement => placement.config?.hide === true)
+            .map(placement => placement.id)
+        )
+    );
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    const [quiet, a] = handed.placements ?? [];
+
+    // Outside customise mode, a setting its own rule reads: the card is now
+    // one this reader is not shown.
+    const first = await itemOf(
+      await putWidgetLayout(
+        putReq({
+          placements: [{ ...quiet, config: { hide: true } }, a],
+          version: 0,
+          scope: handed.scope,
+          arranged: false,
+        })
+      )
+    );
+    stored = unarrangedRow(saved?.placements ?? []);
+    saved = undefined;
+
+    const second = await putWidgetLayout(
+      putReq({
+        placements: [{ ...a, removed: true }],
+        version: first.version,
+        scope: first.scope,
+        arranged: false,
+      })
+    );
+    expect(second.status).toBe(200);
+    expect(saved).toBeDefined();
+  });
+
+  it("keeps two cards of one widget apart through a save, each with its own settings and removal", async () => {
+    registerWidget(widget({ id: "site/many", allowsSeveral: true }));
+    plan({
+      cards: [
+        { widget: "site/many", settings: { top: 5 } },
+        { widget: "site/many", id: "many-2", settings: { top: 10 } },
+      ],
+      suggestions: false,
+    });
+
+    const handed = await bodyOf(await getWidgetLayout(getReq()));
+    // Two cards, two identities: one id would make them one card to the admin.
+    expect(handed.placements?.map(p => p.id)).toEqual(["site/many", "many-2"]);
+
+    // A change to the second card alone, outside customise mode: the row
+    // still follows the default.
+    const [first, second] = handed.placements ?? [];
+    await putWidgetLayout(
+      putReq({
+        placements: [first, { ...second, config: { top: 20 } }],
+        version: 0,
+        scope: scopeFor(),
+        arranged: false,
+      })
+    );
+    stored = unarrangedRow(saved?.placements ?? []);
+    const afterChange = await bodyOf(await getWidgetLayout(getReq()));
+    expect(afterChange.placements?.map(p => p.config)).toEqual([
+      { top: 5 },
+      { top: 20 },
+    ]);
+
+    // Then the first removed: the second stays.
+    await putWidgetLayout(
+      putReq({
+        placements: [
+          { ...afterChange.placements?.[0], removed: true },
+          afterChange.placements?.[1],
+        ],
+        version: 1,
+        scope: scopeFor(),
+        arranged: false,
+      })
+    );
+    stored = unarrangedRow(saved?.placements ?? [], 2);
+    const afterRemoval = await bodyOf(await getWidgetLayout(getReq()));
+    expect(
+      afterRemoval.placements?.map(p => [p.id, p.removed, p.config])
+    ).toEqual([
+      ["site/many", true, { top: 5 }],
+      ["many-2", false, { top: 20 }],
+    ]);
   });
 });

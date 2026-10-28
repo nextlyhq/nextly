@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 import type { FieldDiff, VersionDiff } from "@admin/services/versionApi";
 
 import {
@@ -420,5 +420,71 @@ describe("ViewedVersionBody — a past version with its changes marked", () => {
     ).toBeInTheDocument();
     expect(unchangedShown.current.at(-1)).toEqual(["excerpt", "body", "slug"]);
     expect(diffMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("ViewedVersionBody — the phone's bar of version actions", () => {
+  function renderWithRestore(comparedWith: ViewedVersion["comparedWith"]) {
+    return render(
+      <DocumentHistoryContext.Provider
+        value={{
+          viewing: { ...viewing, comparedWith },
+          setViewing: () => {},
+          restore: {
+            canRestore: true,
+            request: vi.fn(),
+            returnToCurrent: vi.fn(),
+          },
+          setRestore: () => {},
+        }}
+      >
+        <ViewedVersionBody
+          fields={fields}
+          values={viewing.snapshot as Record<string, unknown>}
+          actionsDisabled={false}
+        />
+      </DocumentHistoryContext.Provider>
+    );
+  }
+
+  it("draws no moves through the changes where there are none to move between", () => {
+    // The first version has nothing to compare with, so there is no change to
+    // move to; dead arrows would only take the width the actions need.
+    renderWithRestore({ kind: "first" });
+    const bar = screen.getByRole("toolbar", { name: "Version actions" });
+    expect(bar).toHaveTextContent("First version");
+    expect(
+      within(bar).queryByRole("button", { name: "Previous change" })
+    ).not.toBeInTheDocument();
+    expect(
+      within(bar).queryByRole("button", { name: "Next change" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers the moves once there are changes to move between", async () => {
+    renderWithRestore({ kind: "version", versionNo: 2 });
+    const bar = screen.getByRole("toolbar", { name: "Version actions" });
+    await waitFor(() => expect(bar).toHaveTextContent("1 of 2"));
+    expect(
+      within(bar).getByRole("button", { name: "Previous change" })
+    ).toBeEnabled();
+    expect(
+      within(bar).getByRole("button", { name: "Next change" })
+    ).toBeEnabled();
+  });
+
+  it("names Restore this version in full while showing the short word", () => {
+    // The visible word is short so the bar fits a phone's width; the name a
+    // screen reader speaks is the one the document bar uses.
+    renderWithRestore({ kind: "first" });
+    const bar = screen.getByRole("toolbar", { name: "Version actions" });
+    const restore = within(bar).getByRole("button", {
+      name: "Restore this version",
+    });
+    const shown = [...restore.querySelectorAll("*")]
+      .filter(element => element.classList.contains("sr-only"))
+      .map(element => element.textContent);
+    expect(shown).toEqual(["this version"]);
+    expect(restore.textContent).toBe("Restore this version");
   });
 });

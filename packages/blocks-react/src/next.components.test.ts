@@ -16,6 +16,7 @@ import {
 import type { ReactElement } from "react";
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
+import { throughBoundary } from "./__tests__/through-boundary";
 import { describe, expect, it, vi } from "vitest";
 
 const cached = vi.fn();
@@ -119,9 +120,11 @@ async function renderWith(
     nextly: r.nextly,
     ...extra,
   } as Parameters<typeof createBlocksPage>[0]);
-  const element = (await route.ContentPage({
-    params: { slug: ["about"] },
-  })) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
+  const element = (await throughBoundary(
+    route.ContentPage({
+      params: { slug: ["about"] },
+    })
+  )) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
   return { props: element.props, calls: r.calls };
 }
 
@@ -421,9 +424,11 @@ describe("a component's pending edits in draft mode", () => {
       draft: true,
     } as Parameters<typeof createBlocksPage>[0]);
 
-    const element = (await route.ContentPage({
-      params: { slug: ["about"] },
-    })) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
+    const element = (await throughBoundary(
+      route.ContentPage({
+        params: { slug: ["about"] },
+      })
+    )) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
 
     const hero = element.props.definitions?.get("hero");
     expect(hero?.nodes[0]?.props).toMatchObject({ text: "PENDING EDIT" });
@@ -476,7 +481,7 @@ describe("a component's pending edits in draft mode", () => {
       draft: true,
     } as Parameters<typeof createBlocksPage>[0]);
 
-    await route.ContentPage({ params: { slug: ["about"] } });
+    await throughBoundary(route.ContentPage({ params: { slug: ["about"] } }));
 
     expect(r.byId).toHaveLength(1);
     expect(cached).not.toHaveBeenCalled();
@@ -497,7 +502,7 @@ describe("a component's pending edits in draft mode", () => {
       nextly: r.nextly,
     } as Parameters<typeof createBlocksPage>[0]);
 
-    await route.ContentPage({ params: { slug: ["about"] } });
+    await throughBoundary(route.ContentPage({ params: { slug: ["about"] } }));
 
     expect(componentReads(r.calls)).toHaveLength(1);
     expect(r.byId).toEqual([]);
@@ -522,9 +527,11 @@ describe("a component's pending edits in draft mode", () => {
       status: "published",
     } as Parameters<typeof createBlocksPage>[0]);
 
-    const element = (await route.ContentPage({
-      params: { slug: ["about"] },
-    })) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
+    const element = (await throughBoundary(
+      route.ContentPage({
+        params: { slug: ["about"] },
+      })
+    )) as ReactElement<{ definitions?: Map<string, BlockDocument> }>;
 
     expect(r.byId).toEqual([]);
     expect(componentReads(r.calls)[0]!.status).toBe("published");
@@ -549,7 +556,7 @@ describe("a component's pending edits in draft mode", () => {
       draft: true,
     } as Parameters<typeof createBlocksPage>[0]);
 
-    await route.ContentPage({ params: { slug: ["about"] } });
+    await throughBoundary(route.ContentPage({ params: { slug: ["about"] } }));
 
     expect(r.byId).toEqual([{ id: "hero", draft: true }]);
   });
@@ -577,7 +584,7 @@ describe("the lifecycle scope a draft-mode component read stays inside", () => {
       status: "draft",
     } as Parameters<typeof createBlocksPage>[0]);
 
-    await route.ContentPage({ params: { slug: ["about"] } });
+    await throughBoundary(route.ContentPage({ params: { slug: ["about"] } }));
 
     expect(r.byId).toEqual([]);
     expect(componentReads(r.calls)[0]!.status).toBe("draft");

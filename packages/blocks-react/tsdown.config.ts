@@ -1,4 +1,4 @@
-import { defineConfig } from "tsdown";
+import { defineConfig, type UserConfig } from "tsdown";
 
 /**
  * Two entries, and the split is the package's central contract.
@@ -17,9 +17,11 @@ import { defineConfig } from "tsdown";
  * bundlers can drop it entirely. Puck ships a separate `/rsc` bundle for the
  * same reason: one bundle cannot serve both an editor-aware and a
  * server-rendering consumer.
+ *
+ * `environment` is the client entry, and has a build of its own below.
  */
-export default defineConfig({
-  entry: ["src/index.ts", "src/next.ts", "src/blocks/index.ts"],
+/** What both builds share. */
+const shared = {
   format: ["esm"],
   // Declarations without a type check: `check-types` is the type check.
   // oxc writes the declarations from the source's own annotations
@@ -27,7 +29,6 @@ export default defineConfig({
   // plugin's choice, which picks `tsc` (or `tsgo` under TypeScript 7) without
   // saying so when the flag is off.
   dts: { generator: "oxc", sourcemap: false },
-  clean: true,
   sourcemap: true,
   treeshake: true,
   // React and Next are the consumer's; bundling either would produce a second
@@ -37,4 +38,27 @@ export default defineConfig({
   outExtensions() {
     return { js: ".mjs", dts: ".d.ts" };
   },
-});
+} satisfies UserConfig;
+
+export default defineConfig([
+  {
+    ...shared,
+    entry: ["src/index.ts", "src/next.ts", "src/blocks/index.ts"],
+    clean: true,
+  },
+  /*
+   * `environment` is the one CLIENT entry, built apart so nothing else is ever
+   * bundled into a chunk with it. Its module's own `"use client"` is kept
+   * because it is an entry module (a bundler drops directives only from the
+   * modules it folds into a chunk); `environment-directive.test.ts` holds the
+   * published file to that. A Next host given the file without the directive
+   * would try to create a React context on the server, where there is none.
+   * Not `clean`: the build above owns the directory and has already cleared it
+   * when this one writes beside it.
+   */
+  {
+    ...shared,
+    entry: ["src/environment.tsx"],
+    clean: false,
+  },
+]);
