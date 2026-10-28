@@ -51,6 +51,8 @@ export interface PluginDashboardSnapshot {
   readonly alternatives: unknown;
   /** Declared slug to the slug the site uses, for the plugin's collections. */
   readonly collections?: Readonly<Record<string, string>>;
+  /** Its `attention` items, copied where it is a list: startup checks each. */
+  readonly attention: unknown;
   /** Each key it carries that a contribution does not take, as a fault's words. */
   readonly unknownKeys: readonly string[];
 }
@@ -79,7 +81,7 @@ export function pluginDashboardSnapshots(
     const given: unknown = plugin.contributes?.dashboard;
     if (given === undefined) return [];
     const fields = isRecord(given) ? given : {};
-    const { widgets, suggest, alternatives } = fields;
+    const { widgets, suggest, alternatives, attention } = fields;
     return [
       {
         owner: pluginOwner(plugin),
@@ -91,6 +93,11 @@ export function pluginDashboardSnapshots(
           ? Object.fromEntries(Object.entries(alternatives))
           : alternatives,
         collections: resolvePluginSelf(plugin).collections,
+        // Copied with `slice`, which keeps an empty slot as one, so the startup
+        // check can name it rather than read it as an item that is undefined.
+        attention: Array.isArray(attention)
+          ? (attention as unknown[]).slice()
+          : attention,
         // A misspelt key would otherwise be dropped here, and what it asked for
         // would silently never happen.
         unknownKeys: unknownKeyProblems(

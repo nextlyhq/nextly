@@ -35,6 +35,7 @@ import {
   isCoreView,
   viewOfDisplay,
 } from "./displays";
+import { isPermissionName } from "./permission-name";
 import { quote } from "./quote";
 
 /** One thing wrong with one declaration, said where an author reads it. */
@@ -68,13 +69,6 @@ export interface WidgetDeclarationGroup {
  * may hand out tomorrow.
  */
 const RESERVED_NAMESPACES = ["core", "collection", "single"] as const;
-
-/**
- * A permission as core stores and seeds it, `action-resource` (`read-orders`).
- * A widget names the stored form, the one spelling a permission has, and a
- * sentence names no permission at all.
- */
-const PERMISSION_NAME = /^[a-z][a-z0-9_]*-[a-z0-9][a-z0-9_-]*$/;
 
 /** The fields a declaration may carry. Anything else is named as a mistake. */
 const FIELDS = new Set([
@@ -417,10 +411,6 @@ function sizeProblems(size: unknown): readonly string[] {
 /** A problem as a list of none or one, to spread into a longer list. */
 const optional = (problem: string | undefined): string[] =>
   problem === undefined ? [] : [problem];
-
-function isPermissionName(value: unknown): boolean {
-  return typeof value === "string" && PERMISSION_NAME.test(value);
-}
 
 /**
  * Every problem with a declaration's settings.

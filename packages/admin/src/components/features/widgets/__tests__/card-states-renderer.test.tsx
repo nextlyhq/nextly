@@ -75,14 +75,14 @@ describe("card states from a widget's answer", () => {
   it("asks for a setting the widget needs as its empty state, not as an error", () => {
     const needs: WidgetSlot = {
       ok: false,
-      error: "Choose Collection in the card's settings",
+      error: "No collection chosen yet",
       code: "needs-setting",
       setting: "Collection",
     };
     expect(resolveWidgetOutcome(list, needs)).toEqual({
       state: "empty",
       empty: {
-        title: "Choose Collection in the card's settings",
+        title: "No collection chosen yet",
         action: { label: "Choose collection", opensSettings: true },
       },
     });
@@ -90,7 +90,7 @@ describe("card states from a widget's answer", () => {
       <WidgetRenderer definition={list} slot={needs} onRetry={() => {}} />
     );
     expect(screen.getByTestId("card-empty")).toHaveTextContent(
-      "Choose Collection in the card's settings"
+      "No collection chosen yet"
     );
     // Retrying would ask the same unanswerable question again.
     expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
@@ -103,7 +103,7 @@ describe("card states from a widget's answer", () => {
   it("opens the card's settings from a missing setting's empty state, in one click", async () => {
     const needs: WidgetSlot = {
       ok: false,
-      error: "Choose Collection in the card's settings",
+      error: "No collection chosen yet",
       code: "needs-setting",
       setting: "Collection",
     };

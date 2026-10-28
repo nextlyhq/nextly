@@ -229,6 +229,19 @@ export function buildCapabilities(
  */
 const UNANSWERED_RECHECK_MS = 60_000;
 
+/**
+ * How long an answer from `/me/permissions` counts as the screen's own: callers
+ * that mount within it share it, and one that mounts after asks again.
+ *
+ * 🔴 A screen's callers do not mount in one commit. The dashboard's cards mount
+ * once its layout has answered, after the shell's navigation has asked, and
+ * with every mount asking again each dashboard load asked twice. Two seconds
+ * holds one screen's mounts to one answer while the next screen still asks
+ * afresh, so a changed role is seen there; an answer past its end is never
+ * counted, however recently it was asked (`askedAt`).
+ */
+export const PERMISSIONS_FRESH_MS = 2_000;
+
 /** The longest delay a browser timer holds without overflowing. */
 const MAX_TIMER_MS = 2_147_483_647;
 
@@ -655,8 +668,8 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
         protectedApi.get<UserPermissionsResponse>("/me/permissions")
       ),
     enabled: isPrivateRoute,
-    staleTime: 0,
-    refetchOnMount: "always",
+    staleTime: PERMISSIONS_FRESH_MS,
+    refetchOnMount: true,
     refetchOnWindowFocus: true,
     // Asked again on the schedule when its own refresh failed with no answer
     // that counts, and while the content answer has none, whose end it
