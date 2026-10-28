@@ -16,6 +16,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
 import {
   defineCollection,
@@ -67,6 +68,11 @@ afterEach(async () => {
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    // The cases read as a visitor, judged by the Public role a real boot
+    // makes. Each read rule answers a filter rather than `true`, so boot
+    // grants Public no read of them; it is granted below, as a site admin
+    // would, so the filter is what decides which entries a visitor sees.
+    seedPublic: true,
     fieldGroups: [
       defineFieldGroup({ slug: META, fields: [text({ name: "heading" })] }),
     ],
@@ -120,6 +126,12 @@ async function boot(): Promise<TestNextly> {
       }),
     ],
   });
+  await grantPublic(
+    current,
+    [COMPONENTED, NOTES, OPEN_NOTES, SHIFTING, VANISHED, PLACES].map(
+      slug => `read-${slug}`
+    )
+  );
   return current;
 }
 
@@ -290,6 +302,10 @@ describe("a read rule that answers a filter", () => {
 
   it("refuses a filter using near, and reports it once, rather than reading every entry", async () => {
     const t = await boot();
+    // Boot's seeding asks each read rule as a visitor to decide the Public
+    // role's grants, which reports this rule's misuse once; it is forgotten
+    // here so the report counted is the visitor's read's.
+    clearRuleFilterReports();
     await t.nextly.create({ collection: PLACES, data: { title: "a place" } });
     const reported = vi
       .spyOn(consoleLogger, "error")

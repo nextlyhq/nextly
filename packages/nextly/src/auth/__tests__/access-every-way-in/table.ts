@@ -788,18 +788,20 @@ export function publicHolds(
 
 /**
  * A visitor's answer: the Public role's permission, then, where the target
- * declares a rule for the action, a rule answering exactly `true`. A rule that
- * reads the caller's permissions sees the Public role's. A visitor never
- * publishes or unpublishes, whatever Public holds.
+ * declares a rule for the action, what the rule lets through, as for a
+ * signed-in user: a rule answering exactly `true` every entry, and a
+ * collection's read rule answering a well-formed filter the entries it
+ * matches. A rule that reads the caller's permissions sees the Public role's.
+ * A visitor never publishes or unpublishes, whatever Public holds.
  */
 function visitorAnswer(row: Row, action: Action): Verdict {
   const { setup, target, rule } = row;
   if (isLifecycle(action)) return "refuse";
-  const held = publicHolds(setup, target, rule, action);
-  if (!held) return "refuse";
-  const says =
-    rule === "role-screen-spelling" ? held : RULE_SAYS[rule](action, "visitor");
-  return says === null || says === true ? "allow" : "refuse";
+  if (!publicHolds(setup, target, rule, action)) return "refuse";
+  // The rule reads the caller's permissions, which are the Public role's,
+  // and Public holds the action.
+  if (rule === "role-screen-spelling") return "allow";
+  return answerFor(row, rulesLet(rule, action, "visitor", target));
 }
 
 /**

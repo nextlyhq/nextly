@@ -92,8 +92,6 @@ service key-role-based read collection principal-kind at schema  # schema-list-i
 service key-super-admin read collection principal-kind at schema  # schema-list-ignores-rules
 service user-partial read collection principal-kind at schema  # schema-list-ignores-rules
 service key-partial read collection principal-kind at schema  # schema-list-ignores-rules
-service principal read media none at population  # visitor-keeps-media, filter-not-applied
-service principal-other read media none at population  # visitor-keeps-media, filter-not-applied
 no-service user-with read collection none at can  # can-no-service-refuses-people
 no-service user-with read collection none at entity  # no-service
 no-service user-with read collection none at capabilities  # no-service
@@ -775,12 +773,6 @@ service key-super-admin unpublish single-pub malformed-filter at widget  # holds
 
 # With no access-control service, a filter's cells are the same as
 # `returns-false`'s: the fallbacks that read no rule disagree there.
-no-service user-with read collection returns-filter at rest
-no-service user-with read collection returns-filter at direct  # no-service
-no-service key-role-based read collection returns-filter at rest
-no-service key-role-based read collection returns-filter at direct  # no-service
-no-service key-role-based read collection returns-filter at can  # no-service
-no-service key-role-based read collection returns-filter at entity  # no-service
 no-service user-with read single returns-filter at rest
 no-service user-with read single returns-filter at direct  # no-service
 no-service user-without read single returns-filter at direct  # no-service
@@ -788,18 +780,8 @@ no-service key-role-based read single returns-filter at rest
 no-service key-role-based read single returns-filter at direct  # no-service
 no-service key-role-based read single returns-filter at can  # no-service
 no-service key-role-based read single returns-filter at entity  # no-service
-no-service user-with read related returns-filter at population  # no-service
-no-service key-role-based read related returns-filter at population  # no-service
-no-service key-role-based read collection returns-filter at widget  # holds-permission-key-skips-rules
-no-service key-role-based read collection returns-filter at capabilities  # no-service
 no-service key-role-based read single returns-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single returns-filter at capabilities  # no-service
-no-service user-with read collection async-filter at rest
-no-service user-with read collection async-filter at direct  # no-service
-no-service key-role-based read collection async-filter at rest
-no-service key-role-based read collection async-filter at direct  # no-service
-no-service key-role-based read collection async-filter at can  # no-service
-no-service key-role-based read collection async-filter at entity  # no-service
 no-service user-with read single async-filter at rest
 no-service user-with read single async-filter at direct  # no-service
 no-service user-without read single async-filter at direct  # no-service
@@ -807,10 +789,6 @@ no-service key-role-based read single async-filter at rest
 no-service key-role-based read single async-filter at direct  # no-service
 no-service key-role-based read single async-filter at can  # no-service
 no-service key-role-based read single async-filter at entity  # no-service
-no-service user-with read related async-filter at population  # no-service
-no-service key-role-based read related async-filter at population  # no-service
-no-service key-role-based read collection async-filter at widget  # holds-permission-key-skips-rules
-no-service key-role-based read collection async-filter at capabilities  # no-service
 no-service key-role-based read single async-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single async-filter at capabilities  # no-service
 no-service user-with read collection returns-empty-in at rest
@@ -853,6 +831,12 @@ no-service key-role-based read single malformed-filter at widget  # holds-permis
 no-service key-role-based read single malformed-filter at capabilities  # no-service
 
 # rest-refuses-visitors: REST refuses a visitor before it asks the Public role, until REST asks it.
+public visitor read collection returns-filter at rest
+public visitor list collection returns-filter at rest
+public visitor count collection returns-filter at rest
+public visitor read collection async-filter at rest
+public visitor list collection async-filter at rest
+public visitor count collection async-filter at rest
 service visitor read collection true at rest
 service visitor list collection true at rest
 service visitor count collection true at rest
@@ -1129,6 +1113,10 @@ service user-with read collection returns-filter at entity  # filter-not-applied
 service user-with read collection returns-filter at rest
 service user-with read collection returns-filter at route  # filter-not-applied
 service user-with read collection returns-filter at service  # filter-not-applied
+public visitor read collection returns-filter at direct  # filter-not-applied
+public visitor read collection returns-filter at service  # filter-not-applied
+public visitor read collection async-filter at direct  # filter-not-applied
+public visitor read collection async-filter at service  # filter-not-applied
 service user-with read collection returns-filter at widget  # filter-not-applied
 service user-with read related async-filter at population  # filter-not-applied
 service user-with read related returns-filter at population  # filter-not-applied
