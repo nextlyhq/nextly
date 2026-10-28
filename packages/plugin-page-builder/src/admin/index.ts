@@ -75,5 +75,12 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
 });
 
 export { BlocksField, BlocksSummary, PageBuilderView };
+/**
+ * Called by the app's generated component map to hand the editor the block
+ * modules plugins declared (`editorEntry`, `editor.component`). Not for a
+ * plugin to call: the map is what knows every declared path.
+ */
+export { registerBlockEditorModules } from "./contributed-blocks";
+export type { BlockEditorModules } from "./contributed-blocks";
 export type { BlocksFieldProps } from "./BlocksField";
 export type { BlocksSummaryProps } from "./BlocksSummary";

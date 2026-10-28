@@ -155,6 +155,7 @@ import {
   type WriteEventInput,
 } from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   applyFieldGroupWriteAccessToDocument,
   applyInlineFieldGroupWriteAccess,
@@ -3950,6 +3951,9 @@ export class CollectionMutationService extends BaseService {
     actor?: RequestActor;
     user?: UserContext;
   }): Promise<number> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
@@ -4019,6 +4023,9 @@ export class CollectionMutationService extends BaseService {
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<TakenLiveValues>> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
       // An update of this entry: a rule that answers a filter allows it only
       // where the filter matches the entry as it is stored.
@@ -5172,6 +5179,9 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set once the outbox event is appended (below), so the catch can report a
     // committed-but-hook-failed write as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -6446,6 +6456,9 @@ export class CollectionMutationService extends BaseService {
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code: publishing or
+    // withdrawing every language is a write to the entry like any other.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set when the publish rule, asked inside the transaction once for each
     // language going live, refuses one of them. Declared out here so the
     // catch can read it: the adapter re-wraps the thrown sentinel in a
@@ -8184,13 +8197,6 @@ export class CollectionMutationService extends BaseService {
     return { hold, componentSchemas, draftLocale };
   }
 
-  /**
-   * The document a working draft should now hold, after this save.
-   *
-   * Accumulates onto the draft already stored rather than re-deriving from the
-   * live row: a second status-less save of different fields would otherwise
-   * rebuild from live content and silently revert the first pending edit.
-   */
   /** The live document a held save leaves in place, at a draft's shape. */
   private async liveDocumentOf(
     tx: TransactionContext,
@@ -8209,6 +8215,32 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
+  /**
+   * The update filter a held edit changes a field of, if any. Judged against
+   * the live document, not the draft it replaces: an edit held before may
+   * already carry a change this save would put on.
+   */
+  private async heldEditRefusedBy(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext,
+    heldBefore: boolean,
+    draftDocument: Record<string, unknown>,
+    replaces: Record<string, unknown>
+  ): Promise<FilteredWriteCheck | undefined> {
+    if (!ctx.updateFilters?.length) return undefined;
+    const live = heldBefore ? await this.liveDocumentOf(tx, ctx) : replaces;
+    return ctx.updateFilters.find(check =>
+      changesFieldFilterNames(check.filter, draftDocument, live, ctx.fields)
+    );
+  }
+
+  /**
+   * The document a working draft should now hold, after this save.
+   *
+   * Accumulates onto the draft already stored rather than re-deriving from the
+   * live row: a second status-less save of different fields would otherwise
+   * rebuild from live content and silently revert the first pending edit.
+   */
   private async buildAccumulatedDraft(
     tx: TransactionContext,
     ctx: WorkingDraftWriteContext,
@@ -8441,17 +8473,16 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
-    // Judged against the live document, not the draft it replaces: an edit
-    // held before may already carry a change this save would put on.
-    if (ctx.updateFilters?.length) {
-      const live = existingDraft
-        ? await this.liveDocumentOf(tx, ctx)
-        : replaces;
-      const refusedBy = ctx.updateFilters.find(check =>
-        changesFieldFilterNames(check.filter, draftDocument, live, fields)
-      );
-      if (refusedBy) return { refusedBy };
-    }
+    // A held edit may not change a field an update filter that judged it
+    // names, or the entry could leave the filter once the edit is put live.
+    const refusedBy = await this.heldEditRefusedBy(
+      tx,
+      ctx,
+      existingDraft !== undefined,
+      draftDocument,
+      replaces
+    );
+    if (refusedBy) return { refusedBy };
     await this.judgeHeldFieldGroups(tx, ctx, draftDocument, replaces);
     // The held component values are judged as the publish would judge them:
     // merged into the draft, since a save carries only the sub-fields it
@@ -8613,6 +8644,9 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", rawParams.collectionName);
     // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale, and the
     // body of this method must never see it as one. Resolved here, once, so the
     // fourteen places below that read `params.locale` keep receiving a real
@@ -11969,6 +12003,9 @@ export class CollectionMutationService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set once the outbox event is appended (below); lets the catch report a
     // committed-but-hook-failed delete as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -12456,6 +12493,11 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     options: CreateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
+    // Refused first when the collection is removed from code. Read on the
+    // caller's transaction, which every write in it then rolls back with.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Computed right after the row is written (before response redaction can
     // strip the slug, and before the after-hooks run) and carried on every
     // post-write return, so a committed item whose after-hook then throws still
@@ -13034,6 +13076,10 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     options: UpdateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
+    // Refused first when the collection is removed from code; see createEntryWrite.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Computed right after the row is updated (before redaction can strip the
     // slug and before the after-hooks run) and carried on every post-write
     // return, so a committed item whose after-hook then throws still surfaces
@@ -14310,6 +14356,10 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     options: DeleteEntryWriteOptions
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
+    // Refused first when the collection is removed from code; see createEntryWrite.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // True only in the window between the row delete and the outbox insert: a
     // failure there has left this shared transaction with a delete but no event,
     // so the catch re-throws to force a rollback. Cleared once the event is

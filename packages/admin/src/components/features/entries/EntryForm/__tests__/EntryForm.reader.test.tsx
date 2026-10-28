@@ -15,6 +15,8 @@ import { render } from "@admin/__tests__/utils";
 
 const hooks = vi.hoisted(() => ({
   readOnlyForReader: false,
+  /** Whether a language switch's answer is on its way. */
+  switching: false,
   useDocumentAutosave: vi.fn(() => ({ status: "idle", lastSavedAt: null })),
   useAutosaveRecovery: vi.fn(() => ({
     offer: null,
@@ -39,8 +41,14 @@ vi.mock("../../PreviewMode/PreviewPanes", () => ({
     return props.children ?? null;
   },
 }));
-vi.mock("@admin/hooks/useReadOnlyForReader", () => ({
-  useReadOnlyForReader: () => hooks.readOnlyForReader,
+vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
+  useUpdateAnswer: () =>
+    hooks.switching
+      ? "switching"
+      : hooks.readOnlyForReader
+        ? "refused"
+        : "allowed",
 }));
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   ...(await importOriginal<
@@ -91,8 +99,9 @@ const lastOptions = (mock: { mock: { calls: unknown[][] } }) => {
   return call!;
 };
 
-function renderAs(readOnlyForReader: boolean) {
+function renderAs(readOnlyForReader: boolean, switching = false) {
   hooks.readOnlyForReader = readOnlyForReader;
+  hooks.switching = switching;
   render(<EntryForm collection={collection} entry={entry} mode="edit" />);
 }
 
@@ -179,6 +188,38 @@ describe("the entry editor for a user who may only read the entry", () => {
     );
     expect(lastOptions(hooks.previewPanesProps)[0]).toMatchObject({
       open: false,
+    });
+  });
+});
+
+describe("the entry editor while a language switch's answer is on its way", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("holds every write that changing the entry needs, as for a reader", () => {
+    // The answer on screen is the language moved from, which grants nothing
+    // in the new one: no preview to share, no restore, the toolbar's writes
+    // held.
+    renderAs(false, true);
+    expect(lastOptions(hooks.headerProps)[0]).not.toHaveProperty(
+      "shareDocument"
+    );
+    expect(lastOptions(hooks.versionBodyProps)[0]).toMatchObject({
+      actionsDisabled: true,
+    });
+    expect(lastOptions(hooks.versionAwareToolbarSlots)[1]).toBe(true);
+    // Nor is the form recorded, whose saves may not be allowed in the new
+    // language.
+    expect(lastOptions(hooks.useDocumentAutosave)[0]).toMatchObject({
+      enabled: false,
+    });
+  });
+
+  it("is not a reader's page meanwhile: its recovery point stays", () => {
+    renderAs(false, true);
+    expect(lastOptions(hooks.useAutosaveRecovery)[0]).not.toMatchObject({
+      scope: null,
     });
   });
 });

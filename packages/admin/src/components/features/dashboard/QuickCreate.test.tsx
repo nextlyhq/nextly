@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
-import { useCollections } from "@admin/hooks/queries/useCollections";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  useCollections,
+} from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
 import { CardTierContext } from "../widgets/frame/tier";
@@ -16,7 +19,11 @@ import { QuickCreate } from "./QuickCreate";
 // Mocked through the same specifiers the component imports: a mock registered
 // against a module nobody loads leaves the real hook in place, which is a green
 // that tested nothing.
-vi.mock("@admin/hooks/queries/useCollections", () => ({
+vi.mock("@admin/hooks/queries/useCollections", async importOriginal => ({
+  // The real query parameters, so the card is seen asking with the navigation's own.
+  ...(await importOriginal<
+    typeof import("@admin/hooks/queries/useCollections")
+  >()),
   useCollections: vi.fn(),
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
@@ -92,6 +99,17 @@ beforeEach(() => {
 });
 
 describe("the quick-create card", () => {
+  it("asks for the collections with the navigation's own query, so a dashboard load asks once", () => {
+    // 🔴 The very parameters the sidebar asks with: any other spelling is a second cache entry,
+    // and a second request for the same list on every dashboard load.
+    mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(granting(["create-posts"]));
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    expect(mockCollections).toHaveBeenCalledWith(NAV_COLLECTIONS_PARAMS);
+  });
+
   it("offers a shortcut only where the reader may CREATE", () => {
     // 🔴 Two gates compose here and each removes a different set. The server's
     // list has already dropped collections this reader cannot see at all; this

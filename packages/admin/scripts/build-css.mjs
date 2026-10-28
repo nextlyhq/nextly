@@ -12,10 +12,8 @@
  * 3. This prevents any style conflicts with consumer app's Tailwind/CSS
  */
 
-import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 
 import {
   findUnscopedRules,
@@ -24,7 +22,8 @@ import {
   scopeCss,
 } from "@nextlyhq/admin-css";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { compileTailwind, PACKAGE_ROOT, STYLES_ENTRY } from "./compile-tailwind.mjs";
+
 
 /**
  * Prefix for the names this sheet publishes document-wide.
@@ -33,10 +32,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * property that came from the same build are recognisable as one origin.
  */
 const NAME_PREFIX = "nx-";
-const rootDir = path.resolve(__dirname, "..");
-
-const inputFile = path.join(rootDir, "src/styles/globals.css");
-const outputDir = path.join(rootDir, "dist/styles");
+const outputDir = path.join(PACKAGE_ROOT, "dist/styles");
 const outputFile = path.join(outputDir, "globals.css");
 const tempFile = path.join(outputDir, "globals.temp.css");
 
@@ -49,10 +45,7 @@ console.log("🎨 Building CSS with Tailwind...");
 
 try {
   // Step 1: Run Tailwind CSS CLI to compile CSS (without minify first for processing)
-  execSync(`npx @tailwindcss/cli -i "${inputFile}" -o "${tempFile}"`, {
-    cwd: rootDir,
-    stdio: "inherit",
-  });
+  compileTailwind({ input: STYLES_ENTRY, output: tempFile });
 
   console.log("🔒 Scoping CSS utilities within .nextly-admin...");
 
@@ -86,13 +79,7 @@ try {
 
   // Step 3: Minify the final output
   console.log("📦 Minifying CSS...");
-  execSync(
-    `npx @tailwindcss/cli -i "${scopedTempFile}" -o "${outputFile}" --minify`,
-    {
-      cwd: rootDir,
-      stdio: "inherit",
-    }
-  );
+  compileTailwind({ input: scopedTempFile, output: outputFile, minify: true });
 
   // Clean up scoped temp file
   fs.unlinkSync(scopedTempFile);
@@ -154,7 +141,7 @@ try {
       .map(match => match[1].replace(/^["']|["']$/g, ""))
       .map(name => name.slice(NAME_PREFIX.length))
   );
-  const srcDir = path.join(rootDir, "src");
+  const srcDir = path.join(PACKAGE_ROOT, "src");
   const stale = [];
   const visit = dir => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -170,7 +157,7 @@ try {
         )) {
           const name = m[1];
           if (defined.has(name) && !name.startsWith(NAME_PREFIX)) {
-            stale.push(`${path.relative(rootDir, full)}: ${name}`);
+            stale.push(`${path.relative(PACKAGE_ROOT, full)}: ${name}`);
           }
         }
       }
