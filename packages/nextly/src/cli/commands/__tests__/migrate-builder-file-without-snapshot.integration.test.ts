@@ -197,12 +197,13 @@ describe.each(getConfiguredTestDialects())(
       const code = await exitCode(() => runMigrate({ cwd: dir }, context));
 
       expect(code).toBe(1);
+      // Nothing changed: no table, no ledger row, no registry row.
+      expect(await state(t, dialect)).toEqual(before);
       const refusal = said.filter(line => line.includes(file));
       expect(refusal, said.join("\n")).toEqual([
         expect.stringMatching(/Schema Builder.*no snapshot/s),
       ]);
       expect(refusal[0]).toContain("migrate:create");
-      expect(await state(t, dialect)).toEqual(before);
       expect(before.tables).not.toContain("dc_bf_events");
     });
 
