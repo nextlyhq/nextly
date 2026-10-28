@@ -268,6 +268,26 @@ describe("migrateDownCore", () => {
     expect(no.executed).toEqual([]);
   });
 
+  it("refuses a DOWN that changed after it was agreed to, before the lock", async () => {
+    // The DOWN is read again under the lock; agreeing to the one first read
+    // does not agree to a different one read there.
+    let reads = 0;
+    const changed = baseDeps({
+      interactive: true,
+      askToDelete: async () => true,
+      readDownSql: async () =>
+        down(
+          reads++ === 0
+            ? 'ALTER TABLE "t" DROP COLUMN "c";'
+            : 'ALTER TABLE "t" DROP COLUMN "d";'
+        ),
+    });
+    await expect(migrateDownCore(changed.deps)).rejects.toThrow(
+      /needs consent[\s\S]*a\.sql's DOWN/
+    );
+    expect(changed.executed).toEqual([]);
+  });
+
   it("does not require the data-loss consent for a complete SQLite table rebuild", async () => {
     // A constraint-only DOWN on SQLite rebuilds the table: the rows are
     // copied into the twin before the original is dropped.

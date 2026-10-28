@@ -80,6 +80,8 @@ const ENV_SPELLINGS: ReadonlySet<EarlierSpelling> = new Set([
  * `unnamed` is a deletion its command can judge but not yet name, such as a
  * migration's DOWN read only as "drops something": no list of targets can
  * cover what it does not name, so only consent without targets covers it.
+ * Its `fingerprint` names the statements it was judged from, so agreeing to it
+ * does not agree to different statements under the same description.
  */
 export type Deletion =
   | {
@@ -97,7 +99,12 @@ export type Deletion =
       count?: number;
     }
   | { kind: "rows"; table: string; core?: boolean; count?: number }
-  | { kind: "unnamed"; description: string; core?: boolean };
+  | {
+      kind: "unnamed";
+      description: string;
+      core?: boolean;
+      fingerprint?: string;
+    };
 
 /** The tables and `table.column` pairs a consent names. */
 interface ConsentTargets {
@@ -269,7 +276,7 @@ function deletionKey(deletion: Deletion): string {
     case "rows":
       return `rows:${deletion.table}`;
     case "unnamed":
-      return `unnamed:${deletion.description}`;
+      return `unnamed:${deletion.description}:${deletion.fingerprint ?? ""}`;
   }
 }
 

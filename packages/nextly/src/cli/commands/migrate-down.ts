@@ -13,6 +13,7 @@
  *
  * @module cli/commands/migrate-down
  */
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -614,6 +615,11 @@ async function planAndGuard(
     .map(p => ({
       kind: "unnamed" as const,
       description: `${p.filename}'s DOWN, which drops a table or column, or empties a table`,
+      // The statements as judged: under the lock the DOWN is read again, and
+      // one that changed since it was agreed to is a different deletion.
+      fingerprint: createHash("sha256")
+        .update(p.statements.join("\n;\n"))
+        .digest("hex"),
     }));
   const first = agreed === undefined;
   const verdict = await judgeDataLoss({
