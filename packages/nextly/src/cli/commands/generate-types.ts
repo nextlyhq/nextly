@@ -60,9 +60,10 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
-import { formatDuration, formatCount } from "../utils/logger";
+import { formatDuration, formatCount, logWarnings } from "../utils/logger";
 import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
+import { runComponentMapCheck } from "./component-map-check-command";
 import {
   applyBlockManifestState,
   readBlockManifestState,
@@ -94,6 +95,12 @@ export interface GenerateTypesCommandOptions {
    * @default true (Zod schemas are generated)
    */
   zod?: boolean;
+
+  /**
+   * Only check that the committed component map agrees with the config, writing nothing, and
+   * exit with the verdict (`runComponentMapCheck`). For CI.
+   */
+  check?: boolean;
 }
 
 /**
@@ -141,8 +148,9 @@ interface GenerationResult {
 /**
  * Write the admin component import map (D60) and its strings-only path list
  * beside the types file. Importing the map from the app self-registers every
- * plugin admin component, with no manual host imports, and the admin's server
- * layout reads the list to refuse a widget whose component the map lacks.
+ * plugin admin component, with no manual host imports. The admin's server
+ * layout reads the list in development to write the pair again when it falls
+ * behind, and `generate:types --check` reads it in CI.
  *
  * Both are written even when nothing contributes a component: the app imports
  * them, so removing them would break its build. An empty map imports nothing,
@@ -662,13 +670,7 @@ function displayResults(
   }
 
   // Warnings
-  if (result.warnings.length > 0) {
-    logger.newline();
-    logger.warn(`${result.warnings.length} warning(s):`);
-    for (const warning of result.warnings) {
-      logger.item(warning, 1);
-    }
-  }
+  logWarnings(logger, result.warnings);
 
   // Duration (verbose only)
   logger.debug(`Generation completed in ${formatDuration(result.durationMs)}`);
@@ -697,6 +699,10 @@ export function registerGenerateTypesCommand(program: Command): void {
     )
     .option("--no-declare", "Skip module declaration/augmentation")
     .option("--no-zod", "Skip Zod schema generation")
+    .option(
+      "--check",
+      "Only check that the committed component map agrees with the config, writing nothing (exit 1 when it does not, 2 when it cannot be checked)"
+    )
     .action(async (cmdOptions: GenerateTypesCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
@@ -709,6 +715,10 @@ export function registerGenerateTypesCommand(program: Command): void {
         cwd: globalOpts.cwd,
       };
 
+      // The check writes nothing and runs nothing else: it answers with its exit status alone.
+      if (cmdOptions.check === true) {
+        process.exit(await runComponentMapCheck(resolvedOptions, context));
+      }
       try {
         await runGenerateTypes(resolvedOptions, context);
       } catch (error) {

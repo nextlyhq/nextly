@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Which cards' own components threw while drawing an answer, as the grid
- * counts them.
+ * Which cards' own components threw while drawing an answer, or are missing
+ * from the admin altogether, as the grid counts them, and what such a card says.
  *
  * The grid counts each card's outcome from its answer, and a component that
  * throws has an answer that was fine: only the card knows its component then
@@ -14,8 +14,38 @@
 
 import { createContext, useCallback, useState } from "react";
 
+import { hasComponent } from "@admin/lib/plugins/component-registry";
+
 /** What a throw while drawing says, in the card's own words. */
 export const DREW_NOTHING = "Its component stopped while drawing.";
+
+/** What a card whose component is missing says in production: nothing about the app's code. */
+export const COMPONENT_MISSING = "Its component could not be loaded.";
+
+/**
+ * What a card drawn by its own component says when the admin holds no component at its path,
+ * or `undefined` while it does. In development it names the widget, its owner and the path, and
+ * the fix; in production only that it could not be loaded, as `development` is read from the
+ * server (`AdminBranding.devReload`).
+ *
+ * The component registry is filled before the admin draws, when the app's generated component
+ * map is imported, so a path it does not hold now is one no draw will find: the map was
+ * generated before the widget was declared, or the app does not import it.
+ */
+export function missingComponentMessage(
+  definition: { id: string; component?: string; owner?: string },
+  development: boolean
+): string | undefined {
+  const path = definition.component;
+  if (path === undefined || hasComponent(path)) return undefined;
+  if (!development) return COMPONENT_MISSING;
+  const owner = definition.owner === undefined ? "" : ` of ${definition.owner}`;
+  return (
+    `Widget "${definition.id}"${owner} draws with ${path}, which is not in the app's ` +
+    "component map. Run `npx nextly generate:types`, or start `next dev` once, then commit " +
+    "both generated files."
+  );
+}
 
 /** A card telling the grid whether its component failed to draw. */
 export type DrawFailureReport = (placementId: string, failed: boolean) => void;
