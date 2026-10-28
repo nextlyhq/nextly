@@ -304,6 +304,33 @@ describe.each(getConfiguredTestDialects())(
       expect(notes?.points.length).toBeGreaterThan(1);
     });
 
+    it("refuses a malformed read of a collection the reader may not read, as it does for a reader of it", async () => {
+      // 🔴 Checked before "nothing there" is answered: a read that names no
+      // field the collection has fails for every reader alike, never only for
+      // the one who may read the collection.
+      const t = await boot();
+      declare([
+        {
+          id: "acme/misread",
+          label: "Tasks grouped by a field they lack",
+          collections: [NOTES, TASKS],
+          count: async ({ services, signal }) =>
+            (await services.count(NOTES, { signal })) +
+            (await services.groupBy(TASKS, { field: "no_such_field", signal }))
+              .buckets.length,
+          link: "collections/ad_notes",
+        },
+      ]);
+      const admin: ReadCaller = {
+        user: { id: await superAdminUser(t, "ad-admin") },
+      };
+      const notesOnly: ReadCaller = {
+        user: { id: await userWhoMay(t, "ad-notes", "read", [NOTES]) },
+      };
+      expect(brief(await digestFor(admin))).toEqual(["acme/misread=!"]);
+      expect(brief(await digestFor(notesOnly))).toEqual(["acme/misread=!"]);
+    });
+
     it("fails an item alone when it reads a collection it did not declare", async () => {
       const t = await boot();
       declare([
