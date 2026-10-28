@@ -26,6 +26,16 @@ const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
   "delete",
 ]);
 
+/**
+ * The resources a `manage-` permission is bridged on, and the actions it
+ * counts as there: what a role holding one is converted to, and what any
+ * writer stores in its place.
+ */
+export const MANAGE_BRIDGED_RESOURCES: readonly string[] = [
+  ...MANAGE_COUNTS_ON,
+];
+export const MANAGE_BRIDGED_ACTIONS: readonly string[] = [...MANAGE_COUNTS_AS];
+
 /** Whether a `manage-` permission on `resource` can count for `action`. */
 export function manageCounts(action: string, resource: string): boolean {
   return MANAGE_COUNTS_AS.has(action) && MANAGE_COUNTS_ON.has(resource);

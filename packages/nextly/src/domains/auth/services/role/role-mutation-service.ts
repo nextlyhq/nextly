@@ -24,6 +24,7 @@ import {
 } from "../../../users/services/last-super-admin";
 import { PUBLIC_ROLE_SLUG, refuseLinkingPublicRole } from "../public-role";
 import { afterRoleGrantsChanged } from "../role-grants-changed";
+import { storedAsPlain } from "../role-permission-service";
 import { refuseGrantingSuperAdmin } from "../super-admin-grant";
 
 import { toDialectBool, validateRoleId } from "./utils";
@@ -474,6 +475,13 @@ export class RoleMutationService extends BaseService {
           logContext: { invalidPermissionIds },
         });
       }
+      // A retired `manage-` permission is stored as the plain four it stands
+      // for, so a role made with one never holds it.
+      const storedPermissionIds = await storedAsPlain(
+        this.adapter,
+        uniqueIds,
+        this.adapter.getCapabilities().maxParamsPerQuery
+      );
 
       // Verify all child roles exist before creating the role
       if (uniqueChildRoleIds.length > 0) {
@@ -528,12 +536,14 @@ export class RoleMutationService extends BaseService {
           );
           await executor.insert(this.tables.roles).values(roleData);
 
-          if (uniqueIds.length > 0) {
-            const rolePermissionData = uniqueIds.map(permissionId => ({
-              id: randomUUID(),
-              roleId: id,
-              permissionId,
-            }));
+          if (storedPermissionIds.length > 0) {
+            const rolePermissionData = storedPermissionIds.map(
+              permissionId => ({
+                id: randomUUID(),
+                roleId: id,
+                permissionId,
+              })
+            );
             await executor
               .insert(this.tables.rolePermissions)
               .values(rolePermissionData);
@@ -880,6 +890,13 @@ export class RoleMutationService extends BaseService {
             // grants to the Public role), so neither lands between this
             // removal and the insert below.
             await tx.lockRow("roles", storedRoleId);
+            // A retired `manage-` permission is stored as the plain four it
+            // stands for, so a role saved with one never holds it.
+            const storedPermissionIds = await storedAsPlain(
+              tx,
+              uniquePermissionIds,
+              this.adapter.getCapabilities().maxParamsPerQuery
+            );
             // Delete all existing role-permission mappings
             await tx.delete(
               "role_permissions",
@@ -889,11 +906,11 @@ export class RoleMutationService extends BaseService {
             // Insert new role-permission mappings. `createdAt` is set here
             // because the schema's default for it is applied by the query
             // builder, which the adapter's insert does not go through.
-            if (uniquePermissionIds.length > 0) {
+            if (storedPermissionIds.length > 0) {
               const createdAt = new Date();
               await tx.insertMany(
                 "role_permissions",
-                uniquePermissionIds.map(permissionId => ({
+                storedPermissionIds.map(permissionId => ({
                   id: randomUUID(),
                   roleId: storedRoleId,
                   permissionId,

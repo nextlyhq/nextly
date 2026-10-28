@@ -19,6 +19,8 @@
 // first query will surface real DB errors loudly, and `nextly db:sync`
 // remains the canonical recovery path.
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import {
   type ExtensionSchema,
   getActiveExtensionSchema,
@@ -44,6 +46,11 @@ interface AdapterLike {
   getDrizzle: () => unknown;
   tableExists: (name: string) => Promise<boolean>;
   executeQuery: (sql: string) => Promise<unknown>;
+  /**
+   * The adapter's own read by table and column name. Every adapter a boot
+   * runs with has it; a stand-in without it is not asked about roles.
+   */
+  select?: Pick<TransactionContext, "select">["select"];
 }
 
 interface LoggerLike {
@@ -543,6 +550,18 @@ async function runCoreSchemaChecks(
         retiredTablesNamedForErasure(process.env[ERASE_RETIRED_AUTH_TABLES_ENV])
       )
     );
+  }
+
+  // Roles an earlier release gave a retired `manage-` permission, each named
+  // at every start until `nextly upgrade` converts it.
+  const { select } = adapter;
+  if (select) {
+    const { formatRetiredManageWarning, rolesHoldingRetiredManage } =
+      await import("../domains/auth/retired-manage");
+    const holding = await rolesHoldingRetiredManage({
+      select: select.bind(adapter),
+    });
+    if (holding.length > 0) logger.warn(formatRetiredManageWarning(holding));
   }
 }
 

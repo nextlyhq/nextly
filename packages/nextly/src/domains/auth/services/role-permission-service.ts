@@ -9,6 +9,10 @@ import type {
   RolePermissionInsertData,
 } from "@nextly/types/rbac-operations";
 
+import {
+  MANAGE_BRIDGED_ACTIONS,
+  MANAGE_BRIDGED_RESOURCES,
+} from "../../../auth/access/manage-bridge";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
@@ -72,6 +76,17 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     perm: { action: string; resource: string; name?: string; slug?: string }
   ): Promise<void> {
+    // A retired `manage-` permission is added as the plain four it stands
+    // for, each as a permission of its own.
+    if (isRetiredManage(perm.action, perm.resource)) {
+      for (const action of MANAGE_BRIDGED_ACTIONS) {
+        await this.addPermissionToRole(roleId, {
+          action,
+          resource: perm.resource,
+        });
+      }
+      return;
+    }
     // Composed by the shared helpers rather than written out. This method
     // creates the permission row when the pair has none, and it is reached from
     // the REST surface with neither field supplied — so what these fallbacks
@@ -272,7 +287,16 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     permissionIds: string[]
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
-    const desired = new Set(permissionIds);
+    // A retired `manage-` permission is stored as the plain four it stands
+    // for, so a role set with one, a preset's at each boot included, never
+    // holds it again once converted.
+    const desired = new Set(
+      await storedAsPlain(
+        this.adapter,
+        permissionIds,
+        this.adapter.getCapabilities().maxParamsPerQuery
+      )
+    );
 
     // Read first, outside any transaction: once a preset has settled, every
     // boot of every instance asks this with nothing to change, and the answer
@@ -419,6 +443,38 @@ export class RolePermissionService extends BaseService {
   }
 
   /**
+   * Stores what the role holds as the plain permissions a retired `manage-`
+   * one stands for, under the lock on the role's row every writer of its
+   * permissions takes: each retired one held is replaced by the plain four on
+   * its resource. Whether anything changed; a role with none changes nothing,
+   * so a second conversion finds nothing to do.
+   */
+  async convertRetiredManage(roleId: string): Promise<boolean> {
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    let changed = false;
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("roles", roleId);
+      const held = await this.heldIn(tx, roleId);
+      const desired = new Set(await storedAsPlain(tx, [...held], maxParams));
+      const removed = [...held].filter(id => !desired.has(id));
+      const added = [...desired].filter(id => !held.has(id));
+      if (removed.length === 0 && added.length === 0) return;
+      for (const ids of batches(removed, maxParams - 1)) {
+        await tx.delete("role_permissions", {
+          and: [
+            { column: "roleId", op: "=", value: roleId },
+            { column: "permissionId", op: "IN", value: ids },
+          ],
+        });
+      }
+      await this.insertAssignments(tx, roleId, added);
+      changed = true;
+    });
+    if (changed) await afterRoleGrantsChanged(roleId);
+    return changed;
+  }
+
+  /**
    * The ids among `wanted` whose permission row, locked on transaction `tx`,
    * still grants the action and resource it is wanted for.
    */
@@ -510,6 +566,71 @@ function named(
 }
 
 /** `items` in runs of at most `size`, and never less than one per run. */
+/** Whether a permission is a retired `manage-` one: bridged, and stored as the plain four. */
+export function isRetiredManage(action: string, resource: string): boolean {
+  return action === "manage" && MANAGE_BRIDGED_RESOURCES.includes(resource);
+}
+
+/** Where `storedAsPlain` reads permission rows: an adapter or a transaction. */
+type PermissionReader = Pick<TransactionContext, "select">;
+
+/** A permission row as `storedAsPlain` reads it. */
+type PermissionRow = { id: unknown; action: string; resource: string };
+
+/**
+ * The permission ids as a role stores them: each retired `manage-` one
+ * replaced by the plain read, create, update and delete on its resource, and
+ * every other id as it is. Where a resource lacks one of the plain four, its
+ * `manage-` id is kept, so the role loses nothing; the bridge still counts it
+ * until `nextly upgrade` converts it once they exist.
+ */
+export async function storedAsPlain(
+  reader: PermissionReader,
+  permissionIds: readonly string[],
+  maxParams: number
+): Promise<string[]> {
+  const ids = [...new Set(permissionIds.map(String))];
+  if (ids.length === 0) return ids;
+  const rows: PermissionRow[] = [];
+  for (const batch of batches(ids, maxParams)) {
+    rows.push(
+      ...(await reader.select<PermissionRow>("permissions", {
+        columns: ["id", "action", "resource"],
+        where: { and: [{ column: "id", op: "IN", value: batch }] },
+      }))
+    );
+  }
+  const retired = rows.filter(row => isRetiredManage(row.action, row.resource));
+  if (retired.length === 0) return ids;
+  const resources = [...new Set(retired.map(row => row.resource))];
+  const plain = await reader.select<PermissionRow>("permissions", {
+    columns: ["id", "action", "resource"],
+    where: {
+      and: [
+        { column: "action", op: "IN", value: [...MANAGE_BRIDGED_ACTIONS] },
+        { column: "resource", op: "IN", value: resources },
+      ],
+    },
+  });
+  const replaced = new Set<string>();
+  const added: string[] = [];
+  for (const resource of resources) {
+    const four = plain.filter(row => row.resource === resource);
+    if (
+      !MANAGE_BRIDGED_ACTIONS.every(action =>
+        four.some(row => row.action === action)
+      )
+    ) {
+      continue;
+    }
+    for (const row of retired) {
+      if (row.resource === resource) replaced.add(String(row.id));
+    }
+    added.push(...four.map(row => String(row.id)));
+  }
+  return [...new Set([...ids.filter(id => !replaced.has(id)), ...added])];
+}
+
 function batches<T>(items: readonly T[], size: number): T[][] {
   const step = Math.max(1, Math.floor(size));
   const runs: T[][] = [];
