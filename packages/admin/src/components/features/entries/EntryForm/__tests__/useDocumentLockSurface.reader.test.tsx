@@ -39,6 +39,8 @@ beforeEach(() => {
     message: "",
     item: { status: "acquired", claimToken: "t1" },
   });
+  // An editor's claim is released when the surface unmounts.
+  del.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
