@@ -274,3 +274,41 @@ describe("the focus point when the image changes", () => {
     expect(document.querySelector("[data-focal-dot]")).toBeNull();
   });
 });
+
+describe("the focus point while it saves", () => {
+  it("saves once when Enter is pressed again before the save finishes", async () => {
+    let finish: () => void = () => undefined;
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        })
+    );
+    render(
+      <MediaFocalPoint
+        src="/uploads/photo.jpg"
+        alt="A photo"
+        focalX={50}
+        focalY={50}
+        onSave={onSave}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    const dot = screen.getByRole("slider", { name: "Focus point" });
+    fireEvent.keyDown(dot, { key: "ArrowRight" });
+
+    fireEvent.keyDown(dot, { key: "Enter" });
+    fireEvent.keyDown(dot, { key: "Enter" });
+
+    // POSITIVE CONTROL: the first Enter did save.
+    expect(onSave).toHaveBeenCalledWith({ focalX: 51, focalY: 50 });
+    expect(onSave).toHaveBeenCalledTimes(1);
+    finish();
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Set focus point" })
+      ).toBeInTheDocument()
+    );
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+});

@@ -268,6 +268,25 @@ describe("an item's details in the library", () => {
     );
   });
 
+  it("keeps the panel open, and stops placing the point, when Escape is pressed on Done", async () => {
+    renderLibrary();
+    await screen.findByText("photo-1.jpg");
+    fireEvent.click(tile(1));
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    const done = screen.getByRole("button", { name: "Done" });
+    done.focus();
+
+    fireEvent.keyDown(done, { key: "Escape" });
+
+    expect(
+      screen.getByRole("complementary", { name: "Media details" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Set focus point" })
+    ).toBeInTheDocument();
+    expect(api.updateMedia).not.toHaveBeenCalled();
+  });
+
   it("shows a reader the details with nothing to edit, move or delete", async () => {
     held.slugs = new Set(["read-media"]);
     renderLibrary();

@@ -36,3 +36,12 @@ export const MEDIA_SORT_OPTIONS: ReadonlyArray<{
  */
 export const MEDIA_DESTRUCTIVE_TEXT_CLASSES =
   "text-destructive-700 dark:text-destructive" as const;
+
+/**
+ * The longest alt text and caption the admin saves for an item: the edit
+ * dialog's form refuses longer, and the details panel's fields stop there and
+ * won't save past it. One definition, so the two can't accept different
+ * lengths.
+ */
+export const MEDIA_ALT_TEXT_MAX_LENGTH = 500;
+export const MEDIA_CAPTION_MAX_LENGTH = 1000;

@@ -132,4 +132,22 @@ describe("the media viewer", () => {
     );
     await vi.waitFor(() => expect(expand).toHaveFocus());
   });
+
+  it("stays open, and stops placing the point, when Escape is pressed on Centre", () => {
+    const { viewer } = openViewer();
+    fireEvent.click(
+      within(viewer).getByRole("button", { name: "Set focus point" })
+    );
+    const centre = within(viewer).getByRole("button", { name: "Centre" });
+    centre.focus();
+
+    fireEvent.keyDown(centre, { key: "Escape" });
+
+    expect(
+      screen.getByRole("dialog", { name: "coast.jpg" })
+    ).toBeInTheDocument();
+    expect(
+      within(viewer).getByRole("button", { name: "Set focus point" })
+    ).toBeInTheDocument();
+  });
 });

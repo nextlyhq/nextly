@@ -1,6 +1,9 @@
 /**
  * The edit dialog an upload field opens places the focus point the same way
- * the library does: one dot on the whole image, saved by Done.
+ * the library does: one dot on the whole image. Unlike the library, Done
+ * only places it: the dialog's `onSave` runs once, from "Save changes", with
+ * the point and the text together, which is what callers of this exported
+ * dialog were written against.
  *
  * It used to place the point on the square thumbnail, a crop of the image,
  * and draw a crosshair, the coordinates, the image again at three ratios and
@@ -31,17 +34,32 @@ const item: Media = {
   updatedAt: new Date(0),
 };
 
+function renderDialog() {
+  const onSave = vi.fn(() => Promise.resolve());
+  const onOpenChange = vi.fn();
+  render(
+    <MediaEditDialog
+      open
+      media={item}
+      onOpenChange={onOpenChange}
+      onSave={onSave}
+    />
+  );
+  return { onSave, onOpenChange };
+}
+
+/** Moves the point one step right with the keyboard and presses Done. */
+function placePointOneRight() {
+  fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+  fireEvent.keyDown(screen.getByRole("slider", { name: "Focus point" }), {
+    key: "ArrowRight",
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+}
+
 describe("the media edit dialog's focus point", () => {
-  it("is one dot on the whole image, saved by Done", async () => {
-    const onSave = vi.fn(() => Promise.resolve());
-    render(
-      <MediaEditDialog
-        open
-        media={item}
-        onOpenChange={vi.fn()}
-        onSave={onSave}
-      />
-    );
+  it("is one dot on the whole image, placed by Done without saving", async () => {
+    const { onSave } = renderDialog();
 
     expect(
       screen.getByRole("img", { name: "Coastline at dusk" })
@@ -49,17 +67,9 @@ describe("the media edit dialog's focus point", () => {
     expect(screen.queryByText(/1:1|16:9|4:3/)).toBeNull();
     expect(screen.queryByText(/\(\s*30\s*,\s*40\s*\)/)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
-    fireEvent.keyDown(screen.getByRole("slider", { name: "Focus point" }), {
-      key: "ArrowRight",
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    placePointOneRight();
 
-    await vi.waitFor(() =>
-      expect(onSave).toHaveBeenCalledWith({ focalX: 31, focalY: 40 })
-    );
-    // The field keeps the item it opened with, so the dot has to stay where
-    // Done put it rather than snap back to the item's old point.
+    // POSITIVE CONTROL: Done finished placing, and the dot stayed put.
     await vi.waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Set focus point" })
@@ -67,38 +77,50 @@ describe("the media edit dialog's focus point", () => {
     );
     const dot = document.querySelector<HTMLElement>("[data-focal-dot]");
     expect(dot?.style.left).toBe("31%");
+    expect(onSave).not.toHaveBeenCalled();
   });
 
-  it("saves the text on its own once the point is saved, and says nothing about regenerating sizes", async () => {
-    const onSave = vi.fn(() => Promise.resolve());
-    render(
-      <MediaEditDialog
-        open
-        media={item}
-        onOpenChange={vi.fn()}
-        onSave={onSave}
-      />
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
-    fireEvent.keyDown(screen.getByRole("slider", { name: "Focus point" }), {
-      key: "ArrowDown",
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Done" }));
-    await vi.waitFor(() =>
-      expect(onSave).toHaveBeenCalledWith({ focalX: 30, focalY: 41 })
-    );
-
+  it("sends the point with the text in one save from Save changes", async () => {
+    const { onSave } = renderDialog();
+    placePointOneRight();
     fireEvent.change(screen.getByLabelText(/Alt text/), {
       target: { value: "Coast" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
-    await vi.waitFor(() =>
-      expect(onSave).toHaveBeenLastCalledWith({
-        altText: "Coast",
-        caption: undefined,
-      })
-    );
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith({
+      altText: "Coast",
+      caption: undefined,
+      focalX: 31,
+      focalY: 40,
+    });
     expect(screen.queryByText(/regenerat/i)).toBeNull();
+  });
+
+  it("sends no point from Save changes when it wasn't moved", async () => {
+    const { onSave } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave).toHaveBeenCalledWith({
+      altText: "Coastline at dusk",
+      caption: undefined,
+    });
+  });
+
+  it("stays open, and stops placing the point, when Escape is pressed on Done", () => {
+    const { onOpenChange, onSave } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    const done = screen.getByRole("button", { name: "Done" });
+    done.focus();
+
+    fireEvent.keyDown(done, { key: "Escape" });
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Set focus point" })
+    ).toBeInTheDocument();
   });
 });

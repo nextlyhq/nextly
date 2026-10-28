@@ -4,9 +4,10 @@
  * MediaEditDialog Component
  *
  * Dialog for editing media metadata, opened from an upload field. For an
- * image it shows the whole image with the shared focus point control, which
- * saves the point itself on Done, the same way the library's details do;
- * "Save changes" saves the text. "Show image sizes" gates only the generated
+ * image it shows the whole image with the shared focus point control. Here
+ * Done only places the point: "Save changes" sends it with the text in one
+ * `onSave`, as this exported dialog always has, so a caller whose handler
+ * closes or submits runs once. "Show image sizes" gates only the generated
  * image-size list. Folder is intentionally NOT editable here -- moving files
  * between folders is its own dedicated dialog.
  */
@@ -41,6 +42,10 @@ import {
   Download,
 } from "@admin/components/icons";
 import {
+  MEDIA_ALT_TEXT_MAX_LENGTH,
+  MEDIA_CAPTION_MAX_LENGTH,
+} from "@admin/constants/media";
+import {
   copyableMediaUrl,
   formatFileSize,
   mediaImageSrc,
@@ -49,7 +54,11 @@ import {
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
 
-import { isFocalPointKeyEvent, MediaFocalPoint } from "../MediaFocalPoint";
+import {
+  isFocalPointKeyEvent,
+  MediaFocalPoint,
+  type MediaFocalPointValue,
+} from "../MediaFocalPoint";
 
 // ============================================================
 // Schema
@@ -58,12 +67,18 @@ import { isFocalPointKeyEvent, MediaFocalPoint } from "../MediaFocalPoint";
 const mediaEditSchema = z.object({
   altText: z
     .string()
-    .max(500, "Alt text must be less than 500 characters")
+    .max(
+      MEDIA_ALT_TEXT_MAX_LENGTH,
+      `Alt text can be at most ${MEDIA_ALT_TEXT_MAX_LENGTH} characters`
+    )
     .optional()
     .nullable(),
   caption: z
     .string()
-    .max(1000, "Caption must be less than 1000 characters")
+    .max(
+      MEDIA_CAPTION_MAX_LENGTH,
+      `Caption can be at most ${MEDIA_CAPTION_MAX_LENGTH} characters`
+    )
     .optional()
     .nullable(),
 });
@@ -157,6 +172,9 @@ export function MediaEditDialog({
   const [isSaving, setIsSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  // The point as placed by Done, sent by "Save changes"; null until placed.
+  const [focalDraft, setFocalDraft] =
+    React.useState<MediaFocalPointValue | null>(null);
 
   const isPending = isSaving || isLoading;
   const isImage = media?.mimeType?.startsWith("image/") ?? false;
@@ -179,6 +197,7 @@ export function MediaEditDialog({
       });
       setAdvancedOpen(false);
       setError(null);
+      setFocalDraft(null);
     }
   }, [media, form]);
 
@@ -190,10 +209,16 @@ export function MediaEditDialog({
       setIsSaving(true);
       setError(null);
 
-      // Text only: the focus point saves itself from its own Done.
+      // The point goes only when Done moved it from the stored one, so a
+      // save that didn't touch it doesn't cut the image's sizes again.
+      const pointMoved =
+        focalDraft !== null &&
+        (focalDraft.focalX !== (media.focalX ?? 50) ||
+          focalDraft.focalY !== (media.focalY ?? 50));
       const updates: MediaUpdateInput = {
         altText: data.altText || undefined,
         caption: data.caption || undefined,
+        ...(pointMoved ? focalDraft : {}),
       };
 
       await onSave(updates);
@@ -264,7 +289,8 @@ export function MediaEditDialog({
                     focalY={media.focalY}
                     readOnly={isPending}
                     imageClassName="max-h-[300px]"
-                    onSave={point => onSave(point)}
+                    // Done places the point; "Save changes" sends it.
+                    onSave={setFocalDraft}
                   />
                 </div>
               )}
@@ -292,6 +318,7 @@ export function MediaEditDialog({
                     id="altText"
                     placeholder="Describe the image for screen readers..."
                     {...form.register("altText")}
+                    maxLength={MEDIA_ALT_TEXT_MAX_LENGTH}
                     disabled={isPending}
                   />
                 </div>
@@ -305,6 +332,7 @@ export function MediaEditDialog({
                     id="caption"
                     placeholder="Optional caption or description..."
                     {...form.register("caption")}
+                    maxLength={MEDIA_CAPTION_MAX_LENGTH}
                     disabled={isPending}
                   />
                 </div>

@@ -52,15 +52,17 @@ const ARROW_STEP = 1;
 const SHIFT_ARROW_STEP = 10;
 
 /**
- * Whether a key press was aimed at a focus point being placed. A sheet or a
- * dialog holding this control passes its Escape here and stays open when it
- * is: Radix hears Escape on the document before the dot does, and would close
- * the whole surface when the person only meant to stop placing the point.
+ * Whether a key press was aimed at a focus point being placed: from anywhere
+ * in the control while it is placing (the dot, Centre or Done), which marks
+ * itself `data-focal-editing`. A sheet or a dialog holding this control
+ * passes its Escape here and stays open when it is: Radix hears Escape on the
+ * document before the control does, and would close the whole surface when
+ * the person only meant to stop placing the point.
  */
 export function isFocalPointKeyEvent(event: KeyboardEvent): boolean {
   return (
     event.target instanceof Element &&
-    event.target.closest("[data-focal-dot]") !== null
+    event.target.closest("[data-focal-editing]") !== null
   );
 }
 
@@ -107,6 +109,9 @@ export function MediaFocalPoint({
   const [setting, setSetting] = React.useState(false);
   const [draft, setDraft] = React.useState(stored);
   const [saving, setSaving] = React.useState(false);
+  // Read by Done and Enter, so a second press before the first save settles
+  // (and before a re-render shows `saving`) sends nothing more.
+  const savingRef = React.useRef(false);
   const [saveFailed, setSaveFailed] = React.useState(false);
   const imageRef = React.useRef<HTMLImageElement>(null);
   const dotRef = React.useRef<HTMLSpanElement>(null);
@@ -125,6 +130,7 @@ export function MediaFocalPoint({
     setShownSrc(src);
     setSetting(false);
     setSaving(false);
+    savingRef.current = false;
     setSaveFailed(false);
     setStored(fromProps);
     setDraft(fromProps);
@@ -169,6 +175,7 @@ export function MediaFocalPoint({
   };
 
   const done = async () => {
+    if (savingRef.current) return;
     // Nothing moved (Done straight after "Set focus point", or Centre on a
     // point already in the middle): there is nothing to save, and a save
     // would make the server cut every size of the image again for nothing.
@@ -178,6 +185,7 @@ export function MediaFocalPoint({
       return;
     }
     const savingSrc = src;
+    savingRef.current = true;
     setSaving(true);
     setSaveFailed(false);
     try {
@@ -189,7 +197,10 @@ export function MediaFocalPoint({
       // The draft stays on screen, so Done can be pressed again.
       if (srcRef.current === savingSrc) setSaveFailed(true);
     } finally {
-      if (srcRef.current === savingSrc) setSaving(false);
+      if (srcRef.current === savingSrc) {
+        savingRef.current = false;
+        setSaving(false);
+      }
     }
   };
 
@@ -241,16 +252,22 @@ export function MediaFocalPoint({
       }));
       return;
     }
-    if (event.key === "Escape") {
-      // Escape leaves the focus point first; only a second one closes the
-      // surface around it.
-      event.preventDefault();
-      event.stopPropagation();
-      cancel();
-    } else if (event.key === "Enter") {
+    if (event.key === "Enter") {
       event.preventDefault();
       void done();
     }
+  };
+
+  // Escape from anywhere in the control while placing (the dot, Centre or
+  // Done) leaves the focus point first; only a second one closes the surface
+  // around it. Not stopped by a prevented default: the sheet or dialog
+  // around it prevents Escape's default to stay open, and it is still this
+  // control's Escape.
+  const handleEditingKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancel();
   };
 
   const shown = setting ? draft : stored;
@@ -259,7 +276,12 @@ export function MediaFocalPoint({
   const showDot = setting || shown.focalX !== CENTRE || shown.focalY !== CENTRE;
 
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      className="flex flex-col gap-2"
+      {...(setting
+        ? { "data-focal-editing": "", onKeyDown: handleEditingKeyDown }
+        : {})}
+    >
       <div
         data-focal-frame=""
         className={cn(

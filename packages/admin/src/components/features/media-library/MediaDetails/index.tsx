@@ -22,7 +22,11 @@ import {
   Trash2,
   Video,
 } from "@admin/components/icons";
-import { MEDIA_DESTRUCTIVE_TEXT_CLASSES } from "@admin/constants/media";
+import {
+  MEDIA_ALT_TEXT_MAX_LENGTH,
+  MEDIA_CAPTION_MAX_LENGTH,
+  MEDIA_DESTRUCTIVE_TEXT_CLASSES,
+} from "@admin/constants/media";
 import {
   formatFileSize,
   formatUploadedDate,
@@ -146,10 +150,15 @@ export function MediaPreview({
 function FieldSaveStatus({
   state,
   onRetry,
+  label,
+  maxLength,
 }: {
   state: MediaFieldSaveState;
   onRetry: () => void;
+  label: string;
+  maxLength: number;
 }): React.JSX.Element {
+  const isProblem = state === "failed" || state === "too-long";
   return (
     <div className="flex min-h-5 flex-wrap items-center gap-2 text-xs">
       {/* Always in the page, so a screen reader is already listening when
@@ -158,9 +167,7 @@ function FieldSaveStatus({
       <span
         role="status"
         className={cn(
-          state === "failed"
-            ? MEDIA_DESTRUCTIVE_TEXT_CLASSES
-            : "text-muted-foreground",
+          isProblem ? MEDIA_DESTRUCTIVE_TEXT_CLASSES : "text-muted-foreground",
           state === "saved" && "text-success"
         )}
       >
@@ -168,6 +175,8 @@ function FieldSaveStatus({
         {state === "saved" && "Saved"}
         {state === "failed" &&
           "Couldn't save. Your text is still here to try again."}
+        {state === "too-long" &&
+          `Not saved: ${label} can be at most ${maxLength} characters.`}
       </span>
       {state === "failed" && (
         <Button
@@ -193,6 +202,7 @@ function AutosaveField({
   placeholder,
   help,
   marker,
+  maxLength,
   onSave,
 }: {
   media: Media;
@@ -202,6 +212,8 @@ function AutosaveField({
   placeholder: string;
   help?: string;
   marker?: React.ReactNode;
+  /** The longest text the field takes and saves. */
+  maxLength: number;
   onSave: MediaSave;
 }): React.JSX.Element {
   const id = React.useId();
@@ -215,12 +227,14 @@ function AutosaveField({
     savedValue: media[field] ?? "",
     save,
     fieldLabel: label,
+    maxLength,
   });
   const shared = {
     id,
     value: autosave.value,
     placeholder,
     "aria-describedby": help ? helpId : undefined,
+    maxLength,
     onBlur: autosave.onBlur,
   };
 
@@ -250,7 +264,12 @@ function AutosaveField({
           {help}
         </p>
       )}
-      <FieldSaveStatus state={autosave.state} onRetry={autosave.retry} />
+      <FieldSaveStatus
+        state={autosave.state}
+        onRetry={autosave.retry}
+        label={label}
+        maxLength={maxLength}
+      />
     </div>
   );
 }
@@ -301,6 +320,7 @@ export function MediaDetailsFields({
           placeholder="Describe what the image shows"
           help="Read by screen readers and search engines. Leave it empty only for decoration."
           marker={missingAlt ? <MissingAltBadge /> : null}
+          maxLength={MEDIA_ALT_TEXT_MAX_LENGTH}
           onSave={onSave}
         />
       )}
@@ -310,6 +330,7 @@ export function MediaDetailsFields({
         label="Caption"
         placeholder="Optional"
         multiline
+        maxLength={MEDIA_CAPTION_MAX_LENGTH}
         onSave={onSave}
       />
     </div>

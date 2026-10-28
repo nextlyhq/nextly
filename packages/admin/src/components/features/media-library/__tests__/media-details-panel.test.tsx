@@ -252,6 +252,56 @@ describe("the details panel", () => {
     }
   });
 
+  it("sends one save at a time for a field, then the latest text, and says Saved only for what was stored", async () => {
+    const finish: Array<() => void> = [];
+    const onSave = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finish.push(resolve);
+        })
+    );
+    renderPanel({ onSave });
+    const alt = screen.getByLabelText(/Alt text/);
+
+    fireEvent.change(alt, { target: { value: "First" } });
+    fireEvent.blur(alt);
+    fireEvent.change(alt, { target: { value: "Second" } });
+    fireEvent.blur(alt);
+    fireEvent.change(alt, { target: { value: "Third" } });
+    fireEvent.blur(alt);
+
+    // POSITIVE CONTROL: the first blur did send.
+    expect(onSave).toHaveBeenCalledWith("m1", { altText: "First" });
+    // The rest wait for it, so an older request can't land after a newer one.
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    finish[0]();
+    await vi.waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    // Only the latest text waited; "Second" was never sent.
+    expect(onSave).toHaveBeenLastCalledWith("m1", { altText: "Third" });
+    expect(screen.queryByText("Saved")).toBeNull();
+
+    finish[1]();
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+  });
+
+  it("holds alt text and caption to the edit dialog's limits, and refuses to save past them", () => {
+    const { onSave } = renderPanel();
+    const alt = screen.getByLabelText(/Alt text/);
+    const caption = screen.getByLabelText("Caption");
+    expect(alt).toHaveAttribute("maxLength", "500");
+    expect(caption).toHaveAttribute("maxLength", "1000");
+
+    // A value set past the limit (a script, or an old browser) isn't saved.
+    fireEvent.change(alt, { target: { value: "a".repeat(501) } });
+    fireEvent.blur(alt);
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/Alt text can be at most 500 characters/)
+    ).toBeInTheDocument();
+  });
+
   it("moves to the previous and next item with the arrow keys and the buttons", () => {
     const { onPrevious, onNext } = renderPanel();
     const title = screen.getByRole("heading", { name: "coast.jpg" });
@@ -331,6 +381,21 @@ describe("the details panel over a narrow library", () => {
     });
 
     expect(onClose).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Set focus point" })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the sheet open, and stops placing the point, when Escape is pressed on Done", () => {
+    const { onClose, onSave } = renderPanel({ layout: "over" });
+    fireEvent.click(screen.getByRole("button", { name: "Set focus point" }));
+    const done = screen.getByRole("button", { name: "Done" });
+    done.focus();
+
+    fireEvent.keyDown(done, { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
     expect(
       screen.getByRole("button", { name: "Set focus point" })
     ).toBeInTheDocument();
