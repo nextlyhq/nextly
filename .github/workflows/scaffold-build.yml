@@ -20,6 +20,15 @@ name: Scaffold build
 # pull request in the repo, and the one least likely to change what a scaffold imports.
 # The cost belongs on changes to the scaffolder and its templates, which are rare.
 on:
+  # The nightly newest-minor run calls this same matrix with the newest Next.js
+  # and React minors to install before each build. A pull request passes no
+  # input, so that install step is skipped and its run is unchanged.
+  workflow_call:
+    inputs:
+      versions:
+        description: "Space-separated `name@version` specs to install into the scaffolded app before it builds"
+        type: string
+        default: ""
   pull_request:
     paths:
       # `templates/plugin/**` is deliberately absent. A plugin scaffold is a publishable
@@ -732,6 +741,19 @@ jobs:
             [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
           fi
 
+      # Only the nightly newest-minor run sets the input (see `on.workflow_call`).
+      # The specs are passed through the environment, and the caller checks
+      # their shape, so nothing from them is read as shell syntax.
+      - name: Install the newest Next.js and React minors
+        if: inputs.versions
+        shell: bash
+        env:
+          VERSIONS: ${{ inputs.versions }}
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          read -ra specs <<< "$VERSIONS"
+          if [ "${{ matrix.pm }}" = pnpm ]; then pnpm add "${specs[@]}"; else npm install "${specs[@]}"; fi
+
       - name: Build the scaffolded project
         shell: bash
         run: |
@@ -756,6 +778,120 @@ jobs:
             echo "the build ran the Google font loader, which needs the network"
             exit 1
           fi
+
+      # A fresh blog has no categories or tags, so its build renders no archive page, and
+      # Next.js counted the archive routes as static. The archive pages read `searchParams`
+      # for pagination, which a static render refuses, so every category and tag page
+      # answered 500: an unknown one, and one created after the build. This serves the
+      # build and asks for an archive that does not exist: the not-found page, never a 500.
+      # Then, with the server running, it adds a category, a tag and ten posts in both, as
+      # an editor would after deploying, and asks for each archive's two pages: nine posts
+      # on the first, the tenth on `?page=2`, so the new archives render on request and
+      # read their pagination. It also adds a category and a tag whose slug is the one the
+      # build used as its placeholder, `__none__`, with a post in both: a slug is free text,
+      # so on a request that archive is a real one, and lists its post.
+      - name: Check the blog answers unknown and new categories and tags
+        if: matrix.template == 'blog'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          PORT=3101 NEXT_TELEMETRY_DISABLED=1 NEXTLY_TELEMETRY_DISABLED=1 npm start > /tmp/blog-start.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 60); do
+            curl -s -o /dev/null http://localhost:3101/ && break
+            sleep 1
+          done
+          fetch() {
+            status=$(curl -s -o /tmp/archive.html -w '%{http_code}' "http://localhost:3101$1")
+            echo "$1: $status"
+            case "$status" in
+              200|404) ;;
+              *) tail -40 /tmp/blog-start.log; exit 1 ;;
+            esac
+          }
+          for path in /categories/no-such-category /tags/no-such-tag; do
+            fetch "$path"
+            grep -q 'NEXT_HTTP_ERROR_FALLBACK;404' /tmp/archive.html || {
+              echo "$path did not render the not-found page"
+              exit 1
+            }
+          done
+
+          # Written through nextly's local API, as the site's own code would. The project's
+          # TypeScript loads as CommonJS, and `nextly/config`, which its config imports, is
+          # served only to `import`, so the project is marked as a module while the script
+          # runs, and put back after.
+          mkdir -p scripts
+          cat > scripts/add-after-build.mts <<'TS'
+          import { getNextly } from "nextly";
+
+          import config from "../nextly.config";
+
+          const nextly = await getNextly({ config });
+          const data = { title: "After Build", name: "After Build", slug: "after-build" };
+          const category = await nextly.create({ collection: "categories", data });
+          const tag = await nextly.create({ collection: "tags", data });
+          for (let i = 1; i <= 10; i += 1) {
+            await nextly.create({
+              collection: "posts",
+              data: {
+                title: `After build ${i}`,
+                slug: `after-build-${i}`,
+                excerpt: `Post ${i} written after the build.`,
+                categories: [category.item.id],
+                tags: [tag.item.id],
+                status: "published",
+                publishedAt: new Date(Date.now() - i * 60_000).toISOString(),
+              },
+            });
+          }
+          const named = { title: "None", name: "None", slug: "__none__" };
+          const namedCategory = await nextly.create({ collection: "categories", data: named });
+          const namedTag = await nextly.create({ collection: "tags", data: named });
+          await nextly.create({
+            collection: "posts",
+            data: {
+              title: "In the placeholder's slug",
+              slug: "in-the-placeholder-slug",
+              excerpt: "A post in the archives named __none__.",
+              categories: [namedCategory.item.id],
+              tags: [namedTag.item.id],
+              status: "published",
+              publishedAt: new Date().toISOString(),
+            },
+          });
+          process.exit(0);
+          TS
+          cp package.json /tmp/package.json.bak
+          npm pkg set type=module
+          npx --yes tsx@4.21.0 --env-file=.env scripts/add-after-build.mts
+          cp /tmp/package.json.bak package.json
+
+          for archive in /categories/after-build /tags/after-build; do
+            for page in "" "?page=2"; do
+              fetch "$archive$page"
+              # `|| true`: a page listing none is a count of 0 for the check below, not
+              # a grep failure that ends the step without saying why.
+              listed=$({ grep -o 'href="/blog/after-build-[0-9]*"' /tmp/archive.html || true; } | sort -u | wc -l)
+              expected=9
+              [ -n "$page" ] && expected=1
+              [ "$listed" -eq "$expected" ] || {
+                echo "$archive$page listed $listed posts, expected $expected"
+                tail -40 /tmp/blog-start.log
+                exit 1
+              }
+            done
+          done
+          for archive in /categories/__none__ /tags/__none__; do
+            fetch "$archive"
+            if grep -q 'NEXT_HTTP_ERROR_FALLBACK;404' /tmp/archive.html ||
+              ! grep -q 'href="/blog/in-the-placeholder-slug"' /tmp/archive.html; then
+              echo "$archive did not list its post"
+              tail -40 /tmp/blog-start.log
+              exit 1
+            fi
+          done
 
       # A build proves the app compiles; this proves it serves. The existing-app installer
       # writes the routes, the instrumentation hook and the config Nextly starts from, so the

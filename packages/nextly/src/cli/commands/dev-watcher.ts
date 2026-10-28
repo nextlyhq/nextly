@@ -91,6 +91,9 @@ export function createDebouncedSync(
             adapter: adapter as unknown as DrizzleAdapter,
             logger,
             label: "db:sync watch",
+            // A command-line run: a held schema lock is waited for, about a minute, and then
+            // the run stops naming its holder.
+            whenHeld: "wait",
             mayCreateLock: options.autoSync !== false,
             // Ctrl+C is the documented way to stop watch mode, and a sync is idempotent, so a
             // claim stuck behind a dead watcher would block every later sync for no gain.
