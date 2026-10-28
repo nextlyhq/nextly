@@ -441,8 +441,11 @@ const RELEASE_KINDS = [
 ] as const;
 
 /**
- * A reader for each release kind. A reader who may not read releases gets
- * `null` from each, so neither leaves an item, exactly as on a site with none.
+ * A reader for each release kind. A reader who may not read releases is shown
+ * neither, exactly as on a site with none; and so is one whose access could
+ * not be read, since the digest hides an item whose `visible` check throws
+ * (and logs it) rather than showing release labels to a reader never proven
+ * to read releases.
  */
 function releaseReaders(caller: ReadCaller): DigestReader[] {
   let mayRead: Promise<boolean> | undefined;
@@ -454,7 +457,8 @@ function releaseReaders(caller: ReadCaller): DigestReader[] {
     severity: "critical" as const,
     link: `releases?tab=attention&reason=${kind}`,
     owner: "core",
-    read: async () => ((await mayReadReleases()) ? count(caller) : null),
+    visible: mayReadReleases,
+    read: () => count(caller),
   }));
 }
 
@@ -471,7 +475,7 @@ async function resolveDigest(
   const now = opts?.now ?? new Date();
   const readers = [
     ...releaseReaders(caller),
-    ...(await pluginItemReaders(caller, now)),
+    ...pluginItemReaders(caller, now),
   ];
   const items = await runDigest(readers, opts?.signal);
   return {

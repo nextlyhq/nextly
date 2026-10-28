@@ -39,14 +39,17 @@ attention card reads is unchanged.
 - Core's kinds are releases that stopped and overdue releases, both critical, each the releases
   domain's own count, linked to Releases filtered to its reason, and shown only to a reader of
   releases.
-- Plugins' attention items (`contributes.dashboard.attention`, `defineAttentionItem`) now reach
-  the digest as warnings. An item with `permission` shows only to a holder of it, and one with
-  `collections` only to a reader of one of them. Its `count` reads only those collections, as the
+- Plugins' attention items (`contributes.dashboard.attention`) now reach the digest as warnings.
+  An item with `permission` shows only to a holder of it, and one with `collections` only to a
+  reader of one of them. Who may see an item is asked within its own budget, and a check that
+  fails or runs out of time hides the item. Its `count` reads only those collections, as the
   reader, and one the reader cannot read answers empty.
 - Every item is counted at once, each within its own 10-second budget. One that throws, runs out of
   time or answers something that is not a count fails alone and is logged with its plugin and id.
-  Counts above 99 read as 99 and a floor.
+  Counts above 99 read as 99 and a floor. A reader whose access to releases cannot be read is
+  shown neither release kind.
 - Startup refuses, in the one dashboard fault message, an attention item that breaks its shape,
-  repeats another's id, uses the reserved `core`, `collection` or `single` namespace, or is one of
-  more than 10 from a plugin. An item naming a collection the site does not have is warned about
+  repeats another's id, uses the reserved `core`, `collection` or `single` namespace, names a
+  permission other than in its stored `action-resource` form, or is one of more than 10 from a
+  plugin. An item naming a collection the site does not have is warned about
   and shows to nobody.

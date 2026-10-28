@@ -16,7 +16,12 @@ vi.mock("../../reader-content", async importOriginal => ({
   readableCollectionSlugs: readable,
 }));
 
-import type { PluginDashboardSnapshot } from "../../../../plugins/dashboard-declarations";
+import {
+  pluginDashboardSnapshots,
+  type PluginDashboardSnapshot,
+} from "../../../../plugins/dashboard-declarations";
+import { definePlugin } from "../../../../plugins/plugin-context";
+import type { AttentionItem } from "../../declaration/dashboard";
 import {
   attentionItemFaults,
   clearAttentionItems,
@@ -113,6 +118,18 @@ describe("the startup check", () => {
       { permission: undefined, collections: [] },
       /one or more collection slugs/,
     ],
+    // 🔴 Each would pass a check for a non-blank string, and hide the item
+    // from every reader, since no stored permission is spelt that way.
+    [
+      "a permission in the earlier spelling",
+      { permission: "form-submissions:read" },
+      /stored form, "action-resource"/,
+    ],
+    [
+      "a permission written as a sentence",
+      { permission: "Read form submissions" },
+      /stored form, "action-resource"/,
+    ],
   ])("refuses %s", (_name, override, problem) => {
     expect(problemsOf([item(override)])).toEqual([
       expect.stringMatching(problem),
@@ -155,6 +172,31 @@ describe("the startup check", () => {
     expect(problemsOf(many.slice(1))).toEqual([]);
   });
 
+  /*
+   * 🔴 An empty slot is skipped by every reading of the list, `forEach` and a
+   * spread copy alike (the copy turned it into an undefined item), so it is
+   * named, through startup's own copy of the plugin's declaration.
+   */
+  it("names an empty slot in the list by its place", () => {
+    const attention: AttentionItem[] = [item()];
+    attention[2] = item({ id: "forms/spam" });
+    const snapshots = pluginDashboardSnapshots([
+      definePlugin({
+        name: "forms",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { dashboard: { widgets: [], attention } },
+      }),
+    ]);
+    expect(attentionItemFaults(snapshots)).toEqual([
+      {
+        owner: snapshots[0]!.owner,
+        widget: "(attention[1])",
+        problem: "is an empty slot in the attention list",
+      },
+    ]);
+  });
+
   it("refuses attention that is not a list, and an entry that is not an item", () => {
     expect(problemsOf({ id: "forms/unread" })).toEqual([
       expect.stringMatching(/must be a list/),
@@ -174,7 +216,7 @@ describe("what an item's count is handed", () => {
     const caller = { user: { id: "u1" } } as Parameters<
       typeof pluginItemReaders
     >[0];
-    const [reader] = await pluginItemReaders(caller, now);
+    const [reader] = pluginItemReaders(caller, now);
     const signal = new AbortController().signal;
     await expect(reader!.read(signal)).resolves.toBe(4);
     const input = count.mock.calls[0]![0] as Record<string, unknown>;
@@ -196,7 +238,7 @@ describe("what an item's count is handed", () => {
   it("ranks as a warning whatever the plugin declared, and keeps its own link", async () => {
     registerAttentionItems([snapshot([item({ severity: "critical" })])]);
     holds.mockResolvedValue(true);
-    const [reader] = await pluginItemReaders(
+    const [reader] = pluginItemReaders(
       { user: { id: "u1" } } as Parameters<typeof pluginItemReaders>[0],
       new Date()
     );
@@ -208,14 +250,21 @@ describe("what an item's count is handed", () => {
     });
   });
 
-  it("gives no reader to someone without the item's permission, nor when the check fails", async () => {
+  it("is visible only to a holder of the item's permission, asked when the digest asks", async () => {
     registerAttentionItems([snapshot([item()])]);
     const caller = { user: { id: "u1" } } as Parameters<
       typeof pluginItemReaders
     >[0];
+    const [reader] = pluginItemReaders(caller, new Date());
+    const signal = new AbortController().signal;
+    // Nothing is asked until the digest asks: the check runs in its budget.
+    expect(holds).not.toHaveBeenCalled();
+    holds.mockResolvedValue(true);
+    await expect(reader!.visible!(signal)).resolves.toBe(true);
     holds.mockResolvedValue(false);
-    await expect(pluginItemReaders(caller, new Date())).resolves.toEqual([]);
+    await expect(reader!.visible!(signal)).resolves.toBe(false);
+    // A check that fails is the digest's to deny, and to log.
     holds.mockRejectedValue(new Error("rbac down"));
-    await expect(pluginItemReaders(caller, new Date())).resolves.toEqual([]);
+    await expect(reader!.visible!(signal)).rejects.toThrow("rbac down");
   });
 });

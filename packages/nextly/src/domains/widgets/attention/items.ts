@@ -41,6 +41,7 @@ import { isAdminRelativePath } from "../admin-path";
 import { createBatchScope } from "../batch-scope";
 import { renamedCollection } from "../declaration/card-settings";
 import type { AttentionItem } from "../declaration/dashboard";
+import { isPermissionName } from "../declaration/permission-name";
 import { bindReadServices } from "../declaration/read-services";
 import type { WidgetDeclarationFault } from "../declaration/validate";
 import { validateWidgetQuery } from "../query";
@@ -127,9 +128,11 @@ function gateProblem(
     return "needs exactly one of permission or collections";
   }
   if (permission !== undefined) {
-    return typeof permission === "string" && permission.trim() !== ""
+    // The stored spelling, as a widget's access is held to: "orders:read"
+    // would pass a looser check and hide the item from every reader.
+    return isPermissionName(permission)
       ? undefined
-      : "needs a permission slug";
+      : `needs a permission in its stored form, "action-resource" such as "read-orders"`;
   }
   return Array.isArray(collections) &&
     collections.length > 0 &&
@@ -153,44 +156,80 @@ function itemName(given: unknown, index: number): string {
 export function attentionItemFaults(
   dashboards: readonly PluginDashboardSnapshot[]
 ): WidgetDeclarationFault[] {
-  const faults: WidgetDeclarationFault[] = [];
+  // One id across every plugin: two plugins' items may not share one either.
   const seen = new Map<string, string>();
-  for (const { owner, attention } of dashboards) {
-    if (attention === undefined) continue;
-    if (!Array.isArray(attention)) {
-      faults.push({
-        owner,
-        widget: "(contributes.dashboard)",
-        problem: "attention must be a list of attention items",
-      });
-      continue;
-    }
-    if (attention.length > MAX_ATTENTION_ITEMS_PER_PLUGIN) {
-      faults.push({
-        owner,
-        widget: "(contributes.dashboard)",
-        problem: `declares ${attention.length} attention items; a plugin may declare at most ${MAX_ATTENTION_ITEMS_PER_PLUGIN}`,
-      });
-    }
-    attention.forEach((given: unknown, index) => {
-      const widget = itemName(given, index);
-      for (const problem of shapeProblems(given)) {
-        faults.push({ owner, widget, problem });
-      }
-      if (!isRecord(given) || typeof given.id !== "string") return;
-      const first = seen.get(given.id);
-      if (first !== undefined) {
-        faults.push({
-          owner,
-          widget,
-          problem: `repeats the id of an attention item ${first} declares`,
-        });
-      } else {
-        seen.set(given.id, owner);
-      }
-    });
+  return dashboards.flatMap(({ owner, attention }) =>
+    attention === undefined ? [] : pluginAttentionFaults(owner, attention, seen)
+  );
+}
+
+/** Every fault in one plugin's `attention`: the list itself, then each item. */
+function pluginAttentionFaults(
+  owner: string,
+  attention: unknown,
+  seen: Map<string, string>
+): WidgetDeclarationFault[] {
+  const widget = "(contributes.dashboard)";
+  if (!Array.isArray(attention)) {
+    return [
+      { owner, widget, problem: "attention must be a list of attention items" },
+    ];
+  }
+  const faults: WidgetDeclarationFault[] =
+    attention.length > MAX_ATTENTION_ITEMS_PER_PLUGIN
+      ? [
+          {
+            owner,
+            widget,
+            problem: `declares ${attention.length} attention items; a plugin may declare at most ${MAX_ATTENTION_ITEMS_PER_PLUGIN}`,
+          },
+        ]
+      : [];
+  // By index, not `forEach`, which steps over an empty slot: `[a, , b]` is
+  // a list every reading of skips the middle of, so it is named.
+  for (let index = 0; index < attention.length; index++) {
+    faults.push(...slotFaults(owner, attention, index, seen));
   }
   return faults;
+}
+
+/** The faults of one slot of a plugin's list: empty, a broken shape, or a repeated id. */
+function slotFaults(
+  owner: string,
+  attention: readonly unknown[],
+  index: number,
+  seen: Map<string, string>
+): WidgetDeclarationFault[] {
+  if (!Object.hasOwn(attention, index)) {
+    return [
+      {
+        owner,
+        widget: `(attention[${index}])`,
+        problem: "is an empty slot in the attention list",
+      },
+    ];
+  }
+  const given: unknown = attention[index];
+  const widget = itemName(given, index);
+  const faults = shapeProblems(given).map(problem => ({
+    owner,
+    widget,
+    problem,
+  }));
+  if (!isRecord(given) || typeof given.id !== "string") return faults;
+  const first = seen.get(given.id);
+  if (first === undefined) {
+    seen.set(given.id, owner);
+    return faults;
+  }
+  return [
+    ...faults,
+    {
+      owner,
+      widget,
+      problem: `repeats the id of an attention item ${first} declares`,
+    },
+  ];
 }
 
 /**
@@ -255,10 +294,8 @@ async function visibleTo(
 ): Promise<boolean> {
   const { permission } = entry.item;
   if (permission !== undefined) {
-    // A check that fails denies: an item is never shown on an unknown answer.
-    return callerHoldsPermission(permission, readAccessCaller(caller)).catch(
-      () => false
-    );
+    // A check that throws denies, where the digest asks this (`isVisible`).
+    return callerHoldsPermission(permission, readAccessCaller(caller));
   }
   if (!collectionsExist(entry)) return false;
   const slugs = await readable();
@@ -318,13 +355,15 @@ function itemServices(
 }
 
 /**
- * A reader for each plugin item `caller` may see, each counting as them.
- * Items they may not see get no reader, so they leave nothing in the digest.
+ * A reader for each plugin item, each counting as `caller`. Whether they may
+ * see it is the reader's `visible` check, which the digest asks first within
+ * the item's own budget and signal, so a stalled permission or collection
+ * lookup costs only its own item, and hides it rather than failing it.
  */
-export async function pluginItemReaders(
+export function pluginItemReaders(
   caller: ReadCaller,
   now: Date
-): Promise<DigestReader[]> {
+): DigestReader[] {
   if (registered.length === 0) return [];
   let readableOnce: Promise<ReadonlySet<string>> | undefined;
   // Read once for every item. A read that fails denies, as a permission check
@@ -337,32 +376,24 @@ export async function pluginItemReaders(
   // One scope per answer, each plugin with its own keys, so two items of one
   // plugin can share a scan and no plugin reads another's.
   const scopes = createBatchScope();
-  const visible = await Promise.all(
-    registered.map(async entry => ({
-      entry,
-      shown: await visibleTo(entry, caller, readable),
-    }))
-  );
-  const slugs = visible.some(({ shown, entry }) => shown && entry.collections)
-    ? await readable()
-    : new Set<string>();
-  return visible
-    .filter(({ shown }) => shown)
-    .map(({ entry }) => ({
-      id: entry.item.id,
-      kind: "plugin" as const,
-      label: entry.item.label,
-      // A plugin's item ranks as a warning, always: only core's kinds are critical.
-      severity: "warning" as const,
-      link: entry.item.link,
-      owner: entry.owner,
-      read: signal =>
-        entry.item.count({
-          user: caller.user,
-          signal,
-          services: itemServices(entry, caller, slugs, signal, now),
-          scope: scopes.forOwner(entry.owner),
-          now: new Date(now),
-        }),
-    }));
+  return registered.map(entry => ({
+    id: entry.item.id,
+    kind: "plugin" as const,
+    label: entry.item.label,
+    // A plugin's item ranks as a warning, always: only core's kinds are critical.
+    severity: "warning" as const,
+    link: entry.item.link,
+    owner: entry.owner,
+    visible: () => visibleTo(entry, caller, readable),
+    read: async signal => {
+      const slugs = entry.collections ? await readable() : new Set<string>();
+      return entry.item.count({
+        user: caller.user,
+        signal,
+        services: itemServices(entry, caller, slugs, signal, now),
+        scope: scopes.forOwner(entry.owner),
+        now: new Date(now),
+      });
+    },
+  }));
 }

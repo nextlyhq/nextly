@@ -88,8 +88,10 @@ export function pluginDashboardSnapshots(
           ? Object.fromEntries(Object.entries(alternatives))
           : alternatives,
         collections: resolvePluginSelf(plugin).collections,
+        // Copied with `slice`, which keeps an empty slot as one, so the startup
+        // check can name it rather than read it as an item that is undefined.
         attention: Array.isArray(attention)
-          ? [...(attention as unknown[])]
+          ? (attention as unknown[]).slice()
           : attention,
         // A misspelt key would otherwise be dropped here, and what it asked for
         // would silently never happen.

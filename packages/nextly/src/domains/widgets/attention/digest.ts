@@ -17,6 +17,13 @@
  * that counts nothing both leave no item, so the digest never tells a reader
  * what it kept from them.
  *
+ * ## Who may see an item is asked first, and fails closed
+ *
+ * A reader's `visible` check runs first, inside the same budget and signal as
+ * its count. A check that refuses, throws or runs out of time hides the item
+ * rather than failing it: a failed item still shows its label, which a reader
+ * not proven to see the item must not be shown.
+ *
  * @module domains/widgets/attention/digest
  * @experimental The digest's items may change until the card that draws them
  *   is built on them.
@@ -71,6 +78,12 @@ export interface DigestReader {
   /** Who declared it, named in the log when it fails: core, or a plugin. */
   owner: string;
   /**
+   * Whether the reader may see the item, asked before its count under the
+   * same budget and signal. `false`, a throw or running out of time hides the
+   * item. Absent, every reader may see it.
+   */
+  visible?: (signal: AbortSignal) => Promise<boolean>;
+  /**
    * The item's count as the reader sees it, or `null` when the reader may not
    * act on it. `signal` aborts when the item's budget runs out or the request
    * is abandoned.
@@ -102,36 +115,83 @@ type ReaderAnswer =
 
 /**
  * One reader's answer under its own budget: its count, `null` for an item the
- * reader may not act on, or why it failed.
+ * reader may not see or act on, or why it failed.
  */
 async function readWithinBudget(
   reader: DigestReader,
   request: AbortSignal | undefined
 ): Promise<ReaderAnswer> {
+  // A request already abandoned has nobody waiting for its answer: its readers
+  // are never started, so none runs out its whole budget for nothing.
+  if (request?.aborted) return null;
   const controller = new AbortController();
   const abandon = () => controller.abort();
   request?.addEventListener("abort", abandon, { once: true });
+  // Until the item is known to be the reader's, running out of time hides it
+  // rather than failing it, as a check that throws does.
+  let shown = reader.visible === undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<{ failure: Failure }>(resolve => {
+  const timedOut = new Promise<ReaderAnswer>(resolve => {
     timer = setTimeout(() => {
       controller.abort();
-      resolve({ failure: "timed-out" });
+      resolve(shown ? { failure: "timed-out" } : null);
     }, ATTENTION_ITEM_BUDGET_MS);
   });
+  const answered = (async (): Promise<ReaderAnswer> => {
+    if (reader.visible !== undefined) {
+      if (!(await isVisible(reader, reader.visible, controller.signal))) {
+        return null;
+      }
+      shown = true;
+    }
+    return countOf(reader, controller.signal);
+  })();
   try {
-    const answered = reader.read(controller.signal).then(
-      value => {
-        if (value === null) return null;
-        return (
-          parseAttentionCount(value) ?? { failure: "not-a-count" as const }
-        );
-      },
-      (error: unknown) => ({ failure: "threw" as const, error })
-    );
     return await Promise.race([answered, timedOut]);
   } finally {
     clearTimeout(timer);
     request?.removeEventListener("abort", abandon);
+  }
+}
+
+/**
+ * Whether the reader may see an item. A check that throws denies, and is
+ * logged with the item's owner and id: the item is hidden, never shown on an
+ * unknown answer.
+ */
+async function isVisible(
+  reader: DigestReader,
+  visible: NonNullable<DigestReader["visible"]>,
+  signal: AbortSignal
+): Promise<boolean> {
+  try {
+    return (await visible(signal)) === true;
+  } catch (error) {
+    getNextlyLogger().warn({
+      kind: "attention-item-access-failed",
+      owner: reader.owner,
+      item: reader.id,
+      ...(error instanceof Error ? { error: error.message } : {}),
+    });
+    return false;
+  }
+}
+
+/**
+ * An item's count, or why it failed. Read inside the `try`, so a count that
+ * throws before it returns a promise fails its own item, as one that rejects
+ * does, rather than the whole digest.
+ */
+async function countOf(
+  reader: DigestReader,
+  signal: AbortSignal
+): Promise<ReaderAnswer> {
+  try {
+    const value = await reader.read(signal);
+    if (value === null) return null;
+    return parseAttentionCount(value) ?? { failure: "not-a-count" };
+  } catch (error) {
+    return { failure: "threw", error };
   }
 }
 

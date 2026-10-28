@@ -115,6 +115,26 @@ describe("an item that fails", () => {
     );
   });
 
+  /*
+   * 🔴 A count that throws before it returns a promise: called outside a
+   * promise chain, its throw escaped the item and rejected the whole digest.
+   */
+  it("fails alone when its count throws before returning a promise", async () => {
+    const items = await runDigest([
+      reader("w/sync", () => {
+        throw new Error("sync boom");
+      }),
+      reader("w/fine", answers(2)),
+    ]);
+    expect(items).toEqual([
+      expect.objectContaining({ id: "w/fine", count: 2 }),
+      expect.objectContaining({ id: "w/sync", count: 0, failed: true }),
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ item: "w/sync", reason: "threw" })
+    );
+  });
+
   it.each([
     ["3"],
     [-1],
@@ -172,6 +192,78 @@ describe("an item that fails", () => {
     // At once, not when each item's own budget later runs out.
     expect(signals.map(signal => signal.aborted)).toEqual([true, true]);
     await done;
+  });
+});
+
+describe("who may see an item", () => {
+  it("is asked first, and an item they may not see is never counted", async () => {
+    const count = vi.fn(answers(4));
+    const items = await runDigest([
+      reader("w/hidden", count, { visible: () => Promise.resolve(false) }),
+      reader("w/shown", answers(1), { visible: () => Promise.resolve(true) }),
+    ]);
+    expect(items.map(item => item.id)).toEqual(["w/shown"]);
+    expect(count).not.toHaveBeenCalled();
+  });
+
+  /*
+   * 🔴 Fails closed: a failed item still shows its label, so an access check
+   * that throws must hide the item, not fail it, and is logged.
+   */
+  it("hides an item whose check throws, synchronously or not, and logs it", async () => {
+    const items = await runDigest([
+      reader("w/rejects", answers(4), {
+        visible: () => Promise.reject(new Error("rbac down")),
+      }),
+      reader("w/throws", answers(4), {
+        visible: () => {
+          throw new Error("rbac down");
+        },
+      }),
+      reader("w/fine", answers(1)),
+    ]);
+    expect(items.map(item => item.id)).toEqual(["w/fine"]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "attention-item-access-failed",
+        item: "w/rejects",
+        error: "rbac down",
+      })
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ item: "w/throws" })
+    );
+  });
+
+  it("hides an item whose check outlasts the item's budget, while the others answer", async () => {
+    vi.useFakeTimers();
+    let seen: AbortSignal | undefined;
+    const done = runDigest([
+      reader("w/stalled", answers(4), {
+        visible: signal => {
+          seen = signal;
+          return new Promise(() => {});
+        },
+      }),
+      reader("w/quick", answers(3)),
+    ]);
+    await vi.advanceTimersByTimeAsync(ATTENTION_ITEM_BUDGET_MS);
+    const items = await done;
+    // Hidden, not failed: the reader was never shown to be allowed it.
+    expect(items.map(item => item.id)).toEqual(["w/quick"]);
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it("starts no reader for a request abandoned before the digest began", async () => {
+    const request = new AbortController();
+    request.abort();
+    const count = vi.fn(answers(4));
+    const visible = vi.fn(() => Promise.resolve(true));
+    expect(
+      await runDigest([reader("w/a", count, { visible })], request.signal)
+    ).toEqual([]);
+    expect(visible).not.toHaveBeenCalled();
+    expect(count).not.toHaveBeenCalled();
   });
 });
 
