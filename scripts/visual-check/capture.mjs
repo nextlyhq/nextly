@@ -11,7 +11,7 @@ import { THEME_STORAGE_KEY } from "../../e2e/tests/support/theme.mjs";
 import { settleTransitions } from "../../e2e/tests/support/axe-scan.mjs";
 import { SESSION_MAX_AGE_MS } from "../../e2e/tests/support/session.mjs";
 
-import { capturePlan } from "./options.mjs";
+import { capturePlan, publishedRoute } from "./options.mjs";
 import {
   checkPage,
   describeFinding,
@@ -134,7 +134,9 @@ async function prepared(page, step, prepare, where) {
  */
 async function captureView(context, step, { full, outDir, drawnMs, prepare }) {
   const { route } = step;
-  const where = `${route} ${step.width} ${step.scheme}`;
+  // Findings are published with the captures, so they name the route as it
+  // may be published.
+  const where = `${publishedRoute(route)} ${step.width} ${step.scheme}`;
   await context.addInitScript(
     ([key, value]) => globalThis.localStorage.setItem(key, value),
     [THEME_STORAGE_KEY, step.scheme]

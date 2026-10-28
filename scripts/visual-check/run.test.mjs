@@ -224,6 +224,30 @@ describe("the visual check, run against a stubbed server", () => {
     expect(listed).toBeGreaterThan(text.indexOf("![", look));
   });
 
+  /*
+   * The findings are published too, so a query value such as a reset token
+   * must not reach them any more than it reaches a capture's name.
+   */
+  it("keeps a query's values out of the findings it publishes", async () => {
+    const record = recordedPublish();
+    // Assembled from pieces, so no credential-shaped text sits in the source.
+    const secret = ["9c1e", "77ab", "03fd5e2"].join("");
+    await runPublishing(
+      record,
+      `/admin/wide?token=${secret}`,
+      "--publish",
+      "t",
+      "--allow-findings"
+    );
+    expect(record.pushed).toEqual([{ topic: "t", files: 6 }]);
+    const text = lines.join("\n");
+    const look = text.slice(text.indexOf("## The look"));
+    expect(look).toMatch(
+      /\/admin\/wide\?token=…#[0-9a-f]{8} 390 light: div\.wide-box/
+    );
+    expect(look).not.toContain(secret);
+  });
+
   it("never publishes a run with a route not captured, flag or not", async () => {
     for (const flags of [[], ["--allow-findings"]]) {
       const record = recordedPublish();
