@@ -28,14 +28,15 @@ export const kitCardWidget = defineWidget({
     "Exists for the e2e suite: a card built only from the plugin widget kit.",
   category: "Fixtures",
   size: { default: { w: 6, h: 4 }, min: { w: 6, h: 4 } },
-  data: async () => ({
+  load: async () => ({
     total: 1234,
     groups: [
       { key: "open", label: "Open", count: 3, value: "open" },
       { key: "paid", label: "Paid", count: 5, value: "paid" },
     ],
   }),
-  display: { component: KIT_CARD_COMPONENT },
+  view: { component: KIT_CARD_COMPONENT },
+  isEmpty: data => data.groups.length === 0,
 });
 
 /** A card whose component throws while it draws. */
@@ -46,8 +47,10 @@ const throwingCardWidget = defineWidget({
     "Exists for the e2e suite: its component throws; the error stays in its own card.",
   category: "Fixtures",
   size: { default: { w: 6, h: 4 }, min: { w: 6, h: 4 } },
-  data: async () => ({ total: 0 }),
-  display: { component: THROWING_CARD_COMPONENT },
+  load: async () => ({ total: 0 }),
+  view: { component: THROWING_CARD_COMPONENT },
+  // Never empty, so the card always reaches the component that throws.
+  isEmpty: () => false,
 });
 
 /**
@@ -64,8 +67,8 @@ const hidesWhenEmptyWidget = defineWidget({
   category: "Fixtures",
   size: { default: { w: 6, h: 4 }, min: { w: 6, h: 4 } },
   hidesWhenEmpty: true,
-  data: async () => ({ buckets: [] }),
-  display: "bars",
+  load: async () => ({ buckets: [] }),
+  view: "bars",
 });
 
 /**
@@ -80,8 +83,8 @@ const fullWidthWidget = defineWidget({
   description: "Exists for the e2e suite: always the full twelve columns wide.",
   category: "Fixtures",
   size: { default: { w: 12, h: 2 }, min: { w: 12, h: 2 } },
-  data: async () => ({ total: 12 }),
-  display: "metric",
+  load: async () => ({ total: 12 }),
+  view: "figure",
 });
 
 export const widgetKitFixturePlugin = definePlugin({

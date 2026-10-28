@@ -27,7 +27,7 @@ import { quote } from "./quote";
  * Core's displays that draw data: today's data archetypes, so a display is a
  * way of drawing that already exists rather than a new vocabulary.
  */
-export const CORE_DISPLAYS = DATA_ARCHETYPES;
+const CORE_DISPLAYS = DATA_ARCHETYPES;
 
 /** One of core's displays that draws data. */
 export type CoreDisplay = DataWidgetArchetype;
@@ -159,6 +159,56 @@ export interface ComponentDisplay {
 export type WidgetDisplay = CoreDisplay | ComponentDisplay;
 
 /**
+ * The core views a declaration names, each drawn by one of core's displays.
+ *
+ * Named for what a reader sees (a figure, a list, a table, bars, a series)
+ * rather than for the archetype that draws it, and mapped onto those displays,
+ * so a declared view is drawn by the renderer that exists.
+ */
+export const CORE_VIEWS = {
+  figure: "metric",
+  list: "list",
+  table: "table",
+  bars: "bars",
+  series: "timeseries",
+} as const satisfies Record<string, CoreDisplay>;
+
+/** One of core's views, by the name a declaration gives it. */
+export type CoreView = keyof typeof CORE_VIEWS;
+
+/** How a widget declares its view: a core view's name, or its own component's path. */
+export type WidgetView = CoreView | ComponentDisplay;
+
+/** The display a view is drawn by: a core view's, or the component itself. */
+export type DisplayOf<View> = View extends CoreView
+  ? (typeof CORE_VIEWS)[View]
+  : View;
+
+/** Whether a value names one of core's views. */
+export const isCoreView = (value: unknown): value is CoreView =>
+  typeof value === "string" && Object.hasOwn(CORE_VIEWS, value);
+
+/** Whether a value is a component view: an object naming its component's path. */
+export const isComponentView = (value: unknown): value is ComponentDisplay =>
+  typeof value === "object" &&
+  value !== null &&
+  !Array.isArray(value) &&
+  typeof (value as { component?: unknown }).component === "string";
+
+/** The view name a core display is declared by, so a fault speaks the author's own word. */
+export function viewOfDisplay(display: string): string {
+  const entry = Object.entries(CORE_VIEWS).find(
+    ([, drawn]) => drawn === display
+  );
+  return entry === undefined ? display : entry[0];
+}
+
+/** The display a declared view is drawn by. */
+export function displayOfView(view: WidgetView): WidgetDisplay {
+  return isCoreView(view) ? CORE_VIEWS[view] : view;
+}
+
+/**
  * The data each core display draws, as a check that runs.
  *
  * The types above say this to a TypeScript author. These say it to everything
@@ -197,6 +247,10 @@ const LIST_DATA = z.looseObject({
   fields: z.array(RESULT_FIELD).optional(),
   // The span the source looked at, in whole days; absent when unbounded.
   window: z.looseObject({ days: z.number().int().positive() }).optional(),
+  // How many rows the read matched in all, which a card's "View all (N)" names: a whole
+  // count of at least zero, and whether it is a floor.
+  total: z.number().int().nonnegative().optional(),
+  atLeast: z.boolean().optional(),
 });
 
 const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {

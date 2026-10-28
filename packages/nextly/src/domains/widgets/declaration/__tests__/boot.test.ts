@@ -188,4 +188,29 @@ describe("startup with plugins that declare widgets", () => {
       'id "acme/revenue" is already used by plugin "@old/stats", which declares it in the old shape'
     );
   });
+
+  it("stops when a plugin uses one of core's declared ids in today's shape, saying it is core's and what to do", () => {
+    // 🔴 One id has one owner: core declares core/note, so the plugin using it
+    // in the old shape is told to remove it or contribute an id of its own.
+    const message = refusal(() =>
+      resetWidgetRegistries([
+        plugin("@old/notes", {
+          admin: {
+            widgets: [
+              {
+                id: "core/note",
+                title: "Note",
+                component: "@old/notes/admin#Note",
+              },
+            ],
+          },
+        }),
+      ])
+    );
+    expect(message).toContain(
+      'plugin "@old/notes" contributes core/note through contributes.admin.widgets; core owns that id. Remove it, or contribute your own id through contributes.dashboard.'
+    );
+    // Filed under the plugin that has to change, not under core.
+    expect(message).toContain('plugin "@old/notes", widget "core/note"');
+  });
 });

@@ -41,8 +41,7 @@ export function choiceLabel(
  * "[object Object]", which is not a defect a reader can act on — it looks like
  * data. A relationship, a repeater or a rich-text value all arrive here as
  * objects, and no row-drawing archetype can render any of them; saying nothing
- * is better than saying that. The same reading `RecentEntriesWidget` had to be
- * taught when its titles came back as objects.
+ * is better than saying that, as a title that came back as an object showed.
  *
  * `null` and `undefined` are absent values, not text. `0` and `false` ARE text:
  * a count of zero is a real answer and dropping it would make the row lie.

@@ -2,7 +2,7 @@
  * The card is the one anatomy every widget wears, so these assert what a user
  * or a screen reader can observe about it, not which props were forwarded.
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { FrameState, type CardState } from "../frame/card-state";
@@ -19,6 +19,33 @@ const STATES: readonly CardState[] = [
 ];
 
 describe("WidgetCard", () => {
+  it("centres a state that says something in the body, and leaves the skeleton at the top", () => {
+    // A card keeps its rows whatever it shows: empty, error and no access are centred in the
+    // body both ways rather than left at its top-left with the rest of a tall card blank.
+    for (const [state, drawn] of [
+      [{ kind: "empty", empty: { title: "No posts yet" } }, "card-empty"],
+      [{ kind: "error", message: "Source unavailable." }, "widget-card-error"],
+      [{ kind: "no-access" }, "card-unavailable"],
+    ] as const) {
+      const { unmount } = render(
+        <WidgetCard title="Published posts" state={state}>
+          <p>42</p>
+        </WidgetCard>
+      );
+      const centred = screen.getByTestId("card-state-centred");
+      expect(centred).toHaveClass("items-center", "justify-center");
+      expect(centred).toContainElement(screen.getByTestId(drawn));
+      unmount();
+    }
+    // The must-differ half: the loading skeleton is not centred.
+    render(
+      <WidgetCard title="Published posts" state={{ kind: "loading" }}>
+        <p>42</p>
+      </WidgetCard>
+    );
+    expect(screen.queryByTestId("card-state-centred")).toBeNull();
+  });
+
   it("renders the title and the body it was given", () => {
     render(
       <WidgetCard title="Published posts">
@@ -107,7 +134,7 @@ describe("WidgetCard", () => {
     expect(links[0]).toHaveAttribute("href", "/dashboard/entries/posts");
   });
 
-  it("drops the footer while the card is loading, failed or not available", () => {
+  it("drops the footer's link while the card is loading, failed or not available", () => {
     for (const state of STATES) {
       const { unmount } = render(
         <WidgetCard
@@ -118,13 +145,15 @@ describe("WidgetCard", () => {
           <p>42</p>
         </WidgetCard>
       );
-      // An empty card keeps its link: "View all" still leads somewhere.
+      // An empty card keeps its link: "View all" still leads somewhere. The footer itself is
+      // always kept, so the card is one height whatever it shows.
       const keepsLink =
         state.kind === "ready" ||
         state.kind === "refreshing" ||
         state.kind === "empty";
+      const footer = screen.getByTestId("widget-card-footer");
       expect(
-        screen.queryByTestId("widget-card-footer") !== null,
+        within(footer).queryByRole("link", { name: "View all" }) !== null,
         state.kind
       ).toBe(keepsLink);
       unmount();
@@ -334,7 +363,7 @@ describe("a state the body reports", () => {
     );
   });
 
-  it("withholds the footer when the body reports an error", () => {
+  it("withholds the footer's link when the body reports an error", () => {
     render(
       <WidgetCard
         title="Posts"
@@ -343,7 +372,9 @@ describe("a state the body reports", () => {
         <FrameState state={{ kind: "error", message: "Unreadable." }} />
       </WidgetCard>
     );
-    expect(screen.queryByTestId("widget-card-footer")).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("widget-card-footer")).queryByRole("link")
+    ).toBeNull();
     expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
       "Unreadable."
     );

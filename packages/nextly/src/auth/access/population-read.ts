@@ -23,9 +23,13 @@ import { codeAccessAllows } from "../code-access";
 import { readAccessCaller } from "../entity-read-access";
 
 import { holdsPermission, type Actor } from "./actor";
-import { decide, declaresRule, type AccessTarget } from "./decide";
+import { declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
+import {
+  answeredRead as answered,
+  decidedRead as decided,
+} from "./read-decision";
 import {
   actorForKey,
   actorForPrincipal,
@@ -43,14 +47,6 @@ export interface RelatedRowCaller {
   readonly scope?: AuthenticatedScope;
   /** A plugin's signed-in person, when the read is made as one. */
   readonly principal: Principal | null;
-}
-
-/**
- * The decision about reading `target`: population's answer, or the one a
- * deviation compares today's with.
- */
-async function decided(actor: Actor, target: AccessTarget): Promise<boolean> {
-  return (await decide(actor, "read", target)).allowed;
 }
 
 /**
@@ -72,16 +68,13 @@ function keyActorOf(
 }
 
 /** Population's answer for a visitor. */
-async function visitorReads(
-  target: AccessTarget,
-  rbac: RBACAccessControlService | undefined
-): Promise<boolean> {
+async function visitorReads(target: AccessTarget): Promise<boolean> {
   // A failed read of Public's grants withholds the row rather than failing
   // the read, as a user's failed lookup does here.
   const visitor = await actorForVisitorFailingClosed();
-  // Without the service nothing is asked, and the visitor is admitted.
-  if (!rbac) return deviate("no-service", true, () => decided(visitor, target));
-  // The decision: the Public role's read, then a read rule answering `true`.
+  // The decision, with or without the service: the Public role's read, then
+  // a read rule answering `true`. Without the service no rule is registered,
+  // so Public's read decides, as it does for the visitor's direct read.
   return decided(visitor, target);
 }
 
@@ -117,7 +110,7 @@ async function keyReads(
       decided(actor, target)
     );
   }
-  return decided(actor, target);
+  return answered(actor, target);
 }
 
 /** Population's answer for a signed-in user. */
@@ -147,7 +140,7 @@ async function userReads(
       codeAccess: target.access,
     });
   }
-  return decided(await actor(), target);
+  return answered(await actor(), target);
 }
 
 /**
@@ -175,11 +168,11 @@ export function relatedRowReads(
     if (!rbac) {
       return deviate("no-service", false, () => decided(person, target));
     }
-    return decided(person, target);
+    return answered(person, target);
   }
   // A read with no user is a visitor's, a key scope included, as it was
   // before: no door populates for a key without naming the user it acts for.
-  if (!caller.user) return visitorReads(target, rbac);
+  if (!caller.user) return visitorReads(target);
   if (scope) return keyReads(target, scope, caller.user, rbac);
   return userReads(target, caller.user.id, rbac);
 }

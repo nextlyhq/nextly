@@ -26,7 +26,7 @@ const recentEntries = defineWidget({
     range: settings.dateRange({ default: "30d" }),
     items: settings.items({ default: 5 }),
   },
-  data: {
+  load: {
     query: ({ settings }) => ({
       collection: settings.collection,
       op: "list",
@@ -36,7 +36,7 @@ const recentEntries = defineWidget({
       limit: settings.items,
     }),
   },
-  display: "list",
+  view: "list",
 });
 
 describe("the query core runs for a card", () => {
@@ -46,7 +46,7 @@ describe("the query core runs for a card", () => {
         collection: "posts",
         sort: "title",
         range: "7d",
-        items: 12,
+        items: 8,
       })
     ).toEqual({
       source: "collection:posts",
@@ -54,7 +54,7 @@ describe("the query core runs for a card", () => {
       select: ["title"],
       sort: "title",
       where: { createdAt: { after: "7d" } },
-      limit: 12,
+      limit: 8,
     });
   });
 
@@ -69,7 +69,7 @@ describe("the query core runs for a card", () => {
   ])("changes with %s", (_label, changed, expected) => {
     // One setting changed against the same baseline: the query changes in
     // exactly the part that setting writes, and nowhere else.
-    const base = { collection: "posts", sort: "title", range: "7d", items: 12 };
+    const base = { collection: "posts", sort: "title", range: "7d", items: 8 };
     const before = buildCardQuery(recentEntries, base);
     const after = buildCardQuery(recentEntries, { ...base, ...changed });
     expect(after).toEqual({ ...before, ...expected });
@@ -96,8 +96,8 @@ describe("the query core runs for a card", () => {
       category: "Test",
       size: { default: { w: 12, h: 4 } },
       settings: { collection: settings.collection() },
-      data: { query },
-      display: "metric",
+      load: { query },
+      view: "figure",
     });
     expect(buildCardQuery(trims, undefined)).toBeUndefined();
     expect(query).not.toHaveBeenCalled();
@@ -133,7 +133,7 @@ describe("the query core runs for a card", () => {
   ])(
     "refuses a plain JavaScript query function that %s",
     (_label, query, reason) => {
-      const declaration = { data: { query }, settings: {} };
+      const declaration = { load: { query }, settings: {} };
       let thrown: unknown;
       try {
         buildCardQuery(declaration, undefined);
@@ -152,8 +152,8 @@ describe("the query core runs for a card", () => {
       description: "A data function",
       category: "Test",
       size: { default: { w: 12, h: 4 } },
-      data: async () => ({ total: 1 }),
-      display: "metric",
+      load: async () => ({ total: 1 }),
+      view: "figure",
     });
     expect(buildCardQuery(fn, {})).toBeUndefined();
   });

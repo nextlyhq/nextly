@@ -40,7 +40,7 @@ const shop = {
       widgets: [
         {
           id: "acme/revenue",
-          display: { component: "@acme/shop/admin#Revenue" },
+          view: { component: "@acme/shop/admin#Revenue" },
         },
       ],
     },
@@ -314,11 +314,11 @@ describe("two widgets drawn with one component", () => {
           widgets: [
             {
               id: "acme/revenue",
-              display: { component: "@acme/shop/admin#Chart" },
+              view: { component: "@acme/shop/admin#Chart" },
             },
             {
               id: "acme/orders",
-              display: { component: "@acme/shop/admin#Chart" },
+              view: { component: "@acme/shop/admin#Chart" },
             },
           ],
         },
