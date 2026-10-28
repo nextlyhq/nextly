@@ -20,7 +20,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { date, defineCollection, text } from "../../../config";
+import { date, defineCollection, relationship, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -30,6 +30,7 @@ import {
 // own collection slugs.
 const EVENTS = "rulefilter_localized_events";
 const NOTES = "rulefilter_localized_notes";
+const PINS = "rulefilter_localized_pins";
 
 /** A read rule answering `value`, which the rule type does not allow yet. */
 const answering = (value: unknown) => () => value as boolean;
@@ -60,6 +61,15 @@ async function boot(): Promise<TestNextly> {
         fields: [
           text({ name: "title", localized: true }),
           text({ name: "secret", localized: true }),
+        ],
+      }),
+      // Points at a note, so a read populates it through the note's rule.
+      defineCollection({
+        slug: PINS,
+        access: { read: () => true },
+        fields: [
+          text({ name: "label" }),
+          relationship({ name: "note", relationTo: NOTES }),
         ],
       }),
     ],
@@ -185,6 +195,31 @@ describe("a read rule's filter on a field the read may show from a fallback lang
     expect(await byId(t, NOTES, withEnglishSecret, frenchFallingBack)).not.toBe(
       "english-secret"
     );
+  });
+
+  it("withholds such an entry where a read populates it", async () => {
+    const t = await boot();
+    const { withEnglishSecret, withoutSecret } = await seed(t);
+    const pinned = async (note: string) => {
+      const pin = await t.nextly.create({
+        collection: PINS,
+        data: { label: note, note },
+      });
+      const read = (await t.nextly.findByID({
+        collection: PINS,
+        id: idOf(pin),
+        depth: 1,
+        ...frenchFallingBack,
+        ...asVisitor,
+      })) as Record<string, unknown>;
+      return read.note;
+    };
+    // Populated: the row itself, which the rule admits in every language.
+    expect(((await pinned(withoutSecret)) as { id?: unknown } | null)?.id).toBe(
+      withoutSecret
+    );
+    // Withheld as a row the caller may not read is: the stored id, not the row.
+    expect(await pinned(withEnglishSecret)).toBe(withEnglishSecret);
   });
 
   it("judges a read with no fallback in its own language alone", async () => {
