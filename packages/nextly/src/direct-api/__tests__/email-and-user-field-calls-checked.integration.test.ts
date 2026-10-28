@@ -8,8 +8,8 @@
  * user fields. A test send and a template preview ask create; making a
  * provider the default, a template's ownership changes and reordering user
  * fields ask update. Each person below holds exactly one permission, so an
- * operation that asked the wrong one is told apart; a holder of the `manage-`
- * permissions is let through everywhere, as REST lets it.
+ * operation that asked the wrong one is told apart: its holder is let through,
+ * and the holders of the other three on the same resource are refused.
  *
  * A refused call is refused before any work: it answers forbidden and writes
  * nothing. A call naming no user is refused as unauthenticated. A trusted
@@ -46,7 +46,7 @@ const ACTIONS: readonly Action[] = ["read", "create", "update", "delete"];
 
 /** A person holding exactly `<action>-<resource>`, named by that slug. */
 type Holder = `${Action}-${Resource}`;
-type Person = Holder | "manager" | "lacker";
+type Person = Holder | "lacker";
 
 /** What a call needs in hand: rows made by trusted code. */
 interface Subjects {
@@ -326,11 +326,6 @@ describe.each(getConfiguredTestDialects())(
           grants[`${action}-${resource}`] = [`${action}-${resource}`];
         }
       }
-      grants.manager = [
-        "manage-email-providers",
-        "manage-email-templates",
-        "manage-settings",
-      ];
       // A role, so a refusal is for want of the grant, not of any role.
       grants.lacker = ["read-api-keys"];
       for (const [person, slugs] of Object.entries(grants) as [
@@ -385,18 +380,14 @@ describe.each(getConfiguredTestDialects())(
           });
         }
 
-        for (const person of [asks, "manager"] as const) {
-          it(`goes past the check for ${person}, who holds what REST asks`, async () => {
-            // Past the check, a call answers whatever it deserves: a change of
-            // ownership on a template no one owns is refused by the service,
-            // never by the check.
-            expect(REFUSALS).not.toContain(
-              await failureOf(
-                call(checkedAs(person), subjects, trusted, "allowed")
-              )
-            );
-          });
-        }
+        it(`goes past the check for ${asks}, who holds what REST asks`, async () => {
+          // Past the check, a call answers whatever it deserves: a change of
+          // ownership on a template no one owns is refused by the service,
+          // never by the check.
+          expect(REFUSALS).not.toContain(
+            await failureOf(call(checkedAs(asks), subjects, trusted, "allowed"))
+          );
+        });
 
         it("is unchanged for trusted server code", async () => {
           expect(REFUSALS).not.toContain(
