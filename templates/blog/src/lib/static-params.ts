@@ -17,7 +17,7 @@
  * page is a 404 at build, and since the route is request-time, an archive
  * created later with that slug renders like any other.
  *
- * The placeholder's render reads nothing from the database (see
+ * At build, the placeholder's render reads nothing from the database (see
  * `isArchivePlaceholder`), so the build depends only on the page's shape, not
  * on what the database holds or whether it can be read at build time.
  */
@@ -29,7 +29,17 @@ export function archiveStaticParams(slugs: string[]): { slug: string }[] {
   }));
 }
 
-/** Whether a slug is the placeholder, whose render reads nothing else. */
+/** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
+const PRODUCTION_BUILD_PHASE = "phase-production-build";
+
+/**
+ * Whether this render is the build's placeholder, which reads nothing else.
+ * Only during the build: a slug is free text, so a real category or tag may
+ * be called `__none__`, and on a request it renders like any other.
+ */
 export function isArchivePlaceholder(slug: string): boolean {
-  return slug === PLACEHOLDER_SLUG;
+  return (
+    slug === PLACEHOLDER_SLUG &&
+    process.env.NEXT_PHASE === PRODUCTION_BUILD_PHASE
+  );
 }

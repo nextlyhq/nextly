@@ -150,7 +150,7 @@ async function assertMigrated(adapter: DrizzleAdapter): Promise<void> {
 }
 
 async function connect(options: RunnerOptions, context: CommandContext) {
-  const { config, appConfig, pluginConsent } = await loadConfig({
+  const { config, appConfig, pluginConsent, projectRoot } = await loadConfig({
     configPath: options.config,
     cwd: options.cwd,
   });
@@ -597,8 +597,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // As the lifecycle command's boot: the install-state gate would refuse
       // the very plugin this command is installing or uninstalling.
       await asLifecycleCommandBoot(plugin.name, () =>
-        registerServices(
-          buildServiceConfig({
+        registerServices({
+          ...buildServiceConfig({
             // The config as the app wrote it. The boot runs every `setup`
             // transformer and contribution fold itself; booting from the
             // loader's `config`, which holds their result, ran each twice, so
@@ -618,8 +618,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
             imageProcessor: getImageProcessor(),
             hookRegistry: getHookRegistry(),
             logger: context.logger,
-          })
-        )
+          }),
+          // The project `--cwd` names, not the directory the CLI ran in: the
+          // start check judges the Next.js and React that app installs.
+          appRoot: projectRoot,
+        })
       );
       const pluginContext = getInitializedPluginContext(plugin.name);
       if (pluginContext === undefined) {

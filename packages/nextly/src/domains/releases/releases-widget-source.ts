@@ -337,6 +337,24 @@ export function overdueReleaseCount(caller: ReadCaller): Promise<number> {
 }
 
 /**
+ * How many releases stopped, for this dashboard caller: a scheduled publish
+ * that failed and left the release unpublished. The releases domain's own count
+ * of its Needs attention tab narrowed to stopped, as {@link overdueReleaseCount}
+ * is to overdue, so "stopped" is decided there and nowhere else.
+ *
+ * Refused, as every release read is, for a caller who may not read releases;
+ * ask {@link callerMayReadReleases} first to leave the count out instead.
+ *
+ * @experimental
+ */
+export function stoppedReleaseCount(caller: ReadCaller): Promise<number> {
+  return service().count(
+    { tab: "attention", reason: "stopped" },
+    actorFor(caller)
+  );
+}
+
+/**
  * Publish the source and the function that answers it.
  *
  * Called from the boot-time registry reset, which is the one choke point both

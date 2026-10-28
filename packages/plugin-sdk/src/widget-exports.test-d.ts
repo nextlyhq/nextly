@@ -11,8 +11,20 @@
  * Using each export in a type position makes the compiler error if any is
  * missing.
  */
-import { WIDGET_CONDITIONS, WIDGET_LIFECYCLES } from "@nextlyhq/plugin-sdk";
+import { expectTypeOf } from "vitest";
+
+import {
+  defineAttentionItem,
+  formatWidgetChange,
+  formatWidgetNumber,
+  WIDGET_CONDITIONS,
+  WIDGET_LIFECYCLES,
+  widgetChartColour,
+  type WidgetChartSlot,
+} from "@nextlyhq/plugin-sdk";
 import type {
+  AttentionCount,
+  AttentionItem,
   GridSize,
   WidgetLifecycle,
   WidgetCondition,
@@ -70,5 +82,26 @@ const _vocabulary: readonly string[] = [
 void _lifecycle;
 void _condition;
 void _vocabulary;
+
+// The figure formatters and the chart colour accessor, from the server-safe root: a figure as
+// drawn and as heard, and a slot's colour token.
+expectTypeOf(formatWidgetNumber).returns.toHaveProperty("text");
+expectTypeOf(formatWidgetNumber).returns.toHaveProperty("label");
+expectTypeOf(formatWidgetChange).returns.toHaveProperty("text");
+expectTypeOf(widgetChartColour).parameter(0).toEqualTypeOf<WidgetChartSlot>();
+expectTypeOf<WidgetChartSlot>().toEqualTypeOf<1 | 2 | 3 | 4 | 5>();
+
+// The Needs attention item a plugin lists under `contributes.dashboard.attention`:
+// declared through the SDK's own `defineAttentionItem`, and both of its types
+// nameable, so an author can annotate a count they write as a named function.
+const _count: AttentionCount = { count: 100, atLeast: true };
+const _attention: AttentionItem = defineAttentionItem({
+  id: "overdue-orders",
+  label: "Overdue orders",
+  permission: "read-orders",
+  link: "collections/orders",
+  count: () => Promise.resolve(_count),
+});
+void _attention;
 
 export type { _WidgetSurface };

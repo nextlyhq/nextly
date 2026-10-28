@@ -22,8 +22,6 @@ export const getStartedWidget = {
     min: { w: 12, h: 3 },
     max: { w: 12, h: 12 },
   },
-  // First: it addresses a reader who has just arrived.
-  defaultOrder: 0,
   component: "core#GetStartedCard",
   /*
    * 🔴 No condition. Whether a widget is visible is part of the token a

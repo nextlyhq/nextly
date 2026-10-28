@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { MAX_WIDGET_SETTINGS } from "../../settings";
-import { settings } from "../setting-builders";
+import { setting } from "../setting-builders";
 import {
   assertWidgetDeclarations,
   collectWidgetDeclarationFaults,
@@ -33,9 +33,20 @@ function valid(overrides: Record<string, unknown> = {}): unknown {
       max: { w: 6, h: 6 },
     },
     settings: {
-      collection: { type: "collection" },
-      by: { type: "groupBy", of: "collection", defaultValue: "state" },
-      top: { type: "number", defaultValue: 5, min: 1, max: 25 },
+      collection: { type: "collection", label: "Collection" },
+      by: {
+        type: "groupBy",
+        label: "Group by",
+        of: "collection",
+        defaultValue: "state",
+      },
+      top: {
+        type: "number",
+        label: "Top",
+        defaultValue: 5,
+        min: 1,
+        max: 25,
+      },
     },
     load: async () => ({ buckets: [] }),
     view: "bars",
@@ -363,6 +374,26 @@ describe("a widget declaration as startup receives it", () => {
     ]);
   });
 
+  it("refuses a preview case drawn with a setting the widget does not declare, or a value its setting refuses", () => {
+    const withCase = (settings: Record<string, unknown>) =>
+      problemsOf(
+        valid({
+          preview: [{ name: "Some", data: { buckets: [] }, settings }],
+        })
+      );
+    // The control: a declared setting at a value it accepts.
+    expect(withCase({ top: 3, by: "state" })).toEqual([]);
+    expect(withCase({ tops: 3 })).toEqual([
+      'preview[0].settings sets "tops", which the widget does not declare',
+    ]);
+    expect(withCase({ top: 30 })).toEqual([
+      'preview[0].settings: setting "top" defaults to 30, outside the range it declares',
+    ]);
+    expect(withCase({ top: "3" })).toEqual([
+      'preview[0].settings: setting "top" is typed "number" but defaults to "3"',
+    ]);
+  });
+
   it("refuses a preview case that cannot be sent to the browser as it is", () => {
     const listOf = (data: unknown) =>
       valid({ view: "list", preview: [{ name: "Case", data }] });
@@ -457,7 +488,9 @@ describe("a widget declaration as startup receives it", () => {
   describe("refuses invalid settings", () => {
     it("of a type no setting has", () => {
       expect(
-        problemsOf(valid({ settings: { a: { type: "colour" } } }))[0]
+        problemsOf(
+          valid({ settings: { a: { type: "colour", label: "A" } } })
+        )[0]
       ).toContain('"colour"');
     });
 
@@ -468,6 +501,7 @@ describe("a widget declaration as startup receives it", () => {
             settings: {
               tone: {
                 type: "select",
+                label: "Tone",
                 options: [{ label: "Calm", value: "calm" }],
                 defaultValue: "loud",
               },
@@ -484,10 +518,14 @@ describe("a widget declaration as startup receives it", () => {
         problemsOf(
           valid({
             settings: {
-              collection: settings.collection(),
-              where: settings.filter({ of: "collection" }),
-              order: settings.sort({ of: "collection", default: "-updatedAt" }),
-              by: settings.groupBy({ of: "collection" }),
+              collection: setting.collection({ label: "Collection" }),
+              where: setting.filter({ of: "collection", label: "Filter" }),
+              order: setting.sort({
+                of: "collection",
+                label: "Sort",
+                defaultValue: "-updatedAt",
+              }),
+              by: setting.groupBy({ of: "collection", label: "Group by" }),
             },
           })
         )
@@ -499,8 +537,8 @@ describe("a widget declaration as startup receives it", () => {
         problemsOf(
           valid({
             settings: {
-              collection: { type: "collection" },
-              by: { type: "groupBy", of: "colection" },
+              collection: { type: "collection", label: "Collection" },
+              by: { type: "groupBy", label: "Group by", of: "colection" },
             },
           })
         )
@@ -516,8 +554,8 @@ describe("a widget declaration as startup receives it", () => {
         valid({
           settings: {
             broken: null,
-            limit: { type: "number", defaultValue: "five" },
-            by: { type: "groupBy", of: "missing" },
+            limit: { type: "number", label: "Limit", defaultValue: "five" },
+            by: { type: "groupBy", label: "Group by", of: "missing" },
           },
         })
       );
@@ -534,11 +572,29 @@ describe("a widget declaration as startup receives it", () => {
       );
     });
 
+    it("without a label, or with a blank one, named by its key", () => {
+      // 🔴 The builders' types require a label; plain JavaScript meets this.
+      expect(
+        problemsOf(
+          valid({
+            settings: {
+              top: { type: "number", defaultValue: 5 },
+              note: { type: "text", label: "  " },
+              tone: { type: "text", label: "Tone" },
+            },
+          })
+        )
+      ).toEqual([
+        'setting "top" needs a label: the settings sheet names every setting by what its label says, never by its key',
+        'setting "note" needs a label: the settings sheet names every setting by what its label says, never by its key',
+      ]);
+    });
+
     it("over the limit, still saying so when one is malformed", () => {
       const many = Object.fromEntries(
         Array.from({ length: MAX_WIDGET_SETTINGS }, (_, index) => [
           `s${index}`,
-          { type: "number" },
+          { type: "number", label: `S${index}` },
         ])
       );
       const problems = problemsOf(valid({ settings: { ...many, broken: 7 } }));
@@ -602,6 +658,63 @@ describe("a widget declaration as startup receives it", () => {
         "empty.action"
       );
     });
+
+    it("with an action opening anything but the card's settings", () => {
+      expect(
+        problemsOf(
+          valid({ empty: { action: { label: "Open", opens: "sheet" } } })
+        )
+      ).toEqual([
+        'empty.action.opens must be "settings", the card\'s own settings, got "sheet"',
+      ]);
+    });
+
+    it.each([
+      ["a link", { link: "collections/orders" }],
+      ["a permission", { permission: "update-orders" }],
+    ])(
+      "with an action that opens the settings and also names %s",
+      (_label, extra) => {
+        // One or the other: the frame would otherwise have to pick what a click does.
+        expect(
+          problemsOf(
+            valid({
+              empty: {
+                action: { label: "Choose", opens: "settings", ...extra },
+              },
+            })
+          )
+        ).toEqual([
+          'empty.action opens the card\'s settings, so it takes no link or permission: give either { label, link, permission? } or { label, opens: "settings" }',
+        ]);
+      }
+    );
+
+    it("with an action that opens the settings of a widget that declares none", () => {
+      expect(
+        problemsOf(
+          validComponent({
+            empty: { action: { label: "Choose", opens: "settings" } },
+          })
+        )
+      ).toEqual([
+        "empty.action opens the card's settings, but the widget declares none: declare the setting it asks for, or give a link instead",
+      ]);
+    });
+  });
+
+  it("accepts an empty action that opens the card's own settings", () => {
+    // The control for the refusals above: a widget with settings, and the action alone.
+    expect(
+      problemsOf(
+        valid({
+          empty: {
+            message: "Pick what to group by",
+            action: { label: "Choose", opens: "settings" },
+          },
+        })
+      )
+    ).toEqual([]);
   });
 
   it("refuses a field a widget declaration does not have", () => {

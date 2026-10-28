@@ -67,11 +67,13 @@ export function defineAttentionItem(item: AttentionItem): AttentionItem {
  * the widgets' types are known, the same type refuses it when it compiles.
  */
 export interface DashboardContribution<W extends AnyWidget = AnyWidget> {
-  widgets: readonly W[];
+  /** Its widgets; absent for a plugin that adds only Needs attention items. */
+  widgets?: readonly W[];
   /**
    * Widgets of this plugin to place on the default dashboard. Core places
-   * them after every built-in card, in the order the site lists its plugins,
-   * while there is room; a site may turn suggestions off.
+   * them after the default's own cards, in the order the site lists its
+   * plugins, while there is room; a site may turn suggestions off. Never
+   * added to a dashboard someone has saved: the add panel offers them there.
    */
   suggest?: readonly W["id"][];
   /**
@@ -102,11 +104,24 @@ export type WidgetRef = CoreWidgetId | (string & {});
  */
 export interface DefaultLayoutCard {
   widget: WidgetRef;
+  /**
+   * The card's own id, which a reader's choices about it are kept under. A
+   * widget placed once needs none: its card is named after the widget. Each
+   * further card of a widget placed more than once must name one, and no two
+   * cards, nor a card and a widget, may share one.
+   */
+  id?: string;
   /** Columns, of twelve. */
   w?: number;
   /** Rows. */
   h?: number;
   settings?: Readonly<Record<string, unknown>>;
+  /**
+   * Left out, with no fault, when no widget has this id: a plugin's widget on a
+   * site that does not install the plugin. An entry not marked so must name a
+   * widget the install has, or startup refuses it.
+   */
+  optional?: boolean;
 }
 
 /**
@@ -149,7 +164,8 @@ export interface AdminDashboardConfig<W extends AnyWidget = AnyWidget> {
   overrides?: Partial<Record<WidgetRef, WidgetOverride>>;
   /**
    * The default dashboard, in place of core's, for everyone who has not
-   * arranged theirs. A widget added here later is offered to people who have
+   * arranged theirs: the same cards for everyone, less, for each person, those
+   * they may not see. A widget added here later is offered to people who have
    * saved a dashboard, never placed on it.
    */
   defaultLayout?: readonly (WidgetRef | DefaultLayoutCard)[];

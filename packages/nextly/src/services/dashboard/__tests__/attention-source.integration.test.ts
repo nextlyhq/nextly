@@ -26,7 +26,7 @@ import {
   RELEASES_TABLE,
 } from "../../../domains/releases/release-tables";
 import { releaseMemberKey } from "../../../domains/releases/release-member-key";
-import { refreshContentSources } from "../../../domains/widgets/collection-widgets";
+import { refreshContentSources } from "../../../domains/widgets/content-sources";
 import type { WidgetQuery } from "../../../domains/widgets/query";
 import { sourceResolver } from "../../../domains/widgets/resolved-sources";
 import { isUnavailableSourceRefusal } from "../../../domains/widgets/sources";

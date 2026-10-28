@@ -659,6 +659,23 @@ export class NextlyError extends Error {
     });
   }
 
+  /**
+   * The app is set up so nextly cannot work: a missing `config`, or a Next.js
+   * or React outside the supported ranges. The public message stays generic;
+   * what to change goes in `logMessage`, for the operator.
+   */
+  static configuration(opts: {
+    logMessage: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "CONFIGURATION_ERROR",
+      publicMessage: "Server configuration error.",
+      logMessage: opts.logMessage,
+      logContext: opts.logContext,
+    });
+  }
+
   // Accepts an optional `logMessage` override so callers (e.g. the health
   // route) can record a specific operator narrative ("Health check failed")
   // while the public message stays canonical per spec §13.8.5.
