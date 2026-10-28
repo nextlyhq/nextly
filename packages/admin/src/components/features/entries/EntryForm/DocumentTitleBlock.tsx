@@ -156,6 +156,9 @@ function titleFacts(
  * The slug, under the title: a pencil opens it for editing, Enter saves the
  * edit into the form and Esc puts it back. Read-only, it is drawn as text with
  * no pencil.
+ *
+ * Drawn from small parts (the value or its input, the pencil, the note after
+ * it), each deciding only its own case.
  */
 function DocumentSlugLine({
   slugField,
@@ -169,94 +172,174 @@ function DocumentSlugLine({
 }) {
   const form = useFormContext();
   const slugName = "name" in slugField ? (slugField.name as string) : "slug";
-  const liveValue = form?.watch(slugName) as string | undefined;
-  const errorMsg = (
-    form?.formState.errors[slugName] as { message?: string } | undefined
-  )?.message;
-
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<string>(liveValue ?? "");
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
+  const edit = useSlugEdit(slugName);
 
   if (!form) return null;
-
-  const startEdit = () => {
-    setDraft(liveValue ?? "");
-    setEditing(true);
-  };
-
-  const commit = () => {
-    form.setValue(slugName, draft, { shouldDirty: true, shouldValidate: true });
-    setEditing(false);
-  };
-
-  const cancel = () => {
-    setDraft(liveValue ?? "");
-    setEditing(false);
-  };
 
   return (
     <div className="group mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-xs text-muted-foreground">
       <span className="shrink-0 font-sans">slug:</span>
       {/* A claim arriving mid-edit closes the input: read-only wins. */}
-      {editing && !readOnly ? (
-        <input
-          ref={inputRef}
-          type="text"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={e => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              commit();
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              cancel();
-            }
-          }}
-          className="h-6 w-64 max-w-full rounded border border-input bg-background px-1.5 font-mono text-xs text-foreground transition-colors focus:border-primary focus:outline-none"
-          aria-label="Slug"
-          aria-invalid={!!errorMsg}
+      {edit.editing && !readOnly ? (
+        <SlugEditInput
+          value={edit.draft}
+          invalid={Boolean(edit.errorMsg)}
+          onChange={edit.setDraft}
+          onCommit={edit.commit}
+          onCancel={edit.cancel}
         />
       ) : (
         <code className="min-w-0 truncate whitespace-nowrap text-foreground/80">
-          {liveValue || "(unset)"}
+          {edit.liveValue || "(unset)"}
         </code>
       )}
-      {readOnly ? null : (
-        <button
-          type="button"
-          onClick={startEdit}
-          // Shown on hover, and whenever it has keyboard focus, so a keyboard
-          // user can see what they reached.
-          className={cn(
-            "shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-primary/5",
-            "group-hover:opacity-100 focus-visible:opacity-100"
-          )}
-          aria-label="Edit slug"
-        >
-          <Pencil className="h-3 w-3" aria-hidden="true" />
-        </button>
-      )}
-      {errorMsg ? (
-        <span
-          className="shrink-0 font-sans text-xs text-destructive-600"
-          role="alert"
-        >
-          {errorMsg}
-        </span>
-      ) : readOnly ? null : (
-        <PublicUrlChangeNotice
-          slugName={slugName}
-          active={warnOnChange}
-          className="shrink-0 font-sans"
-        />
-      )}
+      {readOnly ? null : <SlugEditButton onEdit={edit.startEdit} />}
+      <SlugLineNote
+        errorMsg={edit.errorMsg}
+        readOnly={readOnly}
+        slugName={slugName}
+        warnOnChange={warnOnChange}
+      />
     </div>
+  );
+}
+
+/**
+ * The slug's edit state: the form's live value and its error, whether the
+ * input is open, the draft in it, and the three moves (open, save, put back).
+ * Opening and putting back both start from the form's value, so an edit
+ * abandoned leaves nothing behind.
+ */
+function useSlugEdit(slugName: string) {
+  const form = useFormContext();
+  const liveValue = form?.watch(slugName) as string | undefined;
+  const errorMsg = (
+    form?.formState.errors[slugName] as { message?: string } | undefined
+  )?.message;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>(liveValue ?? "");
+  return {
+    liveValue,
+    errorMsg,
+    editing,
+    draft,
+    setDraft,
+    startEdit: () => {
+      setDraft(liveValue ?? "");
+      setEditing(true);
+    },
+    commit: () => {
+      form?.setValue(slugName, draft, {
+        shouldDirty: true,
+        shouldValidate: true,
+      });
+      setEditing(false);
+    },
+    cancel: () => {
+      setDraft(liveValue ?? "");
+      setEditing(false);
+    },
+  };
+}
+
+/**
+ * The slug's input, focused as it opens: Enter saves, Esc puts the value back,
+ * and leaving it saves, as Enter does.
+ */
+function SlugEditInput({
+  value,
+  invalid,
+  onChange,
+  onCommit,
+  onCancel,
+}: {
+  value: string;
+  invalid: boolean;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      onBlur={onCommit}
+      onKeyDown={e => {
+        const move = SLUG_KEYS[e.key];
+        if (move === undefined) return;
+        e.preventDefault();
+        if (move === "commit") onCommit();
+        else onCancel();
+      }}
+      className="h-6 w-64 max-w-full rounded border border-input bg-background px-1.5 font-mono text-xs text-foreground transition-colors focus:border-primary focus:outline-none"
+      aria-label="Slug"
+      aria-invalid={invalid}
+    />
+  );
+}
+
+/** The keys the slug's input answers, and what each does. */
+const SLUG_KEYS: Record<string, "commit" | "cancel" | undefined> = {
+  Enter: "commit",
+  Escape: "cancel",
+};
+
+/** The pencil that opens the slug for editing. */
+function SlugEditButton({ onEdit }: { onEdit: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onEdit}
+      // Shown on hover, and whenever it has keyboard focus, so a keyboard
+      // user can see what they reached.
+      className={cn(
+        "shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-primary/5",
+        "group-hover:opacity-100 focus-visible:opacity-100"
+      )}
+      aria-label="Edit slug"
+    >
+      <Pencil className="h-3 w-3" aria-hidden="true" />
+    </button>
+  );
+}
+
+/**
+ * What follows the slug: its error when it has one; otherwise, where it can be
+ * edited, the notice that changing a live address retires a URL.
+ */
+function SlugLineNote({
+  errorMsg,
+  readOnly,
+  slugName,
+  warnOnChange,
+}: {
+  errorMsg: string | undefined;
+  readOnly: boolean;
+  slugName: string;
+  warnOnChange: boolean;
+}) {
+  if (errorMsg) {
+    return (
+      <span
+        className="shrink-0 font-sans text-xs text-destructive-600"
+        role="alert"
+      >
+        {errorMsg}
+      </span>
+    );
+  }
+  if (readOnly) return null;
+  return (
+    <PublicUrlChangeNotice
+      slugName={slugName}
+      active={warnOnChange}
+      className="shrink-0 font-sans"
+    />
   );
 }

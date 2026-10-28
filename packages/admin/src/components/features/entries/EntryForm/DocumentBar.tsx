@@ -748,35 +748,61 @@ function DocumentBarState({
   languageCode: string | undefined;
   saveState: React.ReactNode;
 }) {
-  const {
-    enabled: localizationEnabled,
-    defaultLocale,
-    getLocale,
-  } = useLocalization();
+  // Each part decides its own case and draws nothing where it does not apply.
   return (
     <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-[18px] text-muted-foreground">
-      {hasStatus && documentStatus ? (
-        <DocumentStatusPill
-          status={documentStatus.status}
-          hasWorkingDraft={documentStatus.hasWorkingDraft}
-        />
-      ) : null}
+      <BarStatusPill documentStatus={hasStatus ? documentStatus : undefined} />
       {saveState}
-      {languageCode ? (
-        <span
-          className={LANGUAGE_CODE_CHIP}
-          title={`Editing ${getLocale(languageCode)?.label ?? languageCode}`}
-        >
-          {languageCode}
-        </span>
-      ) : null}
-      {localizationEnabled && mode === "create" ? (
-        <CreatingInLanguage
-          code={defaultLocale}
-          label={getLocale(defaultLocale)?.label ?? defaultLocale}
-        />
-      ) : null}
+      <EditingLanguageChip code={languageCode} />
+      <CreatingInLanguageNote mode={mode} />
     </div>
+  );
+}
+
+/** The status pill, where the document has a status to show. */
+function BarStatusPill({
+  documentStatus,
+}: {
+  documentStatus: DocumentBarProps["documentStatus"];
+}) {
+  if (!documentStatus) return null;
+  return (
+    <DocumentStatusPill
+      status={documentStatus.status}
+      hasWorkingDraft={documentStatus.hasWorkingDraft}
+    />
+  );
+}
+
+/**
+ * The code of the language being edited, titled with its name. Absent on the
+ * default language.
+ */
+function EditingLanguageChip({ code }: { code: string | undefined }) {
+  const { getLocale } = useLocalization();
+  if (!code) return null;
+  return (
+    <span
+      className={LANGUAGE_CODE_CHIP}
+      title={`Editing ${getLocale(code)?.label ?? code}`}
+    >
+      {code}
+    </span>
+  );
+}
+
+/**
+ * The language a new document is being created in, on a localized site only:
+ * it has no translations yet to switch between.
+ */
+function CreatingInLanguageNote({ mode }: { mode: EntryFormMode }) {
+  const { enabled, defaultLocale, getLocale } = useLocalization();
+  if (!enabled || mode !== "create") return null;
+  return (
+    <CreatingInLanguage
+      code={defaultLocale}
+      label={getLocale(defaultLocale)?.label ?? defaultLocale}
+    />
   );
 }
 
