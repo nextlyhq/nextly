@@ -13,7 +13,7 @@
  * update decides, from the phase it fails in, whether to raise the error or record it against a
  * row, and both outcomes look like "the save did not work" from outside.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 
 vi.mock("../../helpers/di", () => ({
   getSingleRegistryFromDI: vi.fn(),
@@ -216,6 +216,13 @@ import {
   getSingleRegistryFromDI,
 } from "../../helpers/di";
 import { dispatchSingles } from "../single-dispatcher";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql and mysql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql", "mysql"].map(d => loadDialectTables(d)));
+});
 
 /** Silent: these tests read the statements, not the log. */
 const logger: Logger = {

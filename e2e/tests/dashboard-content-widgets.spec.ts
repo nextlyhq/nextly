@@ -2,13 +2,14 @@
  * Recent entries and Over time in a browser, each placed by the test through the layout, set
  * to posts.
  *
- * Recent entries: a row opens its entry, and "View all" opens the collection's list holding the
- * card's rows. Over time: its Date range, the card's one quick setting, is on the card's header
+ * Recent entries: a row opens its entry, and "View all (N)", drawn while the collection holds
+ * more than the card draws, opens the collection's list holding the card's rows. Over time: its Date range, the card's one quick setting, is on the card's header
  * at each reference width, and choosing a range redraws the card over it.
  */
 import { expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { widestSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
 import { test } from "./support/test";
@@ -24,8 +25,15 @@ interface Layout {
   placements: Array<{ widgetId: string }>;
 }
 
-/** Put one card of `widgetId`, set to posts, on the reader's dashboard, full width. */
-async function place(page: Page, widgetId: string): Promise<void> {
+/**
+ * Put one card of `widgetId`, set to posts and to any other `settings`, on the reader's
+ * dashboard, as wide as it may be.
+ */
+async function place(
+  page: Page,
+  widgetId: string,
+  settings: Record<string, unknown> = {}
+): Promise<void> {
   const layout = await ok<Layout>(
     await page.request.get(`${API}/dashboard/layout`)
   );
@@ -37,9 +45,9 @@ async function place(page: Page, widgetId: string): Promise<void> {
           {
             id: `e2e-${widgetId.replace("/", "-")}`,
             widgetId,
-            width: "full",
+            ...(await widestSizeOf(page, widgetId)),
             removed: false,
-            config: { collection: "posts" },
+            config: { collection: "posts", ...settings },
           },
           ...others,
         ],
@@ -50,7 +58,7 @@ async function place(page: Page, widgetId: string): Promise<void> {
   );
 }
 
-test("a Recent entries row opens its entry, and View all opens the collection's list", async ({
+test("a Recent entries row opens its entry, and View all (N) opens the collection's list", async ({
   page,
 }) => {
   const stamp = Date.now().toString(36);
@@ -72,8 +80,20 @@ test("a Recent entries row opens its entry, and View all opens the collection's 
     new RegExp(`/admin/collections/posts/${created.item.id}$`)
   );
 
+  // A second entry, and a card drawing one row: the collection then holds more than the card
+  // draws, which is when it offers the full list.
+  await ok(
+    await page.request.post(`${API}/collections/posts/entries`, {
+      data: {
+        title: `${title} second`,
+        slug: `recent-e2e-${stamp}-2`,
+        status: "published",
+      },
+    })
+  );
+  await place(page, "core/recent-entries", { limit: 1 });
   await gotoAdmin(page, "/");
-  await card.getByRole("link", { name: "View all" }).click();
+  await card.getByRole("link", { name: /^View all/ }).click();
   await expect(page).toHaveURL(/\/admin\/collections\/posts\?sort=-updatedAt/);
   await expect(
     page.getByText(title, { exact: false }).filter({ visible: true }).first()

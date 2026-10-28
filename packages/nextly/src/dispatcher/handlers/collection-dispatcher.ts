@@ -35,9 +35,13 @@ import type { UserContext } from "../../domains/collections/services/collection-
 import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsAsFirstPushed,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
-import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
+import { applyCompanionTransition } from "../../domains/i18n/migration/held-leaving-drops";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -83,12 +87,17 @@ import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  isLeavingSettingsRefusal,
+  leavingSettingsStep,
+} from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -188,8 +197,8 @@ function formatToastSummary(summary: {
 /**
  * Both directions of the all-locales lifecycle, as one handler.
  *
- * i18n M7 publishes every language of an entry at once; the takedown is its
- * twin. They differ in exactly two things — the service method and the success
+ * Publishing every language of an entry at once has a twin, the takedown.
+ * They differ in exactly two things — the service method and the success
  * message — and everything else about them is the same identity forwarding and
  * the same attestation. Written twice, they were a 40-line clone whose halves
  * could drift in which credentials they passed, and the drift would show up as
@@ -197,12 +206,10 @@ function formatToastSummary(summary: {
  *
  * The parameters are forwarded rather than defaulted for reasons that apply to
  * both: `userRoles` so role-based access evaluates against the real user;
- * `routeAuthorized` to attest that the route middleware already ran the
- * RBAC/code-access gate, so the entry service skips only that redundant
- * re-check while field-level write access still runs — never inferred from a
- * userId; and `authenticatedScope` so a scoped API key's own
- * `publish-`/`unpublish-` grant is judged, since the route authorized this POST
- * only as an `update`.
+ * `routeAuthorized` false, since the route admitted this POST on the
+ * `publish-`/`unpublish-` grant or on update, and attests no gate the service
+ * could skip; and `authenticatedScope` so a scoped API key's own grant and the
+ * rule are judged by the service, in each language the change puts live.
  */
 function allLocalesLifecycle(
   method: "publishAllLocales" | "unpublishAllLocales",
@@ -219,7 +226,7 @@ function allLocalesLifecycle(
         entryId,
         actor: readAuthenticatedActor(),
         ...callerUser(),
-        routeAuthorized: true,
+        routeAuthorized: false,
         authenticatedScope: readAuthenticatedScope(),
       });
       const entry = unwrapServiceResult(result, { collectionName, entryId });
@@ -616,7 +623,13 @@ const COLLECTIONS_METHODS: Record<
       desired.collections[p.collectionName] = {
         slug: p.collectionName,
         tableName,
-        fields: fields as DesiredCollection["fields"],
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          entity: collection,
+          requestedLocalized: previewLocalized,
+        }) as DesiredCollection["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: collection.status === true,
@@ -779,25 +792,6 @@ const COLLECTIONS_METHODS: Record<
       // candidates for the new collection being saved.
       const desired = await buildFullDesiredSchema();
 
-      // Splice in the user's changes for THIS collection (overwrites
-      // any registry entry for the same slug).
-      desired.collections[p.collectionName] = {
-        slug: p.collectionName,
-        tableName,
-        fields: fields as DesiredCollection["fields"],
-        // Mirror previewSchemaChanges so apply diffs against the same
-        // desired schema preview classified.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff omits translatable
-        // columns from the main table (they live in the companion `_locales`
-        // table, provisioned separately below). Uses the request's flag so a
-        // toggle applies immediately; without this the apply re-adds translatable
-        // columns to the main table.
-        localized: isLocalized,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-      };
-
       // Resolve adapter for the pipeline construction.
       const adapter = getAdapterFromDI();
       if (!adapter) {
@@ -896,6 +890,36 @@ const COLLECTIONS_METHODS: Record<
         builtBy: "collection",
       });
 
+      // A Required or Unique field leaving translation is pushed without its setting first, and
+      // the setting is pushed once the companion transition has copied its values in, before its
+      // companion column is dropped.
+      const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        renamed: companionRename,
+      });
+
+      // Splice in the user's changes for THIS collection (overwrites
+      // any registry entry for the same slug).
+      desired.collections[p.collectionName] = {
+        slug: p.collectionName,
+        tableName,
+        fields: (settingsDeferred ?? fields) as DesiredCollection["fields"],
+        // Mirror previewSchemaChanges so apply diffs against the same
+        // desired schema preview classified.
+        status: collection.status === true,
+        // i18n: carry the localized flag so the push diff omits translatable
+        // columns from the main table (they live in the companion `_locales`
+        // table, provisioned separately below). Uses the request's flag so a
+        // toggle applies immediately; without this the apply re-adds translatable
+        // columns to the main table.
+        localized: isLocalized,
+        // Authored in the Schema Builder: this is the Builder's own save path.
+        builderOwned: true,
+      };
+
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await archiveFieldsLeavingTranslation({
@@ -974,6 +998,7 @@ const COLLECTIONS_METHODS: Record<
             joinedBefore: movedOnto(result, tableName),
             // A translated field the admin renamed: the dialog's answer naming the companion.
             renamed,
+            holdLeavingDrops: settingsDeferred !== undefined,
             // What this database holds now, so a re-apply after a part-applied one finishes it.
             ...(await liveCompanionShape(adapter, {
               tableName,
@@ -983,42 +1008,48 @@ const COLLECTIONS_METHODS: Record<
               companionExists,
             })),
           });
-          // A disable archives non-default translations, so ensure the archive
-          // table exists first. Run each statement individually (executeQuery is
-          // single-statement on some drivers, e.g. sqlite).
-          if (plan.needsArchive) {
-            await ensureI18nArchive(adapter, dialect);
-          }
-          // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
-          // would make a half-finished localization ENABLE look like success, because the planner
-          // cannot tell that state from an orphan repair. A loud failure is the safer outcome.
-          for (const stmt of plan.statements) {
-            await adapter.executeQuery(stmt);
-          }
-
-          // The transition record describes a companion that no longer exists, so it stops being true
-          // the moment the disable succeeds. Left behind, it would refuse the next enable's real
-          // source locale — the check that protects a live transition would block a legitimate one.
-          if (plan.companionDropped) {
-            // The other half of "this companion is gone": readiness remembers only that one
-            // exists.
-            const { forgetCompanionReadiness } = await import(
-              "../../domains/i18n/runtime/companion-readiness"
-            );
-            forgetCompanionReadiness(adapter, `${tableName}_locales`);
-            const { resolveTransitionStore } = await import(
-              "../../domains/i18n/migration/transition-recorder"
-            );
-            const { forgetI18nTransition } = await import(
-              "../../domains/i18n/migration/transition-state"
-            );
-            await forgetI18nTransition(
-              await resolveTransitionStore(adapter),
-              "collection",
-              String(p.collectionName)
-            );
-          }
+          // The settings the first push left off, once the shared columns hold the default
+          // language's values, and only then the leaving fields' companion columns dropped. A new
+          // desired schema rather than an edit of the first: the pipeline keeps the last one it
+          // applied, by reference, to skip a push that changes nothing.
+          await applyCompanionTransition({
+            adapter,
+            plan,
+            settleLeaving: settingsDeferred
+              ? leavingSettingsStep({
+                  adapter,
+                  entity: String(p.collectionName),
+                  tableName,
+                  builtBy: "collection",
+                  oldFields,
+                  newFields,
+                  renamed: companionRename,
+                  push: () =>
+                    apply(
+                      {
+                        ...desired,
+                        collections: {
+                          ...desired.collections,
+                          [p.collectionName]: {
+                            ...desired.collections[p.collectionName],
+                            fields: fields as DesiredCollection["fields"],
+                          },
+                        },
+                      },
+                      "ui",
+                      { promptChannel: "auto" }
+                    ),
+                })
+              : undefined,
+            kind: "collection",
+            slug: String(p.collectionName),
+            tableName,
+          });
         } catch (err) {
+          // A refused setting is the dialog's answer to the admin, naming the field, and nothing
+          // has been dropped by then, so it is passed on as it is rather than as a companion out
+          // of step.
+          if (isLeavingSettingsRefusal(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           // Fatal to correctness (translatable values have nowhere to live), but
           // the main-table apply already committed — surface loudly rather than
@@ -1414,10 +1445,11 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). A caller admitted on publish or unpublish
+          // alone is judged by the service. Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1537,10 +1569,10 @@ const COLLECTIONS_METHODS: Record<
         data: b.data,
         actor: readAuthenticatedActor(),
         ...callerUser(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Where the route admitted the caller on update, attest it so the
+        // handler skips only that redundant re-check (field-level write access
+        // still runs). Never inferred from userId.
+        routeAuthorized: routeAdmittedUpdate(),
         // The route authorized `update` against the key's scope, never
         // publish/unpublish — carry the scope so each per-id transition is
         // judged on the key's OWN grants.
@@ -1595,10 +1627,10 @@ const COLLECTIONS_METHODS: Record<
           data: b.data,
           actor: readAuthenticatedActor(),
           ...callerUser(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Where the route admitted the caller on update, attest it so the
+          // handler skips only that redundant re-check (field-level write
+          // access still runs). Never inferred from userId.
+          routeAuthorized: routeAdmittedUpdate(),
           // The route authorized `update` against the key's scope, never
           // publish/unpublish — carry the scope so the collection-level gate and
           // each per-row transition are judged on the key's OWN grants.

@@ -27,7 +27,11 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { CollectionAccessControl } from "../../shared/types/access";
-import { routeVerdictFor, runWithAccessMemo } from "../access/request-memo";
+import {
+  rememberRouteVerdict,
+  routeVerdictFor,
+  runWithAccessMemo,
+} from "../access/request-memo";
 import { currentRuleLanguage } from "../access/rule-language";
 import type { GrantedPermission } from "../authenticated-scope";
 
@@ -328,6 +332,13 @@ describe("a session whose access cannot be read", () => {
 
 describe("a read whose rule answers a filter, at a route that applies it", () => {
   const OWN = { author: { equals: "editor" } };
+  /** The question a route keeps the editor's read of posts under, now. */
+  const editorsRead = () => ({
+    userId: "editor",
+    slug: POSTS,
+    action: "read",
+    language: currentRuleLanguage(),
+  });
 
   it("lets the caller through and keeps the filter for the read it authorized", async () => {
     registered.rbac = serviceFor("service", () => OWN as unknown as boolean);
@@ -347,6 +358,28 @@ describe("a read whose rule answers a filter, at a route that applies it", () =>
       }),
     }));
     expect(said(result)).toBe("A");
+    expect(kept).toEqual({ filter: OWN });
+  });
+
+  it("keeps every entry at a route that applies a filter, where the rule allows", async () => {
+    registered.rbac = serviceFor("service", () => true);
+    const kept = await runWithAccessMemo(async () => {
+      await authorizeCaller(session("editor"), "read", POSTS, "all", true);
+      return routeVerdictFor(editorsRead());
+    });
+    expect(kept).toEqual({ all: true });
+  });
+
+  it("keeps nothing at a route that applies no filter, so it leaves another route's filter as it was", async () => {
+    // A list kept the filter; a route reading through no filter, whose rule
+    // answers `true` when asked afresh, must not replace it with every entry.
+    registered.rbac = serviceFor("service", () => true);
+    const kept = await runWithAccessMemo(async () => {
+      rememberRouteVerdict(editorsRead(), { filter: OWN });
+      const result = await authorizeCaller(session("editor"), "read", POSTS);
+      expect(said(result)).toBe("A");
+      return routeVerdictFor(editorsRead());
+    });
     expect(kept).toEqual({ filter: OWN });
   });
 

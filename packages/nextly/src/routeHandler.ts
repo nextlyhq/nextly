@@ -23,6 +23,9 @@ import {
   requirePermission,
   requireAnyPermission,
   requireCollectionAccess,
+  requireCollectionWriteAccess,
+  requireLifecycleAccess,
+  admittedActionOf,
   createJsonErrorResponse,
   isErrorResponse,
   type AuthContext,
@@ -136,6 +139,7 @@ import {
   appLocalization,
   withCurrentLanguages,
 } from "./domains/i18n/configured-locales";
+import { hasLifecycle } from "./domains/versions/recorded-status";
 import { collectionDefaultForReader } from "./domains/widgets/collection-cards";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
@@ -160,6 +164,7 @@ import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
 } from "./lib/date-formatting";
+import { writeGateFor } from "./lib/immutable-system-fields";
 import { createCorsMiddleware } from "./middleware/cors";
 import { defaultRestCallerReaders } from "./middleware/rest-callers";
 import {
@@ -874,6 +879,81 @@ const READING_PERMISSIONS: RefusalTarget = LIST_READ_GATES.permissions.names;
  *
  * @returns Auth result — either `{ user }` on success or `ErrorResponse` on failure.
  */
+/**
+ * The write routes a caller may reach on update, or on publish or unpublish
+ * alone ({@link requireCollectionWriteAccess}): the service judges a write
+ * that changes only the status by that gate, and any other by update.
+ */
+const STATUS_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "updateEntry",
+  "bulkUpdateEntries",
+  "bulkUpdateByQuery",
+  "updateSingleDocument",
+]);
+
+/**
+ * The action a status write route's request asks, read only once every
+ * action has refused it, so the refusal names that action: the gate the
+ * services judge the write by ({@link writeGateFor}). A bulk route carries
+ * the write as its body's `data`. The body is read from a copy, and a body or
+ * lookup that cannot be read is answered as update, since only the refusal's
+ * words depend on it.
+ */
+function actionAskedBy(
+  req: Request,
+  method: string,
+  entity: "collection" | "single",
+  slug: string
+): () => Promise<"update" | "publish" | "unpublish"> {
+  return async () => {
+    try {
+      const body: unknown = JSON.parse(await req.clone().text());
+      const write =
+        method === "bulkUpdateEntries" || method === "bulkUpdateByQuery"
+          ? (body as { data?: unknown } | null)?.data
+          : body;
+      if (typeof write !== "object" || write === null || Array.isArray(write)) {
+        return "update";
+      }
+      // The entity's lifecycle, from the record the services read it from.
+      const lifecycle = async () =>
+        hasLifecycle(
+          entity === "single"
+            ? await container
+                .get<{
+                  getSingleBySlug(slug: string): Promise<unknown>;
+                }>("singleRegistryService")
+                .getSingleBySlug(slug)
+            : await container
+                .get<{
+                  getCollectionBySlug(slug: string): Promise<unknown>;
+                }>("collectionRegistryService")
+                .getCollectionBySlug(slug)
+        );
+      return await writeGateFor(
+        write as Record<string, unknown>,
+        entity,
+        lifecycle
+      );
+    } catch {
+      return "update";
+    }
+  };
+}
+
+/**
+ * The routes that change only the status of every language, each admitted on
+ * its own action's grant rather than update; the service asks that action's
+ * rule in each language the change puts live.
+ */
+const LIFECYCLE_ROUTE_ACTIONS: Readonly<
+  Record<string, "publish" | "unpublish">
+> = {
+  publishAllLocales: "publish",
+  unpublishAllLocales: "unpublish",
+  publishAllSingleLocales: "publish",
+};
+
 async function resolveAuthorization(
   req: Request,
   service: string,
@@ -888,9 +968,8 @@ async function resolveAuthorization(
   if (service === "collections") {
     if (COLLECTION_ENTRY_METHODS.has(method)) {
       // Entry operations → {action}-{collectionSlug}
-      const action = getActionFromOperation(operation);
       const slug = routeParams?.collectionName || "";
-      return requireCollectionAccess(req, action, slug, {
+      const route = {
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
@@ -898,7 +977,25 @@ async function resolveAuthorization(
         // filtered read, which applies a read rule's filter; every other entry
         // route refuses a caller whose rule answers one.
         appliesReadFilter: FILTERED_READ_METHODS.has(method),
-      });
+      };
+      if (STATUS_WRITE_METHODS.has(method)) {
+        return requireCollectionWriteAccess(
+          req,
+          slug,
+          route,
+          actionAskedBy(req, method, "collection", slug)
+        );
+      }
+      const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
+      if (lifecycle) {
+        return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      return requireCollectionAccess(
+        req,
+        getActionFromOperation(operation),
+        slug,
+        route
+      );
     }
     if (method === "getCollection") {
       const slug = routeParams?.collectionName || "";
@@ -935,12 +1032,25 @@ async function resolveAuthorization(
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
-      return requireCollectionAccess(req, action, slug, {
+      const route = {
         method,
         params: routeParams ?? {},
         // A Single is its one document, named by its slug.
         namesOne: true,
-      });
+      };
+      if (STATUS_WRITE_METHODS.has(method)) {
+        return requireCollectionWriteAccess(
+          req,
+          slug,
+          route,
+          actionAskedBy(req, method, "single", slug)
+        );
+      }
+      const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
+      if (lifecycle) {
+        return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      return requireCollectionAccess(req, action, slug, route);
     }
     if (method === "getSingleSchema") {
       const slug = routeParams?.slug || "";
@@ -1842,12 +1952,10 @@ async function serveServiceRequest(
 const NO_WIDGETS: WidgetAudience = {
   visible: [],
   declared: new Set(),
-  generated: [],
   holds: () => false,
   heldActionGates: new Set(),
   token: visibilityToken([], []),
   // No reader and no cards, so no collection a card could name.
-  registeredCollections: undefined,
   readableCollections: new Set(),
 };
 
@@ -1865,7 +1973,7 @@ function actionsForAudience<
   W extends {
     id: string;
     actions?: readonly WidgetAction[];
-    empty?: { message?: string; action?: { requiredPermission?: string } };
+    empty?: { message?: string; action?: object };
   },
 >(widget: W, audience: WidgetAudience): W {
   const withheldEmpty = emptyForAudience(widget.empty, audience);
@@ -1889,11 +1997,20 @@ function actionsForAudience<
  * A declared widget's empty state with its action withheld from a reader who
  * may not take it; the same object when there is nothing to withhold.
  */
-function emptyForAudience<
-  E extends { message?: string; action?: { requiredPermission?: string } },
->(empty: E | undefined, audience: WidgetAudience): E | undefined {
+function emptyForAudience<E extends { message?: string; action?: object }>(
+  empty: E | undefined,
+  audience: WidgetAudience
+): E | undefined {
   if (empty?.action === undefined) return empty;
-  if (audience.holds(empty.action.requiredPermission)) return empty;
+  // A link's permission, when it names one; an action opening the card's own settings has none,
+  // since the admin offers it only where the reader can change that card's settings.
+  const { action } = empty;
+  const gate =
+    "requiredPermission" in action &&
+    typeof action.requiredPermission === "string"
+      ? action.requiredPermission
+      : undefined;
+  if (audience.holds(gate)) return empty;
   const { action: _withheld, ...rest } = empty;
   return rest as E;
 }
@@ -2102,17 +2219,11 @@ async function buildAdminMeta(
   // is a whole declaration -- a `text` widget's prose, an `actions` widget's
   // links -- so shipping every one and leaving the browser to hide the gated
   // cards hands a reader the contents of a card they may not see.
-  const widgets = [
-    ...publishableWidgets()
-      .filter(widget => audience.declared.has(widget.id))
-      .map(widget =>
-        collectionDefaultForReader(
-          actionsForAudience(widget, audience),
-          readable
-        )
-      ),
-    ...audience.generated,
-  ];
+  const widgets = publishableWidgets()
+    .filter(widget => audience.declared.has(widget.id))
+    .map(widget =>
+      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+    );
   if (widgets.length > 0) {
     workspace.widgets = widgets;
   }
@@ -2287,14 +2398,14 @@ async function handleAdminMetaWorkspaceRequest(
   // 🔴 Which widgets this reader may be told about is decided HERE rather than
   // inside `buildAdminMeta`, and by the SAME implementation the layout endpoint
   // places and offers with, so the two cannot disagree about what a reader may
-  // see. A declaration is its whole content -- a generated card's id, title and
-  // query all name a COLLECTION, a `text` widget carries its prose -- so
-  // publishing the whole set and leaving the browser to hide the gated ones
-  // would disclose every collection in the install and the body of every gated
-  // card to any authenticated caller. That the admin would not draw the card
+  // see. A declaration is its whole content -- a Collection setting's default
+  // names a COLLECTION, a `text` widget carries its prose -- so publishing the
+  // whole set and leaving the browser to hide the gated ones would disclose
+  // collections the reader may not read and the body of every gated card to
+  // any authenticated caller. That the admin would not draw the card
   // is not a control; the payload is JSON, and reading it is the bypass.
   //
-  // `widgetAudience` re-derives the generated cards per request, which is why
+  // `widgetAudience` refreshes the content sources per request, which is why
   // it runs on this route and not in the shared builder: the PUBLIC branding
   // handler deliberately does not initialise services, and refreshing there
   // asked an empty container for the collection registry on every anonymous
@@ -2882,6 +2993,11 @@ async function requestCallerFor(
       : {}),
     actor: Object.freeze(actorFromAuthContext(authorizedUser)),
     ...(roles ? { roles: Object.freeze([...roles]) } : {}),
+    // The action a write route admitted the caller on, where it accepts
+    // several, so the dispatch attests only an update the route ran.
+    ...(admittedActionOf(authorizedUser)
+      ? { routeAction: admittedActionOf(authorizedUser) }
+      : {}),
   });
 }
 

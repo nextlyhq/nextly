@@ -16,8 +16,8 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // Before any admin page: the generated component map must hold every
-  // dashboard widget's component, as in an app's admin.
+  // Before any admin page, as in an app's admin: in development, the generated
+  // component map is written again when it falls behind the config.
   await checkAdminComponents({ config, registeredComponentPaths });
   return (
     <AdminShell>

@@ -42,6 +42,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { recordTransitionEvents } from "../../content-events/write-event";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import {
   fieldGroupWriteAccessOf,
@@ -123,6 +124,7 @@ import {
 } from "./promote-gate";
 import {
   checkSingleAccess,
+  singleGrantRefusal,
   type SingleQueryService,
 } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -230,6 +232,9 @@ export class SinglePublishAllService extends BaseService {
     slug: string,
     options: PublishAllSingleLocalesOptions = {}
   ): Promise<SingleResult<PublishAllSingleResult>> {
+    // Refused first when the Single is removed from code, before any hook or
+    // read of its document, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("single", slug);
     this.logger.debug("Publishing all languages of a Single", { slug });
 
     // A refusal inside the transaction (the languages going live changed under
@@ -331,12 +336,12 @@ export class SinglePublishAllService extends BaseService {
   /**
    * Resolve what this publish would act on, or the answer that ends it early.
    *
-   * Three things end it before any authorization to publish: no such Single, no
-   * document to publish, and a caller who may not update this Single at all.
-   * A fourth ends it successfully — a Single with no draft/published lifecycle
-   * has nothing to publish, and that answer is produced HERE, before the
-   * publish permission is asked for, so a caller holding update but not publish
-   * is not refused for a call that would change nothing.
+   * Two things end it before any authorization to publish: no such Single, and
+   * no document to publish. A third ends it successfully — a Single with no
+   * draft/published lifecycle has nothing to publish, and that answer is
+   * produced HERE, to a caller who may update it, before the publish
+   * permission is asked for, so a caller holding update but not publish is
+   * not refused for a call that would change nothing.
    */
   private async resolvePublishTarget(
     slug: string,
@@ -379,25 +384,43 @@ export class SinglePublishAllService extends BaseService {
       };
     }
 
-    const accessDenied = await checkSingleAccess({
-      slug,
-      operation: "update",
-      user: options.user,
-      overrideAccess: options.overrideAccess,
-      // The route ran the `update` gate already (against an API key's scope
-      // where applicable), so skip only that redundant RBAC re-check; the
-      // publish gate still runs.
-      routeAuthorized: options.routeAuthorized,
-      rbacAccessControlService: this.rbacAccessControlService,
-      authenticatedScope: options.authenticatedScope,
-      logger: this.logger,
-    });
-    if (accessDenied) return { result: accessDenied };
+    // A Single with a lifecycle is asked the publish grant here, before any
+    // work only a publish needs; its rule is asked below, once the languages
+    // going live are known. A caller without the grant is refused as the full
+    // gate words it.
+    const refused =
+      (singleMeta as { status?: boolean }).status === true
+        ? await singleGrantRefusal({
+            slug,
+            operation: "publish",
+            user: options.user,
+            overrideAccess: options.overrideAccess,
+            rbacAccessControlService: this.rbacAccessControlService,
+            authenticatedScope: options.authenticatedScope,
+            logger: this.logger,
+          })
+        : null;
+    if (refused) return { result: refused };
 
     const { hasMainStatus, companion, companionPublishable } =
       await this.resolveLifecycle(slug, singleMeta);
 
     if (!hasMainStatus && !companionPublishable) {
+      // Nothing moves, so this is no publish: the caller's update gate decides
+      // whether they are told so. A Single with a lifecycle asks no update
+      // gate, since publishing every language changes only its status and the
+      // publish gate judges that.
+      const accessDenied = await checkSingleAccess({
+        slug,
+        operation: "update",
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+        routeAuthorized: options.routeAuthorized,
+        rbacAccessControlService: this.rbacAccessControlService,
+        authenticatedScope: options.authenticatedScope,
+        logger: this.logger,
+      });
+      if (accessDenied) return { result: accessDenied };
       return {
         result: {
           success: true,
@@ -473,7 +496,8 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * Check `publish-{slug}` on top of the update already granted, and decide
+   * Check `publish-{slug}`, the whole of what publishing every language needs
+   * since it changes only the status, and decide
    * whether the Single's stored publish rule has to be re-judged under the lock.
    *
    * Checked directly rather than through a transition, since this publishes

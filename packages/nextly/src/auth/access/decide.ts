@@ -11,9 +11,8 @@
  * - a super-admin passes every collection and Single rule;
  * - everyone else needs the permission for the action, AND, where the target
  *   declares a rule for the action, a rule that answers exactly `true`. A
- *   publish or an unpublish is judged on top of update: it needs the update
- *   permission as well as its own, and where the target declares an update
- *   rule, that rule must answer `true` too;
+ *   publish or an unpublish is judged by its own permission and its own rule,
+ *   as any other action is;
  * - a collection's read, update, delete, publish or unpublish rule may answer
  *   a filter instead of `true`, which allows only the entries the filter
  *   matches. The decision then refuses the action for every entry and names
@@ -89,8 +88,6 @@ export type RefusalReason =
   | "no-permission"
   | "rule-refused"
   | "rule-threw"
-  | "update-rule-refused"
-  | "update-rule-threw"
   // A rule answered a filter that is not well formed.
   | "rule-filter-malformed"
   // A create rule or a Single's rule answered a filter, which only a
@@ -211,21 +208,6 @@ function ruleRefusal(
     : "rule-refused";
 }
 
-/**
- * Whether the outcome of the rule `target` declares for `action` lets the
- * action through to the next rule: it allowed every entry, answered a filter
- * it may answer, or declared nothing. The rule a publish or an unpublish is
- * judged on top of, update's, is asked only then, by the decision and by any
- * way in that asks the rules itself, so a refused change never runs it.
- */
-export function ruleLetsThrough(
-  outcome: RuleOutcome,
-  target: AccessTarget,
-  action: AccessAction
-): boolean {
-  return ruleRefusal(outcome, target, action) === null;
-}
-
 /** The filter a rule's outcome answered, or `undefined` for none. */
 function filterOf(outcome: RuleOutcome | undefined): RuleFilter | undefined {
   if (!outcome?.declared || "threw" in outcome) return undefined;
@@ -234,27 +216,19 @@ function filterOf(outcome: RuleOutcome | undefined): RuleFilter | undefined {
 }
 
 /**
- * The decision once every rule read has let the action through: allowed for
- * every entry, or only for the entries every filter the rules answered
- * matches. A filter from a rule that may not answer one refuses.
+ * The decision once the action's rule has let it through: allowed for every
+ * entry, or only for the entries the filter it answered matches. A filter
+ * from a rule that may not answer one refuses.
  */
-function withFilters(
-  action: AccessAction,
+function withFilter(
   target: AccessTarget,
-  answered: readonly { action: AccessAction; filter: RuleFilter | undefined }[]
+  action: AccessAction,
+  filter: RuleFilter | undefined
 ): Decision {
-  const filters: RuleFilter[] = [];
-  for (const { action: ruled, filter } of answered) {
-    if (filter === undefined) continue;
-    if (!mayAnswerFilter(target.kind, ruled)) {
-      return refuse("rule-filter-misplaced");
-    }
-    filters.push(filter);
+  if (filter === undefined) return ALLOW;
+  if (!mayAnswerFilter(target.kind, action)) {
+    return refuse("rule-filter-misplaced");
   }
-  if (filters.length === 0) return ALLOW;
-  // A publish's own rule and the update rule it is judged on top of both
-  // limit it, so an entry must match both filters.
-  const filter = filters.length === 1 ? filters[0] : { and: filters };
   return { allowed: false, reason: "only-matching-entries", filter };
 }
 
@@ -262,13 +236,11 @@ const isLifecycle = (action: AccessAction) =>
   action === "publish" || action === "unpublish";
 
 /**
- * What the target's rules answered for one question: the action's own rule,
- * and, for a publish or an unpublish its own rule let through, the update
- * rule as well. A rule the judgement never reaches is never asked.
+ * What the target's rules answered for one question: the action's own rule.
+ * A rule the judgement never reaches is never asked.
  */
 export interface RuleOutcomes {
   readonly action: RuleOutcome;
-  readonly update?: RuleOutcome;
 }
 
 /**
@@ -301,10 +273,6 @@ function permissionRefusal(
   if (!holdsPermission(actor, action, target.slug)) {
     return refuse("no-permission");
   }
-  // A publish or an unpublish changes the entry, so it is an update first.
-  if (isLifecycle(action) && !holdsPermission(actor, "update", target.slug)) {
-    return refuse("no-permission");
-  }
   return null;
 }
 
@@ -323,13 +291,7 @@ export async function askRules(
   if (actor.kind === "system" || beforeRules(actor, action, target)) {
     return null;
   }
-  const outcome = await askRule(actor, action, target);
-  if (actor.kind === "principal" || !isLifecycle(action)) {
-    return { action: outcome };
-  }
-  // The update rule is read only when the action's own rule lets it through.
-  if (!ruleLetsThrough(outcome, target, action)) return { action: outcome };
-  return { action: outcome, update: await askRule(actor, "update", target) };
+  return { action: await askRule(actor, action, target) };
 }
 
 /**
@@ -358,53 +320,7 @@ export function judge(
   }
   const refusal = ruleRefusal(outcomes.action, target, action);
   if (refusal) return refuse(refusal);
-  // A plugin's person is judged by the action's own rule alone.
-  if (actor.kind === "principal") {
-    return withFilters(action, target, [
-      { action, filter: filterOf(outcomes.action) },
-    ]);
-  }
-  const update = isLifecycle(action)
-    ? updateRuleRefusal(action, target, outcomes.update)
-    : null;
-  if (update) return update;
-  return withFilters(action, target, [
-    { action, filter: filterOf(outcomes.action) },
-    { action: "update", filter: filterOf(outcomes.update) },
-  ]);
-}
-
-/**
- * The refusal from the update rule a publish or an unpublish is judged on top
- * of, or `null` when it lets the change through. Asked only once the action's
- * own rule has let it through, so it must have been asked by then.
- */
-function updateRuleRefusal(
-  action: AccessAction,
-  target: AccessTarget,
-  outcome: RuleOutcome | undefined
-): Decision | null {
-  // A change judged without its update rule could be one that rule refuses.
-  if (!outcome) {
-    throw NextlyError.internal({
-      logContext: {
-        reason: "access-update-rule-not-asked",
-        action,
-        target: target.slug,
-      },
-    });
-  }
-  const update = ruleRefusal(outcome, target, "update");
-  // Kept apart, so the log tells a failing update rule from a refusing one.
-  if (update === "rule-threw") return refuse("update-rule-threw");
-  if (
-    update === "rule-filter-malformed" ||
-    update === "rule-filter-misplaced"
-  ) {
-    return refuse(update);
-  }
-  if (update) return refuse("update-rule-refused");
-  return null;
+  return withFilter(target, action, filterOf(outcomes.action));
 }
 
 export async function decide(

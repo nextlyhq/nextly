@@ -18,11 +18,76 @@ export { definePlugin } from "nextly";
 
 /**
  * @experimental `defineWidget` — declares a dashboard widget once: its
- * settings, its data and how it draws. A widget drawn by its own component is
- * handed `WidgetProps<typeof widget>`; the types are here and in `./widgets`.
+ * settings, its data, its size and how it draws. A widget drawn by its own
+ * component is handed `WidgetProps<typeof widget>`; the types are here and in
+ * `./widgets`. Its `size` is a `WidgetSizeDeclaration` of `GridSize`s, `{ w, h }`
+ * on a grid twelve columns wide, the one way a card's size is stated. The
+ * types its other fields are written in (`view`, `access` and its
+ * `WidgetAccessGate`, `preview`, `summary`) come from here too, and so do
+ * `WidgetInterval` and `WidgetRange`, a series read's interval and range, so
+ * an author annotating one imports it from where `defineWidget` came from.
  */
 export { defineWidget } from "nextly";
-export type { WidgetData, WidgetProps, WidgetRenderSize } from "nextly";
+/**
+ * @experimental `setting` and `option` — a widget's settings, written with the
+ * collections' field builders: `setting.select({ label, options: [option("US
+ * dollar", "usd")], defaultValue: "usd" })` takes the config `select()` takes
+ * in a collection, less the `name` the setting's key gives, with a `label`
+ * required. Beside them, the dashboard's pickers: `setting.collection`,
+ * `setting.fieldOf`, `setting.dateRange` and the list card's `filter`,
+ * `sort`, `groupBy` and `fields`. `option` is the collections' own.
+ */
+export { option, setting } from "nextly";
+export type {
+  CoreView,
+  GridSize,
+  WidgetAccess,
+  WidgetAccessGate,
+  WidgetData,
+  WidgetInterval,
+  WidgetPreviewCase,
+  WidgetProps,
+  WidgetRange,
+  WidgetRenderSize,
+  WidgetSizeDeclaration,
+  WidgetSummary,
+  WidgetView,
+} from "nextly";
+
+/**
+ * @experimental The number and change formatters a dashboard card's figures are
+ * written with, and the colour a chart slot is drawn in, for a widget's own view
+ * and for server code alike:
+ *
+ * - `formatWidgetNumber`: a count, total or chart value, as drawn ("1.2k" at a
+ *   small tier, "2,000+" for a floor) and as heard ("2,000 or more").
+ * - `formatWidgetChange`: a change against an earlier period, with its arrow
+ *   and sign, never its colour alone.
+ * - `widgetChartColour`: the token a chart slot is drawn in
+ *   (`var(--nx-chart-N)`), the five colours core's charts use in light and dark.
+ *
+ * Here, at the server-safe root, rather than beside the kit's components in
+ * `./admin`: every module of the admin is a client module, which a Server
+ * Component cannot call. Each is `@nextlyhq/ui`'s own, from its server-safe
+ * entries, so a figure reads the same wherever it is written. The locale is
+ * the `locale` option's, `en-US` when none is given.
+ */
+export {
+  chartColour as widgetChartColour,
+  formatChange as formatWidgetChange,
+  formatCount as formatWidgetNumber,
+  type ChartSlot as WidgetChartSlot,
+} from "@nextlyhq/ui/format";
+
+/**
+ * @experimental `defineAttentionItem` — declares one line of the Needs
+ * attention card, which a plugin lists under `contributes.dashboard.attention`:
+ * a label, a count taken as the person asking, and where it leads. Who sees it
+ * is a permission, or the collections it counts. `AttentionItem` and
+ * `AttentionCount` are the types it is written in.
+ */
+export { defineAttentionItem } from "nextly";
+export type { AttentionCount, AttentionItem } from "nextly";
 
 /**
  * @experimental `collectionDraftSplit` — whether a collection stores a working
@@ -397,8 +462,13 @@ export type {
  *   `ctx.config.plugins`), `PluginEmailSettings` (`ctx.config.email`),
  *   `PluginUserService`, `PluginMediaService`, `PluginEmailService`,
  *   `PluginVersionsService` (the methods `ctx.services.users`, `media`,
- *   `email` and `versions` expose) and `PluginCollectionTransaction` (what
- *   `ctx.services.collections.withTransaction` hands its work). `FrozenCopy`
+ *   `email` and `versions` expose), `PluginCollectionTransaction` (what
+ *   `ctx.services.collections.withTransaction` hands its work), and the
+ *   version pins of `ctx.services.versions.pins`: `PluginVersionPins`,
+ *   `PluginVersionPinHolder`, `PluginVersionPin`, `PluginPinOptions`,
+ *   `PluginPinTransaction`, `VersionPinHolderDefinition` (what
+ *   `registerHolder` takes) and `VersionRef` (the document a pin is on).
+ *   `FrozenCopy`
  *   is the readonly-all-the-way-down type `PluginConfig` is built from, and
  *   `FrozenValue` the type of each of its properties, both exported so a
  *   plugin's declaration files can name them. See STABILITY.md.
@@ -414,6 +484,13 @@ export type {
   PluginEmailService,
   PluginVersionsService,
   PluginCollectionTransaction,
+  PluginVersionPins,
+  PluginVersionPinHolder,
+  PluginVersionPin,
+  PluginPinOptions,
+  PluginPinTransaction,
+  VersionPinHolderDefinition,
+  VersionRef,
 } from "nextly";
 
 /**
@@ -724,7 +801,7 @@ export type {
  * so this is the only supported spelling.
  *
  * Every contract a published shape NAMES travels with it, the way core's own
- * root export does: `WidgetDefinition.defaultHeight` is a `WidgetHeight`, and a
+ * root export does: `WidgetDefinition.size` is a `WidgetSizeDeclaration`, and a
  * `WidgetSource` is built out of `WidgetSourceField`, `WidgetSourceKind` and
  * `WidgetOp` — a public property whose type has no public name can be inferred
  * but never annotated.
@@ -755,8 +832,6 @@ export type {
  * grants instead of the roles of whoever minted it.
  */
 export {
-  WIDGET_SIZES,
-  WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
   WIDGET_OPS,
   WIDGET_SOURCE_KINDS,
@@ -773,8 +848,6 @@ export {
   type WidgetAction,
   type WidgetSetting,
   type WidgetQuery,
-  type WidgetSize,
-  type WidgetHeight,
   type WidgetArchetype,
   type DataWidgetArchetype,
   type QuerylessWidgetArchetype,

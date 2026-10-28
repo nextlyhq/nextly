@@ -21,7 +21,7 @@ import { rememberRouteVerdict } from "./access/request-memo";
 import { holdsPermissionAnswer } from "./access/route-gate-adapters";
 import { readOf, type FilteredRead } from "./access/rule-answer";
 import { currentRuleLanguage } from "./access/rule-language";
-import { scopeGrants } from "./authenticated-scope";
+import { apiKeyScopeFrom, scopeGrants } from "./authenticated-scope";
 import {
   codeAccessAllows,
   getRBACService,
@@ -132,6 +132,11 @@ export async function entityReadFor(
   const kept = rememberRouteVerdict(
     {
       userId: caller.userId,
+      // A key's verdict is kept under the scope its rule is told, as a
+      // route keeps it, so the read the key's request then runs finds it.
+      ...(caller.authMethod === "api-key"
+        ? { scope: apiKeyScopeFrom(caller) }
+        : {}),
       slug,
       action: "read",
       language: currentRuleLanguage(),

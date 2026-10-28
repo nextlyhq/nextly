@@ -23,6 +23,7 @@ import { inArray, type AnyColumn } from "drizzle-orm";
 
 import {
   answerForRefusal,
+  holdsGrant,
   singleGateVerdict,
 } from "../../../auth/access/gate-adapters";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
@@ -100,6 +101,7 @@ import {
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { recordWriteEvent } from "../../content-events/write-event";
+import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
@@ -375,6 +377,27 @@ export async function checkSingleAccess(params: {
     // Named by the service's caller, so its slug is the site's own.
     message: await refusalMessageFor(operation, slug, "all", { named: true }),
   };
+}
+
+/**
+ * The refusal for a caller who certainly lacks a Single's lifecycle grant
+ * ({@link holdsGrant}), worded by the full gate, or `null` to go on: asked
+ * before the work only a publish or an unpublish needs, its rule being asked
+ * once the languages going live are known.
+ */
+export async function singleGrantRefusal(
+  params: Omit<Parameters<typeof checkSingleAccess>[0], "operation"> & {
+    operation: "publish" | "unpublish";
+  }
+): Promise<SingleResult | null> {
+  const held = await holdsGrant({
+    action: params.operation,
+    slug: params.slug,
+    user: params.user,
+    overrideAccess: params.overrideAccess,
+    authenticatedScope: params.authenticatedScope,
+  });
+  return held ? null : checkSingleAccess({ ...params, routeAuthorized: false });
 }
 
 // ============================================================
@@ -992,7 +1015,12 @@ export class SingleQueryService extends BaseService {
     slug: string,
     options: GetSingleOptions = {}
   ): Promise<SingleResult> {
-    this.logger.debug("Getting Single document", { slug, options });
+    // Not the options themselves: they carry the request, whose headers hold
+    // the caller's credentials.
+    this.logger.debug("Getting Single document", {
+      slug,
+      locale: options.locale,
+    });
 
     // ONE instant for this read. Both visibility checks below resolve releases
     // against it, so a release becoming due between them cannot admit the row
@@ -1083,6 +1111,12 @@ export class SingleQueryService extends BaseService {
       // when the Single is versioned so a first-read materialization still
       // starts a history (the mutation path records its own first version).
       if (!doc) {
+        // A Single removed from code is not given a document by a read:
+        // creating one is a write, which it refuses. It answers as a Single
+        // holding no document does.
+        if (await entityRemovedFromCode("single", slug)) {
+          return singleAbsentResult(slug);
+        }
         this.logger.info("Auto-creating Single document", { slug });
         doc = await this.createDefaultDocumentOnce(singleMeta);
       }

@@ -15,9 +15,11 @@ import type {
   WidgetResult,
 } from "@admin/types/dashboard/widgets";
 
+import { sizeChartsInTests } from "../../charts/__tests__/chart-env";
 import { CardTierContext } from "../../frame/tier";
 import { barsBody } from "../bars";
 
+sizeChartsInTests();
 afterEach(() => cleanup());
 
 const widget = {
@@ -39,7 +41,8 @@ function groups(count: number, truncated?: boolean): WidgetResult {
   };
 }
 
-function drawAt(tier: SizeTier, result: WidgetResult) {
+/** Draws the card's chart at `tier`, and waits for the drawing, which loads lazily. */
+async function drawAt(tier: SizeTier, result: WidgetResult): Promise<void> {
   const outcome = barsBody(result, widget);
   if (!outcome.ok || !("node" in outcome) || !outcome.node) {
     throw new Error("the bars drew nothing");
@@ -49,6 +52,7 @@ function drawAt(tier: SizeTier, result: WidgetResult) {
       {outcome.node}
     </CardTierContext.Provider>
   );
+  await screen.findByTestId("chart-drawing");
 }
 
 /** The groups the chart draws, read inside the picture: the frame's table repeats them. */
@@ -62,35 +66,35 @@ describe("a breakdown card's groups at each tier", () => {
     ["small", 3],
     ["medium", 5],
     ["large", 8],
-  ])("draws the %s tier's %i largest groups", (tier, drawn) => {
-    drawAt(tier, groups(10, true));
+  ])("draws the %s tier's %i largest groups", async (tier, drawn) => {
+    await drawAt(tier, groups(10, true));
     // 🔴 The largest ones, in order: a slice from the wrong end, or every group, fails here.
     expect(drawnGroups()).toEqual(
       Array.from({ length: drawn }, (_, i) => `Author ${i + 1}`)
     );
   });
 
-  it("says how many more groups there are when the tier draws fewer than the answer holds", () => {
+  it("says how many more groups there are when the tier draws fewer than the answer holds", async () => {
     // Fetched for a large card (a whole answer of 6 groups), drawn small: three are left out,
     // and the answer says how many.
-    drawAt("small", groups(6));
+    await drawAt("small", groups(6));
     expect(screen.getByText("3 more groups")).toBeInTheDocument();
   });
 
-  it("says more groups exist when the server left some out", () => {
-    drawAt("large", groups(8, true));
+  it("says more groups exist when the server left some out", async () => {
+    await drawAt("large", groups(8, true));
     expect(
       screen.getByText("More groups exist than are shown.")
     ).toBeInTheDocument();
   });
 
-  it("says nothing more when every group is drawn", () => {
-    drawAt("large", groups(6));
+  it("says nothing more when every group is drawn", async () => {
+    await drawAt("large", groups(6));
     expect(screen.queryByText(/more group/i)).not.toBeInTheDocument();
   });
 
-  it("counts every group the answer holds in its words, and the ones left out under the bars", () => {
-    drawAt("small", groups(6));
+  it("counts every group the answer holds in its words, and the ones left out under the bars", async () => {
+    await drawAt("small", groups(6));
     expect(
       within(
         screen.getByRole("group", { name: /Use the arrow keys/ })
@@ -101,11 +105,11 @@ describe("a breakdown card's groups at each tier", () => {
 });
 
 describe("which groups a tier cuts", () => {
-  it("cuts after ordering, so a tie at the edge keeps the first label", () => {
+  it("cuts after ordering, so a tie at the edge keeps the first label", async () => {
     // Authors 3 and 4 tie for the last place a small card draws, and the server lists 4 first.
     // Ordered by count and then label BEFORE the cut, the card draws Author 3, and its table
     // and its "1 more group" agree on which group was left out.
-    drawAt("small", {
+    await drawAt("small", {
       op: "groupBy",
       buckets: [
         { value: "Author 1", count: 100 },

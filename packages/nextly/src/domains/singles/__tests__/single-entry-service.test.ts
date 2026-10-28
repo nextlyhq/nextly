@@ -1174,9 +1174,12 @@ describe("SingleEntryService", () => {
       const ctx = lifecycleCtx("publish");
       ctx.adapter.selectOne.mockResolvedValue(null);
 
+      // The write also edits a field, so the update gate admits it and the
+      // publish is refused inside the transaction. A status alone would be
+      // refused by the publish gate before any default is built.
       const result = await ctx.service.update(
         "site-settings",
-        { status: "published" },
+        { status: "published", siteName: "S2" },
         { user: { id: "u1" } }
       );
 

@@ -23,16 +23,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Column, SQL, Table } from "drizzle-orm";
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 
+import { loadedDialectHolding } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors";
-import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
-import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
-import { emailDeliveriesSqlite } from "../../schemas/email-deliveries/sqlite";
-import { emailQueueMysql } from "../../schemas/email-queue/mysql";
-import { emailQueuePg } from "../../schemas/email-queue/postgres";
-import { emailQueueSqlite } from "../../schemas/email-queue/sqlite";
-import { emailQueueRecipientsMysql } from "../../schemas/email-queue-recipients/mysql";
-import { emailQueueRecipientsPg } from "../../schemas/email-queue-recipients/postgres";
-import { emailQueueRecipientsSqlite } from "../../schemas/email-queue-recipients/sqlite";
 import {
   type RowLockStrength,
   rowLockStrength,
@@ -142,28 +134,15 @@ const BATCH = 500;
 export function queueTablesBeside(
   deliveries: unknown
 ): EmailQueueTables | undefined {
-  if (deliveries === emailDeliveriesPg) {
-    return {
-      dialect: "postgresql",
-      queue: emailQueuePg,
-      recipients: emailQueueRecipientsPg,
-    };
-  }
-  if (deliveries === emailDeliveriesMysql) {
-    return {
-      dialect: "mysql",
-      queue: emailQueueMysql,
-      recipients: emailQueueRecipientsMysql,
-    };
-  }
-  if (deliveries === emailDeliveriesSqlite) {
-    return {
-      dialect: "sqlite",
-      queue: emailQueueSqlite,
-      recipients: emailQueueRecipientsSqlite,
-    };
-  }
-  return undefined;
+  // The loaded dialect that holds this delivery table, so only that
+  // dialect's files are imported; `createAdapter` loads them.
+  const loaded = loadedDialectHolding(deliveries);
+  if (!loaded || loaded.tables.emailDeliveries !== deliveries) return undefined;
+  return {
+    dialect: loaded.dialect,
+    queue: loaded.tables.emailQueue,
+    recipients: loaded.tables.emailQueueRecipients,
+  };
 }
 
 /**
