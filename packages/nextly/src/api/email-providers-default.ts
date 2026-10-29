@@ -57,7 +57,9 @@ export const PATCH = withErrorHandler(
     // mount instead of the catch-all dispatcher, so without the actor every
     // provider mutation through them recorded nothing -- the trail would have
     // covered one supported REST surface and not the other.
-    const auth = await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailProviders.makeDefault.anyOf]);
+    const auth = await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.emailProviders.makeDefault.anyOf,
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();
