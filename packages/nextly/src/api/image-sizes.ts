@@ -30,7 +30,10 @@ import { z } from "zod";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { SYSTEM_READ_POLICY, SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { ImageSizeService } from "../services/image-size";
@@ -93,7 +96,9 @@ const updateImageSizeSchema = z.object({
  * `respondList` for every list endpoint.
  */
 export const listImageSizes = withErrorHandler(async (req: Request) => {
-  const authResult = await requireAnyPermission(req, [...SYSTEM_READ_POLICY.settings.read.anyOf]);
+  const authResult = await requireAnyPermission(req, [
+    ...SYSTEM_READ_POLICY.settings.read.anyOf,
+  ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   const service = await getImageSizeService();
@@ -116,7 +121,9 @@ export const listImageSizes = withErrorHandler(async (req: Request) => {
  */
 export const getImageSizeById = withErrorHandler(
   async (req: Request, id: string) => {
-    const authResult = await requireAnyPermission(req, [...SYSTEM_READ_POLICY.settings.read.anyOf]);
+    const authResult = await requireAnyPermission(req, [
+      ...SYSTEM_READ_POLICY.settings.read.anyOf,
+    ]);
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
     const service = await getImageSizeService();
@@ -136,7 +143,9 @@ export const getImageSizeById = withErrorHandler(
  * POST /api/image-sizes - Create a new image size
  */
 export const createImageSize = withErrorHandler(async (req: Request) => {
-  const authResult = await requireAnyPermission(req, [...SYSTEM_WRITE_POLICY.imageSizes.create.anyOf]);
+  const authResult = await requireAnyPermission(req, [
+    ...SYSTEM_WRITE_POLICY.imageSizes.create.anyOf,
+  ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   const text = await req.text();
@@ -195,7 +204,9 @@ export const createImageSize = withErrorHandler(async (req: Request) => {
  */
 export const updateImageSize = withErrorHandler(
   async (req: Request, id: string) => {
-    const authResult = await requireAnyPermission(req, [...SYSTEM_WRITE_POLICY.imageSizes.update.anyOf]);
+    const authResult = await requireAnyPermission(req, [
+      ...SYSTEM_WRITE_POLICY.imageSizes.update.anyOf,
+    ]);
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
     const text = await req.text();
@@ -231,7 +242,9 @@ export const updateImageSize = withErrorHandler(
  */
 export const deleteImageSize = withErrorHandler(
   async (req: Request, id: string) => {
-    const authResult = await requireAnyPermission(req, [...SYSTEM_WRITE_POLICY.imageSizes.delete.anyOf]);
+    const authResult = await requireAnyPermission(req, [
+      ...SYSTEM_WRITE_POLICY.imageSizes.delete.anyOf,
+    ]);
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
     const service = await getImageSizeService();
@@ -247,7 +260,9 @@ export const deleteImageSize = withErrorHandler(
  * GET /api/image-sizes/regeneration-status - Check regeneration status
  */
 export const getRegenerationStatus = withErrorHandler(async (req: Request) => {
-  const authResult = await requireAnyPermission(req, [...SYSTEM_READ_POLICY.settings.read.anyOf]);
+  const authResult = await requireAnyPermission(req, [
+    ...SYSTEM_READ_POLICY.settings.read.anyOf,
+  ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   await getCachedNextly();
@@ -263,7 +278,9 @@ export const getRegenerationStatus = withErrorHandler(async (req: Request) => {
  * POST /api/image-sizes/regenerate - Process a batch of images
  */
 export const regenerateBatch = withErrorHandler(async (req: Request) => {
-  const authResult = await requireAnyPermission(req, [...SYSTEM_WRITE_POLICY.imageSizes.regenerate.anyOf]);
+  const authResult = await requireAnyPermission(req, [
+    ...SYSTEM_WRITE_POLICY.imageSizes.regenerate.anyOf,
+  ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   const text = await req.text();

@@ -48,6 +48,7 @@ import {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
+import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import {
   moveWebhookRecording,
   renameEntity,
@@ -830,8 +831,12 @@ export class SingleRegistryService extends BaseRegistryService<
       //
       // What is swept, and what is deliberately kept, is for
       // `deleteEntityRegistryRow` to say.
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+      };
       const count = await this.adapter.transaction(async tx => {
-        return deleteEntityRegistryRow(tx, "single", slug);
+        return deleteEntityRegistryRow(tx, "single", slug, tables);
       });
 
       if (count === 0) {

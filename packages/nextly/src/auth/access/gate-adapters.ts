@@ -57,7 +57,7 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { allowsSome, mayAnswerFilter, type RuleFilter } from "./rule-answer";
+import { allowsSome, readFilterIn, type RuleFilter } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
@@ -152,10 +152,8 @@ function readFilterOf(
   action: AccessOperation,
   outcome: RuleOutcome
 ): RuleFilter | undefined {
-  if (action !== "read" || !mayAnswerFilter(target.kind, action)) return;
   if (!outcome.declared || "threw" in outcome) return;
-  const answer = outcomeAnswer(outcome);
-  return answer.kind === "filter" ? answer.filter : undefined;
+  return readFilterIn(target.kind, action, outcomeAnswer(outcome));
 }
 
 /**

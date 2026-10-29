@@ -227,6 +227,27 @@ export async function readableDocumentIds(
 }
 
 /**
+ * The documents among `entryIds` this caller may READ, each with the columns
+ * `columns` names beside its id: a title to show beside a document the caller
+ * chose to keep. Derived from the same read as {@link readableDocumentIds}, so
+ * a document shown here is exactly one that read would call readable.
+ */
+export async function readableDocumentColumns(
+  collection: string,
+  entryIds: readonly string[],
+  caller: ReadCaller,
+  columns: readonly string[]
+): Promise<Map<string, Record<string, unknown>>> {
+  return documentsReturnedBy(
+    collection,
+    entryIds,
+    undefined,
+    { overrideAccess: false, caller },
+    columns
+  );
+}
+
+/**
  * Which of `entryIds` still EXIST in `collection`, regardless of who is asking.
  *
  * 🔴 `overrideAccess: true`, and the distinction it buys is the only reason this
