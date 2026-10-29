@@ -109,7 +109,10 @@ export function PermissionLevelRow({
       )}
       data-slot="permission-level-row"
     >
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-6">
+      {/* Side by side only from `xl`: below it, beside the settings menu, the
+          levels and the switch leave the name too little room, so the name
+          sits above them instead. */}
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between xl:gap-6">
         <RowHeading
           row={row}
           custom={level === "custom"}
@@ -117,7 +120,7 @@ export function PermissionLevelRow({
           givers={givers}
         />
 
-        <div className="flex flex-col gap-3 md:shrink-0 md:flex-row md:items-center md:gap-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6 xl:shrink-0">
           <RadioGroupPrimitive.Root
             aria-label={`${name} level`}
             orientation="horizontal"
@@ -204,11 +207,23 @@ function RowHeading({
     <div className="flex min-w-0 flex-1 flex-col gap-1">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-foreground">{row.label}</span>
-        {custom && <Badge variant="warning">Custom</Badge>}
-        {givers.length > 0 && (
-          <Badge variant="outline">from {listed(givers)}</Badge>
+        {/* A badge keeps its words on one line; a narrow row wraps the
+            badges, not the words inside one. */}
+        {custom && (
+          <Badge variant="warning" className="whitespace-nowrap">
+            Custom
+          </Badge>
         )}
-        {narrowed && <Badge variant="outline">Narrowed in code</Badge>}
+        {givers.length > 0 && (
+          <Badge variant="outline" className="whitespace-nowrap">
+            from {listed(givers)}
+          </Badge>
+        )}
+        {narrowed && (
+          <Badge variant="outline" className="whitespace-nowrap">
+            Narrowed in code
+          </Badge>
+        )}
       </div>
       <span className="font-mono text-xs break-all text-muted-foreground">
         {row.slug}
