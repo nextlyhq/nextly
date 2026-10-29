@@ -37,7 +37,7 @@ import {
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { WidgetQuery } from "../domains/widgets/query";
 import { getWidget } from "../domains/widgets/registry";
-import type { WidgetSlot } from "../domains/widgets/result";
+import { answerHasNothing, type WidgetSlot } from "../domains/widgets/result";
 import { withSiteOverride } from "../domains/widgets/site-rules";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
@@ -173,6 +173,11 @@ export interface CardBatch {
    * source, and the query is valid for it. Throws the refusal a query gets.
    */
   check: (raw: unknown) => Promise<WidgetQuery>;
+  /**
+   * Asked by the layout read, ahead of the dashboard's own batch, so the read
+   * services each card is bound to say so (`ReadServiceBinding.readAhead`).
+   */
+  readAhead?: boolean;
 }
 
 /**
@@ -436,9 +441,10 @@ type CardVerdict =
 /**
  * Which of a card's rules is being judged, kept up to date by `judgeCard` for whoever bounds it:
  * a timeout names the stage that was running, the widget's access (its predicate, or core's own
- * check of the collections it reads) or its `shows`.
+ * check of the collections it reads) or its `shows`; or, for a card answered whole to learn
+ * whether it is empty (`cardAnswersEmpty`), its `load`.
  */
-type JudgingStage = { at: "access" | "shows" };
+type JudgingStage = { at: "access" | "shows" | "load" };
 
 async function judgeCard(
   declared: DeclaredWidget,
@@ -474,6 +480,7 @@ async function judgeCard(
       signal,
       now,
       ...(collections === undefined ? {} : { collections }),
+      ...(batch.readAhead === true ? { readAhead: true } : {}),
     }),
   };
   const { shows } = declaration;
@@ -577,6 +584,46 @@ export async function cardIsShownTo(
       asked.signal
     );
     return verdict.kind === "shown" || verdict.kind === "needs-setting";
+  } catch (error) {
+    // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
+    if (!asked.signal.aborted) logNotJudged(declared, error);
+    return false;
+  }
+}
+
+/**
+ * Whether this person's card answers empty by its own `isEmpty`, for a widget that hides while
+ * empty: asked by the layout read, so the dashboard is drawn without the card from its first
+ * paint, rather than drawn with it and then taken out, which moves every card after it.
+ *
+ * The card's own answer (`answerCard`, its rules, then its `load`, then its `isEmpty`), within the
+ * card's budget, under `signal` as the batch's. Empty when its `isEmpty` holds, or when the core
+ * display that draws it would find nothing in it (`answerHasNothing`); anything else is not empty: refused, a setting missing, not shown, a `load` that throws or does not settle in time.
+ * The card is then placed, and says for itself what it has.
+ *
+ * @param asked as `cardIsShownTo` is handed it: no browser asks, so the card is answered at the
+ * placement's own size, at the unstated tier (`cardSize`).
+ */
+export async function cardAnswersEmpty(
+  declared: DeclaredWidget,
+  placement: WidgetPlacement,
+  batch: CardBatch,
+  asked: CardInput
+): Promise<boolean> {
+  const size = cardSize(declared, { placement, preview: false });
+  try {
+    const answer = await withinSlotBudget(
+      signal =>
+        answerCard(declared, placement, batch, { ...asked, signal }, size),
+      () => judgingTimedOut(declared, { at: "load" }),
+      asked.signal
+    );
+    // Empty by the widget's own `isEmpty`, or, drawn by a core display, by the
+    // display's own rule, as the card itself would draw it.
+    return (
+      "empty" in answer &&
+      (answer.empty === true || answerHasNothing(answer.result))
+    );
   } catch (error) {
     // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
     if (!asked.signal.aborted) logNotJudged(declared, error);

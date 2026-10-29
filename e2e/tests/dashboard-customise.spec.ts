@@ -138,7 +138,9 @@ test("entering by keyboard lands on the bar, and Tab never reaches a card's own 
   page,
 }) => {
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   // The positive control: at rest the cards DO hold links of their own, so a
   // Tab walk that meets none in customise mode has measured a fence rather
   // than an empty dashboard.
@@ -234,7 +236,9 @@ test("going Back with unsaved changes asks, and Keep Editing stays", async ({
   await expect(page).not.toHaveURL(DASHBOARD_PATH);
   await page.evaluate(() => window.history.pushState(null, "", "/admin"));
   await expect(page).toHaveURL(DASHBOARD_PATH);
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
 
   await customize(page);
   await moveFirstCardLater(page);
@@ -283,7 +287,9 @@ test("reloading with unsaved changes gets the browser's own prompt", async ({
 for (const theme of ["light", "dark"] as Theme[]) {
   test(`customise mode passes axe at 1440 (${theme})`, async ({ page }) => {
     await gotoAdmin(page, "/", theme);
-    await expect(page.locator(CELLS).first()).toBeVisible();
+    await expect(
+      page.locator(CELLS).filter({ visible: true }).first()
+    ).toBeVisible();
     await customize(page);
     // With a change made, so the unsaved-changes marker is scanned too.
     await moveFirstCardLater(page);
@@ -319,7 +325,9 @@ test("the add panel adds three cards in one visit, each said and ringed, and clo
   page,
 }) => {
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   await customize(page);
   // Three cards out of the draft first, so there is something to put back on any site.
   for (let i = 0; i < 3; i += 1) {
@@ -366,7 +374,9 @@ for (const theme of ["light", "dark"] as Theme[]) {
       // Customise mode is offered at every width, so it is entered at the one measured.
       await page.setViewportSize(viewport);
       await gotoAdmin(page, "/", theme);
-      await expect(page.locator(CELLS).first()).toBeVisible();
+      await expect(
+        page.locator(CELLS).filter({ visible: true }).first()
+      ).toBeVisible();
       await customize(page);
       // One card removed, so the Removed group and its Add back are scanned too.
       await page
@@ -445,7 +455,9 @@ test("a pointer drag shows a line, moves nothing else, and puts the card down af
   // stopped rather than after the one aimed at.
   await page.setViewportSize({ width: 1440, height: 2400 });
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).nth(2)).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).nth(2)
+  ).toBeVisible();
   await customize(page);
   // Mixed widths: the first card that may change width put at the narrowest its bounds allow
   // (the menu lists them narrowest first), so rows hold cards of different spans whatever that
@@ -511,7 +523,9 @@ test("a keyboard drag moves the card, and its handle keeps focus in view below t
   page,
 }) => {
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).nth(2)).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).nth(2)
+  ).toBeVisible();
   await customize(page);
   const before = await cardOrder(page);
   const held = before[0];
@@ -551,7 +565,9 @@ test.describe("on a phone, with touch", () => {
     page,
   }) => {
     await gotoAdmin(page, "/");
-    await expect(page.locator(CELLS).nth(1)).toBeVisible();
+    await expect(
+      page.locator(CELLS).filter({ visible: true }).nth(1)
+    ).toBeVisible();
     await page.getByTestId("dashboard-edit-begin").tap();
     await expect(bar(page)).toBeVisible();
     await expect(page.getByTestId("widget-drag-handle")).toHaveCount(0);
@@ -605,7 +621,9 @@ test.describe("on a phone, with touch", () => {
       page,
     }) => {
       await gotoAdmin(page, "/", theme);
-      await expect(page.locator(CELLS).first()).toBeVisible();
+      await expect(
+        page.locator(CELLS).filter({ visible: true }).first()
+      ).toBeVisible();
       await customize(page);
       await moveFirstCardLater(page);
       // Cancel leading, Save trailing, Add widget below them.

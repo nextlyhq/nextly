@@ -153,10 +153,13 @@ export interface WidgetCardProps {
   /** A stats card's cell labels, which its loading skeleton draws under each held value. */
   skeletonCells?: readonly string[];
   /**
-   * The widget takes its card off the dashboard while its answer is empty, rather than saying
-   * so; customise mode still shows it, marked, so it can be moved or removed.
+   * The widget hides while empty and the layout read found this card empty, so the card is off
+   * the dashboard for this visit; customise mode still shows it, marked, so it can be moved or
+   * removed. Decided before the first paint and held (`hidden-while-empty`), never from an answer
+   * that arrives after it: a card that left, or joined, the page then would move every card after
+   * it. A card of such a widget not taken off draws its own state, its empty one included.
    */
-  hidesWhenEmpty?: boolean;
+  hiddenWhileEmpty?: boolean;
   /**
    * The widget's own `shows` said no for this person: the card is taken off the dashboard as one
    * hidden while empty is, and customise mode shows it marked, so it can be removed.
@@ -234,17 +237,16 @@ function bodyClassName(
 
 /**
  * Whether the card is off the dashboard and why: its widget's own `shows` said no for this person,
- * or it hides when empty and is. Taken out at rest, and shown marked with that reason while
- * customising, so it can still be moved or removed.
+ * or it hides while empty and was found so when the layout was read (`hiddenWhileEmpty`). Taken
+ * out at rest, and shown marked with that reason while customising, so it can still be moved or
+ * removed.
  */
 function hiddenFlags(
-  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown">,
-  state: CardState,
+  props: Pick<WidgetCardProps, "hiddenWhileEmpty" | "notShown">,
   customizing: boolean
 ) {
   const notShown = props.notShown === true;
-  const hidden =
-    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+  const hidden = notShown || props.hiddenWhileEmpty === true;
   return {
     hiddenEmpty: hidden && !customizing,
     markedHidden: hidden && customizing,
@@ -260,7 +262,7 @@ function hiddenFlags(
  * its quick control is out of reach, how its body is marked, and whether its footer link shows.
  */
 function frameFlags(
-  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown" | "link">,
+  props: Pick<WidgetCardProps, "hiddenWhileEmpty" | "notShown" | "link">,
   state: CardState,
   modes: {
     customizing: boolean;
@@ -270,7 +272,7 @@ function frameFlags(
 ) {
   const { customizing } = modes;
   const refreshing = modes.refreshing || state.kind === "refreshing";
-  const hidden = hiddenFlags(props, state, customizing);
+  const hidden = hiddenFlags(props, customizing);
   return {
     ...hidden,
     // A quick control changes the question; before the first answer there is no question on

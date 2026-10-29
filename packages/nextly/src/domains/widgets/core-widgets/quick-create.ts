@@ -16,10 +16,10 @@ export const quickCreateWidget = {
     "One click to an empty entry form, for the collections this reader may create in.",
   archetype: "custom",
   // From a third, where its row of create buttons wraps, to the full width.
-  // Four rows tall by default, the height of Needs attention, whose row of the
-  // default dashboard it shares.
+  // Three rows tall by default, the height of Needs attention, whose row of
+  // the default dashboard it shares.
   size: {
-    default: { w: 4, h: 4 },
+    default: { w: 4, h: 3 },
     min: { w: 4, h: 2 },
     max: { w: 12, h: 4 },
   },

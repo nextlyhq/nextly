@@ -40,8 +40,8 @@ import { setDefaultLayoutPlan } from "../default-layout";
  * five rows tall, the height whose body holds five rows, but four beside Team, whose row it shares.
  */
 const AGREED = [
-  ["core/needs-attention", "8x4"],
-  ["core/quick-create", "4x4"],
+  ["core/needs-attention", "8x3"],
+  ["core/quick-create", "4x3"],
   ["core/recently-edited", "6x5"],
   ["core/recent-activity", "6x5"],
   ["core/content", "12x4"],
@@ -165,15 +165,18 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(await defaultFor(admin)).toEqual(without());
 
-      // No grants: nothing to create, count or list, and neither the team nor releases.
+      // No grants: nothing to create, count or list, and neither the team nor releases. Needs
+      // attention is placed for everyone: it is the card, not the layout, that leaves the
+      // dashboard while nothing waits for its reader.
       expect(await defaultFor(editor)).toEqual([
+        ["core/needs-attention", "8x3"],
         ["core/recently-edited", "6x5"],
         ["core/recent-activity", "6x5"],
       ]);
 
       // One collection to read and none to write in: Needs attention and Content, never Create.
       expect(await defaultFor(readerId)).toEqual([
-        ["core/needs-attention", "8x4"],
+        ["core/needs-attention", "8x3"],
         ["core/recently-edited", "6x5"],
         ["core/recent-activity", "6x5"],
         ["core/content", "12x4"],

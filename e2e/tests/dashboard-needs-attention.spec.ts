@@ -1,88 +1,97 @@
 /**
- * Needs attention's links open exactly what the card counted.
+ * Needs your attention draws the open work waiting for its reader, and only
+ * while something is.
  *
- * A published post is edited without publishing, so it holds unpublished
- * changes. The card's link for posts opens the posts list under the same
- * condition the card counted with, and that list holds the post, with as
- * many entries as the card said.
+ * A stopped and an overdue release are left as the release runner would leave
+ * them. The card then draws a critical row for each, with its reason, and each
+ * Review opens Releases' Needs attention tab narrowed to that row's part. A
+ * reader who may not read releases has nothing waiting, so their dashboard
+ * draws no card at all, rather than one that says all is clear.
  *
- * Other specs leave their own pending changes in the shared database, so the
- * spec reads the card's number back rather than assuming one, and finds its own
- * post by a stamp.
+ * Other specs leave their own stopped and overdue releases in the shared
+ * database, so the spec finds its rows by label and reads no exact count.
  */
 import { expect } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { ok } from "./support/releases-api";
-import { test } from "./support/test";
+import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
+import {
+  leaveReleasesAsTheRunnerWould,
+  type RunnerOutcome,
+} from "./support/release-states";
+import { cancel, post, release, schedule } from "./support/releases-api";
+import { test } from "./support/test";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ lock: [LOCK.dashboard] });
+test.describe.configure({ lock: [LOCK.dashboard, LOCK.releases] });
 
-const API = "/admin/api";
 const CARD = "core/needs-attention";
+const DAY = 24 * 60 * 60 * 1000;
 
-test("the card's link opens the posts it counted", async ({ page }) => {
+test("rows for stopped and overdue releases, each with its reason and Review; no card for a reader of no releases", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
   const stamp = Date.now().toString(36);
-  const { item } = await ok<{ item: { id: string } }>(
-    await page.request.post(`${API}/collections/posts/entries`, {
-      data: {
-        title: `Needs attention e2e ${stamp}`,
-        slug: `needs-attention-e2e-${stamp}`,
-        status: "published",
-      },
-    })
-  );
-  // No status named, on a published post: the edit is held as unpublished
-  // changes and the live post stays as it was.
-  await ok(
-    await page.request.patch(`${API}/collections/posts/entries/${item.id}`, {
-      data: { title: `Needs attention e2e ${stamp} (edited)` },
-    })
-  );
+  const postId = await post(page, stamp);
+  const seeded: Array<{ id: string; outcome: RunnerOutcome }> = [];
+  for (const outcome of ["overdue", "stopped"] as const) {
+    const id = await release(page, `Attention e2e ${outcome} ${stamp}`, postId);
+    await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+    seeded.push({ id, outcome });
+  }
+  await leaveReleasesAsTheRunnerWould(page, seeded);
 
-  await gotoAdmin(page, "");
-  const card = page.getByTestId(`widget-cell-${CARD}`);
-  await expect(card).toBeVisible();
+  try {
+    await gotoAdmin(page, "");
+    const card = page.getByTestId(`widget-cell-${CARD}`);
+    await expect(card).toBeVisible();
+    const row = (label: string) =>
+      card.getByTestId("needs-attention-item").filter({ hasText: label });
 
-  // The posts link: the kind's own when posts hold all of it, else the posts
-  // part's. Either way its address names the condition the card counted with.
-  const postsLink = card
-    .getByRole("link")
-    .filter({ hasText: /Posts|Unpublished changes/ })
-    .and(card.locator('a[href*="/admin/collections/posts?"]'))
-    .first();
-  await expect(postsLink).toBeVisible();
-  const href = (await postsLink.getAttribute("href")) ?? "";
-  const where = new URLSearchParams(href.split("?")[1]).get("where");
-  expect(JSON.parse(where ?? "null")).toEqual({ _pendingChange: true });
-  // The number the card showed for that link, as it is spoken: a row link says it in text kept
-  // for assistive technology, a small card's inline link in its label.
-  const spoken =
-    (await postsLink.getAttribute("aria-label")) ??
-    (await postsLink.locator(".sr-only").first().textContent()) ??
-    "";
-  const counted = Number(/:\s*(\d+)/.exec(spoken)?.[1]);
-  expect(counted).toBeGreaterThan(0);
+    const stopped = row("Releases that stopped");
+    await expect(stopped).toContainText("A scheduled publish failed.");
+    await expect(stopped.getByTestId("needs-attention-critical")).toBeVisible();
+    const overdue = row("Overdue releases");
+    await expect(overdue).toContainText("Still scheduled after its time.");
+    await expect(overdue.getByTestId("needs-attention-critical")).toBeVisible();
+    // Nothing on the card dismisses an item.
+    await expect(
+      card.getByRole("button", { name: /dismiss|mark/i })
+    ).toHaveCount(0);
 
-  await postsLink.click();
-  await expect(page).toHaveURL(/\/admin\/collections\/posts\?/);
-  // The post in the list. Visible matches only: the page also holds hidden
-  // copies of each title, which a plain text match finds first.
-  await expect(
-    page
-      .getByText(`Needs attention e2e ${stamp}`, { exact: false })
-      .filter({ visible: true })
-      .first()
-  ).toBeVisible();
+    await overdue
+      .getByRole("link", { name: "Review overdue releases" })
+      .click();
+    await expect(page).toHaveURL(
+      /\/admin\/releases\?tab=attention&reason=overdue$/
+    );
 
-  // The list the link opened holds as many entries as the card counted: the
-  // same condition, read as the same person, in the same language.
-  const listed = await ok<{ meta: { total: number } }>(
-    await page.request.get(
-      `${API}/collections/posts/entries?status=all&limit=1&where=${encodeURIComponent(where ?? "")}`
-    )
-  );
-  expect(listed.meta.total).toBe(counted);
+    // A reader of posts only: no release kind is theirs, and no plugin item
+    // is declared, so nothing waits for them and the card is not drawn.
+    const reader = await signInAsLimitedUser(
+      browser,
+      page.request,
+      baseURL ?? "",
+      ["read-posts"]
+    );
+    try {
+      const theirs = await reader.context.newPage();
+      await gotoAdmin(theirs, "");
+      // Their dashboard has drawn: a card every reader is shown is there.
+      await expect(
+        theirs.getByTestId("widget-cell-core/recently-edited")
+      ).toBeVisible();
+      await expect(theirs.getByTestId(`widget-cell-${CARD}`)).toBeHidden();
+      await expect(theirs.getByText("All clear")).toHaveCount(0);
+    } finally {
+      await reader.context.close();
+    }
+  } finally {
+    // Left as they were found: a stopped or overdue release of this spec's
+    // would show the card on every later spec's dashboard.
+    for (const { id } of seeded) await cancel(page, id);
+  }
 });

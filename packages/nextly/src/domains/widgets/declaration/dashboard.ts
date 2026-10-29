@@ -49,6 +49,11 @@ export type AttentionItem = {
   ) => Promise<AttentionCount>;
   /** A path relative to the admin, which core resolves. */
   link: string;
+  /**
+   * One line under the label saying why it is waiting, such as "Pages with no
+   * description". The card draws none when it is absent.
+   */
+  reason?: string;
 } & (
   | { permission: string; collections?: never }
   | { collections: readonly [string, ...string[]]; permission?: never }

@@ -30,6 +30,13 @@ const { defaultCardsNotShown } = vi.hoisted(() => ({
   defaultCardsNotShown: vi.fn(),
 }));
 vi.mock("./default-cards-shown", () => ({ defaultCardsNotShown }));
+
+// Which of the reader's cards that hide while empty answered empty: the case
+// states it, since that answer has its own tests.
+const { cardsAnsweredEmpty } = vi.hoisted(() => ({
+  cardsAnsweredEmpty: vi.fn(),
+}));
+vi.mock("./cards-answered-empty", () => ({ cardsAnsweredEmpty }));
 vi.mock("../di", () => ({ container: { get: containerGet } }));
 
 // `callerHoldsPermission` is the seam a caller is put on either side of.
@@ -200,6 +207,7 @@ function putReq(body: unknown): Request {
 
 interface LayoutPayload {
   placements?: WidgetPlacement[];
+  hiddenWhileEmpty?: string[];
   available?: string[];
   version?: number;
   source?: string;
@@ -255,6 +263,7 @@ beforeEach(() => {
     suggested: [],
   });
   defaultCardsNotShown.mockResolvedValue(new Set());
+  cardsAnsweredEmpty.mockResolvedValue([]);
   reqAuth.mockResolvedValue({
     userId: "user-1",
     permissions: [],
@@ -2770,6 +2779,37 @@ describe("the one default", () => {
       "site/a",
       "acme/suggested",
     ]);
+  });
+
+  it("names the cards that hide while empty and answered empty, asked of what the reader was handed, outside the scope token", async () => {
+    registerWidget(widget({ id: "site/a" }));
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }, { widget: "site/a" }] });
+    const placed = await bodyOf(await getWidgetLayout(getReq()));
+    expect(placed.hiddenWhileEmpty).toEqual([]);
+
+    cardsAnsweredEmpty.mockResolvedValue(["acme/quiet"]);
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.hiddenWhileEmpty).toEqual(["acme/quiet"]);
+    // Still placed: the admin draws the page without it, and customise mode
+    // shows it marked, so it can be moved or removed.
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      "acme/quiet",
+      "site/a",
+    ]);
+    expect(cardsAnsweredEmpty).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      [
+        expect.objectContaining({ widgetId: "acme/quiet" }),
+        expect.objectContaining({ widgetId: "site/a" }),
+      ],
+      expect.any(AbortSignal)
+    );
+    // A card that empties is no change to the arrangement: a save staged
+    // before it did is not a conflict.
+    expect(body.scope).toBe(placed.scope);
   });
 
   it("leaves out a card its declared widget would not show this reader, and carries it into the first save", async () => {

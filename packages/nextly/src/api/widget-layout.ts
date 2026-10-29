@@ -520,6 +520,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
     askedForSteps
   );
   const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
+  // The cards that hide while empty and are empty for this reader now, so the
+  // admin draws its first paint without them rather than drawing them and
+  // taking them out. Outside the scope token: what a card answers changes
+  // with the content, and a save must not conflict because a card emptied.
+  const { cardsAnsweredEmpty } = await import("./cards-answered-empty");
+  const hiddenWhileEmpty = await cardsAnsweredEmpty(
+    auth,
+    view.reader,
+    placements,
+    req.signal
+  );
   // The default as a reader following it would be handed it: their card has
   // no settings yet, so it is drawn from the answer alone. The steps are
   // worked out when this read worked them out, or when the admin asks
@@ -578,6 +589,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The Get started steps, from the computation that decided whether the
       // card is drawn, so the card and its steps cannot disagree.
       getStarted,
+      hiddenWhileEmpty,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );

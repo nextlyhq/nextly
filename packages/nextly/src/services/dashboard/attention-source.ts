@@ -65,6 +65,7 @@ import {
   type DigestReader,
   runDigest,
 } from "../../domains/widgets/attention/digest";
+import type { AttentionDigestItem } from "../../domains/widgets/attention/digest-item";
 import { pluginItemReaders } from "../../domains/widgets/attention/items";
 import {
   ATTENTION_DUE_WINDOW_MS,
@@ -72,6 +73,12 @@ import {
   type AttentionContentKind,
   type AttentionKind,
 } from "../../domains/widgets/attention-keys";
+import { provideAttentionDigest } from "../../domains/widgets/core-widgets/needs-attention";
+import {
+  boundCaller,
+  boundToReadAhead,
+} from "../../domains/widgets/declaration/read-services";
+import { processHeld } from "../../domains/widgets/process-held";
 import {
   MAX_WIDGET_LIMIT,
   type WidgetQuery,
@@ -430,12 +437,14 @@ const RELEASE_KINDS = [
     id: "core/stopped-releases",
     kind: "stopped",
     label: "Releases that stopped",
+    reason: "A scheduled publish failed.",
     count: stoppedReleaseCount,
   },
   {
     id: "core/overdue-releases",
     kind: "overdue",
     label: "Overdue releases",
+    reason: "Still scheduled after its time.",
     count: overdueReleaseCount,
   },
 ] as const;
@@ -450,16 +459,106 @@ const RELEASE_KINDS = [
 function releaseReaders(caller: ReadCaller): DigestReader[] {
   let mayRead: Promise<boolean> | undefined;
   const mayReadReleases = () => (mayRead ??= callerMayReadReleases(caller));
-  return RELEASE_KINDS.map(({ id, kind, label, count }) => ({
+  return RELEASE_KINDS.map(({ id, kind, label, reason, count }) => ({
     id,
     kind,
     label,
+    reason,
     severity: "critical" as const,
     link: `releases?tab=attention&reason=${kind}`,
     owner: "core",
     visible: mayReadReleases,
     read: () => count(caller),
   }));
+}
+
+/**
+ * Every item waiting for `caller`, most urgent first: the one read of the
+ * digest, which the source's list answer and the Needs attention card both
+ * make, so they cannot disagree about what is waiting.
+ */
+async function readAttentionDigest(
+  caller: ReadCaller,
+  opts?: { signal?: AbortSignal; now?: Date }
+): Promise<AttentionDigestItem[]> {
+  // One instant for every item, so each plugin item counts against the same "now".
+  const now = opts?.now ?? new Date();
+  const readers = [
+    ...releaseReaders(caller),
+    ...pluginItemReaders(caller, now),
+  ];
+  return runDigest(readers, opts?.signal);
+}
+
+/**
+ * How long a digest read ahead for a reader's dashboard waits for that
+ * dashboard's own batch to take it: one load, never a standing cache.
+ */
+const READ_AHEAD_KEPT_MS = 5_000;
+
+/** At most this many readers' digests wait at once; the oldest goes first. */
+const READ_AHEAD_READERS = 500;
+
+/**
+ * Digests read ahead by the layout read, by reader, each waiting for the
+ * batch that follows. Held for the process (`processHeld`), as the card's own
+ * digest read is: the layout read and the batch can reach different copies
+ * of this module.
+ */
+const readAhead = processHeld(
+  "nextly.dashboard.attentionReadAhead",
+  () => new Map<string, { at: number; items: AttentionDigestItem[] }>(),
+  (held): held is Map<string, { at: number; items: AttentionDigestItem[] }> =>
+    held instanceof Map
+);
+
+/**
+ * Who a digest was read for: the person, their roles, and the scope that
+ * judged them, an API key's grants included, so two callers that may see
+ * different things never share one.
+ */
+function readerKey(caller: ReadCaller): string {
+  const { user, authenticatedScope } = caller;
+  return JSON.stringify([
+    user.id,
+    user.role ?? null,
+    user.roles ?? null,
+    authenticatedScope ?? null,
+  ]);
+}
+
+/**
+ * The Needs attention card's digest: read once per dashboard load. The layout
+ * read answers the card ahead (`readsAhead`), to learn whether it is empty
+ * before the dashboard is drawn, and leaves its digest for this reader; the
+ * batch that follows takes it, once, if it is fresh. Any other ask, a refetch,
+ * a retry or a later visit, reads anew, so what a reader resolved is gone from
+ * the next answer they are given.
+ */
+async function cardDigest(
+  caller: ReadCaller,
+  readsAhead: boolean,
+  opts: { signal: AbortSignal; now: Date }
+): Promise<AttentionDigestItem[]> {
+  const key = readerKey(caller);
+  const waiting = readAhead.get(key);
+  readAhead.delete(key);
+  if (
+    !readsAhead &&
+    waiting !== undefined &&
+    Date.now() - waiting.at < READ_AHEAD_KEPT_MS
+  ) {
+    return waiting.items;
+  }
+  const items = await readAttentionDigest(caller, opts);
+  if (readsAhead) {
+    readAhead.set(key, { at: Date.now(), items });
+    for (const oldest of readAhead.keys()) {
+      if (readAhead.size <= READ_AHEAD_READERS) break;
+      readAhead.delete(oldest);
+    }
+  }
+  return items;
 }
 
 /**
@@ -471,13 +570,7 @@ async function resolveDigest(
   caller: ReadCaller,
   opts?: ResolverOptions
 ): Promise<WidgetResult> {
-  // One instant for every item, so each plugin item counts against the same "now".
-  const now = opts?.now ?? new Date();
-  const readers = [
-    ...releaseReaders(caller),
-    ...pluginItemReaders(caller, now),
-  ];
-  const items = await runDigest(readers, opts?.signal);
+  const items = await readAttentionDigest(caller, opts);
   return {
     op: "list",
     items: items
@@ -523,6 +616,11 @@ async function resolveAttention(
  * op has a meaning here.
  */
 export function registerAttentionWidgetSource(): void {
+  // The Needs your attention card's own read: the digest as the caller its
+  // read services were bound for, so an API key is judged by its own grant.
+  provideAttentionDigest((services, opts) =>
+    cardDigest(boundCaller(services), boundToReadAhead(services), opts)
+  );
   registerSystemSource(
     {
       id: ATTENTION_SOURCE_ID,

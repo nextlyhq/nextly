@@ -280,7 +280,9 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     await gotoAdmin(page, "/", theme);
     await placeFullMinimumCard(page);
     await page.reload();
-    await expect(page.locator(CELLS).first()).toBeVisible();
+    await expect(
+      page.locator(CELLS).filter({ visible: true }).first()
+    ).toBeVisible();
     const layout = await readLayout(page);
     for (const { viewport, open } of [
       ...WIDE_CASES,
@@ -307,7 +309,9 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     await gotoAdmin(page, "/", theme);
     const full = await placeFullMinimumCard(page);
     await page.reload();
-    await expect(page.locator(CELLS).first()).toBeVisible();
+    await expect(
+      page.locator(CELLS).filter({ visible: true }).first()
+    ).toBeVisible();
     const area = await expectCardsInBand(page, `360px, ${theme}`);
     expect(area).toBeLessThan(640);
 
@@ -336,7 +340,9 @@ test("changes band at the dashboard's own 639/640 and 1,023/1,024 px, and its ga
   await gotoAdmin(page, "/");
   await placeFullMinimumCard(page);
   await page.reload();
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   // Resizing the window changes no placement, so one read serves every width.
   const layout = await readLayout(page);
   for (const target of [639, 640, 1023, 1024, 1279, 1280]) {
@@ -353,7 +359,9 @@ test("never resizes a card past its widget's maximum, from the menu or the layou
 }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   const [first] = await drawnCards(page);
   const bounds = await sizeBoundsOf(page, first.widgetId);
   const cell = page.locator(

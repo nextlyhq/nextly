@@ -41,6 +41,7 @@ import {
 } from "@admin/context/providers/BrandingProvider";
 import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "./core-components";
 import { DrawFailureContext, useDrawFailures } from "./draw-failures";
@@ -62,6 +63,10 @@ import { useDashboardFocus } from "./edit/useDashboardFocus";
 import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
+import {
+  HiddenWhileEmptyContext,
+  useHiddenWhileEmptyAtFirstPaint,
+} from "./hidden-while-empty";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
@@ -332,6 +337,31 @@ function ArrangementLoading() {
 }
 
 /**
+ * What every card under the grid reads beside its props: where a card that fails to draw reports
+ * it, and which cards the dashboard is drawn without while empty, from the first layout answer
+ * the grid is drawn from and for the whole visit (`hidden-while-empty`). Mounted with the grid,
+ * which waits for that answer, so the verdict is taken before any card is drawn.
+ */
+function CardContexts({
+  reportDraw,
+  layout,
+  children,
+}: {
+  reportDraw: ComponentProps<typeof DrawFailureContext.Provider>["value"];
+  layout: DashboardLayoutResponse | undefined;
+  children: ReactNode;
+}): JSX.Element {
+  const hiddenWhileEmpty = useHiddenWhileEmptyAtFirstPaint(layout);
+  return (
+    <DrawFailureContext.Provider value={reportDraw}>
+      <HiddenWhileEmptyContext.Provider value={hiddenWhileEmpty}>
+        {children}
+      </HiddenWhileEmptyContext.Provider>
+    </DrawFailureContext.Provider>
+  );
+}
+
+/**
  * What the dashboard's container holds while there are no cards to draw, or `null` once there
  * are. Drawn inside the measured container either way, by the one return that draws it.
  *
@@ -524,7 +554,7 @@ export function WidgetGrid(): JSX.Element {
 
           <CardDragContext drag={drag}>
             <AtRestSettingsWriteProvider value={settingsWrite}>
-              <DrawFailureContext.Provider value={reportDraw}>
+              <CardContexts reportDraw={reportDraw} layout={layout.layout}>
                 <ArrangedGrid
                   rows={visible}
                   placements={editor.placements}
@@ -551,7 +581,7 @@ export function WidgetGrid(): JSX.Element {
                   drag={drag}
                   on={cardActions(arrangement, removal, editor)}
                 />
-              </DrawFailureContext.Provider>
+              </CardContexts>
             </AtRestSettingsWriteProvider>
           </CardDragContext>
 

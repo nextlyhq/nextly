@@ -305,6 +305,14 @@ export interface DashboardLayoutResponse {
    * @experimental
    */
   getStarted?: GetStartedLayoutView;
+  /**
+   * The placement ids of the cards that hide while empty and were empty for
+   * this reader when the layout was read. The dashboard is drawn without them
+   * from its first paint, and every other card that hides while empty is
+   * placed and stays: neither leaves nor joins the page mid-view. Absent from
+   * a server that predates it, which reads as none.
+   */
+  hiddenWhileEmpty?: string[];
 }
 
 /** What the layout read says of the Get started card. */

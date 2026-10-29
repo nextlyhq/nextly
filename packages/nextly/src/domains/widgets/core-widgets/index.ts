@@ -77,7 +77,7 @@ import { upcomingReleasesWidget } from "./upcoming-releases";
  * Core's widgets declared with `defineWidget`, as a plugin declares its own.
  * Registered through the same call as everyone's declarations, under core.
  */
-export const CORE_DECLARATIONS = [noteWidget] as const;
+export const CORE_DECLARATIONS = [needsAttentionWidget, noteWidget] as const;
 
 /** Core's widgets still written as definitions: every one not declared. */
 const CORE_WIDGET_LITERALS = [
@@ -85,7 +85,6 @@ const CORE_WIDGET_LITERALS = [
   contentWidget,
   quickCreateWidget,
   teamWidget,
-  needsAttentionWidget,
   recentlyEditedWidget,
   upcomingReleasesWidget,
   recentActivityWidget,

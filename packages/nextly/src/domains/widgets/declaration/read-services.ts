@@ -22,6 +22,7 @@ import type { ReadCaller } from "../../../services/dashboard/readable-resources"
 import { intervalWindow } from "../../collections/query/timeseries-interval";
 import { answerAsAsked } from "../answer-as-asked";
 import { executeWidgetQuery } from "../execute";
+import { processHeld } from "../process-held";
 import { publishableContentSources } from "../publish";
 import {
   isRangeInterval,
@@ -65,6 +66,13 @@ export interface ReadServiceBinding {
    * that collection is disclosed.
    */
   answersNothing?: (slug: string) => boolean;
+  /**
+   * Bound for the layout read, which answers a card that hides while empty
+   * before the dashboard is drawn: the batch that follows asks the same card
+   * again, and a core widget may hand it this answer rather than reading
+   * twice (Needs attention's digest).
+   */
+  readAhead?: boolean;
 }
 
 /** A call's own options, of which only the ones a read may carry are kept. */
@@ -324,10 +332,79 @@ function refuseUnreadableDate(slug: string, dateField: string): void {
   });
 }
 
+/**
+ * The caller each card's services were bound for, and whether they were bound
+ * to read ahead (`ReadServiceBinding.readAhead`), kept beside them rather than
+ * on them: the services a data function is handed carry no person, and a
+ * plugin's function must never be able to read one off them.
+ *
+ * Held for the process (`processHeld`), since Next.js and Turbopack can
+ * evaluate this module in more than one server graph, and the request route
+ * that binds a card's services and the widget registered at boot, whose
+ * `load` asks for their caller, can each hold a different copy. Reachable only
+ * through `bindReadServices`, `boundCaller` and `boundToReadAhead`.
+ */
+const bindings = processHeld(
+  "nextly.dashboard.readCallers",
+  () => new WeakMap<WidgetReadServices, BoundRead>(),
+  (held): held is WeakMap<WidgetReadServices, BoundRead> =>
+    held instanceof WeakMap
+);
+
+/** What core keeps of a card's binding, beside its services. */
+interface BoundRead {
+  caller: ReadCaller;
+  readAhead: boolean;
+}
+
+/** What `services` were bound with; services core did not bind are refused. */
+function boundRead(services: WidgetReadServices): BoundRead {
+  const bound = bindings.get(services);
+  if (bound === undefined) {
+    // Only services this module bound have a caller; anything else would be
+    // read as nobody, which must refuse rather than read as the system.
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "This widget could not be answered",
+      logMessage: "a widget's read services were not bound by core",
+      logContext: { reason: "widget-services-unbound" },
+    });
+  }
+  return bound;
+}
+
+/**
+ * The caller `services` were bound for, for core's own widgets whose data is
+ * a core source asked as that caller (Needs attention's digest), so an API
+ * key is still judged by its own grant rather than by the person who made it.
+ * Internal to core: no public entry point exports it.
+ */
+export function boundCaller(services: WidgetReadServices): ReadCaller {
+  return boundRead(services).caller;
+}
+
+/**
+ * Whether `services` were bound to read ahead of the dashboard's own batch
+ * (`ReadServiceBinding.readAhead`). Internal to core, as `boundCaller` is.
+ */
+export function boundToReadAhead(services: WidgetReadServices): boolean {
+  return boundRead(services).readAhead;
+}
+
 /** The read services for one card, bound to `binding`. */
 export function bindReadServices(
   binding: ReadServiceBinding
 ): WidgetReadServices {
+  const services = readServices(binding);
+  bindings.set(services, {
+    caller: binding.caller,
+    readAhead: binding.readAhead === true,
+  });
+  return services;
+}
+
+/** The reads themselves, bound to `binding`'s caller, check and signal. */
+function readServices(binding: ReadServiceBinding): WidgetReadServices {
   const {
     caller,
     prepare,

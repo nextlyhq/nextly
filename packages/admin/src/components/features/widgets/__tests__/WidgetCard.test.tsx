@@ -418,37 +418,36 @@ describe("an empty card's action in a short card", () => {
   });
 });
 
-describe("a card that hides when its data is empty", () => {
+describe("a card that hides while empty", () => {
   const empty: CardState = { kind: "empty", empty: { title: "Nothing" } };
 
-  it("marks itself for the grid to take out while its answer is empty", () => {
-    render(
-      <WidgetCard title="Needs attention" state={empty} hidesWhenEmpty>
-        <p>rows</p>
-      </WidgetCard>
-    );
-    expect(
-      screen.getByRole("region", { name: "Needs attention" })
-    ).toHaveAttribute("data-hidden-empty");
-  });
-
-  it("is never hidden while it is failed, not available or still loading", () => {
-    for (const state of [
-      { kind: "error", message: "Failed." },
-      { kind: "no-access" },
-      { kind: "loading" },
-    ] satisfies CardState[]) {
+  it("marks itself for the grid to take out when the layout read found it empty, from its first state", () => {
+    for (const state of [empty, { kind: "loading" }] satisfies CardState[]) {
       const { unmount } = render(
-        <WidgetCard title="Needs attention" state={state} hidesWhenEmpty>
+        <WidgetCard title="Needs attention" state={state} hiddenWhileEmpty>
           <p>rows</p>
         </WidgetCard>
       );
       expect(
         screen.getByRole("region", { name: "Needs attention" }),
         state.kind
-      ).not.toHaveAttribute("data-hidden-empty");
+      ).toHaveAttribute("data-hidden-empty");
       unmount();
     }
+  });
+
+  it("stays in place when its answer turns out empty after the first paint, saying so", () => {
+    render(
+      <WidgetCard title="Needs attention" state={empty}>
+        <p>rows</p>
+      </WidgetCard>
+    );
+    // An answer that empties while the reader looks never takes the card off
+    // the page: that would move every card after it.
+    expect(
+      screen.getByRole("region", { name: "Needs attention" })
+    ).not.toHaveAttribute("data-hidden-empty");
+    expect(screen.getByText("Nothing")).toBeInTheDocument();
   });
 
   it("stays in reach in customise mode, marked as hidden while empty", () => {
@@ -456,7 +455,7 @@ describe("a card that hides when its data is empty", () => {
       <WidgetCard
         title="Needs attention"
         state={empty}
-        hidesWhenEmpty
+        hiddenWhileEmpty
         customizing
       >
         <p>rows</p>

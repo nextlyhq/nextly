@@ -209,6 +209,29 @@ export type WidgetResult =
     };
 
 /**
+ * Whether an answer holds nothing a core display would draw: a list with no
+ * items, groups with no bucket, a series with no point. A count always holds
+ * its number, and a declared widget's own data is judged by its `isEmpty`.
+ *
+ * The one rule: each core display draws its empty state by it, and the layout
+ * read leaves a card that hides while empty off the dashboard by it, so the
+ * page is drawn without the card exactly when the card would draw nothing.
+ */
+export function answerHasNothing(result: WidgetResult): boolean {
+  switch (result.op) {
+    case "list":
+      return result.items.length === 0;
+    case "groupBy":
+      return result.buckets.length === 0;
+    case "timeseries":
+      return result.points.length === 0;
+    case "count":
+    case "data":
+      return false;
+  }
+}
+
+/**
  * One slot of the dashboard batch response: what ONE widget's query answered.
  *
  * 🔴 A failure is a VALUE here, not a thrown error, because the batch answers

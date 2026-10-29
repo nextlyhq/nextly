@@ -20,6 +20,8 @@
  * @module components/features/widgets/archetypes/bars
  */
 
+import { answerHasNothing } from "nextly/widget-result";
+
 import { WithCollectionUnit } from "../charts/chart-unit";
 import { GroupsChart, type GroupsChartGroup } from "../charts/groups-chart";
 
@@ -109,7 +111,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
     bucketRow(bucket.value, bucket.count, result.field?.choices)
   );
 
-  if (rows.length === 0) {
+  if (answerHasNothing(result)) {
     // The frame's one empty state, worded for groups. Source-neutral: the card may read any
     // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     //
