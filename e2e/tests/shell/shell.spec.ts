@@ -20,7 +20,7 @@ import {
 } from "@nextlyhq/builder/shell-state";
 import { expect } from "@playwright/test";
 
-import { test } from "../support/test";
+import { includingHidden, test } from "../support/test";
 import {
   assertShellReady,
   createShellDriver,
@@ -260,7 +260,9 @@ test.describe("a narrow CONTAINER inside a wide window", () => {
     await page.goto(`/builder-shell?container=${MIN_SHELL_WIDTH + 200}`);
 
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
-    await expect(page.getByText(/needs more width/i)).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText(/needs more width/i)
+    ).toHaveCount(0);
   });
 
   test("recovers when the container grows back", async ({ page }) => {
@@ -292,7 +294,9 @@ test.describe("a narrow CONTAINER inside a wide window", () => {
     }, MIN_SHELL_WIDTH + 20);
 
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
-    await expect(page.getByText(/needs more width/i)).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByText(/needs more width/i)
+    ).toHaveCount(0);
   });
 });
 

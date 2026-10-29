@@ -110,7 +110,7 @@ test("a card that throws while it draws shows its own error, and only that card"
   ).toBeVisible();
   // The plugin boundary's generic message is not what the card shows.
   await expect(
-    page.getByText("This plugin component failed to load")
+    includingHidden(page).getByText("This plugin component failed to load")
   ).toHaveCount(0);
   // The card beside it draws as if nothing happened.
   await expect(page.getByTestId("kit-card")).toBeVisible();
@@ -129,7 +129,7 @@ test("a card whose data function throws on the server shows its own error, and t
     failing.getByRole("button", { name: "Retry Test fixture: failing data" })
   ).toBeVisible();
   // What the plugin's error said stays in the server's log.
-  await expect(page.getByText("customer 42")).toHaveCount(0);
+  await expect(includingHidden(page).getByText("customer 42")).toHaveCount(0);
   // Answered in the same batch, the cards beside it draw.
   await expect(page.getByTestId("kit-card")).toBeVisible();
   await expect(

@@ -6,7 +6,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
@@ -50,6 +50,10 @@ test.afterAll(async () => {
 
 const save = () => page.locator('[data-primary="true"]');
 const banner = () => page.getByTestId("document-lock-banner");
+// The banner anywhere in the document, a hidden copy of the page included:
+// what proving it is not there has to see.
+const bannerAnywhere = () =>
+  includingHidden(page).getByTestId("document-lock-banner");
 const note = () =>
   page.locator("main").getByRole("textbox", { name: "Note", exact: true });
 
@@ -63,7 +67,7 @@ function asksCapabilitiesIn(locale: string) {
 test("edits the English and opens the Spanish read-only, showing no editor while it loads", async () => {
   await gotoAdmin(page, `/collections/translator-notes/${noteId}`);
   await expect(save()).toBeVisible();
-  await expect(banner()).toHaveCount(0);
+  await expect(bannerAnywhere()).toHaveCount(0);
   await expect(note()).toBeEditable();
 
   // The Spanish answer is held until the page has been read without it.
@@ -103,6 +107,6 @@ test("is offered the save again on returning to English", async () => {
   await expect(banner()).toBeVisible();
   await page.getByRole("button", { name: "Open English" }).click();
   await expect(save()).toBeVisible();
-  await expect(banner()).toHaveCount(0);
+  await expect(bannerAnywhere()).toHaveCount(0);
   await expect(note()).toBeEditable();
 });

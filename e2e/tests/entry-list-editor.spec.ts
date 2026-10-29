@@ -8,7 +8,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
@@ -87,7 +87,9 @@ test("opens a post editable, with no reader's banner", async () => {
     .getByRole("textbox", { name: "Excerpt", exact: true });
   await expect(excerpt).toBeEditable();
   await expect(page.locator('[data-primary="true"]')).toBeVisible();
-  await expect(page.getByTestId("document-lock-banner")).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByTestId("document-lock-banner")
+  ).toHaveCount(0);
 });
 
 // Below the width the document panel is drawn from, a tablet's as a phone's,

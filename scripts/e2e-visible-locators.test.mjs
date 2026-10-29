@@ -35,6 +35,58 @@ export function hiddenCopyLookups(source) {
   return found;
 }
 
+/** A page's locators that the suite holds to visible elements. */
+const VISIBLE_ONLY =
+  /^(\w*[pP]age)\.(getByText|getByLabel|getByTestId|getByPlaceholder)\(/;
+
+/**
+ * Each assertion in a source that something is absent, made on one of a
+ * page's visible-only locators: `toHaveCount(0)` or `not.toBeAttached()`. Those
+ * prove something was never rendered, so they must see hidden elements too,
+ * through `includingHidden(page)`; on a visible-only locator a hidden element
+ * the page should never have held would pass them. The subject is read
+ * directly, or through a name the file binds to such a locator
+ * (`const banner = () => page.getByTestId(...)`). `toBeHidden` is not
+ * weighed: a visible-only locator gives it the answer it should.
+ */
+export function absenceOnVisibleOnlyPage(source) {
+  const bound = new Set(
+    [
+      ...source.matchAll(
+        /(?:const|let)\s+(\w+)\s*=\s*(?:\(\s*\)\s*=>\s*)?(\w*[pP]age\.(?:getByText|getByLabel|getByTestId|getByPlaceholder)\()/g
+      ),
+    ].map(([, name]) => name)
+  );
+  const found = [];
+  for (const match of source.matchAll(/\bexpect\(/g)) {
+    const from = match.index + match[0].length;
+    let depth = 1;
+    let quote = null;
+    let i = from;
+    for (; i < source.length && depth > 0; i += 1) {
+      const c = source[i];
+      if (quote) {
+        if (c === "\\") i += 1;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "(" || c === "[" || c === "{") depth += 1;
+      else if (c === ")" || c === "]" || c === "}") depth -= 1;
+    }
+    const subject = source.slice(from, i - 1).trim();
+    const name = /^(\w+)(?:\(\s*\))?$/.exec(subject)?.[1];
+    if (!VISIBLE_ONLY.test(subject) && !(name && bound.has(name))) continue;
+    const assertion =
+      /^\s*\.(toHaveCount\(\s*0\s*\)|not\s*\.\s*toBeAttached\()/.exec(
+        source.slice(i)
+      );
+    if (assertion)
+      found.push(
+        `${subject.split("(")[0]} ${assertion[1].replace(/\s+/g, "")}`
+      );
+  }
+  return found;
+}
+
 /** The browser suite's own source files, as git tracks them. */
 function browserSuiteFiles() {
   return execFileSync("git", ["ls-files", "e2e"], {
@@ -55,6 +107,43 @@ describe("the browser suite's locators", () => {
       )
     );
     expect(found).toEqual([]);
+  });
+
+  it("assert absence only where a hidden element would be seen too", () => {
+    const found = browserSuiteFiles().flatMap(file =>
+      absenceOnVisibleOnlyPage(readFileSync(path.join(ROOT, file), "utf8")).map(
+        assertion => `${file}: ${assertion}`
+      )
+    );
+    expect(found).toEqual([]);
+  });
+
+  it("tell an absence on a visible-only locator from one that sees hidden elements", () => {
+    expect(
+      absenceOnVisibleOnlyPage(
+        'await expect(page.getByText("secret")).toHaveCount(0);'
+      )
+    ).toEqual(["page.getByText toHaveCount(0)"]);
+    expect(
+      absenceOnVisibleOnlyPage(
+        'await expect(\n  otherPage.getByTestId("x")\n).not.toBeAttached();'
+      )
+    ).toEqual(["otherPage.getByTestId not.toBeAttached("]);
+    expect(
+      absenceOnVisibleOnlyPage(
+        'const banner = () => page.getByTestId("b");\nawait expect(banner()).toHaveCount(0);'
+      )
+    ).toEqual(["banner toHaveCount(0)"]);
+    expect(
+      absenceOnVisibleOnlyPage(
+        'await expect(includingHidden(page).getByText("secret")).toHaveCount(0);'
+      )
+    ).toEqual([]);
+    expect(
+      absenceOnVisibleOnlyPage(
+        'await expect(page.getByText("x")).toHaveCount(1);\nawait expect(page.getByText("y")).toBeHidden();\nawait expect(dialog.getByText("z")).toHaveCount(0);'
+      )
+    ).toEqual([]);
   });
 
   it("tell an id lookup from a visible-only one and from other locators", () => {

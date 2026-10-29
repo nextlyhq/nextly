@@ -10,7 +10,7 @@
  */
 import { expect } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 /** A hidden copy of the page, then the page itself, holding the same element. */
 function hiddenCopyBeside(element: string): string {
@@ -51,24 +51,46 @@ test("finds a visible field by its placeholder, not its hidden copy's", async ({
   await expect(page.getByPlaceholder("Search")).toBeVisible();
 });
 
-// The control: what each of the four would find without the suite's page,
-// so a fixture that stopped filtering cannot pass the cases above unnoticed.
-test("Playwright's own locators find the hidden copy too", async ({
-  browser,
+test("holds a page its context opens to visible elements too", async ({
+  context,
 }) => {
-  const page = await browser.newPage();
+  const page = await context.newPage();
   try {
-    await page.setContent(
-      hiddenCopyBeside(
-        "<p>Saved</p><label>Title <input /></label>" +
-          "<div data-testid='bar'>Bar</div><input placeholder='Search' />"
-      )
-    );
-    await expect(page.getByText("Saved")).toHaveCount(2);
-    await expect(page.getByLabel("Title")).toHaveCount(2);
-    await expect(page.getByTestId("bar")).toHaveCount(2);
-    await expect(page.getByPlaceholder("Search")).toHaveCount(2);
+    await page.setContent(hiddenCopyBeside("<p>Saved</p>"));
+    await expect(page.getByText("Saved")).toHaveCount(1);
   } finally {
     await page.close();
   }
+});
+
+test("holds a page of a context the spec makes itself to visible elements", async ({
+  browser,
+}) => {
+  // As a second user's sign-in makes one.
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await page.setContent(hiddenCopyBeside("<p>Saved</p>"));
+    await expect(page.getByText("Saved")).toHaveCount(1);
+  } finally {
+    await context.close();
+  }
+});
+
+// The control: what each of the four finds when it may see hidden elements,
+// so a page that stopped filtering cannot pass the cases above unnoticed.
+test("each would find the hidden copy too, through includingHidden", async ({
+  page,
+}) => {
+  await page.setContent(
+    hiddenCopyBeside(
+      "<p>Saved</p><label>Title <input /></label>" +
+        "<div data-testid='bar'>Bar</div><input placeholder='Search' />"
+    )
+  );
+  const whole = includingHidden(page);
+  await expect(whole.getByText("Saved")).toHaveCount(2);
+  await expect(whole.getByLabel("Title")).toHaveCount(2);
+  await expect(whole.getByTestId("bar")).toHaveCount(2);
+  await expect(whole.getByPlaceholder("Search")).toHaveCount(2);
 });

@@ -11,7 +11,7 @@
  */
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
-import { fileAccount, test } from "./support/test";
+import { fileAccount, includingHidden, test } from "./support/test";
 
 import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
@@ -98,7 +98,9 @@ test("a refused delete shows the server's message, and the post stays", async ()
 
   // The toast says exactly that, with nothing wrapped around it.
   await expect(page.getByText(error.message, { exact: true })).toBeVisible();
-  await expect(page.getByText(/failed to delete/i)).toHaveCount(0);
+  await expect(
+    includingHidden(page).getByText(/failed to delete/i)
+  ).toHaveCount(0);
 
   // Nothing was deleted, and the editor is still on the post.
   await expect(page).toHaveURL(new RegExp(`/collections/posts/${postId}$`));

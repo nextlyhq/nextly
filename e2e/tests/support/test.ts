@@ -29,6 +29,8 @@ import {
   request,
   test as base,
   type APIRequestContext,
+  type Browser,
+  type BrowserContext,
   type Locator,
   type Page,
   type TestInfo,
@@ -213,6 +215,22 @@ function findVisibleOnly<M extends (typeof MATCHES_HIDDEN)[number]>(
     find(...args).filter({ visible: true })) as Page[M];
 }
 
+/** The pages already held to visible elements, so none is wrapped twice. */
+const visibleOnlyPages = new WeakSet<Page>();
+
+/** Make a page's text, label, test-id and placeholder locators visible-only. */
+function holdToVisible(page: Page): void {
+  if (visibleOnlyPages.has(page)) return;
+  visibleOnlyPages.add(page);
+  for (const method of MATCHES_HIDDEN) findVisibleOnly(page, method);
+}
+
+/** Hold every page a context has, and every page it opens later, to visible. */
+function holdContextToVisible(context: BrowserContext): void {
+  for (const page of context.pages()) holdToVisible(page);
+  context.on("page", holdToVisible);
+}
+
 /**
  * The page's whole document, for a spec that means to find a hidden element:
  * locators chained from it are not held to visible elements, as the page's
@@ -227,10 +245,16 @@ export const test = base.extend<{ freshSession: string }>({
   // so the document can hold a hidden copy of the page a spec is on. A role
   // locator leaves hidden elements out, but a text, label, test-id or
   // placeholder locator would match the hidden copy's as readily as the
-  // visible one's, so on the page every spec is handed they find visible
-  // elements only. A locator chained from one of them is held to it.
+  // visible one's, so on every page a spec reaches they find visible elements
+  // only: the page it is handed, any other its context opens, and any page of
+  // a context or page it makes itself, as a second user's sign-in does. A
+  // locator chained from one of them is held to it.
+  context: async ({ context }, use) => {
+    holdContextToVisible(context);
+    await use(context);
+  },
   page: async ({ page }, use) => {
-    for (const method of MATCHES_HIDDEN) findVisibleOnly(page, method);
+    holdToVisible(page);
     await use(page);
   },
   freshSession: [
@@ -244,4 +268,24 @@ export const test = base.extend<{ freshSession: string }>({
     if (!baseURL) throw new Error("[e2e] No baseURL configured.");
     await use(await fileAccount(baseURL, testInfo));
   },
+  browser: [
+    async ({ browser }, use) => {
+      const newContext = browser.newContext.bind(browser);
+      browser.newContext = async (
+        ...args: Parameters<Browser["newContext"]>
+      ) => {
+        const context = await newContext(...args);
+        holdContextToVisible(context);
+        return context;
+      };
+      const newPage = browser.newPage.bind(browser);
+      browser.newPage = async (...args: Parameters<Browser["newPage"]>) => {
+        const page = await newPage(...args);
+        holdToVisible(page);
+        return page;
+      };
+      await use(browser);
+    },
+    { scope: "worker" },
+  ],
 });

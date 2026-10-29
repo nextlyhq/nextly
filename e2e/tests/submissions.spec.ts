@@ -7,7 +7,7 @@
  */
 import { expect } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test.describe.configure({ mode: "serial" });
@@ -96,7 +96,9 @@ test("shows per-field columns, edits in the drawer, and stamps the edit", async 
   ).toBeVisible();
 
   // The spam row stays out of the default view.
-  await expect(page.getByText("bot@example.com")).toHaveCount(0);
+  await expect(includingHidden(page).getByText("bot@example.com")).toHaveCount(
+    0
+  );
 
   // Drawer: values, edit, save — the server stamps the edit.
   await page
