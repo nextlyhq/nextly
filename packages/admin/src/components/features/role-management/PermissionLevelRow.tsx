@@ -25,6 +25,12 @@ import {
   type LevelRow,
 } from "@admin/lib/permissions/level-rows";
 import { levelsFor, type AccessLevel } from "@admin/lib/permissions/levels";
+import {
+  givesVisitorsAWrite,
+  offeredSwitches,
+  VISITOR_LEVELS,
+  VISITOR_WRITE_WARNING,
+} from "@admin/lib/roles/role-screen-mode";
 import { cn } from "@admin/lib/utils";
 import type { Permission } from "@admin/types/ui/form";
 
@@ -46,6 +52,13 @@ export interface PermissionLevelRowProps {
    */
   bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
+  /**
+   * The row is the Public role's: it offers No access and Can view alone,
+   * no publish or unpublish switch, and warns where a switch gives visitors
+   * a write. Its level is still read over every level, so a write held reads
+   * Custom.
+   */
+  visitors?: boolean;
 }
 
 /**
@@ -72,13 +85,20 @@ export function PermissionLevelRow({
   lockedIds = [],
   bases = [],
   disabled = false,
+  visitors = false,
 }: PermissionLevelRowProps): JSX.Element {
   const [eachAction, setEachAction] = useState(false);
   const { owned, locked, held } = useHeldPermissions(value, lockedIds);
 
   const level = rowLevel(row, held);
-  const levels = levelsFor(row.kind);
-  const offered = offeredLevels(row, lockedIds);
+  const forRole = (candidates: readonly AccessLevel[]) =>
+    visitors
+      ? candidates.filter(candidate => VISITOR_LEVELS.includes(candidate))
+      : [...candidates];
+  const levels = forRole(levelsFor(row.kind));
+  const offered = forRole(offeredLevels(row, lockedIds));
+  const switches = offeredSwitches(row.permissions, visitors);
+  const visitorsWrite = visitors && givesVisitorsAWrite(switches, held);
   // The bases that give this row something, each named for its own grants.
   const rowIds = new Set(row.permissions.map(permission => permission.id));
   const givers = bases
@@ -168,9 +188,15 @@ export function PermissionLevelRow({
         </div>
       </div>
 
+      {visitorsWrite && (
+        <p role="note" className="text-sm text-destructive">
+          {VISITOR_WRITE_WARNING}
+        </p>
+      )}
+
       {eachAction && (
         <PermissionSwitches
-          permissions={row.permissions}
+          permissions={switches}
           name={name}
           held={held}
           locked={locked}

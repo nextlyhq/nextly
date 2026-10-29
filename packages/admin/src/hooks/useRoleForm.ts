@@ -20,6 +20,11 @@ import {
 } from "@admin/lib/permissions/level-rows";
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
 import { assignableRoles } from "@admin/lib/roles/assignable";
+import {
+  roleScreenMode,
+  screenSaves,
+  type RoleScreenMode,
+} from "@admin/lib/roles/role-screen-mode";
 
 import { PAGINATION } from "../constants/pagination";
 import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
@@ -48,8 +53,6 @@ interface LoadingState {
 
 // System resources that belong in the "Settings" tab of the permission matrix.
 // Keep this list in sync with SYSTEM_RESOURCES in packages/nextly/src/schemas/rbac.ts
-/** The one role nothing may be built on; see the base-role filter below. */
-const SUPER_ADMIN_SLUG = "super-admin";
 
 /**
  * Built-in resources, derived from the single admin definition.
@@ -170,6 +173,8 @@ export interface UseRoleFormReturn {
   setError: (error: string | null) => void;
   isEditMode: boolean;
   isSystemRole: boolean;
+  /** How the screen shows the role: see `roleScreenMode`. */
+  screenMode: RoleScreenMode;
   selectedBaseRoleIds: string[];
   setSelectedBaseRoleIds: (ids: string[]) => void;
   lockedPermissionIds: string[];
@@ -300,6 +305,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
   // Derived state
   const isEditMode = !!roleId;
   const isSystemRole = role?.isSystemRole ?? false;
+  const screenMode = roleScreenMode(role);
 
   const onSubmitHandler = async (values: RoleFormValuesType) => {
     debugLog(
@@ -307,6 +313,9 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
       "onSubmitHandler called - ROLE FORM SUBMISSION TRIGGERED",
       { values, isEditMode }
     );
+    // Super-admin holds every permission and a preset is changed by copying
+    // it: neither is saved from this form, which offers neither a save.
+    if (!screenSaves(screenMode)) return;
     setError(null);
     setIsLoading(true);
 
@@ -329,7 +338,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         // one into `isSystem`, so naming it here would answer a question
         // nobody asked — and answering "Custom" would demote a seeded role to
         // a custom one on any save, including a description-only edit.
-        await roleApi.updateRole(roleId, roleData);
+        // A built-in role's details are the framework's, and the server
+        // refuses any change to them; the Public role's permissions are the
+        // one thing about it that changes, so it sends only those.
+        if (!isSystemRole) await roleApi.updateRole(roleId, roleData);
         try {
           await roleApi.updateRolePermissions(
             roleId,
@@ -513,6 +525,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             roleData.roleName.toLowerCase().replace(/\s+/g, "-"),
           description: roleData.description,
           isSystemRole: roleData.type === "System",
+          builtIn: roleData.builtIn,
           permissions: normalizedRolePermissionIds.map(id => ({ id })),
           users: [],
         };
@@ -610,6 +623,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             permissions: normalizePermissions(r.permissions),
             description: r.description,
             isSystem: r.type === "System",
+            builtIn: r.builtIn,
           })
         );
 
@@ -620,7 +634,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           // permission to grant. The presets are system roles too, and are
           // the thing most worth building on — so the line is drawn at the
           // one role that hands out everything, not at the class.
-          if (r.slug === SUPER_ADMIN_SLUG) return false;
+          if (r.builtIn === "super-admin") return false;
           return true;
         });
 
@@ -688,6 +702,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     setError,
     isEditMode,
     isSystemRole,
+    screenMode,
     selectedBaseRoleIds,
     setSelectedBaseRoleIds,
     lockedPermissionIds,

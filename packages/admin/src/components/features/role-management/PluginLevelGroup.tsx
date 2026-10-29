@@ -12,6 +12,7 @@ import {
   groupLevel,
   type PluginGroup,
 } from "@admin/lib/permissions/level-rows";
+import { offeredSwitches } from "@admin/lib/roles/role-screen-mode";
 import { cn } from "@admin/lib/utils";
 import type { Permission } from "@admin/types/ui/form";
 
@@ -28,6 +29,8 @@ export interface PluginLevelGroupProps {
   lockedIds?: readonly string[];
   bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
+  /** The Public role's rows: see {@link PermissionLevelRow}'s `visitors`. */
+  visitors?: boolean;
 }
 
 /**
@@ -44,6 +47,7 @@ export function PluginLevelGroup({
   lockedIds = [],
   bases,
   disabled = false,
+  visitors = false,
 }: PluginLevelGroupProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const { owned, locked, held } = useHeldPermissions(value, lockedIds);
@@ -109,6 +113,7 @@ export function PluginLevelGroup({
             lockedIds={lockedIds}
             bases={bases}
             disabled={disabled}
+            visitors={visitors}
           />
         ))}
         {ownCount > 0 && (
@@ -117,7 +122,7 @@ export function PluginLevelGroup({
               {`${displayName}'s own permissions`}
             </span>
             <PermissionSwitches
-              permissions={group.permissions}
+              permissions={offeredSwitches(group.permissions, visitors)}
               name={displayName}
               // A plugin's own action has no level to be named after: its
               // permission's own name says what it does.

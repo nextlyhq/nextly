@@ -52,6 +52,8 @@ export interface RoleWithPermissions extends EntityBase {
   description?: string;
   priority?: number;
   isSystemRole?: boolean;
+  /** Which built-in role this is, as the server marks it. */
+  builtIn?: "public" | "super-admin";
   permissions?: { id: string }[];
   users?: { id: string; name?: string }[];
 }

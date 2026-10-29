@@ -20,6 +20,8 @@ export interface PermissionLevelRowsProps {
   /** The base roles and the permissions each gives; see {@link PermissionLevelRow}. */
   bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
+  /** The Public role's rows: see {@link PermissionLevelRow}'s `visitors`. */
+  visitors?: boolean;
 }
 
 /** The sections the rows are shown in, by the kind of entity each holds. */
@@ -44,6 +46,7 @@ export function PermissionLevelRows({
   lockedIds,
   bases,
   disabled = false,
+  visitors = false,
 }: PermissionLevelRowsProps): JSX.Element {
   const [find, setFind] = useState("");
   const wanted = find.trim().toLowerCase();
@@ -106,6 +109,7 @@ export function PermissionLevelRows({
                 lockedIds={lockedIds}
                 bases={bases}
                 disabled={disabled}
+                visitors={visitors}
               />
             ))}
           </section>
@@ -127,6 +131,7 @@ export function PermissionLevelRows({
               lockedIds={lockedIds}
               bases={bases}
               disabled={disabled}
+              visitors={visitors}
             />
           ))}
         </section>

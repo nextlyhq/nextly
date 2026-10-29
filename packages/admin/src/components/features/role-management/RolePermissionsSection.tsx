@@ -28,6 +28,10 @@ interface RolePermissionsSectionProps {
   /** The base roles and the permissions each gives. */
   bases: { name: string; ids: string[] }[];
   isLoading: boolean;
+  /** Shown but not changed: a built-in role changed by copying it. */
+  readOnly?: boolean;
+  /** The Public role's rows: see `PermissionLevelRow`'s `visitors`. */
+  visitors?: boolean;
 }
 
 /**
@@ -43,6 +47,8 @@ export function RolePermissionsSection({
   lockedPermissionIds,
   bases,
   isLoading,
+  readOnly = false,
+  visitors = false,
 }: RolePermissionsSectionProps): JSX.Element {
   return (
     <FormField
@@ -60,7 +66,8 @@ export function RolePermissionsSection({
                 onChange={field.onChange}
                 lockedIds={lockedPermissionIds}
                 bases={bases}
-                disabled={isLoading}
+                disabled={isLoading || readOnly}
+                visitors={visitors}
               />
               <div className="flex flex-col gap-4">
                 <h3 className="px-6 text-base font-semibold text-foreground">
@@ -70,7 +77,7 @@ export function RolePermissionsSection({
                   permissions={otherPermissions}
                   value={field.value || []}
                   onChange={field.onChange}
-                  disabled={isLoading}
+                  disabled={isLoading || readOnly}
                   lockedIds={lockedPermissionIds}
                 />
               </div>
