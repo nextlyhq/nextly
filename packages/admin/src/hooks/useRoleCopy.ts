@@ -67,7 +67,10 @@ export function useRoleCopy(
   return { copyRole, copying };
 }
 
-/** The role a new role's address names to copy, or null. */
+/**
+ * The role a new role's address names to copy, or null: an empty
+ * `copyFrom` names none.
+ */
 function copyFromOf(search: string): string | null {
-  return new URLSearchParams(search).get("copyFrom");
+  return new URLSearchParams(search).get("copyFrom") || null;
 }
