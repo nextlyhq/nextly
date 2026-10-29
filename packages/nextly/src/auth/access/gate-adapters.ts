@@ -517,7 +517,19 @@ async function visitorVerdict(
     "rules"
   );
   if (outcomes === null) return UNAUTHENTICATED;
-  const outcome = outcomes.action;
+  return visitorRuleVerdict(visitor, q, target, outcomes.action);
+}
+
+/**
+ * A visitor the Public role grants the action, judged by its rule's outcome,
+ * already asked.
+ */
+function visitorRuleVerdict(
+  visitor: VisitorActor,
+  q: GateQuestion,
+  target: AccessTarget,
+  outcome: RuleOutcome
+): GateVerdict | Promise<GateVerdict> {
   // A rule that answers `false` or fails refuses a visitor outright.
   if (outcome.declared && ("threw" in outcome || outcome.value === false)) {
     return INSUFFICIENT;
