@@ -2733,6 +2733,7 @@ export class CollectionQueryService extends BaseService {
       // The language a target collection's read rule is evaluated in when its
       // predicate names a localized field.
       locale: localeChain?.[0],
+      localeChain: localeChain ?? undefined,
       // Only "read everything" propagates, and only when the caller actually
       // asked for it. Deriving this from the parent having resolved to no
       // filter would unfilter every target behind a status-less collection.
@@ -3381,6 +3382,7 @@ export class CollectionQueryService extends BaseService {
             // read rule filters on a localized field can have that filter
             // applied against the right companion rows instead of withholding.
             locale: localeChain?.[0],
+            localeChain: localeChain ?? undefined,
             // Only "read everything" propagates, and only when the caller
             // actually asked for it. Deriving this from the parent having
             // resolved to no filter would unfilter every target behind a
@@ -3442,6 +3444,7 @@ export class CollectionQueryService extends BaseService {
               // A relationship inside a component points at a collection whose
               // read rule may filter on one of its own localized fields.
               locale: localeChain?.[0],
+              localeChain: localeChain ?? undefined,
               // Only "read everything" propagates, and only when the caller
               // actually asked for it. Deriving this from the parent having
               // resolved to no filter would unfilter every target behind a
@@ -4706,6 +4709,7 @@ export class CollectionQueryService extends BaseService {
             // As on the list path: a component's relationship reaches a
             // collection that may scope reads by a localized field.
             locale: localeChain?.[0],
+            localeChain: localeChain ?? undefined,
             // Only "read everything" propagates, and only when the caller
             // actually asked for it. Deriving this from the parent having
             // resolved to no filter would unfilter every target behind a

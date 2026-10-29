@@ -91,6 +91,15 @@ export interface RelatedRowReadContext {
   locale?: string;
 
   /**
+   * The languages the surrounding read falls back through, {@link locale}
+   * first. A target collection's read rule that filters on a localized field
+   * is judged in each of them, as a direct read of the target judges it, so
+   * a related row is populated only where the caller could read it directly.
+   * Absent, the rule is judged in {@link locale} alone.
+   */
+  localeChain?: readonly string[];
+
+  /**
    * The caller's Draft/Published intent, when they asked to see everything.
    *
    * Deliberately narrow. `"all"` is a statement about the caller's trust and

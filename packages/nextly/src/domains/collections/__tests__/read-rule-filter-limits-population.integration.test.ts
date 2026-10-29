@@ -163,15 +163,19 @@ describe("populating a relationship under a read rule that answers a filter", ()
       service as unknown as { ruleMatch: (...args: unknown[]) => unknown },
       "ruleMatch"
     );
+    // Fetched at once, as a `hasMany` field fetches its references, so the
+    // build each fetch starts is still pending when the next asks for it.
     const caches = readExpansionCaches();
-    for (const id of ids) {
-      await service.fetchRelatedEntry(TEAMS, id, {
-        trusted: TRUSTS_EVERY_COLLECTION,
-        enforceCollectionAccess: true,
-        withheldByAccess: new Set<string>(),
-        ...caches,
-      });
-    }
+    await Promise.all(
+      ids.map(id =>
+        service.fetchRelatedEntry(TEAMS, id, {
+          trusted: TRUSTS_EVERY_COLLECTION,
+          enforceCollectionAccess: true,
+          withheldByAccess: new Set<string>(),
+          ...caches,
+        })
+      )
+    );
     expect(builds).toHaveBeenCalledTimes(1);
     builds.mockRestore();
   });

@@ -411,7 +411,7 @@ function trustsTarget(
  * belongs to.
  */
 export interface RelationshipExpansionOptions
-  extends Pick<RelatedRowReadContext, "targetRuleMatches"> {
+  extends Pick<RelatedRowReadContext, "targetRuleMatches" | "localeChain"> {
   /**
    * Maximum depth to expand relationships (0-5).
    * - 0: No expansion, return IDs only
@@ -786,6 +786,7 @@ function relatedRowAccessOf(
     trusted: assumedBound(options.trusted),
     authenticatedScope: options.authenticatedScope,
     locale: options.locale,
+    localeChain: options.localeChain,
     status: options.status,
     withheldByAccess: options.withheldByAccess,
     // One per expansion, so a relationship holding many references reads its
@@ -1739,7 +1740,10 @@ export class CollectionRelationshipService extends BaseService {
     statusFilter: StatusFilter | null,
     access: RelatedRowAccess
   ): Promise<SQL<number> | undefined> {
-    const localeChain = access.locale ? [access.locale] : null;
+    // Every language the surrounding read falls back through, as a direct
+    // read of the target is judged in; else the one it resolved to.
+    const localeChain =
+      access.localeChain ?? (access.locale ? [access.locale] : null);
     const companion = localeChain
       ? await this.resolveTargetCompanion(targetCollection, access)
       : null;
@@ -1982,7 +1986,7 @@ export class CollectionRelationshipService extends BaseService {
     const key = JSON.stringify([
       targetCollection,
       statusFilter?.values ?? null,
-      access.locale ?? null,
+      access.localeChain ?? access.locale ?? null,
     ]);
     const cached = access.targetRuleMatches?.get(key);
     if (cached) return cached;
