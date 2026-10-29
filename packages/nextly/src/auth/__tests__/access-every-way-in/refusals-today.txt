@@ -409,9 +409,6 @@ public visitor publish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED e
 public visitor read collection async-false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc async false.
 public visitor read collection async-false at rest  403 FORBIDDEN error  missing=same  | You can't see this pc async false.
 public visitor read collection async-false at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc async false.
-public visitor read collection async-filter at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc async filter.
-public visitor read collection async-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this pc async filter.
-public visitor read collection async-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc async filter.
 public visitor read collection async-throws at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc async throws.
 public visitor read collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't see this pc async throws.
 public visitor read collection async-throws at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc async throws.
@@ -433,9 +430,6 @@ public visitor read collection returns-empty-in at service  403 FORBIDDEN thrown
 public visitor read collection returns-false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns false.
 public visitor read collection returns-false at rest  403 FORBIDDEN error  missing=same  | You can't see this pc returns false.
 public visitor read collection returns-false at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns false.
-public visitor read collection returns-filter at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns filter.
-public visitor read collection returns-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this pc returns filter.
-public visitor read collection returns-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns filter.
 public visitor read collection returns-null at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns null.
 public visitor read collection returns-null at rest  403 FORBIDDEN error  missing=same  | You can't see this pc returns null.
 public visitor read collection returns-null at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns null.
@@ -1085,10 +1079,7 @@ service custom-role read collection async-false at direct  404 NOT_FOUND thrown 
 service custom-role read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role read collection async-false at route  403 FORBIDDEN error  | You can't see c async falses.
 service custom-role read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
-service custom-role read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -1117,10 +1108,7 @@ service custom-role read collection returns-false at direct  404 NOT_FOUND throw
 service custom-role read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role read collection returns-false at route  403 FORBIDDEN error  | You can't see c returns falses.
 service custom-role read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role read collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
-service custom-role read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -1811,10 +1799,7 @@ service key-full-access read collection async-false at direct  404 NOT_FOUND thr
 service key-full-access read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access read collection async-false at route  403 FORBIDDEN error  | You can't see c async falses.
 service key-full-access read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
-service key-full-access read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -1843,10 +1828,7 @@ service key-full-access read collection returns-false at direct  404 NOT_FOUND t
 service key-full-access read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access read collection returns-false at route  403 FORBIDDEN error  | You can't see c returns falses.
 service key-full-access read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access read collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
-service key-full-access read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -2608,10 +2590,7 @@ service key-partial read collection async-false at direct  404 NOT_FOUND thrown 
 service key-partial read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial read collection async-false at route  403 FORBIDDEN error  | You can't see c async falses.
 service key-partial read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
-service key-partial read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -2640,10 +2619,7 @@ service key-partial read collection returns-false at direct  404 NOT_FOUND throw
 service key-partial read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial read collection returns-false at route  403 FORBIDDEN error  | You can't see c returns falses.
 service key-partial read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial read collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
-service key-partial read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -3520,10 +3496,7 @@ service key-read-only read collection async-false at direct  404 NOT_FOUND throw
 service key-read-only read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only read collection async-false at route  403 FORBIDDEN error  | You can't see c async falses.
 service key-read-only read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
-service key-read-only read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -3552,10 +3525,7 @@ service key-read-only read collection returns-false at direct  404 NOT_FOUND thr
 service key-read-only read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only read collection returns-false at route  403 FORBIDDEN error  | You can't see c returns falses.
 service key-read-only read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-read-only read collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
-service key-read-only read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -4356,10 +4326,7 @@ service key-role-based read collection async-false at direct  404 NOT_FOUND thro
 service key-role-based read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based read collection async-false at route  403 FORBIDDEN error  | You can't see c async falses.
 service key-role-based read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
-service key-role-based read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -4388,10 +4355,7 @@ service key-role-based read collection returns-false at direct  404 NOT_FOUND th
 service key-role-based read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based read collection returns-false at route  403 FORBIDDEN error  | You can't see c returns falses.
 service key-role-based read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based read collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
-service key-role-based read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -5103,10 +5067,7 @@ service key-super-admin read collection async-false at direct  404 NOT_FOUND thr
 service key-super-admin read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin read collection async-false at route  403 FORBIDDEN error  | You can't see c async falses.
 service key-super-admin read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-super-admin read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-super-admin read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
-service key-super-admin read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -5135,10 +5096,7 @@ service key-super-admin read collection returns-false at direct  404 NOT_FOUND t
 service key-super-admin read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin read collection returns-false at route  403 FORBIDDEN error  | You can't see c returns falses.
 service key-super-admin read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-super-admin read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-super-admin read collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
-service key-super-admin read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-super-admin read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-super-admin read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -5744,8 +5702,6 @@ service principal publish single-pub true at direct  403 FORBIDDEN thrown  | You
 service principal publish single-pub user-is-key-maker at direct  404 NOT_FOUND thrown  | Not found.
 service principal read collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5764,8 +5720,6 @@ service principal read collection returns-empty-in at direct  404 NOT_FOUND thro
 service principal read collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal read collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6194,8 +6148,6 @@ service principal-other publish single-pub true at direct  403 FORBIDDEN thrown 
 service principal-other publish single-pub user-is-key-maker at direct  404 NOT_FOUND thrown  | Not found.
 service principal-other read collection async-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal-other read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal-other read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection async-throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6216,8 +6168,6 @@ service principal-other read collection returns-empty-in at direct  404 NOT_FOUN
 service principal-other read collection returns-empty-in at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection returns-false at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal-other read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service principal-other read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection returns-null at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service principal-other read collection returns-string at direct  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6853,10 +6803,7 @@ service user-partial read collection async-false at direct  404 NOT_FOUND thrown
 service user-partial read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial read collection async-false at route  403 FORBIDDEN error  | You can't see c async falses.
 service user-partial read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
-service user-partial read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -6885,10 +6832,7 @@ service user-partial read collection returns-false at direct  404 NOT_FOUND thro
 service user-partial read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial read collection returns-false at route  403 FORBIDDEN error  | You can't see c returns falses.
 service user-partial read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial read collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
-service user-partial read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
@@ -7621,10 +7565,7 @@ service user-with read collection async-false at direct  404 NOT_FOUND thrown  m
 service user-with read collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with read collection async-false at route  403 FORBIDDEN error  | You can't see c async falses.
 service user-with read collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with read collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with read collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with read collection async-filter at route  403 FORBIDDEN error  | You can't see c async filters.
-service user-with read collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with read collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with read collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with read collection async-throws at route  403 FORBIDDEN error  | You can't see c async throws.
@@ -7653,10 +7594,7 @@ service user-with read collection returns-false at direct  404 NOT_FOUND thrown 
 service user-with read collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with read collection returns-false at route  403 FORBIDDEN error  | You can't see c returns falses.
 service user-with read collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with read collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with read collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with read collection returns-filter at route  403 FORBIDDEN error  | You can't see c returns filters.
-service user-with read collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with read collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with read collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with read collection returns-null at route  403 FORBIDDEN error  | You can't see c returns nulls.
