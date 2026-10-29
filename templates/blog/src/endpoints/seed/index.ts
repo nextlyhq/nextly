@@ -74,7 +74,7 @@ const TEMPLATE_ROLES = [
     slug: "author",
     name: "Author",
     description:
-      "Can draft and edit posts, but not publish or delete them. Reads taxonomy.",
+      "Can draft, edit, and delete their own posts, but not publish them. Reads taxonomy.",
     level: 10,
   },
 ] as const;
@@ -135,11 +135,12 @@ async function findUserByEmail(
 /**
  * The only posts permissions the author role is given. Named rather than
  * withheld, so an action a site adds later (`manage-posts`, say) is not
- * handed to authors by default. Access rules cannot tell an author's own post
- * from anyone else's, so delete or publish would reach every post (see
- * pickPermissionIdsForRoles).
+ * handed to authors by default. Posts' update and delete rules limit a caller
+ * without `publish-posts` to the posts they wrote, so update and delete reach
+ * an author's own posts only. Publish is withheld: it would reach every post
+ * (see pickPermissionIdsForRoles).
  */
-const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
+const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update", "delete"]);
 
 /**
  * Pick permission IDs appropriate for each role. Fetches the catalog of
@@ -149,10 +150,12 @@ const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
  * - admin: every permission in the system (broad default - tighten via
  *   /admin/roles/<slug> after seeding).
  * - editor: content + media permissions.
- * - author: posts (create, read, update) + media and read-only access to
- *   the content taxonomy. No delete or publish on posts: access rules
- *   cannot tell an author's own post from anyone else's, so either
- *   permission would reach every post. An editor publishes.
+ * - author: posts (create, read, update, delete) + media and read-only
+ *   access to the content taxonomy. Posts' rules limit an update or a
+ *   delete by a caller without `publish-posts` to the posts they wrote, so
+ *   an author changes and deletes only their own. No publish on posts: it
+ *   is not limited that way, and would reach every post. An editor
+ *   publishes.
  *
  * Returns an empty array if fetching permissions fails; callers still
  * get a "at least one permission required" error from the core service
