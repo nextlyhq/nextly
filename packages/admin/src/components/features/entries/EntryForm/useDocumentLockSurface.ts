@@ -23,6 +23,7 @@ import {
 import {
   documentLockAffordances,
   READ_ONLY_FOR_READER,
+  READ_ONLY_REMOVED_FROM_CODE,
   type DocumentLockAffordances,
 } from "./document-lock-affordances";
 
@@ -46,10 +47,17 @@ export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
    * the surface is read-only, with the reader's notice in the lock's place.
    */
   readOnlyForReader?: boolean;
+  /**
+   * Why the surface is read-only for a reader: the user's access (the
+   * default), or the entity's removal from code, whose notice the editor's
+   * document banner carries instead of the reader's sentence.
+   */
+  readOnlyBecause?: "access" | "removed-from-code";
 }
 
 export function useDocumentLockSurface({
   readOnlyForReader = false,
+  readOnlyBecause = "access",
   ...options
 }: DocumentLockSurfaceOptions): DocumentLockSurface {
   const { state, takeOver, requestAccess } = useDocumentLock({
@@ -80,7 +88,9 @@ export function useDocumentLockSurface({
 
   return {
     ...(readOnlyForReader
-      ? READ_ONLY_FOR_READER
+      ? readOnlyBecause === "removed-from-code"
+        ? READ_ONLY_REMOVED_FROM_CODE
+        : READ_ONLY_FOR_READER
       : documentLockAffordances(state, lastKnownHolder.current)),
     takeOver,
     requestAccess,

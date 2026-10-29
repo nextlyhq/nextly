@@ -59,6 +59,11 @@ export interface CollectionForColumns {
    * language filter.
    */
   localized?: boolean;
+  /**
+   * Whether the collection is removed from code: its entries are listed and
+   * nothing that writes to them is offered.
+   */
+  removedFromCode?: boolean;
   /** Admin UI configuration */
   admin?: {
     /** Default columns to display in list view */

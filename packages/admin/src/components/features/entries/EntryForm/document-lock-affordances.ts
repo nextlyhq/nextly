@@ -139,6 +139,18 @@ export const READ_ONLY_FOR_READER: DocumentLockAffordances = {
   },
 };
 
+/**
+ * A document whose collection or Single was removed from code: read-only for
+ * everyone, with no claim made, as for a reader. The strip says nothing: the
+ * editor's document banner carries the notice that names the entity and its
+ * next step, and a second sentence here would say it twice.
+ */
+export const READ_ONLY_REMOVED_FROM_CODE: DocumentLockAffordances = {
+  readOnly: true,
+  actionsDisabled: false,
+  notice: null,
+};
+
 /** Everything a colleague's claim withholds, with the sentence that explains it. */
 function withheld(
   tone: DocumentLockNotice["tone"],

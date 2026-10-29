@@ -76,6 +76,7 @@ import {
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
@@ -111,6 +112,7 @@ import {
 } from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { SingleAdminOptions } from "@admin/types/entities";
+import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
 import { relaxIdentityRequired } from "./identity-fields";
 import { useSinglePreviewLink } from "./useSinglePreviewLink";
@@ -123,7 +125,7 @@ import { useSinglePreviewPane } from "./useSinglePreviewPane";
 /**
  * Single schema data (from useSingleSchema hook)
  */
-export interface SingleSchema {
+export interface SingleSchema extends RemovedFromCodeMark {
   slug: string;
   label: string;
   description?: string;
@@ -595,19 +597,28 @@ export function SingleForm({
   // A user who may read this Single but not change it gets the same page,
   // read-only, with no claim made on the document.
   const updateAnswer = useUpdateAnswer(schema.slug);
-  const readOnlyForReader = updateAnswer === "refused";
+  // A Single removed from code refuses every write, for everyone: the page
+  // opens as it does for a reader, through the same gates.
+  const removedFromCode = isRemovedFromCode(schema);
+  const readOnlyForReader = updateAnswer === "refused" || removedFromCode;
+  // What the user's access allows, apart from the removal: previewing and
+  // sharing a preview follow it alone, since the server keeps preview links
+  // working for a removed Single and opening one writes nothing.
+  const accessAllowsEdits = editsOffered(updateAnswer);
   // While a language switch's answer is on its way, nothing that saves is
   // offered and a submit is held, though the page is not read-only.
-  const mayEdit = editsOffered(updateAnswer);
-  // What changing the Single needs is held with it: previewing and sharing a
-  // preview (minting a link needs it on the server) and a version's restore,
-  // for a reader and while a language switch's answer is on its way.
+  const mayEdit = accessAllowsEdits && !removedFromCode;
+  const previewHeld = !accessAllowsEdits;
+  // What changing the Single needs is held with it: a recovery point and a
+  // version's restore, for a reader, for a removed Single and while a
+  // language switch's answer is on its way.
   const updatesHeld = !mayEdit;
   const lock = useDocumentLockSurface({
     scopeKind: "single",
     slug: schema.slug,
     entryId: document.id,
     readOnlyForReader,
+    readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
   });
 
   // System fields: title (system header) and slug (meta strip). Per the
@@ -1002,6 +1013,7 @@ export function SingleForm({
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
     canEdit: mayEdit,
+    writesRefused: removedFromCode,
     contributedActions: documentActions,
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
@@ -1061,7 +1073,7 @@ export function SingleForm({
                  * it there.
                  */
                 // Nor beside a document view, which takes the window alone.
-                open={previewPane.open && !documentView && !updatesHeld}
+                open={previewPane.open && !documentView && !previewHeld}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1154,12 +1166,12 @@ export function SingleForm({
                                   // Sharing a preview needs the permission to change
                                   // the Single on the server, so a reader is not offered it.
                                   isLinkAvailable={
-                                    previewLink.isAvailable && !updatesHeld
+                                    previewLink.isAvailable && !previewHeld
                                   }
                                   // Withheld from a reader, so the share
                                   // popover cannot stay mounted for them.
                                   {...(previewLink.shareDocument ===
-                                    undefined || updatesHeld
+                                    undefined || previewHeld
                                     ? {}
                                     : {
                                         shareDocument:
@@ -1175,7 +1187,7 @@ export function SingleForm({
                                   // share link beside it: opening one mints a
                                   // credential the server grants only to a
                                   // user who may change the Single.
-                                  {...(updatesHeld ? {} : previewPane.toggle)}
+                                  {...(previewHeld ? {} : previewPane.toggle)}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     // A reader's page holds the slot's writes too.
@@ -1190,6 +1202,7 @@ export function SingleForm({
                                   scope="single"
                                   lockIdentity
                                   documentLocked={lock.readOnly}
+                                  writesRefused={removedFromCode}
                                   isRailCollapsed={railCollapsed}
                                   onToggleRail={toggleRail}
                                 />

@@ -104,6 +104,12 @@ export interface DocumentActionState {
   isDirty: boolean;
   /** Whether the document can be duplicated — an edit-mode affordance. */
   canDuplicate: boolean;
+  /**
+   * Whether the server refuses every write to this document whoever asks: its
+   * collection or Single was removed from code. Then only what reads is
+   * offered, with no permission bringing a write back. Absent means false.
+   */
+  writesRefused?: boolean;
 }
 
 /** The reason every action is unavailable while a past version is on screen. */
@@ -200,7 +206,7 @@ const PRIMARY_FALLBACK = { id: "publish", label: "Publish" };
 function primaryAction(state: DocumentActionState): DocumentAction | undefined {
   // Every leading action stores the form, which a user who may not change
   // the document cannot do, so a page they may only read leads with nothing.
-  if (!state.canEdit) return undefined;
+  if (!state.canEdit || state.writesRefused === true) return undefined;
   const matched = PRIMARY_RULES.find(rule => rule.applies(state));
   const { id, label } = matched?.build(state) ?? PRIMARY_FALLBACK;
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
@@ -423,7 +429,12 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
 export function documentActions(state: DocumentActionState): DocumentAction[] {
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
   const built = BUILT_IN_ACTIONS.filter(
-    rule => rule.applies(state) && (state.canEdit || !rule.edits)
+    rule =>
+      rule.applies(state) &&
+      (state.canEdit || !rule.edits) &&
+      // Nothing that writes, where every write is refused: not even the
+      // verbs that follow a permission of their own.
+      (state.writesRefused !== true || !rule.mutates)
   ).map(rule =>
     withReason(
       {

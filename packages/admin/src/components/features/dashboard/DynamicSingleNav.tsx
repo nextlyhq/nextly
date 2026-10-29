@@ -3,6 +3,12 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import React from "react";
 
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
+import {
+  RemovedFromCodeDescription,
+  RemovedFromCodeMark,
+  removedFromCodeMarkId,
+} from "@admin/components/features/entries/RemovedFromCodeNotice";
 import * as Icons from "@admin/components/icons";
 import { Bookmark, Globe, type LucideIcon } from "@admin/components/icons";
 import {
@@ -66,6 +72,18 @@ export function DynamicSingleNav({
         const isItemActive = isActive(href);
         const singlePinned = isPinned(single.slug);
         const displayName = singleDisplayName(single);
+        // A Single removed from code stays listed, marked, with the step that
+        // retires it as the link's description.
+        const removed = isRemovedFromCode(single)
+          ? {
+              entity: {
+                kind: "single" as const,
+                label: displayName,
+                slug: single.slug,
+              },
+              state: single.removedFromCodeState,
+            }
+          : null;
 
         return (
           <SidebarMenuItem key={single.slug}>
@@ -76,14 +94,28 @@ export function DynamicSingleNav({
                   isActive={isItemActive}
                   className={cn(!isCollapsed && "justify-start")}
                 >
-                  <Link href={href}>
+                  <Link
+                    href={href}
+                    aria-describedby={
+                      removed
+                        ? removedFromCodeMarkId(removed.entity)
+                        : undefined
+                    }
+                  >
                     {React.createElement(
                       iconMap[single.admin?.icon || ""] || Globe,
                       {
                         className: cn("h-4 w-4 shrink-0"),
                       }
                     )}
-                    {!isCollapsed && <span>{displayName}</span>}
+                    {/* Truncated itself: the button truncates only its last
+                        span, which the mark would otherwise be. */}
+                    {!isCollapsed && (
+                      <span className="min-w-0 truncate">{displayName}</span>
+                    )}
+                    {!isCollapsed && removed ? (
+                      <RemovedFromCodeMark {...removed} />
+                    ) : null}
                   </Link>
                 </SidebarMenuButton>
               </TooltipTrigger>
@@ -95,6 +127,7 @@ export function DynamicSingleNav({
                 {displayName}
               </TooltipContent>
             </Tooltip>
+            {removed ? <RemovedFromCodeDescription {...removed} /> : null}
             {!isCollapsed && (
               <SidebarMenuAction
                 showOnHover={!singlePinned}

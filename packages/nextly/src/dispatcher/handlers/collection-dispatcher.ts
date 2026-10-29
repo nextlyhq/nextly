@@ -107,6 +107,7 @@ import {
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
+import { withRemovedFromCodeMarks } from "../helpers/removed-from-code-marks";
 import { readRequestLocalized } from "../helpers/request-localized";
 import {
   paginatedResponseToMeta,
@@ -515,8 +516,13 @@ const COLLECTIONS_METHODS: Record<
       };
 
       // The rows and the meta now describe one set, because the allowlist was
-      // a condition on the query that produced both.
-      return respondList(items, toPaginationMeta(baseMeta));
+      // a condition on the query that produced both. A collection removed from
+      // code stays listed, marked, so the admin can say so and name the step
+      // that retires it.
+      return respondList(
+        await withRemovedFromCodeMarks("collection", items),
+        toPaginationMeta(baseMeta)
+      );
     },
   },
   getCollection: {
@@ -537,7 +543,12 @@ const COLLECTIONS_METHODS: Record<
         [collection as CollectionWithAdmin],
         config?.plugins ?? []
       );
-      return respondDoc(collectionWithViews as unknown);
+      // Marked as the listing marks it, so the entity's own screens show the
+      // notice the navigation's mark promises.
+      const [marked] = await withRemovedFromCodeMarks("collection", [
+        collectionWithViews as unknown as Record<string, unknown>,
+      ]);
+      return respondDoc(marked as unknown);
     },
   },
   updateCollection: {

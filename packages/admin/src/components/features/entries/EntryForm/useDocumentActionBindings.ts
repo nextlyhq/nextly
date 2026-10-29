@@ -122,6 +122,12 @@ export interface DocumentActionBindingsInput {
    */
   canEdit?: boolean;
   /**
+   * Whether the server refuses every write to the document whoever asks (its
+   * collection or Single was removed from code): only what reads is offered,
+   * and no contributed action is folded in.
+   */
+  writesRefused?: boolean;
+  /**
    * Document actions the PAGE owns, folded in with the built-in ones.
    *
    * Descriptions rather than rendered controls, so placement, ordering and
@@ -388,6 +394,7 @@ export function useDocumentActionBindings({
   locale,
   documentLocked = false,
   canEdit = true,
+  writesRefused = false,
   contributedActions = [],
   onSubmit,
   onSaveDraft,
@@ -486,6 +493,7 @@ export function useDocumentActionBindings({
     canDelete: onDelete !== undefined,
     isDirty: isDirty === true,
     canDuplicate: onDuplicate !== undefined,
+    writesRefused,
   });
 
   const { reasons, refusalFor } = refusalReasons({
@@ -543,7 +551,9 @@ export function useDocumentActionBindings({
   const withContributions = acceptContributions(
     documentVerbs,
     actionBindings,
-    isReadingHistory ? [] : contributedActions
+    // A contribution acts on the document too (adding it to a release), which
+    // is not offered where every write to it is refused.
+    isReadingHistory || writesRefused ? [] : contributedActions
   );
 
   const run = (id: string): Promise<DocumentActionOutcome> =>

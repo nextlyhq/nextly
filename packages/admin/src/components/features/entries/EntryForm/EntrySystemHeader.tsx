@@ -174,6 +174,12 @@ export interface EntrySystemHeaderProps {
    * under someone else's claim contradicts the strip above it.
    */
   documentLocked?: boolean;
+  /**
+   * Whether the server refuses every write to the document whoever asks (its
+   * collection or Single was removed from code): the history panel offers no
+   * restore and no version naming, whatever the user's permissions.
+   */
+  writesRefused?: boolean;
 
   /** Rail collapsed state. */
   isRailCollapsed?: boolean;
@@ -232,6 +238,7 @@ export function EntrySystemHeader({
   historyLifecycle = false,
   lockIdentity = false,
   documentLocked = false,
+  writesRefused = false,
   isRailCollapsed = false,
   onToggleRail,
   toolbarSlot,
@@ -676,7 +683,9 @@ export function EntrySystemHeader({
           entityLocalized={localized}
           // Restore reuses the ordinary edit permission, so a caller who may
           // only read history is not offered a write that would be refused.
-          canRestore={canUpdateDocument}
+          // Naming a version rides the same answer, so a removed entity's
+          // history offers neither.
+          canRestore={canUpdateDocument && !writesRefused}
           // The restore's confirmation must disclose what happens to unsaved
           // work in the live editor — restoring replaces the live document,
           // and the refresh that follows discards it. The WHOLE unsaved-work

@@ -41,6 +41,11 @@ import type { Entry } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { BulkDeleteDialog } from "../BulkActions/BulkDeleteDialog";
+import {
+  isRemovedFromCode,
+  removedEntityHasNoTable,
+} from "../removed-from-code-notice";
+import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 
 import {
   getCollectionLabels,
@@ -503,7 +508,10 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
   // is unknown, and unknown counts as disabled: the shortcut must not slip
   // through the loading window.
   const canCreate = useCan(`create-${collectionSlug}`);
-  const createDisabled = Boolean(collection?.admin?.disableCreate);
+  // A collection removed from code refuses every write, a create included.
+  const removedFromCode = isRemovedFromCode(collection);
+  const createDisabled =
+    Boolean(collection?.admin?.disableCreate) || removedFromCode;
   const createAllowed = Boolean(collection) && !createDisabled && canCreate;
   // The bulk actions offered here, which the table's checkboxes and bar
   // follow too, so the Delete shortcut opens nothing they would not.
@@ -649,6 +657,19 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
         </div>
       </div>
 
+      {/* Above the list: why nothing here can be changed, and the next step. */}
+      {removedFromCode && (
+        <RemovedFromCodeNotice
+          entity={{
+            kind: "collection",
+            label: labels.plural,
+            slug: collectionSlug,
+          }}
+          state={collection?.removedFromCodeState}
+          className="mb-6"
+        />
+      )}
+
       {/* BeforeListTable injection point */}
       {beforeListTablePath && (
         <PluginSlot path={beforeListTablePath} props={injectionProps} />
@@ -657,7 +678,8 @@ export function EntryList({ collectionSlug }: EntryListProps): JSX.Element {
       {/* Content — a plugin List override replaces the default table (D23) */}
       {listViewPath ? (
         <PluginSlot path={listViewPath} props={injectionProps} />
-      ) : entriesError ? (
+      ) : entriesError &&
+        removedEntityHasNoTable(collection) ? null : entriesError ? (
         // A list the server refused says so in its own words where the rows
         // would be. Without this a failed read has no rows and is not
         // loading, which draws the empty state and calls the collection empty.

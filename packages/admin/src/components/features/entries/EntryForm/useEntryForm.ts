@@ -30,6 +30,7 @@ import {
   withoutPlaceholders,
 } from "@admin/lib/form/stored-references";
 import type { EntryValue } from "@admin/types/collection";
+import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
 import { submitDocument } from "./submit-document";
 import {
@@ -67,7 +68,7 @@ export interface EntryFormPreviewConfig {
  * Supports both old API format (schemaDefinition.fields) and
  * new API format (fields directly at root).
  */
-export interface EntryFormCollection {
+export interface EntryFormCollection extends RemovedFromCodeMark {
   /** Collection slug/name for API calls */
   name: string;
   /** Slug for new API format */

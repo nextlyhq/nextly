@@ -3,6 +3,7 @@
 import type { SinglePreviewConfig } from "nextly/config";
 
 import type { FieldDefinition } from "./collection";
+import type { RemovedFromCodeMark } from "./removed-from-code";
 
 export interface Permission {
   id: string;
@@ -141,7 +142,7 @@ export interface CollectionLabels {
  * This interface includes all metadata fields needed for the collection
  * list page, including source tracking, migration status, and locked state.
  */
-export interface ApiCollection {
+export interface ApiCollection extends RemovedFromCodeMark {
   id: string;
   name: string;
   label: string;
@@ -293,7 +294,7 @@ export interface CustomSidebarGroup {
  * This interface includes all metadata fields needed for the Single
  * list page, including source tracking, migration status, and locked state.
  */
-export interface ApiSingle {
+export interface ApiSingle extends RemovedFromCodeMark {
   id: string;
   slug: string;
   label: string;

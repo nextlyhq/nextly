@@ -137,7 +137,25 @@ export async function entityRemovedFromCode(
     slug,
     options.executor
   );
-  return row !== null && isRemovedFromCode(row, slugs);
+  return row !== null && registryRowRemovedFromCode(kind, row);
+}
+
+/**
+ * Whether a registry row already in hand is removed from code under the
+ * published configuration: the one decision the write guard makes, for a
+ * listing that reads the rows itself. False while no configuration is
+ * published, as the guard reads it.
+ */
+export function registryRowRemovedFromCode(
+  kind: RemovableEntityKind,
+  row: { slug?: string | null; source?: string | null }
+): boolean {
+  const declared = globalForDeclared.__nextly_declaredEntities;
+  if (declared === undefined) return false;
+  return isRemovedFromCode(
+    row,
+    kind === "single" ? declared.singles : declared.collections
+  );
 }
 
 /**
