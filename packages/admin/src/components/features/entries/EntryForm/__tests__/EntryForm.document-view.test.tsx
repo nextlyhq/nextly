@@ -28,6 +28,7 @@ import {
   screen,
   waitFor,
 } from "@admin/__tests__/utils";
+import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 import {
   clearRegistry,
   registerComponent,
@@ -38,9 +39,14 @@ import {
   registerDocumentViews,
 } from "@admin/lib/plugins/document-view-registry";
 
-const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
+const { useDocumentLock, update, recovery, updateOptions } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
   update: vi.fn(),
+  // What the editor hands its update mutation, a refused publish's way out
+  // among it.
+  updateOptions: {
+    current: undefined as { refusedForm?: RefusedForm } | undefined,
+  },
   recovery: {
     current: {
       offer: null as { savedAt: Date; snapshot: unknown } | null,
@@ -54,7 +60,10 @@ const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 // The save is observed where it leaves the editor: the update mutation.
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
-  useUpdateEntry: () => ({ mutateAsync: update, isPending: false }),
+  useUpdateEntry: (options: { refusedForm?: RefusedForm }) => {
+    updateOptions.current = options;
+    return { mutateAsync: update, isPending: false };
+  },
 }));
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   useAutosaveRecovery: () => recovery.current,
@@ -78,6 +87,10 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 import { useHostedDocumentActions } from "../DocumentActionsContext";
 import { EntryForm } from "../EntryForm";
 import { useDocumentStatus } from "../EntryFormContext";
+import {
+  useBeforeDocumentAction,
+  useTrackedWrite,
+} from "../useDocumentActionHooks";
 
 const VIEW = "@acme/pb/admin#Builder";
 const collection = {
@@ -86,6 +99,19 @@ const collection = {
   fields: [{ name: "title", type: "text", label: "Title" }],
 } as never;
 const entry = { id: "e1", title: "Hello" } as never;
+/**
+ * The same document with a lifecycle that keeps a published entry's change
+ * pending: where a refused publish happens, and its recovery's Save stays
+ * unpublished.
+ */
+const withDrafts = {
+  collection: {
+    ...(collection as object),
+    status: true,
+    draftsEnabled: true,
+  } as never,
+  entry: { id: "e1", title: "Hello", status: "published" } as never,
+};
 const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 
 const received = vi.fn();
@@ -262,6 +288,193 @@ describe("EntryForm with a document view", () => {
       expect.objectContaining({ readOnly: true })
     );
   });
+
+  it("holds the view read-only, and marks it busy, while a recovery takes the live values", async () => {
+    renderView(withDrafts);
+    const busyAround = () =>
+      screen.getByTestId("builder-view").closest("[aria-busy='true']");
+    expect(busyAround()).toBeNull();
+
+    // Made before the recovery starts, which runs its work a task later.
+    let done: () => void = () => {};
+    const held = new Promise<void>(resolve => {
+      done = resolve;
+    });
+    let running: Promise<unknown> | undefined;
+    act(() => {
+      running = updateOptions.current?.refusedForm?.recover(() => held);
+    });
+    expect(busyAround()).not.toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true })
+    );
+
+    await act(async () => {
+      done();
+      await running;
+    });
+    expect(busyAround()).toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: false })
+    );
+  });
+
+  it.each([
+    ["the recovery's Save", true, 0],
+    ["the view's own Save", true, 0],
+    // The control: with no move, the same Save writes.
+    ["the view's own Save", false, 1],
+  ] as const)(
+    "writes nothing into the language %s started in once the editor moved while it waited on the view (moved: %s)",
+    async (which, moves, writes) => {
+      let commit: () => void = () => {};
+      const saved: unknown[] = [];
+      /** A view whose open edit commits when the test says. */
+      function SlowView(): ReactElement {
+        const { run } = useHostedDocumentActions();
+        const { register } = useFormContext();
+        useBeforeDocumentAction(
+          () =>
+            new Promise<void>(resolve => {
+              commit = resolve;
+            })
+        );
+        return (
+          <div>
+            <input aria-label="Title in the view" {...register("title")} />
+            <button
+              type="button"
+              onClick={() => {
+                void run("save").then(outcome => saved.push(outcome));
+              }}
+            >
+              Save from the view
+            </button>
+          </div>
+        );
+      }
+      registerComponent(VIEW, SlowView);
+      const element = (locale?: string) => (
+        <EntryForm
+          collection={collection}
+          entry={entry}
+          mode="edit"
+          onCancel={onCancel}
+          documentView={{ component: VIEW, onExit }}
+          {...withDrafts}
+          {...(locale === undefined ? {} : { locale })}
+        />
+      );
+      const { rerender } = render(element(), { wrapper: Providers });
+      // An edit, so a published entry has a Save to offer.
+      fireEvent.change(
+        screen.getByRole("textbox", { name: "Title in the view" }),
+        {
+          target: { value: "Edited in the view" },
+        }
+      );
+      const take = vi.fn(async () => undefined);
+
+      let running: Promise<unknown> | undefined;
+      act(() => {
+        running =
+          which === "the recovery's Save"
+            ? updateOptions.current?.refusedForm
+                ?.recover(take)
+                .catch((error: unknown) => error)
+            : undefined;
+      });
+      if (which === "the view's own Save") {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Save from the view" })
+        );
+      }
+      // A switch to a language already cached, while the view's edit is still
+      // committing: the form starts afresh from that language's values.
+      if (moves) rerender(element("de"));
+      await act(async () => {
+        commit();
+        await running;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      });
+
+      // Nothing is written into the language the store started in.
+      expect(update).toHaveBeenCalledTimes(writes);
+      if (moves) expect(take).not.toHaveBeenCalled();
+    }
+  );
+
+  it("waits for a view's before-action handler, and its Save stores what the view commits", async () => {
+    /** A view holding work outside the form, committed when asked. */
+    function HoldingView(): ReactElement {
+      const { setValue } = useFormContext();
+      useBeforeDocumentAction(async () => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        setValue("title", "Committed by the view", { shouldDirty: true });
+      });
+      return <div data-testid="holding-view" />;
+    }
+    registerComponent(VIEW, HoldingView);
+    renderView(withDrafts);
+    const take = vi.fn(async () => undefined);
+
+    await act(async () => {
+      await updateOptions.current?.refusedForm?.recover(take);
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0]?.[0]).toMatchObject({
+      title: "Committed by the view",
+    });
+    expect(take).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["succeeds", true],
+    ["fails", false],
+  ] as const)(
+    "waits for a write the view tracks, and stores and takes only when it %s",
+    async (_outcome, ok) => {
+      let settle: () => void = () => {};
+      /** A view whose dependent write is still in flight. */
+      function TrackingView(): ReactElement {
+        const track = useTrackedWrite();
+        useEffect(() => {
+          track(
+            "Site colours",
+            new Promise((resolve, reject) => {
+              settle = () =>
+                ok ? resolve(undefined) : reject(new Error("offline"));
+            })
+          );
+        }, [track]);
+        return <div data-testid="tracking-view" />;
+      }
+      registerComponent(VIEW, TrackingView);
+      renderView(withDrafts);
+      const take = vi.fn(async () => undefined);
+
+      let running: Promise<unknown> | undefined;
+      act(() => {
+        running = updateOptions.current?.refusedForm
+          ?.recover(take)
+          .catch(() => undefined);
+      });
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      });
+      // Nothing stored while the write it depends on is in flight.
+      expect(update).not.toHaveBeenCalled();
+
+      await act(async () => {
+        settle();
+        await running;
+      });
+
+      expect(update).toHaveBeenCalledTimes(ok ? 1 : 0);
+      expect(take).toHaveBeenCalledTimes(ok ? 1 : 0);
+    }
+  );
 
   it("offers recovered work above the view", () => {
     recovery.current = {

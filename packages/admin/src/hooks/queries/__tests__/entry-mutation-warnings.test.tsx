@@ -58,6 +58,7 @@ vi.mock("@admin/components/ui", () => ({
     warning: warningSpy,
     info: infoSpy,
     error: vi.fn(),
+    dismiss: vi.fn(),
   },
 }));
 

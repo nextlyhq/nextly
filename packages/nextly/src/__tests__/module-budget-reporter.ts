@@ -79,14 +79,18 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * fewer. It came down to 1,257 when the suite measured 1,223 (the CLI's
  * upgrade and plugin-rollback tests now heavy, the boot refusal and the
  * seeding wait no longer), and to 1,255 when it measured 1,221, so it holds
- * whether CI measures one fewer. Each
+ * whether CI measures one fewer. The heavy files' pin rose to 70 when the
+ * suite measured 70: four tests that already sat just under the heavy line
+ * (two migrate commands', the production guard of the dev server, the plugin
+ * codegen) crossed it as their shared graph grew by two modules on chains
+ * they already held, with no new edge to make lazy. Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
  * measures below a pin by more than its margin fails, naming the pin to set;
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 67, tailMeanModules: 1_255 };
+export const BUDGET = { heavyFiles: 70, tailMeanModules: 1_255 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

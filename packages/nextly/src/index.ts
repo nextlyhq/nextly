@@ -1144,6 +1144,12 @@ export {
   type AccessRuleOperation,
   type AccessRuleTarget,
   type MinimalUser,
+  // A read rule may answer a filter, typed by the collection's fields.
+  type CollectionFilterRule,
+  type CollectionFilterRuleInput,
+  type CollectionRuleAnswer,
+  type CollectionRuleFilter,
+  type UntypedRuleFilter,
 } from "./collections/config";
 
 // Collection configuration validation
