@@ -21,6 +21,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import {
+  filesWithinStep,
+  stepContinuedNotice,
+  stepFileOf,
+  type StepFile,
+} from "../../domains/i18n/migration/step-windows";
+import {
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
@@ -156,6 +162,47 @@ export function selectAppliedTargets(
   );
   return applied.slice(0, Math.max(0, step)).map(a => a.filename);
 }
+
+/**
+ * The files `migrate:down --step` rolls back, newest first: `step` of them, and on through a move
+ * between translated and shared it would otherwise end inside, saying so (`filesWithinStep`). Each
+ * applied file is read for what it is for; one that is missing or can't be read opens and closes
+ * nothing, and its own refusal comes from `planRollback` if it is a target. A plugin's modules move
+ * no translation, so its stream keeps to the step.
+ */
+async function targetsWithinStep(
+  rows: SchemaEventRow[],
+  step: number,
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "options" | "fileExists" | "readDownSql" | "logger"
+  >,
+  notify: boolean
+): Promise<string[]> {
+  if (deps.options.plugin !== undefined) {
+    return selectAppliedTargets(rows, step, deps.options.plugin);
+  }
+  const applied = selectAppliedTargets(rows, Number.POSITIVE_INFINITY);
+  const files = await Promise.all(
+    applied.map(async filename => {
+      const read = (await deps.fileExists(filename))
+        ? await deps.readDownSql(filename).catch(() => undefined)
+        : undefined;
+      return { filename, ...(read?.stepFile ?? NO_STEP_FILE) };
+    })
+  );
+  const within = filesWithinStep(
+    files.map(file => ({ file, done: false })),
+    step,
+    "down"
+  );
+  if (notify && within.continued !== undefined) {
+    deps.logger.info(stepContinuedNotice(within.continued));
+  }
+  return within.run.map(f => f.filename);
+}
+
+const NO_STEP_FILE: StepFile = { collections: [], singles: [], components: [] };
 
 /**
  * Negative when ledger filename `a` runs after `b` in its stream: by module
@@ -325,6 +372,12 @@ export interface MigrationDown {
   sql: string;
   /** False when the migration is marked to run outside a transaction. */
   transaction: boolean;
+  /**
+   * What the file is for and the entities it names, which `--step` reads so it never ends inside
+   * a move between translated and shared (`filesWithinStep`). Absent for a plugin's module, which
+   * moves no translation.
+   */
+  stepFile?: StepFile;
 }
 
 /** One rollback target, as planned before anything runs. */
@@ -593,7 +646,12 @@ async function planAndGuard(
     await deps.listFileApplies(),
     deps.options.plugin
   );
-  const targets = selectAppliedTargets(rows, step, deps.options.plugin);
+  const targets = await targetsWithinStep(
+    rows,
+    step,
+    deps,
+    agreed === undefined
+  );
   if (targets.length === 0)
     return { planned: [], deletions: [], declined: false };
   const planned = await planRollback(targets, deps);
@@ -1001,6 +1059,7 @@ export async function runMigrateDown(
       return {
         sql: parseSqlSections(content).downSql,
         transaction: !marksNoTransaction(content),
+        stepFile: stepFileOf(content, name),
       };
     };
 

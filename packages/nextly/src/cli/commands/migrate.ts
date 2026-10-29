@@ -45,7 +45,10 @@ import {
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
-import { KIND_NAMES } from "../../domains/i18n/migration/resolve-entity-table";
+import {
+  filesWithinStep,
+  stepContinuedNotice,
+} from "../../domains/i18n/migration/step-windows";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -800,14 +803,17 @@ export async function previewMigrate(args: {
     appStep === 0
       ? []
       : filesWithinStep(
-          await listMigrationFiles(
-            adapter,
-            db,
-            dialect,
-            args.migrationsDir,
-            logger
-          ),
-          appStep
+          (
+            await listMigrationFiles(
+              adapter,
+              db,
+              dialect,
+              args.migrationsDir,
+              logger
+            )
+          ).map(({ file, applied }) => ({ file, done: applied })),
+          appStep,
+          "up"
         ).run;
 
   logger.newline();
@@ -1896,7 +1902,11 @@ export async function runFileMigrations(args: {
       applied: await repo.isFileApplied(`${file.name}.sql`),
     });
   }
-  const within = filesWithinStep(listed, args.step);
+  const within = filesWithinStep(
+    listed.map(({ file, applied }) => ({ file, done: applied })),
+    args.step,
+    "up"
+  );
   const runs = new Set(within.run);
 
   for (const [i, m] of all.entries()) {
@@ -1914,10 +1924,7 @@ export async function runFileMigrations(args: {
     }
     if (!runs.has(m)) break;
     if (applied === within.budget && within.continued !== undefined) {
-      logger.info(
-        `--step ends inside a move out of translation (${within.continued}): running on through its ` +
-          "shared file, so nothing can write between its main and shared files."
-      );
+      logger.info(stepContinuedNotice(within.continued));
     }
 
     // Both apply routes run the same whole-file judgement, so a foreign drop
@@ -2064,79 +2071,6 @@ export async function runFileMigrations(args: {
   }
 
   return applied;
-}
-
-/**
- * The pending files a run with `step` applies, in run order: `step` of them, or every pending file
- * when there is no step, and past the budget on through the shared file of a move out of
- * translation it would otherwise end inside (`fieldLeavesMoves`). Between such a move's main file
- * and its shared file the main column is there and empty, so an app already storing the field there
- * could write a value the shared file's copy then replaces. `continued` names the moves the run goes
- * on for. The run and its dry-run preview both read it, so the preview lists what the run does.
- */
-function filesWithinStep<T extends Pick<ParsedMigration, "localization">>(
-  files: readonly { file: T; applied: boolean }[],
-  step: number | undefined
-): { run: T[]; budget: number; continued: string | undefined } {
-  const moves = fieldLeavesMoves(files.map(f => f.file));
-  const budget =
-    step !== undefined && step > 0 ? step : Number.POSITIVE_INFINITY;
-  const run: T[] = [];
-  let continued: string | undefined;
-  for (const { file, applied } of files) {
-    if (!applied) {
-      if (run.length >= budget) {
-        if (!moves.open()) break;
-        continued ??= moves.describe();
-      }
-      run.push(file);
-    }
-    moves.ran(file);
-  }
-  return { run, budget, continued };
-}
-
-/**
- * The moves out of translation among `files`, as each file runs. A move is one field-leaves change
- * for an entity: its `archive` file opens it and its `shared` file closes it, matched by entity and
- * the columns they move. A move counts as open only while a shared file for it is among `files`, so
- * a missing one never keeps a run going.
- */
-function fieldLeavesMoves(
-  files: readonly Pick<ParsedMigration, "localization">[]
-): {
-  ran(file: Pick<ParsedMigration, "localization">): void;
-  open(): boolean;
-  describe(): string;
-} {
-  const keyOf = (intent: LocalizationMigrationIntent) =>
-    `${intent.entity}:${intent.spec.collection}:${intent.spec.columns
-      .map(c => c.name)
-      .sort()
-      .join(",")}`;
-  const closable = new Set(
-    files.flatMap(f =>
-      f.localization?.kind === "shared" ? [keyOf(f.localization)] : []
-    )
-  );
-  const open = new Map<string, LocalizationMigrationIntent>();
-  return {
-    ran(file) {
-      const intent = file.localization;
-      if (intent?.kind === "archive" && closable.has(keyOf(intent))) {
-        open.set(keyOf(intent), intent);
-      }
-      if (intent?.kind === "shared") open.delete(keyOf(intent));
-    },
-    open: () => open.size > 0,
-    describe: () =>
-      [...open.values()]
-        .map(
-          i =>
-            `${i.spec.columns.map(c => `"${c.name}"`).join(", ")} in ${KIND_NAMES[i.entity]} "${i.spec.collection}"`
-        )
-        .join("; "),
-  };
 }
 
 async function discoverMigrations(

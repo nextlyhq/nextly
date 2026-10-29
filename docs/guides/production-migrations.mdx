@@ -17,32 +17,32 @@ This page covers the common deploy patterns. Pick whichever fits your stack.
 
 ## The CLI commands you'll use
 
-| Command | Purpose |
-|---|---|
-| `nextly migrate:baseline` | Run **once**, when a project developed with `db:sync` starts using migrations. Records the schema the database already has as the starting point. See [Graduating from `db:sync`](#graduating-from-dbsync-to-migrations). |
-| `nextly migrate:create [name]` | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git. |
-| `nextly migrate:check` | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database. |
-| `nextly migrate` | Applies pending `.sql` files to the target database. Run from CI or your laptop. |
-| `nextly migrate:status` | Shows applied / pending / failed / unfinished migrations with their checksums and durations. An unfinished one's last attempt recorded no outcome: the process running it stopped, or is still running. Also names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree). |
-| `nextly migrate:resolve` | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration). |
-| `nextly migrate:fresh` | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required. |
-| `nextly migrate:down` | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration). |
-| `nextly upgrade` | Run after upgrading Nextly, once every instance serves the new release. Brings an existing database up to date in steps: it moves old migration records into `nextly_schema_events`, hashes passwords stored before this release, and removes passwords kept in version history. Says "Already upgraded. Nothing to do." when no step has work. See [Upgrading an existing database](#upgrading-an-existing-database). |
-| `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply --confirm-default-hasher`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed). |
+| Command                                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nextly migrate:baseline`                | Run **once**, when a project developed with `db:sync` starts using migrations. Records the schema the database already has as the starting point. See [Graduating from `db:sync`](#graduating-from-dbsync-to-migrations).                                                                                                                                                                                              |
+| `nextly migrate:create [name]`           | After you edit `nextly.config.ts`, generate a `.sql` file capturing the change. Commit it to git.                                                                                                                                                                                                                                                                                                                      |
+| `nextly migrate:check`                   | CI gate. Verifies migration file integrity and config drift. Does NOT connect to a database.                                                                                                                                                                                                                                                                                                                           |
+| `nextly migrate`                         | Applies pending `.sql` files to the target database. Run from CI or your laptop.                                                                                                                                                                                                                                                                                                                                       |
+| `nextly migrate:status`                  | Shows applied / pending / failed / unfinished migrations with their checksums and durations. An unfinished one's last attempt recorded no outcome: the process running it stopped, or is still running. Also names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree).                                                                                                          |
+| `nextly migrate:resolve`                 | Recovery: mark a file applied/rolled-back or clean up a failed attempt without running SQL. See [Recovering from a failed migration](#recovering-from-a-failed-migration).                                                                                                                                                                                                                                             |
+| `nextly migrate:fresh`                   | Wipes all tables and re-applies every migration. Local-dev only. Confirmation required.                                                                                                                                                                                                                                                                                                                                |
+| `nextly migrate:down`                    | Rolls back the most-recently-applied migration(s) using their `-- DOWN` section. CLI-only; never runs on boot. See [Rolling back a migration](#rolling-back-a-migration).                                                                                                                                                                                                                                              |
+| `nextly upgrade`                         | Run after upgrading Nextly, once every instance serves the new release. Brings an existing database up to date in steps: it moves old migration records into `nextly_schema_events`, hashes passwords stored before this release, and removes passwords kept in version history. Says "Already upgraded. Nothing to do." when no step has work. See [Upgrading an existing database](#upgrading-an-existing-database). |
+| `nextly users:clear-plaintext-passwords` | Finds accounts an earlier release left holding a password stored as typed and, with `--apply --confirm-default-hasher`, clears it and ends their sessions. Previews by default. See [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).                                                                                                                                                         |
 
 Global flags inherited from the root `nextly` command: `--config <path>` (custom `nextly.config.ts` path), `--cwd <path>`, `--verbose`, `-q/--quiet`.
 
-`nextly migrate:down` reverts a single migration at a time (or the last N via `--step`). It is a manual, CLI-only tool — it never runs on boot. **In production, prefer rolling forward** with a new corrective migration, or restore from a backup; rollback restores schema *shape*, not row *data*. See [Rolling back a migration](#rolling-back-a-migration).
+`nextly migrate:down` reverts a single migration at a time (or the last N via `--step`). It is a manual, CLI-only tool — it never runs on boot. **In production, prefer rolling forward** with a new corrective migration, or restore from a backup; rollback restores schema _shape_, not row _data_. See [Rolling back a migration](#rolling-back-a-migration).
 
 ### Per-command flags
 
-- `nextly migrate` -- `--dry-run` (list what a run would apply, without executing: each plugin's pending migration modules by `plugin:<name>/<module>`, then the app's pending files with the SQL each would run, in run order and within `--step`, with anything a run would refuse), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
+- `nextly migrate` -- `--dry-run` (list what a run would apply, without executing: each plugin's pending migration modules by `plugin:<name>/<module>`, then the app's pending files with the SQL each would run, in run order and within `--step`, with anything a run would refuse), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files; a step never ends inside the files that move a field between translated and shared, and the run says when it goes on through them), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`.
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive`, `--accept-renames`.
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting), `--plugin <name>` (list that plugin's migration modules instead of the app's files).
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
-- `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
+- `nextly migrate:down` -- `--step <n>` (roll back the last N migrations, going on through the files that move a field between translated and shared when the step would end inside them), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
 - `nextly upgrade` -- `--confirm-backed-up` (required outside a terminal, when a step has work: your statement that the database is backed up), `-f, --force` (skip the backup prompt), `--target-table-name <name>` (use another name for the events table when one of that name already exists), `--reconcile-core` (see [Core schema drift after `nextly upgrade`](#core-schema-drift-after-nextly-upgrade)), `--force-unlock`.
 - `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued being refused within about ten seconds; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
 
@@ -98,6 +98,7 @@ Accepting them would have written content into `created_by` and `first_published
 the recorded snapshot rather than guessing from shape.
 
 `db:sync` is for a development database you are willing to throw away.
+
 </Callout>
 
 ```bash
@@ -163,7 +164,7 @@ jobs:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
+          vercel-args: "--prod"
 ```
 
 **Order of operations:**
@@ -289,12 +290,12 @@ Specific examples:
 7. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
 8. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
 
-| Exit code | Meaning |
-|---|---|
-| 0 | All pending applied OR no pending |
-| 1 | A migration failed during execution |
-| 2 | `MIGRATION_TAMPERED`. Abort before running any. |
-| 3 | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
+| Exit code | Meaning                                                                  |
+| --------- | ------------------------------------------------------------------------ |
+| 0         | All pending applied OR no pending                                        |
+| 1         | A migration failed during execution                                      |
+| 2         | `MIGRATION_TAMPERED`. Abort before running any.                          |
+| 3         | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
 
 ## Where the registry and the tables disagree
 
@@ -335,18 +336,18 @@ A few kinds of statement cannot live inside that, and `nextly migrate`,
 runs. `migrate --dry-run` and `migrate:down --dry-run` report the same
 refusals without executing anything, and `migrate:check` warns about them.
 
-| Statement | What happens | Why |
-|---|---|---|
-| `BEGIN`, `START TRANSACTION`, `COMMIT`, `END` (with any modifiers, such as `BEGIN IMMEDIATE` or `START TRANSACTION READ WRITE`) | Left out; the rest of the file runs. Refused in a no-transaction file | The runner's own transaction already brackets the file. |
-| `SAVEPOINT`, `ROLLBACK [WORK \| TRANSACTION] TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]` | Run as written. Refused in a no-transaction file | A savepoint works inside the runner's transaction and undoes at most part of the file. On MySQL a schema statement commits on its own and ends the savepoint with it, so keep savepoints to data statements there. |
-| `ROLLBACK [WORK \| TRANSACTION]`, `ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …` | File refused | Each one would undo or hand off the runner's transaction, which would then record work that did not happen. |
-| PostgreSQL `SET …` (except `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`), `RESET`, `DISCARD` | File refused | A session setting stays on the pooled connection after the migration. Use `SET LOCAL`, which ends with the transaction. |
-| MySQL `SET …` (except user variables, `SET @name = …`), including one inside `/*!…*/` | File refused | The same: `SET FOREIGN_KEY_CHECKS = 0` would stay on a pooled connection and switch checks off for whatever it serves next. Order the statements instead (create a table before the tables that reference it, drop it after them), or drop the foreign key and add it back within the migration. |
-| PostgreSQL `VACUUM`, `CREATE`/`DROP INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`, `CLUSTER` naming no table; SQLite `VACUUM` | File refused, unless it is marked to run outside a transaction | The database cannot run them inside a transaction. Mark the file (`-- nextly:no-transaction` as its first line) or the module (`transaction: false`), and they run. |
-| In a no-transaction file: its own `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`; `SAVEPOINT`, `ROLLBACK … TO`, `RELEASE`; PostgreSQL `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION` | Refused in a no-transaction file | Each one needs a transaction, and a no-transaction file has none: each statement commits as it runs. Outside one, PostgreSQL ignores `SET LOCAL` and refuses a savepoint, SQLite opens a transaction for a `BEGIN` or a savepoint that nothing ends, and a `COMMIT` has nothing to commit. Move the statement to a file without the marker, which runs in a transaction. |
-| In a no-transaction file on SQLite: `PRAGMA foreign_keys = …`, `PRAGMA defer_foreign_keys = …` | Refused in a no-transaction file | The runner switches foreign-key enforcement off for the file and restores it afterwards; see [foreign keys on SQLite](#foreign-keys-on-sqlite). Reading the setting (`PRAGMA foreign_keys`) is allowed. |
-| SQLite `ATTACH`, `DETACH` | File refused, marked or not | They change which databases the process's one connection sees, after the migration too. |
-| MySQL `LOCK TABLES`, `UNLOCK TABLES` (and the `INSTANCE` forms) | File refused, marked or not | They commit the migration's transaction implicitly, and the locks stay with the pooled connection. |
+| Statement                                                                                                                                                                                           | What happens                                                          | Why                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `BEGIN`, `START TRANSACTION`, `COMMIT`, `END` (with any modifiers, such as `BEGIN IMMEDIATE` or `START TRANSACTION READ WRITE`)                                                                     | Left out; the rest of the file runs. Refused in a no-transaction file | The runner's own transaction already brackets the file.                                                                                                                                                                                                                                                                                                                  |
+| `SAVEPOINT`, `ROLLBACK [WORK \| TRANSACTION] TO [SAVEPOINT]`, `RELEASE [SAVEPOINT]`                                                                                                                 | Run as written. Refused in a no-transaction file                      | A savepoint works inside the runner's transaction and undoes at most part of the file. On MySQL a schema statement commits on its own and ends the savepoint with it, so keep savepoints to data statements there.                                                                                                                                                       |
+| `ROLLBACK [WORK \| TRANSACTION]`, `ABORT`, `COMMIT PREPARED`, `PREPARE TRANSACTION`, `XA …`                                                                                                         | File refused                                                          | Each one would undo or hand off the runner's transaction, which would then record work that did not happen.                                                                                                                                                                                                                                                              |
+| PostgreSQL `SET …` (except `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`), `RESET`, `DISCARD`                                                                                                   | File refused                                                          | A session setting stays on the pooled connection after the migration. Use `SET LOCAL`, which ends with the transaction.                                                                                                                                                                                                                                                  |
+| MySQL `SET …` (except user variables, `SET @name = …`), including one inside `/*!…*/`                                                                                                               | File refused                                                          | The same: `SET FOREIGN_KEY_CHECKS = 0` would stay on a pooled connection and switch checks off for whatever it serves next. Order the statements instead (create a table before the tables that reference it, drop it after them), or drop the foreign key and add it back within the migration.                                                                         |
+| PostgreSQL `VACUUM`, `CREATE`/`DROP INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`, `ALTER SYSTEM`, `CLUSTER` naming no table; SQLite `VACUUM` | File refused, unless it is marked to run outside a transaction        | The database cannot run them inside a transaction. Mark the file (`-- nextly:no-transaction` as its first line) or the module (`transaction: false`), and they run.                                                                                                                                                                                                      |
+| In a no-transaction file: its own `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`; `SAVEPOINT`, `ROLLBACK … TO`, `RELEASE`; PostgreSQL `SET LOCAL`, `SET CONSTRAINTS`, `SET TRANSACTION`              | Refused in a no-transaction file                                      | Each one needs a transaction, and a no-transaction file has none: each statement commits as it runs. Outside one, PostgreSQL ignores `SET LOCAL` and refuses a savepoint, SQLite opens a transaction for a `BEGIN` or a savepoint that nothing ends, and a `COMMIT` has nothing to commit. Move the statement to a file without the marker, which runs in a transaction. |
+| In a no-transaction file on SQLite: `PRAGMA foreign_keys = …`, `PRAGMA defer_foreign_keys = …`                                                                                                      | Refused in a no-transaction file                                      | The runner switches foreign-key enforcement off for the file and restores it afterwards; see [foreign keys on SQLite](#foreign-keys-on-sqlite). Reading the setting (`PRAGMA foreign_keys`) is allowed.                                                                                                                                                                  |
+| SQLite `ATTACH`, `DETACH`                                                                                                                                                                           | File refused, marked or not                                           | They change which databases the process's one connection sees, after the migration too.                                                                                                                                                                                                                                                                                  |
+| MySQL `LOCK TABLES`, `UNLOCK TABLES` (and the `INSTANCE` forms)                                                                                                                                     | File refused, marked or not                                           | They commit the migration's transaction implicitly, and the locks stay with the pooled connection.                                                                                                                                                                                                                                                                       |
 
 PostgreSQL's `ALTER TYPE … ADD VALUE` runs inside the transaction (PostgreSQL 12
 and later), but the value it adds cannot be used until the transaction commits,
@@ -399,6 +400,7 @@ the file as failed. Then either:
 Keep a marked file to the statements that need it, and write them so they can
 run again (`IF NOT EXISTS`, `IF EXISTS`). A `CREATE INDEX CONCURRENTLY` that
 fails can leave an invalid index behind: drop it before you retry.
+
 </Callout>
 
 When every schema statement in a failed marked file ran and a later data
@@ -559,14 +561,14 @@ applied migration's snapshot describes but the registry lacks, and it promotes a
 `applied` once no unapplied migration still names that entity and its table exists. Which of those
 reach a Builder entity is narrower than it sounds:
 
-| Case | Repaired by `nextly migrate`? |
-|---|---|
-| A pending row, once every migration naming the entity has run and its table exists | Yes — promoted to `applied` |
-| A missing **collection** or **single** row from a `migrate:create` deployment | **No** — a `migrate:create` snapshot records tables, not entities, so registration finds nothing to insert. Only an entity-level snapshot, such as a scaffolded template's, restores a row |
-| A missing **field group** row | No — registration covers collections and singles only |
-| An existing row with stale labels, descriptions or fields | No — the pass promotes status; it does not refresh content |
-| A metadata-only edit that produced no file | No — there is no artifact to read |
-| The row of a **deleted** entity | No — nothing on this path removes a row |
+| Case                                                                               | Repaired by `nextly migrate`?                                                                                                                                                              |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A pending row, once every migration naming the entity has run and its table exists | Yes — promoted to `applied`                                                                                                                                                                |
+| A missing **collection** or **single** row from a `migrate:create` deployment      | **No** — a `migrate:create` snapshot records tables, not entities, so registration finds nothing to insert. Only an entity-level snapshot, such as a scaffolded template's, restores a row |
+| A missing **field group** row                                                      | No — registration covers collections and singles only                                                                                                                                      |
+| An existing row with stale labels, descriptions or fields                          | No — the pass promotes status; it does not refresh content                                                                                                                                 |
+| A metadata-only edit that produced no file                                         | No — there is no artifact to read                                                                                                                                                          |
+| The row of a **deleted** entity                                                    | No — nothing on this path removes a row                                                                                                                                                    |
 
 So run `nextly migrate` to settle a pending status, but do not rely on it to recreate a registry row
 that a Builder deployment is missing.
@@ -593,27 +595,27 @@ names each file marked `-- nextly:no-transaction`. It does not connect, so it
 cannot tell a file still pending from one already applied, which never runs
 again.
 
-| Check | What it catches |
-|---|---|
+| Check               | What it catches                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `CHECKSUM_MISMATCH` | A `.sql` file's content differs from its paired `.snapshot.json`'s recorded hash. Someone edited the file after it was generated. |
-| `MISSING_SNAPSHOT` | A `.sql` file has no paired `.snapshot.json` (operator deleted the snapshot or the file was hand-added). |
-| `INVALID_SNAPSHOT` | A `.snapshot.json` exists but is corrupt, hand-edited, or version-incompatible. |
-| `MISSING_MIGRATION` | A `.snapshot.json` has no paired `.sql` (someone deleted the SQL but kept the snapshot). |
-| `SCHEMA_DRIFT` | Your current `nextly.config.ts` doesn't match the latest snapshot. You forgot to run `migrate:create` after editing config. |
+| `MISSING_SNAPSHOT`  | A `.sql` file has no paired `.snapshot.json` (operator deleted the snapshot or the file was hand-added).                          |
+| `INVALID_SNAPSHOT`  | A `.snapshot.json` exists but is corrupt, hand-edited, or version-incompatible.                                                   |
+| `MISSING_MIGRATION` | A `.snapshot.json` has no paired `.sql` (someone deleted the SQL but kept the snapshot).                                          |
+| `SCHEMA_DRIFT`      | Your current `nextly.config.ts` doesn't match the latest snapshot. You forgot to run `migrate:create` after editing config.       |
 
 Run it in your PR CI to catch mistakes before they reach production.
 
 ## Environment variables
 
-| Variable                     | Where used | Purpose                                                                 |
-|------------------------------|------------|-------------------------------------------------------------------------|
-| `DATABASE_URL`               | All commands | Target database. Required (except SQLite, which falls back to `file:./data/nextly.db`). |
-| `NEXTLY_APPLIED_BY`          | `migrate`  | No effect today: the column exists on `nextly_schema_events` but the runner does not write it. |
-| `NEXTLY_ACCEPT_DATA_LOSS=1`  | `migrate`, `db:sync` | Acknowledge destructive changes (drops, type narrowings) without an interactive prompt. Required for CI runs of destructive migrations. |
-| `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` | `migrate` | Allow a destructive change to Nextly's **own** core tables, which `migrate` otherwise refuses with `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. Applies to every operation in the run — see below before setting it. |
-| `NEXTLY_DROP_RETIRED_AUTH_TABLES=1` | `migrate` | Drop the retired `accounts`, `sessions` and `user_permission_cache` tables, when they are present in the shape Nextly created them. A table that only shares the name is left alone, but an Auth.js adapter's table has the same shape as `accounts` or `sessions`, so check a table is not another app's before setting it. `user_permission_cache` held permission answers that are now recomputed from roles, so it is dropped even when it holds rows; the drop is logged. Drop it once every instance runs this release, since an earlier release reads it. |
-| `NEXTLY_DROP_NONEMPTY_RETIRED=1` | `migrate` | With the flag above, also drop a retired `accounts` or `sessions` table that still holds rows. Without it such a table is kept, with a warning, and the rest of the run goes ahead. |
-| `NEXTLY_ERASE_RETIRED_AUTH_TABLES` | Runtime | The retired tables that are Nextly's, comma-separated (`accounts`, `sessions` or `accounts,sessions`). Deleting a user erases their rows only from a table named here, and only while it has the shape Nextly created. Nextly keeps no record that it created either table, so unset, the rows stay and the startup warning says so. |
+| Variable                            | Where used           | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                      | All commands         | Target database. Required (except SQLite, which falls back to `file:./data/nextly.db`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `NEXTLY_APPLIED_BY`                 | `migrate`            | No effect today: the column exists on `nextly_schema_events` but the runner does not write it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `NEXTLY_ACCEPT_DATA_LOSS=1`         | `migrate`, `db:sync` | Acknowledge destructive changes (drops, type narrowings) without an interactive prompt. Required for CI runs of destructive migrations.                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`   | `migrate`            | Allow a destructive change to Nextly's **own** core tables, which `migrate` otherwise refuses with `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. Applies to every operation in the run — see below before setting it.                                                                                                                                                                                                                                                                                                                                                       |
+| `NEXTLY_DROP_RETIRED_AUTH_TABLES=1` | `migrate`            | Drop the retired `accounts`, `sessions` and `user_permission_cache` tables, when they are present in the shape Nextly created them. A table that only shares the name is left alone, but an Auth.js adapter's table has the same shape as `accounts` or `sessions`, so check a table is not another app's before setting it. `user_permission_cache` held permission answers that are now recomputed from roles, so it is dropped even when it holds rows; the drop is logged. Drop it once every instance runs this release, since an earlier release reads it. |
+| `NEXTLY_DROP_NONEMPTY_RETIRED=1`    | `migrate`            | With the flag above, also drop a retired `accounts` or `sessions` table that still holds rows. Without it such a table is kept, with a warning, and the rest of the run goes ahead.                                                                                                                                                                                                                                                                                                                                                                              |
+| `NEXTLY_ERASE_RETIRED_AUTH_TABLES`  | Runtime              | The retired tables that are Nextly's, comma-separated (`accounts`, `sessions` or `accounts,sessions`). Deleting a user erases their rows only from a table named here, and only while it has the shape Nextly created. Nextly keeps no record that it created either table, so unset, the rows stay and the startup warning says so.                                                                                                                                                                                                                             |
 
 ## When `migrate` refuses a destructive core change
 
@@ -622,11 +624,11 @@ tables, reporting `NEXTLY_CORE_DESTRUCTIVE_REFUSED`. The refusal **names every o
 refused** — the list you see is the whole list, not a sample — so you can judge them one at
 a time.
 
-| Operation | Verdict |
-|---|---|
-| A widening, e.g. `varchar(20)` → `varchar(255)` | **Safe.** Nothing that fits today stops fitting |
+| Operation                                        | Verdict                                                                 |
+| ------------------------------------------------ | ----------------------------------------------------------------------- |
+| A widening, e.g. `varchar(20)` → `varchar(255)`  | **Safe.** Nothing that fits today stops fitting                         |
 | A narrowing, e.g. `varchar(255)` → `varchar(20)` | **Safe only if you have measured the longest stored value** and it fits |
-| A dropped column, or any other type change | **Stop.** Work out what happens to the existing values first |
+| A dropped column, or any other type change       | **Stop.** Work out what happens to the existing values first            |
 
 Two independent facts make a widening safe: the direction, and knowing what the column
 holds. A narrowing gives you the first only, so go and look:
@@ -642,8 +644,8 @@ NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 nextly migrate
 ```
 
 <Callout type="warn">
-The flag disables the refusal for **every** operation in that run, not just the one you
-judged safe. Read the whole list before setting it.
+  The flag disables the refusal for **every** operation in that run, not just
+  the one you judged safe. Read the whole list before setting it.
 </Callout>
 
 ## Clearing passwords stored as typed
@@ -662,11 +664,11 @@ nextly users:clear-plaintext-passwords
 ```
 
 <Callout type="warn">
-If your app passes, or has ever passed, its own `passwordHasher` to `getNextly`, do not clear
-these accounts.
-The command reads `nextly.config.ts`, not your app's code, so it cannot see that hasher,
-and a hash it wrote in a format the command does not recognise is counted here as
-plain text. Clearing it locks that person out until they reset their password.
+  If your app passes, or has ever passed, its own `passwordHasher` to
+  `getNextly`, do not clear these accounts. The command reads
+  `nextly.config.ts`, not your app's code, so it cannot see that hasher, and a
+  hash it wrote in a format the command does not recognise is counted here as
+  plain text. Clearing it locks that person out until they reset their password.
 </Callout>
 
 The count never includes a value in a format other password hashers write: an argon2,
@@ -775,7 +777,7 @@ nextly migrate:down --step 3
 nextly migrate:down --dry-run
 ```
 
-**Rollback restores schema *shape*, not *data*.** Reverting an added column drops
+**Rollback restores schema _shape_, not _data_.** Reverting an added column drops
 it (and its data); reverting a dropped column re-adds an empty column — the old
 rows are gone. For this reason:
 
@@ -841,11 +843,11 @@ and that is the ordinary case rather than a failure.
 Each module is decided by comparing the live tables against its own two
 endpoints:
 
-| The database matches | What happens |
-| --- | --- |
-| the module's `before` | the UP runs |
-| the module's `snapshot` | recorded as applied; nothing runs |
-| neither | refused, with the difference named |
+| The database matches    | What happens                       |
+| ----------------------- | ---------------------------------- |
+| the module's `before`   | the UP runs                        |
+| the module's `snapshot` | recorded as applied; nothing runs  |
+| neither                 | refused, with the difference named |
 
 The third row is why this is a comparison and not an existence check. A table
 created by push and then altered by hand matches neither, and running the UP
@@ -950,9 +952,9 @@ risk, and that is a decision for `nextly plugins uninstall` rather than a side
 effect of a reload.
 
 <Callout type="warn">
-`nextly migrate:fresh` drops everything. The check above — that a migration
-dropping another owner's table is refused — applies to push, reconcile and
-`migrate`, within the limits below, and not to `migrate:fresh`.
+  `nextly migrate:fresh` drops everything. The check above — that a migration
+  dropping another owner's table is refused — applies to push, reconcile and
+  `migrate`, within the limits below, and not to `migrate:fresh`.
 </Callout>
 
 #### Known limits
@@ -986,15 +988,15 @@ limits are accepted:
 
 ### Boot refusals you may meet
 
-| Code | Meaning |
-| --- | --- |
-| `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
-| `PLUGIN_NOT_INSTALLED` | An enabled plugin in your config has not been installed on this database. Run `nextly plugins install <name>` for each one it names, or `nextly plugins install --all`. A disabled plugin is not required to be installed: its tables exist, but its `onInstall` runs only when you enable and install it. |
-| `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled, with or without `--keep-data`, but is still in your config. Reinstall it or remove the line. |
-| `PLUGIN_UNINSTALL_UNFINISHED` | An uninstall of the plugin began and did not finish. Run it again, the way it began, to finish it, or reinstall the plugin. |
-| `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
-| `MIGRATION_CHECKSUM_MISMATCH` | A migration changed after it was generated or applied. |
-| `DROP_OF_FOREIGN_TABLE` | A migration would drop or rename another owner's table, column, index, foreign key or check, or a plugin migration a table no owner row claims. Nothing was applied. |
+| Code                            | Meaning                                                                                                                                                                                                                                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PLUGIN_SCHEMA_BEHIND`          | The plugin expects a newer schema than the database has. Run `nextly migrate`.                                                                                                                                                                                                                             |
+| `PLUGIN_NOT_INSTALLED`          | An enabled plugin in your config has not been installed on this database. Run `nextly plugins install <name>` for each one it names, or `nextly plugins install --all`. A disabled plugin is not required to be installed: its tables exist, but its `onInstall` runs only when you enable and install it. |
+| `PLUGIN_SCHEMA_UNINSTALLED`     | The plugin was uninstalled, with or without `--keep-data`, but is still in your config. Reinstall it or remove the line.                                                                                                                                                                                   |
+| `PLUGIN_UNINSTALL_UNFINISHED`   | An uninstall of the plugin began and did not finish. Run it again, the way it began, to finish it, or reinstall the plugin.                                                                                                                                                                                |
+| `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them.                                                                                                                                                                                                                                           |
+| `MIGRATION_CHECKSUM_MISMATCH`   | A migration changed after it was generated or applied.                                                                                                                                                                                                                                                     |
+| `DROP_OF_FOREIGN_TABLE`         | A migration would drop or rename another owner's table, column, index, foreign key or check, or a plugin migration a table no owner row claims. Nothing was applied.                                                                                                                                       |
 
 In development, `PLUGIN_SCHEMA_BEHIND` and `PLUGIN_NOT_INSTALLED` only log:
 push reconciles from config on every reload, so a schema behind resolves

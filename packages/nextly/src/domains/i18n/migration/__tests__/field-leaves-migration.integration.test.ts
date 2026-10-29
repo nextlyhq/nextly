@@ -46,6 +46,7 @@ import {
   type MinimalConfigEntity,
 } from "../../../schema/migrate-create/generate";
 import { withMigrateLock } from "../../../schema/pipeline/locks";
+import { stepFileOf } from "../step-windows";
 import {
   createScratchDatabase,
   type ScratchDatabase,
@@ -181,14 +182,17 @@ for (const entry of DIALECTS) {
       }
 
       /** `nextly migrate:down --step <n> --allow-data-loss --yes`, reading each file's DOWN. */
-      async function migrateDown(step: number): Promise<string[]> {
+      async function migrateDown(
+        step: number,
+        logger = quiet
+      ): Promise<string[]> {
         const result = await migrateDownCore({
           ...(await downDatabaseDeps({
             adapter: adapter as unknown as DrizzleAdapter,
             dialect,
           })),
           nodeEnv: "test",
-          logger: quiet,
+          logger,
           options: {
             step,
             allowDataLoss: true,
@@ -207,6 +211,7 @@ for (const entry of DIALECTS) {
             return {
               sql: parseSqlSections(content).downSql,
               transaction: !marksNoTransaction(content),
+              stepFile: stepFileOf(content, name),
             };
           },
           withLock: withMigrateLock,
@@ -317,13 +322,75 @@ for (const entry of DIALECTS) {
         expect(info).toHaveBeenCalledWith(
           expect.stringMatching(
             new RegExp(
-              `--step ends inside a move out of translation \\("body" in collection "${slug}"\\)`
+              `--step ends inside a move between translated and shared \\("body" in collection "${slug}"\\)`
             )
           )
         );
         await expectShared();
         // Nothing is left for the next run.
         expect(await migrate()).toBe(0);
+      });
+
+      it("runs a move into translation whole under --step, saying so", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        // `price` joins translation: its joins file copies it into the companion, and the main
+        // file after it drops the main column.
+        await migrateCreate({
+          ...translated,
+          fields: [
+            { name: "body", type: "text", localized: true },
+            { name: "price", type: "number", localized: true },
+          ],
+        });
+        const logger = createLogger({ quiet: true });
+        const info = vi.spyOn(logger, "info");
+
+        // `migrate --step 1` would stop after the joins file, leaving the main column for an app
+        // to write into before the main file drops it.
+        expect(
+          await runFileMigrations({
+            adapter: adapter as never,
+            db: adapter.getDrizzle(),
+            dialect,
+            migrationsDir,
+            logger,
+            step: 1,
+          })
+        ).toBe(2);
+        expect(info).toHaveBeenCalledWith(
+          expect.stringMatching(
+            new RegExp(
+              `--step ends inside a move between translated and shared \\("price" in collection "${slug}"\\)`
+            )
+          )
+        );
+        expect(await columnsOf(table)).not.toContain("price");
+        expect(await columnsOf(companion)).toContain("price");
+      });
+
+      it("rolls a move out of translation back whole under migrate:down --step, saying so", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        await migrateCreate(shared);
+        await migrate();
+        const logger = createLogger({ quiet: true });
+        const info = vi.spyOn(logger, "info");
+
+        // `migrate:down --step 1` would stop after the shared file's DOWN, with the companion
+        // column back and the main column still there until the main file's DOWN drops it.
+        expect(await migrateDown(1, logger)).toHaveLength(2);
+        expect(info).toHaveBeenCalledWith(
+          expect.stringMatching(
+            new RegExp(
+              `--step ends inside a move between translated and shared \\("body" in collection "${slug}"\\)`
+            )
+          )
+        );
+        expect(await columnsOf(table)).not.toContain("body");
+        expect(await columnsOf(companion)).toContain("body");
       });
 
       it("keeps to --step outside a move out of translation", async () => {
