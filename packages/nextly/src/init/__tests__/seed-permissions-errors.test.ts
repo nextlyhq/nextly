@@ -103,6 +103,27 @@ describe("seedPermissionsAndRolePresets", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
+  it("goes on without the retired manage check when its read stalls", async () => {
+    // A read that never answers holds the boot only for the check's bound.
+    vi.useFakeTimers();
+    try {
+      rolesHoldingRetiredManage.mockReturnValue(new Promise(() => {}));
+      let finished = false;
+      const seeding = seedPermissionsAndRolePresets().then(() => {
+        finished = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_900);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await seeding;
+      expect(finished).toBe(true);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("logs any other failure as an error naming the step, and still seeds the presets", async () => {
     seedSystemPermissions.mockRejectedValue(new Error("connection reset"));
 

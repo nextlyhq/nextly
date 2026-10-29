@@ -40,6 +40,8 @@ import { seedPluginRoles } from "../plugins/roles/seed-roles";
 import { permissionSlug, SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
 import { consoleLogger } from "../shared/types";
 
+import { runBoundedDiagnostic } from "./bounded-diagnostic";
+
 /**
  * Seed system, collection, single and plugin-declared permissions, then grant
  * whatever is new to super_admin.
@@ -299,15 +301,31 @@ async function seedEverything(): Promise<void> {
   // above store a retired permission as the plain four, so a preset, the
   // Public role or a plugin role holding one is converted by this seeding, and
   // naming it before would ask for an upgrade this boot already did.
-  await seedingStep("retired manage check", async () => {
-    const { formatRetiredManageWarning, rolesHoldingRetiredManage } =
-      await import("../domains/auth/retired-manage");
-    const holding = await rolesHoldingRetiredManage(getService("adapter"));
-    if (holding.length > 0) {
-      getService("logger").warn(formatRetiredManageWarning(holding));
-    }
-  });
+  // The scan reads `role_permissions` by a column no dialect indexes, so it is
+  // bounded as the core schema check is: a slow or stalled read lets the boot
+  // go on without the warning rather than wait for the driver's own timeout.
+  await seedingStep("retired manage check", () =>
+    runBoundedDiagnostic({
+      run: async () => {
+        const { formatRetiredManageWarning, rolesHoldingRetiredManage } =
+          await import("../domains/auth/retired-manage");
+        const holding = await rolesHoldingRetiredManage(getService("adapter"));
+        if (holding.length > 0) {
+          getService("logger").warn(formatRetiredManageWarning(holding));
+        }
+      },
+      logger: getService("logger"),
+      timeoutMs: RETIRED_MANAGE_CHECK_TIMEOUT_MS,
+      timedOutMessage:
+        "[nextly] Retired manage permission check timed out; continuing startup.",
+      failedMessagePrefix:
+        "[nextly] Could not check for roles holding a retired manage permission: ",
+    })
+  );
 }
+
+/** How long the retired manage check may hold a boot, as the schema check may. */
+const RETIRED_MANAGE_CHECK_TIMEOUT_MS = 2_000;
 
 /** What the Public role's grant steps need, from the registered services. */
 function publicGrantSeeding(): Parameters<typeof seedPublicReadGrants>[0] {
