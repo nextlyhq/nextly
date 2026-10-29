@@ -369,7 +369,7 @@ export default function SingleEditPage({
   // kept rather than from what it sent.
   const handleSubmit = async (
     data: Record<string, unknown>,
-    form: RefusedForm
+    form?: RefusedForm
   ) => {
     try {
       const stored = await updateDocument(data);
@@ -484,7 +484,7 @@ function useSingleSaveFailure(args: {
   locale?: string;
   /** The Single's schema, for the labels a refusal names its fields by. */
   schema?: { fields?: readonly { name?: string; label?: unknown }[] } | null;
-}): (error: unknown, form: RefusedForm) => void {
+}): (error: unknown, form: RefusedForm | undefined) => void {
   const slug = args.slug ?? "";
   const documentId = args.document?.id;
   const { locale } = args;
@@ -502,7 +502,7 @@ function useSingleSaveFailure(args: {
     ),
   });
   return useCallback(
-    (error: unknown, form: RefusedForm) => {
+    (error: unknown, form: RefusedForm | undefined) => {
       if (!recover(error, form)) {
         toast.error(
           error instanceof Error ? error.message : "Failed to save changes"

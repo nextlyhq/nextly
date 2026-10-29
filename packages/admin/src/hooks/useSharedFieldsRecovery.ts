@@ -153,9 +153,9 @@ function refusalToastId(scope: VersionScope, locale?: string): string {
 
 /**
  * A handler for a failed save or publish: when the failure is the
- * out-of-date refusal, it shows the refusal with "Take the live values" and
- * answers true; otherwise it answers false and the caller reports the error
- * as before. The action saves the form with the editor's own Save, takes the
+ * out-of-date refusal and a form was handed over, it shows the refusal with
+ * "Take the live values" and answers true; otherwise it answers false and the
+ * caller reports the error as before. The action saves the form with the editor's own Save, takes the
  * live values into the pending change, and has the form show them.
  */
 export function useSharedFieldsRecovery(args: {
@@ -170,7 +170,7 @@ export function useSharedFieldsRecovery(args: {
    * reloaded document has arrived and rejecting when it couldn't be loaded.
    */
   onTaken: () => Promise<unknown>;
-}): (error: unknown, form: RefusedForm) => boolean {
+}): (error: unknown, form: RefusedForm | undefined) => boolean {
   const { scope, locale, fields, onTaken } = args;
   const { getLocale, defaultLocale } = useLocalization();
   // A string, so the effect below follows the document's address rather than
@@ -223,9 +223,12 @@ export function useSharedFieldsRecovery(args: {
   }, []);
 
   return useCallback(
-    (error: unknown, form: RefusedForm) => {
+    (error: unknown, form: RefusedForm | undefined) => {
       const stale = outOfDateSharedFields(error);
-      if (!stale || !scope) return false;
+      // Without a form there is nothing to take the live values into, as for
+      // a reader's publish of the status alone: the caller reports the
+      // refusal as it would any other error.
+      if (!stale || !scope || !form) return false;
       const labelOf = (name: string) => {
         const field = fields.find(f => f.name === name);
         return field?.name

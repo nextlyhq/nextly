@@ -216,11 +216,12 @@ export interface SingleFormProps {
   /**
    * Writes a submission. With the values, the form itself: a publish refused
    * over out-of-date shared fields is resolved on the form as it is when the
-   * author acts on the refusal, not as it was submitted.
+   * author acts on the refusal, not as it was submitted. Absent for a
+   * reader's write of the status alone, which has no form to resolve it on.
    */
   onSubmit: (
     data: Record<string, unknown>,
-    form: RefusedForm
+    form?: RefusedForm
   ) => Promise<SingleDocumentData | void>;
   /** Whether the form is currently submitting */
   isSubmitting?: boolean;

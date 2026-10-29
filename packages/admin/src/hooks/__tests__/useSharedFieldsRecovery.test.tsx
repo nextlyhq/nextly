@@ -139,6 +139,22 @@ describe("useSharedFieldsRecovery", () => {
     });
   });
 
+  it("leaves the refusal to the caller when it was handed no form to take the live values into", () => {
+    // A reader's publish writes the status alone, from a form the reader
+    // can't change: there is nothing to take the live values into.
+    const { recover } = renderRecovery();
+    const handled = recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      undefined
+    );
+
+    expect(handled).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("stores the form with the editor's own Save, then takes the live values and reloads, all inside its hold", async () => {
     const order: string[] = [];
     take.mockImplementation(async () => {
