@@ -273,7 +273,8 @@ export function groupLevel(
     ...group.rows.flatMap(row => {
       const decided = standardActions(row.kind, row.slug);
       return row.permissions.filter(
-        permission => permission.owner && !decided.has(permission.action)
+        permission =>
+          permission.owner === group.plugin && !decided.has(permission.action)
       );
     }),
   ];

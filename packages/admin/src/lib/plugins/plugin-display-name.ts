@@ -13,5 +13,6 @@ export function pluginDisplayName(
 export function pluginDisplayName(
   plugin: PluginMetadata | undefined
 ): string | undefined {
-  return plugin && (plugin.appearance?.label ?? plugin.name);
+  // An empty label counts as none, as the sidebar treats it.
+  return plugin && (plugin.appearance?.label || plugin.name);
 }

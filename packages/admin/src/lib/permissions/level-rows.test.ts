@@ -362,6 +362,25 @@ describe("pluginGroups, for the app's own declared permissions", () => {
 });
 
 describe("groupLevel", () => {
+  it("does not count another plugin's action on this plugin's collection", () => {
+    const entities: ScreenEntity[] = [
+      {
+        slug: "forms",
+        kind: "collection",
+        labels: { singular: "Form", plural: "Forms" },
+        plugin: FORMS,
+        declaredRules: [],
+      },
+    ];
+    const { rows, rest } = levelRows(entities, [
+      permission("forms", "read"),
+      permission("forms", "audit", "@acme/plugin-audit"),
+    ]);
+    const [group] = pluginGroups(rows, rest).groups;
+
+    expect(groupLevel(group, ["read-forms", "audit-forms"])).toBe("view");
+  });
+
   it("reads custom where a plugin's own action on one of its collections is held", () => {
     // A plugin may declare an action of its own on a collection it
     // contributes; the row takes it, under its switch.
