@@ -124,4 +124,41 @@ describe("a publish refused over out-of-date shared fields", () => {
     // The refused publish is the only write it made itself.
     expect(update).toHaveBeenCalledTimes(1);
   });
+
+  it("reports a refused write of the status alone as any other error, with nothing to take the live values into", async () => {
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    update.mockRejectedValueOnce(outOfDate(["articleCount"]));
+    // The editor's form is there, but a write of the status alone, as a
+    // reader's publish sends it, doesn't come from it: a reader can't save.
+    const form = {
+      mayWrite: vi.fn(() => false),
+      recover: vi.fn(async () => undefined),
+    };
+    const { result } = renderHook(
+      () =>
+        useUpdateEntry({
+          collectionSlug: "authors",
+          entryId: "e1",
+          locale: "es",
+          draft: true,
+          refusedForm: form,
+        }),
+      { wrapper: wrapper(client) }
+    );
+
+    await result.current
+      .mutateAsync({ status: "published" })
+      .catch(() => undefined);
+
+    // The refusal as any failed write reports it: no action that can't run.
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    const [, options] = toast.error.mock.calls[0] as [
+      string,
+      { action?: unknown } | undefined,
+    ];
+    expect(options?.action).toBeUndefined();
+    expect(form.recover).not.toHaveBeenCalled();
+  });
 });
