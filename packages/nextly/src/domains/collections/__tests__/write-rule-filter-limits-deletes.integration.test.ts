@@ -29,6 +29,7 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -378,3 +379,79 @@ describe("a delete rule's filter on a collection with languages", () => {
     expect(await stillThere(t, LOCALIZED, others)).toBe(true);
   });
 });
+
+// MySQL's default REPEATABLE READ fixes a transaction's snapshot at its first
+// read, so only there can a row seen early differ from the row a later lock
+// holds.
+describe.skipIf(!getConfiguredTestDialects().includes("mysql"))(
+  "a delete rule's filter inside the caller's transaction on MySQL",
+  () => {
+    it("refuses an entry another writer moved out of the filter after the transaction first read it", async () => {
+      current = await createTestNextly({
+        dialect: "mysql",
+        collections: [
+          defineCollection({
+            slug: OPEN_POSTS,
+            access: { read: () => true, delete: ownEntries },
+            fields: [text({ name: "title" }), text({ name: "owner" })],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [OPEN_POSTS]);
+      await grantTo(t, AUTHOR, "delete", [OPEN_POSTS]);
+      const { own } = await seed(t, OPEN_POSTS);
+      const entries = t
+        .getService("collectionsHandler")
+        .getEntryService() as CollectionEntryService;
+      type Deleted = Awaited<
+        ReturnType<CollectionEntryService["deleteEntryInTransaction"]>
+      >;
+
+      // Another writer gives the entry away and commits. Chained here, before
+      // the transaction opens, it runs outside the transaction's flow, on a
+      // connection of its own, as a concurrent request would.
+      let release: () => void = () => undefined;
+      const released = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const givenAway = released.then(() =>
+        t.nextly.update({
+          collection: OPEN_POSTS,
+          id: own,
+          data: { owner: OTHER },
+        })
+      );
+
+      const refusal = await t.adapter
+        .transaction<Deleted>(async tx => {
+          // The transaction's first read, which fixes its snapshot while the
+          // entry is still the author's.
+          await tx.selectOne(`dc_${OPEN_POSTS}`, {
+            where: { and: [{ column: "id", op: "=", value: own }] },
+          });
+          // The other writer commits before the delete takes its lock.
+          release();
+          await givenAway;
+          return entries.deleteEntryInTransaction(tx, {
+            collectionName: OPEN_POSTS,
+            entryId: own,
+            user: { id: AUTHOR },
+          });
+        })
+        .then(
+          (result): { result?: Deleted; error?: unknown } => ({ result }),
+          (error: unknown): { result?: Deleted; error?: unknown } => ({
+            error,
+          })
+        );
+
+      const status =
+        refusal.result?.statusCode ??
+        (NextlyError.is(refusal.error) ? refusal.error.statusCode : undefined);
+      expect(refusal.result?.success ?? false).toBe(false);
+      expect(status).toBe(403);
+      expect(await stillThere(t, OPEN_POSTS, own)).toBe(true);
+    });
+  }
+);
