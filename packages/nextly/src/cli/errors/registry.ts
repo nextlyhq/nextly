@@ -14,6 +14,7 @@ import { CONFIG_CODES } from "./areas/config";
 import { DATABASE_CODES } from "./areas/database";
 import { GENERAL_CODES } from "./areas/general";
 import { MIGRATION_CODES } from "./areas/migrations";
+import { PLUGIN_CONFIG_CODES } from "./areas/plugin-config";
 import { PLUGIN_CODES } from "./areas/plugins";
 import { SCHEMA_CODES } from "./areas/schema";
 import { SYNC_CODES } from "./areas/sync";
@@ -28,6 +29,7 @@ export const CLI_ERROR_AREAS = [
   SCHEMA_CODES,
   SYNC_CODES,
   PLUGIN_CODES,
+  PLUGIN_CONFIG_CODES,
   UPGRADE_CODES,
   COMMAND_CODES,
   GENERAL_CODES,
@@ -40,6 +42,7 @@ export const CLI_ERROR_CODES = {
   ...SCHEMA_CODES,
   ...SYNC_CODES,
   ...PLUGIN_CODES,
+  ...PLUGIN_CONFIG_CODES,
   ...UPGRADE_CODES,
   ...COMMAND_CODES,
   ...GENERAL_CODES,

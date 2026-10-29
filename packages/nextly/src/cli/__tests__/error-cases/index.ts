@@ -10,6 +10,7 @@ import { CONFIG_CASES } from "./config";
 import { DATABASE_CASES } from "./database";
 import { GENERAL_CASES } from "./general";
 import { MIGRATION_CASES } from "./migrations";
+import { PLUGIN_CONFIG_CASES } from "./plugin-config";
 import { PLUGIN_CASES } from "./plugins";
 import { SCHEMA_CASES } from "./schema";
 import { SYNC_CASES } from "./sync";
@@ -23,6 +24,7 @@ export const ERROR_CASES = {
   ...SCHEMA_CASES,
   ...SYNC_CASES,
   ...PLUGIN_CASES,
+  ...PLUGIN_CONFIG_CASES,
   ...UPGRADE_CASES,
   ...COMMAND_CASES,
   ...GENERAL_CASES,

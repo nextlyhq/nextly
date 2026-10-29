@@ -50,3 +50,16 @@ export function exitWithError(
   reportCliError(error, { verbose, noColor });
   return process.exit(1);
 }
+
+/**
+ * Prints `error` in the error shape and sets the exit code to 1, letting the process end on its
+ * own: for a command whose pending output or handles must finish before it exits.
+ */
+export function failWithError(
+  logger: Pick<Logger, "getOptions">,
+  error: unknown
+): void {
+  const { verbose, noColor } = logger.getOptions();
+  reportCliError(error, { verbose, noColor });
+  process.exitCode = 1;
+}
