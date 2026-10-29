@@ -168,6 +168,18 @@ jobs:
             source: local
             core: workspace
 
+          # The blog under Cache Components and Partial Prefetching. The scaffolder still
+          # writes both off, so this leg turns them on after scaffolding, then builds and
+          # serves on an empty database and again on seeded content. Rendering under Cache
+          # Components does not depend on the dialect, so one SQLite leg covers it.
+          - name: blog-cache-components
+            template: blog
+            approach: code-first
+            pm: npm
+            source: local
+            core: workspace
+            cacheComponents: "on"
+
           # Not a scaffold: an EXISTING app, as `create-next-app` makes it with its defaults,
           # which since 16.4 turn Cache Components on (`cacheComponents: true` and
           # `partialPrefetching: true`). Nextly does not support Cache Components yet, so
@@ -741,6 +753,28 @@ jobs:
             [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
           fi
 
+      # What the leg is for, so it fails rather than builds the default when the
+      # generated config no longer reads as expected.
+      - name: Turn Cache Components on in the scaffold
+        if: matrix.cacheComponents == 'on'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          node -e '
+            const fs = require("fs");
+            const config = fs.readFileSync("next.config.ts", "utf8");
+            const on = config.replace(
+              "cacheComponents: false,",
+              "cacheComponents: true,\n  partialPrefetching: true,"
+            );
+            if (on === config) {
+              console.error("next.config.ts does not set cacheComponents: false");
+              process.exit(1);
+            }
+            fs.writeFileSync("next.config.ts", on);
+          '
+          cat next.config.ts
+
       # Only the nightly newest-minor run sets the input (see `on.workflow_call`).
       # The specs are passed through the environment, and the caller checks
       # their shape, so nothing from them is read as shell syntax.
@@ -778,6 +812,23 @@ jobs:
             echo "the build ran the Google font loader, which needs the network"
             exit 1
           fi
+
+      # The step below writes categories, tags and posts into the scaffold's database, and
+      # the Cache Components check after it first serves an EMPTY one, so the database the
+      # build left is kept here, while no server holds it, for that check to put back.
+      - name: Keep the empty database for the Cache Components check
+        if: matrix.cacheComponents == 'on'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          url=$(grep -E '^DATABASE_URL=' .env | head -1 | cut -d= -f2- | tr -d "\"'")
+          db=${url#file:}
+          [ -f "$db" ] || { echo "no SQLite database at $db (DATABASE_URL=$url)"; exit 1; }
+          mkdir -p /tmp/blog-empty-db
+          for f in "$db" "$db-wal" "$db-shm"; do
+            [ -f "$f" ] && cp "$f" /tmp/blog-empty-db/
+          done
+          echo "$db" > /tmp/blog-empty-db/path
 
       # A fresh blog has no categories or tags, so its build renders no archive page, and
       # Next.js counted the archive routes as static. The archive pages read `searchParams`
@@ -892,6 +943,136 @@ jobs:
               exit 1
             fi
           done
+
+      # Under Cache Components every route streams a static shell, so the first request for
+      # an unknown slug is answered with the not-found page and `noindex` before its status
+      # can change, and Next.js stores that render: every later request gets 404. Asked
+      # per detail route, as a browser and as a crawler, each with a slug of its own.
+      #
+      # Then the demo content goes in through nextly's local API, as the template's seed
+      # route does, and the app is built again from a clean `.next`, as a fresh deploy
+      # would be: the build cache keeps the first build's cached reads, so reusing it
+      # would build from the empty database's answers. The seeded build is served and a
+      # page of each kind, taken from its sitemap, must answer 200. Both serves fail on
+      # Next.js reporting uncached data or the clock read too early.
+      - name: Check the blog under Cache Components
+        if: matrix.cacheComponents == 'on'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          # In a session of its own, so `stop` ends npm and the `next start` it runs
+          # together: signalling npm alone leaves Next.js holding the port, and the
+          # next serve would be answered by the server it was meant to replace.
+          server=""
+          serve() {
+            PORT=3102 NEXT_TELEMETRY_DISABLED=1 NEXTLY_TELEMETRY_DISABLED=1 setsid npm start > "$1" 2>&1 &
+            server=$!
+            for _ in $(seq 1 60); do
+              curl -s -o /dev/null http://localhost:3102/api/health && return 0
+              sleep 1
+            done
+            echo "the app did not start"; tail -40 "$1"; exit 1
+          }
+          stop() {
+            [ -n "$server" ] || return 0
+            kill -- -"$server" 2>/dev/null || true
+            wait "$server" 2>/dev/null || true
+            server=""
+            # curl exits non-zero once nothing listens on the port.
+            for _ in $(seq 1 30); do
+              curl -s -o /dev/null http://localhost:3102/ || return 0
+              sleep 1
+            done
+            echo "port 3102 still answers after the server was stopped"; exit 1
+          }
+          trap stop EXIT
+          clean_log() {
+            if grep -nE 'uncached or runtime data|unstable value' "$1"; then
+              tail -60 "$1"; exit 1
+            fi
+          }
+          crawler='Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+          browser='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36'
+
+          # The database the build left, from before the step above added content.
+          db=$(cat /tmp/blog-empty-db/path)
+          rm -f "$db" "$db-wal" "$db-shm"
+          for f in /tmp/blog-empty-db/*; do
+            case "$f" in */path) ;; *) cp "$f" "$(dirname "$db")/" ;; esac
+          done
+          cmp "$db" "/tmp/blog-empty-db/$(basename "$db")" || { echo "the empty database was not put back"; exit 1; }
+
+          serve /tmp/blog-cc-empty.log
+          for route in /blog /authors /categories /tags; do
+            for agent in browser crawler; do
+              ua=$browser
+              [ "$agent" = crawler ] && ua=$crawler
+              path="$route/no-such-$agent"
+              status=$(curl -s -A "$ua" -o /tmp/unknown.html -w '%{http_code}' "http://localhost:3102$path")
+              echo "$agent $path, first: $status"
+              if [ "$status" != 200 ] || ! grep -q 'noindex' /tmp/unknown.html ||
+                ! grep -q 'NEXT_HTTP_ERROR_FALLBACK;404' /tmp/unknown.html; then
+                echo "$path did not answer the not-found page with noindex"
+                tail -40 /tmp/blog-cc-empty.log; exit 1
+              fi
+              # Stored once the first response finishes, so a moment may pass.
+              status=""
+              for _ in 1 2 3 4 5; do
+                status=$(curl -s -A "$ua" -o /dev/null -w '%{http_code}' "http://localhost:3102$path")
+                [ "$status" = 404 ] && break
+                sleep 1
+              done
+              echo "$agent $path, later: $status"
+              [ "$status" = 404 ] || { echo "$path never answered 404"; exit 1; }
+            done
+          done
+          stop
+          clean_log /tmp/blog-cc-empty.log
+
+          # Inside the app, since it imports `nextly` and the app's own config, which
+          # resolve from the script's folder. A file the scaffold already has at
+          # that path is refused rather than replaced, so the check never runs a
+          # substitute in place of the app's own file.
+          mkdir -p scripts
+          if [ -e scripts/seed-for-check.mts ]; then
+            echo "the scaffold already has scripts/seed-for-check.mts"; exit 1
+          fi
+          set -o noclobber
+          cat > scripts/seed-for-check.mts <<'TS'
+          import { getNextly } from "nextly";
+
+          import config from "../nextly.config";
+          import { seed } from "../src/endpoints/seed";
+
+          const nextly = await getNextly({ config });
+          const result = await seed({ nextly });
+          console.log(JSON.stringify(result.summary));
+          process.exit(0);
+          TS
+          set +o noclobber
+          cp package.json /tmp/package.json.bak
+          npm pkg set type=module
+          npx --yes tsx@4.21.0 --env-file=.env scripts/seed-for-check.mts
+          cp /tmp/package.json.bak package.json
+
+          rm -rf .next
+          npm run build
+
+          serve /tmp/blog-cc-seeded.log
+          curl -sf -o /tmp/sitemap.xml http://localhost:3102/sitemap.xml
+          pages="/ /blog /feed.xml"
+          for kind in blog authors categories tags; do
+            url=$(grep -o "<loc>[^<]*/$kind/[^<]*</loc>" /tmp/sitemap.xml | head -1 | sed -E 's#</?loc>##g')
+            [ -n "$url" ] || { echo "the sitemap lists no /$kind/ page"; cat /tmp/sitemap.xml; exit 1; }
+            pages="$pages /${url#*://*/}"
+          done
+          for page in $pages; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3102$page")
+            echo "$page: $status"
+            [ "$status" = 200 ] || { tail -40 /tmp/blog-cc-seeded.log; exit 1; }
+          done
+          stop
+          clean_log /tmp/blog-cc-seeded.log
 
       # A build proves the app compiles; this proves it serves. The existing-app installer
       # writes the routes, the instrumentation hook and the config Nextly starts from, so the
