@@ -27,7 +27,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   parseSqlSections,
@@ -291,6 +291,48 @@ for (const entry of DIALECTS) {
         // Applied again, it changes nothing more: the archive still holds one row.
         await migrate();
         await expectShared();
+      });
+
+      it("runs a move out of translation whole under --step, saying so", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        await migrateCreate(shared);
+        const logger = createLogger({ quiet: true });
+        const info = vi.spyOn(logger, "info");
+
+        // `migrate --step 2` would stop after the main file, with the main column there and
+        // empty: an app already storing the field there could write a value the shared file's
+        // copy then replaces. The run goes on through the shared file instead.
+        expect(
+          await runFileMigrations({
+            adapter: adapter as never,
+            db: adapter.getDrizzle(),
+            dialect,
+            migrationsDir,
+            logger,
+            step: 2,
+          })
+        ).toBe(3);
+        expect(info).toHaveBeenCalledWith(
+          expect.stringMatching(
+            new RegExp(
+              `--step ends inside a move out of translation \\("body" in collection "${slug}"\\)`
+            )
+          )
+        );
+        await expectShared();
+        // Nothing is left for the next run.
+        expect(await migrate()).toBe(0);
+      });
+
+      it("keeps to --step outside a move out of translation", async () => {
+        await migrateCreate(translated);
+        await migrateCreate(shared);
+
+        // The first run's main file and companion file, and the archive file: none inside a move.
+        expect(await migrate(1)).toBe(1);
+        expect(await migrate(1)).toBe(1);
       });
 
       it("adds no archive rows when the archive file runs again", async () => {
