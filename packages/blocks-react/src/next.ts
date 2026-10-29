@@ -31,6 +31,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
 import {
+  cacheComponentsEnabled,
   cachedFind,
   createContentRoute,
   createPublicContentRoute,
@@ -1761,12 +1762,30 @@ function blocksSingleConfig(
 }
 
 /**
- * A route's page body inside a Suspense boundary the page provides.
+ * Whether this app builds with Cache Components on.
+ *
+ * Read here, in code the app bundles, because Next.js inlines
+ * `process.env.__NEXT_CACHE_COMPONENTS` only into that; nextly, loaded as a
+ * server external, cannot see it. The value is a build-time constant, so the
+ * factories decide once, when they build a route.
+ */
+function underCacheComponents(): boolean {
+  return cacheComponentsEnabled(process.env.__NEXT_CACHE_COMPONENTS);
+}
+
+/**
+ * A route's page body inside a Suspense boundary the page provides, which
+ * only Cache Components needs.
  *
  * What a page reads at request time (the draft gate's cookie, an enforced read,
  * a param the build did not list) is read in the body, so under Cache
  * Components the boundary is where the prerender stops, and everything above
- * it is a static shell. Without Cache Components the same page streams.
+ * it is a static shell.
+ *
+ * Without Cache Components the factories return the route's own page instead.
+ * A boundary there would let the shell stream before the body's read, so a page
+ * that calls `notFound()` (an unknown or unpublished entry) would answer 200
+ * with the not-found page rather than a 404.
  *
  * The pages below build this before awaiting anything, because a read above
  * the boundary is the one Cache Components refuses to prerender. They still
@@ -1779,6 +1798,7 @@ function withinBoundary(body: ReactElement): ReactElement {
 function singleWithinBoundary(
   route: SingleRoute<ReactElement>
 ): SingleRoute<ReactElement> {
+  if (!underCacheComponents()) return route;
   return {
     ...route,
     SinglePage: () =>
@@ -1789,6 +1809,7 @@ function singleWithinBoundary(
 function contentWithinBoundary<R extends ContentRoute<ReactElement>>(
   route: R
 ): R {
+  if (!underCacheComponents()) return route;
   return {
     ...route,
     ContentPage: args =>

@@ -50,18 +50,43 @@ if [ -z "$NEXTLY_BOUNDED" ]; then
   # sha is all zeros. No refs at all is NOT read as "only deletions": an empty
   # list is not an all-clear. A terminal on stdin means the hook was run by
   # hand, and there are no refs to read.
+  #
+  # A push of screenshots carries no code either: `pnpm visual-check --publish`
+  # pushes a `pr-screenshots/` branch holding PNG files and nothing else. Its
+  # name alone proves nothing, so it passes only when every commit in its
+  # history holds PNG files alone, read from git's own objects. A history too
+  # long to be screenshots, or one git cannot read, is gated.
   if [ ! -t 0 ]; then
     REFS=0
     DELETIONS=0
-    while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    SCREENSHOTS=0
+    while read -r _local_ref local_sha remote_ref _remote_sha; do
       REFS=$((REFS + 1))
       case "$local_sha" in
         '' | *[!0]*) ;;
-        *) DELETIONS=$((DELETIONS + 1)) ;;
+        *) DELETIONS=$((DELETIONS + 1)); continue ;;
       esac
+      case "$remote_ref" in
+        refs/heads/pr-screenshots/*) ;;
+        *) continue ;;
+      esac
+      # `--count` rather than counting lines, whose `wc -l` pads its number on BSD.
+      length=$(git rev-list --count --max-count=101 "$local_sha" 2>/dev/null </dev/null) || continue
+      if [ "$length" -lt 1 ] || [ "$length" -gt 100 ]; then continue; fi
+      only_images=1
+      for commit in $(git rev-list "$local_sha" </dev/null); do
+        files=$(git ls-tree -r --name-only "$commit" 2>/dev/null </dev/null) || only_images=0
+        if [ -z "$files" ]; then only_images=0; fi
+        if printf '%s\n' "$files" | grep -v '\.png$' >/dev/null; then only_images=0; fi
+      done
+      if [ "$only_images" -eq 1 ]; then SCREENSHOTS=$((SCREENSHOTS + 1)); fi
     done
     if [ "$REFS" -gt 0 ] && [ "$DELETIONS" -eq "$REFS" ]; then
       echo "pre-push: only deleting remote branches — nothing to gate."
+      exit 0
+    fi
+    if [ "$REFS" -gt 0 ] && [ $((DELETIONS + SCREENSHOTS)) -eq "$REFS" ]; then
+      echo "pre-push: only screenshots on pr-screenshots/ branches — nothing to gate."
       exit 0
     fi
   fi
