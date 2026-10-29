@@ -830,9 +830,6 @@ no-service key-role-based read collection malformed-filter at capabilities  # no
 no-service key-role-based read single malformed-filter at widget  # holds-permission-key-skips-rules
 no-service key-role-based read single malformed-filter at capabilities  # no-service
 
-# rest-refuses-visitors: REST's media routes refuse a visitor before they ask the Public role's read-media.
-service visitor read media none at rest
-public visitor read media none at rest
 # A collection's read rule that answers a well-formed filter allows the
 # entries it matches. Each door below refuses it still, as no read there
 # applies a rule's filter yet.
