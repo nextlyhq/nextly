@@ -556,6 +556,40 @@ for (const entry of DIALECTS) {
         }
       );
 
+      it.skipIf(dialect !== "sqlite")(
+        "refuses a SQLite rebuild that would lose a column's ON CONFLICT policy",
+        async () => {
+          // A conflict clause sits on the column's NOT NULL in the table's own definition, where no
+          // snapshot records it; the rebuild would declare the column without it, so a write that
+          // was skipped would fail instead.
+          await migrateCreate(heading("heading"));
+          await migrate();
+          const [table] = await adapter.executeQuery<{ sql: string }>(
+            `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dc_posts'`
+          );
+          const indexes = await adapter.executeQuery<{ sql: string }>(
+            `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'dc_posts' AND sql IS NOT NULL`
+          );
+          const withPolicy = table.sql.replace(
+            '"title" text NOT NULL',
+            '"title" text NOT NULL ON CONFLICT IGNORE'
+          );
+          expect(withPolicy).not.toBe(table.sql);
+          await exec(`ALTER TABLE "dc_posts" RENAME TO "dc_posts_old"`);
+          await exec(withPolicy);
+          await exec(`DROP TABLE "dc_posts_old"`);
+          for (const index of indexes) await exec(index.sql);
+          const before = await definitionOf("dc_posts");
+
+          await migrateCreate(heading("heading", { required: true }));
+          await expect(migrate()).rejects.toThrow(
+            /would drop conflict clauses its schema does not track/
+          );
+
+          expect(await definitionOf("dc_posts")).toEqual(before);
+        }
+      );
+
       it.skipIf(dialect !== "sqlite").each(["STRICT", "WITHOUT ROWID"])(
         "refuses a SQLite rebuild that would lose the table option %s",
         async option => {

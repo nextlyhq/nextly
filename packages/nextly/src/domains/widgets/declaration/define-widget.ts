@@ -17,7 +17,7 @@
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetSizeDeclaration } from "../grid-size";
 import type { RangeInterval, TimeseriesRange } from "../query";
-import type { DeclaredComponentProps } from "../result";
+import type { DeclaredComponentProps, WidgetRenderSize } from "../result";
 import type { WidgetScope } from "../widget-scope";
 
 import type {
@@ -149,6 +149,25 @@ export interface WidgetReadServices {
   }>;
 }
 
+/**
+ * The size a card's data is loaded for: `w` and `h`, the card's size in grid
+ * units, held to its widget's declared bounds; and `tier`, how much room the
+ * card has on the screen asking, `"small"`, `"medium"` or `"large"`.
+ *
+ * 🔴 The shape a widget's own component is handed as its `size`
+ * (`WidgetRenderSize`), named again for the reader of a `load`, so the size a
+ * load reads and the size its card is drawn at cannot come to be two shapes.
+ * The tier is the one the admin predicts from the dashboard's width and the
+ * card's span before the card is drawn, by the rule the drawn card then
+ * measures itself by. A card asked with no tier (a request made with no
+ * dashboard width, or a default dashboard judged on the server) is loaded at
+ * `"medium"`, the tier a component is drawn at before its card has measured
+ * itself.
+ *
+ * @experimental
+ */
+export type WidgetLoadSize = WidgetRenderSize;
+
 /** What a data function is handed. */
 export interface WidgetDataInput<Values> {
   /** The card's settings: the person's values, or the starting ones. */
@@ -175,6 +194,16 @@ export interface WidgetDataInput<Values> {
    * @experimental
    */
   now: Date;
+  /**
+   * The size this card is loaded for (`WidgetLoadSize`): its grid size and
+   * its tier. Part of what the load is asked, so a card that is resized or
+   * crosses a tier is loaded again, alone; read it to ask for no more than
+   * the card draws, such as `rowsThatFit(size, { density })` rows, or a
+   * trend only a large card shows.
+   *
+   * @experimental
+   */
+  size: WidgetLoadSize;
 }
 
 /** A widget's own data function, run on the server for each card. */

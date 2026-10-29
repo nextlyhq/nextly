@@ -14,7 +14,10 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { RETIRED_MANAGE_RESOURCES } from "../../auth/access/retired-manage-permissions";
+import {
+  RETIRED_MANAGE_RESOURCES,
+  batches,
+} from "../../auth/access/retired-manage-permissions";
 
 /** Where the roles are read: an adapter or a transaction. */
 type Reader = Pick<TransactionContext, "select">;
@@ -25,6 +28,9 @@ export interface RoleHoldingRetiredManage {
   name: string;
   permissions: string[];
 }
+
+/** How many role ids one read of the roles binds. */
+const ROLE_IDS_PER_READ = 500;
 
 /** Every role holding a retired `manage-` permission, by name. */
 export async function rolesHoldingRetiredManage(
@@ -68,10 +74,17 @@ export async function rolesHoldingRetiredManage(
       slugOf.get(String(row.permissionId)) ?? "",
     ]);
   }
-  const roles = await reader.select<{ id: unknown; name: unknown }>("roles", {
-    columns: ["id", "name"],
-    where: { and: [{ column: "id", op: "IN", value: [...byRole.keys()] }] },
-  });
+  // In runs, so an install with more such roles than one statement may bind
+  // still names them all: 500 is under SQLite's lowest supported limit.
+  const roles: Array<{ id: unknown; name: unknown }> = [];
+  for (const ids of batches([...byRole.keys()], ROLE_IDS_PER_READ)) {
+    roles.push(
+      ...(await reader.select<{ id: unknown; name: unknown }>("roles", {
+        columns: ["id", "name"],
+        where: { and: [{ column: "id", op: "IN", value: ids }] },
+      }))
+    );
+  }
   return roles
     .map(role => ({
       id: String(role.id),

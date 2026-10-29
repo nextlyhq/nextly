@@ -18,6 +18,8 @@ export {
   type WidgetDataInput,
   type WidgetEmpty,
   type WidgetInterval,
+  // The size a card's `load` is handed, beside the input it arrives in.
+  type WidgetLoadSize,
   type WidgetPreviewCase,
   type WidgetProps,
   type WidgetRange,

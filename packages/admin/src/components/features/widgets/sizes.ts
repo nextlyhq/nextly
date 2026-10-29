@@ -40,10 +40,12 @@ import {
 } from "nextly/config";
 import type { CSSProperties } from "react";
 
-/** One row's height, in pixels rather than rem so it does not follow the root font size. */
-export const ROW_HEIGHT_PX = 72;
-/** The gap down the grid, between rows, at every width. */
-export const ROW_GAP_PX = 16;
+// One row's height and the gap down the grid, in pixels, and a card's height from its rows: core's
+// own (`nextly/card-geometry`), the numbers a widget's server `load` counts its rows by, so the
+// grid drawn here and the rows a load reads cannot come to disagree. Re-exported for the grid's
+// readers, which name them from here.
+export { cardHeightPx, ROW_GAP_PX, ROW_HEIGHT_PX } from "nextly/card-geometry";
+
 /** The gap across the grid, between columns, below {@link WIDE_GAP_FROM_PX}. */
 export const COLUMN_GAP_PX = 16;
 /** The gap across the grid from {@link WIDE_GAP_FROM_PX}. */
@@ -153,11 +155,6 @@ export function cardSpanClass(w: number): string {
  */
 export function cardRowStyle(h: number): CSSProperties {
   return { gridRow: `span ${h} / span ${h}` };
-}
-
-/** A card's height in pixels at `h` rows: its rows and the gaps between them, at every width. */
-export function cardHeightPx(h: number): number {
-  return h * ROW_HEIGHT_PX + (h - 1) * ROW_GAP_PX;
 }
 
 /** The widths the card menu offers wherever a widget's bounds allow them: the common fractions. */

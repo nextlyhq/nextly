@@ -10,8 +10,10 @@ import type {
 } from "@nextly/types/rbac-operations";
 
 import {
-  RETIRED_MANAGE_PLAIN_ACTIONS,
+  batches,
   isRetiredManage,
+  plainFourOn,
+  storedAsPlain,
 } from "../../../auth/access/retired-manage-permissions";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
@@ -77,15 +79,28 @@ export class RolePermissionService extends BaseService {
     perm: { action: string; resource: string; name?: string; slug?: string }
   ): Promise<void> {
     // A retired `manage-` permission is added as the plain four it stands
-    // for, each as a permission of its own.
+    // for, all four in one transaction under the lock on the role's row, so
+    // the add lands whole and no other writer lands between its parts. Where
+    // one of the four is missing, it is added as itself, as `storedAsPlain`
+    // keeps it.
     if (isRetiredManage(perm.action, perm.resource)) {
-      for (const action of RETIRED_MANAGE_PLAIN_ACTIONS) {
-        await this.addPermissionToRole(roleId, {
-          action,
-          resource: perm.resource,
-        });
+      let added = false;
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        const four = await plainFourOn(tx, perm.resource);
+        if (four.length === 0) return;
+        const held = await this.heldIn(tx, roleId);
+        await this.insertAssignments(
+          tx,
+          roleId,
+          four.filter(id => !held.has(id))
+        );
+        added = true;
+      });
+      if (added) {
+        await afterRoleGrantsChanged(roleId);
+        return;
       }
-      return;
     }
     // Composed by the shared helpers rather than written out. This method
     // creates the permission row when the pair has none, and it is reached from
@@ -246,17 +261,25 @@ export class RolePermissionService extends BaseService {
         id: true,
       },
     });
-    if (!permission) return;
+    const retired = isRetiredManage(perm.action, perm.resource);
+    if (!permission && !retired) return;
 
     // Under the lock on the role's row that every other writer of its
     // permissions takes, so a removal never lands between another writer's
     // read of what the role holds and its write.
     await this.adapter.transaction(async tx => {
       await tx.lockRow("roles", roleId);
+      const ids = [
+        ...(permission ? [String(permission.id)] : []),
+        // A retired `manage-` permission is stored as the plain four it
+        // stands for, so taking it off takes them off too.
+        ...(retired ? await plainFourOn(tx, perm.resource) : []),
+      ];
+      if (ids.length === 0) return;
       await tx.delete("role_permissions", {
         and: [
           { column: "roleId", op: "=", value: roleId },
-          { column: "permissionId", op: "=", value: String(permission.id) },
+          { column: "permissionId", op: "IN", value: ids },
         ],
       });
     });
@@ -611,80 +634,6 @@ function named(
         ]
       : []
   );
-}
-
-/** `items` in runs of at most `size`, and never less than one per run. */
-/** Where `storedAsPlain` reads permission rows: an adapter or a transaction. */
-type PermissionReader = Pick<TransactionContext, "select">;
-
-/** A permission row as `storedAsPlain` reads it. */
-type PermissionRow = { id: unknown; action: string; resource: string };
-
-/**
- * The permission ids as a role stores them: each retired `manage-` one
- * replaced by the plain read, create, update and delete on its resource, and
- * every other id as it is. Where a resource lacks one of the plain four, its
- * `manage-` id is kept, so the role loses nothing; the bridge still counts it
- * until `nextly upgrade` converts it once they exist.
- */
-export async function storedAsPlain(
-  reader: PermissionReader,
-  permissionIds: readonly string[],
-  maxParams: number
-): Promise<string[]> {
-  const ids = [...new Set(permissionIds.map(String))];
-  if (ids.length === 0) return ids;
-  const rows: PermissionRow[] = [];
-  for (const batch of batches(ids, maxParams)) {
-    rows.push(
-      ...(await reader.select<PermissionRow>("permissions", {
-        columns: ["id", "action", "resource"],
-        where: { and: [{ column: "id", op: "IN", value: batch }] },
-      }))
-    );
-  }
-  const retired = rows.filter(row => isRetiredManage(row.action, row.resource));
-  if (retired.length === 0) return ids;
-  const resources = [...new Set(retired.map(row => row.resource))];
-  const plain = await reader.select<PermissionRow>("permissions", {
-    columns: ["id", "action", "resource"],
-    where: {
-      and: [
-        {
-          column: "action",
-          op: "IN",
-          value: [...RETIRED_MANAGE_PLAIN_ACTIONS],
-        },
-        { column: "resource", op: "IN", value: resources },
-      ],
-    },
-  });
-  const replaced = new Set<string>();
-  const added: string[] = [];
-  for (const resource of resources) {
-    const four = plain.filter(row => row.resource === resource);
-    if (
-      !RETIRED_MANAGE_PLAIN_ACTIONS.every(action =>
-        four.some(row => row.action === action)
-      )
-    ) {
-      continue;
-    }
-    for (const row of retired) {
-      if (row.resource === resource) replaced.add(String(row.id));
-    }
-    added.push(...four.map(row => String(row.id)));
-  }
-  return [...new Set([...ids.filter(id => !replaced.has(id)), ...added])];
-}
-
-function batches<T>(items: readonly T[], size: number): T[][] {
-  const step = Math.max(1, Math.floor(size));
-  const runs: T[][] = [];
-  for (let start = 0; start < items.length; start += step) {
-    runs.push(items.slice(start, start + step));
-  }
-  return runs;
 }
 
 /** Whether two sets hold the same members. */

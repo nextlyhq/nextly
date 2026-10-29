@@ -87,10 +87,15 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
         grant("publish", POSTS),
       ],
     },
-    // May publish posts, and holds no update.
+    // May publish posts and the home Single, and holds no update.
     "publisher-only": {
       roles: ["publisher"],
-      grants: [grant("read", POSTS), grant("publish", POSTS)],
+      grants: [
+        grant("read", POSTS),
+        grant("publish", POSTS),
+        grant("read", HOME),
+        grant("publish", HOME),
+      ],
     },
     "grants-unreadable": { roles: ["editor"], grants: [] },
     // A super-admin whose roles cannot be read.
@@ -449,6 +454,41 @@ describe("routeGateCapabilities", () => {
       registered.rbac
     );
     expect(alone.allowed).toBe(true);
+  });
+
+  it("publishes every language of a collection with a lifecycle on publish alone", async () => {
+    // Publishing every language changes only each language's status, which
+    // its publish permission judges where the collection has a lifecycle; a
+    // Single, and a collection without one, ask update as well.
+    registered.rbac = new RBACAccessControlService();
+    const answer = (userId: string, hasLifecycle: (slug: string) => boolean) =>
+      routeGateCapabilities(
+        { userId },
+        ENTITIES,
+        registered.rbac,
+        LANGUAGE_OF,
+        hasLifecycle
+      );
+    const everything = () => true;
+    const publishOnly = await answer("publisher-only", everything);
+    expect(publishOnly.entities[POSTS]).toMatchObject({
+      update: false,
+      publishEveryLanguage: true,
+    });
+    // Without a lifecycle the request asks update, which this role lacks.
+    expect(
+      (await answer("publisher-only", NO_LIFECYCLE)).entities[POSTS]
+    ).toMatchObject({ publishEveryLanguage: false });
+    // A role that may update and not publish is not offered it either way.
+    expect((await answer("editor", everything)).entities[POSTS]).toMatchObject(
+      { update: true, publish: false, publishEveryLanguage: false }
+    );
+    // A Single stays strict: update in every language, then publish.
+    expect(publishOnly.entities[HOME]).toMatchObject({
+      update: false,
+      publish: true,
+      publishEveryLanguage: false,
+    });
   });
 
   it("answers a publish by its own rule where update is refused", async () => {
