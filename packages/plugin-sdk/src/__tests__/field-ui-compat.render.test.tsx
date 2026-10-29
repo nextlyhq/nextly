@@ -155,6 +155,18 @@ const CASES = {
     expect(byEntries.querySelector('[role="radiogroup"]')?.className).not.toBe(
       twoColumns
     );
+
+    // Every optional prop left out, as most plugins write it: today's defaults
+    // are two columns, the accessible name "Field type", and cards enabled.
+    const byDefaults = render(
+      <FieldTypePicker types={["text"]} value="text" onChange={noop} />
+    );
+    const defaultGroup = byDefaults.querySelector('[role="radiogroup"]');
+    expect(defaultGroup?.getAttribute("aria-label")).toBe("Field type");
+    expect(defaultGroup?.className).toBe(twoColumns);
+    expect(
+      byDefaults.querySelector<HTMLButtonElement>('[role="radio"]')?.disabled
+    ).toBe(false);
   },
 
   FieldDefaultValueInput: () => {
@@ -173,6 +185,15 @@ const CASES = {
     );
     expect(input?.value).toBe("Untitled");
     expect(input?.disabled).toBe(true);
+
+    // Optional props left out: named "Default value" and enabled, by default.
+    const byDefaults = render(
+      <FieldDefaultValueInput fieldType="text" value="" onChange={noop} />
+    );
+    const defaultInput = byDefaults.querySelector<HTMLInputElement>(
+      'input[aria-label="Default value"]'
+    );
+    expect(defaultInput?.disabled).toBe(false);
   },
 
   FieldOptionsEditor: () => {
@@ -203,6 +224,12 @@ const CASES = {
       <FieldOptionsEditor options={options} onOptionsChange={noop} disabled />
     );
     expect(buttonLabelled(withImport, "Import")?.disabled).toBe(true);
+
+    // Optional props left out: the import is offered and enabled, by default.
+    const byDefaults = render(
+      <FieldOptionsEditor options={options} onOptionsChange={noop} />
+    );
+    expect(buttonLabelled(byDefaults, "Import")?.disabled).toBe(false);
   },
 
   withOptionIds: () => {
@@ -232,24 +259,43 @@ const CASES = {
 
   ConditionRow: () => {
     const { ConditionRow } = entry;
+    const condition = {
+      field: "status",
+      operator: "equals",
+      value: "draft",
+    } as const;
+    const sources = [
+      {
+        name: "status",
+        label: "Status",
+        type: "select",
+        options: [{ value: "draft", label: "Draft" }],
+      },
+    ];
+    const controls = (container: HTMLElement): HTMLButtonElement[] => [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="combobox"]'),
+    ];
+
+    // Optional props left out: every control is enabled, by default.
+    const byDefaults = render(
+      <ConditionRow condition={condition} sources={sources} onChange={noop} />
+    );
+    expect(byDefaults.textContent).toContain("Status");
+    expect(byDefaults.textContent).toContain("equals");
+    expect(controls(byDefaults).length).toBeGreaterThan(0);
+    expect(controls(byDefaults).every(control => !control.disabled)).toBe(true);
+
     const container = render(
       <ConditionRow
-        condition={{ field: "status", operator: "equals", value: "draft" }}
-        sources={[
-          {
-            name: "status",
-            label: "Status",
-            type: "select",
-            options: [{ value: "draft", label: "Draft" }],
-          },
-        ]}
+        condition={condition}
+        sources={sources}
         onChange={noop}
+        readOnly
         className="condition-row-layout"
       />
     );
-    expect(container.textContent).toContain("Status");
-    expect(container.textContent).toContain("equals");
     expect(container.querySelector(".condition-row-layout")).not.toBeNull();
+    expect(controls(container).every(control => control.disabled)).toBe(true);
   },
 
   operatorsForType: () => {
@@ -284,6 +330,14 @@ const CASES = {
     expect(input.placeholder).toBe("None");
     // `counts`: a bound that counts things takes whole numbers from zero.
     expect([input.min, input.step]).toEqual(["0", "1"]);
+
+    // `counts` left out: a bound on a value, which may be fractional or
+    // negative, so neither limit is set.
+    const byDefaults = render(
+      <ValidationNumberField label="Min" value={undefined} onChange={noop} />
+    );
+    const [defaultInput] = inputs(byDefaults);
+    expect([defaultInput.min, defaultInput.step]).toEqual(["", ""]);
   },
 
   ValidationRulesEditor: () => {
@@ -305,6 +359,19 @@ const CASES = {
       "",
     ]);
     expect(inputs(container).every(input => input.disabled)).toBe(true);
+
+    // Optional props left out: the message says it is shown for any failed
+    // rule, and every control is enabled, by default.
+    const byDefaults = render(
+      <ValidationRulesEditor
+        allowed={["minLength", "message"]}
+        value={{}}
+        onChange={noop}
+      />
+    );
+    expect(byDefaults.textContent).toContain("fails validation");
+    expect(byDefaults.textContent).not.toContain("fails the Pattern above");
+    expect(inputs(byDefaults).every(input => !input.disabled)).toBe(true);
   },
 
   drawsAnyValidationRule: () => {

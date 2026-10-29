@@ -340,19 +340,38 @@ type ReadsAs<Now, Today> =
     : Usable<Now, Today>;
 
 /**
- * A function as today's consumer calls it: today's arguments still accepted,
- * and its result held as a shape that consumer reads. Checked through the
- * result rather than the function type, because a function declared to
- * return `never` is assignable to any signature with the same parameters.
+ * Each argument of a function held as a shape today's consumer passes values
+ * into, so an argument typed `any` or `never` is caught as a prop would be:
+ * the argument list as a whole stays assignable either way.
+ */
+type ArgumentVerdicts<
+  TodayArgs extends readonly unknown[],
+  Args extends readonly unknown[],
+> = {
+  [Index in keyof TodayArgs]: Index extends keyof Args
+    ? Accepts<TodayArgs[Index], Args[Index]>
+    : "drops an argument today's consumer passes";
+};
+
+/**
+ * A function as today's consumer calls it: each of today's arguments still
+ * accepted, and its result held as a shape that consumer reads. Checked
+ * through the arguments and the result rather than the function type, because
+ * a function declared to return `never` is assignable to any signature with
+ * the same parameters, and one taking `any` to any signature at all.
  */
 type Calls<Now, TodayArgs extends readonly unknown[], TodayResult> =
   Degenerate<Now> extends string
     ? Degenerate<Now>
     : Now extends (...args: infer Args) => infer Result
       ? [TodayArgs] extends [Args]
-        ? ReadsAs<Result, TodayResult> extends true
-          ? true
-          : `its result ${ReadsAs<Result, TodayResult> & string}`
+        ? [Extract<ArgumentVerdicts<TodayArgs, Args>[number], string>] extends [
+            never,
+          ]
+          ? ReadsAs<Result, TodayResult> extends true
+            ? true
+            : `its result ${ReadsAs<Result, TodayResult> & string}`
+          : `an argument ${Extract<ArgumentVerdicts<TodayArgs, Args>[number], string>}`
         : "refuses arguments today's consumer passes"
       : "is no longer callable";
 

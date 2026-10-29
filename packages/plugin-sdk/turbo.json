@@ -30,14 +30,8 @@
         "tsdown.config.ts",
         "vitest.global-setup.ts"
       ]
-    },
-    "test:watch": {
-      // The same build edge as `test`. A watch run loads the same entry, and a
-      // task that inherited the root definition alone would start against
-      // whatever `dist` happened to be on disk.
-      "dependsOn": ["$TURBO_EXTENDS$", "build"],
-      "cache": false,
-      "persistent": true
     }
+    // No `test:watch` here: this package has no watch script, so turbo would
+    // create no such task and an entry for it would configure nothing.
   }
 }
