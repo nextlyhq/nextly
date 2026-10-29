@@ -59,7 +59,7 @@
  *
  * @module collections/layouts
  */
-import type { RepeaterFieldValue } from "nextly/config";
+import type { CollectionConfig, RepeaterFieldValue } from "nextly/config";
 import {
   defineCollection,
   relationship,
@@ -107,7 +107,7 @@ function rejectRepeatedAreas(value: RepeaterFieldValue): string | true {
  * document — nothing about it is authored on a canvas — so giving it a tree
  * would offer an editor for content it does not have.
  */
-export function layoutsCollection() {
+export function layoutsCollection(): CollectionConfig {
   return defineCollection({
     slug: LAYOUTS_SLUG,
     labels: { singular: "Layout", plural: "Layouts" },

@@ -39,35 +39,39 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 
-import type { GrantedPermission } from "../../../auth/authenticated-scope";
+import {
+  keyCallerHoldsSuperAdmin,
+  type GrantedPermission,
+} from "../../../auth/authenticated-scope";
 import { accountIsActive } from "../../../auth/session/session-standing";
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
-import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
-import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
-import { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
-import {
+import type { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
+import type { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
+import type { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
+import type {
   permissions as permissionsMysql,
   rolePermissions as rolePermissionsMysql,
   roles as rolesMysql,
   userRoles as userRolesMysql,
 } from "../../../schemas/rbac/mysql";
-import {
+import type {
   permissions as permissionsPg,
   rolePermissions as rolePermissionsPg,
   roles as rolesPg,
   userRoles as userRolesPg,
 } from "../../../schemas/rbac/postgres";
-import {
+import type {
   permissions as permissionsSqlite,
   rolePermissions as rolePermissionsSqlite,
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
-import { users as usersMysql } from "../../../schemas/users/mysql";
-import { users as usersPg } from "../../../schemas/users/postgres";
-import { users as usersSqlite } from "../../../schemas/users/sqlite";
+import type { users as usersMysql } from "../../../schemas/users/mysql";
+import type { users as usersPg } from "../../../schemas/users/postgres";
+import type { users as usersSqlite } from "../../../schemas/users/sqlite";
 // PR 4 migration: switch from legacy ServiceError to NextlyError unified system.
 // ServiceError throw sites are replaced with NextlyError factory calls; identifying
 // info (key id, role id, exceeded permission) moves from public message to logContext
@@ -83,12 +87,25 @@ import { refreshEpoch, stampIsCurrent } from "../../../services/lib/rbac-epoch";
 import { userRoleAssignmentsInForce } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
+import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
+
+import { refuseLinkingPublicRole } from "./public-role";
 
 /** The three token types that determine how permissions are resolved at request time. */
 export type ApiKeyTokenType = "read-only" | "full-access" | "role-based";
 
 /** Token duration options for key expiry. "unlimited" means the key never expires. */
 export type ExpiresIn = "7d" | "30d" | "90d" | "unlimited";
+
+/**
+ * Why a presented key does not authenticate: for the server's log, never the
+ * caller, who is told the same thing whichever it is.
+ */
+export type ApiKeyRefusalCause =
+  | "unknown"
+  | "revoked"
+  | "expired"
+  | "creator-inactive";
 
 /** The key value returned by generateApiKey(). fullKey is shown once and never stored. */
 export interface GeneratedApiKey {
@@ -264,14 +281,19 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
  * Here, beside the metadata it narrows, so the REST routes and the Direct API
  * answer one caller the same way.
  */
-export async function apiKeyViewer(caller: {
-  userId: string;
-  authMethod: string;
-  permissions: readonly string[];
-}): Promise<(key: ApiKeyMeta) => ApiKeyMeta> {
+export async function apiKeyViewer(
+  caller: {
+    userId: string;
+    authMethod: string;
+    permissions: readonly string[];
+  } & Parameters<typeof keyCallerHoldsSuperAdmin>[0]
+): Promise<(key: ApiKeyMeta) => ApiKeyMeta> {
   const byKey = caller.authMethod === "api-key";
+  // A key carrying its maker's super-admin authority holds every permission,
+  // as every other way in treats it, its grant list notwithstanding.
   const readsUsers = byKey
-    ? caller.permissions.includes(permissionSlug("read", "users"))
+    ? keyCallerHoldsSuperAdmin(caller) ||
+      caller.permissions.includes(permissionSlug("read", "users"))
     : await hasPermission(caller.userId, "read", "users");
   return key =>
     readsUsers || (!byKey && key.owner?.id === caller.userId)
@@ -370,10 +392,9 @@ function keyGrantsServable(entry: KeyGrantsEntry, now: number): boolean {
  * Distinct rows, keyed on the slug — the identity a grant is stored under.
  *
  * A key's grants are kept as rows, not slugs: the slug (`read-posts`) is what
- * every check compares and what a rule is handed, and for one release a rule
- * is also handed the earlier `posts:read` spelling, made from the row's
- * `action` and `resource`. A stored slug cannot be decomposed back into those
- * parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
+ * every check compares and what a rule is handed, and the row also names
+ * the `action` and `resource` it grants. A stored slug cannot be decomposed
+ * back into those parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
  * explicitly supported by `RolePermissionService`, so splitting on the hyphen
  * would invent a resource that no row names.
  */
@@ -422,6 +443,93 @@ interface ApiKeyRow {
  */
 const LAST_USE_RESOLUTION_MS = 60_000;
 
+/**
+ * Whether a key acts with super-admin authority for this request: only a
+ * full-access key, and only while the person who made it holds the
+ * super-admin role, directly or through an inherited one.
+ *
+ * Asked for each request, as the maker's own sessions ask it, so the key
+ * loses the authority when its maker does: a role removed or expired, or a
+ * changed role version, is seen within the bound their sessions follow, and
+ * a deactivated maker's key is refused before this is asked. Never read from
+ * the grants cached for the key, which may outlast the maker's role. A
+ * lookup that fails answers no.
+ *
+ * With the answer comes the soonest expiry among the maker's roles, which
+ * ends the authority on a scope kept past its request as it ends a session's
+ * token. Read BEFORE the role itself, as a session reads it: read after, a
+ * role lapsing between the two reads would leave the authority with no end.
+ */
+async function keyHoldsSuperAdmin(
+  tokenType: ApiKeyTokenType,
+  userId: string
+): Promise<{ holds: boolean; until?: number }> {
+  if (tokenType !== "full-access") return { holds: false };
+  let until: number | undefined;
+  try {
+    ({ validUntil: until } = await resolveUserRoles(userId));
+  } catch {
+    // An authority with no known end is not carried.
+    return { holds: false };
+  }
+  if (!(await isSuperAdmin(userId))) return { holds: false };
+  return until === undefined ? { holds: true } : { holds: true, until };
+}
+
+/** What a key authentication accepted is resolved to, for its request. */
+export interface ResolvedKeyCaller {
+  grants: readonly GrantedPermission[];
+  roles: string[];
+  keyHoldsSuperAdmin: boolean;
+  /** The soonest expiry among the maker's roles, where the authority ends. */
+  keyHoldsSuperAdminUntil?: number;
+  /** When authentication asked the maker's standing, passed on as it came. */
+  keyStandingAskedAt?: number;
+}
+
+/**
+ * The grants, roles and super-admin authority a key authentication accepted
+ * acts with for this request. The one resolution REST authentication and
+ * `checkApiKey` share, so a scope made from either is the same scope, judged
+ * the same at every way in.
+ */
+export async function resolveKeyCaller(
+  service: Pick<ApiKeyService, "resolveApiKeyGrants" | "resolveApiKeyRoles">,
+  key: {
+    id: string;
+    userId: string;
+    tokenType: ApiKeyTokenType;
+    roleId: string | null;
+    /** When authentication asked the maker's standing, where it says. */
+    standingAskedAt?: number;
+    /** When the key itself expires (epoch ms), where it does. */
+    expiresAt?: number | null;
+  }
+): Promise<ResolvedKeyCaller> {
+  const [grants, roles, superAdmin] = await Promise.all([
+    service.resolveApiKeyGrants(key.tokenType, key.roleId, key.userId, key.id),
+    service.resolveApiKeyRoles(key.tokenType, key.roleId, key.userId),
+    keyHoldsSuperAdmin(key.tokenType, key.userId),
+  ]);
+  // The authority ends at the first of the maker's role expiry and the key's
+  // own, so a kept scope never outlives a key fresh authentication refuses.
+  const ends = [superAdmin.until, key.expiresAt ?? undefined].filter(
+    (at): at is number => at !== undefined
+  );
+  const until = ends.length > 0 ? Math.min(...ends) : undefined;
+  return {
+    grants,
+    roles,
+    keyHoldsSuperAdmin: superAdmin.holds,
+    ...(!superAdmin.holds || until === undefined
+      ? {}
+      : { keyHoldsSuperAdminUntil: until }),
+    ...(key.standingAskedAt === undefined
+      ? {}
+      : { keyStandingAskedAt: key.standingAskedAt }),
+  };
+}
+
 export class ApiKeyService extends BaseService {
   private apiKeysTable:
     | typeof apiKeysPg
@@ -447,29 +555,19 @@ export class ApiKeyService extends BaseService {
 
     switch (this.dialect) {
       case "postgresql":
-        this.apiKeysTable = apiKeysPg;
-        this.rolesTable = rolesPg;
-        this.userRolesTable = userRolesPg;
-        this.rolePermissionsTable = rolePermissionsPg;
-        this.permissionsTable = permissionsPg;
-        this.usersTable = usersPg;
-        break;
       case "mysql":
-        this.apiKeysTable = apiKeysMysql;
-        this.rolesTable = rolesMysql;
-        this.userRolesTable = userRolesMysql;
-        this.rolePermissionsTable = rolePermissionsMysql;
-        this.permissionsTable = permissionsMysql;
-        this.usersTable = usersMysql;
+      case "sqlite": {
+        // The loaded dialect's own tables, so only that dialect's files are
+        // imported; `createAdapter` loads them.
+        const tables = loadedDialect(this.dialect).tables;
+        this.apiKeysTable = tables.apiKeys;
+        this.rolesTable = tables.roles;
+        this.userRolesTable = tables.userRoles;
+        this.rolePermissionsTable = tables.rolePermissions;
+        this.permissionsTable = tables.permissions;
+        this.usersTable = tables.users;
         break;
-      case "sqlite":
-        this.apiKeysTable = apiKeysSqlite;
-        this.rolesTable = rolesSqlite;
-        this.userRolesTable = userRolesSqlite;
-        this.rolePermissionsTable = rolePermissionsSqlite;
-        this.permissionsTable = permissionsSqlite;
-        this.usersTable = usersSqlite;
-        break;
+      }
       default:
         // `this.dialect` is narrowed to `never` here after the exhaustive switch;
         // wrap in String() to satisfy @typescript-eslint/restrict-template-expressions.
@@ -637,6 +735,14 @@ export class ApiKeyService extends BaseService {
           logContext: { tokenType },
         });
       }
+      // The Public role is what visitors hold, never a key's.
+      await refuseLinkingPublicRole(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        [roleId],
+        "assign",
+        { userId }
+      );
     }
 
     await this.checkPermissionCeiling(userId, tokenType, roleId);
@@ -853,10 +959,10 @@ export class ApiKeyService extends BaseService {
   /**
    * The key's grants, as the rows they were resolved from.
    *
-   * Rows rather than slugs, because a rule judging the key on its own scope is
-   * handed, for one release, each grant's earlier `resource:action` spelling
-   * beside the stored slug its coarse permission check tests, and only the
-   * row has the parts to make it.
+   * Rows rather than slugs, because a slug cannot be split back into the
+   * action and resource it grants, and the scope keeps both for whatever
+   * asks of the key. A rule judging the key is handed each grant's stored
+   * slug, the one its coarse permission check tests.
    *
    * Returns a COPY. The cached arrays are shared by every request this key
    * makes for the TTL, and the scope built from them is handed to plugin route
@@ -1123,8 +1229,10 @@ export class ApiKeyService extends BaseService {
    *
    * Returns `null` for any failure case (not found, revoked, expired) so the
    * middleware can respond with a uniform 401 without leaking the reason.
+   * Which one it was is told to `onRefused`, for the server's log.
    *
    * @param rawKey - The full raw key from the `Authorization: Bearer` header
+   * @param onRefused - Told why the key does not authenticate, when it does not
    * @returns Auth tuple `{ id, userId, tokenType, roleId }` on success, or `null`
    *
    * @example
@@ -1136,11 +1244,25 @@ export class ApiKeyService extends BaseService {
    * );
    * ```
    */
-  async authenticateApiKey(rawKey: string): Promise<{
+  async authenticateApiKey(
+    rawKey: string,
+    onRefused?: (cause: ApiKeyRefusalCause) => void
+  ): Promise<{
     id: string;
     userId: string;
     tokenType: ApiKeyTokenType;
     roleId: string | null;
+    /**
+     * When the maker's standing was asked (`performance.now()`), taken just
+     * before the ask: the bound on any authority a scope made from this key
+     * carries counts from here, not from when the scope is made.
+     */
+    standingAskedAt: number;
+    /**
+     * When the key itself expires (epoch ms), or null where it does not: any
+     * authority a scope made from it carries ends there too.
+     */
+    expiresAt: number | null;
   } | null> {
     const keyHash = hashApiKey(rawKey);
 
@@ -1152,14 +1274,12 @@ export class ApiKeyService extends BaseService {
         roleId: this.apiKeysTable.roleId,
         expiresAt: this.apiKeysTable.expiresAt,
         lastUsedAt: this.apiKeysTable.lastUsedAt,
+        // Read rather than filtered on, so a revoked key is told from one
+        // that was never issued.
+        isActive: this.apiKeysTable.isActive,
       })
       .from(this.apiKeysTable)
-      .where(
-        and(
-          eq(this.apiKeysTable.keyHash, keyHash),
-          eq(this.apiKeysTable.isActive, true)
-        )
-      )
+      .where(eq(this.apiKeysTable.keyHash, keyHash))
       .limit(1);
 
     type AuthRow = {
@@ -1169,10 +1289,16 @@ export class ApiKeyService extends BaseService {
       roleId: string | null;
       expiresAt: Date | number | null;
       lastUsedAt: Date | number | null;
+      isActive: boolean | number;
     };
-    if ((rows as AuthRow[]).length === 0) return null;
+    const refused = (cause: ApiKeyRefusalCause): null => {
+      onRefused?.(cause);
+      return null;
+    };
+    if ((rows as AuthRow[]).length === 0) return refused("unknown");
 
     const row = (rows as AuthRow[])[0];
+    if (!row.isActive) return refused("revoked");
 
     // Normalise expiresAt — SQLite returns numeric timestamps, PG/MySQL return Date objects
     const expiresAt: Date | null =
@@ -1182,14 +1308,17 @@ export class ApiKeyService extends BaseService {
           ? new Date(row.expiresAt)
           : null;
 
-    if (isKeyExpired(expiresAt)) return null;
+    if (isKeyExpired(expiresAt)) return refused("expired");
 
     // A key acts with its creator's authority, so it is refused while the
     // creator is deactivated and works again once they are reactivated. Read
     // through the account-standing cache sessions use, so a deactivation is
     // refused at once on the instance that made it and within the cache's
     // lifetime elsewhere. A failed read throws rather than admitting the key.
-    if (!(await accountIsActive(row.userId))) return null;
+    const standingAskedAt = performance.now();
+    if (!(await accountIsActive(row.userId))) {
+      return refused("creator-inactive");
+    }
 
     await this.recordLastUse(row.id, row.lastUsedAt);
 
@@ -1198,6 +1327,8 @@ export class ApiKeyService extends BaseService {
       userId: row.userId,
       tokenType: row.tokenType as ApiKeyTokenType,
       roleId: row.roleId ?? null,
+      standingAskedAt,
+      expiresAt: expiresAt === null ? null : expiresAt.getTime(),
     };
   }
 

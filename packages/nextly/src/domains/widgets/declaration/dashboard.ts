@@ -10,9 +10,10 @@
  * @module domains/widgets/declaration/dashboard
  */
 
-import type { CoreWidgetId } from "../core-widgets";
+import type { CoreWidgetId } from "../core-widgets/ids";
+import type { WidgetSizeDeclaration } from "../grid-size";
 
-import type { AnyWidget, WidgetDataInput, WidgetWidth } from "./define-widget";
+import type { AnyWidget, WidgetDataInput } from "./define-widget";
 
 /**
  * The ids of core's own widgets, read from core's widget list, so a plugin
@@ -20,7 +21,7 @@ import type { AnyWidget, WidgetDataInput, WidgetWidth } from "./define-widget";
  * misspelt id when it compiles, and the set follows core's widgets with no
  * second edit.
  */
-export type { CoreWidgetId } from "../core-widgets";
+export type { CoreWidgetId } from "../core-widgets/ids";
 
 /**
  * A count for the Needs attention card: a whole number, or one marked as a
@@ -31,16 +32,20 @@ export type AttentionCount = number | { count: number; atLeast: true };
 /**
  * One line of the Needs attention card, from a plugin.
  *
- * It has no title, widths, settings or display: the card that draws it owns
+ * It has no title, size, settings or display: the card that draws it owns
  * those. Who may see it is either a permission, or the collections it counts,
  * in which case it shows to anyone who may read one of them.
  */
 export type AttentionItem = {
   id: string;
   label: string;
-  /** Counts as the person asking, through services bound to them. */
+  /**
+   * Counts as the person asking, through services bound to them. Handed no
+   * `size`: an item is one line of the Needs attention card, not a card of
+   * its own, so it has no size to be loaded for.
+   */
   count: (
-    input: Omit<WidgetDataInput<never>, "settings">
+    input: Omit<WidgetDataInput<never>, "settings" | "size">
   ) => Promise<AttentionCount>;
   /** A path relative to the admin, which core resolves. */
   link: string;
@@ -66,11 +71,13 @@ export function defineAttentionItem(item: AttentionItem): AttentionItem {
  * the widgets' types are known, the same type refuses it when it compiles.
  */
 export interface DashboardContribution<W extends AnyWidget = AnyWidget> {
-  widgets: readonly W[];
+  /** Its widgets; absent for a plugin that adds only Needs attention items. */
+  widgets?: readonly W[];
   /**
    * Widgets of this plugin to place on the default dashboard. Core places
-   * them after every built-in card, in the order the site lists its plugins,
-   * while there is room; a site may turn suggestions off.
+   * them after the default's own cards, in the order the site lists its
+   * plugins, while there is room; a site may turn suggestions off. Never
+   * added to a dashboard someone has saved: the add panel offers them there.
    */
   suggest?: readonly W["id"][];
   /**
@@ -81,21 +88,60 @@ export interface DashboardContribution<W extends AnyWidget = AnyWidget> {
   attention?: readonly AttentionItem[];
 }
 
-/** A card of the site's own default dashboard. */
-export interface DefaultCard {
-  widget: string;
-  width?: WidgetWidth;
+/**
+ * A widget's id as the site config names it: a core id, which completes as it
+ * is typed, or any other widget's, a plugin's or the site's own, which startup
+ * checks against the whole registry.
+ *
+ * @experimental While the dashboard widget SDK is being built.
+ */
+export type WidgetRef = CoreWidgetId | (string & {});
+
+/**
+ * A card of the site's own default dashboard: a widget, at a size it allows,
+ * with starting values for its settings.
+ *
+ * `w` and `h` are in grid units, each within the widget's bounds; either left
+ * out is the widget's starting size in that direction.
+ *
+ * @experimental While the dashboard widget SDK is being built.
+ */
+export interface DefaultLayoutCard {
+  widget: WidgetRef;
+  /**
+   * The card's own id, which a reader's choices about it are kept under. A
+   * widget placed once needs none: its card is named after the widget. Each
+   * further card of a widget placed more than once must name one, and no two
+   * cards, nor a card and a widget, may share one.
+   */
+  id?: string;
+  /** Columns, of twelve. */
+  w?: number;
+  /** Rows. */
+  h?: number;
   settings?: Readonly<Record<string, unknown>>;
+  /**
+   * Left out, with no fault, when no widget has this id: a plugin's widget on a
+   * site that does not install the plugin. An entry not marked so must name a
+   * widget the install has, or startup refuses it.
+   */
+  optional?: boolean;
 }
 
-/** What a site may change about a widget it did not declare. */
-export interface WidgetAdjustment {
+/**
+ * What a site may change about a widget, its own or not.
+ *
+ * @experimental While the dashboard widget SDK is being built.
+ */
+export interface WidgetOverride {
   title?: string;
   description?: string;
-  /** The starting width. */
-  width?: WidgetWidth;
-  /** Narrows the widths the widget allows; never widens them. */
-  widths?: readonly WidgetWidth[];
+  /**
+   * A new starting size, smallest or largest size, each within the widget's
+   * own bounds: an override narrows the sizes a widget allows and never
+   * widens them. An end left out keeps the widget's own.
+   */
+  size?: Partial<WidgetSizeDeclaration>;
   /** New starting values, for everyone who has not changed them. */
   settings?: Readonly<Record<string, unknown>>;
 }
@@ -104,18 +150,34 @@ export interface WidgetAdjustment {
  * The site config's `admin.dashboard`.
  *
  * Every reference to another widget is checked against the whole registry at
- * startup, the plugins' widgets included, which no type here can see.
+ * startup, the plugins' widgets included, which no type here can see, and all
+ * the faults are reported together.
+ *
+ * @experimental While the dashboard widget SDK is being built.
  */
 export interface AdminDashboardConfig<W extends AnyWidget = AnyWidget> {
   /** Widgets of the site's own, declared as a plugin declares them. */
   widgets?: readonly W[];
-  /** Widgets nobody is offered and no card draws, built-in or a plugin's. */
-  hide?: readonly string[];
-  adjust?: { readonly [id: string]: WidgetAdjustment };
-  /** The default dashboard, replacing core's. */
-  default?: readonly (string | DefaultCard)[];
+  /**
+   * Widgets nobody is offered and no card draws, built-in or a plugin's. Their
+   * cards are kept, and drawn again where they were once a widget is no
+   * longer hidden.
+   */
+  hide?: readonly WidgetRef[];
+  /** Title, description, starting settings, and a narrowed size. */
+  overrides?: Partial<Record<WidgetRef, WidgetOverride>>;
+  /**
+   * The default dashboard, in place of core's, for everyone who has not
+   * arranged theirs: the same cards for everyone, less, for each person, those
+   * they may not see. A widget added here later is offered to people who have
+   * saved a dashboard, never placed on it.
+   */
+  defaultLayout?: readonly (WidgetRef | DefaultLayoutCard)[];
   /** `false` ignores every plugin's suggestion. */
   suggestions?: boolean;
-  /** A plugin's offered alternative, in place of the built-in it names. */
-  instead?: { readonly [Core in CoreWidgetId]?: string };
+  /**
+   * A plugin's offered alternative, in the place of the built-in it names, at
+   * the alternative's own starting size.
+   */
+  replace?: { readonly [Core in CoreWidgetId]?: string };
 }

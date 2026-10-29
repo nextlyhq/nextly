@@ -286,7 +286,9 @@ export interface TreeViewProps
  *
  * @experimental
  */
-const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
+const TreeView: React.ForwardRefExoticComponent<
+  React.PropsWithoutRef<TreeViewProps> & React.RefAttributes<HTMLDivElement>
+> = React.forwardRef<HTMLDivElement, TreeViewProps>(
   (
     {
       nodes,

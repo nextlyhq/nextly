@@ -25,9 +25,14 @@
  * @see services/entryApi.ts - Entry API client
  */
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import {
   toastMutationResult,
   type MutationResult,
@@ -151,7 +156,12 @@ export function useDeleteEntry<T = Entry>({
   onSuccess,
   onError,
   showToast = true,
-}: UseDeleteEntryOptions<T>) {
+}: UseDeleteEntryOptions<T>): UseMutationResult<
+  MutationResult<T>,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   // The mutation resolves to the whole envelope so the success path can report
@@ -193,7 +203,9 @@ export function useDeleteEntry<T = Entry>({
 
     onError: (error: Error) => {
       if (showToast) {
-        toast.error(`Failed to delete entry: ${error.message}`);
+        // The server's message already says what was refused ("You can't
+        // delete this post."), so it is shown as it is, with nothing in front.
+        toast.error(apiErrorMessage(error, "The entry couldn't be deleted."));
       }
 
       onError?.(error);

@@ -27,13 +27,15 @@ import {
   type SystemColumnEntity,
 } from "../../../lib/system-columns";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
-import {
-  extractFieldGroupReferences,
-  isFieldGroupFieldType,
-} from "../../field-groups/storage/field-group-field-type";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { documentSystemKeys } from "../snapshot-system-keys";
 
+import {
+  isComponentField,
+  isComponentList,
+  isListField,
+} from "./field-cardinality";
 import { maskSecret } from "./mask-secret";
 import { reconcileById, type ItemMatch } from "./reconcile-list";
 import { richTextNode } from "./rich-text-node";
@@ -65,11 +67,29 @@ export interface ComputeDiffOptions {
    * Fields the caller's redaction removed from either snapshot: a top-level
    * name, or a dotted path below it (`banner.secret`). Each is reported in its
    * place as a hidden node rather than left out, so the reader learns it
-   * exists without learning anything about its values.
+   * exists without learning anything about its values. Applies to both
+   * versions; a path that names a list row by index belongs in one version's
+   * own set below, since the two versions may hold their rows in different
+   * places.
    *
    * @experimental
    */
   withheld?: ReadonlySet<string>;
+  /**
+   * What the redaction removed from the earlier version (`before`), by that
+   * version's own paths: a list row is named by its index in it
+   * (`items.1.secret`).
+   *
+   * @experimental
+   */
+  withheldFrom?: ReadonlySet<string>;
+  /**
+   * What the redaction removed from the later version (`after`), by that
+   * version's own paths, as `withheldFrom` is for the earlier one.
+   *
+   * @experimental
+   */
+  withheldTo?: ReadonlySet<string>;
   /**
    * Whether the caller's redaction applied each component's own read rules
    * inside the snapshots. Without it, a component field that declares a read
@@ -114,6 +134,17 @@ const SYSTEM_COLUMN_KEYS: Readonly<
 };
 const NOTHING_WITHHELD: ReadonlySet<string> = new Set();
 
+/**
+ * What the redaction removed from one version, and where the walk is in it:
+ * the names of the containers above this level, with a list row named by its
+ * index in this version. `at` is `null` inside a row this version does not
+ * hold, where it withheld nothing.
+ */
+interface WithheldSide {
+  paths: ReadonlySet<string>;
+  at: readonly string[] | null;
+}
+
 /** Where in the tree a walk is, which decides framework-key and redaction rules. */
 interface WalkContext {
   /** The top-level document object (framework columns live here). */
@@ -125,10 +156,11 @@ interface WalkContext {
   /** The containers this level sits inside, outermost first. */
   path: DiffPathSegment[];
   /**
-   * What the caller's redaction removed: top-level names, and dotted paths
-   * for nested levels.
+   * What the caller's redaction removed from each version: top-level names,
+   * and dotted paths for nested levels. Kept apart, because a list row sits at
+   * its own index in each version, so one path can name different rows.
    */
-  withheld: ReadonlySet<string>;
+  withheld: { from: WithheldSide; to: WithheldSide };
   /** Whether component read rules were applied before the walk. */
   componentRulesApplied: boolean;
   /** A component-instance or repeater ROW object (its `id` is framework). */
@@ -169,9 +201,6 @@ function componentSlugs(field: FieldConfig): string[] | undefined {
   // whitelist under `fieldGroups`, and reading only `components` would treat
   // that zone as a single-schema field and skip its nested diff entirely.
   return extractFieldGroupReferences(field).many;
-}
-function isRepeatable(field: FieldConfig): boolean {
-  return (field as { repeatable?: boolean }).repeatable === true;
 }
 /**
  * The language a code field declares, which the renderer needs to pick a
@@ -304,9 +333,47 @@ function inside(
     systemColumns: ctx.systemColumns,
     documentKeys: ctx.documentKeys,
     path: [...ctx.path, ...segment],
-    // Every level: redaction names a nested field by its dotted path.
-    withheld: ctx.withheld,
+    // Every level: redaction names a nested field by its dotted path, which a
+    // named container extends in both versions alike.
+    withheld:
+      name === null
+        ? ctx.withheld
+        : {
+            from: deeperIn(ctx.withheld.from, name),
+            to: deeperIn(ctx.withheld.to, name),
+          },
     componentRulesApplied: ctx.componentRulesApplied,
+  };
+}
+
+/** One version's place, one key further down; nowhere stays nowhere. */
+function deeperIn(side: WithheldSide, key: string): WithheldSide {
+  return {
+    paths: side.paths,
+    at: side.at === null ? null : [...side.at, key],
+  };
+}
+
+/**
+ * The context for one row of a list, which sits at its own index in each
+ * version that holds it: redaction names a field in a row by that index. A
+ * row one version does not hold places that version nowhere.
+ */
+function inListRow(
+  ctx: WalkContext,
+  fromIndex: number | undefined,
+  toIndex: number | undefined
+): WalkContext {
+  const at = (side: WithheldSide, index: number | undefined): WithheldSide =>
+    index === undefined
+      ? { paths: side.paths, at: null }
+      : deeperIn(side, String(index));
+  return {
+    ...ctx,
+    withheld: {
+      from: at(ctx.withheld.from, fromIndex),
+      to: at(ctx.withheld.to, toIndex),
+    },
   };
 }
 
@@ -315,12 +382,15 @@ function hasReadAccessRule(field: FieldConfig): boolean {
   return read !== undefined && read !== null;
 }
 
-/** The key redaction withholds a field under: its name, after its named containers. */
-function withheldKey(path: readonly DiffPathSegment[], name: string): string {
-  return [
-    ...path.flatMap(segment => (segment.name ? [segment.name] : [])),
-    name,
-  ].join(".");
+/**
+ * Whether either version's redaction withheld the field `name` at this level:
+ * its key there is its name after that version's named containers and row
+ * indexes.
+ */
+function isWithheld(ctx: WalkContext, name: string): boolean {
+  return [ctx.withheld.from, ctx.withheld.to].some(
+    side => side.at !== null && side.paths.has([...side.at, name].join("."))
+  );
 }
 
 // ---- relationship targets ---------------------------------------------------
@@ -356,16 +426,6 @@ function targetKey(target: RelationTarget): string {
 
 // ---- classification ---------------------------------------------------------
 
-function isComponentField(field: FieldConfig): boolean {
-  return isFieldGroupFieldType(field.type);
-}
-/** Cardinality is decided by `repeatable`; a non-repeatable field holds one value. */
-function isComponentList(field: FieldConfig): boolean {
-  return isComponentField(field) && isRepeatable(field);
-}
-function isListField(field: FieldConfig): boolean {
-  return field.type === "repeater" || isComponentList(field);
-}
 function isGroupField(field: FieldConfig): boolean {
   return (
     field.type === "group" ||
@@ -623,8 +683,15 @@ function componentSwapFields(
 function itemDiff(
   match: ItemMatch,
   field: FieldConfig,
-  ctx: WalkContext
+  listCtx: WalkContext
 ): ListItemDiff {
+  // The row's own place in each version that holds it, where redaction named
+  // what it withheld from that row.
+  const ctx = inListRow(
+    listCtx,
+    match.presence === "added" ? undefined : match.fromIndex,
+    match.presence === "removed" ? undefined : match.toIndex
+  );
   const beforeType =
     match.presence === "added" ? undefined : componentTypeOf(match.beforeItem);
   const afterType =
@@ -969,8 +1036,9 @@ function fieldNodes(
   // rule that reads the document can deny one version only, and comparing the
   // side that is left would still say the field came or went. Below the top
   // level, redaction names a field by its dotted path (`banner.secret`),
-  // components included, since their own read rules run before the diff.
-  if (ctx.withheld.has(withheldKey(ctx.path, name))) {
+  // components included, since their own read rules run before the diff, and
+  // a list row by its index in that version (`items.1.secret`).
+  if (isWithheld(ctx, name)) {
     return [hiddenNode(field, name, ctx)];
   }
   if (!(name in beforeObj) && !(name in afterObj)) return [];
@@ -1066,6 +1134,16 @@ function pruneNode(node: FieldDiff): FieldDiff {
   return node;
 }
 
+/** What one version withheld: its own set, with what both versions withheld. */
+function withheldIn(
+  opts: ComputeDiffOptions,
+  own: ReadonlySet<string> | undefined
+): ReadonlySet<string> {
+  const both = opts.withheld ?? NOTHING_WITHHELD;
+  if (own === undefined || own.size === 0) return both;
+  return both.size === 0 ? own : new Set([...both, ...own]);
+}
+
 /**
  * Compare two normalized snapshots against the current field definitions.
  * Returns the diff body; the caller stamps `from`, `to`, and `locale`.
@@ -1083,7 +1161,10 @@ export function computeVersionDiff(
     systemColumns: SYSTEM_COLUMN_KEYS[opts.entity ?? "collection"],
     documentKeys: documentSystemKeys(opts.entity ?? "collection"),
     path: [],
-    withheld: opts.withheld ?? NOTHING_WITHHELD,
+    withheld: {
+      from: { paths: withheldIn(opts, opts.withheldFrom), at: [] },
+      to: { paths: withheldIn(opts, opts.withheldTo), at: [] },
+    },
     componentRulesApplied: opts.componentRulesApplied === true,
   });
   const hasChanges = nodes.some(n => n.status !== "unchanged");

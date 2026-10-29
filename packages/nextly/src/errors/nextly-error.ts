@@ -13,6 +13,7 @@ import type {
   PublicData,
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
+  SharedFieldsConflictPublicData,
   ValidationPublicData,
 } from "./public-data";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "./retry-after";
@@ -329,6 +330,143 @@ export class NextlyError extends Error {
   }
 
   /**
+   * Something only a signed-in person can do, asked by a caller that is not
+   * one: an API key, or a request acting as no person. Forbidden, and the
+   * message says so, since it is about what kind of caller asked, not about
+   * the caller's permissions. `doing` completes "Only a signed-in person can".
+   */
+  static personOnly(opts: {
+    doing: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: `Only a signed-in person can ${opts.doing}.`,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
+   * A role or permission built into Nextly, which is never changed or
+   * deleted. Forbidden, and the message says so: it is a fact about the role,
+   * not about the caller's permissions.
+   */
+  static builtIn(opts: {
+    thing: "role" | "permission";
+    change: "change" | "delete" | "assign" | "inherit";
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    const done = {
+      change: "changed",
+      delete: "deleted",
+      assign: "assigned",
+      inherit: "inherited",
+    }[opts.change];
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: `This ${opts.thing} is built in, so it can't be ${done}.`,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
+   * A request from a site not allowed to make it: its own `Origin` names a
+   * site the installation does not allow. Forbidden, and the message says so;
+   * the origin is the caller's own, so naming its kind tells them nothing.
+   */
+  static originRefused(opts?: {
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage:
+        "This request came from a site that isn't allowed to make it.",
+      logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * A Single deleted without `force`: Singles hold a site's lasting settings,
+   * so they are not deleted from here, only by an admin or CLI clean-up that
+   * passes `force`. Forbidden, and the message says so.
+   */
+  static singleNotDeletable(opts?: {
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: "A Single can't be deleted from here.",
+      logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * A collection, Single or component defined in code, which is changed by
+   * changing its code and not from here. Forbidden, and the message says so:
+   * it is a fact about the thing, not about the caller's permissions, so it
+   * names no permission and no policy. The lock's detail goes to the log
+   * through `logContext`.
+   */
+  static definedInCode(opts: {
+    thing: "collection" | "Single" | "component";
+    change: "change" | "delete";
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: `This ${opts.thing} is defined in code, so it can't be ${
+        opts.change === "change" ? "changed" : "deleted"
+      } here.`,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
+   * A write to an entry of a collection or Single removed from code: its
+   * registry row says the app's code defines it, and the running configuration
+   * no longer declares it. Its entries are read-only until it is retired or
+   * declared again, so the message names the entity, says what happened and
+   * gives both ways out. `publicData` carries the kind and the slug, which the
+   * caller named, so a client can mark the entity without parsing the sentence.
+   */
+  static removedFromCode(opts: {
+    kind: "collection" | "single";
+    slug: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    const thing = opts.kind === "single" ? "Single" : "collection";
+    const its = opts.kind === "single" ? "it" : "its entries";
+    return new NextlyError({
+      code: "ENTITY_REMOVED_FROM_CODE",
+      publicMessage:
+        `The ${thing} "${opts.slug}" was removed from code, so ${its} ` +
+        `can't be changed. To retire it, run \`nextly migrate:create\` and ` +
+        `then \`nextly migrate\`. To keep it, declare it again in ` +
+        `nextly.config.ts.`,
+      publicData: { kind: opts.kind, slug: opts.slug },
+      logContext: { kind: opts.kind, slug: opts.slug, ...opts.logContext },
+    });
+  }
+
+  /**
+   * An autosave where the collection or Single does not autosave: its owner
+   * switched autosave off, or it keeps no drafts to autosave into. Forbidden,
+   * and the message says so, since it is a setting and not a permission.
+   */
+  static autosaveOff(opts: {
+    scopeKind: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: `Autosave is turned off for this ${
+        opts.scopeKind === "single" ? "Single" : "collection"
+      }.`,
+      logContext: opts.logContext,
+    });
+  }
+
+  /**
    * An API key refused because its role allows more than the person creating
    * it may do. The sentence is FORBIDDEN's and names no permission; which one
    * exceeded goes to the log through `logContext`. The code is its own, so a
@@ -407,9 +545,13 @@ export class NextlyError extends Error {
     /**
      * What a caller needs to act on the conflict: for a release refused over
      * its documents, the problems by code and member; for a release that
-     * cannot be deleted, the reason.
+     * cannot be deleted, the reason; for a pending change refused over the
+     * fields every language shares, why and which fields.
      */
-    data?: ReleaseProblemsPublicData | ReleaseNotDeletablePublicData;
+    data?:
+      | ReleaseProblemsPublicData
+      | ReleaseNotDeletablePublicData
+      | SharedFieldsConflictPublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
@@ -514,6 +656,23 @@ export class NextlyError extends Error {
       publicMessage: "An unexpected error occurred.",
       cause: opts?.cause,
       logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * The app is set up so nextly cannot work: a missing `config`, or a Next.js
+   * or React outside the supported ranges. The public message stays generic;
+   * what to change goes in `logMessage`, for the operator.
+   */
+  static configuration(opts: {
+    logMessage: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "CONFIGURATION_ERROR",
+      publicMessage: "Server configuration error.",
+      logMessage: opts.logMessage,
+      logContext: opts.logContext,
     });
   }
 

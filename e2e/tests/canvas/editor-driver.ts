@@ -257,6 +257,38 @@ export async function field(
 }
 
 /**
+ * The text the inline editor ITSELF holds selected in a field being edited,
+ * or "" when it holds none.
+ *
+ * Not the browser's selection. The editor copies the DOM selection into its
+ * own state on `selectionchange`, which the browser dispatches after the keys
+ * that moved it, and a keyboard shortcut acts on the editor's copy, which is
+ * not refreshed from the DOM for a key press. A format pressed after the DOM
+ * shows the word selected, but before the editor has caught up, formats the
+ * caret it last saw, and nothing in the document changes. Waiting on this is
+ * waiting on the selection the shortcut will actually use.
+ *
+ * Read through the editor Lexical attaches to its root element. That is an
+ * internal of the library, and the only place this state is visible: nothing
+ * on the canvas reflects the editor's selection.
+ */
+export async function editorSelectionText(field: Locator): Promise<string> {
+  return field.evaluate(element => {
+    type Lexical = {
+      getEditorState(): {
+        _selection: { getTextContent(): string } | null;
+        read<T>(read: () => T): T;
+      };
+    };
+    const editor = (element as Element & { __lexicalEditor?: Lexical })
+      .__lexicalEditor;
+    if (editor === undefined) return "";
+    const state = editor.getEditorState();
+    return state.read(() => state._selection?.getTextContent() ?? "");
+  });
+}
+
+/**
  * Clear the selection by pressing empty canvas below the last block.
  *
  * The editor restores the author's last selection when the page opens again,

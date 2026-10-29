@@ -6,7 +6,7 @@
  * The bundle report labels its bytes with a commit; without a stamp, a dist
  * from an older checkout or another branch wears whichever commit the
  * checkout holds, and nothing can tell. The build chain runs this last
- * (package.json `build`), after tsup's clean, so the stamp always describes
+ * (package.json `build`), after tsdown's clean, so the stamp always describes
  * the bytes the dist now holds.
  */
 

@@ -48,6 +48,10 @@ import type {
 } from "../../domains/collections/services/collection-types";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../domains/i18n/localization-source";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
@@ -153,6 +157,11 @@ export class CollectionEntryService extends BaseService {
   private readonly mutationService: CollectionMutationService;
   private readonly bulkService: CollectionBulkService;
 
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -171,7 +180,7 @@ export class CollectionEntryService extends BaseService {
      * languages its source read falls back to), and an operation on the whole
      * entry every language.
      */
-    private readonly localization?: SanitizedLocalizationConfig,
+    private readonly localizationSource?: LocalizationSource,
     /**
      * Offers a retention pass after a write — both of them: the webhook event
      * ledger and the audit trails, each on its own window and its own gate. The
@@ -226,8 +235,12 @@ export class CollectionEntryService extends BaseService {
       this.accessService,
       this.hookService,
       fieldGroupDataService,
-      localization,
-      releaseVisibility
+      localizationSource,
+      releaseVisibility,
+      // The write's own judgement, asked when the read shows a pending change
+      // to a caller who may publish and not update. Read when a read asks it,
+      // after the mutation service below exists.
+      args => this.mutationService.workingDraftPromotionRefused(args)
     );
     this.mutationService = new CollectionMutationService(
       adapter,
@@ -238,7 +251,7 @@ export class CollectionEntryService extends BaseService {
       this.accessService,
       this.hookService,
       fieldGroupDataService,
-      localization
+      localizationSource
     );
     this.bulkService = new CollectionBulkService(
       adapter,
@@ -343,6 +356,25 @@ export class CollectionEntryService extends BaseService {
       refusedFilter(params.where) ??
       withRuleLanguage(this.readLanguages(params), () =>
         this.queryService.countEntries(params)
+      )
+    );
+  }
+
+  /**
+   * How many rows `countEntries` would count, read no further than a cap.
+   *
+   * Through the same refusal and rule-language wrapping as the count, so the
+   * bounded count and the exact one are one door with two reads behind it.
+   *
+   * @experimental
+   */
+  async countEntriesUpTo(
+    params: Parameters<CollectionQueryService["countEntriesUpTo"]>[0]
+  ): ReturnType<CollectionQueryService["countEntriesUpTo"]> {
+    return (
+      refusedFilter(params.where) ??
+      withRuleLanguage(this.readLanguages(params), () =>
+        this.queryService.countEntriesUpTo(params)
       )
     );
   }
@@ -699,6 +731,23 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published since it began. See the mutation service.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(
+    params: Parameters<CollectionMutationService["takeLiveSharedValues"]>[0]
+  ): ReturnType<CollectionMutationService["takeLiveSharedValues"]> {
+    // A write to one language's change: its rules see that language, as a
+    // save of it does.
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale ?? undefined),
+      () => this.mutationService.takeLiveSharedValues(params)
+    );
+  }
+
+  /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
    *
@@ -929,6 +978,12 @@ export class CollectionEntryService extends BaseService {
       collectionName: string;
       entryId: string;
       user?: UserContext;
+      /**
+       * Trusted server work, which the gate lets through before any check.
+       * Declared for the reason the scope below is: a spread carrying it
+       * would otherwise be dropped silently.
+       */
+      overrideAccess?: boolean;
       /**
        * The caller's own grants when they arrived on an API key. Declared here
        * or a spread carrying it is silently dropped: a spread into an object

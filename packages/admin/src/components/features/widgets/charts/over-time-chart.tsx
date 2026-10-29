@@ -5,26 +5,29 @@
  * or query result -- so the over-time archetype and a plugin's own card draw time the same
  * way. The card's tier and formatter are read where it is drawn, from the card around it.
  *
- * The line is SVG stretched to the card (`preserveAspectRatio="none"`), with
- * `vector-effect="non-scaling-stroke"` so its weight does not change with the card's width.
- * Everything that must keep its size -- the axis labels, the latest point's mark and label, the
- * legend -- is HTML laid over or beside it, never inside the stretched viewBox, where a circle
- * would be drawn as an ellipse and a label scaled with the card.
+ * The marks are drawn by the chart engine, in `drawn/over-time-drawing`, which this module loads
+ * lazily: the engine reaches a page only where a chart is drawn, and until it arrives the chart
+ * holds its height. Everything a reader needs is here and drawn without the engine -- the chart's
+ * name, description and table, the keys and the live region, the legend and a small card's
+ * figures -- so the chart can be read before its marks arrive.
  *
  * @module components/features/widgets/charts/over-time-chart
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
+import { lazy, Suspense, type JSX } from "react";
+
 import { ChartFrame, type ChartRow } from "../archetypes/chart-frame";
-import {
-  linePath,
-  linePoints,
-  areaPath,
-  type ChartBox,
-} from "../archetypes/chart-scale";
 import { cardNumber } from "../frame/format";
 import { useCardTier } from "../frame/tier";
 
 import { chartColour, type ChartSlot } from "./chart-colour";
+import {
+  CHART_DATES_HEIGHT,
+  CHART_PLOT_HEIGHT,
+  seriesKey,
+  type ChartConfig,
+} from "./chart-config";
 import { ChartReachArea, ChartTooltip, useChartReach } from "./chart-reach";
 import {
   chartName,
@@ -32,6 +35,10 @@ import {
   latestMarker,
   overTimeSummary,
 } from "./chart-text";
+import { withUnit, type ChartUnit } from "./chart-unit";
+import type { OverTimeLatest } from "./drawn/over-time-drawing";
+
+const OverTimeDrawing = lazy(() => import("./drawn/over-time-drawing"));
 
 /** One interval of the chart's range: its key, and how it is written, as the table writes it. */
 export interface OverTimeInterval {
@@ -67,16 +74,17 @@ export interface OverTimeChartProps {
   series: readonly OverTimeSeries[];
   /** Heads the table's first column. */
   labelHeading?: string;
+  /**
+   * How a single series is drawn: a line, or one bar per interval. Several series are always
+   * lines, since bars side by side in one interval would no longer read as a sequence.
+   */
+  chartStyle?: "line" | "bars";
+  /** What the numbers count, written after each in the tooltip ("12 new posts"); bare without. */
+  unit?: ChartUnit;
 }
 
-/**
- * The user units the lines are drawn in. Arbitrary: the SVG scales to the card, so these set the
- * shape's proportions rather than its size. The padding keeps a 2px stroke off the edges.
- */
-const BOX: ChartBox = { width: 240, height: 64, padding: 3 };
-
 /** How many dates a large card writes under its lines, ends included. */
-const LARGE_TIER_DATES = 5;
+const LARGE_TIER_DATES = 3;
 
 /** The chart colour of the series at `index`: the first colour for one series, then in turn. */
 function seriesSlot(index: number): ChartSlot {
@@ -88,22 +96,19 @@ export function OverTimeChart({
   intervals,
   series: given,
   labelHeading = "Interval",
-}: OverTimeChartProps) {
+  chartStyle = "line",
+  unit,
+}: OverTimeChartProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   // One range for every series, so a point is drawn at its interval whatever else its series
-  // holds, and one scale, so their lines are comparable: zero to the highest value.
+  // holds, and one scale, so their lines are comparable.
   const domain = domainOf(intervals);
   const series = given.map(line => ({
     ...line,
     points: line.points.filter(point => domain.index.has(point.key)),
   }));
   const first = series[0];
-  const highest = Math.max(
-    0,
-    ...series.flatMap(line => line.points.map(point => point.value))
-  );
-  const plots = series.map(line => placed(line.points, domain, highest));
   const description = series
     .map(line =>
       overTimeSummary({
@@ -135,6 +140,10 @@ export function OverTimeChart({
         })
       : "";
   const shownAt = reach.shown ? intervals[reach.shown.index] : undefined;
+  const axes = tier !== "small";
+  const height = axes
+    ? CHART_PLOT_HEIGHT + CHART_DATES_HEIGHT
+    : CHART_PLOT_HEIGHT;
 
   return (
     <ChartFrame
@@ -154,70 +163,60 @@ export function OverTimeChart({
           describedBy={descId}
           announcement={announcement}
         >
-          <div className="flex flex-col gap-1">
+          <div className="flex min-h-0 flex-1 flex-col gap-1">
             {series.length > 1 ? <SeriesLegend series={series} /> : null}
             {series.length === 1 && first ? (
               <OverTimeSummary points={first.points} />
             ) : null}
-            <div className="flex gap-1.5">
-              {tier === "small" ? null : <ValueAxis highest={highest} />}
-              <div className="relative min-w-0 flex-1">
-                {/* Drawn for sight and hidden from assistive tech: the area around it is the
-                    chart's one accessible object, named and described once. No `<title>`, which a
-                    browser would also show as a hover tooltip over the chart's own. */}
-                <svg
+            {/* The description stays here for the area to point at, hidden with the drawing:
+                the area around it is the chart's one accessible object, described once. */}
+            <span aria-hidden="true">
+              <span id={descId} className="sr-only">
+                {text}
+              </span>
+            </span>
+            <Suspense
+              fallback={
+                <div
                   aria-hidden="true"
-                  viewBox={`0 0 ${BOX.width} ${BOX.height}`}
-                  preserveAspectRatio="none"
-                  className="block h-16 w-full"
-                >
-                  <desc id={descId}>{text}</desc>
-                  {tier === "small" ? null : <Gridlines />}
-                  {series.map((line, index) => (
-                    <SeriesLine
-                      key={line.key}
-                      plotted={plots[index] ?? []}
-                      slot={seriesSlot(index)}
-                      filled={series.length === 1}
-                    />
-                  ))}
-                </svg>
-                {series.map((line, index) => (
-                  <LatestPoint
-                    key={line.key}
-                    points={line.points}
-                    plotted={plots[index] ?? []}
-                    slot={seriesSlot(index)}
-                    // One series labels its latest value beside it; several name theirs in the
-                    // legend, where values close together cannot print over each other.
-                    labelled={series.length === 1}
-                  />
-                ))}
-                <IntervalStrips
-                  count={domain.labels.length}
-                  onHover={index => reach.hover({ series: 0, index })}
+                  data-testid="chart-pending"
+                  // design-lint-ok: holds the drawing's least height while the engine loads.
+                  className="min-h-0 flex-1"
+                  style={{ minHeight: height }}
                 />
-                {reach.shown && shownAt ? (
-                  <IntervalInView
-                    index={reach.shown.index}
-                    size={domain.labels.length}
-                    title={shownAt.label}
-                    marks={series.map((line, index) => ({
-                      key: line.key,
-                      name: series.length > 1 ? line.name : undefined,
-                      slot: seriesSlot(index),
-                      value: valueAt(line, shownAt.key),
-                      y: plots[index]?.[
-                        line.points.findIndex(
-                          point => point.key === shownAt.key
-                        )
-                      ]?.y,
-                    }))}
-                  />
-                ) : null}
-              </div>
-            </div>
-            <OverTimeDates labels={domain.labels} />
+              }
+            >
+              <OverTimeDrawing
+                rows={drawnRows(intervals, series)}
+                config={configOf(series)}
+                style={drawnStyle(chartStyle, series.length)}
+                axes={axes}
+                dates={datesShown(
+                  domain.labels,
+                  tier === "large" ? LARGE_TIER_DATES : 2
+                )}
+                latest={series.map(line =>
+                  latestOf(line, domain, tier, series.length === 1)
+                )}
+                shown={reach.shown?.index}
+                onHover={index => reach.hover({ series: 0, index })}
+                tooltip={
+                  shownAt ? (
+                    <ChartTooltip
+                      title={shownAt.label}
+                      lines={series.map((line, index) => ({
+                        key: line.key,
+                        name: series.length > 1 ? line.name : undefined,
+                        slot: seriesSlot(index),
+                        value: drawnValueAt(line, shownAt.key, unit),
+                      }))}
+                      className="static"
+                    />
+                  ) : null
+                }
+                minHeight={height}
+              />
+            </Suspense>
           </div>
         </ChartReachArea>
       )}
@@ -242,130 +241,82 @@ function rangeOfIntervals(domain: Domain): string {
   return from === to ? from : `${from} to ${to}`;
 }
 
+/** A series' value in the interval `key` as drawn, with what it counts, or that it has none. */
+function drawnValueAt(
+  line: OverTimeSeries,
+  key: string | undefined,
+  unit: ChartUnit | undefined
+): string {
+  const point = line.points.find(candidate => candidate.key === key);
+  return point
+    ? withUnit(cardNumber(point.value).text, point.value, unit)
+    : "no value";
+}
+
 /** A series' value in the interval `key`, as the table writes it, or that it has none there. */
 function valueAt(line: OverTimeSeries, key: string | undefined): string {
   const point = line.points.find(candidate => candidate.key === key);
   return point ? cardNumber(point.value).label : "no value";
 }
 
-/**
- * Where the interval at `index` of `size` is drawn across the box, in its user units. The ONE
- * horizontal scale: the lines are plotted by it and the pointer's targets, the rule and the
- * tooltip are placed by it, so they cannot drift onto different intervals.
- */
-function xAt(index: number, size: number): number {
-  const step = size > 1 ? (BOX.width - BOX.padding * 2) / (size - 1) : 0;
-  return BOX.padding + step * index;
+/** How the marks are drawn: a single series as bars or as an area, several as lines. */
+function drawnStyle(
+  chartStyle: "line" | "bars",
+  seriesCount: number
+): "area" | "lines" | "bars" {
+  if (seriesCount !== 1) return "lines";
+  return chartStyle === "bars" ? "bars" : "area";
 }
 
-/** How far across the box the interval at `index` of `size` is drawn, as a percentage. */
-function acrossOf(index: number, size: number): number {
-  return (xAt(index, size) / BOX.width) * 100;
-}
-
-/**
- * The pointer's targets: one strip per interval, the full height of the lines, reaching halfway
- * to its neighbours, so every interval is under the pointer somewhere and none overlap. Hidden
- * from assistive tech and never focused: the keys reach the same intervals.
- */
-function IntervalStrips({
-  count,
-  onHover,
-}: {
-  count: number;
-  onHover: (index: number) => void;
-}) {
-  const across = Array.from({ length: count }, (_, index) =>
-    acrossOf(index, count)
-  );
-  return (
-    <>
-      {across.map((at, index) => {
-        const before = index === 0 ? 0 : (at + (across[index - 1] ?? at)) / 2;
-        const after =
-          index === count - 1 ? 100 : (at + (across[index + 1] ?? at)) / 2;
-        return (
-          <span
-            // Intervals have no other id here, and a strip's place is its identity.
-            key={index}
-            aria-hidden="true"
-            data-testid="chart-interval"
-            className="absolute inset-y-0"
-            // design-lint-ok: placed by its interval's position on the stretched line.
-            style={{ left: `${before}%`, width: `${after - before}%` }}
-            onPointerEnter={() => onHover(index)}
-          />
-        );
-      })}
-    </>
+/** The series as the drawing keys them: `s0`, `s1`, … each named and coloured by its place. */
+function configOf(series: readonly OverTimeSeries[]): ChartConfig {
+  return Object.fromEntries(
+    series.map((line, index) => [
+      seriesKey(index),
+      { label: line.name, slot: seriesSlot(index) },
+    ])
   );
 }
 
-/**
- * The interval in view: a rule down through it, each series' point there circled in its
- * colour, and the tooltip naming every series' value, on the interval's own side of the chart.
- */
-function IntervalInView({
-  index,
-  size,
-  title,
-  marks,
-}: {
-  index: number;
-  size: number;
-  title: string;
-  marks: ReadonlyArray<{
-    key: string;
-    name?: string;
-    slot: ChartSlot;
-    value: string;
-    y: number | undefined;
-  }>;
-}) {
-  const across = acrossOf(index, size);
-  const left = `${across}%`;
-  return (
-    <>
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 w-px -translate-x-1/2 bg-border"
-        // design-lint-ok: placed by the interval's position on the stretched line.
-        style={{ left }}
-      />
-      {marks.map(mark =>
-        mark.y === undefined ? null : (
-          <span
-            key={mark.key}
-            aria-hidden="true"
-            data-testid="chart-point-in-view"
-            className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
-            // design-lint-ok: the position is the datum, and the colour is the series' chart slot.
-            style={{
-              left,
-              top: `${(mark.y / BOX.height) * 100}%`,
-              backgroundColor: chartColour(mark.slot),
-            }}
-          />
-        )
-      )}
-      <ChartTooltip
-        title={title}
-        lines={marks.map(mark => ({
-          key: mark.key,
-          slot: mark.slot,
-          name: mark.name,
-          value: mark.value,
-        }))}
-        // Below the lines, on the interval's own side, and no wider than the room on that side,
-        // so a long series name wraps rather than running off the card's edge.
-        style={
-          across <= 50
-            ? { top: "100%", left, maxWidth: `${100 - across}%` }
-            : { top: "100%", right: `${100 - across}%`, maxWidth: `${across}%` }
-        }
-      />
-    </>
+/** One row per interval, oldest first, with each series' value there or `null` for none. */
+function drawnRows(
+  intervals: readonly OverTimeInterval[],
+  series: readonly OverTimeSeries[]
+) {
+  const values = series.map(
+    line => new Map(line.points.map(point => [point.key, point.value]))
   );
+  return intervals.map(interval => ({
+    key: interval.key,
+    label: interval.label,
+    values: values.map(byKey => byKey.get(interval.key) ?? null),
+  }));
+}
+
+/**
+ * A series' latest point as the card's tier marks it: circled at every tier, a single point
+ * included, and its value written beside it except at the small tier, where the figures above the
+ * chart already state it, and on a chart of several series, which names them in its legend.
+ */
+function latestOf(
+  line: OverTimeSeries,
+  domain: Domain,
+  tier: SizeTier,
+  labelled: boolean
+): OverTimeLatest | undefined {
+  const marker = latestMarker(tier, line.points.length);
+  const point = line.points[line.points.length - 1];
+  const index = point ? domain.index.get(point.key) : undefined;
+  if (!marker.circle || !point || index === undefined) return undefined;
+  return {
+    index,
+    value: point.value,
+    // As drawn, "1.2k": the table and the live region say it in full.
+    label:
+      labelled && marker.label
+        ? cardNumber(point.value, { tier }).text
+        : undefined,
+  };
 }
 
 /** The table's rows: one per point, named by its series where there are several. */
@@ -406,152 +357,6 @@ function domainOf(intervals: readonly OverTimeInterval[]): Domain {
     labels: intervals.map(interval => interval.label),
     labelOf: key => names.get(key) ?? key,
   };
-}
-
-/** A series' points in the chart's box: x by its interval in the shared range, y on one scale. */
-function placed(
-  points: readonly OverTimePoint[],
-  domain: Domain,
-  highest: number
-): Array<{ x: number; y: number }> {
-  const heights = linePoints(
-    points.map(point => point.value),
-    BOX,
-    highest
-  );
-  const size = domain.labels.length;
-  return points.map((point, position) => ({
-    x: xAt(domain.index.get(point.key) ?? position, size),
-    y: heights[position]?.y ?? BOX.height - BOX.padding,
-  }));
-}
-
-/** One series' line, in its chart colour, and the soft fill under it for a single series. */
-function SeriesLine({
-  plotted,
-  slot,
-  filled,
-}: {
-  plotted: ReadonlyArray<{ x: number; y: number }>;
-  slot: ChartSlot;
-  filled: boolean;
-}) {
-  const line = linePath(plotted);
-  const area = filled ? areaPath(plotted, BOX.height - BOX.padding) : null;
-  const colour = chartColour(slot);
-  return (
-    <g data-testid="chart-series" style={{ color: colour }}>
-      {area ? (
-        <path d={area} fill="currentColor" className="opacity-10" />
-      ) : null}
-      {line ? (
-        <path
-          d={line}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
-        />
-      ) : null}
-    </g>
-  );
-}
-
-/**
- * The zero and highest gridlines, at medium and large: drawn in the border token itself rather
- * than through a text colour class, since a line is not text and is not held to a text minimum.
- */
-function Gridlines() {
-  const top = BOX.padding;
-  const bottom = BOX.height - BOX.padding;
-  return (
-    <g data-testid="chart-gridlines">
-      {[top, bottom].map(y => (
-        <line
-          key={y}
-          x1={0}
-          x2={BOX.width}
-          y1={y}
-          y2={y}
-          stroke="var(--nx-border)"
-          strokeWidth="1"
-          vectorEffect="non-scaling-stroke"
-        />
-      ))}
-    </g>
-  );
-}
-
-/**
- * The value axis: the highest value at the top gridline and zero at the bottom, in text tokens.
- * HTML beside the chart, so its size is the same on every card. Hidden from assistive tech: the
- * description states the figures, and these would be read as bare numbers.
- */
-function ValueAxis({ highest }: { highest: number }) {
-  return (
-    <div
-      aria-hidden="true"
-      data-testid="chart-value-axis"
-      className="flex h-16 flex-col justify-between text-right text-[10px] leading-none tabular-nums text-muted-foreground"
-    >
-      <span>{cardNumber(highest).label}</span>
-      <span>{cardNumber(0).label}</span>
-    </div>
-  );
-}
-
-/**
- * A series' latest point: circled at every tier, a single point included, and its value
- * labelled except at the small tier, where the figures above the chart already state it.
- */
-function LatestPoint({
-  points,
-  plotted,
-  slot,
-  labelled,
-}: {
-  points: readonly OverTimePoint[];
-  plotted: ReadonlyArray<{ x: number; y: number }>;
-  slot: ChartSlot;
-  /** Whether its value is written beside it; a chart of several series names them in its legend. */
-  labelled: boolean;
-}) {
-  const tier = useCardTier() ?? "medium";
-  const marker = latestMarker(tier, points.length);
-  const at = plotted[plotted.length - 1];
-  const point = points[points.length - 1];
-  if (!marker.circle || !at || !point) return null;
-  // As fractions of the box, so the HTML mark sits on the stretched line at any width.
-  const across = (at.x / BOX.width) * 100;
-  const left = `${across}%`;
-  const top = `${(at.y / BOX.height) * 100}%`;
-  return (
-    <>
-      <span
-        aria-hidden="true"
-        data-testid="chart-latest-point"
-        className="absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
-        // design-lint-ok: the position is the datum, and the colour is the series' chart slot.
-        style={{ left, top, backgroundColor: chartColour(slot) }}
-      />
-      {labelled && marker.label ? (
-        <span
-          aria-hidden="true"
-          data-testid="chart-latest-label"
-          className="absolute -translate-y-full pb-1 text-[10px] font-medium leading-none tabular-nums text-foreground"
-          // design-lint-ok: placed by the latest point's own position, on its own side of the
-          // chart, so a single point at the left edge is labelled there rather than across it.
-          style={
-            across <= 50 ? { left, top } : { right: `${100 - across}%`, top }
-          }
-        >
-          {cardNumber(point.value).label}
-        </span>
-      ) : null}
-    </>
-  );
 }
 
 /** Each series named beside its colour, above the chart at every tier, where there are several. */
@@ -614,28 +419,6 @@ function OverTimeSummary({ points }: { points: readonly OverTimePoint[] }) {
         in total
       </span>
     </p>
-  );
-}
-
-/**
- * The dates under the lines at the card's tier: none when small, the two ends when medium, and
- * evenly spaced dates between them when large. Hidden from assistive tech: the description
- * names the range, and these would be read as bare dates.
- */
-function OverTimeDates({ labels }: { labels: readonly string[] }) {
-  const tier = useCardTier() ?? "medium";
-  if (tier === "small") return null;
-  const shown = datesShown(labels, tier === "large" ? LARGE_TIER_DATES : 2);
-  return (
-    <div
-      aria-hidden="true"
-      data-testid="timeseries-dates"
-      className="flex justify-between gap-2 text-[10px] leading-none text-muted-foreground"
-    >
-      {shown.map(index => (
-        <span key={index}>{labels[index]}</span>
-      ))}
-    </div>
   );
 }
 

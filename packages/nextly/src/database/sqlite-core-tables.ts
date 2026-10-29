@@ -1,5 +1,10 @@
+import { DASHBOARD_PINS_TABLE } from "../schemas/dashboard-pins/table-name";
+import { DASHBOARD_PREFERENCES_TABLE } from "../schemas/dashboard-preferences/table-name";
 import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
+import { EMAIL_QUEUE_TABLE } from "../schemas/email-queue/table-name";
+import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../schemas/email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
+import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
@@ -221,22 +226,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "media" ("uploaded_at")`,
     `CREATE INDEX IF NOT EXISTS "media_folder_id_idx"
       ON "media" ("folder_id")`,
-    `CREATE TABLE IF NOT EXISTS "user_permission_cache" (
-      "id" TEXT PRIMARY KEY,
-      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
-      "action" TEXT NOT NULL,
-      "resource" TEXT NOT NULL,
-      "has_permission" INTEGER NOT NULL,
-      "role_ids" TEXT NOT NULL,
-      "expires_at" INTEGER NOT NULL,
-      "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
-    )`,
-    `CREATE INDEX IF NOT EXISTS "upc_user_id_idx"
-      ON "user_permission_cache" ("user_id")`,
-    `CREATE INDEX IF NOT EXISTS "upc_expires_at_idx"
-      ON "user_permission_cache" ("expires_at")`,
-    `CREATE INDEX IF NOT EXISTS "upc_user_action_resource_idx"
-      ON "user_permission_cache" ("user_id", "action", "resource")`,
     // The counter every instance reads to decide whether a cached
     // authorization answer is still current. One row, keyed `global`: the
     // primary key is what makes a second counter unrepresentable, so nothing
@@ -516,6 +505,19 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_preview_links" ("revoked_by")`,
     `CREATE INDEX IF NOT EXISTS "nextly_preview_links_revoked_idx"
       ON "nextly_preview_links" ("revoked_at")`,
+    // The site's stored content languages. Columns match schemas/languages/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "${LANGUAGES_TABLE}" (
+      "code" TEXT PRIMARY KEY NOT NULL,
+      "label" TEXT NOT NULL,
+      "direction" TEXT NOT NULL DEFAULT 'ltr',
+      "fallback" TEXT NOT NULL DEFAULT '[]',
+      "position" INTEGER NOT NULL,
+      "is_default" INTEGER NOT NULL DEFAULT 0,
+      "active" INTEGER NOT NULL DEFAULT 1,
+      "revision" INTEGER NOT NULL DEFAULT 1,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -734,6 +736,34 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"
       ON "${NOTICES_TABLE}" ("created_at")`,
+    // Each reader's pinned entries and Singles. Columns match
+    // schemas/dashboard-pins/sqlite.ts; a Single's `entry_id` is "" so the
+    // unique index holds without a partial index.
+    `CREATE TABLE IF NOT EXISTS "${DASHBOARD_PINS_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "target_type" TEXT NOT NULL,
+      "target_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "pinned_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_dashboard_pins_target_uidx"
+      ON "${DASHBOARD_PINS_TABLE}" ("user_id", "target_type", "target_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_dashboard_pins_user_idx"
+      ON "${DASHBOARD_PINS_TABLE}" ("user_id", "pinned_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_dashboard_pins_entry_idx"
+      ON "${DASHBOARD_PINS_TABLE}" ("target_type", "target_slug", "entry_id")`,
+    // Each reader's remembered dashboard choices. Columns match
+    // schemas/dashboard-preferences/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "${DASHBOARD_PREFERENCES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "preference_key" TEXT NOT NULL,
+      "value" TEXT NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_dashboard_preferences_key_uidx"
+      ON "${DASHBOARD_PREFERENCES_TABLE}" ("user_id", "preference_key")`,
     // The site's email brand settings, one row. Columns match
     // schemas/email-brand/sqlite.ts; each setting is nullable, null being its
     // starting value.
@@ -812,6 +842,31 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${EMAIL_SEND_CLAIMS_TABLE}" ("state", "settled_at")`,
     `CREATE INDEX IF NOT EXISTS "email_send_claims_lease_idx"
       ON "${EMAIL_SEND_CLAIMS_TABLE}" ("lease_expires_at")`,
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_TABLE}" (
+      "id" TEXT PRIMARY KEY,
+      "scope" TEXT NOT NULL,
+      "state" TEXT NOT NULL,
+      "job_id" TEXT,
+      "message" TEXT,
+      "principal_kind" TEXT,
+      "principal_id" TEXT,
+      "failure" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL,
+      "settled_at" INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_state_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("state", "settled_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_principal_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("principal_kind", "principal_id")`,
+    `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_RECIPIENTS_TABLE}" (
+      "queued_id" TEXT NOT NULL,
+      "recipient_hash" TEXT NOT NULL,
+      "recipient_kind" TEXT NOT NULL,
+      PRIMARY KEY ("queued_id", "recipient_hash")
+    )`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_recipients_hash_idx"
+      ON "${EMAIL_QUEUE_RECIPIENTS_TABLE}" ("recipient_hash")`,
   ];
 }
 

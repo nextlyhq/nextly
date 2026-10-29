@@ -22,6 +22,13 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { TRANSLATION_FILTER_STATES } from "../../i18n/translation-filter-states";
 
 import { parseNearQuery, parseWithinQuery } from "./geo-utils";
+import { TRANSLATED_KEY } from "./reserved-filter-keys";
+import {
+  isWorkflowKey,
+  WORKFLOW_KEY_PURPOSE,
+  workflowKeyForm,
+  workflowKeyProblem,
+} from "./workflow-filter";
 
 /** One problem with a filter, as `NextlyError.validation` reports it. */
 export interface FilterProblem {
@@ -30,8 +37,26 @@ export interface FilterProblem {
   message: string;
 }
 
-/** The reserved key carrying the language filter. */
-export const TRANSLATED_KEY = "_translated";
+/**
+ * The refusal of a key that names no field this collection can be filtered on.
+ *
+ * Exported so a condition that must be refused AS IF it were unknown — one a
+ * caller may not use, where saying so would tell them it exists for others —
+ * is refused in exactly these words. It is the same sentence the condition
+ * builder (`services/collections/drizzle-condition`) gives a name it cannot
+ * resolve.
+ */
+export function unknownFieldProblem(path: string, key: string): FilterProblem {
+  return {
+    path,
+    code: "FILTER_UNKNOWN_FIELD",
+    message: `"${key}" is not a field this collection can be filtered on.`,
+  };
+}
+
+// The language filter's key, declared with the other reserved keys so the
+// admin reads the same list; re-exported for every server caller.
+export { TRANSLATED_KEY } from "./reserved-filter-keys";
 
 /**
  * The one key no filter may carry. JSON makes `__proto__` an own key, and
@@ -282,14 +307,21 @@ function fieldProblems(
     });
     return;
   }
+  // The workflow keys are conditions on other tables, read only at the top
+  // level, like the language filter. Below it they would reach the condition
+  // builder as a field name.
+  if (isWorkflowKey(key)) {
+    into.push({
+      path,
+      code: "FILTER_MISPLACED_KEY",
+      message: `"${key}" ${WORKFLOW_KEY_PURPOSE[key]} and may only be given at the top level of a filter, as ${workflowKeyForm(key)}.`,
+    });
+    return;
+  }
   // Refused before any walk runs: a walk that rebuilds a filter by assignment
   // would set a prototype with it and lose the condition.
   if (key === PROTOTYPE_KEY) {
-    into.push({
-      path,
-      code: "FILTER_UNKNOWN_FIELD",
-      message: `"${key}" is not a field this collection can be filtered on.`,
-    });
+    into.push(unknownFieldProblem(path, key));
     return;
   }
   if (isPlainObject(value)) {
@@ -338,36 +370,66 @@ function nodeProblems(
   for (const [key, value] of Object.entries(node)) {
     const at = `${path}.${key}`;
     if (key === "and" || key === "or") {
-      if (!Array.isArray(value)) {
-        into.push({
-          path: at,
-          code: "FILTER_INVALID_LOGICAL",
-          message: `"${key}" must be a list of filters, not ${describe(value)}.`,
-        });
-        continue;
-      }
-      // By index rather than `forEach`, which skips the holes of a sparse
-      // list — and a query string such as `where[or][3]` with no `[0]` builds
-      // exactly that. A hole is no filter, and must be refused like one.
-      for (let i = 0; i < value.length; i++) {
-        nodeProblems(value[i], `${at}.${i}`, into, false);
-      }
-      continue;
+      logicalProblems(at, key, value, into);
+    } else if (!(allowTranslated && reservedKeyProblems(key, value, into))) {
+      fieldProblems(at, key, value, into);
     }
-    if (key === TRANSLATED_KEY && allowTranslated) {
-      translatedProblems(value, into);
-      continue;
-    }
-    fieldProblems(at, key, value, into);
   }
+}
+
+/** The problems with an `and` or `or` member and every filter in it. */
+function logicalProblems(
+  at: string,
+  key: string,
+  value: unknown,
+  into: FilterProblem[]
+): void {
+  if (!Array.isArray(value)) {
+    into.push({
+      path: at,
+      code: "FILTER_INVALID_LOGICAL",
+      message: `"${key}" must be a list of filters, not ${describe(value)}.`,
+    });
+    return;
+  }
+  // By index rather than `forEach`, which skips the holes of a sparse
+  // list — and a query string such as `where[or][3]` with no `[0]` builds
+  // exactly that. A hole is no filter, and must be refused like one.
+  for (let i = 0; i < value.length; i++) {
+    nodeProblems(value[i], `${at}.${i}`, into, false);
+  }
+}
+
+/**
+ * The problems with a reserved key given at the top level, appended to
+ * `into`; `false` when the key is not one, so it is judged as a field.
+ */
+function reservedKeyProblems(
+  key: string,
+  value: unknown,
+  into: FilterProblem[]
+): boolean {
+  if (key === TRANSLATED_KEY) {
+    translatedProblems(value, into);
+    return true;
+  }
+  if (isWorkflowKey(key)) {
+    const problem = workflowKeyProblem(key, value);
+    if (problem) into.push(problem);
+    return true;
+  }
+  return false;
 }
 
 /**
  * Every problem with a filter's shape, without throwing.
  *
- * `allowTranslated` admits the language filter at the top level. It is set by
- * a caller that receives the whole filter; the condition builder receives one
- * with that key already taken out, so there the key is refused wherever it is.
+ * `allowTranslated` admits the reserved top-level keys: the language filter,
+ * and the workflow keys `workflow-filter` reads (`_pendingChange`,
+ * `_inRelease`). It is set by a caller that receives the whole filter; the
+ * condition builder receives one with those keys already taken out, so there
+ * each is refused wherever it is. The option keeps the name it had when the
+ * language filter was the only reserved key, so no caller changes meaning.
  */
 export function filterShapeProblems(
   where: unknown,
@@ -414,8 +476,9 @@ function nullAdvice(operator: string): string {
  * Validating one read of a filter and translating another would let a getter
  * or a proxy answer the check with a restrictive value and the translator
  * with none. Each property is read exactly once here, and both steps then
- * work on the copy. Plain objects and lists are copied; every other value,
- * dates included, is kept as it is for the shape check to judge. A filter
+ * work on the copy. Plain objects, lists and dates are copied, a date as a
+ * new one at the same moment, since a date can be changed after it is read;
+ * every other value is kept as it is for the shape check to judge. A filter
  * nested past any real need is refused rather than copied without end.
  */
 export function snapshotFilter<T>(value: T): T {
@@ -441,6 +504,7 @@ function copyFilterValue(value: unknown, depth: number): unknown {
     }
     return list;
   }
+  if (value instanceof Date) return new Date(value.getTime());
   if (!isPlainObject(value)) return value;
   const copy: Record<string, unknown> = {};
   for (const key of Object.keys(value)) {

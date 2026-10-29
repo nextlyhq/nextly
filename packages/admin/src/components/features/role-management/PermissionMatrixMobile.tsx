@@ -10,6 +10,7 @@ import {
   Checkbox,
   Label,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useMemo } from "react";
 
 import {
@@ -189,7 +190,7 @@ export function PermissionMatrixMobile({
   onToggleAllForContentType,
   isAllSelected,
   isPartiallySelected,
-}: PermissionMatrixMobileProps) {
+}: PermissionMatrixMobileProps): JSX.Element {
   // Memoize count calculations for performance optimization
   const contentTypeCounts = useMemo(
     () =>
@@ -276,7 +277,12 @@ export function PermissionMatrixMobile({
                 >
                   {selectedCount}/{totalCount}
                 </Badge>
-                <AccordionTrigger className="hover:no-underline [&>svg]:ml-0" />
+                {/* Named for its row: the trigger draws only a chevron, and
+                    the name beside it sits outside the button. */}
+                <AccordionTrigger
+                  className="hover:no-underline [&>svg]:ml-0"
+                  aria-label={`${contentType.name} permissions`}
+                />
               </div>
             </div>
 

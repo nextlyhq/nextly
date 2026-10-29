@@ -16,6 +16,16 @@ const dialect = "sqlite" as const;
 const LEGACY_COLUMNS: Record<string, string[]> = {
   accounts: ["id", "user_id", "type", "provider", "provider_account_id"],
   sessions: ["session_token", "user_id", "expires"],
+  user_permission_cache: [
+    "id",
+    "user_id",
+    "action",
+    "resource",
+    "has_permission",
+    "role_ids",
+    "expires_at",
+    "created_at",
+  ],
 };
 
 function deps(
@@ -71,8 +81,28 @@ describe("findRetiredAuthTables", () => {
     expect(d.countRows).not.toHaveBeenCalled();
   });
 
-  it("covers exactly the two tables this release retires", () => {
-    expect([...RETIRED_AUTH_TABLES]).toEqual(["accounts", "sessions"]);
+  it("reports the stored permission answers, with their row count", async () => {
+    const d = deps(["user_permission_cache"], { user_permission_cache: 40 });
+    expect(await findRetiredAuthTables({}, dialect, d)).toEqual([
+      { table: "user_permission_cache", rows: 40 },
+    ]);
+  });
+
+  it("ignores a user_permission_cache of another shape", async () => {
+    const d = deps(
+      ["user_permission_cache"],
+      { user_permission_cache: 2 },
+      { user_permission_cache: ["id", "user_id", "permission"] }
+    );
+    expect(await findRetiredAuthTables({}, dialect, d)).toEqual([]);
+  });
+
+  it("covers exactly the tables Nextly no longer creates", () => {
+    expect([...RETIRED_AUTH_TABLES]).toEqual([
+      "accounts",
+      "sessions",
+      "user_permission_cache",
+    ]);
   });
 });
 
@@ -117,6 +147,32 @@ describe("planRetiredAuthTableDrop", () => {
     ).toEqual({ drop: ["accounts", "sessions"], kept: [] });
   });
 
+  it("drops the stored permission answers with rows on the drop alone", () => {
+    // Its rows are copies recomputed from roles, so the drop loses nothing a
+    // second permission would have to accept. A sign-in table with rows is
+    // still kept beside it.
+    const plan = planRetiredAuthTableDrop(
+      [
+        { table: "accounts", rows: 12 },
+        { table: "user_permission_cache", rows: 40 },
+      ],
+      { dropRequested: true, allowNonEmpty: false }
+    );
+    expect(plan).toEqual({
+      drop: ["user_permission_cache"],
+      kept: [{ table: "accounts", rows: 12 }],
+    });
+  });
+
+  it("drops the stored permission answers only when asked", () => {
+    expect(
+      planRetiredAuthTableDrop([{ table: "user_permission_cache", rows: 40 }], {
+        dropRequested: false,
+        allowNonEmpty: false,
+      })
+    ).toEqual({ drop: [], kept: [] });
+  });
+
   it("does nothing when there is nothing to drop", () => {
     expect(
       planRetiredAuthTableDrop([], {
@@ -154,6 +210,19 @@ describe("formatRetiredAuthTablesWarning", () => {
     expect(warning).not.toContain("from accounts or sessions");
   });
 
+  it("explains the stored permission answers on their own", () => {
+    // Nothing about sign-in tables, namesakes or erasure applies to it, and
+    // the drop needs no second permission.
+    const warning = formatRetiredAuthTablesWarning([
+      { table: "user_permission_cache", rows: 40 },
+    ]);
+    expect(warning).toContain("user_permission_cache: 40 rows");
+    expect(warning).toContain("whether or not it holds rows");
+    expect(warning).not.toContain("Auth.js");
+    expect(warning).not.toContain("NEXTLY_DROP_NONEMPTY_RETIRED");
+    expect(warning).not.toContain("does not erase");
+  });
+
   it("says nothing about erasure once every table is named", () => {
     const warning = formatRetiredAuthTablesWarning(
       [{ table: "accounts", rows: 1 }],
@@ -177,5 +246,11 @@ describe("retiredTablesNamedForErasure", () => {
     expect([...retiredTablesNamedForErasure("users,accounts")]).toEqual([
       "accounts",
     ]);
+  });
+
+  it("never names the stored permission answers, which nothing erases from", () => {
+    expect([
+      ...retiredTablesNamedForErasure("user_permission_cache,sessions"),
+    ]).toEqual(["sessions"]);
   });
 });

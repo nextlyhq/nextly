@@ -43,10 +43,25 @@ const state = vi.hoisted(() => {
 });
 const { calls, onInstall, onUninstall, registerServices } = state;
 
+// The schema lock is exercised against real databases in its own suites. These drive the lifecycle hook's boot
+// through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
+vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/pipeline/locks")
+  >()),
+  withMigrateLock: async <T>(
+    _adapter: unknown,
+    _dialect: unknown,
+    fn: () => Promise<T>
+  ) => ({ ran: true as const, value: await fn() }),
+}));
+
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({
     config: state.loadedConfig,
     appConfig: state.appConfig,
+    // The project `--cwd` named, which is not the directory the test runs in.
+    projectRoot: "/projects/site",
   }),
 }));
 
@@ -99,7 +114,6 @@ vi.mock(
 vi.mock("../../../di/register", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   registerServices: state.registerServices,
-  isServicesRegistered: () => state.alreadyRegistered,
   getInitializedPluginContext: () => ({}),
   destroyRegisteredPlugins: async () => {
     state.calls.push("destroy");
@@ -107,6 +121,9 @@ vi.mock("../../../di/register", async importOriginal => ({
   clearServices: () => {
     state.calls.push("clear");
   },
+}));
+vi.mock("../../../di/service-access", () => ({
+  isServicesRegistered: () => state.alreadyRegistered,
 }));
 
 vi.mock("../../../init/build-service-config", () => ({
@@ -145,6 +162,18 @@ beforeEach(() => {
   });
   registerServices.mockReset().mockImplementation(async () => {
     calls.push("register");
+  });
+});
+
+describe("the lifecycle hook's boot", () => {
+  // The start check judges the Next.js and React of the app the command was
+  // pointed at, not of wherever the CLI happened to run.
+  it("judges the project --cwd names", async () => {
+    await runPluginInstall("@acme/fx", {}, context);
+
+    expect(registerServices).toHaveBeenCalledWith(
+      expect.objectContaining({ appRoot: "/projects/site" })
+    );
   });
 });
 

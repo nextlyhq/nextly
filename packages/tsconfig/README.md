@@ -9,7 +9,7 @@ Shared TypeScript configurations for the Nextly monorepo.
 Five base `tsconfig.*.json` files used across the monorepo. Each package extends one of them in its own `tsconfig.json`:
 
 - `base.json` – generic library base
-- `base-bundler.json` – library base tuned for bundlers (tsup, esbuild)
+- `base-bundler.json` – library base tuned for bundlers (tsdown, esbuild)
 - `react-library.json` – React component libraries
 - `react-library-bundler.json` – React libraries built via bundlers
 - `nextjs.json` – Next.js apps and templates

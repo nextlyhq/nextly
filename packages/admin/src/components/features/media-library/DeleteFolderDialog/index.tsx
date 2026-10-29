@@ -32,13 +32,22 @@ export function DeleteFolderDialog({
   folderId,
   folderName,
   onSuccess,
-}: DeleteFolderDialogProps) {
-  const { data: folderContents, isLoading: isLoadingContents } =
-    useFolderContents(folderId);
+}: DeleteFolderDialogProps): React.JSX.Element {
+  const {
+    data: folderContents,
+    isFetching: isLoadingContents,
+    refetch: refetchContents,
+  } = useFolderContents(folderId);
+  // The count is read again whenever the dialog opens. A cached answer can
+  // predate an upload or a delete in this folder, and confirming deletes what
+  // the folder holds now, not what it held when it was last read.
+  React.useEffect(() => {
+    if (open && folderId !== null) void refetchContents();
+  }, [open, folderId, refetchContents]);
   const { mutate: deleteFolderMutation, isPending } = useDeleteFolder();
 
   const subfolderCount = folderContents?.subfolders?.length ?? 0;
-  const mediaCount = folderContents?.mediaFiles?.length ?? 0;
+  const mediaCount = folderContents?.files?.length ?? 0;
   const hasContents = subfolderCount > 0 || mediaCount > 0;
   const displayName =
     folderName ?? folderContents?.folder?.name ?? "this folder";

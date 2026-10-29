@@ -26,6 +26,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 
@@ -34,10 +35,31 @@ export interface PublishAllConfirmDialogProps {
   onOpenChange: (open: boolean) => void;
   /** How many languages this will publish. */
   languageCount: number;
-  /** How many of those hold a saved change nobody has published yet. */
-  pendingCount: number;
+  /**
+   * How many of those hold a saved change nobody has published yet, or null
+   * where that is not known (the languages' states were not read).
+   */
+  pendingCount: number | null;
   onConfirm: () => void | Promise<void>;
   isLoading?: boolean;
+}
+
+/** What publishing every language puts live, as the confirmation says it. */
+function publishAllWarning(pendingCount: number | null): string {
+  // Not knowing which languages hold a change is not knowing there are none:
+  // the warning then covers any of them.
+  if (pendingCount === null) {
+    return "Any language holding unpublished changes goes live too. This cannot be undone by publishing again.";
+  }
+  // The number is the point of the sentence, so it leads. Naming the languages
+  // instead would be better still, but this dialog is reached from surfaces
+  // that know the count and not always the labels.
+  if (pendingCount > 0) {
+    return `${pendingCount} of them ${
+      pendingCount === 1 ? "has" : "have"
+    } unpublished changes that will go live too. This cannot be undone by publishing again.`;
+  }
+  return "Every language goes live together. This cannot be undone by publishing again.";
 }
 
 export function PublishAllConfirmDialog({
@@ -47,7 +69,7 @@ export function PublishAllConfirmDialog({
   pendingCount,
   onConfirm,
   isLoading = false,
-}: PublishAllConfirmDialogProps) {
+}: PublishAllConfirmDialogProps): JSX.Element {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
@@ -56,15 +78,7 @@ export function PublishAllConfirmDialog({
             Publish all {languageCount} languages?
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {pendingCount > 0
-              ? // The number is the point of the sentence, so it leads. Naming
-                // the languages instead would be better still, but this dialog
-                // is reached from surfaces that know the count and not always
-                // the labels.
-                `${pendingCount} of them ${
-                  pendingCount === 1 ? "has" : "have"
-                } unpublished changes that will go live too. This cannot be undone by publishing again.`
-              : "Every language goes live together. This cannot be undone by publishing again."}
+            {publishAllWarning(pendingCount)}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

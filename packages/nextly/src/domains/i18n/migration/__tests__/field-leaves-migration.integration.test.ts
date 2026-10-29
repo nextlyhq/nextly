@@ -12,6 +12,10 @@
  * A file that fails is the runner's to handle: PostgreSQL and SQLite run it in one transaction, so
  * it runs again cleanly, and MySQL, which commits each schema statement as it runs, refuses to run
  * it again and says how to tell whether it landed.
+ *
+ * Each case runs on a database of its own. The runner refuses a database that already holds tables
+ * it did not make (drift), which is the behaviour under test, so a shared database another suite
+ * left tables in would fail these cases for a reason that is not theirs.
  */
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
@@ -42,6 +46,10 @@ import {
   type MinimalConfigEntity,
 } from "../../../schema/migrate-create/generate";
 import { withMigrateLock } from "../../../schema/pipeline/locks";
+import {
+  createScratchDatabase,
+  type ScratchDatabase,
+} from "../../../../__tests__/helpers/fresh-database";
 
 interface TestAdapter {
   connect(): Promise<void>;
@@ -85,6 +93,7 @@ for (const entry of DIALECTS) {
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
       let adapter: TestAdapter;
+      let scratch: ScratchDatabase | null = null;
       let migrationsDir: string;
       // Per-run names, so a shared database cannot let two runs collide.
       let slug: string;
@@ -116,7 +125,12 @@ for (const entry of DIALECTS) {
           ],
         };
         created = 0;
-        adapter = entry.make(entry.url ?? "");
+        // SQLite runs in memory; a server dialect gets an empty database for the case.
+        scratch =
+          dialect === "sqlite"
+            ? null
+            : await createScratchDatabase(dialect, "field_leaves");
+        adapter = entry.make(scratch?.url ?? entry.url ?? "");
         await adapter.connect();
         // What `nextly migrate` creates first: the ledger, the owner registry and the archive.
         await reconcileCore({
@@ -128,13 +142,14 @@ for (const entry of DIALECTS) {
       });
 
       afterEach(async () => {
-        await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(companion)}`);
-        await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(table)}`);
-        await adapter.executeQuery(
-          `DELETE FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${slug}'`
-        );
-        await adapter.disconnect();
-        await rm(migrationsDir, { recursive: true, force: true });
+        // The case's database and folder go even when closing the connection fails.
+        try {
+          await adapter.disconnect();
+        } finally {
+          await scratch?.drop();
+          scratch = null;
+          await rm(migrationsDir, { recursive: true, force: true });
+        }
       });
 
       /** `nextly migrate:create` for the entity as it is now. */
@@ -339,6 +354,74 @@ for (const entry of DIALECTS) {
         );
         expect(await archived()).toEqual([]);
         expect(await columnsOf(companion)).toContain("body");
+      });
+
+      /** The entity with `body` carrying `flags`, translated or shared. */
+      const constrained = (
+        base: MinimalConfigEntity,
+        flags: Record<string, unknown>
+      ): MinimalConfigEntity => ({
+        ...base,
+        fields: base.fields.map(f =>
+          f.name === "body" ? { ...f, ...flags } : f
+        ),
+      });
+
+      /** Whether the database takes a row that keeps the setting, and one that breaks it. */
+      async function takes(body: string): Promise<boolean> {
+        return adapter
+          .executeQuery(
+            `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("body")}) ` +
+              `VALUES ('x${Math.random().toString(36).slice(2, 8)}', 'X', 'x${Math.random().toString(36).slice(2, 8)}', ${body})`
+          )
+          .then(
+            () => true,
+            () => false
+          );
+      }
+
+      it.each([
+        { setting: "required", flags: { required: true }, breaking: "NULL" },
+        { setting: "unique", flags: { unique: true }, breaking: "'Hello'" },
+      ])(
+        "keeps English's value as the shared one and enforces $setting, through migrate:create",
+        async ({ flags, breaking }) => {
+          // The main file creates the column without the setting; the shared file applies it once
+          // the values are in, before the companion column is dropped.
+          await migrateCreate(constrained(translated, flags));
+          await migrate();
+          await seed();
+          await migrateCreate(constrained(shared, flags));
+
+          await migrate();
+
+          await expectShared();
+          expect(await takes("'Kept'")).toBe(true);
+          expect(await takes(breaking)).toBe(false);
+        }
+      );
+
+      it("refuses Required at migrate while an entry has no English value, keeping the values", async () => {
+        // migrate:create has no database to ask, so the database refuses the setting, after the
+        // copy and before the drop: the companion keeps its column and every value.
+        await migrateCreate(constrained(translated, { required: true }));
+        await migrate();
+        await seed();
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e2', 'Two', 'two')`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e2', 'en', NULL)`
+        );
+        await migrateCreate(constrained(shared, { required: true }));
+
+        await expect(migrate()).rejects.toThrow();
+
+        expect(await columnsOf(companion)).toContain("body");
+        const [en] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+        );
+        expect(en?.body).toBe("Hello");
       });
 
       /** The shared file made to fail: its companion column renamed out from under it. */

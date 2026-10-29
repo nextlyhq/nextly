@@ -691,13 +691,8 @@ export {
 
 // Dashboard Components
 export { StatsCard } from "./components/features/dashboard/StatsCard";
-export {
-  RecentActivity,
-  type RecentActivityProps,
-} from "./components/features/dashboard/RecentActivity";
 export { WelcomeHeader } from "./components/features/dashboard/WelcomeHeader";
 export { ContentStatsGrid } from "./components/features/dashboard/ContentStatsGrid";
-export { RecentEntriesWidget } from "./components/features/dashboard/RecentEntriesWidget";
 export { ContentStatusWidget } from "./components/features/dashboard/ContentStatusWidget";
 export { CollectionQuickLinks } from "./components/features/dashboard/CollectionQuickLinks";
 export { ProjectStatsGrid } from "./components/features/dashboard/ProjectStatsGrid";
@@ -733,6 +728,41 @@ export type {
   RecentEntriesResponse,
 } from "./types/dashboard/recent-entries";
 export type { ProjectStatItem } from "./types/dashboard/project-stats";
+
+// The widget kit: the parts core's own dashboard cards are drawn from, for a
+// widget's own component. Plugins reach them only through
+// `@nextlyhq/plugin-sdk/admin`, so the admin stays the host's single copy and
+// a card part reads the tier of the card it is drawn in.
+// @experimental while the dashboard widget SDK settles.
+export {
+  type CardEmptyContent,
+  type SkeletonShape,
+} from "./components/features/widgets/frame/states";
+export {
+  FrameState,
+  type CardState,
+  type SkeletonHint,
+} from "./components/features/widgets/frame/card-state";
+// The parts of a card's body, under the names a plugin uses: `Widget.*`. The formatters and the
+// colour accessor are the SDK root's, from `@nextlyhq/ui`'s server-safe entries.
+export {
+  Widget,
+  type WidgetBarChartGroup,
+  type WidgetBarChartProps,
+  type WidgetChartUnit,
+  type WidgetFigureProps,
+  type WidgetKit,
+  type WidgetListProps,
+  type WidgetListTotal,
+  type WidgetRowAction,
+  type WidgetSeries,
+  type WidgetSeriesChartProps,
+  type WidgetSeriesInterval,
+  type WidgetSeriesPoint,
+  type WidgetTableColumn,
+  type WidgetTableProps,
+} from "./components/features/widgets/kit";
+export type { WidgetRenderSize } from "nextly/widget-result";
 
 // Constants
 export {

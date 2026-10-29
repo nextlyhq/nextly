@@ -15,6 +15,7 @@
  */
 
 import { Columns2 } from "lucide-react";
+import type { Provider, JSX } from "react";
 import { createContext, useContext, useId } from "react";
 
 import { Button } from "@admin/components/ui";
@@ -29,7 +30,8 @@ export type ChangesLayout = "inline" | "split";
 const ChangesLayoutContext = createContext<ChangesLayout>("inline");
 
 /** Sets the layout every field change below it is drawn in. */
-export const ChangesLayoutProvider = ChangesLayoutContext.Provider;
+export const ChangesLayoutProvider: Provider<ChangesLayout> =
+  ChangesLayoutContext.Provider;
 
 /** The layout a field change is drawn in: inline unless a surface says so. */
 export function useChangesLayout(): ChangesLayout {
@@ -106,7 +108,7 @@ export function ChangesLayoutToggle({
   layout: ChangesLayout;
   onChange: (next: ChangesLayout) => void;
   splittable?: boolean;
-}) {
+}): JSX.Element {
   const reasonId = useId();
   const split = splittable && layout === "split";
   return (

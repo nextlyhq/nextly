@@ -1,185 +1,112 @@
 /**
- * A list or table card's rows at its tier: the one layout both displays draw.
+ * A list or table card's rows, drawn from the answer the card's query got back.
  *
- * The two displays answer the same question -- some rows of a source, by the fields the query
- * selected -- and differ only in how wide the card is: a small card draws three rows, titles
- * only; a medium one draws its number of items with a line of detail; a large one draws them as
- * a table with a heading per column. A component, because the tier is the card's own and is
- * read from the frame's context. The card's query asked one row more than its tier draws, so an
- * answer holding that row is the sign more exist.
- *
- * Nothing is cut: text wraps rather than truncating, and nothing scrolls inside the card.
+ * The bridge from a list answer to the one list card: the columns the source described become
+ * the list's model (the card's label column is each row's title, a column of choices such as a
+ * status sits at the row's end, and every other column joins the meta line), and the answer's
+ * total, when the source gave one, is what the footer counts. Stacked rows at the small and
+ * medium tiers, a table at the large one, both by {@link ListCard}.
  *
  * @module components/features/widgets/archetypes/tiered-rows
  */
 
-import { cn } from "@admin/lib/utils";
-import type { WidgetResultField } from "@admin/types/dashboard/widgets";
+import type { JSX } from "react";
 
-import {
-  LIST_CLASS,
-  LIST_DETAIL_CLASS,
-  LIST_LABEL_CLASS,
-  LIST_ROW_CLASS,
-  ROWS_STACK_CLASS,
-  TABLE_CELL_CLASS,
-  TABLE_CLASS,
-  TABLE_HEAD_ROW_CLASS,
-  TABLE_HEADING_CLASS,
-  TABLE_ROW_CLASS,
-} from "../frame/geometry";
-import { rowsDrawn, rowsLayout, useCardTier, useRowsTier } from "../frame/tier";
+import { fieldLabel } from "@admin/lib/field-label";
+import type {
+  WidgetResult,
+  WidgetResultField,
+} from "@admin/types/dashboard/widgets";
+
+import { ListCard, type ListModel, type ListTotal } from "../frame/list-card";
+import { useListDensity } from "../frame/list-rows";
+import { listViewHref } from "../frame/list-view-href";
+import { useCardTier, useRowsDrawn } from "../frame/tier";
 
 import { asPresentedText } from "./cell-text";
-import { MoreExist } from "./more-exist";
+import { presentedCell } from "./presented-cell";
 import type { ArchetypeBody } from "./types";
 
+type AnswerRow = Record<string, unknown>;
+
 export interface TieredRowsProps {
-  items: readonly Record<string, unknown>[];
-  /** The columns the source described, in order; the large tier's table heads them. */
+  items: readonly AnswerRow[];
+  /** The columns the source described, in order. */
   columns: readonly WidgetResultField[];
-  /** The field that heads each row in the list layout, and the one under it. */
+  /** The field that titles each row. */
   labelField: string;
-  detailField: string | undefined;
   query: Parameters<ArchetypeBody>[1]["query"];
+  /** Where a row leads, for a card whose rows each open a document; plain text when absent. */
+  hrefOf?: (item: AnswerRow) => string | undefined;
+  /** The list's whole count, when the source gave one. */
+  total?: ListTotal;
 }
 
 export function TieredRows({
   items,
   columns,
   labelField,
-  detailField,
   query,
-}: TieredRowsProps) {
+  hrefOf,
+  total,
+}: TieredRowsProps): JSX.Element {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
-  // Laid out at the card's tier, counted at its answer's when that is smaller; see `useRowsTier`.
-  const drawn = rowsDrawn(useRowsTier(tier), query?.limit);
-  const rows = items.slice(0, drawn);
-  const columnOf = new Map(columns.map(column => [column.name, column]));
-
+  const density = useListDensity();
+  // Laid out at the card's tier, counted at its answer's size when that draws fewer; see
+  // `useRowsDrawn`.
+  const drawn = useRowsDrawn(tier, query?.limit, density);
   return (
-    <div className={ROWS_STACK_CLASS}>
-      {rowsLayout(tier, columns.length).kind === "table" ? (
-        <RowsTable rows={rows} columns={columns} />
-      ) : (
-        <RowsList
-          rows={rows}
-          columnOf={columnOf}
-          labelField={labelField}
-          // Small is title only: a line of detail is the medium layout's.
-          detailField={tier === "small" ? undefined : detailField}
-        />
-      )}
-      {items.length > drawn && <MoreExist query={query} />}
-    </div>
+    <ListCard
+      model={answerListModel(columns, labelField, hrefOf)}
+      rows={items}
+      drawn={drawn}
+      total={total}
+      viewAllHref={listViewHref(query)}
+      tier={tier}
+      density={density}
+    />
   );
 }
 
-function RowsList({
-  rows,
-  columnOf,
-  labelField,
-  detailField,
-}: {
-  rows: readonly Record<string, unknown>[];
-  columnOf: ReadonlyMap<string, WidgetResultField>;
-  labelField: string;
-  detailField: string | undefined;
-}) {
-  return (
-    <ul data-testid="widget-list" className={LIST_CLASS}>
-      {rows.map((item, index) => {
-        const label = asPresentedText(
-          item[labelField],
-          columnOf.get(labelField)
-        );
-        const detail = detailField
-          ? asPresentedText(item[detailField], columnOf.get(detailField))
-          : undefined;
-        return (
-          <li
-            // The index, because a widget's rows have no identity core can
-            // rely on: `select` need not include a key, and two rows may be
-            // identical in the fields it did select. The list is replaced
-            // wholesale on every refetch and nothing in it is stateful or
-            // reorderable, so there is no state for a wrong key to strand.
-            key={index}
-            data-testid="widget-list-row"
-            className={LIST_ROW_CLASS}
-          >
-            {/* An em dash rather than an empty line, so a row whose label is absent or
-                unprintable still occupies its place and the count of rows matches the
-                count of results. */}
-            <span className={cn(LIST_LABEL_CLASS, "text-foreground")}>
-              {label ?? "—"}
-            </span>
-            {detail !== undefined && (
-              <span className={cn(LIST_DETAIL_CLASS, "text-muted-foreground")}>
-                {detail}
-              </span>
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  );
+/**
+ * A list answer's columns as a list model: the label column titles each row, a column of
+ * choices (a status) sits at the row's end, and every other column joins the meta line, in the
+ * order the source described them. Each value is presented by its column's declared kind, so a
+ * date reads as a date rather than the ISO string it crossed as.
+ */
+export function answerListModel(
+  columns: readonly WidgetResultField[],
+  labelField: string,
+  hrefOf?: (item: AnswerRow) => string | undefined
+): ListModel<AnswerRow> {
+  const label = columns.find(column => column.name === labelField);
+  return {
+    // The source's label when it has one, else the field's key as the admin writes any
+    // field's name: read from the field itself, never invented.
+    titleLabel: fieldLabel({ name: labelField, label: label?.label }),
+    // An em dash rather than an empty title, so a row whose label is absent still holds its
+    // place and the count of rows matches the count of results.
+    titleOf: item => asPresentedText(item[labelField], label) ?? "—",
+    hrefOf,
+    fields: columns
+      .filter(column => column.name !== labelField)
+      .map(column => ({
+        key: column.name,
+        label: fieldLabel(column),
+        role: column.choices === undefined ? "meta" : "trailing",
+        // A time or a number lines up at its column's end in the table form.
+        align:
+          column.type === "date" || column.type === "number" ? "end" : "start",
+        present: item => presentedCell(item[column.name], column),
+      })),
+  };
 }
 
-function RowsTable({
-  rows,
-  columns,
-}: {
-  rows: readonly Record<string, unknown>[];
-  columns: readonly WidgetResultField[];
-}) {
-  return (
-    <table data-testid="widget-table" className={TABLE_CLASS}>
-      <thead>
-        <tr className={TABLE_HEAD_ROW_CLASS}>
-          {columns.map(column => (
-            <th
-              key={column.name}
-              scope="col"
-              data-testid="widget-table-heading"
-              className={cn(TABLE_HEADING_CLASS, "text-muted-foreground")}
-            >
-              {/* The source's label when it has one. A field name is a poor heading, but it is
-                  true, which an invented one would not be. */}
-              {column.label ?? column.name}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((item, index) => (
-          <tr
-            // The index, for the reason the list's rows use it.
-            key={index}
-            data-testid="widget-table-row"
-            // Full-strength `border-border`, matching the header rule above and the resting
-            // edge every other admin surface draws; the half-alpha variant measured 1.11:1
-            // against the card, which is not a lighter separator but an absent one. Not a 3:1
-            // claim: `styles/contrast/pairings.ts` excludes this token deliberately, since a
-            // table whose rows are identified by their content needs no rule to be operable.
-            className={TABLE_ROW_CLASS}
-          >
-            {columns.map(column => (
-              <td
-                key={column.name}
-                // Fixed layout and wrapping cells: the columns share the card's width, so a
-                // long value takes more lines rather than widening the card or scrolling it.
-                className={cn(TABLE_CELL_CLASS, "text-foreground")}
-              >
-                {/* Presented by the column's declared kind, so a date column reads as a date
-                    rather than as the ISO string it crossed the wire as. An em dash rather than
-                    an empty cell, so a missing value is visibly a missing value. */}
-                {asPresentedText(item[column.name], column) ?? "—"}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
+/** A list answer's total, as the footer counts it; nothing from a source that did not count. */
+export function answerTotal(result: WidgetResult): ListTotal | undefined {
+  if (result.op !== "list" || result.total === undefined) return undefined;
+  return result.atLeast === true
+    ? { count: result.total, atLeast: true }
+    : { count: result.total };
 }

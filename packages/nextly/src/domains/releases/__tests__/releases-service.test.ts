@@ -51,6 +51,7 @@ function repository() {
     // The list's paged read, which `find` routes every non-document query to.
     findReleasePage: vi.fn(async () => ({ rows: [], total: 0 })),
     countReleases: vi.fn(async () => 0),
+    anyRelease: vi.fn(async () => false),
     // The calendar's read. Answers nothing; a case asserts what it was ASKED.
     findReleaseCalendar: vi.fn(async (_query: unknown) => []),
     listMembers: vi.fn(
@@ -1105,6 +1106,74 @@ describe("ReleasesService.count", () => {
       code: "FORBIDDEN",
     });
     expect(repo.countReleases).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.mayRead", () => {
+  it("answers by the decision every read makes, implication included", async () => {
+    expect(await service({ holds: ["read"] }).svc.mayRead(ADMIN)).toBe(true);
+    // Creating or publishing a release implies reading one, as for `count`.
+    expect(await service({ holds: ["create"] }).svc.mayRead(ADMIN)).toBe(true);
+    expect(await service({ holds: [] }).svc.mayRead(ADMIN)).toBe(false);
+    expect(
+      await service({ holds: ["read"] }).svc.mayRead({ userId: null })
+    ).toBe(false);
+  });
+
+  it("throws a failure that is not a refusal, rather than answering no", async () => {
+    const { svc, deps } = service({ holds: ["read"] });
+    deps.canManageReleases.mockRejectedValueOnce(new Error("store down"));
+    await expect(svc.mayRead(ADMIN)).rejects.toThrow("store down");
+  });
+});
+
+describe("ReleasesService.anyReadable", () => {
+  it("refuses whoever the list refuses, and reads nothing for them", async () => {
+    // The same decision as `find`, so it never says "yes" where the list
+    // would refuse to show a release.
+    const { svc, repo } = service({ holds: [] });
+    await expect(svc.anyReadable(ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(svc.find({}, ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.anyRelease).not.toHaveBeenCalled();
+  });
+
+  it("asks through the filters an unfiltered list reads, and answers what the repository finds", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    repo.anyRelease.mockResolvedValueOnce(true);
+    // Each request takes its own clock reading (`now`), so the two calls are
+    // made at different instants on purpose: the comparison must not depend
+    // on both landing in the same millisecond.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-06-15T10:00:00.000Z"));
+      expect(await svc.anyReadable(ADMIN)).toBe(true);
+      vi.setSystemTime(new Date("2026-06-15T10:00:00.005Z"));
+      await svc.find({}, ADMIN);
+    } finally {
+      vi.useRealTimers();
+    }
+    // The list's own filters for an unfiltered list: the order, the page and
+    // the request's own instant aside.
+    const {
+      order: _order,
+      offset: _offset,
+      limit: _limit,
+      now: listedNow,
+      ...listed
+    } = (
+      repo.findReleasePage.mock.calls[0] as unknown[] | undefined
+    )?.[0] as Record<string, unknown>;
+    expect(repo.anyRelease).toHaveBeenCalledWith({
+      ...listed,
+      now: new Date("2026-06-15T10:00:00.000Z"),
+    });
+    // Each request's own reading, not one shared or remembered: the list's
+    // instant is the clock as it stood when the list was asked.
+    expect(listedNow).toEqual(new Date("2026-06-15T10:00:00.005Z"));
   });
 });
 

@@ -21,12 +21,17 @@ import {
   useSuppressedChrome,
 } from "../components/layout/ChromeSuppression";
 import { DashboardHeader } from "../components/layout/header";
+import { HeaderTrailProvider } from "../components/layout/header/HeaderTrail";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
 import {
   SidePanelReservationProvider,
   useReservedInlineEnd,
 } from "../components/layout/SidePanelReservation";
+import {
+  MAIN_CONTENT_ID,
+  SkipToContent,
+} from "../components/layout/SkipToContent";
 import { MediaProvider } from "../context/providers/MediaProvider";
 
 interface DashboardLayoutProps {
@@ -49,11 +54,17 @@ interface DashboardLayoutProps {
  * that ask for chrome to be hidden are rendered as `children` and React state
  * has to be lifted past both to be read by the one and written by the other.
  */
-export function DashboardLayout({ children }: DashboardLayoutProps) {
+export function DashboardLayout({
+  children,
+}: DashboardLayoutProps): React.JSX.Element {
   return (
     <ChromeSuppressionProvider>
       <SidePanelReservationProvider>
-        <DashboardChrome>{children}</DashboardChrome>
+        {/* Above the chrome for the same reason: the top bar draws the trail
+            a page below it registers. */}
+        <HeaderTrailProvider>
+          <DashboardChrome>{children}</DashboardChrome>
+        </HeaderTrailProvider>
       </SidePanelReservationProvider>
     </ChromeSuppressionProvider>
   );
@@ -90,6 +101,9 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
     <MediaProvider>
       <SidebarProvider defaultOpen className="h-full overflow-hidden">
         <div className="h-full flex flex-col bg-background overflow-hidden relative w-full">
+          {/* First in the tab order, ahead of the menu, rail and header, on
+              every page this layout draws, the editor included. */}
+          <SkipToContent />
           {/* Mobile Header */}
           <div className="lg:hidden flex h-14 shrink-0 items-center justify-between  border-b border-border px-4 bg-background z-30">
             <div className="flex items-center gap-3 justify-between w-full flex-row-reverse">
@@ -147,7 +161,13 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
               {!hidden.has("header") && <DashboardHeader />}
               {/* Named container so content responds to the panel width
                   (viewport minus sidebar), not the viewport. */}
-              <main className="@container/content flex-1 overflow-y-auto bg-transparent">
+              {/* The skip link's target: an id to name, and tabIndex -1 so
+                  focus can land on it without adding a Tab stop. */}
+              <main
+                id={MAIN_CONTENT_ID}
+                tabIndex={-1}
+                className="@container/content flex-1 overflow-y-auto bg-transparent focus:outline-none"
+              >
                 <ErrorBoundary
                   fallback={
                     <div className="flex h-full items-center justify-center bg-background p-6 text-center">

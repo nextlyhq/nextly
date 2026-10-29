@@ -104,10 +104,18 @@ export const deletePermission = async (permissionId: string): Promise<void> => {
   );
 };
 
+/** The type of {@link permissionApi}. */
+type PermissionApiType = {
+  readonly fetchPermissions: typeof fetchPermissions;
+  readonly updatePermission: typeof updatePermission;
+  readonly deletePermission: typeof deletePermission;
+  readonly getPermissionById: typeof getPermissionById;
+};
+
 /**
  * Composable API object (for convenience and backward compatibility)
  */
-export const permissionApi = {
+export const permissionApi: PermissionApiType = {
   fetchPermissions,
   updatePermission,
   deletePermission,

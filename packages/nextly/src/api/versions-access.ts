@@ -24,7 +24,10 @@ import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
 import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
-import { configuredLocales } from "../domains/i18n/configured-locales";
+import {
+  appLocalization,
+  configuredLocales,
+} from "../domains/i18n/configured-locales";
 import {
   resolveSingleDocumentId,
   singleDocumentEditable,
@@ -65,7 +68,6 @@ import {
   applyFieldReadAccess,
   callerAccessGrants,
 } from "../shared/lib/field-level-registry";
-import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
 
@@ -88,7 +90,13 @@ export async function requireRouteVersionReadAccess(
 ): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
   await getCachedNextly();
 
-  const auth = await requireRouteCollectionAccess(request, "read", slug);
+  // A history names one document: a caller who may not read it is answered
+  // as if it were missing, as the dispatcher's history routes answer.
+  const auth = await requireRouteCollectionAccess(request, "read", slug, {
+    method: "readDocumentHistory",
+    params: {},
+    namesOne: true,
+  });
 
   // Resolved role slugs so field-level `access.read` evaluates against the
   // caller's roles (session auth carries role ids; API-key auth carries slugs).
@@ -291,8 +299,7 @@ export async function historyLanguagesOf(
   if ((entity as { localized?: boolean } | null)?.localized === true) {
     return configured;
   }
-  const defaultLocale =
-    getService("config").localization?.defaultLocale ?? null;
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
   return new Set(
     defaultLocale !== null && configured.has(defaultLocale)
       ? [defaultLocale]
@@ -621,8 +628,9 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * read judges it.
  *
  * Returns what the read rules removed: top-level keys, and dotted paths below
- * them (`banner.secret`), so a comparison can say a field is hidden from this
- * reader rather than leave it out unexplained. Password values are stripped
+ * them (`banner.secret`), with a list row named by its index in this version
+ * (`items.1.secret`), so a comparison can say a field is hidden from this
+ * reader, in the row it was hidden in, rather than leave it out unexplained. Password values are stripped
  * too, but are not reported: a comparison never shows a password field at all.
  *
  * Fails closed: if the rules cannot be evaluated, every field carrying a read
@@ -668,12 +676,7 @@ export async function redactSnapshotForUser(
   // field is declared. The same map takes the read rules into components.
   const componentFields = await currentComponentFields(fields);
   if (fields.length > 0) {
-    stripPasswordsThroughComponents(
-      entry,
-      fields,
-      componentFields,
-      stripPasswordFieldValues
-    );
+    stripPasswordsThroughComponents(entry, fields, componentFields);
   }
 
   const before = structuredClone(entry);
@@ -849,8 +852,7 @@ export async function stripAutosavePasswords(
   stripPasswordsThroughComponents(
     snapshot,
     fields,
-    await autosaveComponentFields(fields, scopeKind, slug),
-    stripPasswordFieldValues
+    await autosaveComponentFields(fields, scopeKind, slug)
   );
 }
 
@@ -1314,8 +1316,7 @@ async function onePart(
   if ((entity as { localized?: boolean } | null)?.localized === true) {
     return false;
   }
-  const defaultLocale =
-    getService("config").localization?.defaultLocale ?? null;
+  const defaultLocale = appLocalization()?.defaultLocale ?? null;
   return [a, b].every(tag => tag === null || tag === defaultLocale);
 }
 
@@ -1343,7 +1344,7 @@ async function partIsLiveNow(
     entity,
     entryId,
     part,
-    defaultLocale: getService("config").localization?.defaultLocale ?? null,
+    defaultLocale: appLocalization()?.defaultLocale ?? null,
   });
 }
 
@@ -1444,7 +1445,10 @@ export async function diffDocumentVersions(args: {
     fields,
     {
       modifiedOnly: args.modifiedOnly,
-      withheld: new Set([...withheldFrom, ...withheldTo]),
+      // Each version's own: a list row is named by its index in that
+      // version, so merging the two would hide a field in the wrong row.
+      withheldFrom,
+      withheldTo,
       // `redactSnapshotForUser` ran each component's own read rules.
       componentRulesApplied: true,
       entity: lookupKind,

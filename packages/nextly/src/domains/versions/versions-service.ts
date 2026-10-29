@@ -19,8 +19,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors";
-import type { VersionStatus } from "../../schemas/versions/types";
+import type {
+  VersionScopeKind,
+  VersionStatus,
+} from "../../schemas/versions/types";
 import { recordWriteEvent } from "../content-events/write-event";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 
 import type { PartVersion } from "./comparison-baselines";
 import type { VersionsDbApi } from "./db-api";
@@ -87,6 +91,21 @@ export class VersionsService {
     });
   }
 
+  /**
+   * Which languages of each of `entryIds` hold pending changes: a working
+   * draft not yet published, null for a document's only or default language.
+   * One query for the documents of one scope, absent for one with none.
+   */
+  async pendingChangeLocales(
+    scopeKind: VersionScopeKind,
+    scopeSlug: string,
+    entryIds: readonly string[]
+  ): Promise<Map<string, Set<string | null>>> {
+    return this.repo.findPendingChangeLocales(scopeKind, scopeSlug, [
+      ...entryIds,
+    ]);
+  }
+
   /** Version metadata for one document, newest-first. Never loads snapshots. */
   async list(
     ref: VersionRef,
@@ -131,6 +150,9 @@ export class VersionsService {
      */
     by?: { actor: RequestActor; personName?: string | null }
   ): Promise<VersionRow> {
+    // Refused first when the document's collection or Single is removed from
+    // code: a version's name is something recorded about the entry.
+    await refuseHistoryWriteIfRemovedFromCode(ref);
     await this.get(ref, versionNo);
     await this.db.transaction(async tx => {
       // Under the document's lock, which retention's own pass waits for, the
@@ -226,6 +248,9 @@ export class VersionsService {
     ref: VersionRef,
     locale: string | null
   ): Promise<number> {
+    // Refused first when the document's collection or Single is removed from
+    // code: its pending change is its own.
+    await refuseHistoryWriteIfRemovedFromCode(ref);
     return this.repo.deleteWorkingDraft(ref, locale);
   }
 
@@ -249,6 +274,9 @@ export class VersionsService {
     locale?: string | null;
     createdBy?: string | null;
   }): Promise<AutosaveWriteResult> {
+    // Refused first when the document's collection or Single is removed from
+    // code: a recovery point is a write to its history.
+    await refuseHistoryWriteIfRemovedFromCode(input.ref);
     return this.repo.upsertAutosave(input);
   }
 

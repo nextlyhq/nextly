@@ -309,6 +309,32 @@ export async function readIndexNames(
   return names;
 }
 
+/** The names of the unique ones among `indexes` (`readIndexUniqueness`). */
+export function uniqueIndexNames(
+  indexes: ReadonlyMap<string, { unique: boolean }>
+): Set<string> {
+  return new Set(
+    [...indexes].filter(([, index]) => index.unique).map(([name]) => name)
+  );
+}
+
+/**
+ * Each index the table carries, by name, with whether it is unique (`readIndexes`). A name says
+ * nothing about what an index enforces, so a caller relying on one being unique asks this.
+ */
+export async function readIndexUniqueness(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Map<string, { unique: boolean }>> {
+  return new Map(
+    (await readIndexes(db, dialect, tableName)).map(index => [
+      index.name,
+      { unique: index.unique },
+    ])
+  );
+}
+
 /**
  * The columns a UNIQUE index covers on its own, whatever the index is called.
  *

@@ -20,6 +20,7 @@ import type { AccessOperation } from "../../services/access/types";
 import type { AccessRuleContext } from "../../shared/types/access";
 import type { GrantedPermission } from "../authenticated-scope";
 
+import { manageCounts } from "./manage-bridge";
 import { buildRuleContext } from "./rule-context";
 
 /**
@@ -81,8 +82,13 @@ export interface KeyActor {
   readonly userId: string;
   readonly roles: readonly string[];
   readonly permissions: readonly PermissionGrant[];
-  /** Never true: no key carries super-admin authority, whoever made it. */
-  readonly superAdmin: false;
+  /**
+   * Carries its maker's super-admin authority: true only for a full-access key
+   * whose maker is an active super-admin for this request, as authentication
+   * found it. Never from the role names the key carries, and never for a key
+   * whose scope was narrowed.
+   */
+  readonly superAdmin: boolean;
 }
 
 export type Actor =
@@ -141,14 +147,16 @@ export function userActor(fields: {
 }
 
 /**
- * A key's actor. It takes no super-admin flag at all, so no caller can hand a
- * key that authority, whatever role names the key carries from its maker.
+ * A key's actor. Its super-admin authority is what authentication found for
+ * the key, handed in by the one resolver that reads it; the role names the
+ * key carries from its maker never give it.
  */
 export function keyActor(fields: {
   keyId: string;
   userId: string;
   roles: readonly string[];
   permissions: readonly PermissionGrant[];
+  superAdmin: boolean;
 }): KeyActor {
   return Object.freeze({
     kind: "key",
@@ -156,7 +164,7 @@ export function keyActor(fields: {
     userId: fields.userId,
     roles: Object.freeze([...fields.roles]),
     permissions: freezeAll(fields.permissions),
-    superAdmin: false,
+    superAdmin: fields.superAdmin,
   });
 }
 
@@ -188,31 +196,8 @@ export function holdsPermission(
   );
 }
 
-/**
- * The system resources whose `manage-` permission still counts as read,
- * create, update and delete on that same resource: a bridge for installs
- * whose roles were given `manage-<resource>` before every action had a plain
- * permission of its own. It never counts as publish or unpublish, as any
- * other action, or on any other resource, and a collection's `manage-`
- * permission means nothing here.
- */
-const MANAGE_COUNTS_ON: ReadonlySet<string> = new Set([
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-]);
-const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
-  "read",
-  "create",
-  "update",
-  "delete",
-]);
-
-/** Whether a `manage-` permission on `resource` can count for `action`. */
-export function manageCounts(action: string, resource: string): boolean {
-  return MANAGE_COUNTS_AS.has(action) && MANAGE_COUNTS_ON.has(resource);
-}
+// Decided in a leaf module of its own, which the admin's copy is held to.
+export { manageCounts } from "./manage-bridge";
 
 /**
  * Whether the actor holds `action` on a system resource through that
@@ -233,9 +218,13 @@ export function storedPermissions(actor: Actor): string[] {
   return grantsOf(actor).map(grant => grant.slug);
 }
 
-/** Whether the actor holds super-admin authority. Only a user can. */
+/**
+ * Whether the actor holds super-admin authority: a super-admin person, or a
+ * full-access key whose maker is one. What is kept for a person asks whether
+ * the caller is a person, never this, so no key reaches it.
+ */
 export function isSuperAdmin(actor: Actor): boolean {
-  return actor.kind === "user" && actor.superAdmin;
+  return (actor.kind === "user" || actor.kind === "key") && actor.superAdmin;
 }
 
 /**
@@ -248,19 +237,14 @@ export function isSuperAdmin(actor: Actor): boolean {
  * the Public role grants decides whether the visitor holds the permission,
  * but a rule written against an anonymous caller is asked with none, as it
  * always has been, so the same rule answers the same way.
- *
- * `rule` is the rule being asked, so a deprecated permission spelling it
- * checks is warned about once for that rule.
  */
 export function ruleContext(
   actor: Exclude<Actor, SystemActor>,
   operation: AccessAction,
-  target: { readonly kind: "collection" | "single"; readonly slug: string },
-  rule: object
+  target: { readonly kind: "collection" | "single"; readonly slug: string }
 ): AccessRuleContext {
   const staff = actor.kind === "user" || actor.kind === "key";
   return buildRuleContext(
-    rule,
     {
       user: staff ? { id: actor.userId } : null,
       roles: staff ? actor.roles : [],

@@ -4,8 +4,17 @@ import { generateAdminPage } from "./admin";
 import { generateConfig } from "./config";
 import type { GeneratedFiles } from "./generated-files";
 import { generateInstrumentation } from "./instrumentation";
-import { generateMediaRoutes, type MediaRouteTemplates } from "./media-routes";
-import { nextConfigFiles, patchNextConfig } from "./next-config";
+import {
+  generateMediaRoutes,
+  generateUploadsRoute,
+  type MediaRouteTemplates,
+} from "./media-routes";
+import {
+  cacheComponentsFiles,
+  nextConfigFiles,
+  patchNextConfig,
+  turnOffCacheComponents,
+} from "./next-config";
 import { generateRoutes } from "./routes";
 import { generateTypesDirectory } from "./types";
 
@@ -30,10 +39,13 @@ export async function generateIntoExistingApp(
   return [
     await generateConfig(cwd, projectType, projectInfo),
     await generateRoutes(cwd, projectInfo),
-    await generateAdminPage(cwd, projectInfo),
+    await generateAdminPage(cwd, projectInfo, templates),
     await generateMediaRoutes(cwd, projectInfo, templates),
+    await generateUploadsRoute(cwd, projectInfo, templates),
     await generateInstrumentation(cwd, projectInfo),
     await generateTypesDirectory(cwd, projectInfo),
     nextConfigFiles(await patchNextConfig(cwd, database)),
+    // After the packages, so it reads the config that step left.
+    cacheComponentsFiles(await turnOffCacheComponents(cwd)),
   ];
 }

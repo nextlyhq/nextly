@@ -3,8 +3,14 @@
  * generation; the runner sorts by module name anyway, so a hand reorder
  * changes nothing.
  */
+import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
+
 import migration0 from "./20261014_081308_231_create_accounts";
 import migration1 from "./20261014_152732_303_index_accounts_by_age";
 import migration2 from "./20261014_180304_889_record_sent_emails";
 
-export const migrations = [migration0, migration1, migration2];
+export const migrations: PluginMigration[] = [
+  migration0,
+  migration1,
+  migration2,
+];

@@ -13,16 +13,18 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { NAV_COLLECTIONS_PARAMS, useCollections } from "@admin/hooks/queries";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
-import { useSidebarPins } from "@admin/hooks/useSidebarPins";
+import { useSidebarCollectionList } from "@admin/hooks/useSidebarContentLists";
 import {
   filterCollectionItems,
   filterSingleItems,
 } from "@admin/lib/permissions/authorization";
-import { getSidebarCollectionsForLanding } from "@admin/lib/sidebar-landing";
+import {
+  collectionDisplayName,
+  searchSidebarCollections,
+} from "@admin/lib/sidebar-landing";
 import type { ApiCollection } from "@admin/types/entities";
 
 const _iconMap = Icons as unknown as Record<string, LucideIcon>;
@@ -36,8 +38,6 @@ interface DynamicCollectionNavProps {
   /** Search query to filter collections */
   search?: string;
 }
-
-const PINNED_COLLECTIONS_STORAGE_KEY = "nextly:sidebar:pinned-collections";
 
 /**
  * Loading skeleton for collection items
@@ -82,22 +82,21 @@ type SidebarSection =
 export function DynamicCollectionNav({
   isActive,
   search = "",
-}: DynamicCollectionNavProps) {
+}: DynamicCollectionNavProps): React.JSX.Element | null {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
   const { capabilities } = useCurrentUserPermissions();
   const branding = useBranding();
-  const { data, isLoading, error } = useCollections(NAV_COLLECTIONS_PARAMS, {
-    staleTime: 5 * 60 * 1000,
-  });
-
+  // The listed collections, their pins and their search come from the hook and
+  // helper the Content panel also reads, so its match count can't disagree.
   const {
-    pinned: pinnedCollections,
+    items: baseCollections,
+    data,
+    isLoading,
+    error,
     isPinned,
     togglePin,
-  } = useSidebarPins({
-    storageKey: PINNED_COLLECTIONS_STORAGE_KEY,
-  });
+  } = useSidebarCollectionList();
 
   const { data: singlesData } = useSingles();
   usePluginAutoRegistration(data?.items);
@@ -121,25 +120,7 @@ export function DynamicCollectionNav({
     [pluginMetadata]
   );
 
-  // Apply the SAME filter + sort that the redirect at /admin/collections
-  // uses (see `lib/sidebar-landing.ts`). Centralising the order keeps the
-  // sidebar's first item and the redirect's landing target in lock-step.
-  // Search filtering still happens here because it's sidebar-only state.
-  const baseCollections = getSidebarCollectionsForLanding(data?.items ?? [], {
-    branding,
-    capabilities,
-    pinnedCollections,
-  });
-  const collections = search
-    ? baseCollections.filter(c => {
-        const displayName = (
-          c.labels?.plural ||
-          c.label ||
-          c.name
-        ).toLowerCase();
-        return displayName.includes(search.toLowerCase());
-      })
-    : baseCollections;
+  const collections = searchSidebarCollections(baseCollections, search);
 
   // Build the unified sorted sections list
   const sections = useMemo(() => {
@@ -280,8 +261,7 @@ export function DynamicCollectionNav({
         const url = getCollectionUrl(collection);
         const isActiveItem = isActive(url);
         const collectionPinned = isPinned(collection.name);
-        const displayName =
-          collection.labels?.plural || collection.label || collection.name;
+        const displayName = collectionDisplayName(collection);
 
         const iconName = collection.admin?.icon || "Database";
         const IconComponent =

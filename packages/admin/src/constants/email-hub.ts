@@ -1,81 +1,77 @@
 /**
  * Who may see and change what in the Email hub.
  *
- * The hub reuses the permissions that guarded the email pages under Settings,
- * so no role gains or loses access by the move. Seeing a tab needs the read
- * grant or the manage grant; a change needs the grant the server checks for
- * that change, and the server refuses it without one whatever this hides.
+ * Each list names the permissions core asks of that action (`SYSTEM_*_POLICY`,
+ * through `lib/permissions/system-policy`), so the hub asks what the server
+ * asks. A role still holding `manage-email-templates` or
+ * `manage-email-providers` holds each of them, as the server counts it
+ * (`holdsPermission`). Seeing a tab needs its read permission; a change needs
+ * the permission the server checks for that change, and the server refuses it
+ * without one whatever this hides.
  *
  * @module constants/email-hub
  */
 
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+  slugsOf,
+} from "../lib/permissions/system-policy";
+
 import { ROUTES } from "./routes";
 
 /** Seeing the emails a site sends, and their layouts. */
-export const EMAIL_TEMPLATE_READ_PERMISSIONS = [
-  "read-email-templates",
-  "manage-email-templates",
-] as const;
+export const EMAIL_TEMPLATE_READ_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_READ_POLICY.emailTemplates.read
+);
 
 /** Creating an email. */
-export const EMAIL_TEMPLATE_CREATE_PERMISSIONS = [
-  "create-email-templates",
-  "manage-email-templates",
-] as const;
+export const EMAIL_TEMPLATE_CREATE_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailTemplates.create
+);
 
-/**
- * Editing an email or a layout. `update-email-templates` is not seeded, so in
- * practice this is the manage grant; the server accepts either.
- */
-export const EMAIL_TEMPLATE_UPDATE_PERMISSIONS = [
-  "update-email-templates",
-  "manage-email-templates",
-] as const;
+/** Editing an email or a layout. */
+export const EMAIL_TEMPLATE_UPDATE_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailTemplates.update
+);
 
 /**
  * Previewing an email with sample data. The preview route is a POST, which
  * the server reads as a create, so seeing the list alone does not reach it.
  */
-export const EMAIL_TEMPLATE_PREVIEW_PERMISSIONS =
-  EMAIL_TEMPLATE_CREATE_PERMISSIONS;
+export const EMAIL_TEMPLATE_PREVIEW_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailTemplates.preview
+);
 
 /** Deleting an email. */
-export const EMAIL_TEMPLATE_DELETE_PERMISSIONS = [
-  "delete-email-templates",
-  "manage-email-templates",
-] as const;
+export const EMAIL_TEMPLATE_DELETE_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailTemplates.delete
+);
 
 /** Seeing the providers email is sent through. */
-export const EMAIL_PROVIDER_READ_PERMISSIONS = [
-  "read-email-providers",
-  "manage-email-providers",
-] as const;
+export const EMAIL_PROVIDER_READ_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_READ_POLICY.emailProviders.read
+);
 
 /** Adding a provider. */
-export const EMAIL_PROVIDER_CREATE_PERMISSIONS = [
-  "create-email-providers",
-  "manage-email-providers",
-] as const;
+export const EMAIL_PROVIDER_CREATE_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailProviders.create
+);
 
-/**
- * Editing a provider or making it the default. Both are updates, and
- * `update-email-providers` is not seeded, so in practice this is the manage
- * grant; the server accepts either.
- */
-export const EMAIL_PROVIDER_UPDATE_PERMISSIONS = [
-  "update-email-providers",
-  "manage-email-providers",
-] as const;
+/** Editing a provider or making it the default. Both are updates. */
+export const EMAIL_PROVIDER_UPDATE_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailProviders.update
+);
 
 /** Sending a test from a provider: a POST, which the server reads as a create. */
-export const EMAIL_PROVIDER_TEST_PERMISSIONS =
-  EMAIL_PROVIDER_CREATE_PERMISSIONS;
+export const EMAIL_PROVIDER_TEST_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailProviders.sendTest
+);
 
 /** Deleting a provider. */
-export const EMAIL_PROVIDER_DELETE_PERMISSIONS = [
-  "delete-email-providers",
-  "manage-email-providers",
-] as const;
+export const EMAIL_PROVIDER_DELETE_PERMISSIONS: readonly string[] = slugsOf(
+  SYSTEM_WRITE_POLICY.emailProviders.delete
+);
 
 /**
  * Reading the delivery log: the Activity tab, and delivery information shown

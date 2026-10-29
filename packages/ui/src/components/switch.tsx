@@ -4,7 +4,7 @@ import {
   Root as SwitchRoot,
   Thumb as SwitchThumb,
 } from "@radix-ui/react-switch";
-import type { ComponentProps } from "react";
+import type { ComponentProps, JSX } from "react";
 
 import { cn } from "../lib/utils";
 
@@ -14,7 +14,10 @@ import { cn } from "../lib/utils";
  * radius the switch must still read as a switch and not as a small checkbox.
  * @public
  */
-function Switch({ className, ...props }: ComponentProps<typeof SwitchRoot>) {
+function Switch({
+  className,
+  ...props
+}: ComponentProps<typeof SwitchRoot>): JSX.Element {
   return (
     <SwitchRoot
       data-slot="switch"

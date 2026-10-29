@@ -27,10 +27,17 @@ import {
   useQuery,
   keepPreviousData,
   type UseQueryOptions,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { useIsKnownSingle } from "@admin/hooks/current-user-access";
 import type { ListResponse } from "@admin/lib/api/response-types";
-import { entryApi, entryKeys, type FindParams } from "@admin/services/entryApi";
+import {
+  entryApi,
+  entryKeys,
+  type FindParams,
+  type CountResult,
+} from "@admin/services/entryApi";
 import type { Entry } from "@admin/types/collection";
 
 /**
@@ -163,13 +170,24 @@ export function useEntries<T = Entry>({
   params,
   enabled = true,
   queryOptions,
-}: UseEntriesOptions<T>) {
+}: UseEntriesOptions<T>): UseQueryResult<ListResponse<T>, Error> {
+  // Part of the key, so a list that answered 404 before the capabilities
+  // answer named the slug a Single is asked again once it does. Only a known
+  // Single's key carries it, so a collection's key is unchanged.
+  const knownSingle = useIsKnownSingle(collectionSlug);
   return useQuery<ListResponse<T>, Error>({
-    queryKey: entryKeys.list(collectionSlug, params),
+    queryKey: [
+      ...entryKeys.list(collectionSlug, params),
+      ...(knownSingle ? ["single"] : []),
+    ],
     queryFn: async () => {
       // Type assertion needed because entryApi.find returns ListResponse<Entry>
       // but we want to support generic entry types
-      const result = await entryApi.find(collectionSlug, params);
+      // A 404 is read again as a Single only for a slug the capabilities
+      // answer names one; for any other slug it is the server's answer.
+      const result = await entryApi.find(collectionSlug, params, {
+        knownSingle,
+      });
       return result as ListResponse<T>;
     },
     enabled: enabled && !!collectionSlug,
@@ -211,7 +229,7 @@ export function useEntryCount(
   collectionSlug: string,
   where?: Record<string, unknown>,
   enabled = true
-) {
+): UseQueryResult<CountResult, Error> {
   return useQuery({
     queryKey: entryKeys.count(collectionSlug, where),
     queryFn: () => entryApi.count(collectionSlug, { where }),

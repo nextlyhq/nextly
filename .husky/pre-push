@@ -50,18 +50,43 @@ if [ -z "$NEXTLY_BOUNDED" ]; then
   # sha is all zeros. No refs at all is NOT read as "only deletions": an empty
   # list is not an all-clear. A terminal on stdin means the hook was run by
   # hand, and there are no refs to read.
+  #
+  # A push of screenshots carries no code either: `pnpm visual-check --publish`
+  # pushes a `pr-screenshots/` branch holding PNG files and nothing else. Its
+  # name alone proves nothing, so it passes only when every commit in its
+  # history holds PNG files alone, read from git's own objects. A history too
+  # long to be screenshots, or one git cannot read, is gated.
   if [ ! -t 0 ]; then
     REFS=0
     DELETIONS=0
-    while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    SCREENSHOTS=0
+    while read -r _local_ref local_sha remote_ref _remote_sha; do
       REFS=$((REFS + 1))
       case "$local_sha" in
         '' | *[!0]*) ;;
-        *) DELETIONS=$((DELETIONS + 1)) ;;
+        *) DELETIONS=$((DELETIONS + 1)); continue ;;
       esac
+      case "$remote_ref" in
+        refs/heads/pr-screenshots/*) ;;
+        *) continue ;;
+      esac
+      # `--count` rather than counting lines, whose `wc -l` pads its number on BSD.
+      length=$(git rev-list --count --max-count=101 "$local_sha" 2>/dev/null </dev/null) || continue
+      if [ "$length" -lt 1 ] || [ "$length" -gt 100 ]; then continue; fi
+      only_images=1
+      for commit in $(git rev-list "$local_sha" </dev/null); do
+        files=$(git ls-tree -r --name-only "$commit" 2>/dev/null </dev/null) || only_images=0
+        if [ -z "$files" ]; then only_images=0; fi
+        if printf '%s\n' "$files" | grep -v '\.png$' >/dev/null; then only_images=0; fi
+      done
+      if [ "$only_images" -eq 1 ]; then SCREENSHOTS=$((SCREENSHOTS + 1)); fi
     done
     if [ "$REFS" -gt 0 ] && [ "$DELETIONS" -eq "$REFS" ]; then
       echo "pre-push: only deleting remote branches — nothing to gate."
+      exit 0
+    fi
+    if [ "$REFS" -gt 0 ] && [ $((DELETIONS + SCREENSHOTS)) -eq "$REFS" ]; then
+      echo "pre-push: only screenshots on pr-screenshots/ branches — nothing to gate."
       exit 0
     fi
   fi
@@ -120,10 +145,11 @@ echo "pre-push: $TURBO_CONCURRENCY package task(s) x $VITEST_WORKERS worker(s) o
 # push, and this runs under `set -e`.
 DIRTY="$(git status --porcelain 2>/dev/null || true)"
 
-# The two repo-wide lints CI gates on that `turbo lint` does not run. Both
-# finish in well under a second, and neither was reachable from any hook, so
-# knowing they existed was something each person carried privately: an `hsl()`
-# literal reached a theme file whose every other token is OKLCH, and an
+# The three lints CI gates on beside the main one, each reading what it does
+# not: design tokens, the workspace manifests and the dev-tooling scripts. Each
+# finishes in about a second. The first two were once reachable from no hook,
+# so knowing they existed was something each person carried privately: an
+# `hsl()` literal reached a theme file whose every other token is OKLCH, and an
 # out-of-order dependency key failed a build, each costing a CI round trip to
 # learn something a local prompt could have said immediately.
 pnpm lint:design
@@ -131,14 +157,16 @@ pnpm lint:workspace
 pnpm lint:scripts
 
 # The build BEFORE lint, for the reason the typecheck below follows it.
-# `import-x/no-unresolved` and every type-aware rule resolve a workspace import
-# through the sibling's `dist`, so lint on an unbuilt tree reports the missing
-# build rather than the diff. Linting first refused every push from a checkout
-# that had never been built — 16 of 23 lint tasks, all on unresolved imports —
-# and a new `pnpm worktree` checkout is exactly that.
+# Every type-aware rule resolves a workspace import through the sibling's
+# `dist`, so lint on an unbuilt tree reports the missing build rather than the
+# diff. Linting first refused every push from a checkout that had never been
+# built — 16 of 23 lint tasks, all on unresolved imports — and a new
+# `pnpm worktree` checkout is exactly that.
+#
+# One oxlint run over the whole repository: packages, `apps/*` and `e2e`
+# alike, where the per-package lint before it reached only `packages/*`.
 pnpm run build
-pnpm turbo lint --continue \
-  --filter='./packages/*'
+pnpm lint
 
 # Types AFTER the build, and over every package rather than the changed ones.
 #
@@ -169,7 +197,7 @@ set -e
 
 # The TESTS of the packages this branch actually changes.
 #
-# Two gaps this closes, and both were real. The lint above filters to
+# Two gaps this closes, and both were real. The lint here once filtered to
 # `./packages/*`, which excludes `apps/*` and `e2e` — workspaces this repo
 # declares and this hook could not reach. And nothing here ran tests at all, so
 # a guard that lives in a TEST was unreachable from any hook: a public-export
@@ -197,15 +225,30 @@ GATE_FILTERS=$(node scripts/gate-scope.mjs --filters)
 GATE_STATUS=$?
 set -e
 
+# Inside each package the change touches, only the test FILES it can affect run:
+# `scripts/test-changed.mjs` asks Vitest's `--changed` over the dependency records
+# each test left on its last run, always adds the tests that read files or spawn
+# processes (which no record names), runs the whole package when its tsconfig or
+# a workspace dependency changed beside it, runs EVERY package for a change every
+# test compiles against (the lockfile, `.nvmrc`, a root or shared tsconfig, a
+# file turbo hashes into every task), runs a package whose test task declares a
+# changed root file, runs a package in full when its dependency records may
+# predate the tree, and runs the root scripts tests when any root file or a
+# Vitest config changed.
+# NEXTLY_PREPUSH_ALL_TESTS=1 runs every test of the touched packages instead.
 if [ "$GATE_STATUS" -eq 2 ]; then
   echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
   pnpm turbo test --continue -- --maxWorkers="$VITEST_WORKERS"
+  node scripts/test-changed.mjs --scripts-only
 elif [ "$GATE_STATUS" -ne 0 ]; then
   echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
   exit "$GATE_STATUS"
-elif [ -n "$GATE_FILTERS" ]; then
-  # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
-  pnpm turbo test --continue $GATE_FILTERS -- --maxWorkers="$VITEST_WORKERS"
+elif [ "${NEXTLY_PREPUSH_ALL_TESTS:-}" = 1 ]; then
+  # The same scope as below, widened the same way, with every package in full:
+  # turbo on gate-scope's filters alone would miss what the widening adds.
+  node scripts/test-changed.mjs --all --max-workers="$VITEST_WORKERS"
+else
+  node scripts/test-changed.mjs --max-workers="$VITEST_WORKERS"
 fi
 
 # The TYPES of the packages this push AFFECTS, blocking.

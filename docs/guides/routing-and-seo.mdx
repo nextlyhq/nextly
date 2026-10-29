@@ -179,9 +179,11 @@ const route = createPublicContentRoute({
 
 export const generateStaticParams = route.generateStaticParams;
 export const generateMetadata = route.generateMetadata;
-export const dynamicParams = true;
 export default route.ContentPage;
 ```
+
+A path the build did not list renders on its first request, so the route needs
+no `dynamicParams` export, which Cache Components refuses.
 
 A public route reads trusted, so its reads are cacheable and its paths
 pre-renderable. It refuses `draft` and `staticParamsLimit: 0` at construction —
@@ -331,6 +333,42 @@ public site wants.
 > least one entry under Cache Components. For a no-prerender or empty-site setup
 > in that mode, export only `ContentPage` and `generateMetadata` and let paths
 > render on demand.
+
+### Under Cache Components
+
+With [Cache Components](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheComponents)
+on, a page may read the request only beneath a `<Suspense>` boundary: the rest
+of the page is prerendered as a static shell, and what reads the request streams
+in at request time. `ContentPage` reads the request (its `params`, the `draft`
+decision's cookie and every access-enforced read), and so does `SinglePage` from
+`createSingleRoute`, so render each inside a boundary of your own:
+
+```tsx
+// app/[[...slug]]/page.tsx
+import { Suspense } from "react";
+import { createContentRoute } from "nextly/runtime";
+
+const route = createContentRoute({
+  collections: ["pages"],
+  render: entry => <Page entry={entry} />,
+});
+
+export const generateMetadata = route.generateMetadata;
+
+export default function ContentPage(props: {
+  params: Promise<{ slug?: string[] }>;
+}) {
+  return (
+    <Suspense fallback={null}>
+      <route.ContentPage {...props} />
+    </Suspense>
+  );
+}
+```
+
+The blocks page helpers in `@nextlyhq/blocks-react/next` (`createBlocksPage`,
+`createSinglePage` and their public versions) provide this boundary themselves,
+so their pages are exported as they are.
 
 Not every blog needs this: if you already have typed per-type routes
 (`/blog/[slug]`, `/authors/[slug]`), keep them and use `resolveContent` +

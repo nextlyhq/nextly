@@ -399,6 +399,24 @@ function useAsTitleOf(collection: RegisteredCollection): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
+/** What the last registry read said about every collection, beside the sources it built. */
+interface RegistryRecord {
+  /** The collections whose definition turns creating entries off (`admin.disableCreate`). */
+  createDisabled: ReadonlySet<string>;
+}
+
+/** The record, pinned where the other widget stores are. */
+const globalForRegistered = globalThis as unknown as {
+  __nextly_widgetRegistryRecord?: RegistryRecord;
+};
+
+/** A collection's `admin.disableCreate`, read defensively from the stored JSON. */
+function disablesCreate(collection: RegisteredCollection): boolean {
+  const admin = collection.admin;
+  if (typeof admin !== "object" || admin === null) return false;
+  return (admin as { disableCreate?: unknown }).disableCreate === true;
+}
+
 /**
  * Rebuild the `collection:` sources, answering whether the registry could be
  * read. On `false` the previous sources stand, as the note above explains.
@@ -407,7 +425,7 @@ export async function refreshCollectionSources(): Promise<boolean> {
   const collections = await readRegisteredCollections();
   if (!collections) return false;
 
-  // A collection kept off the dashboard gets no source, so no card is generated for it and a
+  // A collection kept off the dashboard gets no source, so no card can be set to it and a
   // query naming it is refused exactly as an unknown name is -- for a super-admin too.
   const named = collections.filter(
     (collection): collection is RegisteredCollection & { slug: string } =>
@@ -440,5 +458,25 @@ export async function refreshCollectionSources(): Promise<boolean> {
   // registry refuses keeps the previous sources AND the previous record, so the sources and the
   // other surfaces that ask this record always describe one snapshot.
   recordKeptOffDashboard("collection", collections);
+  const slugged = collections.filter(
+    (collection): collection is RegisteredCollection & { slug: string } =>
+      typeof collection.slug === "string" && collection.slug !== ""
+  );
+  globalForRegistered.__nextly_widgetRegistryRecord = {
+    createDisabled: new Set(
+      slugged.filter(disablesCreate).map(collection => collection.slug)
+    ),
+  };
   return true;
+}
+
+/**
+ * The collections whose definition turned creating entries off at the last
+ * refresh, or `undefined` before any refresh could read the registry.
+ *
+ * From the read the source refresh already makes on every dashboard request,
+ * so asking costs no second read of every collection's definition.
+ */
+export function createDisabledCollections(): ReadonlySet<string> | undefined {
+  return globalForRegistered.__nextly_widgetRegistryRecord?.createDisabled;
 }

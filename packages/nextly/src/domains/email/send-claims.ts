@@ -29,17 +29,18 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
+import {
+  loadedDialect,
+  loadedDialectHolding,
+} from "../../database/dialect-tables";
 import { toDbError } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
 import { getStaticRelations } from "../../database/static-relations";
 import { NextlyError } from "../../errors";
 import type { PrincipalRef } from "../../plugins/principals/types";
-import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
-import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
-import { emailDeliveriesSqlite } from "../../schemas/email-deliveries/sqlite";
-import { emailSendClaimsMysql } from "../../schemas/email-send-claims/mysql";
-import { emailSendClaimsPg } from "../../schemas/email-send-claims/postgres";
-import { emailSendClaimsSqlite } from "../../schemas/email-send-claims/sqlite";
+import type { emailSendClaimsMysql } from "../../schemas/email-send-claims/mysql";
+import type { emailSendClaimsPg } from "../../schemas/email-send-claims/postgres";
+import type { emailSendClaimsSqlite } from "../../schemas/email-send-claims/sqlite";
 import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
 import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
@@ -51,6 +52,7 @@ import {
   type PrincipalDigests,
 } from "../audit/principal-digest";
 
+import { CLAIM_TAKEOVER_MS } from "./send-timing";
 import type { EmailSendOutcome } from "./services/send-failures";
 import type { ResolvedAttachment } from "./types";
 
@@ -66,47 +68,6 @@ export const CORE_KEY_SCOPE = "core";
  */
 export function pluginKeyScope(pluginName: string | undefined): string {
   return pluginName ? `plugin:${pluginName}` : SITE_KEY_SCOPE;
-}
-
-/** Who sent a request over REST: a signed-in person, or an API key. */
-export interface RestKeyCaller {
-  authMethod: "session" | "api-key";
-  userId: string;
-  apiKeyId?: string;
-}
-
-/** What every REST caller's scope starts with, and what a claim stores of it. */
-const REST_SCOPE_LABEL = "rest";
-
-/**
- * A REST caller's scope: its own API key, or the signed-in person. A key sent
- * over REST is the caller's alone, so it can never claim a key the site's own
- * code sends with, nor learn from the answer which keys anyone else has used.
- * The `rest:` prefix keeps it apart from the site, core and plugin scopes.
- *
- * An API-key caller without its key's id is refused rather than given the
- * owner's scope: the key and the owner's own session would then share keys.
- */
-export function restKeyScope(caller: RestKeyCaller): string {
-  if (caller.authMethod !== "api-key") {
-    return `${REST_SCOPE_LABEL}:user:${caller.userId}`;
-  }
-  if (!caller.apiKeyId) {
-    throw NextlyError.internal({
-      logContext: { reason: "api-key-caller-without-key-id" },
-    });
-  }
-  return `${REST_SCOPE_LABEL}:api-key:${caller.apiKeyId}`;
-}
-
-/**
- * A scope as a claim row stores it. A REST caller's scope names a person or an
- * API key, so the row stores `rest` alone and the caller reaches only the key
- * digest, which erasing a person clears. Every other scope names code, and is
- * stored as it is.
- */
-export function storedScope(scope: string): string {
-  return scope.startsWith(`${REST_SCOPE_LABEL}:`) ? REST_SCOPE_LABEL : scope;
 }
 
 /**
@@ -125,12 +86,7 @@ export function scopedSender<T>(service: T, scope: string): T {
 /** The longest idempotency key a send takes, as Resend's header does. */
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 
-/**
- * How long a claim with no outcome holds its key before a later send may take
- * it over: longer than the longest a built-in provider call can take, SMTP's
- * ten-minute socket timeout.
- */
-export const CLAIM_TAKEOVER_MS = 15 * 60_000;
+export { CLAIM_TAKEOVER_MS };
 
 /** Refuse an idempotency key a send cannot use, before anything is sent. */
 export function assertIdempotencyKey(key: unknown): asserts key is string {
@@ -262,11 +218,11 @@ export type EmailSendClaimsTable =
 export function sendClaimsTableFor(dialect: string): EmailSendClaimsTable {
   switch (dialect) {
     case "postgresql":
-      return emailSendClaimsPg;
     case "mysql":
-      return emailSendClaimsMysql;
     case "sqlite":
-      return emailSendClaimsSqlite;
+      // The loaded dialect's own table, so only that dialect's file is
+      // imported; `createAdapter` loads it.
+      return loadedDialect(dialect).tables.emailSendClaims;
     default:
       throw NextlyError.internal({
         logContext: {
@@ -284,10 +240,11 @@ export function sendClaimsTableFor(dialect: string): EmailSendClaimsTable {
 export function sendClaimsTableBeside(
   deliveries: unknown
 ): EmailSendClaimsTable | undefined {
-  if (deliveries === emailDeliveriesPg) return emailSendClaimsPg;
-  if (deliveries === emailDeliveriesMysql) return emailSendClaimsMysql;
-  if (deliveries === emailDeliveriesSqlite) return emailSendClaimsSqlite;
-  return undefined;
+  // The loaded dialect that holds this delivery table, so only that
+  // dialect's files are imported; `createAdapter` loads them.
+  const loaded = loadedDialectHolding(deliveries);
+  if (!loaded || loaded.tables.emailDeliveries !== deliveries) return undefined;
+  return loaded.tables.emailSendClaims;
 }
 
 /** A claim row, as the three dialect tables produce it. */
@@ -326,28 +283,59 @@ export interface HeldClaim {
   /** The key handed to a provider that takes one, for one call. */
   providerKey: (call: ProviderCall) => string;
   /**
-   * The calls of the send an earlier attempt already had accepted, by their
-   * provider key: a retry of a split send sends only the others.
+   * The recipients an earlier attempt already had accepted, by line and
+   * position in the envelope (`recipientSlot`): a retry sends only to the
+   * others, whatever provider carries it.
    */
-  acceptedLegs: ReadonlySet<string>;
+  acceptedRecipients: ReadonlySet<string>;
+  /**
+   * The calls an earlier attempt had accepted, by provider key, as a claim
+   * written before recipients were recorded by position keeps them.
+   */
+  acceptedCalls: ReadonlySet<string>;
 }
 
-/** The legs a partly delivered claim recorded, from its stored result. */
-function acceptedLegsOf(row: ClaimRow | undefined): Set<string> {
+/**
+ * What a partly delivered claim recorded, from its stored result: the
+ * recipients accepted, by place, and, from a claim written before recipients
+ * were recorded that way, the calls accepted, by provider key.
+ */
+function acceptedOf(row: ClaimRow | undefined): {
+  recipients: Set<string>;
+  calls: Set<string>;
+} {
   // `claimed` too: a send that took a partly delivered claim over and then
-  // stopped leaves the recorded calls in place.
-  if (row?.state !== "partial" && row?.state !== "claimed") return new Set();
+  // stopped leaves the recorded recipients in place.
+  if (row?.state !== "partial" && row?.state !== "claimed") {
+    return { recipients: new Set(), calls: new Set() };
+  }
+  const stored = storedResultOf(row.result);
+  return {
+    recipients: stringsOf(stored?.accepted),
+    calls: stringsOf(stored?.acceptedLegs),
+  };
+}
+
+/** A claim's stored result, or nothing when it cannot be read. */
+function storedResultOf(
+  result: string | null
+): { accepted?: unknown; acceptedLegs?: unknown } | null {
   try {
-    const stored = JSON.parse(row.result ?? "null") as {
+    return JSON.parse(result ?? "null") as {
+      accepted?: unknown;
       acceptedLegs?: unknown;
     } | null;
-    const legs = Array.isArray(stored?.acceptedLegs) ? stored.acceptedLegs : [];
-    return new Set(
-      legs.filter((leg): leg is string => typeof leg === "string")
-    );
   } catch {
-    return new Set();
+    return null;
   }
+}
+
+function stringsOf(value: unknown): Set<string> {
+  return new Set(
+    (Array.isArray(value) ? value : []).filter(
+      (entry): entry is string => typeof entry === "string"
+    )
+  );
 }
 
 /** What claiming a key decided. */
@@ -361,7 +349,7 @@ export type ClaimDecision =
 const CLAIM_ATTEMPTS = 3;
 
 /** A runner for work in a transaction of its own, never one the flow has open. */
-function ownTransaction(adapter: DrizzleAdapter) {
+export function ownTransaction(adapter: DrizzleAdapter) {
   const relations = getStaticRelations(adapter.getCapabilities().dialect);
   return <T>(work: (db: ClaimDb) => Promise<T>): Promise<T> =>
     runAdapterTransaction<T, TransactionContext>(
@@ -435,7 +423,8 @@ async function attemptClaim(
       holder,
       keyDigest: digests.key,
       providerKey: digests.providerKey,
-      acceptedLegs: acceptedLegsOf(found),
+      acceptedRecipients: acceptedOf(found).recipients,
+      acceptedCalls: acceptedOf(found).calls,
     },
   });
   if (!found) {
@@ -443,8 +432,7 @@ async function attemptClaim(
     await db.insert(table).values({
       id,
       holder,
-      // A REST caller's person or key stays inside the key digest.
-      scope: storedScope(context.scope),
+      scope: context.scope,
       keyDigest: digests.key,
       messageDigest: digests.message,
       state: "claimed",
@@ -560,9 +548,9 @@ export async function renewSendClaim(
 /**
  * Record a claimed send's outcome: a successful send's result, which a repeat
  * returns, or a failure, which lets the next send with the key try again. A
- * failure after some calls of a split send were accepted is `partial`: it
- * records those calls, so a retry sends only the rest, and is kept as long as
- * a successful claim. `keep: false` removes the claim instead, whatever the
+ * failure after some recipients were accepted is `partial`: it records them by
+ * position, so a retry sends only to the rest, and is kept as long as a
+ * successful claim. `keep: false` removes the claim instead, whatever the
  * outcome, for a site that keeps no delivery history.
  *
  * Written only while this send still holds the claim.
@@ -571,30 +559,97 @@ export async function settleSendClaim(
   adapter: DrizzleAdapter,
   claim: HeldClaim,
   outcome: EmailSendOutcome,
-  options: { keep: boolean; acceptedLegs?: readonly string[]; now?: number }
+  options: SettleOptions
 ): Promise<void> {
-  const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
+  const dialect = adapter.getCapabilities().dialect;
+  await ownTransaction(adapter)(db =>
+    settleClaimIn(db, dialect, claim, outcome, options)
+  );
+}
+
+/** How a claim is settled. */
+export interface SettleOptions {
+  keep: boolean;
+  acceptedRecipients?: readonly string[];
+  /**
+   * The calls wholly accepted, by provider key, written beside the
+   * recipients so an instance of the earlier version that reads only those
+   * keeps the progress too, during a rolling upgrade or a rollback.
+   */
+  acceptedCalls?: readonly string[];
+  now?: number;
+}
+
+/**
+ * {@link settleSendClaim} inside a transaction the caller holds, so the
+ * claim's outcome commits with whatever else that transaction writes: the
+ * send's delivery records.
+ */
+export async function settleClaimIn(
+  db: unknown,
+  dialect: string,
+  claim: HeldClaim,
+  outcome: EmailSendOutcome,
+  options: SettleOptions
+): Promise<void> {
+  const claims = db as ClaimDb;
+  const table = sendClaimsTableFor(dialect);
   const now = options.now ?? Date.now();
   const held = and(eq(table.id, claim.id), eq(table.holder, claim.holder));
-  await ownTransaction(adapter)(async db => {
-    if (!options.keep) {
-      await db.delete(table).where(held);
-      return;
-    }
-    const legs = options.acceptedLegs ?? [];
-    await db
-      .update(table)
-      .set(
-        outcome.success
-          ? { state: "sent", result: JSON.stringify(outcome), settledAt: now }
-          : {
-              state: legs.length > 0 ? "partial" : "failed",
-              result:
-                legs.length > 0 ? JSON.stringify({ acceptedLegs: legs }) : null,
-              leaseExpiresAt: now,
-              settledAt: now,
-            }
-      )
-      .where(held);
-  });
+  if (!options.keep) {
+    await claims.delete(table).where(held);
+    await assertStillHeld(claims, table, claim, { deleted: true });
+    return;
+  }
+  const accepted = options.acceptedRecipients ?? [];
+  await claims
+    .update(table)
+    .set(
+      outcome.success
+        ? { state: "sent", result: JSON.stringify(outcome), settledAt: now }
+        : {
+            state: accepted.length > 0 ? "partial" : "failed",
+            result:
+              accepted.length > 0
+                ? JSON.stringify({
+                    accepted,
+                    acceptedLegs: options.acceptedCalls ?? [],
+                  })
+                : null,
+            leaseExpiresAt: now,
+            settledAt: now,
+          }
+    )
+    .where(held);
+  await assertStillHeld(claims, table, claim, { deleted: false });
+}
+
+/**
+ * Throws, so the caller's transaction rolls back, when the claim is no longer
+ * this send's: its lease lapsed and another send took it over, so that send
+ * now owns the outcome. The settling write above matched nothing then, and
+ * committing this send's delivery records or running its after-send actions
+ * would do the other send's work twice.
+ */
+async function assertStillHeld(
+  claims: ClaimDb,
+  table: EmailSendClaimsTable,
+  claim: HeldClaim,
+  options: { deleted: boolean }
+): Promise<void> {
+  const [row] = (await claims
+    .select({ holder: table.holder })
+    .from(table)
+    .where(eq(table.id, claim.id))
+    .limit(1)) as Array<{ holder: string }>;
+  // Deleted, the claim is gone unless another send holds it; kept, it is
+  // still under this send's holder.
+  const lost = options.deleted
+    ? row !== undefined
+    : row?.holder !== claim.holder;
+  if (lost) {
+    throw NextlyError.internal({
+      logContext: { reason: "send-claim-taken-over" },
+    });
+  }
 }

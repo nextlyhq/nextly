@@ -46,7 +46,7 @@ export const journalApi = {
   // `{ rows, hasMore }` body — respondList would need synthetic
   // total/page/totalPages this query never produces — so we type the
   // fetcher generic with the bare JournalListResponse shape.
-  list: (params: ListJournalParams = {}) => {
+  list: (params: ListJournalParams = {}): Promise<JournalListResponse> => {
     const search = new URLSearchParams();
     if (params.limit !== undefined) search.set("limit", String(params.limit));
     if (params.before) search.set("before", params.before);

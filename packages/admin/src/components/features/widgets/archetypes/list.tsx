@@ -2,8 +2,8 @@
  * The `list` archetype: a few rows, each a line of text.
  *
  * WHICH field a row shows is taken from the query's `select`, in order: the
- * first selected field is the row's label and the second, when there is one, is
- * the muted line under it. Everything after that is ignored.
+ * first selected field titles the row, a field of choices (a status) sits at its
+ * end, and the others join the meta line under the title, up to three of them.
  *
  * Derived from `select` rather than declared separately, because a second
  * declaration would be a second answer to one question — the author has already
@@ -20,8 +20,14 @@
  * @module components/features/widgets/archetypes/list
  */
 
-import { selectsNothing } from "./cell-text";
-import { TieredRows } from "./tiered-rows";
+import { MAX_META_FIELDS } from "../frame/entity-row";
+
+import {
+  declaredAnswerFields,
+  rowsOrInstead,
+  selectsNothing,
+} from "./cell-text";
+import { answerTotal, TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /**
@@ -40,54 +46,54 @@ export const listAccepts: ArchetypeAccepts = definition => {
 };
 
 /**
- * How many of a list card's selected fields this renderer draws below the large tier.
+ * How many of a list card's selected fields this renderer draws below the large tier: the
+ * title and a meta line of up to three.
  *
  * 🔴 Declared because the number is otherwise invisible at the only place it
- * matters -- the card DECLARATION, in another package. A row is a label and a
- * detail, so below the large tier (where the rows become a table with every
- * column) a third selected field is not extra information: it is dropped in
- * silence, and the card looks finished while answering a narrower question than
- * it was written to answer. Two shipped cards did exactly that, one of them
- * omitting the timestamp from a card sorted by time.
+ * matters -- the card DECLARATION, in another package. Below the large tier
+ * (where the rows become a table with every column) a field past these is not
+ * extra information: it is dropped in silence, and the card looks finished
+ * while answering a narrower question than it was written to answer. Two
+ * shipped cards did exactly that, one of them omitting the timestamp from a
+ * card sorted by time.
  *
  * `listAccepts` cannot enforce it. Selecting too many fields is not a REFUSAL --
  * the card draws correctly, just not everything asked for -- and turning it into
  * one would blank a dashboard over what is a declaration mistake. So the check
  * belongs where declarations are reviewed, and this constant is what it reads.
  */
-export const LIST_RENDERED_FIELDS = 2;
+export const LIST_RENDERED_FIELDS: number = 1 + MAX_META_FIELDS;
 
-export const listBody: ArchetypeBody = (result, definition) => {
-  if (result.op !== "list") {
-    return {
-      ok: false,
-      message: `"${definition.title}" expected a list, but the query returned a ${result.op}.`,
-    };
-  }
+export const listBody: ArchetypeBody = (answer, definition) => {
+  const result = rowsOrInstead(answer, definition.title, {
+    expected: "a list",
+    rows: "Items",
+  });
+  if (!("op" in result)) return result;
 
-  const select = definition.query?.select ?? [];
-  // Keep in step with LIST_RENDERED_FIELDS: this destructure IS the number that
-  // constant declares, and a third name here without raising it would let a
-  // card select a field the guard still calls undrawable.
-  const [labelField, detailField] = select;
+  // A card core answered on the server has no query: its answer says which
+  // fields it is drawn by (`declaredAnswerFields`).
+  const select =
+    definition.serverData === true
+      ? declaredAnswerFields(result).map(field => field.name)
+      : (definition.query?.select ?? []);
+  // The first selected field titles each row; the rest are its meta and trailing fields.
+  const [labelField] = select;
   if (!labelField) {
+    // A card core answered whose rows carry no field at all: its data function
+    // answered rows with nothing in them to draw, which no declaration check
+    // could have seen before it ran.
+    if (definition.serverData === true) {
+      return {
+        ok: false,
+        message: `"${definition.title}" answered rows with no fields to draw.`,
+      };
+    }
     // Unreachable through the grid, which declines this declaration before it
     // batches. Kept because a body must be safe to call on its own -- a test,
     // or a future caller that has a result in hand -- and because the sentence
     // is one thing said in one place.
     return { ok: false, message: listAccepts(definition) ?? "" };
-  }
-
-  if (result.items.length === 0) {
-    // The frame's one empty state, worded for a list. Source-neutral: the card may read any
-    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
-    return {
-      ok: true,
-      empty: {
-        title: "Nothing here yet",
-        detail: "Items appear here once something matches this card.",
-      },
-    };
   }
 
   return {
@@ -96,12 +102,15 @@ export const listBody: ArchetypeBody = (result, definition) => {
       <TieredRows
         items={result.items}
         // The columns the SOURCE said survived the read, each with its declared kind and
-        // value labels, so each cell is presented rather than printed; a column it does not
-        // describe falls back to plain text. They also head the large tier's table.
-        columns={result.fields ?? []}
+        // value labels, so each cell is presented rather than printed. A source that describes
+        // no columns at all is drawn by the fields the card selected, as plain text under their
+        // names, which the card's own declaration already holds. Where a source does describe
+        // its columns, only those are drawn: a selected field it left out is one this reader
+        // may not see. They also head the large tier's table.
+        columns={result.fields ?? select.map(name => ({ name }))}
         labelField={labelField}
-        detailField={detailField}
         query={definition.query}
+        total={answerTotal(result)}
       />
     ),
   };

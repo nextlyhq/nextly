@@ -32,6 +32,11 @@ import {
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
+// The Next.js / React check an existing app passes before anything is written.
+import {
+  frameworkVersionMessage,
+  frameworkVersionProblems,
+} from "./lib/framework-versions";
 import {
   nextlySource,
   nextlyVersionConflictMessage,
@@ -65,12 +70,14 @@ import type {
   ProjectType,
 } from "./types";
 import {
+  detectAppPackageManager,
   detectPackageManager,
   detectPluginPackage,
   detectProject,
 } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
+import { pluginNodeRefusal } from "./utils/plugin-node";
 import { copyTemplate, resolveTemplatePath } from "./utils/template";
 
 /**
@@ -161,6 +168,27 @@ export async function createNextly(
   if (existingProject) {
     p.log.success(`${pc.green("Next.js")} project detected`);
 
+    // An app on a Next.js, React or React DOM outside the supported ranges
+    // would install Nextly and then fail at build or at run time. It is
+    // refused here, the first thing the existing-app path does after reading
+    // package.json and before any prompt, install or write, so the app is
+    // left exactly as it was and the person answers nothing first.
+    const frameworkProblems = await frameworkVersionProblems(cwd);
+    if (frameworkProblems.length > 0) {
+      telemetry.capture("scaffold_failed", {
+        stage: "detect",
+        error_code: "unknown",
+        duration_ms: Date.now() - overallStartedAt,
+      });
+      p.cancel(
+        frameworkVersionMessage(
+          frameworkProblems,
+          await detectAppPackageManager(cwd)
+        )
+      );
+      process.exit(1);
+    }
+
     if (!defaults) {
       const shouldInstall = await p.confirm({
         message: "Install Nextly in this project?",
@@ -216,6 +244,9 @@ export async function createNextly(
   // "install into existing Next project" path, the user has already
   // consented to using their current directory.
   let allowExistingTarget = false;
+  // Asked now, done later: the directory is emptied only after every check
+  // that can still refuse the scaffold, so a refusal leaves it as it was.
+  let clearTargetDir: string | undefined;
   if (isFreshProject && projectName) {
     const conflictTargetDir = installInCwd ? cwd : path.join(cwd, projectName);
     if (await isDirectoryNotEmpty(conflictTargetDir)) {
@@ -235,7 +266,7 @@ export async function createNextly(
       // flip the flag here.
       allowExistingTarget = true;
       if (choice === "remove") {
-        await emptyDirectory(conflictTargetDir);
+        clearTargetDir = conflictTargetDir;
       }
       // "ignore" falls through — overlay the template on top of
       // existing files (fs.copy overwrites by default).
@@ -270,6 +301,21 @@ export async function createNextly(
     // If user selects the disabled "coming soon" hint, fall back to blank
     projectType = isValidTemplateSelection(template) ? template : "blank";
   }
+
+  // A plugin builds and tests on tools with a higher Node floor than the
+  // packages', so it is refused here, before anything is written, rather
+  // than scaffolded into a project whose first build fails.
+  if (projectType === "plugin") {
+    const refusal = pluginNodeRefusal(process.versions.node);
+    if (refusal) {
+      p.cancel(refusal);
+      process.exit(1);
+    }
+  }
+
+  // The answer to the directory conflict, carried out now that nothing left
+  // can refuse the scaffold.
+  if (clearTargetDir) await emptyDirectory(clearTargetDir);
 
   // --- Step 3: Schema approach (only for content templates with approaches) ---
 

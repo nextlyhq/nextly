@@ -47,96 +47,71 @@
 import type { ConditionProbe } from "./condition-probe";
 import type { OnboardingStep } from "./onboarding-steps";
 
-/** A step no permission gates, as a predicate the walk below can call alike. */
-const ALWAYS = (): Promise<boolean> => Promise.resolve(true);
+/** The checklist's steps, and whether setup could be checked at all. */
+export interface OnboardingProgress {
+  steps: OnboardingStep[];
+  /**
+   * Whether the install's collections or Singles could not be listed, as the
+   * Get started answer says. The rows cannot say "not known", so the card has
+   * to be told: with it unsaid, every row a reader finished reads as a
+   * finished setup while the condition goes on offering the card.
+   */
+  unknown: boolean;
+}
 
 /**
- * Every step, with the reader's progress through it.
+ * Every step this checklist draws, with the reader's progress through it.
  *
- * The two detected steps share one read of the readable collections: asking
- * separately would resolve the same permission set twice for one answer.
+ * DERIVED from the Get started answer (`getStartedSteps`), not computed beside
+ * it: the two would otherwise agree on the day they were written and drift
+ * after. That answer offers each step only to a reader who could finish it,
+ * and answers "entry" from the same counted read the `content:empty`
+ * condition takes, so a reader told the install has content cannot also be
+ * told the first-entry step is outstanding.
  *
- * `entry` is answered by {@link readerHasContent} rather than by a count of its
- * own, which is what keeps this and the `content:empty` condition one
- * implementation. They ask the same question of the same rows through the same
- * guard, so a reader who is told the install has content cannot also be told
- * the first-entry step is outstanding.
+ * Only the steps this list names. A step whose state is not known is not
+ * complete here: this list has no way to say "not known" per row, and drawing
+ * it done would be the worse error.
  */
-export async function onboardingSteps(
+export async function onboardingProgress(
   probe: ConditionProbe
-): Promise<OnboardingStep[]> {
-  const slugs = await probe.readableSlugs();
-  // Short-circuits inside, and skipped entirely where no collection exists:
-  // with nothing to read there is no row to find, and the walk would be a
-  // guaranteed-empty pass over an empty list.
-  const hasContent = slugs.length > 0 ? await probe.hasContent() : false;
-
-  const candidates: Array<
-    OnboardingStep & { offered: () => Promise<boolean> }
-  > = [
-    // True by construction: an unauthenticated caller never reaches this,
-    // and no permission gates having made the account one is already using.
-    { id: "account", complete: true, offered: ALWAYS },
-    {
-      id: "collection",
-      complete: slugs.length > 0,
-      offered: () => probe.mayCreateCollection(),
-    },
-    {
-      id: "entry",
-      // Done only when content is KNOWN to exist. A check that ran out of time
-      // leaves the step open, so the card stays on the dashboard while setup
-      // is not known rather than vanishing on a guess.
-      complete: hasContent === true,
-      offered: () => probe.mayCreateEntry(),
-    },
-  ];
-
-  const offered: OnboardingStep[] = [];
-  for (const { offered: mayPerform, ...step } of candidates) {
-    // 🔴 Asked only of an INCOMPLETE step, and the asymmetry is the design
-    // rather than an optimisation that leaked into the semantics. A finished
-    // step is a fact about the install's history, and history is not an offer:
-    // withholding it would shorten a reader's list by the very rows that show
-    // them how far the install has come. An UNFINISHED step is an offer, and
-    // an offer the reader cannot accept is the defect -- the link lands on a
-    // surface that refuses them, and `onboardingIsIncomplete` below stays true
-    // for as long as their account exists, pinning the card to their dashboard
-    // permanently.
-    //
-    // It is also what keeps a settled install off this path entirely: with
-    // every step complete no permission decision is taken at all, so the
-    // steady state costs nothing.
-    if (step.complete || (await mayPerform())) offered.push(step);
+): Promise<OnboardingProgress> {
+  const { answer, fellBack, unlisted } = await probe.getStartedDetail();
+  // True by construction: an unauthenticated caller never reaches this, and
+  // no permission gates having made the account one is already using.
+  const steps: OnboardingStep[] = [{ id: "account", complete: true }];
+  for (const id of ["collection", "entry"] as const) {
+    const offered = answer.steps.find(candidate => candidate.kind === id);
+    if (offered) steps.push({ id, complete: offered.status === "done" });
+    // 🔴 Deprecated, and answering as it always has until it is removed: a
+    // step whose own check fell back is a row not complete, not a missing
+    // row. The Get started card withholds that step; this read does not.
+    else if (fellBack.has(id)) steps.push({ id, complete: false });
   }
-  return offered;
+  // "Not known" as this read has always meant it: the registries unlisted,
+  // not a step's own check falling back, which its row already says.
+  return { steps, unknown: unlisted };
 }
 
 /**
  * Whether this reader still has onboarding left to do.
  *
- * DERIVED from the steps rather than computed beside them. A separate
- * "is onboarding done" query would be a second implementation of the same
- * question, and the two would disagree exactly when it mattered: the condition
- * dropping the card while a row on it was still unticked, or keeping a card
- * whose every row is done.
+ * DERIVED from the progress the card draws rather than computed beside it, so
+ * the condition cannot drop the card while a row on it is still unticked, or
+ * keep a card that has nothing to say.
  *
- * Note that this does not short-circuit, and could: the first incomplete step
- * settles it. Left exhaustive because the same call draws the card, and the two
- * paths sharing one implementation is worth more than one skipped count on a
- * request that is about to make the same one.
+ * 🔴 True when setup is NOT KNOWN. The install's collections or Singles could
+ * not be listed, so whether anything is left cannot be said, and a card that
+ * vanished on that basis would hide the one place that tells the reader so.
+ * "Not known" must never read as "finished", which is why the progress carries
+ * it to the card as well.
  *
- * Reader-scoped through the steps themselves, which is what `onboardingSteps`
- * filtering buys: a step this reader cannot perform is not in the list, so it
- * cannot hold the condition true. Scoped any other way -- an aggregate taken
- * over every step that EXISTS -- a reader who may read a collection and create
- * nothing in it would have this answer true for the life of their account,
- * with the card pinned to their dashboard offering an action that always
- * fails. That is the opposite of what the lifecycle was built for.
+ * Reader-scoped through the steps themselves: a step this reader cannot
+ * perform is not in the list, so it cannot hold the condition true.
  */
 export async function onboardingIsIncomplete(
   probe: ConditionProbe
 ): Promise<boolean> {
-  const steps = await onboardingSteps(probe);
-  return steps.some(step => !step.complete);
+  const progress = await onboardingProgress(probe);
+  return progress.unknown || progress.steps.some(step => !step.complete);
 }

@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from "../components/icons";
 import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
+import { READ_SETTINGS } from "../lib/permissions/system-policy";
 
 import { EMAIL_HUB_PERMISSIONS } from "./email-hub";
 import { ROUTES } from "./routes";
@@ -128,9 +129,9 @@ export type SidebarNavigation = NavigationItem[];
  * it. `create-api-keys` is deliberately absent — it opens the create form, not
  * the list this entry links to.
  */
-export const API_KEYS_LIST_PERMISSIONS = apiKeyGrantsFor("read");
+export const API_KEYS_LIST_PERMISSIONS: string[] = apiKeyGrantsFor("read");
 
-export const RELEASE_SECTION_PERMISSIONS = [
+export const RELEASE_SECTION_PERMISSIONS: string[] = [
   "read-content-releases",
   "create-content-releases",
   "publish-content-releases",
@@ -217,7 +218,7 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     href: ROUTES.USERS_FIELDS,
     icon: SlidersHorizontal,
     category: "settings",
-    requiredPermission: "manage-settings",
+    requiredPermission: READ_SETTINGS,
   },
 
   // === SETTINGS (IS with sub-groups) ===
@@ -227,7 +228,7 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     icon: Settings,
     category: "settings",
     subGroup: "system",
-    requiredPermission: "manage-settings",
+    requiredPermission: READ_SETTINGS,
   },
   {
     title: "API Keys",

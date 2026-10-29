@@ -13,18 +13,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
 
 const { container } = vi.hoisted(() => ({
-  container: { config: undefined as unknown },
+  container: {
+    config: undefined as unknown,
+    // The language registry, as a site whose languages are stored in Settings registers it.
+    languageRegistry: undefined as unknown,
+  },
 }));
 
 vi.mock("../../di/container", () => ({
   container: {
-    has: (name: string) => name === "config" && container.config !== undefined,
-    get: () => container.config,
+    has: (name: string) =>
+      (name === "config" && container.config !== undefined) ||
+      (name === "languageRegistry" && container.languageRegistry !== undefined),
+    get: (name: string) =>
+      name === "languageRegistry"
+        ? container.languageRegistry
+        : container.config,
   },
 }));
 
 import { buildRuleContext, type RuleCaller } from "./rule-context";
 import {
+  askEachLanguage,
   currentRuleLanguage,
   everyLanguage,
   languagesOfContent,
@@ -57,10 +67,11 @@ const readPosts = {
   operation: "read",
   target: { kind: "collection", slug: "posts" },
 } as const;
-const contextNow = () => buildRuleContext(() => true, caller, readPosts);
+const contextNow = () => buildRuleContext(caller, readPosts);
 
 afterEach(() => {
   container.config = undefined;
+  container.languageRegistry = undefined;
 });
 
 describe("readLanguagesFor and writeLanguagesFor", () => {
@@ -203,6 +214,14 @@ describe("the languages a rule is told", () => {
     expect(ctx.locales).toEqual(["en", "fr", "de"]);
   });
 
+  // A site whose languages are stored in Settings has no `localization` block: the list is the
+  // language registry's, and a rule must be told it, or `locales.every(...)` passes over none.
+  it("are every language the site stores, where the configuration declares none", () => {
+    container.config = { localization: undefined };
+    container.languageRegistry = { current: () => LOCALISED };
+    expect(contextNow().locales).toEqual(["en", "fr", "de"]);
+  });
+
   it("are none where the site has no languages", () => {
     container.config = { localization: undefined };
     expect(contextNow().locales).toEqual([]);
@@ -213,7 +232,7 @@ describe("the languages a rule is told", () => {
   it("are the question's own where it names them, over the operation's", () => {
     container.config = { localization: LOCALISED };
     const ctx = withRuleLanguage(readLanguagesFor(LOCALISED, "fr"), () =>
-      buildRuleContext(() => true, caller, { ...readPosts, locale: "de" })
+      buildRuleContext(caller, { ...readPosts, locale: "de" })
     );
     expect(ctx.locale).toBe("de");
     expect(ctx.locales).toEqual(["de"]);
@@ -227,7 +246,7 @@ describe("the languages a rule is told", () => {
     const frenchOnly = ({ locales }: { locales: string[] }) =>
       locales.every(code => code === "fr");
     const ctx = withRuleLanguage(everyLanguage(), () =>
-      buildRuleContext(frenchOnly, caller, {
+      buildRuleContext(caller, {
         operation: "delete",
         target: { kind: "collection", slug: "posts" },
       })
@@ -301,9 +320,44 @@ describe("languagesOfContent", () => {
     // same in every language: the related row's rule is told every language.
     declare({ localized: false });
     const related = withRuleLanguage(french, () =>
-      buildRuleContext(() => true, caller, { operation: "read", target: pages })
+      buildRuleContext(caller, { operation: "read", target: pages })
     );
     expect(related.locale).toBeUndefined();
     expect(related.locales).toEqual(every.locales);
+  });
+});
+
+describe("askEachLanguage", () => {
+  it("asks once for each language, each time told that language and all of them", async () => {
+    const asked: { locale?: string; locales: readonly string[] }[] = [];
+    const answer = await askEachLanguage(["en", "fr"], async () => {
+      asked.push(currentRuleLanguage());
+      return undefined;
+    });
+    expect(answer).toBeUndefined();
+    expect(asked).toEqual([
+      { locale: "en", locales: ["en", "fr"] },
+      { locale: "fr", locales: ["en", "fr"] },
+    ]);
+  });
+
+  it("refuses with the first refusal, naming every language refused", async () => {
+    const answer = await askEachLanguage(["en", "fr", "de"], async () => {
+      const { locale } = currentRuleLanguage();
+      return locale === "en" ? undefined : `refused in ${locale}`;
+    });
+    expect(answer).toEqual({ refusal: "refused in fr", refused: ["fr", "de"] });
+  });
+
+  it("asks once, in the operation's own languages, where no language is named", async () => {
+    container.config = { localization: LOCALISED };
+    const asked: { locale?: string; locales: readonly string[] }[] = [];
+    await withRuleLanguage(everyLanguage(), () =>
+      askEachLanguage([], async () => {
+        asked.push(currentRuleLanguage());
+        return undefined;
+      })
+    );
+    expect(asked).toEqual([{ locales: ["en", "fr", "de"] }]);
   });
 });

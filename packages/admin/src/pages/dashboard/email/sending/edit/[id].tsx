@@ -1,7 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
-import { useCallback } from "react";
+import { useCallback, type JSX } from "react";
 
 import { EmailSubpageLayout } from "@admin/components/features/email-hub/EmailSubpageLayout";
 import {
@@ -23,13 +23,14 @@ import {
   useEmailProviderTypes,
   useUpdateEmailProvider,
 } from "@admin/hooks/queries/useEmailProviders";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
 
-export default function EditEmailProviderPage() {
+export default function EditEmailProviderPage(): JSX.Element {
   const { route } = useRouter();
 
   // Extract and validate provider ID from route params
@@ -46,6 +47,8 @@ export default function EditEmailProviderPage() {
     error: fetchError,
     refetch,
   } = useEmailProvider(providerId || undefined);
+  // The tab names the provider being edited once it has arrived.
+  useDocumentTitle(provider?.name);
 
   // The provider catalog. The stored record says which type this provider is;
   // the catalog says what that type's fields are, so both are needed before the

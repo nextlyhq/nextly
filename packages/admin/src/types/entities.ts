@@ -22,6 +22,11 @@ export interface Role {
   type: "System" | "Custom";
   permissions: string[];
   slug?: string;
+  /**
+   * Whether the role may be given to a person or a key, or built on by
+   * another role. False for the Public role. See `assignableRoles`.
+   */
+  assignable?: boolean;
 }
 
 // Simple API response interface
@@ -42,6 +47,8 @@ export interface ApiRole {
   level: number;
   isSystem: boolean;
   description?: string;
+  /** False for a role that can't be given to anyone or inherited. */
+  assignable?: boolean;
 }
 
 export interface ApiRoleCreatePayload {
@@ -178,6 +185,11 @@ export interface ApiCollection {
     useAsTitle?: string;
     /** Whether this collection is provided by a plugin */
     isPlugin?: boolean;
+    /**
+     * Whether only a machine creates this collection's documents (form
+     * submissions do): no "New" is offered for it anywhere in the admin.
+     */
+    disableCreate?: boolean;
     /** Custom component configuration for plugin views */
     components?: {
       /** Custom view components */

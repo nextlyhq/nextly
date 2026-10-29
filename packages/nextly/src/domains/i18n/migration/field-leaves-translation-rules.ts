@@ -30,11 +30,13 @@ export interface LeavingTranslationRefusal {
   path: string;
   code:
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
-    | "CONSTRAINED_FIELD_LEAVES_TRANSLATION"
+    | "REQUIRED_FIELD_LEAVES_WITHOUT_VALUES"
+    | "UNIQUE_FIELD_LEAVES_OVER_DUPLICATES"
     | "RESHAPED_FIELD_JOINS_TRANSLATION"
     | "RESHAPED_TRANSLATED_FIELD_RENAMED"
     | "TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS"
-    | "TRANSLATED_FIELD_RENAME_UNANSWERED";
+    | "TRANSLATED_FIELD_RENAME_UNANSWERED"
+    | "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED";
   /** Why the field cannot leave or join translation in this change, as one sentence. */
   reason: string;
   /** The changes that get there instead, in order, each one sentence. */
@@ -47,7 +49,7 @@ export interface LeavingTranslationRefusal {
  * A refusal whose message is derived from its reason and steps, so a surface that lists the
  * steps and one that prints the message cannot say different things.
  */
-function refusal(
+export function refusal(
   path: string,
   code: LeavingTranslationRefusal["code"],
   reason: string,
@@ -56,7 +58,9 @@ function refusal(
   return { path, code, reason, steps, message: [reason, ...steps].join(" ") };
 }
 
-type Surface = "builder" | "code";
+/** Whose steps a refusal names: the Schema Builder's settings, or the config and its CLI. */
+export type TranslationSurface = "builder" | "code";
+type Surface = TranslationSurface;
 type Constraint = "required" | "unique";
 
 /**
@@ -76,10 +80,10 @@ export function storageDiffers(
 }
 
 /**
- * The settings a field cannot carry while it stops being translated: its own flags, and
- * `unique` when a unique index covers it without the flag.
+ * The settings a field leaving translation has to take on after its values are shared: its own
+ * flags, and `unique` when a unique index covers it without the flag.
  */
-function constraintsOf(
+export function leavingFieldConstraints(
   field: LeavingFieldLike,
   uniqueIndexed: ReadonlySet<string> | undefined
 ): Constraint[] {
@@ -111,26 +115,6 @@ function reshapedRefusal(
   );
 }
 
-function constrainedRefusal(
-  name: string,
-  constraints: readonly Constraint[],
-  surface: Surface
-): LeavingTranslationRefusal {
-  const builder = surface === "builder";
-  return refusal(
-    `fields.${name}`,
-    "CONSTRAINED_FIELD_LEAVES_TRANSLATION",
-    // The Builder shows the reason beside the field it is about, so it does not name it again; a
-    // migration's refusal is read on its own and does.
-    builder
-      ? `A ${constraints.join(" and ")} field can't stop being translated in the same change.`
-      : `"${name}" is ${constraints.join(" and ")}, so it cannot stop being translated in the same migration.`,
-    builder
-      ? builderConstraintSteps(constraints)
-      : codeConstraintSteps(constraints)
-  );
-}
-
 /**
  * The refusals for the fields in `leaving`.
  *
@@ -139,9 +123,10 @@ function constrainedRefusal(
  *   without the conversion and confirmation such a change goes through on its own. Judged against
  *   the column the values sit in now, described by `oldFields` or, where the caller has no old
  *   definition, by `previousColumns`; a field neither describes is not judged.
- * - A required or unique field, or one a unique index covers (`uniqueIndexed`). Its shared column
- *   is created, and its constraints checked, before the default language's values are copied into
- *   it, so at that moment every existing row holds the same placeholder or none.
+ *
+ * A Required or Unique field is not refused here: every surface creates its shared column without
+ * the setting and applies it after the copy (`withoutLeavingConstraints`), and whether the values
+ * can take it is asked of the database (`refusalsForConstrainedFieldsLeaving`).
  *
  * @param surface - Whose steps the message names: the Schema Builder's settings and saves, or
  *   the config's flags and `nextly migrate:create`
@@ -152,8 +137,6 @@ export function refusalsForFieldsLeavingTranslation(args: {
   oldFields?: readonly LeavingFieldLike[];
   /** The companion columns as they are now, by column name, for a caller with no old fields. */
   previousColumns?: ReadonlyMap<string, LocalizedColumnSpec>;
-  /** Fields a unique index covers, beside their own `unique` flag. */
-  uniqueIndexed?: ReadonlySet<string>;
   dialect: SupportedDialect;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
@@ -175,35 +158,25 @@ export function refusalsForFieldsLeavingTranslation(args: {
     if (!args.leaving.has(field.name)) continue;
     if (storageDiffers(previousColumnOf(field), columnOf(field))) {
       refusals.push(reshapedRefusal(field.name, args.surface));
-      continue;
-    }
-    const constraints = constraintsOf(field, args.uniqueIndexed);
-    if (constraints.length > 0) {
-      refusals.push(constrainedRefusal(field.name, constraints, args.surface));
     }
   }
   return refusals;
 }
 
-function builderConstraintSteps(constraints: readonly Constraint[]): string[] {
-  const settings = constraints
-    .map(c => (c === "required" ? "Required" : "Unique"))
-    .join(" and ");
-  // Each step names the Builder control it uses, and ends where the author saves.
-  return [
-    `Turn off ${settings} and save.`,
-    "Turn off Localized and save.",
-    `Turn ${settings} back on and save.`,
-  ];
-}
-
-function codeConstraintSteps(constraints: readonly Constraint[]): string[] {
-  const flags = constraints.map(c => `\`${c}\``).join(" and ");
-  return [
-    `Remove ${flags} from the field and run \`nextly migrate:create\`.`,
-    "Set `localized: false` and run it again.",
-    `Put ${flags} back and run it once more.`,
-  ];
+/**
+ * `fields` with each field in `leaving` that carries a leaving field's settings made optional and
+ * not unique: the shape its shared column is created in, before the default language's values are
+ * copied into it. Every other field is returned as it is.
+ */
+export function withoutLeavingConstraints<F extends LeavingFieldLike>(
+  fields: readonly F[],
+  leaving: ReadonlySet<string>
+): F[] {
+  return fields.map(f =>
+    leaving.has(f.name) && leavingFieldConstraints(f, undefined).length > 0
+      ? { ...f, required: false, unique: false }
+      : f
+  );
 }
 
 function reshapedJoiningRefusal(
@@ -310,4 +283,49 @@ export function refusalsForTranslatedFieldRenamedAndReshaped(args: {
       ["Rename it and save.", "Change its type, length or precision and save."]
     ),
   ];
+}
+
+/**
+ * The refusal for translated fields a change removes while it adds other fields, when no rename was
+ * decided for them. Read by name, each removed field's companion column is dropped with every
+ * language's value, and the change cannot tell that from a rename the rule could not pick (two
+ * renames, a rename beside a new field, a rename to another type), so nothing asked the admin
+ * about the column. A removal on its own, or an addition on its own, is not refused.
+ *
+ * The change that turns translation on is refused the same way for the fields that become
+ * translated: it moves each one's main column under a name the field keeps, so it follows no
+ * rename at all, and its refusal names turning translation on as the first save.
+ */
+export function refusalsForTranslatedFieldsRemovedBesideAdded(args: {
+  /** The translated fields the change removes, each of which has a companion column. */
+  removed: readonly string[];
+  /** The fields the change adds that get a column, translated or shared. */
+  added: readonly string[];
+  /** Whether this change turns translation on, so the removed fields become translated in it. */
+  translationStarts?: boolean;
+}): LeavingTranslationRefusal[] {
+  if (args.removed.length === 0 || args.added.length === 0) return [];
+  const added = args.added.map(name => `"${name}"`).join(", ");
+  const steps = [
+    "Rename or remove one translated field and save.",
+    "Then add or change the other fields and save.",
+  ];
+  return args.removed.map(name =>
+    refusal(
+      `fields.${name}`,
+      "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED",
+      args.translationStarts
+        ? `"${name}" becomes translated, and this change removes it while adding ${added}. ` +
+            `Turning translation on keeps a field's value only under the name it already has, ` +
+            `so its value would be deleted, and in one change that cannot be told from a rename.`
+        : `"${name}" is translated, and this change removes it while adding ${added}. Removing it ` +
+            `deletes every language's value, and in one change that cannot be told from a rename.`,
+      args.translationStarts
+        ? [
+            "Turn translation on with the fields as they are and save.",
+            ...steps,
+          ]
+        : steps
+    )
+  );
 }

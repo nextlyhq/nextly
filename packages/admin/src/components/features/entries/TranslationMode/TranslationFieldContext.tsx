@@ -18,6 +18,7 @@
  * @module components/features/entries/TranslationMode/TranslationFieldContext
  */
 
+import type { Provider } from "react";
 import { createContext, useContext } from "react";
 
 export interface TranslationFieldContextValue {
@@ -34,7 +35,8 @@ export interface TranslationFieldContextValue {
 
 const TranslationFieldContext = createContext<TranslationFieldContextValue>({});
 
-export const TranslationFieldProvider = TranslationFieldContext.Provider;
+export const TranslationFieldProvider: Provider<TranslationFieldContextValue> =
+  TranslationFieldContext.Provider;
 
 /** What a field can offer to fill itself from; empty outside translation mode. */
 export function useTranslationField(): TranslationFieldContextValue {

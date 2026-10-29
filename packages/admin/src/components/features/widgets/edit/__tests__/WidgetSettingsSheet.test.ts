@@ -47,6 +47,33 @@ describe("what the form opens with", () => {
   it("opens a setting with no default and no answer as empty", () => {
     expect(initialValues([title], undefined)).toEqual({ title: "" });
   });
+
+  /*
+   * 🔴 A stored value the setting no longer accepts opens at the default the
+   * card fell back to, as the server reads it: a retired option, a number past
+   * a narrowed bound, a value of another kind. Opened at the stored value, the
+   * sheet showed a choice the card was not using, and saving it unchanged
+   * wrote it back.
+   */
+  it("opens a stored value the setting no longer accepts at its default", () => {
+    const range: WidgetSetting = {
+      name: "range",
+      type: "select",
+      defaultValue: "30d",
+      options: [
+        { label: "Last 7 days", value: "7d" },
+        { label: "Last 30 days", value: "30d" },
+      ],
+    };
+    const rows: WidgetSetting = { ...limit, max: 10 };
+    expect(
+      initialValues([range, rows, title], {
+        range: "90d",
+        limit: 20,
+        title: 7,
+      })
+    ).toEqual({ range: "30d", limit: 5, title: "" });
+  });
 });
 
 /*
@@ -207,11 +234,13 @@ describe("what Reset to defaults leaves in the form", () => {
       {
         collection: "posts",
         label: "Posts",
+        lifecycle: false,
         fields: [{ name: "updatedAt", type: "date" }],
       },
       {
         collection: "pages",
         label: "Pages",
+        lifecycle: false,
         fields: [{ name: "title", type: "string" }],
       },
     ];

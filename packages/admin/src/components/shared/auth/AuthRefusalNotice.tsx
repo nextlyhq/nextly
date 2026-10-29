@@ -1,6 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, AlertTitle } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import type { AuthRefusal } from "@admin/lib/auth/auth-refusal";
 
@@ -18,7 +19,9 @@ export interface AuthRefusalNoticeProps {
  * addresses and links to this same page at the app's own, which is the whole
  * fix.
  */
-export function AuthRefusalNotice({ refusal }: AuthRefusalNoticeProps) {
+export function AuthRefusalNotice({
+  refusal,
+}: AuthRefusalNoticeProps): JSX.Element | null {
   if (refusal === null) return null;
 
   if (refusal.kind === "origin") {

@@ -14,23 +14,36 @@ import { cleanUpNextWrites, stop } from "../support/playground-dev-server";
 
 import { E2E_NEXTLY_SECRET } from "./support/preview-links";
 import { test } from "./support/test";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+// The dashboard too: the layout it writes is its own server's, but the lock is
+// asked of every spec whose source writes a layout, and it costs this one only
+// parallelism.
+test.describe.configure({
+  lock: [LOCK.ownServer, LOCK.heavy, LOCK.dashboard],
+});
 
 /**
  * A development server whose component map lacks a dashboard widget's
- * component, with automatic regeneration off, refuses the admin, naming the
- * plugin, the widget, the component and the fix.
+ * component, with automatic regeneration off, serves the admin: it warns,
+ * naming the widget, its owner, the component and the switch, and only that
+ * widget's card draws its error state, naming the widget, its owner and the
+ * missing path.
  *
- * Regeneration off is the case under test because it is the only one in which
- * development refuses: with it on, `next dev` writes the map again and the
- * widget draws, which a test run must not do to the checkout. It is also how
- * this suite's own server runs (`NEXTLY_GENERATED_FILES_WRITE=0`).
+ * Regeneration off is the case under test because with it on, `next dev`
+ * writes the map again and the widget draws, which a test run must not do to
+ * the checkout. It is also how this suite's own server runs
+ * (`NEXTLY_GENERATED_FILES_WRITE=0`).
  *
  * Its own `next dev`, with the fixture plugin that declares the widget switched
- * on, because a refused admin is the point and the suite's server keeps its
- * admin for the other specs. Its own port, build directory and database, so it
- * never shares `.next-e2e` or the suite's database with that server. The
- * suite's server, started without the fixture, is the control: the same app
- * with the map whole serves the admin.
+ * on, so the suite's server keeps its dashboard for the other specs. Its own
+ * port, build directory and database, so it never shares `.next-e2e` or the
+ * suite's database with that server. The dev user is seeded into that
+ * database before the server starts: development signs in the playground's
+ * dev user only when that user exists, and a fresh database has none, so
+ * unseeded the admin opens on first-run setup instead. The user alone, with no
+ * demo content, so no upload outlives the database this spec removes.
  *
  * @module tests/component-map-dev
  */
@@ -39,12 +52,19 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXTLY_ROOT = path.resolve(HERE, "..", "..");
 const PLAYGROUND = path.join(NEXTLY_ROOT, "apps", "playground");
 const SUITE_PORT = Number(process.env.E2E_PORT) || 3100;
-const SUITE_URL = `http://localhost:${SUITE_PORT}`;
-const REFUSING_PORT = SUITE_PORT + 9;
-const REFUSING_URL = `http://localhost:${REFUSING_PORT}`;
+const FIXTURE_PORT = SUITE_PORT + 9;
+const FIXTURE_URL = `http://localhost:${FIXTURE_PORT}`;
+const MISSING = "missing-widget-fixture/never-built";
+const COMPONENT = "@nextly-e2e/missing-widget-fixture/admin#NeverBuilt";
 /** This spec's own build directory and database, removed when it ends. */
 const DIST_DIR = ".next-e2e-component-map";
 const DB_FILE = "./data/e2e-component-map.db";
+/** How long seeding the dev user may take, on a cold runner. */
+const SEED_BUDGET_MS = 180_000;
+/** How long the server may take to answer its health route: a cold boot compiles on first request. */
+const BOOT_BUDGET_MS = 240_000;
+/** Room for the rest of the hook: removing old files and spawning the server. */
+const HOOK_MARGIN_MS = 30_000;
 
 let server: ChildProcess | undefined;
 let output = "";
@@ -68,17 +88,26 @@ async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
 
 /** Removes what this spec's server wrote: its build directory and database. */
 function removeOwnFiles(): void {
-  rmSync(path.join(PLAYGROUND, DIST_DIR), { recursive: true, force: true });
+  // Retried: a recursive removal of a build directory the server has only just
+  // stopped writing can meet `ENOTEMPTY` while the tree settles, which Node's
+  // `maxRetries` exists for. Seen on macOS with a second worker busy beside it.
+  rmSync(path.join(PLAYGROUND, DIST_DIR), {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
   rmSync(path.join(PLAYGROUND, DB_FILE), { force: true });
 }
 
 test.beforeAll(async () => {
-  test.setTimeout(300_000);
+  // Both phases in full, one after the other, so a slow seed never shortens the boot's window.
+  test.setTimeout(SEED_BUDGET_MS + BOOT_BUDGET_MS + HOOK_MARGIN_MS);
   removeOwnFiles();
   cleanNextWrites = cleanUpNextWrites();
   const env = {
     ...process.env,
-    PORT: String(REFUSING_PORT),
+    PORT: String(FIXTURE_PORT),
     NEXTLY_SECRET: E2E_NEXTLY_SECRET,
     DB_DIALECT: "sqlite",
     DATABASE_URL: `file:${DB_FILE}`,
@@ -86,6 +115,25 @@ test.beforeAll(async () => {
     NEXTLY_GENERATED_FILES_WRITE: "0",
     NEXTLY_E2E_MISSING_WIDGET: "1",
   };
+  // The dev user development signs in, and the permissions it holds, in this
+  // spec's own database, with the same environment the server gets.
+  const seeding = pnpmInvocation(
+    ["--filter", "playground", "run", "db:seed:dev-user"],
+    process.platform,
+    env
+  );
+  const seeded = spawnSync(seeding.command, seeding.args, {
+    cwd: NEXTLY_ROOT,
+    env,
+    encoding: "utf8",
+    shell: seeding.shell,
+    timeout: SEED_BUDGET_MS,
+  });
+  if (seeded.status !== 0) {
+    throw new Error(
+      `seeding this spec's database failed:\n${seeded.stdout}\n${seeded.stderr}`
+    );
+  }
   // Through the repository's pnpm wrapper, as every spawn of pnpm is: on
   // Windows pnpm is a `.cmd` launcher, which Node runs only through a shell.
   const starting = pnpmInvocation(
@@ -96,7 +144,7 @@ test.beforeAll(async () => {
       "next",
       "dev",
       "--port",
-      String(REFUSING_PORT),
+      String(FIXTURE_PORT),
     ],
     process.platform,
     env
@@ -117,7 +165,7 @@ test.beforeAll(async () => {
   }
   // A cold development boot compiles on first request, so the health route
   // can take as long as the suite's own server allows for its boot.
-  await waitForHealth(REFUSING_URL, 240_000);
+  await waitForHealth(FIXTURE_URL, BOOT_BUDGET_MS);
 });
 
 test.afterAll(async () => {
@@ -136,33 +184,93 @@ test.afterAll(async () => {
   cleanNextWrites?.();
 });
 
+interface Layout {
+  version: number;
+  scope: string;
+  placements: Array<{ widgetId: string }>;
+}
+
+/**
+ * The message of the server's warning about an out-of-date map, or "" before it is logged. The
+ * logger writes each entry as one line of JSON, so the message is read back rather than searched
+ * for, its quotes and line breaks escaped.
+ */
+function staleMapWarning(log: string): string {
+  for (const line of log.split("\n")) {
+    if (!line.includes('"admin-component-map-stale"')) continue;
+    try {
+      const entry = JSON.parse(line.slice(line.indexOf("{"))) as {
+        kind?: string;
+        message?: string;
+      };
+      if (entry.kind === "admin-component-map-stale")
+        return entry.message ?? "";
+    } catch {
+      // A line that only mentions the kind, not the entry itself.
+    }
+  }
+  return "";
+}
+
 test.describe("a development server missing a widget's component, with regeneration off", () => {
-  test("refuses the admin, naming the plugin, the widget, the component and the fix", async ({
+  test("serves the admin, warning with the widget, its owner, the component and the switch", async ({
     request,
   }) => {
     test.setTimeout(240_000);
-    const admin = await request.get(`${REFUSING_URL}/admin`, {
+    const admin = await request.get(`${FIXTURE_URL}/admin`, {
       timeout: 200_000,
     });
-    expect(admin.status()).toBe(500);
+    expect(admin.status()).toBe(200);
     await expect
-      .poll(() => output, { timeout: 30_000 })
+      .poll(() => staleMapWarning(output), { timeout: 30_000 })
       .toContain(
-        'plugin "missing-widget-fixture", widget "missing-widget-fixture/never-built"'
+        `- missing: plugin "missing-widget-fixture", widget "${MISSING}": ${COMPONENT}`
       );
-    expect(output).toContain(
-      "@nextly-e2e/missing-widget-fixture/admin#NeverBuilt"
-    );
-    expect(output).toContain(
+    expect(staleMapWarning(output)).toContain(
       "automatic regeneration is off (NEXTLY_GENERATED_FILES_WRITE=0)"
     );
-    expect(output).toContain("Run `npx nextly generate:types`");
   });
 
-  test("serves the admin when the map is whole", async ({ request }) => {
-    // The control: the suite's own development server, the same app with
-    // regeneration off and the fixture not configured.
-    const admin = await request.get(`${SUITE_URL}/admin`, { timeout: 200_000 });
-    expect(admin.status()).toBe(200);
+  test("draws that card's error state, naming the widget, its owner and the path", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    // Development signs the dev user in on its own.
+    await page.goto(`${FIXTURE_URL}/admin`, { timeout: 200_000 });
+    await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+    const read = await page.request.get(
+      `${FIXTURE_URL}/admin/api/dashboard/layout`
+    );
+    const layout = (await read.json()) as Layout;
+    const write = await page.request.put(
+      `${FIXTURE_URL}/admin/api/dashboard/layout`,
+      {
+        data: {
+          placements: [
+            {
+              id: "e2e-missing",
+              widgetId: MISSING,
+              w: 12,
+              h: 4,
+              removed: false,
+            },
+            ...layout.placements.filter(each => each.widgetId !== MISSING),
+          ],
+          version: layout.version,
+          scope: layout.scope,
+        },
+      }
+    );
+    expect(write.ok(), await write.text()).toBe(true);
+
+    await page.goto(`${FIXTURE_URL}/admin`);
+    const card = page.getByRole("region", { name: "Never built" });
+    await expect(card).toHaveAttribute("data-state", "error", {
+      timeout: 60_000,
+    });
+    await expect(card).toContainText(
+      `Widget "${MISSING}" of plugin "missing-widget-fixture" draws with ${COMPONENT}`
+    );
+    await expect(card).toContainText("npx nextly generate:types");
   });
 });

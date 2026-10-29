@@ -3,9 +3,9 @@ title: Roles and Permissions
 description: Control who can do what, down to individual fields.
 ---
 
-Access control answers three questions, at three levels of detail: what a role may do,
-which documents it may do it to, and which fields inside those documents it may see or
-change.
+Access control answers two questions, at two levels of detail: what a role may do in each
+collection or Single, and which fields inside its documents it may see or change. See
+[Limits](#limits) for what it can't restrict.
 
 ## Availability
 
@@ -13,7 +13,7 @@ change.
 |---|---|
 | Built in | No plugin required, and not gated behind a paid tier |
 | Admin | A **Roles** screen for managing roles and their grants |
-| Applies to | The REST API and the admin. The Direct API runs as trusted server code and **bypasses collection and document rules by default** — see below |
+| Applies to | The REST API and the admin. The Direct API runs as trusted server code and **bypasses collection, Single and field rules by default** — see below |
 
 ## Roles and grants
 
@@ -27,20 +27,15 @@ everything.
 ## Collection access
 
 Grants say what a role may do. When a collection declares an `access` rule for an
-operation, that rule is the whole answer for a signed-in user: the grant is not checked
-beside it, so a rule that returns `true` admits someone whose role lacks the grant. So
-for staff and API keys, make the rule check the permission itself, then add your own
-condition, and it only ever narrows what the Roles screen grants. A rule that also admits
-plugin-defined people checks for them in a separate branch, since they hold no
-permissions (see the end of this section):
+operation, that rule only narrows the grant: a signed-in user or an API key needs the
+grant first, and the rule then lets them through only by returning `true`. A rule that
+returns `true` never admits someone whose role lacks the grant, so a rule adds your own
+condition and need not check the permission itself; it only ever narrows what the Roles
+screen grants. Plugin-defined people hold no grants and are judged by the rule alone (see
+the end of this section):
 
 ```ts
-import type { AccessControlFunction } from "nextly";
 import { defineCollection, relationship, text } from "nextly/config";
-
-/** The caller holds this operation's permission on this collection. */
-const permitted: AccessControlFunction = ({ permissions, target, operation }) =>
-  permissions.includes(`${operation}-${target.slug}`);
 
 export const Posts = defineCollection({
   slug: "posts",
@@ -50,34 +45,58 @@ export const Posts = defineCollection({
   ],
   access: {
     read: true,
-    create: permitted,
-    // Narrowed: the permission, and not while a content freeze is on.
-    update: args => permitted(args) && process.env.CONTENT_FREEZE !== "on",
+    // Narrowed: the role's update-posts, and not while a content freeze is on.
+    update: () => process.env.CONTENT_FREEZE !== "on",
   },
 });
 ```
 
 A rule is given the caller's `permissions` spelled as the Roles screen spells them —
 `update-posts` — for a signed-in user and an API key alike. A visitor holds none, so a
-permission check refuses them. A super-admin is admitted before any rule runs.
+permission check refuses them. A super-admin is admitted before any collection or Single
+rule runs; field rules still apply to them.
 
-Rules were once given the other spelling, `posts:update`. For one release the list still
-carries it, after the Roles screen's, so a rule written that way keeps working; Nextly logs
-a warning, once per rule, naming the spelling to use instead. It stops being accepted in a
-later release.
+Rules were once given the other spelling, `posts:update`. That spelling is no longer in
+the list, so a rule checking it does not allow; check `update-posts`, as the Roles screen
+spells it.
 
 **Don't check a role's name in a rule.** `roles.includes("editor")` refuses a role an admin
 created that holds `update-posts`, and every API key whose roles carry none of the names you
 listed, while the Roles screen says both may act. The role's permissions are what the admin
 manages, so a rule that reads them stays in step with that screen.
 
-`true` means anyone, including unauthenticated readers.
+`true` admits every caller with no session, for reads and writes alike, and every signed-in
+user or API key holding the grant.
 
 A collection whose `access` says nothing about an operation falls back to grants: a
 signed-in user needs `read-posts` to read `posts`.
 
-An **API key** must hold the permission in its own grants, and then satisfy the rule if there
-is one.
+A caller with **no session** — the Direct API with `overrideAccess: false` and no `user`, or
+a plugin service call made `{ as: "public" }` — holds no grants, so only a rule can let it
+write. With no rule for the operation, it may **read** (the public default, which public
+pages rely on), but a **create, update or delete is refused**. A collection that takes
+anonymous writes on purpose, such as a contact form, says so with a rule:
+
+```ts
+defineCollection({
+  slug: "contact-messages",
+  access: {
+    // Visitors may send a message.
+    create: () => true,
+    // Reading them needs the grant. Without this rule a visitor could read
+    // them too, since a read with no rule keeps the public default.
+    read: ({ permissions }) => permissions.includes("read-contact-messages"),
+    // Update and delete need no rule: a visitor is refused, and a signed-in
+    // user needs the grant.
+  },
+  fields: [/* ... */],
+});
+```
+
+Publishing and unpublishing always need a signed-in user, whatever the rule says.
+
+A signed-in user must hold the permission through their roles, and an **API key** in its own
+grants, and then satisfy the rule if there is one.
 
 A plugin-defined signed-in person, such as a shop's customer, is different: they
 hold no grants, so a rule is the only way in. A rule sees them as `principal`
@@ -85,16 +104,44 @@ beside a `null` `user`; a collection with no rule for the operation refuses them
 and a rule set to `true` admits them as it admits any visitor. See
 [Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections).
 
+### A read rule that answers with a filter (experimental)
+
+A collection's `read` rule may return a filter, written as a list's `where` is, instead of
+`true`. The caller then reads only the entries the filter matches. The filter narrows what
+the grant allows and never widens it: a signed-in user or an API key still needs
+`read-<collection>`, a caller with no session reads the matching entries in place of the
+public default, and the rule's filter is added to whatever the caller asked for.
+
+This is not finished. In this release a list, its total, a count, and the group and
+timeseries reads made through the Direct API or a plugin service apply the filter, as do a
+REST list and count of a collection's entries, and a page the website resolves by its slug.
+A read by id, through the Direct API, a plugin service or REST, reads an entry the filter
+matches and answers one it does not match exactly as an entry that does not exist. It
+returns the published entry the filter matched, and does not show a pending draft of it yet. A
+populated relationship shows the related rows the filter matches, and a row it does not match
+comes back as a row the caller may not read does. A check of whether the caller may read the
+collection at all answers yes: `ctx.caller.can`, `GET /me/capabilities`, which collections the
+dashboard and its widgets count and list, and the entity reader behind versions, translations
+and content events. What those then read is limited to the entries the filter matches, and a
+document lock is read only for a document the filter matches. Every other REST route still
+refuses a caller whose rule answers with a filter, as it did before. The rule's type still
+says it returns a boolean.
+
+A rule's filter can't use `near` or `within` yet, nor a field inside a component, nor the
+keys a list's `where` reserves for a request's own view: `_translated`, `_pendingChange` and
+`_inRelease`. A rule whose
+filter does is refused, and the refusal is logged once with the collection and the
+operation.
+
 ## Related rows
 
 A populated relationship is read with the same check as reading the related collection
 directly. Reading `posts` at a depth that populates `author` returns the author only to a
 caller who could read that `users` row by name:
 
-- **The related collection declares `access.read`:** that rule decides, for signed-in users
-  and visitors alike. No per-collection grant is needed.
-- **It declares no read rule:** a signed-in user needs `read-<collection>`, as they would to
-  read it directly.
+- **A signed-in user** needs `read-<collection>`, as they would to read it directly, and then
+  the collection's read rule if it declares one.
+- **A visitor** is judged by the collection's read rule where it declares one.
 - **An API key** always needs `read-<collection>` in its own grants, and then the collection's
   rule if it has one. A key granted only `read-posts` does not see populated authors.
 - **`users` and media** have no rules of their own, so the grant decides: a signed-in user or
@@ -104,7 +151,9 @@ caller who could read that `users` row by name:
   as the system by default, so it still shows authors.
 
 This holds at every depth, inside groups and repeaters, for each collection of a polymorphic
-relationship separately, on a Single, and for the entry a create or an update returns.
+relationship separately, on a Single, and for the entry a create or an update returns. Where
+the related collection's read rule answers with a filter, only the rows it matches are
+populated.
 
 A related row the caller may not read comes back exactly as a reference to a row that no
 longer exists would: the stored id for a single relationship, left out of a list, `null` for
@@ -153,16 +202,15 @@ also sees the fields describing what it cost.
 
 ## The Direct API bypasses these rules by default
 
-The Direct API is trusted server code, so `overrideAccess` defaults to `true` and collection
-and document rules are **skipped**. This is deliberate — server code fetching content for a
+The Direct API is trusted server code, so `overrideAccess` defaults to `true` and collection,
+Single and field rules are **skipped**. This is deliberate — server code fetching content for a
 page should not be filtered as though it were an anonymous visitor — but it means a query
 written on behalf of a request does not enforce anything unless you say so:
 
 ```ts
 const posts = await nextly.find({
   collection: "posts",
-  // Both are required. Without a user, an owner rule has nobody to compare
-  // against, so it is skipped rather than failed.
+  // Both are needed to judge the request's own caller.
   overrideAccess: false,
   user: requestUser,
 });
@@ -174,15 +222,39 @@ visitor without setting `overrideAccess: false` returns rows that visitor was no
 see. This is the easiest way to expose data with Nextly.
 </Callout>
 
-Forgetting the `user` is a different and much less dangerous mistake. An owner-based rule has
-nobody to compare against, so the request is refused rather than answered loosely — you get
-an authorization error, not somebody else's rows. If a query that should return data returns
-"authentication required", a missing `user` alongside `overrideAccess: false` is the first
-thing to check.
+Passing a `user` lets a rule decide by who is asking, never by which document. Collection and
+Single rules never see a document: they answer before any document is read. Most answer yes or
+no. The one exception, experimental, is a collection's `read` rule that answers with a filter,
+which limits some reads to the entries it matches (see [A read rule that answers with a
+filter](#a-read-rule-that-answers-with-a-filter-experimental) and [Limits](#limits)).
+
+Forgetting the `user` is a different and much less dangerous mistake. The caller then has no
+session and holds no permissions, so a rule that checks them refuses the request rather than
+answering loosely: you get an authorization error, not somebody else's rows. If a query that
+should return data returns "authentication required", a missing `user` alongside
+`overrideAccess: false` is the first thing to check. Where no rule names the operation, a read
+keeps the public default, but a create, update or delete is refused; only a rule that answers
+`true` lets such a write through.
 
 Field-level rules behave differently: they run whenever `overrideAccess` is `false`, user or
 not, because "which fields may this writer set" has a sensible answer for nobody. Internal
 code that genuinely needs to write a protected field says so with `overrideAccess: true`.
+
+## Limits
+
+- **A grant covers a whole collection or Single.** Grants are per resource and action.
+  A grant can't limit a role to some of a collection's documents, such as an author's own
+  posts, and a rule is never given a document. Only a collection's `read` rule that answers
+  with a filter limits some reads to the entries it matches, and that is experimental (see
+  [A read rule that answers with a filter](#a-read-rule-that-answers-with-a-filter-experimental)).
+- **Field-level rules are code.** The **Roles** screen assigns grants; it has no field-level
+  permissions. A field's `access` is written in your config.
+- **Rules are code.** Access rules can't be set in the admin or in the Visual Schema
+  Builder, and a collection made in the Visual Schema Builder can't carry rule functions,
+  so its access comes from grants alone.
+- **Two callers skip rules.** A super-admin is admitted before any collection or Single
+  rule runs, though field rules still apply to them. The Direct API skips collection,
+  Single and field rules unless you pass `overrideAccess: false` (see above).
 
 ## Related
 

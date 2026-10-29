@@ -15,6 +15,7 @@
  * @module api/widget-slots
  */
 
+import { answerAsAsked } from "../domains/widgets/answer-as-asked";
 import type { BatchScope } from "../domains/widgets/batch-scope";
 import {
   resolveExecutableSource,
@@ -22,7 +23,10 @@ import {
 } from "../domains/widgets/executable-source";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
-import type { ManySourceResolver } from "../domains/widgets/resolved-sources";
+import type {
+  ManySourceResolver,
+  WidgetScope,
+} from "../domains/widgets/resolved-sources";
 import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
 import {
   isUnavailableSourceRefusal,
@@ -63,6 +67,15 @@ const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
  * `withErrorHandler` never sees it and neither did the logger. A dashboard
  * whose widgets all fail left no trace anywhere.
  */
+/**
+ * The one "not available" slot, byte for byte whoever gets it. Built here and nowhere else, so a
+ * card refused before it ran answers exactly what one refused while it ran does, and logs
+ * nothing: its caller says whether the refusal is worth a line.
+ */
+export function unavailableSlot(): Extract<QuerySlot, { ok: false }> {
+  return { ok: false, error: UNAVAILABLE_SOURCE_MESSAGE, code: "unavailable" };
+}
+
 // Narrowed to the failure arm so a caller can read the slot's `code` without a guard.
 export function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
   // Guarded the way `withErrorHandler` guards its own logging call: a
@@ -84,13 +97,7 @@ export function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
   // "not available" without matching the sentence. A FORBIDDEN raised while the query ran is not
   // one of them: the gate above has already refused a source the caller may not read, so that
   // one comes from a field-level rule on a source they can, and names the guard that refused.
-  if (isUnavailableSourceRefusal(error)) {
-    return {
-      ok: false,
-      error: UNAVAILABLE_SOURCE_MESSAGE,
-      code: "unavailable",
-    };
-  }
+  if (isUnavailableSourceRefusal(error)) return unavailableSlot();
   return {
     ok: false,
     error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,
@@ -233,7 +240,7 @@ function slotCancelled(): never {
  */
 export function serialisable(
   result: WidgetResult,
-  source: string
+  subject: SlotSubject
 ): WidgetResult {
   try {
     return JSON.parse(JSON.stringify(result)) as WidgetResult;
@@ -241,10 +248,10 @@ export function serialisable(
     throw new NextlyError({
       code: "INTERNAL_ERROR",
       publicMessage: "This widget returned something that could not be sent",
-      logMessage: `widget source "${source}" returned an unserialisable result`,
+      logMessage: `${named(subject)} returned an unserialisable result`,
       logContext: {
         reason: "widget-result-unserialisable",
-        source,
+        ...subject,
         err: error instanceof Error ? error.message : String(error),
       },
     });
@@ -253,13 +260,64 @@ export function serialisable(
 
 /** A query that passed its own read check and validation, at its place in the batch. */
 export interface ReadyQuery {
+  kind?: "query";
   index: number;
   query: WidgetQuery;
   executable: ExecutableSource;
 }
 
-/** The failure a slot that ran out of time becomes, naming its source for the operator. */
-function slotTimedOut(source: string): never {
+/**
+ * A declared card's own data, at its place in the batch: what core runs for a
+ * declared widget's card, as the person asking, under the card's own budget.
+ */
+export interface ReadyCardData {
+  kind: "data";
+  index: number;
+  /** The declared widget, named for the operator when its card fails or runs out of time. */
+  widgetId: string;
+  /** Who declared it, whose view of the batch's scope its data computes through. */
+  owner: string;
+  /**
+   * The card's answer as a slot carries it, and whether its empty test holds.
+   * Handed the card's own signal, aborted at its budget or when the batch is
+   * given up, and its owner's view of the batch's scope.
+   */
+  answer(input: {
+    signal: AbortSignal;
+    scope: WidgetScope;
+    /** The batch's instant, the card's own copy. */
+    now: Date;
+  }): Promise<CardAnswer>;
+}
+
+/**
+ * What a declared card answers: its data and whether its empty test holds, or
+ * the slot it settles as without data, decided before its `load` ran (it asks
+ * for a setting, is not shown, or is not available to this person). None of
+ * those is a failure, so none is logged as one.
+ */
+export type CardAnswer =
+  | { result: WidgetResult; empty: boolean }
+  | { settled: Extract<QuerySlot, { ok: false }> };
+
+/** Anything a batch answers at its place: a ready query, or a declared card's own data. */
+export type ReadyEntry = ReadyQuery | ReadyCardData;
+
+/**
+ * What a failed or late slot names for the operator: the source asked, or the
+ * declared widget and the owner that declared it.
+ */
+type SlotSubject = { source: string } | { widget: string; owner?: string };
+
+/** A slot's subject as the log names it. */
+function named(subject: SlotSubject): string {
+  return "source" in subject
+    ? `widget source "${subject.source}"`
+    : `declared widget "${subject.widget}"`;
+}
+
+/** The failure a slot that ran out of time becomes, naming its subject for the operator. */
+function slotTimedOut(subject: SlotSubject): never {
   // A `NextlyError`, so `failedSlot` puts THIS sentence on the wire rather than
   // the generic one: a card that timed out is worth telling its reader about,
   // and the source id is already known to them -- they placed the card. The
@@ -268,10 +326,10 @@ function slotTimedOut(source: string): never {
   throw new NextlyError({
     code: "INTERNAL_ERROR",
     publicMessage: "This widget took too long to answer",
-    logMessage: `widget source "${source}" exceeded ${SLOT_TIMEOUT_MS}ms`,
+    logMessage: `${named(subject)} exceeded ${SLOT_TIMEOUT_MS}ms`,
     logContext: {
       reason: "widget-slot-timeout",
-      source,
+      ...subject,
       timeoutMs: SLOT_TIMEOUT_MS,
     },
   });
@@ -290,8 +348,10 @@ export interface SettledSlot {
 interface SlotRun {
   caller: ReadCaller;
   scope: BatchScope;
+  /** The batch's one instant, taken once where the run is built. */
+  now: Date;
   signal: AbortSignal | undefined;
-  settle(entries: readonly ReadyQuery[], slots: readonly QuerySlot[]): void;
+  settle(entries: readonly ReadyEntry[], slots: readonly QuerySlot[]): void;
 }
 
 /**
@@ -313,16 +373,61 @@ async function answerOne(ready: ReadyQuery, run: SlotRun): Promise<void> {
         executeWidgetQuery(ready.query, run.caller, {
           signal,
           scope: run.scope.forSource(source),
+          // Facts about the caller, kept once for every source in the batch.
+          callerScope: run.scope.forCaller(),
+          // The batch's one instant, this query's own copy, so every card
+          // asking for a window measures it from the same moment.
+          now: new Date(run.now),
         }),
-      () => slotTimedOut(source),
+      () => slotTimedOut({ source }),
       run.signal
     );
-    slot = { ok: true, result: serialisable(result, source) };
+    slot = { ok: true, result: serialisable(result, { source }) };
   } catch (error) {
     if (batchGivenUp(run)) return;
     slot = failedSlot(error);
   }
   run.settle([ready], [slot]);
+}
+
+/**
+ * A declared card's own data, answered on its own exactly as one query is: under
+ * its own budget, made sendable by the same check, failed by the same mapping,
+ * and settled when it ends. Its owner's view of the scope is what it shares work
+ * through, so its keys never meet a source's.
+ */
+async function answerCardData(
+  card: ReadyCardData,
+  run: SlotRun
+): Promise<void> {
+  const widget = card.widgetId;
+  let slot: QuerySlot;
+  try {
+    const answer = await withinSlotBudget(
+      signal =>
+        card.answer({
+          signal,
+          scope: run.scope.forOwner(card.owner),
+          // A copy: a Date is mutable, and a data function that moved its own
+          // would move every later card's.
+          now: new Date(run.now),
+        }),
+      () => slotTimedOut({ widget, owner: card.owner }),
+      run.signal
+    );
+    if ("settled" in answer) {
+      slot = answer.settled;
+    } else {
+      const sendable = serialisable(answer.result, { widget });
+      slot = answer.empty
+        ? { ok: true, result: sendable, empty: true }
+        : { ok: true, result: sendable };
+    }
+  } catch (error) {
+    if (batchGivenUp(run)) return;
+    slot = failedSlot(error);
+  }
+  run.settle([card], [slot]);
 }
 
 /**
@@ -349,8 +454,10 @@ async function answerMany(
         resolveMany(queries, run.caller, {
           signal,
           scope: run.scope.forSource(source),
+          // The batch's one instant, as each query on its own gets it.
+          now: new Date(run.now),
         }),
-      () => slotTimedOut(source),
+      () => slotTimedOut({ source }),
       run.signal
     );
     if (!Array.isArray(answers) || answers.length !== queries.length) {
@@ -376,10 +483,14 @@ async function answerMany(
   }
   run.settle(
     group,
-    answers.map(answer => {
+    queries.map((query, position) => {
+      const answer = answers[position];
       if (answer instanceof Error) return failedSlot(answer);
       try {
-        return { ok: true, result: serialisable(answer, source) };
+        // Each answer judged against the query at its own position, as one
+        // query's resolver answer is.
+        const asked = answerAsAsked(query, answer);
+        return { ok: true, result: serialisable(asked, { source }) };
       } catch (error) {
         return failedSlot(error);
       }
@@ -463,13 +574,20 @@ export interface AnswerOptions {
  * call, so the two encodings of a batch cannot disagree about any slot.
  */
 export async function answerReadyQueries(
-  ready: readonly ReadyQuery[],
+  ready: readonly ReadyEntry[],
   caller: ReadCaller,
   scope: BatchScope,
   options: AnswerOptions = {}
 ): Promise<Map<number, QuerySlot>> {
+  // A declared card's data is answered on its own; queries are grouped by the
+  // source they ask, so one source's can share a scan.
+  const cards: ReadyCardData[] = [];
   const bySource = new Map<string, ReadyQuery[]>();
   for (const entry of ready) {
+    if (entry.kind === "data") {
+      cards.push(entry);
+      continue;
+    }
     const list = bySource.get(entry.query.source);
     if (list) list.push(entry);
     else bySource.set(entry.query.source, [entry]);
@@ -480,6 +598,9 @@ export async function answerReadyQueries(
     caller,
     scope,
     signal: options.signal,
+    // Taken once, so every card and cell in the batch measures "the last 30
+    // days" from the same moment.
+    now: new Date(),
     settle(entries, slots) {
       const settled: SettledSlot[] = [];
       entries.forEach((entry, position) => {
@@ -491,11 +612,12 @@ export async function answerReadyQueries(
       if (settled.length > 0) options.onSettled?.(settled);
     },
   };
-  await Promise.all(
-    [...bySource.entries()].map(([source, group]) =>
+  await Promise.all([
+    ...[...bySource.entries()].map(([source, group]) =>
       answerSource(source, group, run)
-    )
-  );
+    ),
+    ...cards.map(card => answerCardData(card, run)),
+  ]);
   return answered;
 }
 

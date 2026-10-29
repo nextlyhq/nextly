@@ -1,6 +1,9 @@
+import type { JSX } from "react";
+
 import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 
 interface RoleBreadcrumbsProps {
   /**
@@ -24,15 +27,17 @@ const PAGE_LABELS = {
  * Consistent breadcrumb navigation for role management pages.
  * Utilizes the shared Breadcrumbs component for unified styling.
  */
-export function RoleBreadcrumbs({ currentPage }: RoleBreadcrumbsProps) {
+export function RoleBreadcrumbs({
+  currentPage,
+}: RoleBreadcrumbsProps): JSX.Element {
   const currentLabel = PAGE_LABELS[currentPage];
   const { hasPermission } = useCurrentUserPermissions();
 
   // Roles live under the Settings section (User Management) now, so the trail
   // nests under a "Settings" parent crumb before the "Roles" item. A roles-only
-  // user can't open the manage-settings-guarded General page, so point the crumb
+  // user can't open the read-settings-guarded General page, so point the crumb
   // at the first Settings subpage it can reach (Roles here).
-  const settingsHref = hasPermission("manage-settings")
+  const settingsHref = hasPermission(READ_SETTINGS)
     ? ROUTES.SETTINGS
     : ROUTES.SECURITY_ROLES;
   const items: BreadcrumbItem[] = [

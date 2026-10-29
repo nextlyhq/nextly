@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { registerHook, unregisterHook } from "../../../hooks";
 import type { HookHandler } from "../../../hooks/types";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, group, json, password, text } from "../../../config";
 import {
   createTestNextly,
@@ -100,6 +101,9 @@ async function boot(
     ],
   });
   current = t;
+  // The signed-in reader. A code rule only narrows the permission, so it holds
+  // read on orders; the field rules are what refuse it a key.
+  await userWhoMay(t, "u1", "read", [ORDERS]);
   const h = t.getService("collectionsHandler") as unknown as Handler;
   for (const row of rows) {
     await h.createEntry({ collectionName: ORDERS, overrideAccess: true }, row);

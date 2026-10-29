@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
-import { STORAGE_STATE } from "./tests/support/session";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXTLY_ROOT = path.resolve(HERE, "..");
@@ -35,6 +34,70 @@ const BASE_URL = `http://localhost:${PORT}`;
  */
 const E2E_DB_RELATIVE = "file:./data/e2e.db";
 
+/**
+ * Which server the suite runs against. `dev` (the default) is `pnpm dev:app`:
+ * what a contributor runs, compiling each route on its first request.
+ * `production` is the same playground built with `next build` and served by
+ * `next start`, with the same database, secrets and e2e fixtures. It runs the
+ * same specs about four times as fast, so CI runs the suite there, and runs the
+ * specs below on `dev` by themselves (`E2E_DEV_SPECS_ONLY=1`).
+ */
+const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
+
+/**
+ * The specs that need the dev server, each for a reason a production build
+ * removes rather than a difference to paper over:
+ *
+ * - `setup-*`: first-run setup's origin rules for loopback names hold in
+ *   development only, and `next dev` is what serves those names a page.
+ * - `component-map-dev`: a development server refusing a stale component map.
+ * - The Schema Builder specs: a production build turns the builder off unless
+ *   the app opts in, and refuses its writes with `BUILDER_DISABLED`.
+ * - `widget-preview`: the widget preview page exists only while the server
+ *   runs in development; a production build answers its address as not found
+ *   (`tests/production/widget-preview.spec.ts`).
+ */
+const DEV_SPECS = [
+  "**/setup-*.spec.ts",
+  "**/component-map-dev.spec.ts",
+  "**/widget-preview.spec.ts",
+  "**/schema-builder.spec.ts",
+  "**/schema-leaving-translation.spec.ts",
+  "**/builder-field-gates.spec.ts",
+  "**/builder-runtime-collection.spec.ts",
+];
+
+/** Only the dev specs, for the run beside a production one. */
+const DEV_SPECS_ONLY =
+  SERVER === "dev" && process.env.E2E_DEV_SPECS_ONLY === "1";
+
+/**
+ * Where a run writes its results and report. The dev specs' run has its own,
+ * since Playwright empties its results folder as it starts, and a shared one
+ * would lose the production run's traces and screenshots beside it.
+ */
+const RUN_OUTPUT = DEV_SPECS_ONLY ? "dev-specs" : "suite";
+
+/**
+ * The commands that start each server, after the database is emptied.
+ *
+ * The dev server applies the schema to the empty database on boot. A
+ * production server does not, so the seed and the plugin install run first, as
+ * the production suite's config does. `E2E_PRODUCTION_PREBUILT=1` skips the
+ * build, for a caller that built once and runs the suite several times on it.
+ */
+const START = {
+  dev: ["pnpm dev:app"],
+  production: [
+    "pnpm --filter playground exec tsx scripts/seed.ts",
+    "pnpm --filter playground exec nextly plugins install --all",
+    ...(process.env.E2E_PRODUCTION_PREBUILT === "1"
+      ? []
+      : ["pnpm --filter playground exec next build"]),
+    "pnpm --filter playground exec next start",
+  ],
+}[SERVER];
+
 export default defineConfig({
   testDir: "./tests",
   /*
@@ -51,20 +114,38 @@ export default defineConfig({
    * by path is what keeps "which server does this suite need" a property of the
    * directory rather than something each spec has to survive.
    */
-  testIgnore: "**/production/**",
-  outputDir: "./.playwright/results",
+  testIgnore: [
+    "**/production/**",
+    ...(SERVER === "production" ? DEV_SPECS : []),
+  ],
+  ...(DEV_SPECS_ONLY ? { testMatch: DEV_SPECS } : {}),
+  outputDir: `./.playwright/results/${RUN_OUTPUT}`,
 
   // A failing assertion in a shared admin is usually a real failure, so the
   // suite is not retried into passing locally. CI retries once, for the
   // genuinely slow-machine flakes, and records a trace when it does.
   retries: process.env.CI ? 1 : 0,
-  // One worker, everywhere. `fullyParallel: false` only serialises tests
-  // *within* a file; different spec files still get their own worker, and the
-  // default is more than one on most machines. Every worker here would share
-  // the same database and the same signed-in session, so a field one file
-  // creates is visible to another mid-assertion. The suite runs in ~20s: there
-  // is nothing to win by racing it against itself.
-  workers: 1,
+  // A run whose server broke fails every remaining test the same way, each one
+  // waiting out its timeout twice: past this many failures the rest of the
+  // report adds nothing but minutes on a runner. A green run still needs every
+  // test, so this only shortens a run that has already failed.
+  maxFailures: process.env.CI ? 25 : 0,
+  // Two workers on a production server and one on `dev`. Measured on the CI
+  // runner: a second worker made each test about a quarter slower on a
+  // production server and finished the run a third sooner, while on `dev`,
+  // where compiling routes already takes the runner's CPU, each test took
+  // about twice as long for little gain. Every worker shares the one server and
+  // the one database, so a spec that writes shared state, or reads it as a
+  // whole, takes that state's named lock (`tests/support/locks.ts`), and files
+  // holding the same lock never overlap. Each file signs in as an account of
+  // its own (`tests/support/test`). `fullyParallel: false` keeps each file's
+  // tests in order on one worker.
+  workers: SERVER === "production" ? 2 : 1,
+  // A retry runs ALONE, after everything else, rather than beside another
+  // file. A test that fails only next to another one then passes on its
+  // retry and is reported flaky, which names the coupling, instead of failing
+  // twice for a reason that is not its own.
+  retryStrategy: "isolated",
   forbidOnly: !!process.env.CI,
   fullyParallel: false,
 
@@ -78,11 +159,17 @@ export default defineConfig({
     ? [
         ["github"],
         ["./flaky-reporter.ts"],
-        ["html", { outputFolder: "./.playwright/report", open: "never" }],
+        [
+          "html",
+          { outputFolder: `./.playwright/report/${RUN_OUTPUT}`, open: "never" },
+        ],
       ]
     : [
         ["list"],
-        ["html", { outputFolder: "./.playwright/report", open: "never" }],
+        [
+          "html",
+          { outputFolder: `./.playwright/report/${RUN_OUTPUT}`, open: "never" },
+        ],
       ],
 
   use: {
@@ -95,12 +182,9 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: {
-        ...devices["Desktop Chrome"],
-        // Signed in before the first test, by global-setup, and renewed as
-        // the suite runs by `tests/support/test`.
-        storageState: STORAGE_STATE,
-      },
+      // Each file's session comes from `tests/support/test`, which signs in
+      // an account of its own for it.
+      use: devices["Desktop Chrome"],
     },
   ],
 
@@ -110,12 +194,16 @@ export default defineConfig({
     // open. The dev server, not a production build: it is what a contributor
     // runs, and it applies the schema to the empty database on boot, which is
     // how the throwaway file becomes usable without a separate push step.
-    command: "node e2e/scripts/reset-e2e-db.mjs && pnpm dev:app",
+    command: ["node e2e/scripts/reset-e2e-db.mjs", ...START].join(" && "),
     cwd: NEXTLY_ROOT,
     url: `${BASE_URL}/api/health`,
     // Generous: a cold Next.js dev boot compiles the admin on first request,
-    // and CI machines are slower than the laptop this was written on.
-    timeout: 240 * 1000,
+    // and CI machines are slower than the laptop this was written on. A
+    // production server that builds first needs the build's time as well.
+    timeout:
+      SERVER === "production" && process.env.E2E_PRODUCTION_PREBUILT !== "1"
+        ? 15 * 60 * 1000
+        : 240 * 1000,
     // Never reuse: a server already on this port is running against a
     // database this suite has not emptied, and the whole safety story is that
     // it has.
@@ -133,7 +221,7 @@ export default defineConfig({
       // two `next dev` processes on one app fight over `.next`, and the
       // second dies before it serves anything. With this, the suite runs
       // while a contributor's dev server keeps going on 3000.
-      NEXT_DIST_DIR: ".next-e2e",
+      NEXT_DIST_DIR: SERVER === "production" ? ".next-e2e-start" : ".next-e2e",
       // Turns on the playground's brand colors, which admin-branding.spec.ts
       // asserts against. They are off by default so a contributor's admin
       // keeps the monochrome identity a default install has.
@@ -155,16 +243,17 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
-      // A session REST budget for the suite's one signed-in session, which
-      // loads pages far faster than a person can: at the default 500 reads a
-      // minute it is refused mid-run. Only the session budget is raised; see
-      // the playground's nextly.config.ts.
-      NEXTLY_E2E_SESSION_BUDGET: "1",
+      // The render-retry harness route, gated the same way: its render fails on
+      // an id's first load, for the test of an error boundary's retry().
+      NEXTLY_E2E_RETRY_HARNESS: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout
       // changed after every run.
       NEXTLY_GENERATED_FILES_WRITE: "0",
+      // `next start` refuses to boot without the app's own address, which the
+      // dev server never needed.
+      NEXT_PUBLIC_APP_URL: BASE_URL,
     },
   },
 

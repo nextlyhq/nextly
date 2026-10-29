@@ -39,7 +39,14 @@ import {
   TooltipTrigger,
 } from "@nextlyhq/ui";
 import { ChevronLeft, ChevronRight, Columns3, Download } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type JSX,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { FormField } from "../../../types";
 import { formatExportValue } from "../../../utils/export-formats";
@@ -139,7 +146,9 @@ function summarizeData(data: Record<string, unknown>): string {
 // Component
 // ---------------------------------------------------------------------------
 
-export function SubmissionsView({ collectionSlug }: SubmissionsViewProps) {
+export function SubmissionsView({
+  collectionSlug,
+}: SubmissionsViewProps): JSX.Element {
   const [slugs, setSlugs] = useState<{ forms: string; submissions: string }>();
   const [forms, setForms] = useState<FormOption[]>([]);
   const [selectedFormId, setSelectedFormId] = useState<string>(() => {

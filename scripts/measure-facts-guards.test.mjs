@@ -29,7 +29,7 @@ function runInFixture(scopesLines) {
   const dir = mkdtempSync(join(tmpdir(), "scopes-fixture-"));
   mkdirSync(join(dir, ".github/workflows"), { recursive: true });
   writeFileSync(
-    join(dir, ".github/workflows/pr-title.yml"),
+    join(dir, ".github/workflows/small-checks.yml"),
     `          scopes: |\n${scopesLines.map(l => `            ${l}`).join("\n")}\n          requireScope: false\n`,
   );
   return spawnSync("bash", ["-o", "pipefail", "-c", scopesCmd()], { cwd: dir, encoding: "utf8" });

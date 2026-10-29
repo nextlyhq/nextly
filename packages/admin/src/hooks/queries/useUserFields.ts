@@ -23,6 +23,8 @@ import {
   useQuery,
   useQueryClient,
   type UseQueryOptions,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import {
@@ -44,9 +46,12 @@ import {
 
 export const userFieldKeys = {
   all: () => ["userFields"] as const,
-  lists: () => [...userFieldKeys.all(), "list"] as const,
-  details: () => [...userFieldKeys.all(), "detail"] as const,
-  detail: (id: string) => [...userFieldKeys.details(), id] as const,
+  lists: (): readonly ["userFields", "list"] =>
+    [...userFieldKeys.all(), "list"] as const,
+  details: (): readonly ["userFields", "detail"] =>
+    [...userFieldKeys.all(), "detail"] as const,
+  detail: (id: string): readonly ["userFields", "detail", string] =>
+    [...userFieldKeys.details(), id] as const,
 };
 
 // ============================================================
@@ -69,7 +74,13 @@ export function useUserFields(
     >,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<
+  {
+    fields: UserFieldDefinitionRecord[];
+    adminConfig?: UserAdminConfig;
+  },
+  Error
+> {
   return useQuery<
     { fields: UserFieldDefinitionRecord[]; adminConfig?: UserAdminConfig },
     Error
@@ -90,7 +101,7 @@ export function useUserField(
     UseQueryOptions<UserFieldDefinitionRecord, Error>,
     "queryKey" | "queryFn" | "enabled"
   >
-) {
+): UseQueryResult<UserFieldDefinitionRecord, Error> {
   return useQuery<UserFieldDefinitionRecord, Error>({
     queryKey: userFieldKeys.detail(id!),
     queryFn: () => {
@@ -110,7 +121,12 @@ export function useUserField(
  * useCreateUserField — Create a new user field definition.
  * Invalidates all user field queries on success.
  */
-export function useCreateUserField() {
+export function useCreateUserField(): UseMutationResult<
+  UserFieldDefinitionRecord,
+  Error,
+  CreateUserFieldPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<UserFieldDefinitionRecord, Error, CreateUserFieldPayload>({
@@ -127,7 +143,15 @@ export function useCreateUserField() {
  * useUpdateUserField — Update an existing user field definition.
  * Invalidates all user field queries on success.
  */
-export function useUpdateUserField() {
+export function useUpdateUserField(): UseMutationResult<
+  UserFieldDefinitionRecord,
+  Error,
+  {
+    id: string;
+    data: UpdateUserFieldPayload;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -148,7 +172,12 @@ export function useUpdateUserField() {
  * useDeleteUserField — Delete a user field definition.
  * Invalidates all user field queries on success.
  */
-export function useDeleteUserField() {
+export function useDeleteUserField(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -166,7 +195,14 @@ export function useDeleteUserField() {
  * Invalidates all user field queries on success.
  * The page component handles optimistic updates locally.
  */
-export function useReorderUserFields() {
+export function useReorderUserFields(): UseMutationResult<
+  {
+    data: UserFieldDefinitionRecord[];
+  },
+  Error,
+  string[],
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<{ data: UserFieldDefinitionRecord[] }, Error, string[]>({

@@ -2,7 +2,7 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useState, type JSX } from "react";
 
 import { ImageSizeForm } from "@admin/components/features/settings/ImageSizeForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
@@ -12,9 +12,12 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
+import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
 import { validateUUID } from "@admin/lib/validation";
 import {
   fetchImageSize,
@@ -46,9 +49,13 @@ function ImageSizeErrorPage({ message }: { message: string }) {
   );
 }
 
-export default function EditImageSizePage() {
+export default function EditImageSizePage(): JSX.Element {
   const { route } = useRouter();
   const [isPending, setIsPending] = useState(false);
+  // A caller who may read settings opens a size to see it; only one who may
+  // update them is offered the change, which the server refuses to the rest.
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayUpdate = settingsChangesAllowed(hasPermission).update;
 
   // Extract and validate image-size id from route params
   const rawId =
@@ -69,6 +76,8 @@ export default function EditImageSizePage() {
       imageSizeId ? fetchImageSize(imageSizeId) : Promise.resolve(null),
     enabled: !!imageSizeId,
   });
+  // The tab names the image size being edited once it has arrived.
+  useDocumentTitle(imageSize?.name);
 
   const handleSubmit = useCallback(
     async (data: Partial<ImageSize>) => {
@@ -180,6 +189,7 @@ export default function EditImageSizePage() {
             onSubmit={data => {
               void handleSubmit(data);
             }}
+            readOnly={!mayUpdate}
           />
         </SettingsLayout>
       </PageContainer>

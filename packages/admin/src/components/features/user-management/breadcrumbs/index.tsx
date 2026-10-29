@@ -1,6 +1,9 @@
+import type { JSX } from "react";
+
 import { Breadcrumbs, type BreadcrumbItem } from "@admin/components/shared";
 import { ROUTES } from "@admin/constants/routes";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 
 interface UserBreadcrumbsProps {
   /**
@@ -33,15 +36,17 @@ const PAGE_LABELS = {
  * Consistent breadcrumb navigation for user management pages.
  * Utilizes the shared Breadcrumbs component for unified styling.
  */
-export function UserBreadcrumbs({ currentPage }: UserBreadcrumbsProps) {
+export function UserBreadcrumbs({
+  currentPage,
+}: UserBreadcrumbsProps): JSX.Element {
   const currentLabel = PAGE_LABELS[currentPage];
   const { hasPermission } = useCurrentUserPermissions();
 
   // User Management lives under the Settings section now, so the trail nests
   // under a "Settings" parent crumb before the "Users" item. A users-only role
-  // can't open the manage-settings-guarded General page, so point the crumb at
+  // can't open the read-settings-guarded General page, so point the crumb at
   // the first Settings subpage it can reach (Users here).
-  const settingsHref = hasPermission("manage-settings")
+  const settingsHref = hasPermission(READ_SETTINGS)
     ? ROUTES.SETTINGS
     : ROUTES.USERS;
   const items: BreadcrumbItem[] = [

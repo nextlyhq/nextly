@@ -203,6 +203,22 @@ export class FieldGroupMetadataService {
       "../../../api/fields-payload"
     );
     assertValidPluginFieldOptions(input.fields);
+    // A translated field marked unique needs an index this server may not be able to key. Refused
+    // here, before the main table: the companion is provisioned after it, and a failure there is
+    // recorded rather than raised. With no adapter, nothing is applied at all.
+    if (this.adapter) {
+      const { refuseUnindexableTranslatedUnique } = await import(
+        "../../i18n/migration/translated-unique-preconditions"
+      );
+      refuseUnindexableTranslatedUnique(this.adapter, {
+        entity: input.slug,
+        builtBy: "fieldGroup",
+        oldFields: [],
+        newFields: input.fields as unknown as FieldDefinition[],
+        wasLocalized: false,
+        isLocalized: input.localized === true,
+      });
+    }
 
     // 1. PLAN. The generator validates as well as renders, so a request it refuses leaves no table
     // and no row behind.
@@ -336,7 +352,9 @@ export class FieldGroupMetadataService {
       assertNotDiverged(input.slug, existing);
     }
     if (existing.locked && input.source !== "code") {
-      throw NextlyError.forbidden({
+      throw NextlyError.definedInCode({
+        thing: "component",
+        change: "change",
         logContext: {
           reason: "component-locked",
           slug: input.slug,
@@ -380,6 +398,20 @@ export class FieldGroupMetadataService {
     // edit would be a second implementation of "apply a schema change"; refusing keeps one, and
     // turns a silent wrong result into an actionable error.
     await this.assertNoUnappliableSchemaChange({ existing, fields, localized });
+
+    // A field leaving, joining or replaced in translation has preconditions of its own, asked by
+    // the same preflight as the collection and Single settings saves, before the companion changes.
+    // The check above judges only fields that render a companion column, so a translated field
+    // replaced by a nested field group (which renders none) passes it, and the companion reconcile
+    // would then drop the removed field's column with every language's value.
+    if (input.fields !== undefined && (wasLocalized || localized)) {
+      await this.assertFieldsMayLeaveTranslation({
+        existing,
+        fields,
+        wasLocalized,
+        localized,
+      });
+    }
 
     // 2. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:
     // enabling seeds the companion from the main table and drops those columns, disabling restores
@@ -757,6 +789,43 @@ export class FieldGroupMetadataService {
         slug: args.existing.slug,
         fields: names,
       },
+    });
+  }
+
+  /**
+   * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`) for a
+   * settings save, which has no schema dialog to answer a rename: the preflight decides by the
+   * main table's rule and refuses what it must, before the companion changes. Nothing is asked
+   * with no adapter, as nothing moves then.
+   */
+  private async assertFieldsMayLeaveTranslation(args: {
+    existing: DynamicFieldGroupRecord;
+    fields: FieldDefinition[];
+    wasLocalized: boolean;
+    localized: boolean;
+  }): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+    // Imported when needed, as this service does for its other collaborators. The same default
+    // locale the companion reconcile reads (`reconcileComponentCompanion`): the site's languages as
+    // the language registry serves them, so a default stored in Settings counts in both steps.
+    const [{ archiveFieldsLeavingTranslation }, { appLocalization }] =
+      await Promise.all([
+        import("../../i18n/migration/archive-preflight"),
+        import("../../i18n/configured-locales"),
+      ]);
+    await archiveFieldsLeavingTranslation({
+      // A field group's own table, which decides the column bounds compared.
+      builtBy: "fieldGroup",
+      tableName: args.existing.tableName,
+      defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      adapter,
+      entity: args.existing.slug,
+      kind: "fieldGroup",
+      oldFields: (args.existing.fields ?? []) as unknown as FieldDefinition[],
+      newFields: args.fields,
+      wasLocalized: args.wasLocalized,
+      isLocalized: args.localized,
     });
   }
 

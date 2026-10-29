@@ -34,11 +34,13 @@ import {
   or,
   sql,
 } from "drizzle-orm";
+import { SQLiteTimestamp } from "drizzle-orm/sqlite-core";
 
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
 import { buildCompanionExists } from "../../domains/i18n/companion-join";
 import { NextlyError } from "../../errors/nextly-error";
 import { toSnakeCase } from "../../shared/lib/case-conversion";
+import { readIsoDateOrInstant } from "../../shared/lib/iso-instant";
 
 import type { buildWhereClause } from "./query-operators";
 
@@ -55,6 +57,25 @@ export interface LocalizedQueryContext {
   mainIdColumn: unknown;
   /** The locale to filter on (the requested locale — chain head). */
   locale: string;
+  /**
+   * The read's languages in the order it falls back through them, the
+   * requested one first. A localized field is shown from the first of them
+   * that holds a value.
+   */
+  localeChain?: readonly string[];
+  /**
+   * Whether each localized condition must hold in every language of
+   * {@link localeChain} rather than in {@link locale} alone. Set for a read
+   * rule's filter: a field the read shows from a fallback language is then
+   * judged on that language's value too, so the read shows nothing the rule
+   * refuses. A caller's own filter keeps its meaning, the requested language.
+   */
+  inEveryFallbackLanguage?: boolean;
+  /**
+   * The companion table's Drizzle columns, so a localized comparison's
+   * operand is read as its column compares it, as a main-table column's is.
+   */
+  companionTable?: unknown;
   /**
    * Per-locale status filter (i18n M6). Set (e.g. `"published"`) when the read resolves to a
    * single status and the collection has per-locale status, so localized where/search EXISTS
@@ -198,6 +219,18 @@ function refuseKey(column: string, code: string, message: string): never {
  * predicate nobody wrote.
  */
 function resolveColumn(schema: object, column: string): Column {
+  return (
+    findColumn(schema, column) ??
+    refuseKey(
+      column,
+      "FILTER_UNKNOWN_FIELD",
+      `"${column}" is not a field this collection can be filtered on.`
+    )
+  );
+}
+
+/** The column a filter key names on this table, if it names one. */
+function findColumn(schema: object, column: string): Column | undefined {
   // The name as written first, then its snake_case form: a runtime table keys
   // its system timestamps `created_at`, while every response spells them
   // `createdAt`, and a filter written the way rows read must reach them.
@@ -207,11 +240,76 @@ function resolveColumn(schema: object, column: string): Column {
       : undefined;
     if (is(candidate, Column)) return candidate;
   }
+  return undefined;
+}
+
+/** The operators that compare a column with a value of the column's own kind. */
+const COMPARISONS = new Set(["=", "!=", ">", ">=", "<", "<=", "IN", "NOT IN"]);
+
+/**
+ * One value a date column is compared with, as the instant it names.
+ *
+ * A Date passes as it is; a string must be ISO 8601, a calendar date or an
+ * instant with its offset (`2026-09-01`, `2026-09-01T09:00:00Z`), read by the
+ * one strict reader the release schedule uses too. Anything else is refused
+ * before a query runs: a value no date can be read from has no rows to match,
+ * and passing it on let each dialect decide alone what it meant.
+ */
+function dateOperand(key: string, value: unknown): Date {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === "string") {
+    const reading = readIsoDateOrInstant(value);
+    if (reading.ok) return reading.at;
+  }
   return refuseKey(
-    column,
-    "FILTER_UNKNOWN_FIELD",
-    `"${column}" is not a field this collection can be filtered on.`
+    key,
+    "FILTER_INVALID_OPERAND",
+    `"${key}" is compared with a date: write one as ISO 8601, such as 2026-09-01 or 2026-09-01T09:00:00Z.`
   );
+}
+
+/**
+ * An instant as this column compares it, on the column's own dialect.
+ *
+ * - SQLite stores an integer in the column's unit (seconds, or milliseconds),
+ *   and its own encoder FLOORS a Date to that unit, so a bound at `.500` would
+ *   be compared as the second before it. The number is bound as it is, the
+ *   fraction kept, so `less_than` `.500` keeps a row at `.000` and `equals`
+ *   `.500` matches none, as on PostgreSQL.
+ * - PostgreSQL and MySQL take the Date through the column's own encoder: the
+ *   UTC wall clock every Nextly write stores. MySQL reads that wall clock in
+ *   the session time zone on both sides, so a bound compares like the stored
+ *   rows whenever writes and reads share a session zone, which is the
+ *   contract every Nextly read already relies on.
+ */
+function dateBound(column: Column, instant: Date): Date | SQL {
+  if (is(column, SQLiteTimestamp)) {
+    const ms = instant.getTime();
+    return sql`${column.mode === "timestamp" ? ms / 1000 : ms}`;
+  }
+  return instant;
+}
+
+/**
+ * A comparison's value as the column compares it.
+ *
+ * Decided by the COLUMN, not by the field's declared type, so every column
+ * Drizzle reads and writes as a `Date` (its "object date" columns: the system
+ * `createdAt` and `updatedAt`, and every date field) takes the same path on
+ * every dialect: the value is read as the instant it names, then spelled as
+ * the column's dialect compares an instant. Handed to the column's own driver
+ * mapping instead, an ISO string threw on SQLite (which reads `getTime()`)
+ * and answered 500, while PostgreSQL and MySQL each interpreted it alone.
+ */
+function comparisonOperand(
+  schemaColumn: Column,
+  key: string,
+  value: unknown
+): unknown {
+  if (schemaColumn.dataType !== "object date") return value;
+  const bound = (item: unknown) =>
+    dateBound(schemaColumn, dateOperand(key, item));
+  return Array.isArray(value) ? value.map(bound) : bound(value);
 }
 
 export function buildDrizzleCondition(
@@ -262,12 +360,38 @@ export function buildDrizzleCondition(
       f => f.name === columnParts[0]
     );
     if (localizedCtx && localizedWhereField) {
-      const localizedCond = localizedExists?.(
-        localizedCtx,
-        localizedWhereField.column,
-        op,
-        value
+      // Read as the companion column compares it: a date is the instant it
+      // names, spelled as that column's dialect stores one, as on the main
+      // table. Bound as written, an ISO string beside SQLite's integer
+      // timestamp compares as text, which every number sorts below.
+      const companionColumn =
+        localizedCtx.companionTable === undefined ||
+        localizedCtx.companionTable === null
+          ? undefined
+          : findColumn(localizedCtx.companionTable, localizedWhereField.name);
+      const operand =
+        companionColumn && COMPARISONS.has(op)
+          ? comparisonOperand(companionColumn, column, value)
+          : value;
+      // In every language the read may show the field from, where asked;
+      // else in the requested one.
+      const languages =
+        localizedCtx.inEveryFallbackLanguage && localizedCtx.localeChain?.length
+          ? localizedCtx.localeChain
+          : [localizedCtx.locale];
+      const perLanguage = languages.map(locale =>
+        localizedExists?.(
+          { ...localizedCtx, locale },
+          localizedWhereField.column,
+          op,
+          operand
+        )
       );
+      const localizedCond = perLanguage.every(cond => cond !== undefined)
+        ? perLanguage.length === 1
+          ? perLanguage[0]
+          : and(...perLanguage)
+        : undefined;
       if (localizedCond) return localizedCond;
       // The field lives in the companion table, so the main table has no
       // column to fall back on: without a companion condition it cannot be
@@ -280,20 +404,25 @@ export function buildDrizzleCondition(
     }
 
     const schemaColumn = resolveColumn(schema, columnParts[0]);
+    // Read once, for every comparison, so a date column's operand is the same
+    // instant whichever operator compares it.
+    const operand = COMPARISONS.has(op)
+      ? comparisonOperand(schemaColumn, column, value)
+      : value;
 
     switch (op) {
       case "=":
-        return eq(schemaColumn, value);
+        return eq(schemaColumn, operand);
       case "!=":
-        return ne(schemaColumn, value);
+        return ne(schemaColumn, operand);
       case ">":
-        return gt(schemaColumn, value);
+        return gt(schemaColumn, operand);
       case ">=":
-        return gte(schemaColumn, value);
+        return gte(schemaColumn, operand);
       case "<":
-        return lt(schemaColumn, value);
+        return lt(schemaColumn, operand);
       case "<=":
-        return lte(schemaColumn, value);
+        return lte(schemaColumn, operand);
       case "LIKE":
         return like(schemaColumn, value);
       case "ILIKE":
@@ -306,8 +435,8 @@ export function buildDrizzleCondition(
         // The filter shape refuses an empty `in` and drops an empty
         // `not_in` before this point; refused again here rather than skipped,
         // because a skipped `in` matched every row.
-        if (Array.isArray(value) && value.length > 0) {
-          return inArray(schemaColumn, value);
+        if (Array.isArray(operand) && operand.length > 0) {
+          return inArray(schemaColumn, operand);
         }
         return refuseKey(
           column,
@@ -315,8 +444,8 @@ export function buildDrizzleCondition(
           `"in" on "${column}" needs a list with at least one value.`
         );
       case "NOT IN":
-        if (Array.isArray(value) && value.length > 0) {
-          return notInArray(schemaColumn, value);
+        if (Array.isArray(operand) && operand.length > 0) {
+          return notInArray(schemaColumn, operand);
         }
         // An empty list excludes nothing. Rendered as true rather than left
         // out, so it reaches here and its column is resolved first, and so an

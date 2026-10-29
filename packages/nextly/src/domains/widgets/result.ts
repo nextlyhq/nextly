@@ -12,6 +12,9 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
+import type { TransportableValue } from "./declaration/transportable";
+import type { GridSize } from "./grid-size";
+import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
@@ -87,6 +90,36 @@ export type WidgetResult =
        * widget chose and nothing honest to head them with.
        */
       fields?: WidgetResultField[];
+      /**
+       * How many rows the read matched in all, of which `items` is the first page.
+       *
+       * Taken from the same read that returned `items` -- its own count under the
+       * same filter and the same caller -- so a card's "View all (N)" names the rows
+       * the list it links to holds, never a second count that could disagree with
+       * the first. Absent from a source that does not count its rows; a card then
+       * says only that more exist, as a floor.
+       *
+       * @experimental
+       */
+      total?: number;
+      /**
+       * Whether `total` is a FLOOR rather than the whole count, as the count arm's
+       * `atLeast` is. Absent means `total` is whole.
+       *
+       * @experimental
+       */
+      atLeast?: boolean;
+      /**
+       * The span of time the source looked at, in whole days back from now.
+       *
+       * A source that keeps rows only for a period answers from that period
+       * alone, so an empty answer means "none in that span" rather than
+       * "none ever", and a card can say which. Absent when the source looked
+       * without a bound, and from a source that does not say.
+       *
+       * @experimental
+       */
+      window?: { days: number };
     }
   | {
       op: "groupBy";
@@ -96,8 +129,12 @@ export type WidgetResult =
        * `value` is null where the column is null, which is a bucket in its own
        * right rather than an absence: "how many rows have no region" is a real
        * answer and folding it into another bucket would misreport both.
+       *
+       * A bucket's `atLeast` says its own count is a floor, for a source whose
+       * buckets are bounded one by one; absent, that count is whole. Optional
+       * and additive: a reader that ignores it still reads every bucket.
        */
-      buckets: { value: string | null; count: number }[];
+      buckets: { value: string | null; count: number; atLeast?: boolean }[];
       /**
        * Whether buckets were left out because a cap was reached.
        *
@@ -107,6 +144,16 @@ export type WidgetResult =
        * `atLeast` makes for a bounded count. Absent means every bucket is here.
        */
       truncated?: boolean;
+      /**
+       * The instant the answer was computed at, in ISO 8601 UTC, for a source
+       * whose buckets depend on it (a window ending "a week from now"). A card
+       * building a link from such a bucket builds it from this instant rather
+       * than its own clock, so the list it opens holds what was counted.
+       * Additive: absent, nothing in the answer depends on when it was read.
+       *
+       * @experimental
+       */
+      asOf?: string;
       /**
        * The grouped field: its label for the chart's axis, and the label of each value a bucket
        * holds. Absent when the source does not declare the field.
@@ -146,6 +193,19 @@ export type WidgetResult =
       points: { start: string; count: number }[];
       /** The interval the points were bucketed by. */
       interval: TimeseriesInterval;
+    }
+  | {
+      /**
+       * A declared widget's own data, for the component it draws itself with.
+       *
+       * 🔴 A RESULT kind only, never a query's op: no query asks for it and no
+       * source answers with it. Core's runner makes it, for a widget declared
+       * with its own display, from what that widget's data function answered
+       * once the value is known to reach the browser as itself. Anything else
+       * answering with it is refused as a malformed answer.
+       */
+      op: "data";
+      data: TransportableValue;
     };
 
 /**
@@ -164,7 +224,17 @@ export type WidgetResult =
  * discover it.
  */
 export type WidgetSlot =
-  | { ok: true; result: WidgetResult }
+  | {
+      ok: true;
+      result: WidgetResult;
+      /**
+       * Present when a declared widget's empty test holds for this answer: the
+       * card shows its empty state, with the answer still carried. Not a failure,
+       * so never a Retry; absent for every answer that is not empty, and for
+       * every widget that declares no test.
+       */
+      empty?: true;
+    }
   | {
       ok: false;
       error: string;
@@ -176,6 +246,27 @@ export type WidgetSlot =
        * Absent for every other failure, which the card shows as an error with Retry.
        */
       code?: "unavailable";
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The card's widget cannot be loaded until a setting has a value: its `load` was not
+       * run, and the card asks its reader for the setting rather than showing an error. Not a
+       * failure, so never a Retry.
+       */
+      code: "needs-setting";
+      /** The setting's label, as the card's settings name it. */
+      setting: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * The widget's own `shows` answered no for this person: the card is left out of their
+       * dashboard, neither drawn nor counted, and its `load` was not run. Not a failure.
+       */
+      code: "not-shown";
     };
 
 /**
@@ -188,6 +279,55 @@ export type WidgetSlot =
 export interface WidgetQueryBatchResponse {
   results: WidgetSlot[];
 }
+
+/**
+ * A card's current size, which changes as the card is resized or the screen
+ * it is drawn on does.
+ *
+ * `w` and `h` are the card's size in grid units (`{ w, h }`, twelve columns
+ * wide), within its widget's declared bounds. `tier` is how much room the card
+ * has on this screen, read from the width it is drawn at: below 340 pixels
+ * `small`, from 700 `large`, `medium` between. On a narrow dashboard a card is
+ * drawn wider than its `w` says, so a component that lays itself out by the
+ * room it has reads `tier`, not `w`.
+ *
+ * Declared here, beside the props it travels in, so the admin that builds
+ * those props and the declaration that types them read one shape.
+ *
+ * @experimental
+ */
+export interface WidgetRenderSize extends GridSize {
+  tier: "small" | "medium" | "large";
+}
+
+/**
+ * What a widget declared with `defineWidget` and drawn by its own component is
+ * handed, as the admin builds it: the shape `WidgetProps<W>` types from the
+ * declaration, its settings and data left untyped here because only the
+ * declaration knows them.
+ *
+ * 🔴 A `type`, for the reason `WidgetComponentProps` below is one: the admin
+ * annotates the object it forwards through `PluginSlot` with it, so a renamed
+ * or dropped prop fails to compile there.
+ *
+ * @experimental
+ */
+export type DeclaredComponentProps = {
+  widgetId: string;
+  /** The card's id: one widget may sit on a dashboard more than once. */
+  placementId: string;
+  settings: Record<string, unknown>;
+  size: WidgetRenderSize;
+  /**
+   * The card's data, always present: the host draws loading, no permission
+   * and error itself, and calls the component only once there is data.
+   */
+  data: unknown;
+  /** True while a newer answer is on its way; `data` is the last one. */
+  refreshing: boolean;
+  /** Asks for the card's data again. */
+  retry: () => void;
+};
 
 /**
  * The props a widget component is handed, whatever it draws.
@@ -235,15 +375,46 @@ export type WidgetComponentProps = {
    *
    * 🔴 `undefined` means TWO different things, and a component that treats them
    * alike will draw an empty state over a request that is still running: the
-   * widget declared no query, so no answer is ever coming; or the batch carrying
-   * this card's query has not answered YET. `isFetching` tells them apart.
+   * widget asks for nothing (no query, and no data of its own core builds), so
+   * no answer is ever coming; or the batch carrying this card's question has not
+   * answered YET. `isFetching` tells them apart. A widget that declares its own
+   * data gets it here as `{ op: "data", data }`.
    */
   slot: WidgetSlot | undefined;
   /**
-   * Whether this card's query is in flight, the FIRST request included.
+   * The answer to each of this card's cells, by key, for a card that declares
+   * several reads (`cells`); absent for one that declares none. A key with no
+   * answer yet is absent from it, as `slot` is.
    *
-   * Always `false` for a widget that declared no query, which is what makes it
+   * @experimental While the content widgets are being built.
+   */
+  cells?: Readonly<Record<string, WidgetSlot>>;
+  /**
+   * Whether this card's question is in flight, the FIRST request included: its
+   * query, or the data core builds for a widget that declares its own.
+   *
+   * Always `false` for a widget that asks for nothing, which is what makes it
    * the discriminator for an absent `slot`.
    */
   isFetching: boolean;
+  /**
+   * The query this card ASKED: its declaration's, with its reader's settings
+   * applied, the "Number of items" among them. A component drawing rows sizes
+   * them from this, as core's lists do. When the widget declares `sizedQuery`,
+   * the batch sent it sized to the card, one row more than the card draws, so
+   * that extra row says more exist; otherwise it was sent exactly as asked.
+   *
+   * Absent for a widget that declared no query.
+   *
+   * @experimental
+   */
+  query?: WidgetQuery;
+  /**
+   * Asks this card's question again, when the batch's answer was an error the
+   * component draws: the Retry a framed card's error offers. Absent while there
+   * is nothing to retry.
+   *
+   * @experimental
+   */
+  onRetry?: () => void;
 };

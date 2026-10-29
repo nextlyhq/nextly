@@ -12,6 +12,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
@@ -22,7 +23,6 @@ import {
 import {
   beginI18nTransition,
   settleI18nTransition,
-  type I18nTransitionKind,
 } from "../../domains/i18n/migration/transition-state";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import { deleteEntityRegistryRow } from "../../domains/versions/entity-teardown";
@@ -742,8 +742,12 @@ async function handleRemovedSingles(
       // Delete the registry entry directly, then the Single's autosaves and
       // version pins, in one transaction and in that order, as the
       // registry's own delete does: see `deleteEntityRegistryRow`.
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(adapter),
+      };
       await adapter.transaction(tx =>
-        deleteEntityRegistryRow(tx, "single", slug)
+        deleteEntityRegistryRow(tx, "single", slug, tables)
       );
 
       // Drop the data table
@@ -949,53 +953,11 @@ export async function ensureLocalizedCompanions(
   // the app configures no default locale, in which case no entity can be localized and nothing
   // reaches the create below.
   const transitions = bindTransitionRecorder(transitionStore, config);
-  // Each entity kind resolves its physical table differently, and a custom
-  // `dbName` is where they diverge: collections and singles force their `dc_` /
-  // `single_` prefix onto it (and singles normalize the identifier), while field
-  // groups take no override at all. A single shared "prefix + slug" rule would
-  // point at a table the runtime never created — `dbName: "forms"` on a
-  // collection lives at `dc_forms`, so the companion would be built as
-  // `forms_locales` with a foreign key to a table that does not exist.
-  const { resolveCollectionTableName, resolveComponentTableName } =
-    await import("../../domains/schema/utils/resolve-table-name");
-  const { resolveSingleTableName } = await import(
-    "../../domains/singles/services/resolve-single-table-name"
+  // Each kind's entities and how its table is named, as the boot reads them too.
+  const { localizableConfigEntities } = await import(
+    "../../domains/i18n/runtime/localizable-config-entities"
   );
-
-  interface LocalizableEntity {
-    slug?: string;
-    dbName?: string;
-    localized?: boolean;
-    status?: boolean;
-    fields?: { name: string; type: string; localized?: boolean }[];
-  }
-
-  // The kind travels with each group because it is part of the transition record's
-  // key: a collection, a single and a field group may share one slug, and only one
-  // of them may have transitioned.
-  const groups: [
-    I18nTransitionKind,
-    LocalizableEntity[],
-    (e: LocalizableEntity) => string,
-  ][] = [
-    [
-      "collection",
-      (config.collections ?? []) as LocalizableEntity[],
-      e => resolveCollectionTableName(e.slug!, e.dbName),
-    ],
-    [
-      "single",
-      (config.singles ?? []) as LocalizableEntity[],
-      e => resolveSingleTableName({ slug: e.slug!, dbName: e.dbName }),
-    ],
-    [
-      "fieldGroup",
-      (config.fieldGroups ?? []) as LocalizableEntity[],
-      // Field groups derive their table from the slug alone — unlike collections
-      // and singles they carry no `dbName` override.
-      e => resolveComponentTableName(e.slug!),
-    ],
-  ];
+  const groups = localizableConfigEntities(config);
 
   const failures: string[] = [];
   for (const [kind, group, resolveTableName] of groups) {
@@ -1158,6 +1120,19 @@ export async function ensureLocalizedCompanions(
         reportCompanionFailure(
           "update",
           "Newly translatable fields will fail to save until it matches"
+        )
+      );
+      // Its per-language unique indexes, once its columns are in step. A field whose rule cannot
+      // hold is reported, which fails the command, and left without its index.
+      const { reconcileCompanionUniqueIndexes } = await import(
+        "../../domains/i18n/runtime/companion-unique-reconcile"
+      );
+      await reconcileCompanionUniqueIndexes(
+        adapter as unknown as DrizzleAdapter,
+        companionEntityArgs,
+        reportCompanionFailure(
+          "index",
+          "Unique translated fields are not enforced in each language until it is"
         )
       );
     }

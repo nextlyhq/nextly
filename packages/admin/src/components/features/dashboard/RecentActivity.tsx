@@ -1,10 +1,9 @@
 /**
  * Who changed what, most recent first.
  *
- * Drawn as the dashboard card `core/recent-activity`, which declares
- * `chrome: "none"` -- so this component owns its own heading and its own
- * loading, error and empty states, and draws the `<section>` shell its
- * neighbours draw rather than a `Card` the grid would frame a second time.
+ * Drawn as the dashboard card `core/recent-activity`, inside the dashboard's
+ * frame, which draws its heading and every state; this component draws the
+ * rows, and reports an empty feed or an unreadable answer for the frame to say.
  *
  * ## It shows a fixed page and offers no way past it
  *
@@ -27,208 +26,169 @@
  * @module components/features/dashboard/RecentActivity
  */
 
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-  Badge,
-  Spinner,
-} from "@nextlyhq/ui";
-import { Clock } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@nextlyhq/ui";
+import type { WidgetComponentProps } from "nextly/widget-result";
 import type React from "react";
 
-import { AlertCircle } from "@admin/components/icons";
-import { useRecentActivity } from "@admin/hooks/queries/useRecentActivity";
-import { useNowTick } from "@admin/hooks/useNowTick";
+import { answerTotal } from "@admin/components/features/widgets/archetypes/tiered-rows";
+import { FrameState } from "@admin/components/features/widgets/frame/card-state";
+import { useCollectionLabel } from "@admin/components/features/widgets/frame/collection-label";
+import {
+  ListCard,
+  type ListModel,
+} from "@admin/components/features/widgets/frame/list-card";
+import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
+import {
+  activityFromRow,
+  activityHref,
+} from "@admin/hooks/queries/useRecentActivity";
 import { formatRelativeTime } from "@admin/lib/dashboard";
-import { cn } from "@admin/lib/utils";
 import type { Activity } from "@admin/types/dashboard/activity";
 
-/**
- * Props for RecentActivity component
- */
-export interface RecentActivityProps {
-  /** Maximum number of activities to display (default: 5) */
-  limit?: number;
+/** One feed row: the activity it reads as, and where it leads, if anywhere. */
+interface ActivityRow {
+  activity: Activity;
+  href: string | undefined;
 }
 
 /**
- * Single Activity Item Component
- *
- * Displays a single activity entry with avatar, description, and badge.
+ * How many saves one row stands for, as its title says it: " · 12 times", or " · 1000+ times"
+ * when the server stopped reading inside the run. A floor is said even at one: "1+" says the
+ * server stopped reading inside it. Nothing for a row of one save.
  */
-const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
-  activity,
-  // Passed down rather than each row starting its own clock: one timer per
-  // CARD, not one per row, and every row then names the same instant.
-  now,
-}) => {
-  const getBadgeStyle = (type: string) => {
-    const t = type.toLowerCase();
-    if (t.includes("create"))
-      return "bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100 ring-1 ring-success-500/20";
-    if (t.includes("update"))
-      return "bg-primary/5 text-primary ring-1 ring-primary/20";
-    if (t.includes("delete"))
-      return "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100 ring-1 ring-destructive-500/20";
-    return "bg-primary/5 text-muted-foreground ring-1 ring-border/50";
-  };
+function repeatText(activity: Activity): string {
+  const count = activity.count ?? 1;
+  if (count <= 1 && activity.countAtLeast !== true) return "";
+  return ` · ${count}${activity.countAtLeast === true ? "+" : ""} times`;
+}
 
-  return (
-    <div className="flex items-center gap-5 p-3 rounded-md hover:bg-primary/[0.03] transition-all duration-500 group/item">
-      <div className="relative">
-        <Avatar className="h-11 w-11 border-2 border-background shadow-sm ring-1 ring-border/10">
-          <AvatarImage src={activity.user.avatar} alt={activity.user.name} />
-          <AvatarFallback className="bg-primary/5 text-primary text-xs font-black">
-            {activity.user.initials}
-          </AvatarFallback>
-        </Avatar>
-        {/* Activity badge: a circle so it sits cleanly on the round avatar. */}
-        <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full bg-background p-0.5 shadow-sm ring-1 ring-border/10">
-          <div
-            className={cn(
-              "h-full w-full rounded-full ring-1 ring-inset",
-              activity.type.toLowerCase().includes("create")
-                ? "bg-success-500 ring-success-500/40"
-                : activity.type.toLowerCase().includes("delete")
-                  ? "bg-destructive-500 ring-destructive-500/40"
-                  : "bg-primary ring-primary/40"
-            )}
-          />
-        </div>
-      </div>
+/**
+ * The same as a screen reader hears it: the dot is a pause to the eye and is said as a comma,
+ * "Ana updated Site style, 12 times". Nothing for a row of one save, whose title reads well.
+ */
+function activitySpoken(activity: Activity): string | undefined {
+  const repeat = repeatText(activity);
+  if (repeat === "") return undefined;
+  const subject = activitySubject(activity);
+  return `${activity.user.name} ${activity.action} ${subject}, ${repeat.slice(3)}`;
+}
 
-      <div className="flex-1 min-w-0 space-y-1">
-        <p className="text-sm text-foreground/80 leading-snug">
-          <span className="font-bold text-foreground tracking-tight">
-            {activity.user.name}
-          </span>{" "}
-          <span className="text-muted-foreground font-medium">
-            {activity.action}
-          </span>{" "}
-          {activity.entryTitle ? (
-            <>
-              <span className="font-bold text-foreground tracking-tight underline decoration-primary/20 underline-offset-4">
-                {activity.entryTitle}
-              </span>{" "}
-              {/* A Single's row has no collection to name: its title is the
-                  Single's label, and the chip would repeat nothing true. */}
-              {activity.collectionLabel !== undefined && (
-                <span className="text-muted-foreground font-bold uppercase text-xs tracking-widest ml-1 bg-primary/5 px-1.5 py-0.5 rounded-md">
-                  {activity.collectionLabel}
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="font-bold text-foreground tracking-tight">
-              {activity.target}
-            </span>
-          )}
-        </p>
+/**
+ * What a row names: its entry's title, or, for an entry with none, its collection by the label
+ * the row shows on its meta line, so the two never name it differently; a Single by its own name.
+ */
+function activitySubject(activity: Activity): string {
+  return activity.entryTitle ?? activity.collectionLabel ?? activity.target;
+}
 
-        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-muted-foreground">
-          <Clock className="w-3 h-3 opacity-60" />
-          {/*
-            Derived HERE rather than carried on the entry. A relative time is a
-            function of when it is read, and computing it while mapping the
-            response froze it: an entry fetched as "just now" kept that label
-            for as long as the query's data was reused. `dateTime` carries the
-            absolute instant, so the machine-readable value is exact whatever
-            the prose says.
-          */}
+/** What a row's title says: who did what to which document, and how many times. */
+function activityTitle(activity: Activity): string {
+  const subject = activitySubject(activity);
+  return `${activity.user.name} ${activity.action} ${subject}${repeatText(activity)}`;
+}
+
+/**
+ * The feed's rows as a list: the actor's avatar leads, the title says who did what, the meta
+ * line names the collection, and when sits at the end. The kind of change is the title's verb,
+ * so no badge repeats it. A Single's row has no collection to name: its title is the Single's
+ * label.
+ *
+ * The time is derived HERE rather than carried on the entry: a relative time is a function of
+ * when it is read, and `dateTime` carries the absolute instant, so the machine-readable value is
+ * exact whatever the prose says.
+ */
+function activityListModel(now: number): ListModel<ActivityRow> {
+  return {
+    titleLabel: "Activity",
+    titleOf: ({ activity }) => activityTitle(activity),
+    spokenOf: ({ activity }) => activitySpoken(activity),
+    hrefOf: ({ href }) => href,
+    leadingOf: ({ activity }) => (
+      <Avatar className="size-full">
+        <AvatarImage src={activity.user.avatar} alt="" />
+        <AvatarFallback className="bg-primary/5 text-primary text-[10px] font-semibold">
+          {activity.user.initials}
+        </AvatarFallback>
+      </Avatar>
+    ),
+    fields: [
+      {
+        key: "collection",
+        label: "Collection",
+        role: "meta",
+        present: ({ activity }) => activity.collectionLabel,
+      },
+      {
+        key: "when",
+        label: "When",
+        role: "trailing",
+        align: "end",
+        present: ({ activity }) => (
           <time dateTime={activity.timestamp}>
             {formatRelativeTime(activity.timestamp, now)}
           </time>
-        </div>
-      </div>
+        ),
+      },
+    ],
+  };
+}
 
-      <Badge
-        className={cn(
-          "uppercase text-xs px-2.5 py-0.5 rounded-sm font-black tracking-[0.15em] border-none shadow-none transition-all duration-500 group-hover/item:scale-105",
-          getBadgeStyle(activity.type)
-        )}
-      >
-        {activity.type}
-      </Badge>
-    </div>
-  );
-};
-
+/**
+ * Nothing to show: reported to the frame, which draws the dashboard's one empty
+ * state in this card's words, as every other card says it.
+ */
 const EmptyState: React.FC = () => (
-  <div className="py-20 text-center space-y-4">
-    <div className="inline-flex p-6 rounded-lg bg-primary/5  border border-border">
-      <Clock className="h-10 w-10 text-muted-foreground" />
-    </div>
-    <div className="space-y-1">
-      <p className="text-sm font-bold text-foreground tracking-tight">
-        Activity log is currently silent
-      </p>
-      <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
-        Actions will appear here as you work
-      </p>
-    </div>
-  </div>
+  <FrameState
+    state={{
+      kind: "empty",
+      empty: {
+        title: "No activity yet",
+        detail: "Changes people make to your content show here.",
+      },
+    }}
+  />
 );
 
-export const RecentActivity: React.FC<RecentActivityProps> = ({
-  limit = 5,
-}) => {
-  const { data, isLoading, error } = useRecentActivity(limit);
-  /*
-   * 🔴 Deriving the label at render is only half the repair. A render has to
-   * HAPPEN, and a dashboard card nobody touches gets none -- so an entry
-   * fetched as "just now" would keep that wording for as long as the page is
-   * open, which is the same wrong label reached by a different route. This is
-   * what makes the derivation run again.
-   *
-   * The value is passed to the formatter rather than discarded, so the label a
-   * reader sees and the instant this hook re-rendered for are the same one.
-   */
-  const now = useNowTick();
-
+/**
+ * The dashboard's Recent activity card, answered by `system:activity` in the
+ * dashboard's batch: framed, so the heading and the size are the card's.
+ *
+ * It draws the rows its body holds, at most the "Number of items" its reader
+ * chose, through the one list card core's lists use, each row leading to the
+ * entry or Single it is about. The feed has no total, so when the answer holds
+ * the one row more the batch asked for, its footer says "N+ more". A run of one
+ * person's saves is one row.
+ *
+ * The frame draws every state; what this card's own answer says beyond its
+ * rows (still loading, an unreadable answer, or an empty feed) it reports.
+ */
+export const RecentActivityCard: React.FC<WidgetComponentProps> = props => {
+  // A relative time is read again as time passes: the clock ticks.
+  const { tier, drawn, density, now, read } = useListCard(props);
+  const labelOf = useCollectionLabel();
+  if ("node" in read) return read.node;
+  // A row this build cannot read is left out rather than drawn from guesses.
+  const rows = read.list.items.flatMap(row => {
+    const activity = activityFromRow(row);
+    if (!activity) return [];
+    // The feed names a collection by its slug; the row names it as the reader is shown it.
+    const named =
+      activity.collectionLabel === undefined
+        ? activity
+        : { ...activity, collectionLabel: labelOf(activity.collectionLabel) };
+    return [{ activity: named, href: activityHref(row) }];
+  });
+  if (rows.length === 0) return <EmptyState />;
   return (
-    <section aria-labelledby="dashboard-activity-heading" className="space-y-6">
-      <div className="flex items-center gap-4">
-        <h4
-          id="dashboard-activity-heading"
-          className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap"
-        >
-          Recent activity
-        </h4>
-        <div className="h-px flex-1 bg-border" />
-      </div>
-
-      {isLoading && (
-        <div className="flex flex-col items-center justify-center py-16 gap-4">
-          <Spinner size="md" className="text-primary/40" />
-          <span className="text-sm text-muted-foreground">
-            Loading activity…
-          </span>
-        </div>
-      )}
-
-      {error && (
-        // Full-strength destructive border so the boundary is perceivable at
-        // the 3:1 UI minimum, matching the other cards' error state.
-        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-md">
-          <AlertCircle className="h-4 w-4" />
-          <span>Couldn&apos;t load recent activity.</span>
-        </div>
-      )}
-
-      {data && !isLoading && !error && (
-        <div className="space-y-1">
-          {data.activities.length === 0 ? (
-            <EmptyState />
-          ) : (
-            data.activities.map(activity => (
-              <ActivityItem key={activity.id} activity={activity} now={now} />
-            ))
-          )}
-        </div>
-      )}
-    </section>
+    <ListCard
+      model={activityListModel(now)}
+      rows={rows}
+      drawn={drawn}
+      total={answerTotal(read.list)}
+      tier={tier}
+      density={density}
+    />
   );
 };
 
-RecentActivity.displayName = "RecentActivity";
+RecentActivityCard.displayName = "RecentActivityCard";

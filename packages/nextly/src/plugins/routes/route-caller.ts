@@ -7,9 +7,9 @@
  * projection down to `{ id, email, name }` loses it — so a read-only key
  * reaches a route with the full reach of whoever minted it.
  *
- * Nothing here decides access. Every branch of that decision already exists —
- * `callerMayPerform` composes the api-key and session halves, and both delegate
- * to the machinery a route-level `requiredPermission` is decided by. This module
+ * Nothing here decides access. `callerMayPerform` asks the one access decision
+ * the way a route-level `requiredPermission` is asked it, for a key on its own
+ * scope and for a session on its permissions and rules. This module
  * only carries the facts a decision needs from the boundary that resolved them
  * to the handler that asks.
  *
@@ -17,11 +17,9 @@
  */
 
 import { readCaller } from "../../api/authenticated-read";
+import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
-import {
-  apiKeyScopeFrom,
-  callerMayPerform,
-} from "../../auth/authenticated-scope";
+import { apiKeyScopeFrom } from "../../auth/authenticated-scope";
 import { readAccessCaller } from "../../auth/entity-read-access";
 import type { AuthContext } from "../../auth/middleware";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";

@@ -19,7 +19,7 @@ import {
   usePluginRoute,
   type PluginRouteRead,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type JSX } from "react";
 
 import {
   ACCOUNT_STATES,
@@ -69,7 +69,7 @@ function isAccountState(value: string): value is AccountState {
  * searched by address or name, filtered by state, newest first, a page at a
  * time. Every name and address is drawn as text, never as markup.
  */
-export function AccountsListPage() {
+export function AccountsListPage(): JSX.Element {
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
   const [state, setState] = useState<AccountState | undefined>(undefined);

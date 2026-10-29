@@ -18,7 +18,8 @@
 
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode, type JSX } from "react";
+import { createPortal } from "react-dom";
 
 import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
@@ -71,6 +72,7 @@ import {
 } from "./version-changes";
 import { VersionChangesForm } from "./VersionChangesForm";
 import { VersionComparisonBar } from "./VersionComparisonBar";
+import { WithheldFieldsProvider } from "./withheld-fields-context";
 
 /**
  * Whether the editor's write affordances are withheld: they act on the LIVE
@@ -306,8 +308,10 @@ export function versionAwareToolbarSlots(
 
 /**
  * A past version's actions on a phone: the moves through its changes, Back to
- * current and Restore…, in a bar at the bottom, under the thumb. Wider
- * screens carry the same actions in the title bar and the comparison bar.
+ * current and Restore this version, in a bar at the bottom, under the thumb.
+ * Wider screens carry the same actions in the document bar and the
+ * comparison bar, under the same names (on a phone, Restore shows its first
+ * word and speaks the whole name).
  */
 /**
  * Where the reader is among the changes, in the phone bar's few words. Says
@@ -350,56 +354,74 @@ function VersionPhoneBar({
   position: number;
   onMove: (delta: -1 | 1) => void;
 }) {
+  // The moves only where there are changes to move between. With one change
+  // or none they could only be disabled, and on a phone their width is what
+  // the version's own actions need.
+  const movable = changed > 1;
   return (
     <div
       role="toolbar"
       aria-label="Version actions"
-      className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-border bg-background px-3 py-2 sm:hidden"
+      // Wraps deliberately where a narrow phone cannot fit the position and
+      // both actions on one row: the actions drop to a row of their own,
+      // still whole, rather than running off the edge.
+      className="fixed inset-x-0 bottom-0 z-30 flex flex-wrap items-center gap-2 border-t border-border bg-background px-3 py-2 sm:hidden"
     >
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="px-2"
-        aria-label="Previous change"
-        disabled={changed < 2}
-        onClick={() => onMove(-1)}
-      >
-        <ArrowUp className="h-4 w-4" aria-hidden="true" />
-      </Button>
-      <span className="text-sm tabular-nums text-muted-foreground">
-        {phonePositionText(state, changed, position)}
-      </span>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="px-2"
-        aria-label="Next change"
-        disabled={changed < 2}
-        onClick={() => onMove(1)}
-      >
-        <ArrowDown className="h-4 w-4" aria-hidden="true" />
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="ml-auto"
-        onClick={actions.returnToCurrent}
-      >
-        Back to current
-      </Button>
-      {actions.restore ? (
+      <div className="flex items-center gap-1.5">
+        {movable ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="px-2"
+            aria-label="Previous change"
+            onClick={() => onMove(-1)}
+          >
+            <ArrowUp className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        ) : null}
+        {/* One line always: a position broken over two lines reads as two
+            things. */}
+        <span className="whitespace-nowrap text-sm tabular-nums text-muted-foreground">
+          {phonePositionText(state, changed, position)}
+        </span>
+        {movable ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="px-2"
+            aria-label="Next change"
+            onClick={() => onMove(1)}
+          >
+            <ArrowDown className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        ) : null}
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         <Button
           type="button"
+          variant="outline"
           size="sm"
-          disabled={actions.restoreDisabled}
-          onClick={actions.restore}
+          onClick={actions.returnToCurrent}
         >
-          Restore…
+          Back to current
         </Button>
-      ) : null}
+        {actions.restore ? (
+          <Button
+            type="button"
+            size="sm"
+            disabled={actions.restoreDisabled}
+            onClick={actions.restore}
+          >
+            {/* "Restore" is what fits beside Back to current on a phone; the
+                name spoken is the document bar's, which says which document
+                state it brings back. The confirmation that follows says what
+                happens to the live document. */}
+            Restore <span className="sr-only">this version</span>
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -509,21 +531,26 @@ function VersionContent({
           writing into the version this area claims is frozen. Empty is the
           context's own answer for "offers nothing". */}
       <TranslationFieldProvider value={{}}>
-        {changes ? (
-          <VersionChangesForm
-            fields={fields}
-            values={values}
-            changes={changes}
-            order={order}
-            current={current}
-            showUnchanged={showUnchanged}
-            onToggleUnchanged={() => setShowUnchanged(v => !v)}
-          />
-        ) : (
-          // Nothing to mark yet (the first version, or while what changed is
-          // read): the version reads whole.
-          <ReadOnlyDocumentForm fields={fields} values={values} mode="edit" />
-        )}
+        {/* What the read held back, so a field whose value was withheld says
+            so where the value would be. It wraps both forms: a field is
+            withheld whether or not what changed has been read yet. */}
+        <WithheldFieldsProvider paths={viewing.withheld}>
+          {changes ? (
+            <VersionChangesForm
+              fields={fields}
+              values={values}
+              changes={changes}
+              order={order}
+              current={current}
+              showUnchanged={showUnchanged}
+              onToggleUnchanged={() => setShowUnchanged(v => !v)}
+            />
+          ) : (
+            // Nothing to mark yet (the first version, or while what changed is
+            // read): the version reads whole.
+            <ReadOnlyDocumentForm fields={fields} values={values} mode="edit" />
+          )}
+        </WithheldFieldsProvider>
       </TranslationFieldProvider>
     </EntryLocaleProvider>
   );
@@ -539,11 +566,13 @@ function ViewedVersionFrame({
   fields,
   values,
   actionsDisabled,
+  bannerSlot,
 }: {
   viewing: ViewedVersion;
   fields: FieldConfig[];
   values: Record<string, unknown>;
   actionsDisabled: boolean;
+  bannerSlot: HTMLElement | null;
 }) {
   const { restore } = useDocumentHistory();
   const actions = useVersionActions(actionsDisabled);
@@ -562,30 +591,37 @@ function ViewedVersionFrame({
   return (
     // The reader's remembered layout, for every change drawn below.
     <ChangesLayoutProvider value={changesLayout}>
-      {/* Room under the last field for the phone's bottom bar. The container
+      {/* Room under the last field for the phone's bottom bar, even where it
+          wraps to two rows (6rem). The container
           the changes query, as on the comparison page: side by side, each
           change's two sides take columns only where this box has room. */}
-      <div className="@container/diff @4xl/content:p-8 pt-6 pb-20 sm:pb-0">
-        <VersionComparisonBar
-          layoutToggle={
-            order.length > 0 ? (
-              <ChangesLayoutToggle
-                layout={changesLayout}
-                onChange={setChangesLayout}
-                splittable={splittable}
-              />
-            ) : null
-          }
-          versionNo={viewing.versionNo}
-          about={viewing.about}
-          comparedWith={viewing.comparedWith}
-          changes={state}
-          position={position}
-          onMove={move}
-          onBackToHistory={restore?.backToHistory}
-          onOpenComparison={restore?.compare}
-          onCompareCurrent={restore?.compareCurrent}
-        />
+      <div className="@container/diff @4xl/content:p-8 pt-6 pb-24 sm:pb-0">
+        <VersionBanner slot={bannerSlot}>
+          <VersionComparisonBar
+            // Inside the host's band, the bar drops its own card surface.
+            {...(bannerSlot
+              ? { className: "mb-0 rounded-none border-0 bg-transparent p-0" }
+              : {})}
+            layoutToggle={
+              order.length > 0 ? (
+                <ChangesLayoutToggle
+                  layout={changesLayout}
+                  onChange={setChangesLayout}
+                  splittable={splittable}
+                />
+              ) : null
+            }
+            versionNo={viewing.versionNo}
+            about={viewing.about}
+            comparedWith={viewing.comparedWith}
+            changes={state}
+            position={position}
+            onMove={move}
+            onBackToHistory={restore?.backToHistory}
+            onOpenComparison={restore?.compare}
+            onCompareCurrent={restore?.compareCurrent}
+          />
+        </VersionBanner>
         <VersionContent
           viewing={viewing}
           fields={fields}
@@ -606,6 +642,26 @@ function ViewedVersionFrame({
       </div>
     </ChangesLayoutProvider>
   );
+}
+
+/**
+ * The version's comparison bar, drawn into the host's banner stack when the
+ * host keeps a place for it, and in place otherwise.
+ *
+ * A portal rather than moving the bar up to the host: the bar shares its
+ * change navigation (which change is current, moving between them) with the
+ * fields below, and that state is the frame's, keyed by the version. Drawn
+ * through a portal it keeps that state and sits where the document's other
+ * banners are, under the document bar.
+ */
+function VersionBanner({
+  slot,
+  children,
+}: {
+  slot: HTMLElement | null;
+  children: ReactNode;
+}) {
+  return slot ? createPortal(children, slot) : <>{children}</>;
 }
 
 /**
@@ -637,13 +693,19 @@ export function ViewedVersionBody({
   fields,
   values,
   actionsDisabled,
+  bannerSlot = null,
   children,
 }: {
   fields: FieldConfig[];
   values?: Record<string, unknown>;
   actionsDisabled: boolean;
+  /**
+   * Where the host draws its document banners, for the version's comparison
+   * bar to be drawn among them; null draws it at the top of the version.
+   */
+  bannerSlot?: HTMLElement | null;
   children?: ReactNode;
-}) {
+}): JSX.Element {
   const { viewing } = useDocumentHistory();
   return (
     <>
@@ -667,6 +729,7 @@ export function ViewedVersionBody({
           fields={fields}
           values={values ?? {}}
           actionsDisabled={actionsDisabled}
+          bannerSlot={bannerSlot}
         />
       ) : null}
     </>

@@ -4,8 +4,9 @@
  *
  * The unit tests drive the endpoint over a stand-in service, which proves its
  * rules and nothing about a stored row. These prove the rules that are about
- * the ROW: what a read leaves behind, what a write keeps and refuses, and that
- * one computed default reaches everyone following it.
+ * the ROW: what a read leaves behind, what a write keeps and refuses, that
+ * one computed default reaches everyone following it, and that a row of an
+ * earlier format is read as no row and replaced by its owner's next write.
  */
 
 // Must be set before the harness boots (env validation) and to sign tokens.
@@ -58,7 +59,8 @@ if (process.env.NEXTLY_TEST_SLOW_DB === "1") {
 interface Placement {
   id: string;
   widgetId: string;
-  width: string;
+  w: number;
+  h: number;
   removed: boolean;
   config?: Record<string, unknown>;
 }
@@ -85,7 +87,7 @@ function testWidget(
       id: `test/${id}`,
       title: id,
       archetype: "text",
-      defaultSize: "md",
+      size: { default: { w: 4, h: 3 } },
       defaultOrder,
       content: id,
       ...extra,
@@ -254,7 +256,7 @@ describe.each(getConfiguredTestDialects())(
       }
       testWidget("first", 1000);
       testWidget("gated", 1010, { requiredPermission: "manage-the-vault" });
-      testWidget("last", 1020, { defaultSize: "sm" });
+      testWidget("last", 1020, { size: { default: { w: 3, h: 2 } } });
     });
 
     // Only this suite's widgets: the instance outlives the test, and so must
@@ -277,7 +279,10 @@ describe.each(getConfiguredTestDialects())(
       expect(forEditor).toEqual(
         forAdmin.filter(p => p.widgetId !== "test/gated")
       );
-      expect(forEditor.map(p => p.width)).toEqual(["third", "quarter"]);
+      expect(forEditor.map(p => [p.w, p.h])).toEqual([
+        [4, 3],
+        [3, 2],
+      ]);
     });
 
     it("brings a change to the default to a person following it", async () => {
@@ -299,7 +304,7 @@ describe.each(getConfiguredTestDialects())(
         ...seen.placements.filter(p => p.widgetId === "test/last"),
         ...seen.placements
           .filter(p => p.widgetId === "test/first")
-          .map(p => ({ ...p, width: "half", config: { range: 30 } })),
+          .map(p => ({ ...p, w: 6, h: 4, config: { range: 30 } })),
       ];
       expect((await save(editor, seen, arranged)).status).toBe(200);
       const stored = (await rawRow(editor)).row;
@@ -321,59 +326,221 @@ describe.each(getConfiguredTestDialects())(
       // And the settings came back exactly as saved.
       expect(
         now.placements.find(p => p.widgetId === "test/first")
-      ).toMatchObject({ width: "half", config: { range: 30 } });
+      ).toMatchObject({ w: 6, h: 4, config: { range: 30 } });
     });
 
-    it("reads a columns-format row without writing it, and converts every card", async () => {
-      const seen = await read(editor);
-      expect((await save(editor, seen, seen.placements)).status).toBe(200);
-      const raw = JSON.stringify({
-        schemaVersion: 2,
-        columnCount: 2,
-        placements: [
-          {
-            id: "b",
-            widgetId: "test/last",
-            column: 1,
-            order: 0,
-            hidden: true,
-            size: "lg",
-          },
-          {
-            id: "a",
-            widgetId: "test/first",
-            column: 0,
-            order: 0,
-            hidden: false,
-            size: "sm",
-            config: { k: "v" },
-          },
+    describe("a row of an earlier format", () => {
+      /**
+       * A row of each earlier format, as those releases wrote it, holding
+       * every field that format stored, each different from the default: a
+       * moved and resized card, a removal, settings, a skipped Get started
+       * step, the unarranged mark and a card of a widget nobody declares.
+       */
+      const EARLIER: ReadonlyArray<[number, string]> = [
+        [
+          1,
+          JSON.stringify({
+            schemaVersion: 1,
+            placements: [
+              {
+                id: "b",
+                widgetId: "test/last",
+                order: 0,
+                hidden: true,
+                size: "lg",
+                height: "tall",
+              },
+              {
+                id: "a",
+                widgetId: "test/first",
+                order: 1,
+                hidden: false,
+                size: "sm",
+                config: { k: "v" },
+              },
+            ],
+          }),
         ],
+        [
+          2,
+          JSON.stringify({
+            schemaVersion: 2,
+            columnCount: 2,
+            placements: [
+              {
+                id: "b",
+                widgetId: "test/last",
+                column: 1,
+                order: 0,
+                hidden: true,
+                size: "lg",
+              },
+              {
+                id: "a",
+                widgetId: "test/first",
+                column: 0,
+                order: 0,
+                hidden: false,
+                size: "sm",
+                config: { k: "v" },
+              },
+              {
+                id: "old",
+                widgetId: "core/onboarding-checklist",
+                column: 0,
+                order: 1,
+                hidden: false,
+              },
+            ],
+          }),
+        ],
+        [
+          3,
+          JSON.stringify({
+            schemaVersion: 3,
+            unarranged: true,
+            placements: [
+              {
+                id: "started",
+                widgetId: "core/get-started",
+                width: "half",
+                removed: true,
+                config: { acted: true, skipped: ["invite"] },
+              },
+              { id: "b", widgetId: "test/last", width: "full", removed: true },
+              {
+                id: "a",
+                widgetId: "test/first",
+                width: "quarter",
+                removed: false,
+                config: { k: "v" },
+              },
+            ],
+          }),
+        ],
+      ];
+
+      /** A row for `userId` holding `raw`, written as that release wrote it. */
+      async function earlierRow(userId: string, raw: string): Promise<void> {
+        const seen = await read(userId);
+        expect((await save(userId, seen, seen.placements)).status).toBe(200);
+        await (await rawRow(userId)).overwrite(raw);
+      }
+
+      for (const [version, raw] of EARLIER) {
+        it(`reads a version ${version} row as the default, without writing it`, async () => {
+          const fresh = await read(editor);
+          await earlierRow(editor, raw);
+
+          const first = await read(editor);
+          const second = await read(editor);
+
+          // 🔴 Exactly what the reader was handed before they had a row: no
+          // card, size, setting, removal or skip of the earlier row.
+          expect(first.source).toBe("default");
+          expect(first.placements).toEqual(fresh.placements);
+          expect(second.placements).toEqual(fresh.placements);
+          // The row's own version, so the next write replaces it.
+          expect(first.version).toBe(1);
+          // And the reads left the row's text exactly as it was.
+          expect((await rawRow(editor)).row).toEqual({
+            layout: raw,
+            version: 1,
+          });
+        });
+
+        it(`replaces a version ${version} row at a single-card write with a version 4 row holding only that write`, async () => {
+          // The same write by someone with no row at all is what this one
+          // must store: the earlier row is replaced as an absent one is
+          // created, nothing of it carried.
+          const noRow = await account(
+            `no-row-${version}-${accounts}@example.com`
+          );
+          await earlierRow(editor, raw);
+          // A removal outside customise mode: the one card changed.
+          const removeFirst = (userId: string, seen: LayoutRead) =>
+            save(
+              userId,
+              seen,
+              seen.placements.map(p =>
+                p.widgetId === "test/first" ? { ...p, removed: true } : p
+              ),
+              { arranged: false }
+            );
+
+          // 🔴 Accepted without asking: an earlier row is not unreadable.
+          expect((await removeFirst(editor, await read(editor))).status).toBe(
+            200
+          );
+          expect((await removeFirst(noRow, await read(noRow))).status).toBe(
+            200
+          );
+
+          const mine = (await rawRow(editor)).row;
+          const created = (await rawRow(noRow)).row;
+          expect(mine?.version).toBe(2);
+          expect(mine?.layout).toBe(created?.layout);
+          const stored = JSON.parse(mine?.layout ?? "null") as {
+            schemaVersion: number;
+            placements: Placement[];
+          };
+          expect(stored.schemaVersion).toBe(4);
+          expect(ours(stored.placements)).toEqual([
+            {
+              id: "test/first",
+              widgetId: "test/first",
+              w: 4,
+              h: 3,
+              removed: true,
+            },
+            {
+              id: "test/gated",
+              widgetId: "test/gated",
+              w: 4,
+              h: 3,
+              removed: false,
+            },
+            {
+              id: "test/last",
+              widgetId: "test/last",
+              w: 3,
+              h: 2,
+              removed: false,
+            },
+          ]);
+          const after = await read(editor);
+          expect(ours(after.placements).map(p => [p.id, p.removed])).toEqual([
+            ["test/first", true],
+            ["test/last", false],
+          ]);
+        });
+      }
+
+      it("is replaced by a full save without a confirmation", async () => {
+        await earlierRow(editor, EARLIER[2]![1]);
+        const seen = await read(editor);
+        const arranged = [...ours(seen.placements)].reverse();
+        expect((await save(editor, seen, arranged)).status).toBe(200);
+
+        const after = await read(editor);
+        expect(after.source).toBe("own");
+        expect(ours(after.placements)).toEqual(arranged);
+        expect((await rawRow(editor)).row?.version).toBe(2);
       });
-      const { overwrite } = await rawRow(editor);
-      await overwrite(raw);
-
-      const converted = await read(editor);
-      await read(editor);
-
-      expect(ours(converted.placements)).toEqual([
-        {
-          id: "a",
-          widgetId: "test/first",
-          width: "quarter",
-          removed: false,
-          config: { k: "v" },
-        },
-        { id: "b", widgetId: "test/last", width: "half", removed: true },
-      ]);
-      expect((await rawRow(editor)).row).toEqual({ layout: raw, version: 1 });
     });
 
-    describe("an arrangement that cannot be read", () => {
+    // A row with no version, one of version 0 (below the range this core
+    // wrote) and one of a version a newer core wrote: none is an earlier
+    // format to reset, and each stays on the unreadable path.
+    describe.each([
+      ["no version", '{"placements":[]}'],
+      ["version 0", '{"schemaVersion":0,"placements":[]}'],
+      ["version 99", '{"schemaVersion":99}'],
+    ])("an arrangement that cannot be read: %s", (_name, text) => {
       async function unreadable(): Promise<LayoutRead> {
         const seen = await read(editor);
         expect((await save(editor, seen, seen.placements)).status).toBe(200);
-        await (await rawRow(editor)).overwrite('{"schemaVersion":99}');
+        await (await rawRow(editor)).overwrite(text);
         return read(editor);
       }
 
@@ -385,7 +552,7 @@ describe.each(getConfiguredTestDialects())(
           "test/last",
         ]);
         expect((await rawRow(editor)).row).toEqual({
-          layout: '{"schemaVersion":99}',
+          layout: text,
           version: 1,
         });
       });
@@ -401,7 +568,7 @@ describe.each(getConfiguredTestDialects())(
         ).toBe(409);
         expect((await save(editor, shown, shown.placements)).status).toBe(409);
         expect((await rawRow(editor)).row).toEqual({
-          layout: '{"schemaVersion":99}',
+          layout: text,
           version: 1,
         });
       });
@@ -564,6 +731,137 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(ok.status).toBe(200);
       expect((await read(editor)).source).toBe("default");
+    });
+
+    describe("the Get started card", () => {
+      const STARTED = "core/get-started";
+
+      interface StartedRead extends LayoutRead {
+        defaultPlacements: Placement[];
+        getStarted: {
+          drawn: boolean;
+          answer: {
+            unknown: boolean;
+            steps: Array<{ key: string; status: string }>;
+          } | null;
+        };
+      }
+
+      /** A read, held to its one rule: the card is handed exactly when it is said to be drawn. */
+      async function readStarted(
+        userId: string,
+        query?: Record<string, string>
+      ): Promise<StartedRead> {
+        const res = await call(userId, "GET", query ? { query } : {});
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as StartedRead;
+        const handed = body.placements.some(
+          p => p.widgetId === STARTED && !p.removed
+        );
+        expect(handed).toBe(body.getStarted.drawn);
+        return body;
+      }
+
+      it("is drawn first, at full width, while a step waits, with its steps from the same read", async () => {
+        const seen = await readStarted(admin);
+        expect(seen.placements[0]).toMatchObject({
+          widgetId: STARTED,
+          w: 12,
+          removed: false,
+        });
+        expect(seen.defaultPlacements[0]?.widgetId).toBe(STARTED);
+        expect(
+          seen.getStarted.answer?.steps.some(s => s.status === "open")
+        ).toBe(true);
+        expect(seen.available).not.toContain(STARTED);
+      });
+
+      it("keeps a dismissal and its skips on the server, answers its steps only when asked, and comes back with them", async () => {
+        const seen = await readStarted(admin);
+        const card = seen.placements.find(p => p.widgetId === STARTED)!;
+        const settings = { acted: true, skipped: ["invite"] };
+        const dismissed = seen.placements.map(p =>
+          p.id === card.id ? { ...p, removed: true, config: settings } : p
+        );
+        expect(
+          (await save(admin, seen, dismissed, { arranged: false })).status
+        ).toBe(200);
+
+        const after = await readStarted(admin);
+        expect(after.placements.find(p => p.id === card.id)).toMatchObject({
+          removed: true,
+          config: settings,
+        });
+        expect(after.getStarted).toEqual({ drawn: false, answer: null });
+        const asked = await readStarted(admin, { getStarted: "1" });
+        expect(asked.getStarted.answer).not.toBeNull();
+
+        const restored = after.placements.map(p =>
+          p.id === card.id ? { ...p, removed: false } : p
+        );
+        expect(
+          (await save(admin, after, restored, { arranged: false })).status
+        ).toBe(200);
+        const back = await readStarted(admin);
+        expect(back.getStarted.drawn).toBe(true);
+        expect(back.placements.find(p => p.id === card.id)?.config).toEqual(
+          settings
+        );
+      });
+
+      it("comes back, drawn and with no skips, for a reader whose earlier-format row removed it", async () => {
+        // 🔴 Nothing of an earlier row is carried: not its removal of the
+        // card, not the steps it skipped.
+        const seen = await read(admin);
+        expect((await save(admin, seen, seen.placements)).status).toBe(200);
+        await (
+          await rawRow(admin)
+        ).overwrite(
+          JSON.stringify({
+            schemaVersion: 3,
+            placements: [
+              {
+                id: "started",
+                widgetId: STARTED,
+                width: "full",
+                removed: true,
+                config: { acted: true, skipped: ["invite"] },
+              },
+            ],
+          })
+        );
+        const after = await readStarted(admin);
+        const card = after.placements.find(p => p.widgetId === STARTED);
+        expect(card).toEqual(
+          expect.objectContaining({ id: STARTED, removed: false })
+        );
+        expect(card?.config).toBeUndefined();
+        expect(after.getStarted.drawn).toBe(true);
+      });
+
+      it("says setup could not be checked, and stays drawn, when the registry cannot be listed", async () => {
+        const registry = handle.getService(
+          "collectionRegistryService"
+        ) as unknown as { getAllSlugs: () => Promise<string[]> };
+        const failing = vi
+          .spyOn(registry, "getAllSlugs")
+          .mockRejectedValue(new Error("registry down"));
+        try {
+          const seen = await readStarted(admin);
+          expect(seen.getStarted.drawn).toBe(true);
+          expect(seen.getStarted.answer?.unknown).toBe(true);
+          // Never shown as waiting on the strength of a registry that did not answer.
+          expect(
+            seen.getStarted.answer?.steps.some(
+              s =>
+                (s.key === "collection" || s.key === "entry") &&
+                s.status === "open"
+            )
+          ).toBe(false);
+        } finally {
+          failing.mockRestore();
+        }
+      });
     });
   }
 );

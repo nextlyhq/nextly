@@ -12,6 +12,8 @@ import { EXACT_VERSION } from "../lib/exact-version";
 import { nextlySource, type NextlySource } from "../lib/nextly-release";
 import { packageVersion } from "../lib/package-version";
 import { getAvailableTemplateNames } from "../lib/templates";
+// The one source of the Next.js and React versions a project declares.
+import { SUPPORTED_RANGES, scaffoldRange } from "../supported-versions";
 import type {
   DatabaseConfig,
   PackageManager,
@@ -20,6 +22,7 @@ import type {
 } from "../types";
 
 import { binaryRunner, scriptRunner } from "./package-manager-commands";
+import { PLUGIN_NODE_ENGINES } from "./plugin-node";
 
 /**
  * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
@@ -1097,19 +1100,17 @@ async function replacePlaceholders(
 /**
  * Pinned dependency versions for generated projects.
  *
- * `next` and `eslint-config-next` are resolved at runtime from the npm
- * registry so that fresh projects always get the latest release without
- * needing to republish create-nextly-app.  The remaining versions use
- * wide semver ranges that rarely need updating.
+ * `next`, `eslint-config-next`, `react` and `react-dom` are not here: they
+ * come from `supported-versions`, the reviewed release of each, so a project
+ * never declares a Next.js or React no Nextly release was checked against.
+ * The remaining versions use wide semver ranges that rarely need updating.
  */
 const PINNED_VERSIONS: Record<string, string> = {
-  // Next.js ecosystem — resolved at runtime via fetchLatestVersion()
-  // (see generatePackageJson)
-  react: "^19.1.0",
-  "react-dom": "^19.1.0",
   // Dev dependencies
   typescript: "^5",
-  "@types/node": "^20",
+  // The oldest Node line in this package's `engines.node`, so a scaffolded
+  // project's type-check refuses an API newer than the Node it may run on.
+  "@types/node": "^22",
   "@types/react": "^19",
   "@types/react-dom": "^19",
   "@tailwindcss/postcss": "^4",
@@ -1128,15 +1129,9 @@ const PINNED_VERSIONS: Record<string, string> = {
  * into its package.json and the existing-app path installs them, both from
  * here, so the two cannot disagree on a version.
  */
-export const CONFIG_TOOLING_DEV_DEPENDENCIES = [
-  `esbuild@${PINNED_VERSIONS.esbuild}`,
-] as const;
-
-/**
- * Packages whose latest version is fetched from the npm registry at
- * runtime so the CLI always scaffolds with the newest release.
- */
-const RUNTIME_RESOLVED_PACKAGES = ["next", "eslint-config-next"] as const;
+export const CONFIG_TOOLING_DEV_DEPENDENCIES: readonly [
+  `esbuild@${typeof PINNED_VERSIONS.esbuild}`,
+] = [`esbuild@${PINNED_VERSIONS.esbuild}`] as const;
 
 /**
  * @nextlyhq packages whose latest version is fetched from npm at runtime.
@@ -1164,11 +1159,12 @@ const resolvedNextlyVersions = new Map<NpmDistTag, Record<string, string>>();
  * On any failure (non-OK response, timeout, missing tag, thrown error) it
  * returns the requested dist-tag NAME itself (e.g. "alpha") — a valid npm
  * install spec — so a project on the alpha line never silently drops to
- * `latest`.
+ * `latest`. The channel has no default: only the Nextly packages are read
+ * from the registry, always on a tag their caller names.
  */
 async function fetchLatestVersion(
   pkg: string,
-  channel: NpmDistTag = "latest"
+  channel: NpmDistTag
 ): Promise<string> {
   try {
     const res = await fetch(
@@ -1223,32 +1219,6 @@ async function nextlyVersions(
   return resolveNextlyVersions("alpha");
 }
 
-/** Cache for runtime-resolved package versions (next, eslint-config-next). */
-let resolvedRuntimeVersions: Record<string, string> | null = null;
-
-/**
- * Resolve latest versions for Next.js ecosystem packages in parallel.
- * Falls back to a safe semver range if the registry is unreachable.
- */
-async function resolveRuntimeVersions(): Promise<Record<string, string>> {
-  if (resolvedRuntimeVersions) return resolvedRuntimeVersions;
-
-  const FALLBACKS: Record<string, string> = {
-    next: "^16.1.0",
-    "eslint-config-next": "^16.1.0",
-  };
-
-  const entries = await Promise.all(
-    RUNTIME_RESOLVED_PACKAGES.map(async pkg => {
-      const version = await fetchLatestVersion(pkg);
-      return [pkg, version === "latest" ? FALLBACKS[pkg] : version] as const;
-    })
-  );
-
-  resolvedRuntimeVersions = Object.fromEntries(entries);
-  return resolvedRuntimeVersions;
-}
-
 /**
  * Generate a `package.json` string for a fresh Nextly project.
  *
@@ -1285,13 +1255,13 @@ export async function generatePackageJson(
     return generatePluginPackageJson(projectName, source);
   }
 
-  // Fetch latest Next.js (and eslint-config-next) version from npm
-  const runtimeVersions = await resolveRuntimeVersions();
-
+  // The reviewed Next.js and React, patch releases of that minor only, with
+  // no registry lookup: npm's `latest` can name a minor or a major no Nextly
+  // release was checked against.
   const dependencies: Record<string, string> = {
-    next: runtimeVersions.next,
-    react: PINNED_VERSIONS.react,
-    "react-dom": PINNED_VERSIONS["react-dom"],
+    next: scaffoldRange("next"),
+    react: scaffoldRange("react"),
+    "react-dom": scaffoldRange("react-dom"),
   };
 
   // @tanstack/react-query is externalized from admin bundle to avoid duplicate
@@ -1355,7 +1325,8 @@ export async function generatePackageJson(
     "@tailwindcss/postcss": PINNED_VERSIONS["@tailwindcss/postcss"],
     tailwindcss: PINNED_VERSIONS.tailwindcss,
     eslint: PINNED_VERSIONS.eslint,
-    "eslint-config-next": runtimeVersions["eslint-config-next"],
+    // Moves with `next`: the reviewed release of the same Next.js.
+    "eslint-config-next": scaffoldRange("eslint-config-next"),
     // Declared HERE rather than inherited: `nextly` takes esbuild as an
     // optional peer, so nothing installs it on a project's behalf. Without it
     // the dev server cannot read `nextly.config.ts`.
@@ -1504,7 +1475,6 @@ async function generatePluginPackageJson(
   source: NextlySource
 ): Promise<string> {
   const versions = await nextlyVersions(source);
-  const runtimeVersions = await resolveRuntimeVersions();
   /*
    * The fallback is the `alpha` tag, never `latest`.
    *
@@ -1529,15 +1499,17 @@ async function generatePluginPackageJson(
     "@nextlyhq/admin": peerRange("@nextlyhq/admin"),
     "@nextlyhq/plugin-sdk": peerRange("@nextlyhq/plugin-sdk"),
     // The UI kit is supplied by the host admin at run time, so a plugin must
-    // declare it rather than carry a copy. As a devDependency alone, tsup
+    // declare it rather than carry a copy. As a devDependency alone, tsdown
     // treats it as bundleable and inlines the whole kit into the published
     // plugin — first-party plugins declare it as a peer for this reason.
     "@nextlyhq/ui": peerRange("@nextlyhq/ui"),
-    react: PINNED_VERSIONS.react,
-    "react-dom": PINNED_VERSIONS["react-dom"],
+    // Every React Nextly supports, as the host app may run any of them; the
+    // plugin's own playground develops on the reviewed one below.
+    react: SUPPORTED_RANGES.react,
+    "react-dom": SUPPORTED_RANGES["react-dom"],
   };
 
-  // devDeps cover: build (tsup/tsc), test (vitest), lint (eslint), AND the
+  // devDeps cover: build (tsdown/tsc), test (vitest), lint (eslint), AND the
   // embedded dev/ playground (next + nextly + admin + sqlite adapter).
   const devDependencies: Record<string, string> = {
     nextly: range("nextly"),
@@ -1546,16 +1518,20 @@ async function generatePluginPackageJson(
     "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
     "@nextlyhq/adapter-drizzle": range("@nextlyhq/adapter-drizzle"),
     "@nextlyhq/adapter-sqlite": range("@nextlyhq/adapter-sqlite"),
-    next: runtimeVersions.next,
-    react: PINNED_VERSIONS.react,
-    "react-dom": PINNED_VERSIONS["react-dom"],
+    // The playground runs on the reviewed Next.js and React, as a new app does.
+    next: scaffoldRange("next"),
+    react: scaffoldRange("react"),
+    "react-dom": scaffoldRange("react-dom"),
     "better-sqlite3": "^12.0.0",
     "@types/node": PINNED_VERSIONS["@types/node"],
     "@types/react": PINNED_VERSIONS["@types/react"],
     "@types/react-dom": PINNED_VERSIONS["@types/react-dom"],
     typescript: PINNED_VERSIONS.typescript,
-    tsup: "^8.5.0",
-    vitest: "^4.1.0",
+    tsdown: "^0.23.1",
+    vitest: "^5.0.5",
+    // Vitest's peer, declared because Yarn installs no peers: without it a
+    // Yarn-scaffolded plugin installs, and then `yarn test` cannot load Vite.
+    vite: "^7.3.5",
     eslint: PINNED_VERSIONS.eslint,
     "@eslint/js": PINNED_VERSIONS.eslint,
     "typescript-eslint": "^8.0.0",
@@ -1586,8 +1562,11 @@ async function generatePluginPackageJson(
     // Only the built library ships. The dev/ playground is never published.
     files: ["dist"],
     keywords: ["nextly", "nextly-plugin"],
+    // The Node its build and test tools both run on, so a plugin never
+    // promises one its own `build` or `test` script refuses.
+    engines: { node: PLUGIN_NODE_ENGINES },
     scripts: {
-      build: "tsup",
+      build: "tsdown",
       // Runs the embedded playground (next dev with dev/ as the project root).
       dev: "next dev dev --turbopack",
       "check-types": "tsc --noEmit",
@@ -1635,8 +1614,10 @@ export const NATIVE_BUILD_DEPENDENCIES = [
  * ESLint setup, so adding Nextly to an app the person set up leaves its
  * approval to them.
  */
-export const NEXTLY_NATIVE_BUILD_DEPENDENCIES =
-  NATIVE_BUILD_DEPENDENCIES.filter(dep => dep !== "unrs-resolver");
+export const NEXTLY_NATIVE_BUILD_DEPENDENCIES: Exclude<
+  (typeof NATIVE_BUILD_DEPENDENCIES)[number],
+  "unrs-resolver"
+>[] = NATIVE_BUILD_DEPENDENCIES.filter(dep => dep !== "unrs-resolver");
 
 /**
  * Generate the `pnpm-workspace.yaml` for a scaffolded project.
@@ -2126,7 +2107,7 @@ export async function copyTemplate(
 
 /**
  * Copy the plugin template (D44/D45): the whole tree (src/ + embedded dev/ +
- * tsconfig/tsup/vitest/eslint), a generated plugin package.json, the dev/
+ * tsconfig/tsdown/vitest/eslint), a generated plugin package.json, the dev/
  * playground's .env, then fill `{{pluginName}}` / `{{nextlyRange}}`. No app
  * base, next.config, or root .env.
  */

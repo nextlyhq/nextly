@@ -1,4 +1,5 @@
 import { FieldShell, Input, Textarea } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { FormField } from "@admin/components/ui/form";
@@ -17,7 +18,7 @@ export function RoleBasicInfo({
   isSystemRole,
   isLoading,
   handleNameChange,
-}: RoleBasicInfoProps) {
+}: RoleBasicInfoProps): JSX.Element {
   return (
     <>
       <FormField

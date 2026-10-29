@@ -1,260 +1,119 @@
 ---
-title: "Quick Start: Build a Blog"
-description: Create a blog with posts and categories using Nextly. Define content with code or build it visually.
+title: Quick start
+description: Create a Nextly project, start it, and create the first admin. Then build something with it.
 ---
 
-This guide walks you through building a blog with posts and categories. You will define a content model, run migrations, create content in the admin panel, and query it in a Next.js page.
+1. Create a project in `my-app` with the defaults.
+2. Start the dev server.
+3. Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) and create the first admin.
 
-**Prerequisites:** Complete the [Installation](/docs/getting-started/installation) steps first, including creating the super admin at `/admin/setup`.
-
-## 1. Define Your Collections
-
-<Tabs items={["Code-First", "Visual Schema Builder"]}>
-<Tab value="Code-First">
-
-Open `nextly.config.ts` and define a `posts` collection and a `categories` collection:
-
-```typescript title="nextly.config.ts"
-import {
-  defineConfig,
-  defineCollection,
-  text,
-  richText,
-  relationship,
-  date,
-} from "nextly/config";
-
-const posts = defineCollection({
-  slug: "posts",
-  labels: { singular: "Post", plural: "Posts" },
-  fields: [
-    text({ name: "title", required: true }),
-    text({ name: "slug", required: true, unique: true }),
-    richText({ name: "content" }),
-    relationship({ name: "category", relationTo: "categories" }),
-    date({ name: "publishedAt" }),
-  ],
-  // Built-in Draft/Published lifecycle: injects a NOT NULL `status`
-  // system column (default 'draft') and adds Save Draft / Publish
-  // buttons in the admin entry editor.
-  status: true,
-});
-
-const categories = defineCollection({
-  slug: "categories",
-  labels: { singular: "Category", plural: "Categories" },
-  fields: [
-    text({ name: "name", required: true }),
-    text({ name: "slug", required: true, unique: true }),
-  ],
-});
-
-export default defineConfig({
-  collections: [posts, categories],
-  singles: [],
-
-  typescript: {
-    outputFile: "./src/types/generated/nextly-types.ts",
-  },
-});
-```
-
-In development, Nextly auto-syncs schema changes when you save `nextly.config.ts`. For production, generate a migration from the change, commit it, and apply it where you deploy:
-
+<Tabs items={["npm", "pnpm", "yarn", "bun"]}>
+<Tab value="npm">
 ```bash
-pnpm nextly migrate:create add_posts_and_categories
-pnpm nextly migrate
+npx create-nextly-app@alpha my-app -y && cd my-app && npm run dev
 ```
-
-`nextly migrate` applies the files in `migrations/`; it does not create tables from `nextly.config.ts` on its own. See [Production migrations](/docs/guides/production-migrations).
-
 </Tab>
-<Tab value="Visual Schema Builder">
-
-1. Open the admin panel at [http://localhost:3000/admin](http://localhost:3000/admin)
-2. Navigate to **Collections** in the sidebar
-3. Click **Create Collection**
-4. Name it `Posts` (slug: `posts`)
-5. Add fields:
-   - `title` -- Text, required
-   - `slug` -- Text, required, unique
-   - `content` -- Rich Text
-   - `publishedAt` -- Date
-6. Open the **Advanced** tab on the collection and toggle **Status (Draft / Published)** on. This adds the system status column without you having to declare a `status` field by hand.
-7. Click **Save**
-8. Repeat to create a `Categories` collection with fields:
-   - `name` -- Text, required
-   - `slug` -- Text, required, unique
-
-The Visual Schema Builder creates the database tables automatically. No migration step needed in development.
-
+<Tab value="pnpm">
+```bash
+pnpm create nextly-app@alpha my-app -y && cd my-app && pnpm dev
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn create nextly-app@alpha my-app -y && cd my-app && yarn dev
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun create nextly-app@alpha my-app -y && cd my-app && bun run dev
+```
 </Tab>
 </Tabs>
 
-## 2. Add Content
+`-y` takes the defaults: the blank template, SQLite, local storage and the Nextly agent skills. To choose instead, see [Choose instead of the defaults](#choose-instead-of-the-defaults). Each step below says what you should see before you move on.
 
-Open the admin panel at [http://localhost:3000/admin](http://localhost:3000/admin).
+## Create the project
 
-1. Go to **Categories** and create a few categories (e.g., "Technology", "Design")
-2. Go to **Posts** and create a post:
-   - Set a title and slug
-   - Write some content in the rich text editor
-   - Select a category
-   - Set status to "Published"
-   - Set a publish date
+When the project is ready, the CLI ends with its next steps. With npm, `create-nextly-app` 0.0.2-alpha.69 prints:
 
-## 3. Query Content in Your App
+<YouShouldSee>
 
-Use the Direct API to fetch posts in a Server Component. The Direct API runs on the server -- no HTTP requests, no REST endpoints needed. Get the instance with `getNextly({ config })`: it starts Nextly in this process if nothing has yet, so the page works on a cold server too.
-
-```typescript title="src/app/blog/page.tsx"
-import nextlyConfig from "../../../nextly.config";
-import { getNextly } from "nextly";
-
-export default async function BlogPage() {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const { items: posts } = await nextly.find({
-    collection: "posts",
-    where: {
-      status: { equals: "published" },
-    },
-    sort: "-publishedAt",
-    limit: 10,
-  });
-
-  return (
-    <div>
-      <h1>Blog</h1>
-      {posts.map((post) => (
-        <article key={post.id}>
-          <h2>{post.title}</h2>
-          <time>{new Date(post.publishedAt).toLocaleDateString()}</time>
-        </article>
-      ))}
-    </div>
-  );
-}
+```txt
+◇  Next steps ──────────────────────────────────────────────────────────────╮
+│                                                                           │
+│    cd my-app                                                              │
+│    npm run dev                                                            │
+│                                                                           │
+│    Your database (SQLite) is stored at ./data/nextly.db                   │
+│    npm run dev will create system tables on first run.                    │
+│    Visit http://localhost:3000/admin/setup to create your admin account.  │
+│                                                                           │
+│    Storage: Using local disk (./public/uploads) by default.               │
+│    See docs to configure S3, Vercel Blob, or other providers.             │
+│                                                                           │
+├───────────────────────────────────────────────────────────────────────────╯
+│
+└  Docs: https://nextlyhq.com/docs
 ```
 
-### Fetch a Single Post
+</YouShouldSee>
 
-```typescript title="src/app/blog/[slug]/page.tsx"
-import nextlyConfig from "../../../../nextly.config";
-import { getNextly } from "nextly";
-import { notFound } from "next/navigation";
+Above it, the CLI lists what it wrote: the skills for coding agents in `.agents/skills/` and `.claude/skills/`, and a `.env`, which it adds to `.gitignore`. Every new Nextly project also ships with an AGENTS.md and CLAUDE.md written for coding agents.
 
-export default async function PostPage({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
-  const { slug } = await params;
+## Start the dev server
 
-  const nextly = await getNextly({ config: nextlyConfig });
-  const { items } = await nextly.find({
-    collection: "posts",
-    where: {
-      slug: { equals: slug },
-      status: { equals: "published" },
-    },
-    // Rich text is stored as JSON; ask for HTML to render it directly.
-    richTextFormat: "html",
-    limit: 1,
-  });
+`npm run dev` starts Next.js. The first run creates the system tables.
 
-  const post = items[0];
-  if (!post) notFound();
+<YouShouldSee>
 
-  return (
-    <article>
-      <h1>{post.title}</h1>
-      <div dangerouslySetInnerHTML={{ __html: post.content }} />
-    </article>
-  );
-}
-```
+Next.js reports `Local: http://localhost:3000`, and on the first run Nextly logs `[nextly] Setting up database schema...`. [http://localhost:3000](http://localhost:3000) shows "Welcome to your new Nextly project."
 
-## 4. Add a Single
+</YouShouldSee>
 
-Singles are perfect for site-wide settings. Add a blog settings single to your config:
+## Create the first admin
 
-<Tabs items={["Code-First", "Visual Schema Builder"]}>
-<Tab value="Code-First">
+Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) and enter your name, an email and a password. Until an admin exists, `/admin` takes you to this page. The first account gets the Super Admin role, with every permission.
 
-```typescript title="nextly.config.ts"
-import { defineSingle, text, number } from "nextly/config";
+<YouShouldSee>
 
-const blogSettings = defineSingle({
-  slug: "blog-settings",
-  label: { singular: "Blog Settings" },
-  fields: [
-    text({ name: "blogTitle", required: true, label: "Blog Title" }),
-    text({ name: "tagline", label: "Tagline" }),
-    number({ name: "postsPerPage", defaultValue: 10 }),
-  ],
-});
+The admin's dashboard at `/admin`, signed in as the account you just created. The admin is at `/admin` from then on.
 
-export default defineConfig({
-  collections: [posts, categories],
-  singles: [blogSettings],
-  // ... rest of config
-});
-```
+</YouShouldSee>
 
-In development, save `nextly.config.ts` and the schema syncs automatically. For production, run `pnpm nextly migrate:create <name>`, commit the file, then run `pnpm nextly migrate` where you deploy.
+<Callout type="info" title="In production">
+In production, the web setup asks for a one-time setup token, printed in the server log, before it creates the first admin. Development setup asks for none.
+</Callout>
 
-</Tab>
-<Tab value="Visual Schema Builder">
+## Choose instead of the defaults
 
-1. In the admin panel, go to **Singles**
-2. Click **Create Single**
-3. Name it `Blog Settings` (slug: `blog-settings`)
-4. Add fields: `blogTitle` (Text, required), `tagline` (Text), `postsPerPage` (Number, default: 10)
-5. Click **Save**
+Leave off `-y` and the CLI asks. Each question also has a flag, and a flag answers its question even with `-y`, which then takes the defaults for the rest.
 
-</Tab>
-</Tabs>
+| Question | Choices | Flag |
+| --- | --- | --- |
+| What should your project be called? | The folder to create. `.` uses the current folder. | The first argument, `my-app` |
+| Pick a starting template | Blank project (an empty config), Blog (posts, authors, categories and public pages) or Plugin (a reusable Nextly plugin with a `/dev` playground) | `-t blank`, `-t blog`, `-t plugin` |
+| How would you like to define your content schema? | Code-first or the Visual Schema Builder, for templates that offer both | `-a code-first`, `-a visual` |
+| Which database will you use? | SQLite, PostgreSQL or MySQL. PostgreSQL and MySQL need a running server and its connection string, which the CLI asks for next; with `-y` it writes a placeholder to `.env` for you to replace. | `-d sqlite`, `-d postgresql`, `-d mysql` |
+| Add Nextly skills for coding agents (Claude Code, Codex, Cursor)? | Yes by default. A plugin project is not asked and gets none. | `--no-skills` leaves them out |
 
-Query the single in your layout:
+For example, `npx create-nextly-app@alpha my-blog -t blog -y` creates a blog on SQLite. See [Templates](/docs/templates) for what each template ships with.
 
-```typescript title="src/app/blog/layout.tsx"
-import nextlyConfig from "../../../nextly.config";
-import { getNextly } from "nextly";
+To add Nextly to an app you already have, run the CLI inside it instead: see [Add to an existing Next.js project](/docs/getting-started/installation#option-b-add-to-an-existing-nextjs-project).
 
-export default async function BlogLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const nextly = await getNextly({ config: nextlyConfig });
-  const settings = await nextly.findSingle({
-    slug: "blog-settings",
-  });
+## Requirements
 
-  return (
-    <div>
-      <header>
-        <h1>{settings?.blogTitle}</h1>
-        <p>{settings?.tagline}</p>
-      </header>
-      {children}
-    </div>
-  );
-}
-```
+| Requirement | Version |
+| --- | --- |
+| Node.js | 22.12+ or 24+ (Node 24 LTS recommended) |
+| Next.js | The supported range in [Requirements](/docs/getting-started/installation#requirements), with the App Router |
+| React and React DOM | The supported range in [Requirements](/docs/getting-started/installation#requirements) |
+| Database | PostgreSQL 15 or later, MySQL 8 or later, or SQLite 3.38 or later for local work |
 
-## What You Built
+SQLite is the default, so the quick start needs no database server. See [Database](/docs/database) before you deploy.
 
-You now have:
+## Next steps
 
-- Two collections (`posts` and `categories`) with typed fields
-- A single (`blog-settings`) for site-wide configuration
-- An admin panel to manage all content at `/admin`
-- Server-rendered pages that query content directly with the Direct API
-
-## Next Steps
-
-- [Project Structure](/docs/getting-started/project-structure) -- Understand how the project is organised
-- [Fields](/docs/configuration/fields) -- Explore all available field types
-- [Direct API](/docs/api-reference/direct-api) -- Full API reference for querying content
-- [Media Storage](/docs/guides/media-storage) -- Set up image and file uploads
+- [Tutorial: build a blog](/docs/getting-started/build-a-blog) -- Define posts and categories, add content in the admin, and read it in a page with the Direct API.
+- [Project structure](/docs/getting-started/project-structure) -- What the CLI wrote, file by file.
+- [Set up with a coding agent](/docs/guides/coding-agents) -- Work on the project with Claude Code, Codex or Cursor.
+- [Deployment](/docs/guides/deployment) -- Run migrations where you deploy, then start the app.

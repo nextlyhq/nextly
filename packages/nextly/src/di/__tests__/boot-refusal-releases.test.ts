@@ -50,7 +50,8 @@ vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
 }));
 
-const { registerServices, isServicesRegistered } = await import("../register");
+const { registerServices } = await import("../register");
+const { isServicesRegistered } = await import("../service-access");
 
 const config = {
   db: {

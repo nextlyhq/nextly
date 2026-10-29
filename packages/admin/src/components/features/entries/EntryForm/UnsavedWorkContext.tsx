@@ -37,6 +37,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type JSX,
 } from "react";
 
 /** How a surface reports itself. `null` outside a form, where nobody is asking. */
@@ -103,7 +104,7 @@ export function UnsavedWorkProvider({
 }: {
   report: (key: string, unsaved: boolean) => void;
   children: ReactNode;
-}) {
+}): JSX.Element {
   return (
     <UnsavedWorkContext.Provider value={report}>
       {children}

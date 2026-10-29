@@ -23,13 +23,13 @@
 import { expect, type Page } from "@playwright/test";
 
 import { test } from "../support/test";
-import { STORAGE_STATE } from "../../global-setup";
 
 import {
   announcer,
   boxOf,
   clearSelection,
   clickBlock,
+  editorSelectionText,
   field as fieldOf,
   glyphPoint,
   canvasScope,
@@ -46,6 +46,20 @@ import {
   EDITOR_PROPERTIES,
   editorTitleFor,
 } from "./editor-manifest";
+import { LOCK } from "../support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.homepage] });
+
+// The editor's own undo and redo, spelled with the key its `mod` means HERE.
+// The editor reads `mod` from the platform the browser reports, and the
+// Desktop Chrome device this suite runs as reports Windows on every host, so
+// `mod` is Control. Playwright's `ControlOrMeta` follows the host instead, and
+// on a Mac presses Command, which the editor rightly ignores, so undo did
+// nothing there. Native editing inside a field (a rich-text bold) follows
+// the host, and keeps `ControlOrMeta`.
+const UNDO = "Control+z";
+const REDO = "Control+Shift+z";
 
 function text(id: string, words: string) {
   return { id, type: "core/text", version: 1, props: { text: words } };
@@ -154,9 +168,8 @@ async function editField(
 
 // Not `serial`: every test reseeds the page it edits, so none depends on one
 // before it, and a failure should not hide the verdicts after it. The shared
-// homepage single is safe because the config runs one worker everywhere.
-
-test.use({ storageState: STORAGE_STATE });
+// homepage single is safe because this file holds the homepage lock (above):
+// no other spec that writes or asserts it runs beside this one.
 
 /**
  * What each covered property does, by its number.
@@ -282,9 +295,9 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await expect.poll(() => structure(page)).not.toEqual(SEEDED);
     // ONE undo restores the tree: a move recorded as several entries would
     // leave it half-done here.
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect.poll(() => structure(page)).toEqual(SEEDED);
-    await page.keyboard.press("ControlOrMeta+Shift+z");
+    await page.keyboard.press(REDO);
     await expect
       .poll(() => structure(page))
       .toEqual(["ea-heading", "ea-second", "ea-first", ...SEEDED.slice(3)]);
@@ -317,7 +330,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
         "ea-section>ea-inner",
         "ea-passage",
       ]);
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect.poll(() => structure(page)).toEqual(SEEDED);
   },
   9: async page => {
@@ -338,7 +351,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
       "Renamed heading"
     );
     // Through the store, not left in the DOM: undo brings the old words back.
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect(field).toHaveText(HEADING);
   },
   10: async page => {
@@ -352,7 +365,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // Cancelling wrote nothing: an undo now has nothing of this edit to bring
     // back, where a cancel that wrote the words and then wrote the old ones
     // over them would surface "Discard me" here.
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect(field).toHaveText(HEADING);
   },
   11: async page => {
@@ -375,7 +388,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // And it was one write: a single undo, pressed on the canvas rather than
     // in the inspector's own field, restores the words as they were.
     await clickBlock(page, "ea-third");
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect(field).toHaveText("First paragraph");
   },
   12: async page => {
@@ -386,16 +399,10 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await page.keyboard.press(`Shift+${WORD}+ArrowLeft`);
     // The editor applies a selection asynchronously, so each step waits for
     // the previous one to land: a format pressed before the word is selected
-    // formats nothing, and the passage commits plain. Read from the passage's
-    // own window, which is the canvas frame's once there is one.
-    await expect
-      .poll(() =>
-        field.evaluate(
-          element =>
-            element.ownerDocument.defaultView?.getSelection()?.toString() ?? ""
-        )
-      )
-      .toBe("bold");
+    // formats nothing, and the passage commits plain. Waited on in the editor's
+    // own state, not the browser's: the browser shows the word selected before
+    // the editor has read it, and the format acts on what the editor holds.
+    await expect.poll(() => editorSelectionText(field)).toBe("bold");
     await page.keyboard.press("ControlOrMeta+b");
     await expect(field.locator("strong")).toHaveText("bold");
     await clickBlock(page, "ea-heading");
@@ -403,7 +410,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // Rendered back from the stored value, so the bold run is in the document.
     await expect(field.locator("strong")).toHaveText("bold");
     await expect(field).toContainText(PASSAGE);
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect(field.locator("strong")).toHaveCount(0);
     await expect(field).toHaveText(PASSAGE);
   },
@@ -418,7 +425,7 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await expect(field).not.toContainText("zzz");
     expect(await field.innerHTML()).toBe(before);
     // And left no history behind, as for plain text.
-    await page.keyboard.press("ControlOrMeta+z");
+    await page.keyboard.press(UNDO);
     await expect(field).not.toContainText("zzz");
     expect(await field.innerHTML()).toBe(before);
   },

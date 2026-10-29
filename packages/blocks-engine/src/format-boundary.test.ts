@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -7,7 +8,6 @@ import {
   readFileSync,
   rmSync,
   realpathSync,
-  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
@@ -44,7 +44,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  *
  * Two instruments replace it, each complete in a dimension the other is not.
  *
- * **The build's own module graph.** `tsup` writes esbuild's metafile beside the
+ * **The build's own module graph.** The build writes a metafile beside the
  * bundles, recording every import edge with its KIND — including the ones
  * nothing executes. A `import("css-tree/parser")` behind a function is a real
  * edge to a real dependency, and no amount of loading the entry point asks the
@@ -250,6 +250,8 @@ describe("the format entry point's boundary", () => {
  */
 interface BuildOutput {
   readonly bytes: number;
+  /** The sha256 of the file as the build wrote it. */
+  readonly sha256?: string;
   readonly imports?: readonly {
     readonly path: string;
     readonly kind: string;
@@ -398,18 +400,19 @@ describe("the module graph the build recorded", () => {
     // leaves a stale graph saying whatever it said last time — which is the
     // flattering direction, because the boundary was intact then.
     //
-    // NOT by comparing recorded sizes against the files. Measured, they do not
-    // agree and are not meant to: esbuild records what IT emitted, and tsup
-    // rewrites both the module and its map afterwards — `dist/format.mjs` is
-    // 890 bytes in the record and 490 on disk. A guard built on that would fail
-    // on every correct build, and be removed.
+    // NOT by comparing recorded sizes against the files. They need not agree:
+    // the record holds the code the bundler emitted, and the file on disk adds
+    // what is appended after it, such as the source map comment. A guard built
+    // on that would fail on correct builds, and be removed.
     //
     // Two things that do hold. The record names exactly the modules that exist,
-    // so an entry point added or dropped without rewriting it is caught; and no
-    // module is NEWER than the record, so a `dist` rebuilt by some path that
-    // did not write one is caught. That second case is the one worth having,
-    // because a stale graph says whatever it said last time — which is the
-    // flattering direction, since the boundary was intact then.
+    // so an entry point added or dropped without rewriting it is caught; and
+    // each module's bytes hash to what the record says was written, so a
+    // `dist` rebuilt by some path that did not write one is caught. That second
+    // case is the one worth having, because a stale graph says whatever it said
+    // last time — which is the flattering direction, since the boundary was
+    // intact then. A hash rather than modification times: Windows can stamp a
+    // module a millisecond or two after the record written behind it.
     const outputs = buildGraph();
     const recorded = Object.keys(outputs)
       .filter(file => file.endsWith(".mjs"))
@@ -422,11 +425,11 @@ describe("the module graph the build recorded", () => {
     expect(recorded.length).toBeGreaterThan(0);
     expect(recorded).toEqual(onDisk);
 
-    const writtenAt = statSync(METAFILE).mtimeMs;
     for (const file of recorded) {
-      expect(statSync(join(PACKAGE, file)).mtimeMs, file).toBeLessThanOrEqual(
-        writtenAt
-      );
+      const onDiskHash = createHash("sha256")
+        .update(readFileSync(join(PACKAGE, file)))
+        .digest("hex");
+      expect(onDiskHash, file).toBe(outputs[file]?.sha256);
     }
   });
 

@@ -15,6 +15,9 @@
 // All 5 names always render together (PR G dropped the partial "show
 // 3 internals only" state). When the user wants the box back, they
 // re-enable it from the Settings modal.
+
+import type { JSX } from "react";
+
 import type { BuilderField } from "../types";
 
 const STORAGE_KEY = "builder.showSystemInternals";
@@ -26,7 +29,10 @@ type Props = {
   onSetVisible: (next: boolean) => void;
 };
 
-export function SystemFieldsRow({ systemFields, onSetVisible }: Props) {
+export function SystemFieldsRow({
+  systemFields,
+  onSetVisible,
+}: Props): JSX.Element {
   const handleHide = () => {
     onSetVisible(false);
     if (typeof window !== "undefined") {

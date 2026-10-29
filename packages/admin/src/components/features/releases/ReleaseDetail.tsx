@@ -15,6 +15,7 @@
  * @module components/features/releases/ReleaseDetail
  */
 
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { Link } from "@admin/components/ui/link";
@@ -28,6 +29,7 @@ import {
   useReleaseTitles,
 } from "@admin/hooks/queries/useReleases";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { navigateTo } from "@admin/lib/navigation";
 import type { Release } from "@admin/types/releases";
 
@@ -44,8 +46,10 @@ import { ReleasePageHeader } from "./ReleasePageHeader";
 import { ReleaseRowDialogs, type OpenDialog } from "./ReleaseRowMenu";
 import { useMinuteClock } from "./useMinuteClock";
 
-export function ReleaseDetail({ id }: { id: string }) {
+export function ReleaseDetail({ id }: { id: string }): JSX.Element {
   const release = useRelease(id);
+  // The tab names the release, as its heading does, once it has arrived.
+  useDocumentTitle(release.data?.title);
 
   if (release.isPending) {
     return (

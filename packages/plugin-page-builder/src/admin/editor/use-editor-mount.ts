@@ -5,14 +5,15 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-editor-mount
  */
-import {
-  hasBlock,
-  registerBlocks,
-  type BlockDocument,
-  type DocumentKind,
+import type {
+  BlockDocument,
+  DocumentKind,
+  DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
+  type NoticeQueue,
+  type EditorState,
+  type UseInlineEditingResult,
   CANVAS_ROOT_CLASS,
   useEditorState,
   useInlineEditing,
@@ -29,36 +30,16 @@ import {
 import { toast } from "@nextlyhq/ui";
 import { useCallback, useMemo, useState } from "react";
 
-import { useComponentLibrary } from "../component-library-client";
+import {
+  useComponentLibrary,
+  type ComponentLibraryRead,
+} from "../component-library-client";
+import { ensureEditorBlocksRegistered } from "../contributed-blocks";
 import { readDocumentLimits } from "../page-render-inputs";
 import { useMayCreatePattern } from "../pattern-capability-client";
 
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 import { finishInlineEdit } from "./use-host-commit";
-
-/**
- * Put the core blocks in the BROWSER's registry.
- *
- * The plugin registers them during its own setup, which runs in the server
- * process. The engine's registry is module state, so the copy loaded into the
- * admin's client bundle is a different one and starts empty — and everything
- * the editor asks flows through it: `allBlocks` fills the inserter,
- * `registryNestingSource` decides what a position accepts, and the renderer
- * resolves a node's type to something it can draw.
- *
- * Registering once, here, rather than handing each of those its own list is
- * what keeps them agreeing. Given separate lists, the palette could offer a
- * block the renderer cannot draw and the nesting rule has never heard of — and
- * an empty registry fails SILENTLY in the permissive direction, because a block
- * nobody has heard of declares no parent and is therefore allowed everywhere.
- *
- * Filtered by `hasBlock` because registration refuses a redefinition, and this
- * runs again on every hot reload and every remount of the editor.
- */
-function ensureCoreBlocksRegistered(): void {
-  const missing = coreBlocks.filter(block => !hasBlock(block.name));
-  if (missing.length > 0) registerBlocks(missing, { source: PLUGIN_SOURCE });
-}
 
 /**
  * What to tell the author when an inline edit did not save, or `null` when
@@ -85,6 +66,16 @@ function inlineEditProblem(outcome: InlineEditOutcome): string | null {
     : "Your text could not be saved into this page. Shortening it may help.";
 }
 
+/** What {@link useSavePatternVerb} returns, and what the editor hands on as `savePattern`. */
+type SavePatternVerb = {
+  /** The document to save from, or `null` when the author has not asked. */
+  readonly document: BlockDocument | null;
+  /** Where focus should go when the form closes, asked at that moment. */
+  readonly returnFocusTo: () => HTMLElement | null;
+  readonly open: () => void;
+  readonly close: () => void;
+};
+
 /**
  * Raising the save-as-pattern form, and everything that has to be true first.
  *
@@ -99,14 +90,7 @@ function inlineEditProblem(outcome: InlineEditOutcome): string | null {
 function useSavePatternVerb(
   editor: { document: BlockDocument },
   inline: { commit: () => InlineEditOutcome }
-): {
-  /** The document to save from, or `null` when the author has not asked. */
-  readonly document: BlockDocument | null;
-  /** Where focus should go when the form closes, asked at that moment. */
-  readonly returnFocusTo: () => HTMLElement | null;
-  readonly open: () => void;
-  readonly close: () => void;
-} {
+): SavePatternVerb {
   const [document, setDocument] = useState<BlockDocument | null>(null);
   /*
    * The opener, read at the GESTURE.
@@ -175,12 +159,13 @@ export function useEditorMount(
   initialValue: unknown,
   /** The kinds the field accepts, so a seeded document is one it will take. */
   kinds: readonly DocumentKind[] | undefined
-) {
-  // Before anything reads the registry. Inside the component that mounts the
-  // editor rather than at module scope: this file is imported by the field
-  // control, which every entry form holding a blocks field renders whether or
-  // not the editor is ever opened.
-  ensureCoreBlocksRegistered();
+): EditorMount {
+  // The core blocks and every block a plugin contributed, before anything
+  // reads the registry. Inside the component that mounts the editor rather
+  // than at module scope: this file is imported by the field control, which
+  // every entry form holding a blocks field renders whether or not the editor
+  // is ever opened.
+  ensureEditorBlocksRegistered();
 
   const initialDocument = useMemo(
     () => documentFrom(initialValue, kinds),
@@ -283,4 +268,14 @@ export function useEditorMount(
 }
 
 /** What mounting the editor produced, for the hooks that build on it. */
-export type EditorMount = ReturnType<typeof useEditorMount>;
+export type EditorMount = {
+  initialDocument: BlockDocument;
+  clientConfig: Record<string, unknown> | undefined;
+  documentLimits: DocumentLimits;
+  componentLibrary: ComponentLibraryRead;
+  notices: NoticeQueue;
+  editor: EditorState;
+  inline: UseInlineEditingResult;
+  savePattern: SavePatternVerb;
+  mayCreatePattern: boolean;
+};

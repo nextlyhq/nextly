@@ -31,7 +31,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { importedSpecifiers } from "@nextlyhq/module-specifiers";
 import { describe, expect, it } from "vitest";
 
 // `import.meta.dirname` needs Node 20.11 and the package floor is Node >=20.0.
@@ -58,11 +58,15 @@ function transitiveImports(entry: string): {
     if (seen.has(file)) continue;
     seen.add(file);
 
-    // `preProcessFile` over the SOURCE, not a compiled bundle: a bundle has
-    // already dropped whatever the bundler decided to drop, which is the very
-    // thing under test.
-    const found = ts.preProcessFile(readFileSync(file, "utf8"), true, true);
-    for (const { fileName } of found.importedFiles) {
+    // The repository's one reader of what a source loads, over the SOURCE,
+    // not a compiled bundle: a bundle has already dropped whatever the bundler
+    // decided to drop, which is the very thing under test. A target it cannot
+    // read comes back as a marker that is not relative, so it lands in `bare`
+    // and fails the assertion rather than vanishing.
+    for (const fileName of importedSpecifiers(
+      readFileSync(file, "utf8"),
+      file
+    )) {
       if (!fileName.startsWith(".")) {
         bare.add(fileName);
         continue;
@@ -122,7 +126,9 @@ describe("the leaf is reachable as one", () => {
     expect(PKG.exports["./route-path"]?.import).toBe(
       "./dist/runtime/routing/slug-param.mjs"
     );
-    expect(PKG.exports["./route-path"]?.types).toBe("./dist/route-path.d.ts");
+    expect(PKG.exports["./route-path"]?.types).toBe(
+      "./dist/runtime/routing/slug-param.d.mts"
+    );
   });
 
   it("builds the artifact that entry promises", () => {
@@ -130,7 +136,10 @@ describe("the leaf is reachable as one", () => {
     // without the other: an export map naming an artifact the build does not
     // emit is a published entry point that 404s on install, and it would pass
     // the assertion above on its own.
-    const tsup = readFileSync(resolve(SRC_DIR, "../tsup.config.js"), "utf8");
-    expect(tsup).toContain('"src/runtime/routing/slug-param.ts"');
+    const buildConfig = readFileSync(
+      resolve(SRC_DIR, "../tsdown.config.ts"),
+      "utf8"
+    );
+    expect(buildConfig).toContain('"src/runtime/routing/slug-param.ts"');
   });
 });

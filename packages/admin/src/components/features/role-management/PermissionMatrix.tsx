@@ -6,6 +6,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Search } from "@admin/components/icons";
 import {
@@ -23,10 +24,11 @@ export function PermissionMatrix({
   onChange,
   disabled = false,
   lockedIds = [],
-}: PermissionMatrixProps) {
+}: PermissionMatrixProps): JSX.Element {
   const {
     searchTerm,
     setSearchTerm,
+    organizedPermissions,
     activeTab,
     setActiveTab,
     filteredContentTypes,
@@ -37,15 +39,27 @@ export function PermissionMatrix({
     isPartiallySelected,
     isAllSelectedForAction,
     isPartiallySelectedForAction,
+    shown,
   } = usePermissionMatrix({ permissions, value, onChange, lockedIds });
+
+  // The grid may hold only some of the role's permissions, the rest being
+  // set elsewhere on the screen, so it offers only the tabs it has something
+  // in, as the hook groups them, and clearing takes away its own ids alone.
+  // An empty grid keeps every tab, so each says it has nothing to show.
+  const withContent = PERMISSION_CATEGORIES.filter(
+    category => (organizedPermissions[category]?.length ?? 0) > 0
+  );
+  const tabs = withContent.length > 0 ? withContent : PERMISSION_CATEGORIES;
+  const tab = tabs.find(category => category === activeTab) ?? tabs[0];
+  const own = new Set(permissions.map(permission => permission.id));
 
   return (
     <div className="flex flex-col">
       {/* Tabs and Search Row */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+      <Tabs value={tab} onValueChange={setActiveTab} className="w-full">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-4 px-6">
           <TabsList>
-            {PERMISSION_CATEGORIES.map(category => (
+            {tabs.map(category => (
               <TabsTrigger key={category} value={category}>
                 {PERMISSION_CATEGORY_LABELS[category]}
               </TabsTrigger>
@@ -70,8 +84,23 @@ export function PermissionMatrix({
               type="button"
               variant="outline"
               size="md"
-              onClick={() => onChange(permissions.map(p => p.id))}
-              disabled={disabled || value.length === permissions.length}
+              // Every permission the base does not already give, beside any
+              // the role holds itself.
+              onClick={() =>
+                onChange(
+                  Array.from(
+                    new Set([
+                      ...value,
+                      ...permissions
+                        .map(p => p.id)
+                        .filter(id => !lockedIds.includes(id)),
+                    ])
+                  )
+                )
+              }
+              disabled={
+                disabled || permissions.every(p => shown.includes(p.id))
+              }
               aria-label="Select all permissions"
             >
               Select All
@@ -81,8 +110,10 @@ export function PermissionMatrix({
               type="button"
               variant="outline"
               size="md"
-              onClick={() => onChange([])}
-              disabled={disabled || value.length === 0}
+              // The value is the role's own permissions, so clearing takes the
+              // grid's away; inherited ones stay shown, as the base gives them.
+              onClick={() => onChange(value.filter(id => !own.has(id)))}
+              disabled={disabled || !value.some(id => own.has(id))}
               aria-label="Clear all permissions"
             >
               Clear All
@@ -92,7 +123,7 @@ export function PermissionMatrix({
 
         {/* Tab Contents */}
         <div className="mt-4">
-          {PERMISSION_CATEGORIES.map(category => (
+          {tabs.map(category => (
             <TabsContent
               key={category}
               value={category}
@@ -100,7 +131,7 @@ export function PermissionMatrix({
             >
               <PermissionMatrixTable
                 contentTypes={filteredContentTypes[category] ?? []}
-                value={value}
+                value={shown}
                 lockedIds={lockedIds}
                 disabled={disabled}
                 searchTerm={searchTerm}

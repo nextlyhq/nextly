@@ -14,6 +14,7 @@ import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useApiKeys, useUpdateApiKey } from "@admin/hooks/queries/useApiKeys";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { navigateTo } from "@admin/lib/navigation";
 import { validateUUID } from "@admin/lib/validation";
@@ -38,6 +39,8 @@ const EditApiKeyContent: React.FC<{ id: string }> = ({ id }) => {
   const { mutate: doUpdate, isPending } = useUpdateApiKey();
 
   const apiKey = data?.data.find(k => k.id === id) ?? null;
+  // The tab names the key being edited once the list holding it has arrived.
+  useDocumentTitle(apiKey?.name);
 
   const handleSubmit = useCallback(
     (values: EditApiKeyFormValues) => {
@@ -107,7 +110,7 @@ const EditApiKeyContent: React.FC<{ id: string }> = ({ id }) => {
 // Page
 // ============================================================
 
-export default function EditApiKeyPage() {
+export default function EditApiKeyPage(): React.JSX.Element {
   const { route } = useRouter();
   const rawId =
     route?.params?.id && typeof route.params.id === "string"

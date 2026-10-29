@@ -36,12 +36,16 @@ import { LinkedEntries } from "./src/collections/linked-entries";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { TranslatedPages } from "./src/collections/translated-pages";
+import { TranslatorNotes } from "./src/collections/translator-notes";
+import { siteNotesWidget } from "./src/dashboard/site-notes-widget";
 import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
+import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
+import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
@@ -52,21 +56,7 @@ import { SiteSettings } from "./src/singles/site-settings";
 // "1" rather than checked for presence so an empty value reads as off.
 const brandingColorsEnabled = process.env.NEXTLY_E2E_BRANDING === "1";
 
-// Set by e2e/playwright.config.ts for the suite's dev server. The suite signs
-// in once and drives every spec through that one session at machine pace, far
-// past the 500 reads a minute the default session budget allows a person, so
-// it is given a session budget of its own. Every other limit keeps its
-// default, and the admin request budget test still holds each page to its bar
-// at the default numbers. Never honoured in a production build, so neither the
-// production suite nor a deployment can raise the limit through this flag.
-const e2eSessionBudget =
-  process.env.NEXTLY_E2E_SESSION_BUDGET === "1" &&
-  process.env.NODE_ENV !== "production";
-
 export default defineConfig({
-  ...(e2eSessionBudget
-    ? { rateLimit: { sessions: { readLimit: 5000, writeLimit: 1500 } } }
-    : {}),
   admin: {
     branding: {
       logoUrlLight: "/Nextly_Icon_dark.svg",
@@ -91,6 +81,9 @@ export default defineConfig({
       email: "dev@nextly.local",
       password: "DevPassword123!",
     },
+    // A widget the site declares itself, offered in the Add panel like a
+    // plugin's, for site-widget.spec.ts.
+    dashboard: { widgets: [siteNotesWidget] },
   },
   localization: {
     locales: [
@@ -127,6 +120,10 @@ export default defineConfig({
     // field group, so a past version can be read in that layout; registered
     // for the e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [HistoryNotes] : []),
+    // The browser test of a document editable in one language and read-only
+    // in another needs a rule that answers by language; registered for the
+    // e2e run only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatorNotes] : []),
   ],
   // Announcement is the localized single WITH the draft/published lifecycle,
   // registered for the same reason Authors is: so the per-language publish
@@ -184,6 +181,15 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
       : []),
+    // Always on, because its widgets are drawn by their own components, which
+    // the committed component map must hold; offered only from the add panel,
+    // named as test fixtures. Moves to the dev-only widget preview page once
+    // there is one.
+    widgetKitFixturePlugin,
+    // Always on, for the same reason: the blocks it contributes reach the
+    // editor through the committed component map. Offered only in the Add
+    // panel, named as test fixtures, for plugin-blocks.spec.ts.
+    blockFixturePlugin,
     // A card whose data answers as late as a spec asks, for the slow-card
     // spec; off in a contributor's dev server, where it would be a test double.
     ...(process.env.NEXTLY_E2E_SLOW_WIDGET === "1"

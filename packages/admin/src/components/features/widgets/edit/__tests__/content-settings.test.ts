@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   dependentsOf,
-  fieldNamedBy,
+  fieldFits,
+  fieldsNamedBy,
   staleContentValues,
 } from "../content-settings";
 
@@ -29,6 +30,7 @@ const sources: PublishedContentSource[] = [
   {
     collection: "posts",
     label: "Posts",
+    lifecycle: false,
     fields: [
       { name: "title", type: "string" },
       { name: "updatedAt", type: "date" },
@@ -39,6 +41,7 @@ const sources: PublishedContentSource[] = [
   {
     collection: "pages",
     label: "Pages",
+    lifecycle: false,
     fields: [{ name: "title", type: "string" }],
   },
 ];
@@ -53,17 +56,87 @@ describe("the settings that follow a collection", () => {
     expect(dependentsOf(settings, "other")).toEqual([]);
   });
 
-  it("each name the field their value refers to", () => {
+  it("each name the fields their value refers to", () => {
     const [where, order, by] = dependentsOf(settings, "collection");
-    expect(fieldNamedBy(order!, "-title")).toBe("title");
-    expect(fieldNamedBy(order!, "title")).toBe("title");
-    expect(fieldNamedBy(by!, "state")).toBe("state");
-    expect(fieldNamedBy(where!, { title: { equals: "a" } })).toBe("title");
-    expect(fieldNamedBy(by!, undefined)).toBeUndefined();
+    expect(fieldsNamedBy(order!, "-title")).toEqual(["title"]);
+    expect(fieldsNamedBy(order!, "title")).toEqual(["title"]);
+    expect(fieldsNamedBy(by!, "state")).toEqual(["state"]);
+    expect(fieldsNamedBy(where!, { title: { equals: "a" } })).toEqual([
+      "title",
+    ]);
+    expect(fieldsNamedBy(by!, undefined)).toEqual([]);
+  });
+
+  it("names every field a Fields setting chose, in order", () => {
+    const shown = {
+      name: "shown",
+      type: "fields" as const,
+      of: "collection",
+    };
+    expect(fieldsNamedBy(shown, ["state", "title"])).toEqual([
+      "state",
+      "title",
+    ]);
+    expect(fieldsNamedBy(shown, undefined)).toEqual([]);
+  });
+});
+
+describe("the fields a Fields setting may choose", () => {
+  const shown = {
+    name: "shown",
+    type: "fields" as const,
+    of: "collection",
+  };
+
+  it("are those a row can print, and never the collection's title", () => {
+    // 🔴 The title is every row's first column already, and a field a row
+    // cannot print would be drawn as an empty place.
+    expect(
+      fieldFits(shown, { name: "category", type: "string" }, "title")
+    ).toBe(true);
+    expect(fieldFits(shown, { name: "title", type: "string" }, "title")).toBe(
+      false
+    );
+    expect(
+      fieldFits(
+        shown,
+        { name: "tags", type: "string", presentable: false },
+        "title"
+      )
+    ).toBe(false);
   });
 });
 
 describe("a stored value naming a field no longer offered", () => {
+  it("is found for a Fields setting by the one chosen field it may not show", () => {
+    // 🔴 `salary` is not among the fields Posts offers this reader: the choice is reset
+    // to none, so the card falls back to its own fields rather than ask for it.
+    const withFields: AnyWidgetSetting[] = [
+      ...settings,
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ];
+    expect(
+      staleContentValues(
+        withFields,
+        { collection: "posts", shown: ["title", "salary"] },
+        sources
+      )
+    ).toEqual([
+      {
+        name: "shown",
+        notice: "Fields was reset: salary is no longer available",
+        replacement: [],
+      },
+    ]);
+    expect(
+      staleContentValues(
+        withFields,
+        { collection: "posts", shown: ["title", "updatedAt"] },
+        sources
+      )
+    ).toEqual([]);
+  });
+
   it("is reported with the sheet's one line", () => {
     expect(
       staleContentValues(

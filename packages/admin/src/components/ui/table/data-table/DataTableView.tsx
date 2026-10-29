@@ -39,7 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import { MoreHorizontal } from "lucide-react";
-import { useMemo, type KeyboardEvent } from "react";
+import { useMemo, type KeyboardEvent, type JSX } from "react";
 
 import { Pagination } from "@admin/components/shared/pagination";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
@@ -165,7 +165,7 @@ export function DataTableView<Row extends object>({
   ariaLabel = "Data table",
   bordered = true,
   className,
-}: DataTableViewProps<Row>) {
+}: DataTableViewProps<Row>): JSX.Element {
   // Merge plugin-contributed columns (and transforms) for this list, if any.
   const resolvedColumns = useMemo(
     () => (registryKey ? resolvePluginColumns(registryKey, columns) : columns),
@@ -443,6 +443,9 @@ export function DataTableView<Row extends object>({
               return (
                 <Card
                   key={id}
+                  // Names the row, so a page can find the card again by the
+                  // row's id: to return focus to it, for one.
+                  data-row-id={id}
                   variant={clickable ? "interactive" : "default"}
                   className={cn(clickable && "cursor-pointer")}
                   role={clickable ? "button" : undefined}
@@ -609,6 +612,8 @@ export function DataTableView<Row extends object>({
                     return (
                       <TableRow
                         key={id}
+                        // The same name the card view gives this row.
+                        data-row-id={id}
                         data-state={
                           selectedSet.has(id) ? "selected" : undefined
                         }

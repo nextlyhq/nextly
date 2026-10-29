@@ -15,8 +15,8 @@
  * @module domains/i18n/config/require-app-config
  */
 
-import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors";
+import { appLocalization } from "../configured-locales";
 
 /**
  * Whether the registered service config carries a localization block.
@@ -27,10 +27,7 @@ import { NextlyError } from "../../../errors";
  */
 export function isAppLocalizationConfigured(): boolean {
   try {
-    if (container.has("config")) {
-      const config = container.get<{ localization?: unknown }>("config");
-      return config.localization != null;
-    }
+    return appLocalization() != null;
   } catch {
     // DI not initialized.
   }

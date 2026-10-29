@@ -49,9 +49,20 @@ import {
   sharedStyleInputs,
 } from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
+import {
+  BlockEnvironmentProvider,
+  type BlockEnvironment,
+} from "@nextlyhq/blocks-react/environment";
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type JSX,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
@@ -1914,7 +1925,7 @@ export function Canvas({
   onDoubleClick,
   overlay,
   preview,
-}: CanvasProps) {
+}: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
 
   /*
@@ -1973,22 +1984,41 @@ export function Canvas({
 
   const boxStyle = useCanvasSurface(root, active, zoom, onScale);
 
+  /*
+   * The document and window the blocks are drawn in, for block code that
+   * measures itself or listens (`useBlockEnvironment`). Read from the canvas
+   * root's OWN document rather than the globals, so the answer is the frame's
+   * once the canvas renders inside one, with nothing here to change.
+   * `undefined` until the root has mounted, which the hook passes on rather
+   * than falling back to the admin page.
+   */
+  const [environment, setEnvironment] = useState<BlockEnvironment | undefined>(
+    undefined
+  );
+  useEffect(() => {
+    const view = root.current?.ownerDocument.defaultView;
+    if (root.current === null || view == null) return;
+    setEnvironment({ document: root.current.ownerDocument, window: view });
+  }, []);
+
   const page = useMemo(
     () => (
-      <PageRenderer
-        {...rendered}
-        document={document}
-        siteStyles={sheet}
-        // What makes the hit-testing above possible at all. The renderer emits
-        // the node attribute only when asked, because a PUBLISHED page should
-        // not carry an editor's addressing — so the canvas asks and a route
-        // does not. Spread first and set here deliberately: a caller passing
-        // `nodeAttribute: false` through `render` would silently disable
-        // selection for the whole canvas.
-        nodeAttribute
-      />
+      <BlockEnvironmentProvider value={environment}>
+        <PageRenderer
+          {...rendered}
+          document={document}
+          siteStyles={sheet}
+          // What makes the hit-testing above possible at all. The renderer emits
+          // the node attribute only when asked, because a PUBLISHED page should
+          // not carry an editor's addressing — so the canvas asks and a route
+          // does not. Spread first and set here deliberately: a caller passing
+          // `nodeAttribute: false` through `render` would silently disable
+          // selection for the whole canvas.
+          nodeAttribute
+        />
+      </BlockEnvironmentProvider>
     ),
-    [rendered, document, sheet]
+    [rendered, document, sheet, environment]
   );
 
   /*

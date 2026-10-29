@@ -1,16 +1,17 @@
 import {
+  Feather,
   LayoutDashboard,
   Languages,
-  Layers,
   Image as ImageIcon,
   Settings,
   Puzzle,
   ShieldAlert,
-  FileText,
 } from "@admin/components/icons";
 import type { ActiveNavSection } from "@admin/constants/nav-sections";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
+
+import { CONTENT_RAIL_ID } from "./lib/content-rail";
 
 /**
  * A rail entry that can be active.
@@ -20,8 +21,14 @@ import { ROUTES } from "@admin/constants/routes";
  */
 export type MainMenuCategory = ActiveNavSection;
 
+/**
+ * A rail item's id: a section, or the Content item, which stands for the
+ * `collections` and `singles` sections together (`lib/content-rail.ts`).
+ */
+export type RailItemId = MainMenuCategory | typeof CONTENT_RAIL_ID;
+
 export interface MainMenuItem {
-  id: MainMenuCategory;
+  id: RailItemId;
   label: string;
   icon: React.ElementType;
   href: string;
@@ -99,8 +106,10 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
     icon: LayoutDashboard,
     href: ROUTES.DASHBOARD,
   },
-  { id: "collections", label: "Collections", icon: Layers, href: "#" },
-  { id: "singles", label: "Singles", icon: FileText, href: "#" },
+  // One item for both content sections: finding a piece of content and
+  // editing it is one job, whether it is a collection entry or a Single. Its
+  // panel switches between the two (`ContentPanel`).
+  { id: CONTENT_RAIL_ID, label: "Content", icon: Feather, href: "#" },
   { id: "media", label: "Media Library", icon: ImageIcon, href: ROUTES.MEDIA },
   // Beside Media rather than under Settings: a release is editorial work on a
   // schedule, and Settings is where configuration lives — filing a daily tool
@@ -138,7 +147,7 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
 // entry is the only route to `/admin/plugins`, which is the installed-plugins
 // list; hiding it until a plugin exists leaves a new install unable to reach
 // that page at all.
-export const getFilteredMenuItems = (showBuilder: boolean) =>
+export const getFilteredMenuItems = (showBuilder: boolean): MainMenuItem[] =>
   MAIN_MENU_ITEMS.filter(item => {
     if (item.id === "builders" && !showBuilder) return false;
     return true;

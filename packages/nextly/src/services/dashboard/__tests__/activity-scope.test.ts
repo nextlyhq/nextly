@@ -476,6 +476,68 @@ describe("a refill that runs out of ROUNDS", () => {
   });
 });
 
+describe("Recently edited's walk at its bound", () => {
+  const caller = { user: { id: "u1", roles: ["editor"] } };
+  /** Saves of ONE document: however many there are, they are one row of the card. */
+  const savesOfOne = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `r${i}`,
+      action: "update",
+      collection: "posts",
+      entryId: "e1",
+      entryTitle: "Same post",
+      subjectKind: "collection",
+      metadata: { changedFields: ["title"] },
+      createdAt: new Date(2026, 0, 1, 0, 0, 100 - i),
+    }));
+
+  it("says more may exist when it stops at its rounds before the table's end", async () => {
+    // 🔴 Every round a full page of saves, none of them admitted (no document
+    // here is readable), so the walk never has a document past the card and
+    // stops at its rounds. Older documents may lie past where it stopped; a
+    // page of one document's many saves stops it the same way.
+    const { service, adapter } = makeService();
+    registeredKinds.mockReturnValue(
+      new Map<string, "collection" | "single">([["posts", "collection"]])
+    );
+    existingIds.mockImplementation((_s: string, ids: string[]) =>
+      Promise.resolve(new Set(ids))
+    );
+    (adapter.select as ReturnType<typeof vi.fn>).mockResolvedValue(
+      savesOfOne(100)
+    );
+    const result = await service.getRecentEdits({
+      limit: 5,
+      scope: someResources(["posts"]),
+      caller,
+    });
+    expect(result.edits).toEqual([]);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("says the list ended when the table runs out", async () => {
+    // The control: without it, `hasMore: true` unconditionally would satisfy
+    // the case above.
+    const { service, adapter } = makeService();
+    registeredKinds.mockReturnValue(
+      new Map<string, "collection" | "single">([["posts", "collection"]])
+    );
+    existingIds.mockImplementation((_s: string, ids: string[]) =>
+      Promise.resolve(new Set(ids))
+    );
+    (adapter.select as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(savesOfOne(3))
+      .mockResolvedValue([]);
+    const result = await service.getRecentEdits({
+      limit: 5,
+      scope: someResources(["posts"]),
+      caller,
+    });
+    expect(result.edits).toEqual([]);
+    expect(result.hasMore).toBe(false);
+  });
+});
+
 describe("counting the feed's rows for the last day", () => {
   /** `count` install-level rows: no document to authorize, so every one is kept. */
   const settingsRows = (count: number, from = 0) =>

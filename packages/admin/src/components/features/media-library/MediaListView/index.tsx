@@ -16,6 +16,7 @@ import {
   Badge,
   Button,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useMemo } from "react";
 
 import {
@@ -39,7 +40,12 @@ import type {
   RowAction,
 } from "@admin/components/ui/table/data-table";
 import { DEFAULT_MEDIA_SKELETON_COUNT } from "@admin/constants/media";
-import { formatFileSize, getMediaType } from "@admin/lib/media-utils";
+import {
+  formatFileSize,
+  formatUploadedDate,
+  getMediaType,
+  mediaImageSrc,
+} from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media } from "@admin/types/media";
 
@@ -103,16 +109,6 @@ function formatDimensions(
   return "-";
 }
 
-// Format date for display
-function formatDate(date: Date | string): string {
-  const d = typeof date === "string" ? new Date(date) : date;
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 export function MediaListView({
   media,
   isLoading = false,
@@ -130,7 +126,7 @@ export function MediaListView({
   className = "",
   emptyStateMessage,
   pagination,
-}: MediaListViewProps) {
+}: MediaListViewProps): JSX.Element {
   const columns = useMemo<NextlyColumn<Media>[]>(() => {
     const allColumns: NextlyColumn<Media>[] = [
       {
@@ -142,9 +138,10 @@ export function MediaListView({
           return (
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-card/50">
+                {/* The grid's tiles choose their image the same way. */}
                 {isImage && (item.thumbnailUrl || item.url) ? (
                   <img
-                    src={item.thumbnailUrl ?? item.url}
+                    src={mediaImageSrc(item, { purpose: "tile" })}
                     alt={item.altText || item.originalFilename}
                     className="block max-h-full max-w-full object-contain"
                     loading="lazy"
@@ -208,7 +205,7 @@ export function MediaListView({
         align: "right",
         cell: ({ value }) => (
           <span className="text-sm text-muted-foreground">
-            {formatDate(value as string | Date)}
+            {formatUploadedDate(value as string | Date)}
           </span>
         ),
       },

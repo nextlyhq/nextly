@@ -9,6 +9,9 @@
  * @module schemas/_dialect-bundles/sqlite
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/sqlite.ts)
  */
+// Every dialect's bundle exports its own tables under the same names, by
+// design: one is chosen by dialect at runtime.
+// fallow-ignore-file duplicate-export
 
 export { users } from "../users/sqlite";
 
@@ -16,6 +19,9 @@ export { users } from "../users/sqlite";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/sqlite";
+// The one schema lock every schema change takes; the field-group lock above is held beside it
+// for processes of an earlier version.
+export { nextlySchemaLock } from "../field-group-lock/sqlite";
 export { nextlyDocumentLock } from "../document-lock/sqlite";
 export { nextlyRbacEpoch } from "../rbac-epoch/sqlite";
 export { nextlyDeletedPrincipals } from "../deleted-principals/sqlite";
@@ -42,7 +48,6 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "../rbac/sqlite";
 
 export { apiKeys } from "../api-keys/sqlite";
@@ -62,6 +67,8 @@ export { userFieldDefinitionsSqlite as userFieldDefinitions } from "../user-fiel
 export { emailProvidersSqlite as emailProviders } from "../email-providers/sqlite";
 export { emailDeliveriesSqlite as emailDeliveries } from "../email-deliveries/sqlite";
 export { emailSendClaimsSqlite as emailSendClaims } from "../email-send-claims/sqlite";
+export { emailQueueSqlite as emailQueue } from "../email-queue/sqlite";
+export { emailQueueRecipientsSqlite as emailQueueRecipients } from "../email-queue-recipients/sqlite";
 export { emailTemplatesSqlite as emailTemplates } from "../email-templates/sqlite";
 
 export { nextlySchemaEventsSqlite as nextlySchemaEvents } from "../schema-events/sqlite";
@@ -103,6 +110,11 @@ export { nextlyJobsSqlite as nextlyJobs } from "../jobs/sqlite";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesSqlite as nextlyNotices } from "../notices/sqlite";
+// Each reader's pinned entries and dashboard preferences; in the bundle for
+// the reason the releases note above gives — this map is what the push
+// creates.
+export { nextlyDashboardPinsSqlite as nextlyDashboardPins } from "../dashboard-pins/sqlite";
+export { nextlyDashboardPreferencesSqlite as nextlyDashboardPreferences } from "../dashboard-preferences/sqlite";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.
@@ -120,3 +132,4 @@ export {
 // Recorded preview links; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksSqlite as nextlyPreviewLinks } from "../preview-links/sqlite";
+export { nextlyLanguagesSqlite as nextlyLanguages } from "../languages/sqlite";

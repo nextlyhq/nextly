@@ -61,7 +61,7 @@ export function SidebarNavigationItem({
   isActive: (href?: string) => boolean;
   isCollapsed: boolean;
   active?: boolean;
-}) {
+}): React.JSX.Element {
   const isItemActive = active !== undefined ? active : isActive(item.href);
   const Icon = item.icon;
   const hasSubItems = item.subItems && item.subItems.length > 0;
@@ -245,10 +245,10 @@ export function SidebarNavigation({
   items,
   isActive,
   hideLabels = [],
-}: SidebarNavigationProps) {
+}: SidebarNavigationProps): React.JSX.Element {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
-  const { capabilities } = useCurrentUserPermissions();
+  const { capabilities, hasPermission } = useCurrentUserPermissions();
   const branding = useBranding();
   const showBuilder = branding?.showBuilder ?? true;
   const [search, setSearch] = React.useState("");
@@ -263,7 +263,11 @@ export function SidebarNavigation({
   const showBuilderSection = showBuilder;
 
   // Filter items based on user permissions before grouping
-  const authorizedItems = filterNavigationItems(items, capabilities);
+  const authorizedItems = filterNavigationItems(
+    items,
+    capabilities,
+    hasPermission
+  );
 
   // Filter items based on search query
   const filteredItems = React.useMemo(() => {

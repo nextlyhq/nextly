@@ -1,18 +1,18 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { inArray, sql } from "drizzle-orm";
+import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { relatedRowReads } from "../../../auth/access/population-read";
 import {
-  apiKeyScopeAllows,
-  type AuthenticatedScope,
-} from "../../../auth/authenticated-scope";
-import {
-  codeAccessAllows,
-  readAccessCaller,
-} from "../../../auth/entity-read-access";
+  readOf,
+  type FilteredRead,
+  type RuleFilter,
+} from "../../../auth/access/rule-answer";
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
+import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -46,22 +46,32 @@ import {
   boundReaches,
   TRUSTS_EVERY_COLLECTION,
 } from "../../../services/collections/trust-grant";
-import { hasPermission } from "../../../services/lib/permissions";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { detachData } from "../../../shared/lib/detach";
 import {
+  anyFieldGroupHasAccessRule,
   applyFieldReadAccess,
+  callerAccessGrants,
+  type CallerGrants,
   runFieldHooks,
   type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
 import {
-  hasPasswordField,
+  type FieldGroupReach,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  liveFieldGroupReadPass,
+  withFieldGroupEvidence,
+  type LiveFieldGroupReadPass,
+} from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -71,6 +81,11 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
+import {
+  localizedFilterContext,
+  ruleFilterCondition,
+  type DynamicSchema,
+} from "../query/filter-condition";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
@@ -87,6 +102,24 @@ import {
  * camelCase form some conversions produce).
  */
 const SYSTEM_ENTITY_SECRET_COLUMNS = ["passwordHash", "password_hash"] as const;
+
+/**
+ * What one read's walk has resolved for the field groups its related rows
+ * hold: each target's pass, and the caller's grants. Keyed by the read's
+ * access context, so a walk reaching one target through many rows resolves
+ * its field-group schemas once, and reads the caller's roles once.
+ */
+interface RelatedFieldGroupState {
+  passes: Map<string, Promise<LiveFieldGroupReadPass | undefined>>;
+  grants: () => Promise<CallerGrants>;
+  /**
+   * The field groups' own evidence, across every pass the walk makes: a later
+   * one restores what an earlier removed, and the entity's own pass is shown
+   * it too (`withFieldGroupEvidence`), since its store cannot hold it.
+   */
+  redactions: ReadAccessRedactions;
+}
+const relatedFieldGroupState = new WeakMap<object, RelatedFieldGroupState>();
 
 /**
  * Default depth for relationship population.
@@ -373,9 +406,12 @@ function trustsTarget(
 }
 
 /**
- * Options for relationship expansion.
+ * Options for relationship expansion. The match-column cache is carried by a
+ * nested hop as the verdict map is, and declared once, on the context it
+ * belongs to.
  */
-export interface RelationshipExpansionOptions {
+export interface RelationshipExpansionOptions
+  extends Pick<RelatedRowReadContext, "targetRuleMatches" | "localeChain"> {
   /**
    * Maximum depth to expand relationships (0-5).
    * - 0: No expansion, return IDs only
@@ -475,7 +511,7 @@ export interface RelationshipExpansionOptions {
    *
    * @internal
    */
-  targetVerdicts?: Map<string, Promise<boolean>>;
+  targetVerdicts?: Map<string, Promise<FilteredRead>>;
 
   /**
    * The caller's authenticated scope, when one applies.
@@ -750,6 +786,7 @@ function relatedRowAccessOf(
     trusted: assumedBound(options.trusted),
     authenticatedScope: options.authenticatedScope,
     locale: options.locale,
+    localeChain: options.localeChain,
     status: options.status,
     withheldByAccess: options.withheldByAccess,
     // One per expansion, so a relationship holding many references reads its
@@ -767,6 +804,8 @@ function relatedRowAccessOf(
     // And the access verdicts, likewise: the caller is the same on every hop,
     // so a target already judged for it is not asked again.
     targetVerdicts: options.targetVerdicts ?? new Map(),
+    // And the match columns, built from those verdicts' filters.
+    targetRuleMatches: options.targetRuleMatches ?? new Map(),
   };
 }
 
@@ -1387,6 +1426,30 @@ type TargetTableColumns = {
   status?: unknown;
 };
 
+/**
+ * The key a related row's fetch selects the match of the target's read rule
+ * filter under, beside the row's own columns. A field name cannot begin with
+ * `$`, so it names no column.
+ */
+const RULE_MATCH = "$ruleMatch";
+
+/**
+ * Strip a related row to its identity (`id` and `label`), in place: the answer
+ * for a row whose schema cannot be resolved, which leaves no field to judge.
+ */
+function stripToIdentity(row: Record<string, unknown>): void {
+  for (const key of Object.keys(row)) {
+    if (key !== "id" && key !== "label") delete row[key];
+  }
+  // Defense in depth: the label is normally a display field (never a
+  // password — a password can't be configured as a label), but a row
+  // migrated from before that guard could carry a bcrypt hash here, so
+  // drop a hash-shaped label rather than surface it.
+  if (typeof row.label === "string" && row.label.startsWith("$2")) {
+    delete row.label;
+  }
+}
+
 export class CollectionRelationshipService extends BaseService {
   /**
    * Decides whether a caller may read a TARGET collection at all.
@@ -1556,7 +1619,8 @@ export class CollectionRelationshipService extends BaseService {
     // refused the whole target is not owed the difference between a row that
     // exists and one that does not, and a completeness check reads the
     // absence as deliberate either way.
-    if (!(await this.callerMayReadTarget(targetCollection, access))) {
+    const read = await this.callerMayReadTarget(targetCollection, access);
+    if (!read.allowed && read.filter === undefined) {
       this.recordWithheldIds(targetCollection, ids, access);
       return [];
     }
@@ -1576,14 +1640,45 @@ export class CollectionRelationshipService extends BaseService {
       access
     );
 
-    const entries = (await this.db
-      .select()
-      .from(schema)
-      .where(inArray(schema.id, ids))) as Record<string, unknown>[];
+    // A read rule that answered a filter shows the caller the rows it
+    // matches. Whether each row matches is selected as a column of this same
+    // fetch rather than added to its WHERE, so a row the filter does not
+    // match is still fetched and recorded below as withheld on purpose, and
+    // an id no row has stays unrecorded, as a dangling reference.
+    const filter = read.filter;
+    const match =
+      filter === undefined
+        ? undefined
+        : await this.memoizedRuleMatch(
+            access,
+            targetCollection,
+            statusFilter,
+            () =>
+              this.ruleMatch(
+                targetCollection,
+                filter,
+                schema,
+                statusFilter,
+                access
+              )
+          );
+    const entries = (await (
+      match === undefined
+        ? this.db.select().from(schema)
+        : this.db
+            .select({ ...getColumns(schema), [RULE_MATCH]: match })
+            .from(schema)
+    ).where(inArray(schema.id, ids))) as Record<string, unknown>[];
 
-    const fetched = entries.map(entry =>
-      convertTimestampsToCamelCase({ ...entry })
-    );
+    const matching = new Set<Record<string, unknown>>();
+    const fetched = entries.map(entry => {
+      // The match is taken off before the row goes further, so it is never
+      // redacted, labelled or returned as one of the row's fields.
+      const { [RULE_MATCH]: matches, ...columns } = entry;
+      const row = convertTimestampsToCamelCase(columns);
+      if (match === undefined || matches === 1) matching.add(row);
+      return row;
+    });
     // Filtered here rather than in the query above so the rows this removes are
     // recorded as deliberately withheld. Narrowing the fetch would drop them
     // before anything could distinguish "exists, wrong lifecycle" from "does
@@ -1606,7 +1701,7 @@ export class CollectionRelationshipService extends BaseService {
     );
     const revealed = new Set(decisions.reveal);
     const hidden = new Set(decisions.hide);
-    const rows = statusFilter
+    const lifecycleRows = statusFilter
       ? fetched.filter(row => {
           const id = typeof row.id === "string" ? row.id : null;
           // Withdrawn wins over the stored status: the row still says
@@ -1620,6 +1715,7 @@ export class CollectionRelationshipService extends BaseService {
           );
         })
       : fetched;
+    const rows = lifecycleRows.filter(row => matching.has(row));
     this.recordWithheld(targetCollection, fetched, rows, access);
 
     // Redaction runs before any caller derives a label from a row: a label
@@ -1630,13 +1726,63 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Whether this caller may read the target collection at all — decided
-   * before its rows are queried, and once per expansion for a dynamic target.
+   * Whether each row of the target matches its read rule's `filter`, as a
+   * column to select: `1` for a row it matches, `0` for one it does not.
+   * Built in the language the read resolved to and under its Draft/Published
+   * filter, as a direct read of the target builds it. `undefined` for a
+   * filter that constrains nothing, which every row matches. A filter that
+   * cannot be built matches no row.
+   */
+  private async ruleMatch(
+    targetCollection: string,
+    filter: RuleFilter,
+    schema: DynamicSchema,
+    statusFilter: StatusFilter | null,
+    access: RelatedRowAccess
+  ): Promise<SQL<number> | undefined> {
+    // Every language the surrounding read falls back through, as a direct
+    // read of the target is judged in; else the one it resolved to.
+    const localeChain =
+      access.localeChain ?? (access.locale ? [access.locale] : null);
+    const companion = localeChain
+      ? await this.resolveTargetCompanion(targetCollection, access)
+      : null;
+    const condition = await ruleFilterCondition(
+      {
+        collectionName: targetCollection,
+        filter,
+        schema,
+        localizedCtx: localizedFilterContext(
+          companion,
+          localeChain,
+          schema,
+          statusFilter?.values
+        ),
+      },
+      // A rule's filter may not name a field inside a component, which the
+      // builder refuses before it looks for a component table, so it is not
+      // told where they are.
+      {
+        getCollection: name => this.collectionService.getCollection(name),
+        adapter: this.adapter,
+      },
+      this.logger
+    );
+    if (condition === undefined) return undefined;
+    return sql<number>`case when ${condition} then 1 else 0 end`.mapWith(
+      Number
+    );
+  }
+
+  /**
+   * Which rows of the target collection this caller may read: all, none, or
+   * those its read rule's filter matches — decided before its rows are
+   * queried, and once per expansion for a dynamic target.
    */
   private async callerMayReadTarget(
     targetCollection: string,
     access: RelatedRowAccess
-  ): Promise<boolean> {
+  ): Promise<FilteredRead> {
     // Deliberately NOT keyed on `enforceFieldAccess`. That flag asks whether a
     // related row's FIELDS should be redacted; this asks whether the caller may
     // see the row at all, and the two have different callers. A Single's
@@ -1645,9 +1791,9 @@ export class CollectionRelationshipService extends BaseService {
     // preliminary view has to withhold it too, or the rule approves a document
     // on evidence the response then removes and side effects run in between.
     if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
-      return true;
+      return readOf(true);
     }
-    if (trustsTarget(access, targetCollection)) return true;
+    if (trustsTarget(access, targetCollection)) return readOf(true);
     if (isSystemEntity(targetCollection)) {
       // A system entity carries no stored collection rules, so the dynamic
       // path below has nothing to evaluate. A direct read of `users` requires
@@ -1665,31 +1811,27 @@ export class CollectionRelationshipService extends BaseService {
       // field otherwise, each a permission lookup.
       return this.memoizedVerdict(access, targetCollection, async () => {
         if (boundRefuses(access, targetCollection)) {
-          return canReadSystemResource(
-            targetCollection.toLowerCase(),
-            callerId(access),
-            access.authenticatedScope
+          return readOf(
+            await canReadSystemResource(
+              targetCollection.toLowerCase(),
+              callerId(access),
+              access.authenticatedScope
+            )
           );
         }
         // A read holding no bypass is asked what its direct read asks.
         // Answered "yes" for everyone before, which let a key or a person
         // refused `users` by name read a post's author through the
         // relationship.
-        return identifiedCallerMayRead(access, targetCollection.toLowerCase());
+        return readOf(
+          await identifiedCallerMayRead(access, targetCollection.toLowerCase())
+        );
       });
     }
-
-    const accessService = this.resolveAccessService();
 
     // The redaction basis when the read names one, as a preview does, so a
     // link never shows a row its sharer could not read.
     const user = judgedFor(access) as UserContext | undefined;
-    // Super-admins bypass the read gate on every other transport. A scoped API
-    // key is authoritative on its OWN grant and never on its owner's roles, so
-    // the bypass does not extend to one — the same carve-out the direct read
-    // paths make.
-    const isScopedApiKey = access.authenticatedScope?.actorType === "apiKey";
-    if (!isScopedApiKey && accessService.isSuperAdmin(user)) return true;
 
     // One verdict for the whole target: every row of it is admitted or
     // withheld together, and the rule is asked once — per EXPANSION, not per
@@ -1792,9 +1934,23 @@ export class CollectionRelationshipService extends BaseService {
     user: UserContext | undefined,
     targetCollection: string,
     access: RelatedRowAccess
-  ): Promise<boolean> {
+  ): Promise<FilteredRead> {
     return this.memoizedVerdict(access, targetCollection, () =>
-      this.judgeTarget(user, targetCollection, access.authenticatedScope)
+      relatedRowReads(
+        targetCollection,
+        {
+          user: user && {
+            id: String(user.id),
+            role: user.role,
+            roles: user.roles,
+          },
+          scope: access.authenticatedScope,
+          principal: currentPrincipal(),
+        },
+        container.has("rbacAccessControlService")
+          ? container.get<RBACAccessControlService>("rbacAccessControlService")
+          : undefined
+      )
     );
   }
 
@@ -1806,8 +1962,8 @@ export class CollectionRelationshipService extends BaseService {
   private memoizedVerdict(
     access: RelatedRowAccess,
     targetCollection: string,
-    decide: () => Promise<boolean>
-  ): Promise<boolean> {
+    decide: () => Promise<FilteredRead>
+  ): Promise<FilteredRead> {
     const cached = access.targetVerdicts?.get(targetCollection);
     if (cached) return cached;
     const pending = decide();
@@ -1816,127 +1972,27 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
-   * Whether the caller may read the target collection at all.
-   *
-   * One verdict for the whole target, asked once per expansion rather than once
-   * per row. The gate answers per caller and operation and has no per-row
-   * shape, so every row of one target is admitted or refused together — and a
-   * rule that reaches out to another service is asked once, not five hundred
-   * times concurrently for a five-hundred-row relationship.
-   *
-   * The question is the one a permission-checked direct read of the target
-   * asks, so a row refused by name is withheld from a relationship too. The
-   * route authorized this caller for the PARENT collection only, and says
-   * nothing about a target they never asked for.
-   *
-   * - A scoped API key must hold `read-<target>` in its OWN scope, and then
-   *   answers to the target's rule when one is declared. The grant is asked
-   *   first, so a key its scope never admitted to the target is refused
-   *   whatever the rule would say, and never on its owner's authority.
-   * - A session caller answers to the target's rule when one is declared,
-   *   without a per-collection grant, so a site that leans on code-defined
-   *   access keeps its relationships. Where the target declares no read rule,
-   *   the caller falls through to their database grants, as the direct read
-   *   does.
-   *
-   * The rule is shown the SAME context a direct read shows it. A session
-   * caller's rule reads real roles and effective permissions, built by the RBAC
-   * service exactly as `checkAccess` builds them for a direct read; a scoped API
-   * key's rule reads the key's own stamped grants, as the direct read's api-key
-   * branch does. A narrower reconstruction here — an empty permission list, say
-   * — makes the same row vanish from a relationship that the caller can read
-   * directly, which reports as a ghost.
-   *
-   * An absent rule decides nothing on its own: a key answers to its grant
-   * alone, and a person to their database grants, as each one's direct read
-   * does. A rule that throws denies, so a broken one fails closed.
-   *
-   * An ANONYMOUS caller is judged too, by the same question a direct anonymous
-   * read of the target asks: the rule, handed a real anonymous context. The
-   * permission half of the gate needs a user and does not run for them, but
-   * the rule reads nothing off the caller — and `read: false` on a target
-   * describes an anonymous reader most clearly of all. Admitting them here
-   * would let a public parent expose, through a relationship, rows the same
-   * visitor is refused when asking for them by name.
+   * The match column this expansion already built for the target, or
+   * `build`'s, kept for the rest of the expansion. The target's filter is its
+   * kept verdict's, fixed for the expansion, so the column depends only on the
+   * target, the status filter and the language it is built under.
    */
-  private async judgeTarget(
-    user: UserContext | undefined,
+  private memoizedRuleMatch(
+    access: RelatedRowAccess,
     targetCollection: string,
-    authenticatedScope: AuthenticatedScope | undefined
-  ): Promise<boolean> {
-    const rbac = container.has("rbacAccessControlService")
-      ? container.get<RBACAccessControlService>("rbacAccessControlService")
-      : undefined;
-
-    // A call made as a plugin-defined person reads a populated target only
-    // where the target's own rule admits them: the one decision the direct
-    // read of the target asks, so a relationship serves a person nothing they
-    // would be refused by name. No rule, or no service to consult, refuses.
-    const principal = currentPrincipal();
-    if (principal !== null) {
-      return (
-        rbac !== undefined &&
-        rbac.checkPrincipalCodeAccess({
-          operation: "read",
-          resource: targetCollection,
-          principal,
-        })
-      );
-    }
-
-    if (!user) {
-      // `undefined` is no opinion — the target names no rule for reading, and
-      // the anonymous read falls through to its public default, as the direct
-      // read does. A boolean is the rule's own verdict.
-      const verdict = await rbac?.checkAnonymousCodeAccess({
-        operation: "read",
-        resource: targetCollection,
-      });
-      return verdict !== false;
-    }
-
-    // A key's own scope is authoritative on the target, before any rule: the
-    // same grant a direct read of the target requires of it.
-    if (
-      apiKeyScopeAllows(authenticatedScope, "read", targetCollection) === false
-    ) {
-      return false;
-    }
-
-    // Without the access-control service, the answer the direct read's gate
-    // gives without it: a key's grant, already asked above, and a person's
-    // database grants. Admitting the person here let a relationship serve rows
-    // the same caller was refused by name.
-    if (!rbac) {
-      return authenticatedScope?.actorType === "apiKey"
-        ? true
-        : hasPermission(user.id, "read", targetCollection);
-    }
-    const target = rbac.getRegisteredTarget(targetCollection);
-    const codeAccess = target?.access;
-
-    if (authenticatedScope?.actorType === "apiKey") {
-      // Judged on the operation rather than the object, because a collection
-      // that declares `access.create` alone has still said nothing about
-      // reading. With no read rule, the grant above is the whole answer, as it
-      // is on the direct read's key branch.
-      if (!target || codeAccess?.read === undefined) return true;
-      return codeAccessAllows(
-        target,
-        "read",
-        readAccessCaller({ user, authenticatedScope })
-      );
-    }
-
-    // A declared read rule answers alone, with its context built the canonical
-    // way. Without one, `checkAccess` falls through to the caller's database
-    // grants, which is the answer a permission-checked direct read gives.
-    return rbac.checkAccess({
-      userId: user.id,
-      operation: "read",
-      resource: targetCollection,
-      codeAccess,
-    });
+    statusFilter: StatusFilter | null,
+    build: () => Promise<SQL<number> | undefined>
+  ): Promise<SQL<number> | undefined> {
+    const key = JSON.stringify([
+      targetCollection,
+      statusFilter?.values ?? null,
+      access.localeChain ?? access.locale ?? null,
+    ]);
+    const cached = access.targetRuleMatches?.get(key);
+    if (cached) return cached;
+    const pending = build();
+    access.targetRuleMatches?.set(key, pending);
+    return pending;
   }
 
   /**
@@ -3128,6 +3184,27 @@ export class CollectionRelationshipService extends BaseService {
    * never describes a related collection's fields.
    */
   /**
+   * {@link redactWalkedRow} for a row the nested walk resolved, by its own
+   * collection's fields and table as the walk cached them.
+   */
+  private async redactNestedRow(
+    resolved: { collection: string; row: Record<string, unknown> },
+    state: NestedHookState
+  ): Promise<void> {
+    const targetFields = await this.fieldsForNestedWalk(
+      resolved.collection,
+      state
+    );
+    this.redactWalkedRow(
+      resolved.collection,
+      resolved.row,
+      targetFields,
+      await this.tableForNestedWalk(resolved.collection, state),
+      await this.passwordReach(targetFields)
+    );
+  }
+
+  /**
    * Redact one row the relationship walk has just populated.
    *
    * Both walks do the same three things and did them in two copies; a
@@ -3143,10 +3220,12 @@ export class CollectionRelationshipService extends BaseService {
     row: Record<string, unknown>,
     targetFields: FieldDefinition[],
     /** The physical table `collection` reads from; see `tableForNestedWalk`. */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): void {
-    if (hasPasswordField(targetFields)) {
-      stripPasswordFieldValues(row, targetFields);
+    if (reachesPasswordField(targetFields, reach)) {
+      stripPasswordFieldValues(row, targetFields, reach);
     }
     if (isSystemEntity(collection)) {
       for (const col of SYSTEM_ENTITY_SECRET_COLUMNS) {
@@ -3192,26 +3271,16 @@ export class CollectionRelationshipService extends BaseService {
     }
     const targetFields = target?.fields ?? null;
     if (targetFields === null) {
-      for (const row of rows) {
-        for (const key of Object.keys(row)) {
-          if (key !== "id" && key !== "label") delete row[key];
-        }
-        // Defense in depth: the label is normally a display field (never a
-        // password — a password can't be configured as a label), but a row
-        // migrated from before that guard could carry a bcrypt hash here, so
-        // drop a hash-shaped label rather than surface it.
-        if (typeof row.label === "string" && row.label.startsWith("$2")) {
-          delete row.label;
-        }
-      }
+      for (const row of rows) stripToIdentity(row);
       // Nothing but id/label survives, so there is no field left to judge.
       return;
     }
     // Secrets first, and for every caller: a trusted read has no more use for a
     // password hash than an anonymous one.
-    if (hasPasswordField(targetFields)) {
+    const reach = await this.passwordReach(targetFields);
+    if (reachesPasswordField(targetFields, reach)) {
       for (const row of rows) {
-        stripPasswordFieldValues(row, targetFields);
+        stripPasswordFieldValues(row, targetFields, reach);
       }
     }
     // Secrets above are unconditional and stay here. The target's FIELD rules
@@ -3715,16 +3784,7 @@ export class CollectionRelationshipService extends BaseService {
       );
       // Secrets a hook could reintroduce, stripped for the same reason the walk
       // strips them: unconditional, override included.
-      const targetFields = await this.fieldsForNestedWalk(
-        resolved.collection,
-        state
-      );
-      this.redactWalkedRow(
-        resolved.collection,
-        resolved.row,
-        targetFields,
-        await this.tableForNestedWalk(resolved.collection, state)
-      );
+      await this.redactNestedRow(resolved, state);
       // Rebuild the label from what survived, as the walk does before returning to a
       // parent: a field hook can mutate an existing child so its label field flips
       // from allowed to denied, and this access pass removes the field but leaves the
@@ -3941,16 +4001,7 @@ export class CollectionRelationshipService extends BaseService {
       // using the source collection's schema, so they would never look at this
       // one. Stripped again here for the same reason a direct read strips after
       // its own hooks.
-      const targetFields = await this.fieldsForNestedWalk(
-        resolved.collection,
-        state
-      );
-      this.redactWalkedRow(
-        resolved.collection,
-        resolved.row,
-        targetFields,
-        await this.tableForNestedWalk(resolved.collection, state)
-      );
+      await this.redactNestedRow(resolved, state);
     }
   }
 
@@ -4020,21 +4071,112 @@ export class CollectionRelationshipService extends BaseService {
     // one restores what an earlier removed as evidence and re-judges the current
     // content, so a denied field a hook reintroduced or a row it changed is
     // caught while an unchanged verdict stays put.
+    // What an earlier field-group pass on these rows removed, which the
+    // target's own rules are judged against as the row stores it.
+    const fieldGroupEvidence = relatedFieldGroupState.get(access)?.redactions;
     for (const row of rows) {
-      await applyFieldReadAccess(
-        {
-          kind: "collection",
-          slug: targetCollection,
-          entry: row,
-          // The field-access identity, never the hook one: a preview judges a
-          // related row's fields as the sharer while every hook goes on seeing
-          // the anonymous bearer who is actually asking.
-          user: access.fieldAccessUser ?? access.user,
-          overrideAccess: false,
-        },
-        redactions
-      );
+      const judge = () =>
+        applyFieldReadAccess(
+          {
+            kind: "collection",
+            slug: targetCollection,
+            entry: row,
+            // The field-access identity, never the hook one: a preview judges a
+            // related row's fields as the sharer while every hook goes on
+            // seeing the anonymous bearer who is actually asking.
+            user: access.fieldAccessUser ?? access.user,
+            overrideAccess: false,
+          },
+          redactions
+        );
+      await (fieldGroupEvidence
+        ? withFieldGroupEvidence(row, fieldGroupEvidence, judge)
+        : judge());
     }
+    await this.applyRelatedFieldGroupReadAccess(targetCollection, rows, access);
+  }
+
+  /**
+   * Evaluate the rules on fields inside the field groups a related row holds,
+   * by the TARGET collection's schema, so a populated row withholds what a
+   * direct read of it would. Its store, kept for the read, lets a later pass
+   * restore what an earlier one removed as evidence.
+   */
+  private async applyRelatedFieldGroupReadAccess(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    access: RelatedRowAccess
+  ): Promise<void> {
+    if (!anyFieldGroupHasAccessRule("read")) return;
+    const user = access.fieldAccessUser ?? access.user;
+    let state = relatedFieldGroupState.get(access);
+    if (!state) {
+      // A scoped API key's own grants, never its owner's.
+      state = {
+        passes: new Map(),
+        grants: callerAccessGrants(user, access.authenticatedScope),
+        redactions: new WeakMap(),
+      };
+      relatedFieldGroupState.set(access, state);
+    }
+    let pending = state.passes.get(targetCollection);
+    if (!pending) {
+      pending = this.relatedFieldGroupPass(targetCollection);
+      state.passes.set(targetCollection, pending);
+    }
+    const pass = await pending;
+    if (!pass) return;
+    const caller = {
+      user,
+      authenticatedScope: access.authenticatedScope,
+      grants: state.grants,
+      redactions: state.redactions,
+    };
+    for (const row of rows) await pass(row, caller);
+  }
+
+  /** The field-group read pass for one target collection's related rows. */
+  private async relatedFieldGroupPass(
+    targetCollection: string
+  ): Promise<LiveFieldGroupReadPass | undefined> {
+    const target = await this.getRedactionTarget(targetCollection);
+    // The schema resolved when the row was loaded, but this read of it failed:
+    // what the row's field groups hold cannot be judged, so the row is
+    // withheld to its identity, as a row whose schema never resolved is.
+    if (target === null) {
+      return row => {
+        stripToIdentity(row);
+        return Promise.resolve();
+      };
+    }
+    const source = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
+      : undefined;
+    return liveFieldGroupReadPass(target.fields as FieldConfig[], source);
+  }
+
+  /**
+   * Where the password strip follows the field groups a target's fields hold
+   * inline, once per field list: a walk caches each target's fields for the
+   * batch, so a target read many times resolves them once.
+   */
+  private readonly passwordReaches = new WeakMap<
+    readonly unknown[],
+    Promise<FieldGroupReach>
+  >();
+
+  private passwordReach(fields: readonly unknown[]): Promise<FieldGroupReach> {
+    let reach = this.passwordReaches.get(fields);
+    if (!reach) {
+      reach = passwordReachOf(
+        fields,
+        container.has("fieldGroupDataService")
+          ? container.get<FieldGroupDataService>("fieldGroupDataService")
+          : undefined
+      );
+      this.passwordReaches.set(fields, reach);
+    }
+    return reach;
   }
 
   /**

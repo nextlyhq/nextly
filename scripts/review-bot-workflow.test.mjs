@@ -26,9 +26,9 @@
  * the calls they make are what is asserted.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, posix } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { load } from "js-yaml";
@@ -351,10 +351,17 @@ describe("where a model agent runs", () => {
       return [step, manifest, ...reached(stepsOfAction(manifest), readAction, seen)];
     });
   }
-  /** The repository path of the local action a step uses, or nothing for any other step. */
+  /**
+   * The repository path of the local action a step uses, or nothing for any
+   * other step. One used from a checkout of this repository in a folder of its
+   * own (`./<folder>/.github/actions/…`) is the same file at the repository's root.
+   */
   function localActionOf(step) {
     if (!step.uses?.startsWith("./")) return undefined;
-    return step.uses.slice(2).replace(/\/$/, "");
+    return step.uses
+      .slice(2)
+      .replace(/^[^/]+\/(?=\.github\/actions\/)/, "")
+      .replace(/\/$/, "");
   }
   /** A composite action's steps; an action of another kind runs none of this repository's. */
   const stepsOfAction = manifest => manifest.runs?.steps ?? [];
@@ -591,7 +598,24 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)("the is
 
   it("creates `.mcp.json` in each directory above the checkout the job's user cannot write, and nowhere else", () => {
     const touched = calls.filter(call => call.startsWith("touch "));
-    expect(touched).toEqual([`touch ${locked}/.mcp.json`, "touch /.mcp.json"]);
+    // Which ancestors the user cannot write depends on where the temporary
+    // folder lives: on Linux only `/` above it, on macOS also the parents of
+    // `/var/folders/…`. The fixture's own locked folder is always among them.
+    const above = [];
+    for (let at = dirname(join(locked, "runner")); ; at = dirname(at)) {
+      above.push(at);
+      if (at === dirname(at)) break;
+    }
+    const unwritable = above.filter(at => {
+      try {
+        accessSync(at, constants.W_OK);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(unwritable).toContain(locked);
+    expect(touched).toEqual(unwritable.map(at => `touch ${at === "/" ? "" : at}/.mcp.json`));
   });
 });
 

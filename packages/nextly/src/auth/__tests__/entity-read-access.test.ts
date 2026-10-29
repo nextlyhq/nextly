@@ -33,7 +33,7 @@ vi.mock("../../di/container", () => ({
   container: {
     has: hasSpy,
     get: () => ({
-      checkAccess: checkAccessSpy,
+      checkAccessApplyingFilter: checkAccessSpy,
       getRegisteredAccess: registeredAccessSpy,
       // The registered target, built from what the spy registers, as the
       // service derives one from the other.
@@ -47,8 +47,15 @@ vi.mock("../../di/container", () => ({
 
 import { userActor } from "../access/actor";
 import { clearDeclaredTargets, declareTarget } from "../access/declared-rules";
+import {
+  JUDGED_OTHERWISE,
+  routeVerdictFor,
+  runWithAccessMemo,
+} from "../access/request-memo";
+import { currentRuleLanguage } from "../access/rule-language";
 import { apiKeyScope } from "../authenticated-scope";
 import {
+  authorizationScheduler,
   canReadEntity,
   readAccessCaller,
   readableEntities,
@@ -102,7 +109,7 @@ describe("canReadEntity — API key callers", () => {
     vi.clearAllMocks();
     hasSpy.mockReturnValue(true);
     registeredAccessSpy.mockReturnValue(undefined);
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
   });
 
   it("refuses a key whose row holds the read under a slug of its own", async () => {
@@ -156,7 +163,7 @@ describe("canReadEntity — API key callers", () => {
     // `checkAccess` bypasses everything for a super admin, which is correct for
     // a session and wrong for a key: a read-only key issued by an administrator
     // would otherwise carry their whole account.
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
 
     await expect(
       canReadEntity("posts", apiKey(["update-posts"]))
@@ -186,10 +193,10 @@ describe("canReadEntity — API key callers", () => {
       true
     );
     // The role screen's spelling, the same slug the coarse check compared,
-    // with the earlier `posts:read` after it for its deprecation release.
+    // and no other.
     expect(read).toHaveBeenCalledWith(
       expect.objectContaining({
-        permissions: ["read-posts", "posts:read"],
+        permissions: ["read-posts"],
         roles: ["editor"],
         operation: "read",
         collection: "posts",
@@ -292,20 +299,20 @@ describe("canReadEntity — session callers", () => {
     // lookup that cannot read them does not fail it.
     actorForUserSpy.mockRejectedValue(new Error("grants unreadable"));
     registeredAccessSpy.mockReturnValue({ read: true });
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
 
     await expect(canReadEntity("posts", session)).resolves.toBe(true);
     expect(actorForUserSpy).not.toHaveBeenCalled();
   });
 
-  it("lets a declared read rule decide alone, its answer handed back as given", async () => {
-    // Kept as today: the service asks the rule once, whatever the grants,
-    // and its answer comes back as the rule gave it.
+  it("lets a declared read rule decide alone", async () => {
+    // The service asks the rule once, whatever the grants, and its refusal
+    // refuses.
     actorForUserSpy.mockResolvedValue(readerOf());
     registeredAccessSpy.mockReturnValue({ read: () => true });
-    checkAccessSpy.mockResolvedValue(null);
+    checkAccessSpy.mockResolvedValue({ allowed: false });
 
-    await expect(canReadEntity("posts", session)).resolves.toBeNull();
+    await expect(canReadEntity("posts", session)).resolves.toBe(false);
     expect(checkAccessSpy).toHaveBeenCalledWith({
       userId: "u1",
       operation: "read",
@@ -314,11 +321,62 @@ describe("canReadEntity — session callers", () => {
   });
 });
 
+describe("canReadEntity — a declared read rule that answers a filter", () => {
+  const filter = { team: { equals: "public" } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hasSpy.mockReturnValue(true);
+    registeredAccessSpy.mockReturnValue({ read: () => filter });
+    checkAccessSpy.mockResolvedValue({ allowed: false, filter });
+  });
+
+  it("answers yes inside a request, keeping the filter for the reads it lets run", async () => {
+    const [answer, kept] = await runWithAccessMemo(async () => [
+      await canReadEntity("posts", session),
+      routeVerdictFor({
+        userId: "u1",
+        slug: "posts",
+        action: "read",
+        language: currentRuleLanguage(),
+      }),
+    ]);
+    expect(answer).toBe(true);
+    expect(kept).toEqual({ filter });
+  });
+
+  it("keeps a key's filter under the key's scope, for the read its request runs", async () => {
+    const key = apiKey(["read-posts"]);
+    const scopeOf = apiKeyScope(key.grants ?? [], key.roles);
+    const asked = (scope?: typeof scopeOf) =>
+      routeVerdictFor({
+        userId: "owner-1",
+        ...(scope ? { scope } : {}),
+        slug: "posts",
+        action: "read",
+        language: currentRuleLanguage(),
+      });
+    const [answer, asKey, asSession] = await runWithAccessMemo(async () => [
+      await canReadEntity("posts", key),
+      asked(scopeOf),
+      asked(),
+    ]);
+    expect(answer).toBe(true);
+    expect(asKey).toEqual({ filter });
+    // The owner's own session is another caller, and is refused the key's.
+    expect(asSession).toBe(JUDGED_OTHERWISE);
+  });
+
+  it("answers no outside a request, where nothing can carry the filter", async () => {
+    await expect(canReadEntity("posts", session)).resolves.toBe(false);
+  });
+});
+
 describe("canReadEntity — degenerate input", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasSpy.mockReturnValue(true);
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
     registeredAccessSpy.mockReturnValue(undefined);
   });
 
@@ -345,7 +403,7 @@ describe("readableEntities", () => {
     vi.clearAllMocks();
     hasSpy.mockReturnValue(true);
     registeredAccessSpy.mockReturnValue(undefined);
-    checkAccessSpy.mockResolvedValue(true);
+    checkAccessSpy.mockResolvedValue({ allowed: true });
     actorForUserSpy.mockResolvedValue(readerOf("posts", "pages", "broken"));
   });
 
@@ -383,5 +441,63 @@ describe("readableEntities", () => {
     // that returns the empty set.
     const allowed = await readableEntities(["posts", "pages"], session);
     expect([...allowed].sort()).toEqual(["pages", "posts"]);
+  });
+});
+
+describe("authorizationScheduler", () => {
+  /** A decision held open until the test answers it, counting how many are in flight. */
+  function harness() {
+    let inFlight = 0;
+    let most = 0;
+    const answers: Array<() => void> = [];
+    const decide =
+      (fail = false) =>
+      () =>
+        new Promise<boolean>((resolve, reject) => {
+          inFlight += 1;
+          most = Math.max(most, inFlight);
+          answers.push(() => {
+            inFlight -= 1;
+            if (fail) reject(new Error("refused"));
+            else resolve(true);
+          });
+        });
+    const answerAll = () => {
+      for (const answer of answers.splice(0, answers.length)) answer();
+    };
+    return { decide, answerAll, inFlight: () => inFlight, most: () => most };
+  }
+
+  it("runs the first decision alone, then at most the bound at once", async () => {
+    const h = harness();
+    const scheduled = authorizationScheduler(3);
+    const decisions = Array.from({ length: 8 }, () => scheduled(h.decide()));
+    // The warm-up: one decision before anything fans out.
+    expect(h.inFlight()).toBe(1);
+    h.answerAll();
+    await vi.waitFor(() => expect(h.inFlight()).toBe(3));
+    while (h.inFlight() > 0) {
+      h.answerAll();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    await expect(Promise.all(decisions)).resolves.toHaveLength(8);
+    // 🔴 Never more than the bound, though all eight were asked at once.
+    expect(h.most()).toBe(3);
+  });
+
+  it("hands each caller its own decision, a refusal reaching only the one that asked", async () => {
+    const h = harness();
+    const scheduled = authorizationScheduler(2);
+    const refused = scheduled(h.decide(true));
+    const allowed = scheduled(h.decide());
+    h.answerAll();
+    await expect(refused).rejects.toThrow("refused");
+    await vi.waitFor(() => expect(h.inFlight()).toBe(1));
+    h.answerAll();
+    await expect(allowed).resolves.toBe(true);
+  });
+
+  it("refuses a bound that would never let a decision start", () => {
+    expect(() => authorizationScheduler(0)).toThrow();
   });
 });

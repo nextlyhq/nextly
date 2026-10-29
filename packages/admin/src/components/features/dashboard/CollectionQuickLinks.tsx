@@ -2,31 +2,114 @@
 
 import { Card, CardContent, Skeleton } from "@nextlyhq/ui";
 import { Database, FileCheck, Layout, Puzzle } from "lucide-react";
+import { MAX_WIDGET_LIMIT } from "nextly/config";
+import type { WidgetComponentProps, WidgetSlot } from "nextly/widget-result";
 import type React from "react";
 import { useMemo } from "react";
 
+import {
+  ListFooter,
+  listFooter,
+} from "@admin/components/features/widgets/frame/list-card";
+import { listViewHref } from "@admin/components/features/widgets/frame/list-view-href";
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
   NAV_COLLECTIONS_PARAMS,
   useCollections,
-  useDashboardStats,
+  useSingles,
 } from "@admin/hooks/queries";
 import { cn } from "@admin/lib/utils";
 import type { CollectionCount } from "@admin/types/dashboard/stats";
 import type { ApiCollection } from "@admin/types/entities";
 
+import { FrameState, readSlot } from "../widgets/frame/card-state";
 import { CardFigure } from "../widgets/frame/figure";
-import { CardError, CardSkeleton } from "../widgets/frame/states";
 
+import { ContentSingleTile } from "./ContentSingleTile";
 import { keptOffDashboard } from "./kept-off-dashboard";
 
 /**
  * One tile: a collection and its count, or `null` while the counts are on their way. The tile is
  * drawn either way, so the counts landing fill tiles already in place rather than inserting them.
  */
-type CollectionTile = Omit<CollectionCount, "count"> & { count: number | null };
+type CollectionTile = Omit<CollectionCount, "count"> & {
+  count: number | null;
+  /** How many of its entries are drafts, once counted; absent until then. */
+  draft?: number;
+};
+
+/**
+ * The most tiles the card draws: one fewer than it asks for, so the one more says more exist, the
+ * rule core's lists follow. The card asks the most any widget query returns, so this is reached
+ * only by an install with that many collections.
+ */
+const TILES_DRAWN = MAX_WIDGET_LIMIT - 1;
+
+/** The sidebar's own Singles request, so the card shares its answer for icons and descriptions. */
+const SINGLES_PARAMS = {
+  pagination: { page: 0, pageSize: 100 },
+  sorting: [],
+  filters: {},
+};
+
+/** One collection as `system:content` answers it: its entries, and how many are drafts. */
+type ContentRow = CollectionCount & { draft: number };
+
+/** One Single as `system:content` answers it: what it is called. */
+interface ContentSingleRow {
+  slug: string;
+  label: string;
+}
+
+/** The rows of a `system:content` answer, or `undefined` while there is none. */
+function answeredRows(
+  slot: WidgetSlot | undefined
+): Record<string, unknown>[] | undefined {
+  if (!slot?.ok || slot.result.op !== "list") return undefined;
+  return slot.result.items;
+}
+
+/**
+ * The Singles of a `system:content` answer, after its collections. A row this build cannot read
+ * is left out rather than drawn from guesses.
+ */
+function singleRowsOf(
+  rows: Record<string, unknown>[] | undefined
+): ContentSingleRow[] {
+  return (rows ?? []).flatMap(({ kind, slug, label }) =>
+    kind === "single" && typeof slug === "string" && typeof label === "string"
+      ? [{ slug, label }]
+      : []
+  );
+}
+
+/**
+ * The collections of a `system:content` answer, or `undefined` while there is none. A row with
+ * no `kind` is a collection, as every row was before Singles joined the answer. A row this build
+ * cannot read is left out rather than drawn from guesses.
+ */
+function contentRowsOf(
+  rows: Record<string, unknown>[] | undefined
+): ContentRow[] | undefined {
+  if (rows === undefined) return undefined;
+  return rows.flatMap(row => {
+    const { kind, slug, label, group, count, draft } = row;
+    if (kind !== undefined && kind !== "collection") return [];
+    if (typeof slug !== "string" || typeof label !== "string") return [];
+    if (typeof count !== "number") return [];
+    return [
+      {
+        slug,
+        label,
+        group: typeof group === "string" ? group : null,
+        count,
+        draft: typeof draft === "number" ? draft : 0,
+      },
+    ];
+  });
+}
 
 interface CollectionGroup {
   name: string | null;
@@ -49,9 +132,10 @@ function getGroupDefaultIcon(group: string | null) {
 /**
  * The tiles to draw, in the collections list's order.
  *
- * - **Both known:** the collections that have a count, each with its count. The list holds
- *   every collection this reader may see, and core counts those it may read and keeps on the
- *   dashboard, so a count names a listed collection and never one the list lacks.
+ * - **Both known:** every counted collection, each with its count: first those the list holds, in
+ *   its order, then any it lacks, in the counts' order. The two are different pages past the
+ *   list's first hundred and the counts' first fifty, so a count is never dropped for missing
+ *   from the list; on an install small enough for both to be whole, the list holds them all.
  * - **The list only:** every listed collection, its count still on its way. Once the counts
  *   land, a tile with no count goes, so the card can only close up, never grow.
  * - **The list still on its way:** nothing yet, whatever the counts say. Drawn from the counts
@@ -65,20 +149,25 @@ function getGroupDefaultIcon(group: string | null) {
 function collectionTiles(
   list: readonly ApiCollection[] | undefined,
   listPending: boolean,
-  counts: readonly CollectionCount[] | undefined
+  counts: readonly ContentRow[] | undefined
 ): CollectionTile[] | undefined {
   if (list === undefined && listPending) return undefined;
   if (list === undefined || list.length === 0) return counts?.slice();
-  const counted = new Map(counts?.map(count => [count.slug, count]));
   // Kept off the dashboard by the admin's one rule for it, as the counts already are: drawn
   // first, a hidden collection's tile would show until the counts took it away again.
-  return list
-    .filter(collection => !keptOffDashboard(collection))
-    .flatMap(collection => {
+  const listed = list.filter(collection => !keptOffDashboard(collection));
+  if (counts === undefined) {
+    return listed.map(collection => tileOf(collection, undefined));
+  }
+  const counted = new Map(counts.map(count => [count.slug, count]));
+  const inList = new Set(listed.map(collection => collection.name));
+  return [
+    ...listed.flatMap(collection => {
       const count = counted.get(collection.name);
-      if (counts !== undefined && count === undefined) return [];
-      return [tileOf(collection, count)];
-    });
+      return count === undefined ? [] : [tileOf(collection, count)];
+    }),
+    ...counts.filter(count => !inList.has(count.slug)),
+  ];
 }
 
 /**
@@ -87,7 +176,7 @@ function collectionTiles(
  */
 function tileOf(
   collection: ApiCollection,
-  count: CollectionCount | undefined
+  count: ContentRow | undefined
 ): CollectionTile {
   if (count !== undefined) return count;
   return {
@@ -183,6 +272,15 @@ function CollectionCard({
               <span className="block break-words font-medium text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
                 {item.label}
               </span>
+              {/* Drafts beside the total, through the same formatter, only when there are any:
+                  "0 drafts" on every tile would be noise, and a collection without the
+                  Draft/Published lifecycle has none to report. */}
+              {item.draft !== undefined && item.draft > 0 && (
+                <span className="block text-xs tabular-nums text-muted-foreground">
+                  <CardFigure value={item.draft} />{" "}
+                  {item.draft === 1 ? "draft" : "drafts"}
+                </span>
+              )}
             </div>
             <div className="text-muted-foreground group-hover:text-foreground transition-colors pt-1">
               <Icon className="h-5 w-5 shrink-0" />
@@ -194,81 +292,167 @@ function CollectionCard({
   );
 }
 
-export const CollectionQuickLinks: React.FC = () => {
-  const {
-    data: statsData,
-    isLoading: statsLoading,
-    error: statsError,
-    refetch: refetchStats,
-  } = useDashboardStats();
+/**
+ * What the Content card draws from its answer and the two lists: the collection groups and the
+ * Singles after them, each with what the lists say of it, and whether more exist than it draws.
+ */
+function useContentTiles(slot: WidgetSlot | undefined) {
   const { data: collectionsData, isLoading: collectionsLoading } =
     // The sidebar's own request, so the shell has usually filled it before this card is drawn.
     useCollections(NAV_COLLECTIONS_PARAMS);
-
+  // The Singles list's own request, as the sidebar makes it, for each Single's icon and description.
+  const { data: singlesData } = useSingles(SINGLES_PARAMS);
+  const rows = useMemo(() => answeredRows(slot), [slot]);
   const tiles = useMemo(
     () =>
       collectionTiles(
         collectionsData?.items,
         collectionsLoading,
-        statsData?.collectionCounts
+        contentRowsOf(rows)
       ),
-    [statsData?.collectionCounts, collectionsData?.items, collectionsLoading]
+    [rows, collectionsData?.items, collectionsLoading]
   );
-  const groups = useMemo(() => groupCollections(tiles ?? []), [tiles]);
+  const groups = useMemo(
+    () => groupCollections((tiles ?? []).slice(0, TILES_DRAWN)),
+    [tiles]
+  );
+  // The Singles follow the collections, in the room the collections leave.
+  const singles = useMemo(
+    () =>
+      singleRowsOf(rows).slice(
+        0,
+        Math.max(0, TILES_DRAWN - Math.min(tiles?.length ?? 0, TILES_DRAWN))
+      ),
+    [rows, tiles]
+  );
+  const collectionsByName = useMemo(
+    () =>
+      new Map(
+        (collectionsData?.items ?? []).map(collection => [
+          collection.name,
+          collection,
+        ])
+      ),
+    [collectionsData?.items]
+  );
+  const singlesBySlug = useMemo(
+    () =>
+      new Map((singlesData?.items ?? []).map(single => [single.slug, single])),
+    [singlesData?.items]
+  );
+  return {
+    tiles,
+    groups,
+    singles,
+    // The one row more the card asked for is what says more exist than it draws.
+    // The list's one footer, from the extra tile the card asked for: a floor, since the content
+    // source counts no total.
+    footer: listFooter(rows?.length ?? 0, TILES_DRAWN, undefined),
+    collectionsByName,
+    singlesBySlug,
+    collectionsLoading,
+  };
+}
 
-  const collectionsMap = useMemo(() => {
-    const map = new Map<string, ApiCollection>();
-    collectionsData?.items?.forEach(col => {
-      map.set(col.name, col);
-    });
-    return map;
-  }, [collectionsData?.items]);
+/**
+ * One group of tiles: an h3 naming it and its size when the card holds several groups (one level
+ * under the frame's title), then as many columns as the CARD's width fits, never the window's: a
+ * tile is at least 11rem, so a small card is one column and a wide one several.
+ */
+function ContentGroup({
+  heading,
+  size,
+  children,
+}: {
+  /** The group's name, or `undefined` when it is the card's only group. */
+  heading: string | undefined;
+  size: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-4">
+      {heading !== undefined && (
+        <h3 className="flex items-baseline gap-2 text-xs font-medium text-muted-foreground">
+          {heading}
+          <span className="tabular-nums">
+            <CardFigure value={size} />
+          </span>
+        </h3>
+      )}
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">
+        {children}
+      </div>
+    </div>
+  );
+}
 
-  // The card's frame draws its title, so this is only its body: the collections, grouped, or the
-  // frame's own skeleton and error while they are not there. The skeleton only while neither the
-  // list nor the counts are known, since either one says which tiles there are.
-  if (statsError) {
+/**
+ * The dashboard's Content card, answered by `system:content` in the dashboard's batch: each
+ * collection's entries and drafts, counted as the reader, in the order and with the icons the
+ * collections list gives them, then each Single.
+ */
+export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
+  slot,
+  isFetching,
+  query,
+  onRetry,
+}) => {
+  const content = useContentTiles(slot);
+  const { tiles, groups, singles } = content;
+
+  // The card's frame draws its title and every state, so this is only its body: the tiles,
+  // grouped. A failed answer, or no tiles yet, is reported for the frame to draw; loading only
+  // while neither the list nor the counts are known, since either one says which tiles there are.
+  if (slot !== undefined && !slot.ok) {
+    const read = readSlot(slot, { isFetching, skeleton: {}, onRetry });
+    if ("state" in read) return <FrameState state={read.state} />;
+  }
+  if (tiles === undefined) {
     return (
-      <CardError
-        title="Collections"
-        message="The collection counts couldn't be loaded."
-        onRetry={() => void refetchStats()}
+      <FrameState
+        state={
+          isFetching || content.collectionsLoading
+            ? { kind: "loading", skeleton: { shape: "rows", rows: 4 } }
+            : { kind: "no-access" }
+        }
       />
     );
   }
-  if (tiles === undefined) {
-    return statsLoading || collectionsLoading ? (
-      <CardSkeleton shape="rows" rows={4} />
-    ) : null;
-  }
-  // One group needs no heading of its own: the card's title already names it. Several are
-  // told apart by an h3, one level under the card's title.
-  const headed = groups.length > 1;
+  // One group needs no heading of its own: the card's title already names it.
+  const headed = groups.length + (singles.length > 0 ? 1 : 0) > 1;
   return (
     <div className="space-y-8">
       {groups.map(group => (
-        <div key={group.name ?? "__ungrouped"} className="space-y-4">
-          {headed && (
-            <h3 className="flex items-baseline gap-2 text-xs font-medium text-muted-foreground">
-              {group.name || "Collections"}
-              <span className="tabular-nums">
-                <CardFigure value={group.collections.length} />
-              </span>
-            </h3>
-          )}
-          {/* As many columns as the CARD's width fits, never the window's: a tile is at least
-              11rem, so a small card is one column and a wide one several. */}
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">
-            {group.collections.map(item => (
-              <CollectionCard
-                key={item.slug}
-                item={item}
-                collectionConfig={collectionsMap.get(item.slug)}
-              />
-            ))}
-          </div>
-        </div>
+        <ContentGroup
+          key={group.name ?? "__ungrouped"}
+          heading={headed ? group.name || "Collections" : undefined}
+          size={group.collections.length}
+        >
+          {group.collections.map(item => (
+            <CollectionCard
+              key={item.slug}
+              item={item}
+              collectionConfig={content.collectionsByName.get(item.slug)}
+            />
+          ))}
+        </ContentGroup>
       ))}
+      {singles.length > 0 && (
+        <ContentGroup
+          heading={headed ? "Singles" : undefined}
+          size={singles.length}
+        >
+          {singles.map(single => (
+            <ContentSingleTile
+              key={single.slug}
+              slug={single.slug}
+              label={single.label}
+              single={content.singlesBySlug.get(single.slug)}
+            />
+          ))}
+        </ContentGroup>
+      )}
+      <ListFooter footer={content.footer} href={listViewHref(query)} />
     </div>
   );
 };

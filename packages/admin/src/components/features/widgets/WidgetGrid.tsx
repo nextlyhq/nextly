@@ -3,7 +3,8 @@
 /**
  * The dashboard's widget grid.
  *
- * Twelve columns, one cell per visible widget, and ONE request for all of them.
+ * Twelve columns, rows of one fixed height, one cell per visible widget, and
+ * ONE request for all of them.
  * The grid is where the three cross-cutting decisions live, because none of
  * them can be made correctly by a widget on its own:
  *
@@ -24,7 +25,14 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { useMemo, useRef, type ComponentProps, type ReactNode } from "react";
+import type { PublishedContentSource } from "nextly/config";
+import {
+  useMemo,
+  useRef,
+  type ComponentProps,
+  type ReactNode,
+  type JSX,
+} from "react";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
@@ -35,7 +43,9 @@ import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
 import { registerCoreWidgetComponents } from "./core-components";
+import { DrawFailureContext, useDrawFailures } from "./draw-failures";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
+import { AtRestSettingsWriteProvider } from "./edit/at-rest-settings-write";
 import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
@@ -53,7 +63,7 @@ import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { bandForWidth, drawnWidth } from "./sizes";
+import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -108,14 +118,15 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
-        className="grid grid-cols-12 gap-[24px]"
+        // The grid the cards will be drawn on, so the placeholders take the rows a card would.
+        className={GRID_CLASS}
       >
         {[0, 1, 2].map(row => (
           <div
             key={row}
             aria-hidden
-            className="col-span-12 mb-6 h-32 animate-pulse rounded-lg bg-muted"
+            style={cardRowStyle(2)}
+            className="col-span-12 animate-pulse rounded-lg bg-muted"
           />
         ))}
       </section>
@@ -142,22 +153,38 @@ function NothingToDraw({
  */
 function askedWith(
   rows: ArrangedWidget[],
-  dashboardWidth: number | undefined
-): Array<ArrangedWidget & { tier?: SizeTier }> {
+  dashboardWidth: number | undefined,
+  editing: boolean,
+  sources: readonly PublishedContentSource[] | undefined
+): Array<
+  ArrangedWidget & { tier?: SizeTier; h?: number; w?: number; editing?: true }
+> {
   return rows.map(row => {
-    // The tier the card will be drawn at, from the dashboard's width and the card's drawn span:
-    // the query is asked before the card can measure itself, and sized for that tier.
-    const tier = predictedTier(
-      drawnWidth(row.width, row.allowedWidths),
-      dashboardWidth
-    );
-    const sized = tier ? { ...row, tier } : row;
-    const widget = widgetAsAsked(row.widget, row.config);
-    // The declared query travels with the asked one, so the batch keys the card by what it
-    // declares and a change of its settings asks this card again alone.
+    // The tier the card will be drawn at, from the dashboard's width and the card's drawn span,
+    // and the height its rows are counted from: the query is asked before the card can measure
+    // itself, and sized for both.
+    const size = drawnSize(row.size, row.widget.size);
+    const tier = predictedTier(size.w, dashboardWidth);
+    // A card core answers on the server is asked by its id at rest, and with
+    // the settings it is drawn with while customising, when they may not be
+    // saved yet (see `questionsFor`); with the size it is drawn at, which its
+    // widget's `load` is handed (`cardAskFor`).
+    if (row.widget.serverData === true) {
+      const drawn = tier ? { ...row, tier, w: size.w, h: size.h } : row;
+      return editing ? { ...drawn, editing: true as const } : drawn;
+    }
+    const sized = tier ? { ...row, tier, h: size.h } : row;
+    const widget = widgetAsAsked(row.widget, row.config, sources);
+    // The declared query, or cells, travel with the asked ones, so the batch keys the card by
+    // what it declares and a change of its settings asks this card again alone.
     return widget === row.widget
       ? sized
-      : { ...sized, widget, declaredQuery: row.widget.query };
+      : {
+          ...sized,
+          widget,
+          declaredQuery: row.widget.query,
+          declaredCells: row.widget.cells,
+        };
   });
 }
 
@@ -170,11 +197,11 @@ const NO_CARDS: [] = [];
  *
  * Each query is sized for the tier it will be drawn at. The width is measured before the first
  * paint, and no card is asked before it is known, so every first query is sized for its card's
- * tier. Dragging is decided from the same width's band: on wherever more than one column is
- * drawn.
+ * tier. Dragging is decided from the same width: on wherever more than one column is drawn.
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
+  editing: boolean,
   carry: Pick<
     Parameters<typeof useCardDrag>[0],
     "gridRef" | "say" | "drop" | "requestFocus"
@@ -182,19 +209,23 @@ function useCardsAtDashboardWidth(
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
+  // The collections the reader may read, with their fields: what a card's content settings are
+  // asked against.
+  const sources = useBranding().widgetSources;
   const cards = useMemo(
     () =>
       dashboardWidth === undefined
         ? NO_CARDS
-        : askedWith(visible, dashboardWidth),
-    [visible, dashboardWidth]
+        : askedWith(visible, dashboardWidth, editing, sources),
+    [visible, dashboardWidth, editing, sources]
   );
-  const band =
-    dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
+  // Cards whose own component threw drawing a fine answer, counted as failed.
+  const draws = useDrawFailures();
   return {
     dashboardRef,
-    drag: useCardDrag({ rows: visible, band, width: dashboardWidth, ...carry }),
-    ...useWidgetBatch(cards),
+    drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
+    ...useWidgetBatch(cards, draws.failed),
+    reportDraw: draws.report,
   };
 }
 
@@ -219,7 +250,7 @@ function cardActions(
 ): ComponentProps<typeof ArrangedGrid>["on"] {
   return {
     move: arrangement.moveCard,
-    setWidth: arrangement.setCardWidth,
+    setSize: arrangement.setCardSize,
     // A removal is the next change, so the card ringed for the last one is no longer news.
     remove: placementId => {
       arrangement.ring.highlight(null);
@@ -332,7 +363,7 @@ function holdingBody({
   return awaitingArrangement ? <ArrangementLoading /> : null;
 }
 
-export function WidgetGrid() {
+export function WidgetGrid(): JSX.Element {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();
@@ -394,13 +425,14 @@ export function WidgetGrid() {
     cellSlots,
     fetchingPlacementIds,
     updatedAtFor,
-    fetchedTierFor,
+    fetchedSizeFor,
     requested,
     counted,
     failed,
     settling,
     retry,
-  } = useCardsAtDashboardWidth(visible, {
+    reportDraw,
+  } = useCardsAtDashboardWidth(visible, editor.isEditing, {
     gridRef: focus.gridRef,
     say: announce.drag,
     drop: arrangement.dropCard,
@@ -491,32 +523,36 @@ export function WidgetGrid() {
           />
 
           <CardDragContext drag={drag}>
-            <ArrangedGrid
-              rows={visible}
-              placements={editor.placements}
-              isDrawn={arrangement.isDrawn}
-              isEditing={editor.isEditing}
-              writes={{
-                isWriting: editor.isWriting,
-                singleCardWriteBlocked: singleCardWriteBlocked(
-                  layout.isUnreadable
-                ),
-                settings: settingsWrite,
-              }}
-              slots={slots}
-              cellSlots={cellSlots}
-              requested={requested}
-              updatedAtFor={updatedAtFor}
-              fetchedTierFor={fetchedTierFor}
-              fetchingPlacementIds={fetchingPlacementIds}
-              retry={retry}
-              announcement={announcement}
-              focus={focus}
-              gridRef={focus.gridRef}
-              highlightedId={ring.highlightedId}
-              drag={drag}
-              on={cardActions(arrangement, removal, editor)}
-            />
+            <AtRestSettingsWriteProvider value={settingsWrite}>
+              <DrawFailureContext.Provider value={reportDraw}>
+                <ArrangedGrid
+                  rows={visible}
+                  placements={editor.placements}
+                  isDrawn={arrangement.isDrawn}
+                  isEditing={editor.isEditing}
+                  writes={{
+                    isWriting: editor.isWriting,
+                    singleCardWriteBlocked: singleCardWriteBlocked(
+                      layout.isUnreadable
+                    ),
+                    settings: settingsWrite,
+                  }}
+                  slots={slots}
+                  cellSlots={cellSlots}
+                  requested={requested}
+                  updatedAtFor={updatedAtFor}
+                  fetchedSizeFor={fetchedSizeFor}
+                  fetchingPlacementIds={fetchingPlacementIds}
+                  retry={retry}
+                  announcement={announcement}
+                  focus={focus}
+                  gridRef={focus.gridRef}
+                  highlightedId={ring.highlightedId}
+                  drag={drag}
+                  on={cardActions(arrangement, removal, editor)}
+                />
+              </DrawFailureContext.Provider>
+            </AtRestSettingsWriteProvider>
           </CardDragContext>
 
           <DashboardAddPanel

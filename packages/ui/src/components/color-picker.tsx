@@ -181,7 +181,7 @@ export function ColorPicker<TValue = string>({
   recentColors = [],
   showAlpha = false,
   className,
-}: ColorPickerProps<TValue>) {
+}: ColorPickerProps<TValue>): React.JSX.Element {
   const fieldId = React.useId();
   /** The picker's own subtree, for telling a press inside it from a dismissal. */
   const rootRef = React.useRef<HTMLDivElement>(null);

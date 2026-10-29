@@ -238,6 +238,36 @@ describe("createResendProvider", () => {
     expect(sentBody()).not.toHaveProperty("idempotencyKey");
   });
 
+  it("aborts its request when the call's signal fires at the deadline", async () => {
+    // A request that waits until its signal is aborted, as `fetch` does.
+    vi.mocked(globalThis.fetch).mockImplementationOnce(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(
+              Object.assign(new Error("This operation was aborted"), {
+                name: "AbortError",
+              })
+            )
+          );
+        })
+    );
+    const controller = new AbortController();
+
+    const adapter = createResendProvider({ apiKey: "re_test_key" });
+    const sending = adapter.send({
+      ...BASE_OPTIONS,
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(sending).rejects.toMatchObject({
+      emailFailure: { retryable: true, unknown: true },
+    });
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(init?.signal?.aborted).toBe(true);
+  });
+
   it("sends no Idempotency-Key header for a send without a key", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(okResponse());
 

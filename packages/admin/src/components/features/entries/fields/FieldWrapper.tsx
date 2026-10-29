@@ -11,15 +11,16 @@
  */
 
 import { Label } from "@nextlyhq/ui";
-import { Globe } from "lucide-react";
+import { Globe, Lock } from "lucide-react";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 import { useId } from "react";
 
 import { fieldLabel } from "@admin/lib/field-label";
 import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
+import { useFieldWithheld } from "../../versions/withheld-fields-context";
 import { useEntryLocale } from "../EntryLocaleContext";
 import { UseSourceButton } from "../TranslationMode/UseSourceButton";
 
@@ -57,6 +58,13 @@ export interface FieldWrapperProps {
    * Useful for nested fields with path prefixes.
    */
   fieldPath?: string;
+
+  /**
+   * Whether the field may not be written: read-only or disabled. Such a field
+   * offers no action that writes it, filling it from the source language
+   * included.
+   */
+  writesHeld?: boolean;
 
   /**
    * Whether the field is in a horizontal layout (e.g., checkbox).
@@ -206,7 +214,8 @@ export function FieldWrapper({
   fieldPath,
   horizontal = false,
   editorIsOpaque = false,
-}: FieldWrapperProps) {
+  writesHeld = false,
+}: FieldWrapperProps): JSX.Element {
   // Active content-language direction (RTL for Arabic/Hebrew/…).
   const entryLocale = useEntryLocale();
   // Generate unique IDs for accessibility
@@ -243,9 +252,28 @@ export function FieldWrapper({
   const width = fieldWithCommonProps.admin?.width || "100%";
   const _fieldType = field.type as string;
 
+  // A field of a past version the reader may not read: the read sent nothing
+  // of its value, not even whether it is set. The field is still drawn and
+  // named, so the reader is told it exists and is held back rather than shown a
+  // version that appears to lack it. Answered by the field's full path, so a
+  // field withheld in one row of a list is withheld in that row alone. The lock
+  // is a cue that does not rest on colour, so the note does not read as an
+  // empty, disabled input; the text alone carries the meaning.
+  const isWithheld = useFieldWithheld(fieldPath);
+  const control = isWithheld ? (
+    <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      <Lock className="size-3.5 shrink-0" aria-hidden="true" />
+      Hidden: you don&apos;t have access to this field.
+    </p>
+  ) : (
+    children
+  );
+
   // A group is named by `aria-labelledby` on a `role="group"` container rather
   // than by a `<label for>`, because there is no single control to point at.
-  const isGroup = GROUP_FIELD_TYPES.has(_fieldType) || editorIsOpaque;
+  // A withheld field has none either: its input was never drawn.
+  const isGroup =
+    GROUP_FIELD_TYPES.has(_fieldType) || editorIsOpaque || isWithheld;
   // Only the non-group path claims a control carries the id, so only it is
   // checked. A group makes no such claim and cannot fail this way.
   // A hidden field never reaches the wrapper: the renderer decides whether a
@@ -324,7 +352,7 @@ export function FieldWrapper({
   // from the source. Renders nothing outside the mode, and nothing on the source
   // pane's own fields — that pane sits outside the context this reads.
   const useSourceAction =
-    isLocalizedField && fieldName != null ? (
+    isLocalizedField && fieldName != null && !writesHeld ? (
       <UseSourceButton fieldName={fieldName} fieldLabel={label} />
     ) : null;
 
@@ -347,7 +375,7 @@ export function FieldWrapper({
         // Render the field right-to-left when a translatable field is edited in an RTL language.
         {...(rtlField ? { dir: "rtl" as const } : {})}
       >
-        <div className="pt-0.5">{children}</div>
+        <div className="pt-0.5">{control}</div>
         <div className="grid gap-1.5 leading-none">
           {/* Outside the label, for the reason given in the vertical layout. */}
           {sharedHint}
@@ -480,8 +508,8 @@ export function FieldWrapper({
         <div className="flex justify-end">{useSourceAction}</div>
       )}
 
-      {/* Input (children) */}
-      {children}
+      {/* Input (children), or what stands in for a value held back. */}
+      {control}
 
       {/* Description / helper text — always visible below the input, rather
           than behind a tooltip on an info icon. Help that only appears on

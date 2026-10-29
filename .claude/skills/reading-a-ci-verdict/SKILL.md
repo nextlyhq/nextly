@@ -54,7 +54,7 @@ not what a green check means — it means the merge of head and base passed.
 (Inside a workflow the relationship inverts, but only for `pull_request`:
 there `github.sha` IS the synthetic merge commit. On `pull_request_target` it is
 the tip of the BASE branch — `main` for an ordinary PR, and the PARENT FEATURE
-BRANCH for a stacked one, so `labeler.yml` and `pr-title.yml` see whichever the
+BRANCH for a stacked one, so `labeler.yml` and `small-checks.yml` see whichever the
 PR targets rather than the PR's own revision. On `push` it is the pushed commit.
 Do not carry a variable named `SHA` between contexts, and qualify the claim by
 event AND by base before relying on it.)
@@ -160,12 +160,10 @@ dependency failed are both `completed/skipped`. What separates them is not the
 row — it is whether the job they depend on succeeded. Read the decision, then
 read the jobs it implies.
 
-Integration's three legs have a third reason to skip on a pull request: they
-run there only while it carries the `run-integration` label (the `changes`
-job's `requested` output; its summary says so). A pull request without the
-label reads `skipped` on all three legs and has tested no database; the merge
-queue runs them before it merges, unless the change is documentation-only,
-which skips them everywhere. To test a dialect before the queue, add the label.
+Integration's three legs follow the same rule on a pull request as in the
+merge queue: the scope decision skips them for a documentation-only change, and
+nothing else does (no label gates them). A leg skipped on a pull request that
+changed code means its `changes` job decided wrongly or failed: read it.
 
 Measured on `59d84ddc0`, 39 check-runs: **33 `completed/skipped`**, 3 `success`,
 3 `failure`. Even with every job now finished, a rollup dominated five-to-one by
@@ -280,20 +278,20 @@ do nothing at all. And pushing at a QUEUED run may cancel it — but only where
 the workflow says so, and that is per workflow rather than a property of
 pushing:
 
-| workflow          | concurrency                        | a push at a queued run                  |
-| ----------------- | ---------------------------------- | --------------------------------------- |
-| `ci.yml`          | group + `cancel-in-progress: true` | cancels and re-queues at the back       |
-| `integration.yml` | group + `cancel-in-progress: true` | cancels and re-queues at the back       |
-| `preview.yml`     | group + `cancel-in-progress: true` | cancels and re-queues at the back       |
-| `secret-scan.yml` | **none declared**                  | starts a SECOND run; the first survives |
+| workflow           | concurrency                                 | a push at a queued run            |
+| ------------------ | ------------------------------------------- | --------------------------------- |
+| `ci.yml`           | group + `cancel-in-progress: true`          | cancels and re-queues at the back |
+| `integration.yml`  | group + `cancel-in-progress: true`          | cancels and re-queues at the back |
+| `preview.yml`      | group + `cancel-in-progress: true`          | cancels and re-queues at the back |
+| `small-checks.yml` | group per PR, cancel only on a pull request | cancels and re-queues at the back |
 
 So read the workflow's `concurrency:` block before deciding a push is expensive.
-Three of the four here cancel; the fourth does not, and treating its queued run
-as fragile costs a wait for no reason.
+These cancel a pull request's older run; a run on `main` or in the queue is
+keyed by its commit and never cancelled.
 
 ## A stacked base runs none of the jobs that gate a merge
 
-Four workflows are declared `pull_request: branches: [main]`, so a PR whose base
+Three workflows are declared `pull_request: branches: [main]`, so a PR whose base
 is another FEATURE BRANCH never triggers them. Measured across
 `.github/workflows/`:
 
@@ -301,9 +299,8 @@ is another FEATURE BRANCH never triggers them. Measured across
 | ----------------------------------------- | ------------------------------------------ | ---------------------- |
 | `ci.yml`                                  | `pull_request: branches: [main]`           | **no**                 |
 | `integration.yml`                         | `pull_request: branches: [main]`           | **no**                 |
-| `secret-scan.yml`                         | `pull_request: branches: [main]`           | **no**                 |
 | `preview.yml`                             | `pull_request: branches: [main]`           | **no**                 |
-| `labeler.yml`, `pr-title.yml`             | `pull_request_target`                      | yes                    |
+| `labeler.yml`, `small-checks.yml`         | `pull_request_target`                      | yes                    |
 | `scaffold-build.yml`, `package-smoke.yml` | `pull_request` + `paths`, no branch filter | yes, if a path matches |
 
 **This is the most dangerous entry in the file, and the last two rows are why.**
@@ -323,7 +320,7 @@ are the only evidence until the base is `main`.
 
 **Retargeting alone does not start CI**, which is the trap on the way out.
 Changing a PR's base emits the `pull_request` activity `edited`, and the default
-activity set is `opened`, `synchronize` and `reopened` — none of these four
+activity set is `opened`, `synchronize` and `reopened` — none of these three
 workflows declares `types:`, so none subscribes to `edited`. Retargeting makes
 the branch filter eligible and emits an event nothing is listening for, leaving
 a PR that now LOOKS main-targeting with still no substantive run against it.

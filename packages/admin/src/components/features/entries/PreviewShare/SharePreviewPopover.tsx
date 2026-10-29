@@ -15,7 +15,7 @@
  * @module components/features/entries/PreviewShare/SharePreviewPopover
  */
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { Popover, PopoverAnchor, PopoverContent } from "@admin/components/ui";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -36,7 +36,7 @@ export function SharePreviewPopover({
   open,
   onOpenChange,
   children,
-}: SharePreviewPopoverProps) {
+}: SharePreviewPopoverProps): JSX.Element {
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverAnchor asChild>{children}</PopoverAnchor>

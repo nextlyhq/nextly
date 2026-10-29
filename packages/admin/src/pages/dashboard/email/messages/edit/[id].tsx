@@ -1,7 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
-import { useCallback } from "react";
+import { useCallback, type JSX } from "react";
 
 import {
   EmailTemplateForm,
@@ -17,6 +17,7 @@ import {
   useEmailTemplate,
   useUpdateEmailTemplate,
 } from "@admin/hooks/queries/useEmailTemplates";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -38,7 +39,7 @@ function EditStateMessage({ message }: { message: string }) {
   );
 }
 
-export default function EditEmailTemplatePage() {
+export default function EditEmailTemplatePage(): JSX.Element {
   const { route } = useRouter();
 
   const rawId =
@@ -52,6 +53,8 @@ export default function EditEmailTemplatePage() {
     isLoading,
     error: fetchError,
   } = useEmailTemplate(templateId || undefined);
+  // The tab names the email being edited once it has arrived.
+  useDocumentTitle(template?.name);
 
   const { mutate: updateTemplate, isPending } = useUpdateEmailTemplate();
 

@@ -18,20 +18,23 @@ import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import { permissionSlug } from "../schemas/_zod/rbac";
 
 import type { AccessTarget } from "./access/decide";
-import { codeAccessAllows, getRBACService } from "./code-access";
+import { onceForRequest } from "./access/request-memo";
+import { codeAccessAllows } from "./code-access";
 import type { RequestActorType } from "./request-actor";
+import {
+  SESSION_CUTOFF_SECONDS,
+  SESSION_STANDING_TTL_MS,
+} from "./session/session-standing";
 
 /**
  * One permission the caller holds, as the row it was resolved from.
  *
  * A permission is spelled one way wherever a developer reads or writes it:
  * the STORED slug (`read-posts`), which the database, the admin's permission
- * matrix, a route's `requiredPermission` and every access rule use. For one
- * release a rule is also handed the earlier rule spelling (`posts:read`),
- * which is made from the row's action and resource.
+ * matrix, a route's `requiredPermission` and every access rule use.
  *
- * The row carries what both are made of, so both are DERIVED from it rather
- * than stored beside each other. Storing them side by side is what let a
+ * The row carries the slug with the action and resource it grants, so every
+ * view of a grant is DERIVED from it rather than stored beside it. Storing them side by side is what let a
  * handler narrow one and leave the other holding the grant it had just given
  * up — the field gate reads the rule's list and has no coarse check standing
  * in front of it, so the narrowing was silently undone.
@@ -86,6 +89,49 @@ export interface AuthenticatedScope {
   readonly roles?: readonly string[];
 }
 
+/**
+ * The scopes authentication made for a full-access key whose maker is an
+ * active super-admin, the only scopes that carry super-admin authority, each
+ * with the moment that authority lapses.
+ *
+ * Kept here rather than as a field of the scope, because a scope is public
+ * and can be built by hand: a field would be forged as easily as written. A
+ * scope built by hand, a narrowed copy and a spread copy are each a different
+ * object, so none of them carries the authority, as a narrower scope must not.
+ *
+ * The authority is the maker's standing when the key was authenticated, so a
+ * scope kept past its request (a plugin storing it, a Direct API `actor`
+ * reused later) holds it no longer than a session would go on holding a
+ * standing that changed: within {@link SESSION_CUTOFF_SECONDS} of the change,
+ * and never past the soonest expiry among the maker's roles, where a
+ * session's access token ends too. The standing that admitted the key may be
+ * up to {@link SESSION_STANDING_TTL_MS} old when the scope is made, so the
+ * scope holds the authority for what is left of the cutoff after that. After that it is judged on its grants alone, and the key's next
+ * authentication asks again. Timed on a monotonic clock, so setting the wall
+ * clock back cannot stretch it once it is made.
+ */
+const SUPER_ADMIN_SCOPES = new WeakMap<AuthenticatedScope, number>();
+
+const SUPER_ADMIN_SCOPE_LIFETIME_MS =
+  SESSION_CUTOFF_SECONDS * 1000 - SESSION_STANDING_TTL_MS;
+
+/**
+ * Whether `scope` carries super-admin authority: authentication made it for a
+ * full-access key whose maker was an active super-admin, and the bound that
+ * authority holds for has not passed.
+ */
+export function scopeHoldsSuperAdmin(
+  scope: AuthenticatedScope | undefined
+): boolean {
+  if (scope === undefined) return false;
+  const lapsesAt = SUPER_ADMIN_SCOPES.get(scope);
+  if (lapsesAt === undefined) return false;
+  // Asked once per request, so every door one operation passes gives the
+  // same answer, even one asked after the bound passed mid-operation. A scope
+  // kept for a later request is asked again there, and has lapsed by then.
+  return onceForRequest(scope, () => performance.now() < lapsesAt);
+}
+
 /** Freeze a scope and the arrays inside it, so no gate can be desynced. */
 function freezeScope(scope: AuthenticatedScope): AuthenticatedScope {
   Object.freeze(scope.permissions);
@@ -135,16 +181,69 @@ export function apiKeyScopeFrom(caller: {
   // turns a missing field into a 500 on every request that shape reaches.
   // An absent role list is the same as an empty one to every reader.
   roles?: readonly string[];
+  /**
+   * Whether authentication found the key to carry super-admin authority. Only
+   * the internal caller shapes carry it, so a scope built from anything else
+   * carries none.
+   */
+  keyHoldsSuperAdmin?: boolean;
+  /**
+   * The soonest expiry among the maker's roles (epoch ms), read with the
+   * authority, or absent where none expires. The authority ends there.
+   */
+  keyHoldsSuperAdminUntil?: number;
+  /**
+   * When authentication asked the maker's standing (`performance.now()`).
+   * The authority's bound counts from here; absent, from when the scope is
+   * made.
+   */
+  keyStandingAskedAt?: number;
 }): AuthenticatedScope {
-  if (caller.grants) return apiKeyScope(caller.grants, caller.roles);
-  // No rows, so `grants` is left ABSENT rather than empty: absent means "this
-  // scope never had them", which `scopeGrants` answers honestly, and
-  // an empty array would mean "this key holds nothing" and deny everything.
-  return freezeScope({
-    actorType: "apiKey",
-    permissions: [...(caller.permissions ?? [])],
-    ...(caller.roles ? { roles: [...caller.roles] } : {}),
-  });
+  const scope = caller.grants
+    ? apiKeyScope(caller.grants, caller.roles)
+    : // No rows, so `grants` is left ABSENT rather than empty: absent means
+      // "this scope never had them", which `scopeGrants` answers honestly,
+      // and an empty array would mean "this key holds nothing" and deny
+      // everything.
+      freezeScope({
+        actorType: "apiKey",
+        permissions: [...(caller.permissions ?? [])],
+        ...(caller.roles ? { roles: [...caller.roles] } : {}),
+      });
+  if (caller.keyHoldsSuperAdmin === true) {
+    // Counted from when the standing that admitted the key was asked, not
+    // from now: resolving the grants and roles in between can take a while.
+    // The role's expiry is wall-clock time, turned into how long is left of
+    // it now, so the deadline itself stays on the monotonic clock.
+    const now = performance.now();
+    const fromStanding =
+      (caller.keyStandingAskedAt ?? now) + SUPER_ADMIN_SCOPE_LIFETIME_MS;
+    const lapsesAt =
+      caller.keyHoldsSuperAdminUntil === undefined
+        ? fromStanding
+        : Math.min(
+            fromStanding,
+            now + (caller.keyHoldsSuperAdminUntil - Date.now())
+          );
+    // A bound already passed leaves nothing to carry.
+    if (lapsesAt > now) SUPER_ADMIN_SCOPES.set(scope, lapsesAt);
+  }
+  return scope;
+}
+
+/**
+ * Whether an authenticated key caller carries its maker's super-admin
+ * authority now: the answer a scope made from it would give, bounds
+ * included. A door that has the caller rather than a scope asks this, so it
+ * cannot admit a key after the scope's bound has passed.
+ */
+export function keyCallerHoldsSuperAdmin(
+  caller: Parameters<typeof apiKeyScopeFrom>[0]
+): boolean {
+  return (
+    caller.keyHoldsSuperAdmin === true &&
+    scopeHoldsSuperAdmin(apiKeyScopeFrom(caller))
+  );
 }
 
 /**
@@ -208,9 +307,7 @@ export function narrowScope(
  * disagreement decides an answer here, so it is refused here.
  *
  * `undefined` when the scope carries no rows. A rule is then handed the stored
- * slugs alone: such a scope never had the parts the earlier spelling is
- * composed of, and splitting a slug on its hyphen would invent a resource no
- * permission row names.
+ * slugs alone, which is what it is handed from the rows too.
  */
 export function scopeGrants(
   scope: AuthenticatedScope
@@ -283,7 +380,10 @@ export function slugGrants(
  * back to its normal RBAC resolution (the owner's / session's database grants).
  * Returns a boolean for an API key: the stamped scope is authoritative, in both
  * directions — a key without the grant is denied however privileged its owner,
- * and a key with it is allowed however unprivileged.
+ * and a key with it is allowed however unprivileged. The one exception is a
+ * scope carrying its maker's super-admin authority, which is allowed whatever
+ * its grants say, as every other way in allows it: its grant list may lag a
+ * permission added since it was read.
  */
 export function apiKeyScopeAllows(
   scope: AuthenticatedScope | undefined,
@@ -291,6 +391,7 @@ export function apiKeyScopeAllows(
   resource: string
 ): boolean | null {
   if (scope?.actorType !== "apiKey") return null;
+  if (scopeHoldsSuperAdmin(scope)) return true;
   return scope.permissions.includes(permissionSlug(operation, resource));
 }
 
@@ -324,6 +425,9 @@ export async function apiKeyWriteAllowed(
   rbac: CodeAccessSource | undefined
 ): Promise<boolean | null> {
   if (scope?.actorType !== "apiKey") return null;
+  // A key carrying its maker's super-admin authority holds every permission
+  // and passes every rule, as a super-admin's session does.
+  if (scopeHoldsSuperAdmin(scope)) return true;
   if (!scope.permissions.includes(permissionSlug(operation, resource)))
     return false;
   const target = rbac?.getRegisteredTarget(resource);
@@ -340,65 +444,5 @@ export async function apiKeyWriteAllowed(
     // on. The read paths resolve the key's roles onto the user before calling
     // here, which is why that remains the fallback rather than an error.
     roles: [...(scope.roles ?? user.roles ?? [])],
-  });
-}
-
-/**
- * Whether this caller may perform `action` on `resource`, whichever way they
- * authenticated.
- *
- * The two branches of the decision, composed: a scoped API key is judged on its
- * OWN stamped grants by {@link apiKeyWriteAllowed} (permission grant AND the
- * code-defined access rule), and everyone else falls through to
- * `rbac.checkAccess`, which is where the super-admin bypass, the code-defined
- * rule and the stored grants already live. Neither half is reproduced here.
- *
- * That asymmetry is the rule, not an omission: a super admin does NOT bypass an
- * API key's scope, for the reason spelled out on `canReadEntity` — a read-only
- * key issued by an administrator must not become equivalent to their full
- * account. The bypass belongs to the session path, and reaching it through
- * `checkAccess` is what keeps that true without restating it.
- *
- * `action` is a plain string rather than the CRUD union because a permission
- * slug's action is not bounded by those four — `export-submissions` and
- * `manage-settings` are both real grants here. `checkAccess` reads it as a
- * string throughout (it indexes `codeAccess` by it and forwards it to
- * `hasPermission`), so the value travels correctly; the type is simply narrower
- * than the implementation. This is the identical cast `requirePermission` and
- * `callerHoldsPermission` make, for the identical reason.
- *
- * Deny-by-default: an unreachable RBAC service answers false rather than
- * falling through to a permissive default.
- *
- * Distinct from `callerHoldsPermission`, which answers the same question for a
- * WIDGET's declared slug and whose api-key branch is the bare permission check.
- * This one also evaluates the code-defined rule against the key's scope, so its
- * answer agrees with what a write on the same resource will actually enforce —
- * which is the property a caller gating a verb on it needs.
- */
-export async function callerMayPerform(
-  scope: AuthenticatedScope | undefined,
-  action: string,
-  resource: string,
-  user: { id: string; roles?: string[] }
-): Promise<boolean> {
-  if (!user.id || !action || !resource) return false;
-
-  const rbac = getRBACService();
-
-  const byKey = await apiKeyWriteAllowed(
-    scope,
-    action as "create" | "read" | "update" | "delete",
-    resource,
-    user,
-    rbac
-  );
-  if (byKey !== null) return byKey;
-
-  if (!rbac) return false;
-  return rbac.checkAccess({
-    userId: user.id,
-    operation: action as "create" | "read" | "update" | "delete",
-    resource,
   });
 }

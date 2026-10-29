@@ -30,6 +30,10 @@ import {
   startEmptyPlayground,
   type EmptyPlayground,
 } from "../support/playground-dev-server";
+import { LOCK } from "./support/locks";
+
+// Shares state with other specs; see support/locks.ts for what each lock guards.
+test.describe.configure({ lock: [LOCK.ownServer, LOCK.heavy] });
 
 test.describe("first-run setup at 127.0.0.1 for an app at localhost", () => {
   test.describe.configure({ mode: "serial", timeout: 6 * 60 * 1000 });
@@ -38,6 +42,11 @@ test.describe("first-run setup at 127.0.0.1 for an app at localhost", () => {
   let playground: EmptyPlayground | undefined;
 
   test.beforeAll(async () => {
+    // A hook takes Playwright's default limit, not the group's: a second
+    // `next dev` compiling from cold beside the suite's own server and the
+    // other worker can take well past 30 s, and startEmptyPlayground allows
+    // itself 4 minutes for that.
+    test.setTimeout(5 * 60 * 1000);
     playground = await startEmptyPlayground("setup-loopback");
   });
 

@@ -3,14 +3,14 @@
  * one decision and answered as the system-resource readers answer today.
  *
  * A system resource is not an entry and declares no code rule, so the
- * decision about it is `decidePermission`'s: the permission alone, a
- * super-admin past it, and a key only by its own grant, never its maker's
- * authority. That is what these readers have answered, but for the deviations
- * kept below.
+ * decision about it is `decidePermission`'s: the permission alone, or the
+ * resource's `manage-` permission where that still counts, a super-admin past
+ * it, and a key only by its own grant, never its maker's authority. That is
+ * what these readers answer, but for the deviation kept below.
  *
  * @module auth/access/system-resource-read
  */
-import { holdsPermission, isSuperAdmin, type Actor } from "./actor";
+import type { Actor } from "./actor";
 import { decidePermission } from "./decide";
 import { deviate } from "./deviations";
 
@@ -39,15 +39,7 @@ export async function readsSystemResource(
   if (!serviceRegistered && actor.kind === "user") {
     return deviate("no-service", false, () => decided);
   }
-  // The decision counts a `manage-` permission on the resource as its read;
-  // these readers never have, and admit only the read grant itself.
-  if (
-    decided &&
-    actor.kind !== "system" &&
-    !isSuperAdmin(actor) &&
-    !holdsPermission(actor, "read", resource)
-  ) {
-    return deviate("manage-not-counted", false, () => decided);
-  }
+  // A `manage-` permission on the resource counts as its read, as the
+  // decision counts it.
   return decided;
 }

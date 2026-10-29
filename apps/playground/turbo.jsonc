@@ -1,0 +1,39 @@
+{
+  // The playground's type-check without its production build.
+  //
+  // The root config makes every package's `check-types` wait for its own
+  // `build`, so two writers of one build-info file never run at once. Here that
+  // `build` is `next build`: about 4 to 5.5 GB at one worker and the largest
+  // single step of a local push, run only to produce the route types
+  // `.next/types` that `tsc` reads. `next typegen` writes those types without
+  // building, and the script runs `tsc` with `--incremental false`, so it
+  // writes no build-info file at all and the race the dependency guarded
+  // cannot happen.
+  //
+  // The production build still runs where it proves what tsc cannot (server-only
+  // code reaching a client bundle, bundling and route errors): CI's build step
+  // builds the playground for production on every pull request and in the
+  // merge queue, and the production browser tests run on it after a merge to
+  // `main`.
+  "$schema": "https://v2-9-7.turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "check-types": {
+      "dependsOn": ["^check-types", "^build"]
+    },
+    "build": {
+      // `next build` compiles Tailwind with automatic detection from this
+      // directory, which reads class names out of every file under it, tests
+      // and Markdown included. So unlike the shared build inputs, this hash
+      // keeps them: a class used only there still lands in the compiled sheet,
+      // and leaving it out would replay a stale one.
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      // Hashed, not passed through: it decides whether this build has Cache
+      // Components on, so a build with it set and one without produce
+      // different output and must not restore each other's. Task-scoped, so no
+      // other package's hash moves, and "$TURBO_EXTENDS$" keeps the root
+      // task's own variables.
+      "env": ["$TURBO_EXTENDS$", "NEXTLY_PLAYGROUND_CACHE_COMPONENTS"]
+    }
+  }
+}

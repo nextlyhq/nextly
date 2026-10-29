@@ -18,8 +18,9 @@
  */
 
 import { Button } from "@nextlyhq/ui";
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
+import { WidgetPreviewsLink } from "@admin/components/features/widgets/preview/WidgetPreviewsLink";
 import * as Icons from "@admin/components/icons";
 
 /** A ref callback that registers an element as a place focus can be sent. */
@@ -154,7 +155,7 @@ export function DashboardEditBar({
   barRef,
   customizeRef,
   children,
-}: DashboardEditBarProps) {
+}: DashboardEditBarProps): JSX.Element {
   if (!isEditing) {
     return (
       <>
@@ -260,6 +261,10 @@ export function DashboardEditBar({
               Reset
             </Button>
           ) : null}
+
+          {/* The widget preview page, for a development server only: it
+              draws nothing anywhere else. */}
+          <WidgetPreviewsLink />
         </div>
 
         <Button

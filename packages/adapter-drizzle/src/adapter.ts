@@ -28,6 +28,7 @@ import {
   type DrizzleTransactor,
   type PinnedConnection,
 } from "./pinned-transaction";
+import { type CatalogExecutor, tableExistsOn } from "./table-exists";
 import {
   createTransactionForwarders,
   transactionDrizzleHandles,
@@ -46,6 +47,8 @@ import type {
   UpsertOptions,
   TransactionContext,
   TransactionOptions,
+  SessionOptions,
+  StatementSession,
   DatabaseCapabilities,
   PoolStats,
   DatabaseError,
@@ -468,6 +471,61 @@ export abstract class DrizzleAdapter {
     callback: (ctx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T>;
+
+  /**
+   * Refuses a `withSession` call made while the calling flow is inside an
+   * open transaction, before any connection is taken. On SQLite's one
+   * connection its statements would join that transaction and be undone
+   * with it; on PostgreSQL and MySQL they would commit on a connection of
+   * their own. Refused on every dialect, so code that passes on one does not
+   * behave differently on another.
+   *
+   * @throws {DatabaseError} code `NEXTLY_SESSION_INSIDE_TRANSACTION`
+   */
+  protected refuseSessionInTransaction(): void {
+    if (!this.transactionOpenInFlow()) return;
+    throw createDatabaseError({
+      kind: "query",
+      code: "NEXTLY_SESSION_INSIDE_TRANSACTION",
+      message:
+        "withSession was called inside an open transaction. Its statements run outside any transaction: call it before opening the transaction, or after it has finished.",
+    });
+  }
+
+  /**
+   * Runs `work` with statements that commit one by one, outside any
+   * transaction, on one connection held for the whole of `work`.
+   *
+   * @remarks
+   * A unit that must not run in a transaction, such as PostgreSQL's
+   * `CREATE INDEX CONCURRENTLY`, still needs what a session gives its
+   * statements: one connection is what lets a session setting, or a
+   * temporary table, reach every statement. This base runs each statement
+   * through `executeQuery`, which is one connection only on an adapter that
+   * has one. A pooled adapter overrides it to hold one connection for the
+   * whole of `work` and close it afterwards, whether `work` finished or
+   * threw, so nothing the session set reaches a later caller; SQLite's
+   * override waits until no other flow's transaction is open on its one
+   * connection.
+   *
+   * Refused inside an open transaction (`refuseSessionInTransaction`).
+   *
+   * @param work - Runs the statements through the session it is handed
+   * @param options - Session options
+   * @returns Result of `work`
+   * @throws {DatabaseError} code `NEXTLY_SESSION_INSIDE_TRANSACTION` when the
+   *   calling flow is inside an open transaction
+   */
+  async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    _options?: SessionOptions
+  ): Promise<T> {
+    this.refuseSessionInTransaction();
+    return work({
+      execute: <R = unknown>(statement: string, params?: SqlParam[]) =>
+        this.executeQuery<R>(statement, params),
+    });
+  }
 
   /**
    * Whether a `transaction()` call made from the current async context would
@@ -2473,82 +2531,33 @@ export abstract class DrizzleAdapter {
    * ```
    */
   async tableExists(tableName: string, schema?: string): Promise<boolean> {
+    return this.tableExistsThrough(
+      {
+        execute: <T = unknown>(sql: string, params?: SqlParam[]) =>
+          this.executeQuery<T>(sql, params),
+      },
+      tableName,
+      schema
+    );
+  }
+
+  /**
+   * {@link tableExists}, asked through `executor`: the same catalogue lookup,
+   * run on a transaction's own connection when the caller holds one. Asking
+   * the pool from inside a transaction waits, on a pool of one, for the
+   * connection that transaction holds; and as a catalogue read it cannot fail
+   * the way a statement against a missing table would, which on PostgreSQL
+   * aborts the transaction.
+   *
+   * @internal For Nextly's own packages; not part of the adapter's public API.
+   */
+  async tableExistsThrough(
+    executor: CatalogExecutor,
+    tableName: string,
+    schema?: string
+  ): Promise<boolean> {
     try {
-      let sql: string;
-      const params: SqlParam[] = [];
-
-      switch (this.dialect) {
-        case "postgresql":
-          sql = `
-            SELECT EXISTS (
-              SELECT FROM information_schema.tables
-              WHERE table_schema = COALESCE($1, (
-                SELECT n.nspname FROM pg_class c
-                JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE c.oid = to_regclass($2)
-              ))
-              AND table_name = $2
-            ) as exists
-          `;
-          // Unqualified DDL and DML resolve across the whole search path, not against one
-          // schema. Naming `public` reported a populated table as absent whenever a deployment
-          // used a schema of its own, and naming only the FIRST entry misses a table that lives
-          // further along it. `to_regclass` resolves exactly as the statements do, so the
-          // lookup and the ALTER cannot disagree about which table is meant. A caller that
-          // reads "absent" as "nothing to conflict with" would otherwise act on the wrong one.
-          params.push(schema ?? null, tableName);
-          break;
-
-        case "mysql":
-          sql = `
-            SELECT COUNT(*) as count
-            FROM information_schema.tables
-            WHERE table_schema = DATABASE()
-            AND table_name = ?
-          `;
-          params.push(tableName);
-          break;
-
-        case "sqlite":
-          sql = `
-            SELECT COUNT(*) as count
-            FROM sqlite_master
-            WHERE type = 'table'
-            AND name = ?
-          `;
-          params.push(tableName);
-          break;
-
-        default:
-          throw this.createDatabaseError(
-            "query",
-            `tableExists not implemented for dialect: ${String(this.dialect)}`,
-            undefined
-          );
-      }
-
-      const results = await this.executeQuery<Record<string, unknown>>(
-        sql,
-        params
-      );
-
-      if (results.length === 0) {
-        return false;
-      }
-
-      const row = results[0];
-
-      // PostgreSQL returns { exists: true/false }
-      if ("exists" in row) {
-        return row.exists === true || row.exists === "t" || row.exists === 1;
-      }
-
-      // MySQL/SQLite return { count: number }
-      if ("count" in row) {
-        return Number(row.count) > 0;
-      }
-
-      return false;
+      return await tableExistsOn(executor, this.dialect, tableName, schema);
     } catch (error) {
       throw this.handleQueryError(error, "tableExists", tableName);
     }

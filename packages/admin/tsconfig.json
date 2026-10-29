@@ -1,10 +1,20 @@
 {
   "extends": "@nextlyhq/tsconfig/react-library-bundler.json",
   "compilerOptions": {
-    "target": "ES2020",
+    // The common directory of every input, as TypeScript infers it today:
+    // `paths` below map `nextly` to its source, so inputs sit in `../nextly`
+    // as well as here. TypeScript 7 defaults `rootDir` to this directory and
+    // would refuse them (TS6059).
+    "rootDir": "..",
+    "types": ["node"],
+    // A field declared without an initializer is a type, not an assignment.
+    // The bundler reads this, and the Lexical node classes rely on it: they
+    // declare `__buttons` and the like and set them in the constructor after
+    // `super()`, where define semantics would first reset them to `undefined`.
+    // It is what this package has always shipped, set by its old ES2020 target.
+    "useDefineForClassFields": false,
     "emitDeclarationOnly": false,
     "outDir": "dist",
-    "baseUrl": ".",
     "paths": {
       "nextly": ["../nextly/src"],
       // The gate the layout endpoint and the browser BOTH decide with. Mapped
@@ -27,6 +37,19 @@
       // Same reason: the translation states the worklist asks the server for.
       "nextly/translation-filter-states": [
         "../nextly/src/domains/i18n/translation-filter-states.ts"
+      ],
+      // Same reason: the keys a linked filter keeps at its top level.
+      "nextly/reserved-filter-keys": [
+        "../nextly/src/domains/collections/query/reserved-filter-keys.ts"
+      ],
+      // Same reason: the kinds and keys Needs attention's answer is written in.
+      "nextly/attention-keys": [
+        "../nextly/src/domains/widgets/attention-keys.ts"
+      ],
+      // Same reason: a card's body height and the rows it holds, the one
+      // formula the frame draws by and a widget's load counts by.
+      "nextly/card-geometry": [
+        "../nextly/src/domains/widgets/card-geometry.ts"
       ],
       "@admin/*": ["./src/*"]
     }

@@ -4,7 +4,7 @@
  *
  * The chart is ONE tab stop. Inside it the arrow keys move a current point (`chart-keys`), which
  * a polite live region reads and a tooltip shows; Escape dismisses the tooltip until the next
- * move or hover. A hovered mark shows its tooltip while the mark or the tooltip is under the
+ * keyboard move or until the pointer moves. A hovered mark shows its tooltip while the mark or the tooltip is under the
  * pointer, so the tooltip can be read and reached (WCAG 2.2 1.4.13), and leaving the chart hides
  * it.
  *
@@ -18,11 +18,14 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type CSSProperties,
   type FocusEvent,
   type KeyboardEvent,
+  type PointerEvent,
   type ReactNode,
+  type JSX,
 } from "react";
 
 import { useKeyboardShortcuts } from "@admin/hooks/useKeyboardShortcuts";
@@ -47,7 +50,7 @@ export interface ChartReach {
   hover: (at: ChartPosition) => void;
   /** Whether a tooltip the pointer opened shows, which Escape dismisses wherever focus is. */
   pointerTip: boolean;
-  /** Hides the tooltip until the next move or hover. */
+  /** Hides the tooltip until the next keyboard move or pointer move. */
   dismiss: () => void;
   /** Props for the chart's one focusable area. */
   area: {
@@ -55,6 +58,7 @@ export interface ChartReach {
     onFocus: () => void;
     onBlur: (event: FocusEvent<HTMLElement>) => void;
     onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+    onPointerMove: (event: PointerEvent<HTMLElement>) => void;
     onPointerLeave: () => void;
   };
 }
@@ -67,13 +71,46 @@ function samePoint(
   return a?.series === b?.series && a?.index === b?.index;
 }
 
+/**
+ * Escape's dismissal of a chart's tooltip, which lasts until the reader moves the keyboard's point
+ * or the pointer.
+ *
+ * Hiding a tooltip changes what is under a pointer that has not moved: the browser reports the mark
+ * beneath it as entered, and may send a move to the same point. Neither is the reader moving, so
+ * only a pointer move to somewhere else ends the dismissal (WCAG 2.2 1.4.13). It remembers where
+ * the pointer last was over the chart, and where it was when the tooltip was dismissed.
+ */
+function useDismissal() {
+  const [dismissed, setDismissed] = useState(false);
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  const dismissedAt = useRef<{ x: number; y: number } | null>(null);
+
+  const dismiss = useCallback(() => {
+    dismissedAt.current = pointer.current;
+    setDismissed(true);
+  }, []);
+  const undismiss = useCallback(() => {
+    dismissedAt.current = null;
+    setDismissed(false);
+  }, []);
+  const onPointerMove = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      const at = { x: event.clientX, y: event.clientY };
+      pointer.current = at;
+      const still = dismissedAt.current;
+      if (still === null || still.x !== at.x || still.y !== at.y) undismiss();
+    },
+    [undismiss]
+  );
+  return { dismissed, dismiss, undismiss, onPointerMove };
+}
+
 /** The keyboard and pointer state of one chart of `shape`. */
 export function useChartReach(shape: ChartShape): ChartReach {
   const [position, setPosition] = useState<ChartPosition | undefined>();
   const [focused, setFocused] = useState(false);
   const [hovered, setHovered] = useState<ChartPosition | undefined>();
-  // Escape hides the tooltip until the reader moves or hovers again.
-  const [dismissed, setDismissed] = useState(false);
+  const { dismissed, dismiss, undismiss, onPointerMove } = useDismissal();
 
   // Read against the chart's shape as it is now, which can shrink under a saved position: the
   // keyboard's point moves to the nearest one left, and a hovered mark that is gone is forgotten
@@ -93,9 +130,10 @@ export function useChartReach(shape: ChartShape): ChartReach {
   // A tooltip the pointer opened, which `ChartReachArea` lets Escape dismiss wherever focus is.
   const pointerTip = hoveredNow !== undefined && !dismissed;
 
+  // A mark entered is remembered, not shown: whether a dismissed tooltip comes back is the
+  // pointer's MOVE to decide (`useDismissal`), since entering is also what a still pointer reports.
   const hover = useCallback((next: ChartPosition) => {
     setHovered(current => (samePoint(current, next) ? current : next));
-    setDismissed(false);
   }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -105,7 +143,7 @@ export function useChartReach(shape: ChartShape): ChartReach {
     if (event.key === "Escape") {
       if (shown) {
         event.preventDefault();
-        setDismissed(true);
+        dismiss();
       }
       return;
     }
@@ -115,7 +153,7 @@ export function useChartReach(shape: ChartShape): ChartReach {
     event.preventDefault();
     setPosition(next);
     setHovered(undefined);
-    setDismissed(false);
+    undismiss();
   };
 
   return {
@@ -123,12 +161,12 @@ export function useChartReach(shape: ChartShape): ChartReach {
     shown,
     hover,
     pointerTip,
-    dismiss: () => setDismissed(true),
+    dismiss,
     area: {
       tabIndex: 0,
       onFocus: () => {
         setFocused(true);
-        setDismissed(false);
+        undismiss();
       },
       onBlur: event => {
         // Focus moving within the chart is not focus leaving it.
@@ -136,6 +174,7 @@ export function useChartReach(shape: ChartShape): ChartReach {
         setFocused(false);
       },
       onKeyDown,
+      onPointerMove,
       onPointerLeave: () => setHovered(undefined),
     },
   };
@@ -157,13 +196,13 @@ export function ChartReachArea({
   describedBy: string;
   announcement: string;
   children: ReactNode;
-}) {
+}): JSX.Element {
   return (
     <div
       role="group"
       aria-label={name}
       aria-describedby={describedBy}
-      className="relative rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="relative flex min-h-0 flex-1 flex-col rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       {...reach.area}
     >
       {children}
@@ -223,7 +262,7 @@ export function ChartTooltip({
   className?: string;
   /** Where it sits, for a place set by the data. */
   style?: CSSProperties;
-}) {
+}): JSX.Element {
   return (
     <div
       aria-hidden="true"
@@ -237,7 +276,8 @@ export function ChartTooltip({
       // design-lint-ok: placed beside the mark it describes.
       style={style}
     >
-      <span className="min-w-0 font-medium">{title}</span>
+      {/* The approved design's tooltip: what is in view, small and muted, over its value. */}
+      <span className="min-w-0 text-[11px] text-muted-foreground">{title}</span>
       {lines.map(line => (
         <span key={line.key} className="flex items-center gap-1.5">
           <span
@@ -249,7 +289,7 @@ export function ChartTooltip({
           {line.name ? (
             <span className="min-w-0 text-muted-foreground">{line.name}</span>
           ) : null}
-          <span className="font-medium tabular-nums">{line.value}</span>
+          <span className="font-semibold tabular-nums">{line.value}</span>
         </span>
       ))}
     </div>

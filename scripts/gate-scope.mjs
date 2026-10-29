@@ -338,9 +338,11 @@ function unreadableSection(unreadable) {
  * Every workspace pnpm resolves, as it resolves them.
  *
  * A subprocess, and worth its cost: it is the only source that cannot disagree
- * with the runner the derived filters are handed to.
+ * with the runner the derived filters are handed to. Exported for
+ * `test-changed.mjs`, which needs the same workspaces to find each package's
+ * directory and its workspace dependencies.
  */
-function pnpmWorkspaces(cwd) {
+export function pnpmWorkspaces(cwd) {
   /*
    * Through the shared invocation, because `pnpm` on Windows is a `.cmd`
    * shim and `execFileSync` cannot spawn one without `shell: true` — it

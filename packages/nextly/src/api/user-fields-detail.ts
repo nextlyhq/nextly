@@ -18,6 +18,10 @@
  */
 
 import { container } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 
@@ -54,8 +58,7 @@ async function getUserFieldDefinitionService(): Promise<UserFieldDefinitionServi
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "read", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_READ_POLICY.settings.read.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -90,8 +93,7 @@ export const GET = withErrorHandler(
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "update", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_WRITE_POLICY.userFields.update.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -140,8 +142,7 @@ export const PATCH = withErrorHandler(
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "delete", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_WRITE_POLICY.userFields.delete.anyOf,
     ]);
 
     const { id } = await context.params;

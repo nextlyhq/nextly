@@ -9,17 +9,23 @@
  * no answer moves, and removing a deviation is a change of its own that the
  * access table shows.
  *
+ * The answer is every entry, none, or the entries a read rule's filter
+ * matches: "may the caller read the entity" means yes, some entries, and the
+ * readers behind it apply the filter.
+ *
  * @module auth/access/entity-read
  */
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { scopeRowsAgree, slugGrants } from "../authenticated-scope";
 import { codeAccessAllows, type ReadAccessCaller } from "../code-access";
 
-import { holdsPermission, type Actor } from "./actor";
-import { decide, declaresRule, type AccessTarget } from "./decide";
+import { holdsPermission, isSuperAdmin, type Actor } from "./actor";
+import { declaresRule, type AccessTarget } from "./decide";
 import { targetAsDeclared } from "./declared-rules";
 import { deviate } from "./deviations";
+import { decidedRead as decided, filteredRead } from "./read-decision";
 import { actorForKey, actorForUserFailingClosed } from "./resolve-actor";
+import { readOf, type FilteredRead } from "./rule-answer";
 
 /** The target as the access-control service registers it, or one with no rule. */
 function targetOf(
@@ -27,15 +33,6 @@ function targetOf(
   rbac: RBACAccessControlService | undefined
 ): AccessTarget {
   return rbac?.getRegisteredTarget(slug) ?? { kind: "collection", slug };
-}
-
-/**
- * The decision about reading `target`: the reader's answer, or the one a
- * deviation compares today's with. With the service, `target` is what it
- * registers now; without one, the rules the app declared stand in.
- */
-async function decided(actor: Actor, target: AccessTarget): Promise<boolean> {
-  return (await decide(actor, "read", target)).allowed;
 }
 
 /**
@@ -51,6 +48,7 @@ function keyActorOf(caller: ReadAccessCaller): Actor {
       ? (caller.grants ?? [])
       : slugGrants(caller.permissions),
     roles: caller.roles,
+    superAdmin: caller.keyHoldsSuperAdmin === true,
   });
 }
 
@@ -59,16 +57,21 @@ async function keyReads(
   slug: string,
   caller: ReadAccessCaller,
   rbac: RBACAccessControlService | undefined
-): Promise<boolean> {
+): Promise<FilteredRead> {
   const target = targetOf(slug, rbac);
   const actor = keyActorOf(caller);
+  // A key carrying its maker's super-admin authority reads every entity a
+  // super-admin's session does.
+  if (isSuperAdmin(actor)) return readOf(true);
   // Judged on its own stored slugs, today as before: the grant decides, and
   // a registered rule must answer `true`.
   const slugAllows = caller.permissions.includes(`read-${slug}`);
   if (!rbac) {
     // Without the service no rule is read: the grant is the whole answer.
-    return deviate("no-service", slugAllows, () =>
-      decided(actor, targetAsDeclared(target))
+    return readOf(
+      await deviate("no-service", slugAllows, () =>
+        decided(actor, targetAsDeclared(target))
+      )
     );
   }
   if (
@@ -81,11 +84,13 @@ async function keyReads(
       slugAllows &&
       (target.access === undefined ||
         (await codeAccessAllows(target, "read", caller)));
-    return deviate("key-slug-string-match", today, () =>
-      decided(actor, target)
+    return readOf(
+      await deviate("key-slug-string-match", today, () =>
+        decided(actor, target)
+      )
     );
   }
-  return decided(actor, target);
+  return filteredRead(actor, target);
 }
 
 /** The entity reader's answer for a signed-in user. */
@@ -93,44 +98,42 @@ async function userReads(
   slug: string,
   caller: ReadAccessCaller,
   rbac: RBACAccessControlService | undefined
-): Promise<boolean> {
+): Promise<FilteredRead> {
   const target = targetOf(slug, rbac);
   // A lookup that fails counts as holding nothing of its kind, so the read
   // is refused rather than failed.
   const actor = () => actorForUserFailingClosed(caller.userId);
   if (!rbac) {
     // Without the service a signed-in user's grant is never asked.
-    return deviate("no-service", false, async () =>
-      decided(await actor(), targetAsDeclared(target))
+    return readOf(
+      await deviate("no-service", false, async () =>
+        decided(await actor(), targetAsDeclared(target))
+      )
     );
   }
   if (declaresRule(target, "read")) {
-    // A declared read rule decides alone for anyone but a super-admin,
-    // whatever their grants, and its answer is handed back as the rule gave
-    // it: today's answer is the access-control service's, which admits a
-    // super-admin and otherwise asks the rule once, with no need of the
-    // user's grants.
-    const today = await rbac.checkAccess({
+    // The access-control service's answer: it admits a super-admin, and
+    // otherwise needs the read permission first and then a rule that answers
+    // `true`, or a filter, as the decision does.
+    return rbac.checkAccessApplyingFilter({
       userId: caller.userId,
       operation: "read",
       resource: slug,
     });
-    return deviate("rule-alone-for-people", today, async () =>
-      decided(await actor(), target)
-    );
   }
-  return decided(await actor(), target);
+  return filteredRead(await actor(), target);
 }
 
 /**
- * The entity reader's answer for `caller` about `slug`, with `rbac` the
- * access-control service, or `undefined` when none is registered.
+ * What the entity reader lets `caller` read of `slug`: every entry, none, or
+ * those a read rule's filter matches, with `rbac` the access-control service,
+ * or `undefined` when none is registered.
  */
 export function readsEntity(
   slug: string,
   caller: ReadAccessCaller,
   rbac: RBACAccessControlService | undefined
-): Promise<boolean> {
+): Promise<FilteredRead> {
   return caller.authMethod === "api-key"
     ? keyReads(slug, caller, rbac)
     : userReads(slug, caller, rbac);

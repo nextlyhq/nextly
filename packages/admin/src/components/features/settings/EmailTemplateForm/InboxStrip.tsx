@@ -7,6 +7,8 @@
  */
 
 /** The display name of a From value: `Name <address>` gives the name. */
+import type { JSX } from "react";
+
 function senderName(from: string): string {
   const named = /^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/.exec(from);
   return (named ? named[1] : from).trim();
@@ -21,7 +23,7 @@ export function InboxStrip({
   from: string;
   subject: string;
   preheader: string;
-}) {
+}): JSX.Element {
   const sender = from.trim() ? senderName(from) : "Your default sender";
   return (
     <div

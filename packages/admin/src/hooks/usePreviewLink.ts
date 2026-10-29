@@ -6,7 +6,7 @@
  * @module hooks/usePreviewLink
  */
 
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import {
@@ -55,7 +55,18 @@ export function usePreviewLink(
      */
     onCreated?: () => void;
   } = {}
-) {
+): UseMutationResult<
+  {
+    url: string;
+    copied: boolean;
+    expiresAt: string;
+  },
+  unknown,
+  void | {
+    ttlSeconds: number;
+  },
+  unknown
+> {
   return useMutation({
     mutationFn: async (
       /**

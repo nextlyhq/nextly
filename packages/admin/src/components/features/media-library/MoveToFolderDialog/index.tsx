@@ -70,7 +70,7 @@ export function MoveToFolderDialog({
   mediaIds,
   currentFolderId,
   onSuccess,
-}: MoveToFolderDialogProps) {
+}: MoveToFolderDialogProps): React.JSX.Element {
   // Root folders are fetched for the "no folders yet" hint. TanStack dedupes
   // this query with the FolderTreePicker's own call.
   const { data: rootFolders, isLoading: foldersLoading } = useRootFolders();

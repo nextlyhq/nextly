@@ -28,6 +28,10 @@ import {
   useInfiniteQuery,
   useQueryClient,
   type UseQueryOptions,
+  type UseQueryResult,
+  type UseMutationResult,
+  type UseInfiniteQueryResult,
+  type InfiniteData,
 } from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
@@ -48,6 +52,7 @@ import {
   deleteFolder,
   moveMediaToFolder,
 } from "@admin/services/mediaApi";
+import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 import type {
   Media,
   MediaListResponse,
@@ -127,12 +132,21 @@ export function useMedia(
     UseQueryOptions<MediaListResponse, Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<MediaListResponse, Error> {
   return useQuery<MediaListResponse, Error>({
     queryKey: ["media", params],
     queryFn: async () => {
       return await fetchMedia(params || defaultParams);
     },
+    // A new page, sort or search keeps showing the current results until its
+    // own arrive, instead of dropping back to the loading skeleton. A new
+    // folder does not: its heading would sit over the old folder's rows, and
+    // their edit and delete controls would act on files the reader just left.
+    placeholderData: (previous, previousQuery) =>
+      (previousQuery?.queryKey[1] as MediaParams | undefined)?.folderId ===
+      params?.folderId
+        ? previous
+        : undefined,
     ...options,
   });
 }
@@ -193,7 +207,9 @@ export function useMedia(
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useInfiniteQuery
  */
-export function useInfiniteMedia(params?: Omit<MediaParams, "page">) {
+export function useInfiniteMedia(
+  params?: Omit<MediaParams, "page">
+): UseInfiniteQueryResult<InfiniteData<MediaListResponse, unknown>, Error> {
   return useInfiniteQuery<MediaListResponse, Error>({
     queryKey: ["media-infinite", params],
     queryFn: async ({ pageParam = 1 }) => {
@@ -259,7 +275,7 @@ export function useInfiniteMedia(params?: Omit<MediaParams, "page">) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function useMediaItem(mediaId?: string) {
+export function useMediaItem(mediaId?: string): UseQueryResult<Media, Error> {
   return useQuery<Media, Error>({
     queryKey: ["media", mediaId],
     queryFn: async () => {
@@ -344,7 +360,18 @@ export function useMediaItem(mediaId?: string) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useUploadMedia(options?: { disableAutoInvalidate?: boolean }) {
+export function useUploadMedia(options?: {
+  disableAutoInvalidate?: boolean;
+}): UseMutationResult<
+  Media,
+  Error,
+  {
+    file: File;
+    onProgress?: (progress: number) => void;
+    folderId?: string | null;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
   const shouldInvalidate = !options?.disableAutoInvalidate;
 
@@ -425,7 +452,15 @@ export function useUploadMedia(options?: { disableAutoInvalidate?: boolean }) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useUpdateMedia() {
+export function useUpdateMedia(): UseMutationResult<
+  void,
+  Error,
+  {
+    mediaId: string;
+    updates: MediaUpdateInput;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -437,9 +472,11 @@ export function useUpdateMedia() {
       return await updateMedia(mediaId, updates);
     },
     onSuccess: () => {
-      // Remove all cached media data so navigating to any folder refetches fresh data
-      queryClient.removeQueries({ queryKey: ["media"] });
-      queryClient.removeQueries({ queryKey: ["media-infinite"] });
+      // Mark every cached media list stale rather than removing it: each one
+      // refetches when it is next shown, and the one on screen keeps its rows
+      // while it does, instead of falling back to the loading skeleton.
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
+      void queryClient.invalidateQueries({ queryKey: ["media-infinite"] });
       void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });
@@ -494,7 +531,12 @@ export function useUpdateMedia() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useDeleteMedia() {
+export function useDeleteMedia(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -619,7 +661,16 @@ export interface UseBulkDeleteMediaOptions {
  * useBulkEntries.ts for the same pattern applied to collection
  * entries.
  */
-export function useBulkDeleteMedia(options: UseBulkDeleteMediaOptions = {}) {
+export function useBulkDeleteMedia(
+  options: UseBulkDeleteMediaOptions = {}
+): UseMutationResult<
+  BulkResponse<{
+    id: string;
+  }>,
+  Error,
+  string[],
+  unknown
+> {
   const { onComplete, onError, showToast = true } = options;
   const queryClient = useQueryClient();
 
@@ -786,7 +837,12 @@ export function useBulkDeleteMedia(options: UseBulkDeleteMediaOptions = {}) {
  * @see useUpdateMedia - Single media update hook
  * @see useBulkDeleteMedia - Similar pattern for deletion
  */
-export function useBulkUpdateMedia() {
+export function useBulkUpdateMedia(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  MediaUpdateInput
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, MediaUpdateInput>({
@@ -811,7 +867,7 @@ export function useBulkUpdateMedia() {
  *
  * @returns TanStack Query result with root folders
  */
-export function useRootFolders() {
+export function useRootFolders(): UseQueryResult<MediaFolder[], Error> {
   return useQuery<MediaFolder[], Error>({
     queryKey: ["folders", "root"],
     queryFn: async () => {
@@ -828,7 +884,15 @@ export function useRootFolders() {
  * @param folderId - Folder ID (undefined disables the query)
  * @returns TanStack Query result with folder + breadcrumbs
  */
-export function useFolderById(folderId?: string | null) {
+export function useFolderById(folderId?: string | null): UseQueryResult<
+  MediaFolder & {
+    breadcrumbs: Array<{
+      id: string;
+      name: string;
+    }>;
+  },
+  Error
+> {
   return useQuery<FolderResponse["data"], Error>({
     queryKey: ["folders", "byId", folderId],
     queryFn: async () => {
@@ -843,31 +907,52 @@ export function useFolderById(folderId?: string | null) {
  * useSubfolders - Query hook for fetching subfolders within a parent folder
  *
  * @param parentId - Parent folder ID
+ * @param options.enabled - Ask only when true (default), so a tree can wait
+ *   until a folder is opened while keeping the answer cached under its id
  * @returns TanStack Query result with subfolders
  */
-export function useSubfolders(parentId?: string) {
+export function useSubfolders(
+  parentId?: string,
+  options?: { enabled?: boolean }
+): UseQueryResult<MediaFolder[], Error> {
   return useQuery<MediaFolder[], Error>({
     queryKey: ["folders", "subfolders", parentId],
     queryFn: async () => {
       if (!parentId) throw new Error("Parent ID is required");
       return await listSubfolders(parentId);
     },
-    enabled: !!parentId,
+    enabled: !!parentId && (options?.enabled ?? true),
   });
 }
 
 /**
- * useFolderContents - Query hook for fetching folder contents (subfolders + media)
+ * useFolderContents - Query hook for fetching a folder's contents (subfolders + media)
  *
- * @param folderId - Folder ID (null for root)
+ * Asks nothing for the root (`null`). The root has no folder record and no
+ * breadcrumbs, and its contents are every file outside a folder, unbounded, so
+ * a reader that only wants the folder's name or trail must not download them.
+ *
+ * @param folderId - Folder ID, or null for the root
  * @returns TanStack Query result with folder contents
  */
-export function useFolderContents(folderId: string | null) {
+export function useFolderContents(folderId: string | null): UseQueryResult<
+  {
+    folder: MediaFolder | null;
+    subfolders: MediaFolder[];
+    files: Media[];
+    breadcrumbs: Array<{
+      id: string;
+      name: string;
+    }>;
+  },
+  Error
+> {
   return useQuery<FolderContentsResponse["data"], Error>({
     queryKey: ["folders", "contents", folderId],
     queryFn: async () => {
       return await getFolderContents(folderId);
     },
+    enabled: folderId !== null,
   });
 }
 
@@ -876,15 +961,30 @@ export function useFolderContents(folderId: string | null) {
  *
  * @returns TanStack Mutation result
  */
-export function useCreateFolder() {
+export function useCreateFolder(): UseMutationResult<
+  MediaFolder,
+  Error,
+  CreateFolderInput,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<MediaFolder, Error, CreateFolderInput>({
     mutationFn: async (input: CreateFolderInput) => {
       return await createFolder(input);
     },
-    onSuccess: () => {
-      // Invalidate folder queries to refetch
+    onSuccess: (created, input) => {
+      // A closed folder's subfolder lookup is disabled, so invalidating it
+      // refetches nothing, and a parent found empty earlier would keep saying
+      // so: no expander to open it by. Adding the new folder to the parent's
+      // cached answer gives it one; opening it then refetches, since the
+      // invalidation below still marks the answer out of date.
+      if (input.parentId) {
+        queryClient.setQueryData<MediaFolder[]>(
+          ["folders", "subfolders", input.parentId],
+          previous => (previous ? [...previous, created] : previous)
+        );
+      }
       void queryClient.invalidateQueries({ queryKey: ["folders"] });
     },
   });
@@ -895,7 +995,15 @@ export function useCreateFolder() {
  *
  * @returns TanStack Mutation result
  */
-export function useUpdateFolder() {
+export function useUpdateFolder(): UseMutationResult<
+  MediaFolder,
+  Error,
+  {
+    folderId: string;
+    updates: UpdateFolderInput;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -918,7 +1026,15 @@ export function useUpdateFolder() {
  *
  * @returns TanStack Mutation result
  */
-export function useDeleteFolder() {
+export function useDeleteFolder(): UseMutationResult<
+  void,
+  Error,
+  {
+    folderId: string;
+    deleteContents: boolean;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -943,7 +1059,15 @@ export function useDeleteFolder() {
  *
  * @returns TanStack Mutation result
  */
-export function useMoveMediaToFolder() {
+export function useMoveMediaToFolder(): UseMutationResult<
+  Media | null,
+  Error,
+  {
+    mediaId: string;
+    folderId: string | null;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<

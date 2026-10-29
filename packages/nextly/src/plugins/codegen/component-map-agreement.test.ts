@@ -8,11 +8,17 @@
  * - At load: the same comparison throws, with a stable code, for `next dev`,
  *   which does not type-check.
  *
- * Both are proved on the generated text itself: compiled by TypeScript over
- * virtual files, and run with its imports stubbed.
+ * Both are proved on the generated text itself: compiled by the TypeScript
+ * command line in a directory of its own, and run with its imports stubbed.
  */
-import ts from "typescript";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { transformSync } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
+
+import { compile } from "../../../../../scripts/tsc-cli.mjs";
 
 import type { PluginDefinition } from "../plugin-context";
 
@@ -36,9 +42,9 @@ const shop = {
   },
 } as unknown as PluginDefinition;
 
-const MAP = "/app/plugin-admin-imports.generated.ts";
-const LIST = "/app/plugin-admin-components.generated.ts";
-const STUBS = "/app/stubs.d.ts";
+const MAP = "plugin-admin-imports.generated.ts";
+const LIST = "plugin-admin-components.generated.ts";
+const STUBS = "stubs.d.ts";
 const STUB_SOURCE = `
 declare module "@nextlyhq/admin" {
   export function registerComponents(map: Record<string, unknown>): void;
@@ -49,47 +55,44 @@ declare module "@acme/shop/admin" {
 }
 `;
 
-/** The errors TypeScript reports on the pair, as their message text. */
+/**
+ * The errors TypeScript reports on the pair, as their message text: the three
+ * files and a config are written to a directory of their own and checked by
+ * the compiler's command line, which answers the same on every TypeScript
+ * version. Errors in anything else the program reads are not the pair's.
+ */
 function compileErrors(map: string, list: string): string[] {
-  const files = new Map([
-    [MAP, map],
-    [LIST, list],
-    [STUBS, STUB_SOURCE],
-  ]);
-  const options: ts.CompilerOptions = {
-    strict: true,
-    noEmit: true,
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    skipLibCheck: true,
-    types: [],
-  };
-  const host = ts.createCompilerHost(options);
-  const realGet = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, version) =>
-    files.has(name)
-      ? ts.createSourceFile(name, files.get(name)!, version)
-      : realGet(name, version);
-  const realExists = host.fileExists.bind(host);
-  host.fileExists = name => files.has(name) || realExists(name);
-  const realRead = host.readFile.bind(host);
-  host.readFile = name => files.get(name) ?? realRead(name);
-  // Module resolution asks whether the importing file's directory exists
-  // before it looks for the file, so the virtual one has to exist too, or
-  // the map's import of its list resolves to nothing.
-  const realDirectoryExists = host.directoryExists?.bind(host);
-  host.directoryExists = dir =>
-    dir === "/app" || (realDirectoryExists?.(dir) ?? false);
-  const program = ts.createProgram([MAP, LIST, STUBS], options, host);
-  return ts
-    .getPreEmitDiagnostics(program)
-    .filter(
-      diagnostic => diagnostic.file && files.has(diagnostic.file.fileName)
-    )
-    .map(diagnostic =>
-      ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
+  return compileErrorsWith(map, list, STUB_SOURCE);
+}
+
+/** {@link compileErrors}, with the declarations the map's imports resolve to. */
+function compileErrorsWith(map: string, list: string, stubs: string): string[] {
+  const dir = mkdtempSync(join(tmpdir(), "component-map-"));
+  try {
+    const files = { [MAP]: map, [LIST]: list, [STUBS]: stubs };
+    for (const [name, text] of Object.entries(files)) {
+      writeFileSync(join(dir, name), text);
+    }
+    writeFileSync(
+      join(dir, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "es2022",
+          module: "esnext",
+          moduleResolution: "bundler",
+          skipLibCheck: true,
+          types: [],
+        },
+        files: Object.keys(files),
+      })
     );
+    return compile(["-p", "tsconfig.json"], dir)
+      .filter(diagnostic => diagnostic.file && diagnostic.file in files)
+      .map(diagnostic => diagnostic.message);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Runs the map as the admin's bundle would, its imports stubbed. */
@@ -105,14 +108,16 @@ function load(
       registeredComponentPaths: listed,
     },
   };
-  const { outputText } = ts.transpileModule(map, {
-    compilerOptions: {
-      module: ts.ModuleKind.CommonJS,
-      target: ts.ScriptTarget.ES2022,
-    },
+  // Its types stripped and its imports made `require` calls, as a bundler
+  // would before running it.
+  const { code } = transformSync(map, {
+    loader: "ts",
+    format: "cjs",
+    target: "es2022",
   });
-  const run = new Function("require", "exports", outputText);
-  run((name: string) => modules[name], {});
+  const run = new Function("require", "module", "exports", code);
+  const module = { exports: {} };
+  run((name: string) => modules[name], module, module.exports);
   return registerComponents;
 }
 
@@ -162,5 +167,111 @@ describe("a pair edited by hand", () => {
       "NEXTLY_ADMIN_COMPONENT_MAP_MISMATCH"
     );
     expect((thrown as Error).message).toContain(COMPONENT_MAP_MISMATCH_MESSAGE);
+  });
+});
+
+/*
+ * A site whose plugins contribute blocks: the map hands each declared editor
+ * entry, and each declared block inspector, to the page builder, and the entry
+ * is listed beside the components so the same agreement holds for it.
+ */
+const blocks = {
+  name: "@acme/blocks",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    declarations: {
+      "@nextlyhq/plugin-page-builder": {
+        blocks: [
+          {
+            name: "acme/hero",
+            editor: { component: "@acme/blocks/editor#Hero" },
+          },
+        ],
+        editorEntry: "@acme/blocks/editor#editorBlocks",
+      },
+    },
+  },
+} as unknown as PluginDefinition;
+const pageBuilder = {
+  name: "@nextlyhq/plugin-page-builder",
+  version: "1.0.0",
+  nextly: "*",
+} as unknown as PluginDefinition;
+
+const BLOCK_STUBS = `
+declare module "@nextlyhq/admin" {
+  export function registerComponents(map: Record<string, unknown>): void;
+}
+declare module "@nextlyhq/plugin-page-builder/admin" {
+  export function registerBlockEditorModules(modules: {
+    entries?: Record<string, unknown>;
+    components?: Record<string, unknown>;
+  }): void;
+}
+declare module "@acme/blocks/editor" {
+  export const Hero: unknown;
+  export const editorBlocks: unknown;
+}
+`;
+
+describe("a map handing block modules to the page builder", () => {
+  const blockMap = buildComponentImportMap([pageBuilder, blocks]);
+  const blockList = buildComponentPathsModule([pageBuilder, blocks]);
+
+  /** Runs the map with both registrars stubbed. */
+  function loadBlocks(map: string, listed: readonly string[]) {
+    const registerComponents = vi.fn();
+    const registerBlockEditorModules = vi.fn();
+    const modules: Record<string, unknown> = {
+      "@nextlyhq/admin": { registerComponents },
+      "@nextlyhq/plugin-page-builder/admin": { registerBlockEditorModules },
+      "@acme/blocks/editor": { Hero: "Hero", editorBlocks: "editorBlocks" },
+      "./plugin-admin-components.generated": {
+        registeredComponentPaths: listed,
+      },
+    };
+    const { code } = transformSync(map, {
+      loader: "ts",
+      format: "cjs",
+      target: "es2022",
+    });
+    const run = new Function("require", "module", "exports", code);
+    const module = { exports: {} };
+    run((name: string) => modules[name], module, module.exports);
+    return { registerComponents, registerBlockEditorModules };
+  }
+
+  it("lists the entry, compiles, and hands the entry and the inspector over", () => {
+    expect(blockList).toContain('"@acme/blocks/editor#editorBlocks"');
+    expect(compileErrorsWith(blockMap, blockList, BLOCK_STUBS)).toEqual([]);
+
+    const { registerComponents, registerBlockEditorModules } = loadBlocks(
+      blockMap,
+      ["@acme/blocks/editor#Hero", "@acme/blocks/editor#editorBlocks"]
+    );
+    // The entry exports definitions, not a component, so the component
+    // registry never receives it.
+    expect(registerComponents).toHaveBeenCalledWith({
+      "@acme/blocks/editor#Hero": "Hero",
+    });
+    expect(registerBlockEditorModules).toHaveBeenCalledWith({
+      entries: { "@acme/blocks/editor#editorBlocks": "editorBlocks" },
+      components: { "@acme/blocks/editor#Hero": "Hero" },
+    });
+  });
+
+  it("holds the entry to the list, at build and at load", () => {
+    const listMissingEntry = blockList.replace(
+      '"@acme/blocks/editor#editorBlocks",',
+      ""
+    );
+    expect(listMissingEntry).not.toBe(blockList);
+    expect(
+      compileErrorsWith(blockMap, listMissingEntry, BLOCK_STUBS).join("\n")
+    ).toContain(COMPONENT_MAP_MISMATCH_MESSAGE);
+    expect(() => loadBlocks(blockMap, ["@acme/blocks/editor#Hero"])).toThrow(
+      COMPONENT_MAP_MISMATCH_MESSAGE
+    );
   });
 });

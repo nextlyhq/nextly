@@ -8,7 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
-import { useMemo } from "react";
+import { useMemo, type JSX } from "react";
 
 /**
  * Radix Select rejects an empty-string item value, so "no default" is a
@@ -61,7 +61,7 @@ export function FieldDefaultValueInput({
   onChange,
   disabled,
   ariaLabel = "Default value",
-}: FieldDefaultValueInputProps) {
+}: FieldDefaultValueInputProps): JSX.Element {
   const validOptions = useMemo(
     () => options.filter(option => option.value.trim()),
     [options]

@@ -33,6 +33,10 @@ import type { CollectionConfig } from "../../collections/config/define-collectio
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import {
+  buildWorkflowRegistry,
+  publishWorkflows,
+} from "../../domains/workflows/registry";
 import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
@@ -44,6 +48,7 @@ import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/
 import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
+import { describeDeclarationFailure } from "../../shared/lib/assert-plugin-field-declarations";
 import {
   generatedTypesFile,
   generatedZodDir,
@@ -55,9 +60,10 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
-import { formatDuration, formatCount } from "../utils/logger";
+import { formatDuration, formatCount, logWarnings } from "../utils/logger";
 import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
+import { runComponentMapCheck } from "./component-map-check-command";
 import {
   applyBlockManifestState,
   readBlockManifestState,
@@ -89,6 +95,12 @@ export interface GenerateTypesCommandOptions {
    * @default true (Zod schemas are generated)
    */
   zod?: boolean;
+
+  /**
+   * Only check that the committed component map agrees with the config, writing nothing, and
+   * exit with the verdict (`runComponentMapCheck`). For CI.
+   */
+  check?: boolean;
 }
 
 /**
@@ -136,8 +148,9 @@ interface GenerationResult {
 /**
  * Write the admin component import map (D60) and its strings-only path list
  * beside the types file. Importing the map from the app self-registers every
- * plugin admin component, with no manual host imports, and the admin's server
- * layout reads the list to refuse a widget whose component the map lacks.
+ * plugin admin component, with no manual host imports. The admin's server
+ * layout reads the list in development to write the pair again when it falls
+ * behind, and `generate:types --check` reads it in CI.
  *
  * Both are written even when nothing contributes a component: the app imports
  * them, so removing them would break its build. An empty map imports nothing,
@@ -149,13 +162,16 @@ async function settleImportMap(
   plugins: Parameters<typeof writeComponentMapFiles>[0],
   typesOutputPath: string,
   cwd: string,
-  configFile: string | undefined
+  configFile: string | undefined,
+  // The site config's `admin.dashboard`, whose own widgets the map lists too.
+  siteDashboard: unknown
 ): Promise<string | undefined> {
   const written = await writeComponentMapFiles(
     plugins,
     typesOutputPath,
     cwd,
-    configFile
+    configFile,
+    siteDashboard
   );
   return written.paths[0];
 }
@@ -195,6 +211,8 @@ export async function runGenerateTypes(
   } else {
     logger.warn("No config file found, using defaults");
   }
+
+  await publishConfiguredWorkflows(configResult, logger);
 
   const collectionCount = configResult.config.collections.length;
   const singleCount = configResult.config.singles?.length ?? 0;
@@ -253,7 +271,8 @@ export async function runGenerateTypes(
     manifestCwd,
     // The config file it was loaded from, whose type the map imports to check each widget
     // component against its widget. None for a site running on the default config.
-    configResult.configPath
+    configResult.configPath,
+    configResult.config.admin?.dashboard
   );
   if (writtenImportMapPath) {
     logger.debug(`Written plugin admin import map to: ${writtenImportMapPath}`);
@@ -293,6 +312,37 @@ export async function runGenerateTypes(
     logger.success(`Type generation completed in ${formatDuration(duration)}`);
   } catch (error) {
     logger.error(`Generation failed: ${describeError(error)}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Check the configuration's attached workflows as boot checks them, plugins'
+ * collections and password fields included, and publish them, so the types
+ * generated next carry their stage and step names. A workflow that cannot be
+ * attached ends the command, reported as a declaration failure. A command
+ * reads no database, so the components an attached collection reaches are
+ * judged at boot.
+ */
+export async function publishConfiguredWorkflows(
+  configResult: LoadConfigResult,
+  logger: { error(message: string): void }
+): Promise<void> {
+  try {
+    publishWorkflows(
+      await buildWorkflowRegistry(
+        configResult.config,
+        configResult.configPath ?? null,
+        // A command reads no database: the components the configuration
+        // defines are judged from their definitions, and any other at boot.
+        {
+          components: configResult.config.fieldGroups ?? [],
+          readRegistry: false,
+        }
+      )
+    );
+  } catch (error) {
+    logger.error(describeDeclarationFailure(error));
     process.exit(1);
   }
 }
@@ -624,13 +674,7 @@ function displayResults(
   }
 
   // Warnings
-  if (result.warnings.length > 0) {
-    logger.newline();
-    logger.warn(`${result.warnings.length} warning(s):`);
-    for (const warning of result.warnings) {
-      logger.item(warning, 1);
-    }
-  }
+  logWarnings(logger, result.warnings);
 
   // Duration (verbose only)
   logger.debug(`Generation completed in ${formatDuration(result.durationMs)}`);
@@ -659,6 +703,10 @@ export function registerGenerateTypesCommand(program: Command): void {
     )
     .option("--no-declare", "Skip module declaration/augmentation")
     .option("--no-zod", "Skip Zod schema generation")
+    .option(
+      "--check",
+      "Only check that the committed component map agrees with the config, writing nothing (exit 1 when it does not, 2 when it cannot be checked)"
+    )
     .action(async (cmdOptions: GenerateTypesCommandOptions, cmd: Command) => {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
@@ -671,6 +719,10 @@ export function registerGenerateTypesCommand(program: Command): void {
         cwd: globalOpts.cwd,
       };
 
+      // The check writes nothing and runs nothing else: it answers with its exit status alone.
+      if (cmdOptions.check === true) {
+        process.exit(await runComponentMapCheck(resolvedOptions, context));
+      }
       try {
         await runGenerateTypes(resolvedOptions, context);
       } catch (error) {

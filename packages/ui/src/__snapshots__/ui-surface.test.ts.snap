@@ -316,6 +316,7 @@ exports[`ui public export surface > ./color surface is unchanged 1`] = `
   "oklchToRgb (value)",
   "parseHex (value)",
   "pointOnSurface (value)",
+  "readableOn (value)",
   "rgbToHsv (value)",
   "rgbToOklch (value)",
   "saturationValueAt (value)",
@@ -327,10 +328,12 @@ exports[`ui public export surface > ./color surface is unchanged 1`] = `
 exports[`ui public export surface > ./format surface is unchanged 1`] = `
 [
   "ChangeDirection (type)",
+  "ChartSlot (type)",
   "FormatCountOptions (type)",
   "FormattedChange (type)",
   "FormattedNumber (type)",
   "SizeTier (type)",
+  "chartColour (value)",
   "formatChange (value)",
   "formatCount (value)",
 ]

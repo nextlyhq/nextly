@@ -47,6 +47,7 @@ import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-defi
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
+import { workflowAttachedTo } from "../../workflows/registry";
 
 import { renderFieldMember } from "./field-nullability";
 import {
@@ -396,6 +397,10 @@ export class TypeGenerator {
       lines.push(iface.code);
       lines.push("");
     }
+
+    // The stage and step names of each attached workflow, so code that names
+    // a stage or a step is checked against the definition.
+    lines.push(...this.workflowUnions(collections, singles));
 
     // Generate User interface
     const userInterface = this.generateUserInterface(userFields);
@@ -1490,6 +1495,11 @@ ${properties}
       lines.push("  };");
     }
 
+    // Workflows section: each attached workflow's stage and step names, by
+    // collection and Single. Emitted only when one is attached, as the
+    // permissions and events above are.
+    lines.push(...this.workflowConfigSection(collections, singles));
+
     // User section
     lines.push("  user: User;");
 
@@ -1766,7 +1776,108 @@ ${properties}
     for (const component of components) {
       names.add(this.toComponentInterfaceName(component.slug));
     }
+    for (const { slug } of this.attachedSlugs(collections, singles)) {
+      for (const name of this.workflowAliasNames(slug)) names.add(name);
+    }
     return names;
+  }
+
+  /**
+   * Each collection and Single a registered workflow is attached to, with its
+   * stage and step names, in declaration order: collections, then Singles.
+   */
+  private *attachedSlugs(
+    collections: DynamicCollectionRecord[],
+    singles: DynamicSingleRecord[]
+  ): Generator<{
+    kind: "collection" | "single";
+    slug: string;
+    names: { stages: string[]; steps: string[] };
+  }> {
+    for (const [kind, list] of [
+      ["collection", collections],
+      ["single", singles],
+    ] as const) {
+      for (const { slug } of list) {
+        const names = this.workflowNamesOf(kind, slug);
+        if (names !== undefined) yield { kind, slug, names };
+      }
+    }
+  }
+
+  /**
+   * The stage and step names of the workflow attached to a collection or
+   * Single, from the registered workflows, or `undefined` when none is.
+   */
+  private workflowNamesOf(
+    kind: "collection" | "single",
+    slug: string
+  ): { stages: string[]; steps: string[] } | undefined {
+    const attached = workflowAttachedTo(kind, slug);
+    if (attached === undefined) return undefined;
+    return {
+      stages: attached.workflow.stages.map(stage => stage.name),
+      steps: attached.workflow.steps.map(step => step.name),
+    };
+  }
+
+  /** The two aliases an attached workflow generates for a collection or Single. */
+  private workflowAliasNames(slug: string): [string, string] {
+    const name = this.toPascalCase(slug);
+    return [`${name}WorkflowStage`, `${name}WorkflowStep`];
+  }
+
+  /** A union of string literals, or `never` for none. */
+  private literalUnion(values: readonly string[]): string {
+    return values.length === 0
+      ? "never"
+      : values.map(value => JSON.stringify(value)).join(" | ");
+  }
+
+  /** The Stage and Step aliases of every attached workflow, as lines. */
+  private workflowUnions(
+    collections: DynamicCollectionRecord[],
+    singles: DynamicSingleRecord[]
+  ): string[] {
+    const lines: string[] = [];
+    for (const { slug, names } of this.attachedSlugs(collections, singles)) {
+      const [stage, step] = this.workflowAliasNames(slug);
+      if (this.includeComments) {
+        lines.push(
+          `/** The stages and steps of the workflow \`${slug}\` is attached to. */`
+        );
+      }
+      lines.push(`export type ${stage} = ${this.literalUnion(names.stages)};`);
+      lines.push(`export type ${step} = ${this.literalUnion(names.steps)};`);
+      lines.push("");
+    }
+    return lines;
+  }
+
+  /** The `workflows` member of `Config`, or nothing when none is attached. */
+  private workflowConfigSection(
+    collections: DynamicCollectionRecord[],
+    singles: DynamicSingleRecord[]
+  ): string[] {
+    const attached = [...this.attachedSlugs(collections, singles)];
+    if (attached.length === 0) return [];
+    const membersOf = (kind: "collection" | "single") =>
+      attached
+        .filter(entry => entry.kind === kind)
+        .map(({ slug }) => {
+          const [stage, step] = this.workflowAliasNames(slug);
+          return `      "${slug}": { stage: ${stage}; step: ${step} };`;
+        });
+    return [
+      "  workflows: {",
+      "    collections: {",
+      ...membersOf("collection"),
+      "    };",
+      "    singles: {",
+      ...membersOf("single"),
+      "    };",
+      "  };",
+    ];
   }
 
   /**
@@ -1823,6 +1934,11 @@ ${properties}
         "field group",
         component.slug
       );
+    }
+    for (const { kind, slug } of this.attachedSlugs(collections, singles)) {
+      for (const name of this.workflowAliasNames(slug)) {
+        claim(name, `the workflow of ${kind}`, slug);
+      }
     }
   }
 
