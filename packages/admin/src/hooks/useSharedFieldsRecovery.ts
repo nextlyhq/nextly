@@ -231,10 +231,11 @@ export function useSharedFieldsRecovery(args: {
   return useCallback(
     (error: unknown, form: RefusedForm | undefined) => {
       const stale = outOfDateSharedFields(error);
-      // Without a form there is nothing to take the live values into, as for
-      // a reader's publish of the status alone: the caller reports the
-      // refusal as it would any other error.
-      if (!stale || !scope || !form) return false;
+      // Without a form there is nothing to take the live values into, and a
+      // form that may not write now, a reader's or one another author holds,
+      // would refuse the take: either way the caller reports the refusal as
+      // it would any other error.
+      if (!stale || !scope || !form || !form.mayWrite()) return false;
       const labelOf = (name: string) => {
         const field = fields.find(f => f.name === name);
         return field?.name
@@ -265,10 +266,13 @@ export function useSharedFieldsRecovery(args: {
         }
         // Let go already, by a move to another document or the editor
         // going: nothing is left to reload into, unless the editor has come
-        // back to this document, which still lacks the live values.
+        // back to this document, which still lacks the live values. An editor
+        // that has gone renders nothing more, so `shownDocument` still names
+        // this one: asked of `mounted` instead.
         if (
-          !holding.current.has(taking) &&
-          shownDocument.current !== forDocument
+          !mounted.current ||
+          (!holding.current.has(taking) &&
+            shownDocument.current !== forDocument)
         ) {
           throw LET_GO;
         }
@@ -332,15 +336,9 @@ export function useSharedFieldsRecovery(args: {
           // between the take and the reload would still send the value the
           // take replaced.
           await form.recover(async () => {
-            holds = true;
-            holding.current.set(taking, {
-              document: forDocument,
-              letGo: () => undefined,
-            });
-            toast.loading("Taking the live values…", { id: taking });
-            // Asked with nothing awaited before the take: the editor is still
-            // there, still shows the change the refusal was for, and may
-            // still write it.
+            // Asked with nothing awaited before the take, and before saying
+            // it is taking: the editor is still there, still shows the change
+            // the refusal was for, and may still write it.
             if (
               !mounted.current ||
               onScreen.current !== refusedFor ||
@@ -348,6 +346,12 @@ export function useSharedFieldsRecovery(args: {
             ) {
               throw NOT_TAKEN;
             }
+            holds = true;
+            holding.current.set(taking, {
+              document: forDocument,
+              letGo: () => undefined,
+            });
+            toast.loading("Taking the live values…", { id: taking });
             let taken: TakenLiveValues;
             try {
               ({ item: taken } = await versionApi.takeLiveSharedValues(

@@ -351,7 +351,7 @@ export function useUpdateEntry<
     },
 
     // Rollback on error
-    onError: (error: Error, variables, context) => {
+    onError: (error: Error, _variables, context) => {
       // Rollback to previous value
       if (optimistic && context?.previousEntry) {
         queryClient.setQueryData(localeKey, context.previousEntry);
@@ -366,10 +366,9 @@ export function useUpdateEntry<
       }
 
       // The out-of-date refusal reports itself, with the action that
-      // resolves it, which works on the editor's form. Not for a write of the
-      // status alone, as a reader's publish sends it: it doesn't come from
-      // the form, and a reader can't store what a take needs saved first.
-      if (!handledByForm && refusedForm && !namesStatusAlone(variables)) {
+      // resolves it, which works on the editor's form, wherever that form
+      // may write now.
+      if (!handledByForm && refusedForm) {
         handledByForm = recoverSharedFields(error, refusedForm);
       }
 
@@ -436,13 +435,4 @@ export function useUpdateEntry<
       onSuccess?.(data);
     },
   });
-}
-
-/**
- * Whether a write names the status alone, as a reader's publish or unpublish
- * sends it: such a write doesn't come from the editor's form.
- */
-function namesStatusAlone(payload: UpdateEntryPayload): boolean {
-  const names = Object.keys(payload);
-  return names.length === 1 && names[0] === "status";
 }

@@ -155,6 +155,24 @@ describe("useSharedFieldsRecovery", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it("leaves the refusal to the caller while the form it was handed may not write", () => {
+    // A reader's form, or one another author now holds: the take would be
+    // refused, so the way out isn't offered.
+    const { recover } = renderRecovery();
+    const form = formHolding({});
+    vi.mocked(form.mayWrite).mockReturnValue(false);
+    const handled = recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    expect(handled).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("stores the form with the editor's own Save, then takes the live values and reloads, all inside its hold", async () => {
     const order: string[] = [];
     take.mockImplementation(async () => {
@@ -363,6 +381,8 @@ describe("useSharedFieldsRecovery", () => {
     await new Promise(resolve => setTimeout(resolve, 20));
 
     expect(take).not.toHaveBeenCalled();
+    // Nor does it say it is taking them first.
+    expect(toast.loading).not.toHaveBeenCalled();
   });
 
   it("keeps one refusal toast per document and language, and closes it when the editor leaves", () => {
@@ -696,6 +716,46 @@ describe("a recovery whose reload fails", () => {
       id: string;
     };
     expect(toast.dismiss).toHaveBeenLastCalledWith(shown.id);
+  });
+
+  it("lets go quietly when the editor goes while the take runs and the reload then fails", async () => {
+    let finishTake: (value: unknown) => void = () => {};
+    take.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          finishTake = resolve;
+        })
+    );
+    const order: string[] = [];
+    const reload = vi
+      .fn<() => unknown>()
+      .mockRejectedValue(new Error("offline"));
+    const { recover, unmount } = renderRecovery({
+      onTaken: () => {
+        order.push("reload");
+        return reload();
+      },
+    });
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      formHolding({}, order)
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(take).toHaveBeenCalled());
+    // The author leaves while the take is in flight.
+    unmount();
+    finishTake({
+      message: "ok",
+      item: { taken: ["articleCount"], outOfDate: [] },
+    });
+    await vi.waitFor(() => expect(order).toContain("release"));
+
+    // Nothing is left to reload into, so no Reload is offered for good.
+    expect(reloadOffer()).toBeUndefined();
   });
 
   it("keeps the form held behind Reload when the take's request fails and so does the reload, claiming no take", async () => {
