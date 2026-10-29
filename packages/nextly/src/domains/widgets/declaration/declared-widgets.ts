@@ -104,6 +104,24 @@ interface DeclaredWidgetShape {
   };
   readonly several?: boolean;
   readonly hidesWhenEmpty?: boolean;
+  /**
+   * The cases the development preview page draws the card's ready state from,
+   * each held at startup to what JSON carries (`previewProblems`).
+   *
+   * 🔴 Kept here, on the server, and never published: `toDefinition` names
+   * every field the registry carries and this is not one of them, so the
+   * admin's workspace payload never holds a case. Only the preview read, which
+   * answers in development alone, sends them, and only for the widgets its
+   * reader may see.
+   */
+  readonly preview?: readonly DeclaredPreviewCase[];
+}
+
+/** One preview case as a declaration states it, checked at startup. */
+interface DeclaredPreviewCase {
+  readonly name: string;
+  readonly data: unknown;
+  readonly settings?: Readonly<Record<string, unknown>>;
 }
 
 /**

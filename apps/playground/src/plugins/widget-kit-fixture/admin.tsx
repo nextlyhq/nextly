@@ -32,3 +32,17 @@ export function KitCard({
 export function ThrowingCard(): JSX.Element {
   throw new Error("The fixture card throws while it draws.");
 }
+
+/**
+ * A text input with no label, planted for the accessibility check to refuse:
+ * axe's `label` rule, a critical finding.
+ */
+export function UnlabelledControlCard({
+  data,
+}: WidgetProps<typeof fixture.unlabelledControlWidget>): JSX.Element {
+  return (
+    <div data-testid="unlabelled-control-card">
+      <input type="text" defaultValue={data.query} />
+    </div>
+  );
+}

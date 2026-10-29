@@ -87,12 +87,14 @@ const callers = {
     keyId: "k1",
     userId: "u3",
     roles: ["super-admin"],
+    superAdmin: false,
     permissions: every("posts"),
   }),
   "key-without": keyActor({
     keyId: "k2",
     userId: "u3",
     roles: ["super-admin"],
+    superAdmin: false,
     permissions: [],
   }),
 } satisfies Record<string, Actor>;
@@ -702,10 +704,38 @@ describe("something no rule can name", () => {
       keyId: "k3",
       userId: "u11",
       roles: ["super-admin"],
+      superAdmin: false,
       permissions: [settingsGrant],
     });
     expect(decidePermission(key, "manage", "settings").allowed).toBe(true);
     expect(decidePermission(key, "export", "settings").allowed).toBe(false);
+  });
+
+  it("gives a key carrying its maker's super-admin authority every permission and every rule", async () => {
+    const carrying = (superAdmin: boolean) =>
+      keyActor({
+        keyId: "k4",
+        userId: "u11",
+        roles: [],
+        superAdmin,
+        permissions: [],
+      });
+    const refusing: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { read: () => false },
+    };
+    expect(decidePermission(carrying(true), "export", "settings").allowed).toBe(
+      true
+    );
+    expect((await decide(carrying(true), "read", refusing)).allowed).toBe(true);
+    // The control: the same key without it holds nothing.
+    expect(
+      decidePermission(carrying(false), "export", "settings").allowed
+    ).toBe(false);
+    expect((await decide(carrying(false), "read", refusing)).allowed).toBe(
+      false
+    );
   });
 
   it("counts a system resource's manage permission as its read, create, update and delete, and nothing else", () => {
@@ -745,6 +775,56 @@ describe("something no rule can name", () => {
     expect(decidePermission(holder("posts"), "read", "posts").allowed).toBe(
       false
     );
+  });
+
+  it("answers a system resource's manage permission, asked of it, by the plain four together", () => {
+    // A gate written before `manage-` was retired still asks it; holding the
+    // plain read, create, update and delete there is holding it.
+    const plain = (resource: string, actions: readonly string[]) =>
+      actions.map(action => ({
+        slug: `${action}-${resource}`,
+        action,
+        resource,
+      }));
+    const four = ["read", "create", "update", "delete"] as const;
+    for (const resource of [
+      "media",
+      "settings",
+      "email-providers",
+      "email-templates",
+    ]) {
+      const person = (actions: readonly string[]) =>
+        userActor({
+          userId: "u13",
+          roles: ["holder"],
+          permissions: plain(resource, actions),
+        });
+      const key = keyActor({
+        keyId: "k4",
+        userId: "u13",
+        roles: [],
+        permissions: plain(resource, four),
+        superAdmin: false,
+      });
+      expect(
+        decidePermission(person(four), "manage", resource).allowed,
+        resource
+      ).toBe(true);
+      expect(decidePermission(key, "manage", resource).allowed, resource).toBe(
+        true
+      );
+      expect(
+        decidePermission(person(four.slice(0, 3)), "manage", resource),
+        resource
+      ).toEqual({ allowed: false, reason: "no-permission" });
+    }
+    // A `manage-` permission outside the four is still held only as stored.
+    const apiKeys = userActor({
+      userId: "u13",
+      roles: ["holder"],
+      permissions: plain("api-keys", four),
+    });
+    expect(decidePermission(apiKeys, "manage", "api-keys").allowed).toBe(false);
   });
 
   it("is refused to a visitor and a plugin's person, who hold no permission", () => {
