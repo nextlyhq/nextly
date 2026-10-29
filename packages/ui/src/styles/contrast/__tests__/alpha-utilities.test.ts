@@ -116,7 +116,6 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // card that is already identified by its fill and text, not a focus indicator
   // (all focus rings are full-strength) nor a sole state cue.
   "ring-primary/20",
-  "ring-foreground/40",
   // Colour-picker handle, over a surface whose colour the USER chose. No
   // semantic token can guarantee contrast against an arbitrary background, and
   // this is the outer half of the standard two-tone handle: a light border

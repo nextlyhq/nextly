@@ -164,11 +164,18 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
   useEmailTemplates: () => ({ data: TEMPLATES, isError: false, error: null }),
 }));
 
-vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
-  useCurrentUserPermissions: () => ({
-    hasPermission: (slug: string) => grants.has(slug),
-  }),
-}));
+vi.mock("@admin/hooks/useCurrentUserPermissions", async () => {
+  // Asked as the product asks: a `manage-` permission counts as the plain
+  // ones it stands for.
+  const { holdsPermission } = await import(
+    "@admin/lib/permissions/holds-permission"
+  );
+  return {
+    useCurrentUserPermissions: () => ({
+      hasPermission: (slug: string) => holdsPermission(grants, slug),
+    }),
+  };
+});
 
 vi.mock("@admin/services/singleApi", () => ({
   singleApi: { getDocument: (slug: string) => getDocument(slug) },
