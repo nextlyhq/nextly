@@ -60,11 +60,7 @@ import type {
   MigrationErrorJson,
   MigrationRecordStatus,
 } from "../../schemas/dynamic-collections/types";
-import {
-  databaseEnvError,
-  databaseUnreachable,
-  exitWithError,
-} from "../errors";
+import { databaseEnvError, exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -307,7 +303,7 @@ export async function runMigrateStatus(
     logger.debug("Database connected");
   } catch (error) {
     printJsonError(options, "Failed to connect to database", error);
-    exitWithError(logger, databaseUnreachable(dialect, error));
+    exitWithError(logger, error);
   }
 
   try {

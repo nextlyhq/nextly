@@ -23,7 +23,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import pc from "picocolors";
 
-import { exitWithError, reportCliError } from "../errors";
+import { exitWithError, printCliError } from "../errors";
 import { packageInstallFailed } from "../errors/areas/commands";
 import {
   createContext,
@@ -142,8 +142,7 @@ export async function runAdd(
     if (code !== 0) {
       // The package manager's own failing code is the command's, so the shape is printed here
       // and the exit keeps that code rather than the 1 `exitWithError` ends with.
-      const { verbose, noColor } = logger.getOptions();
-      reportCliError(packageInstallFailed(pm, pkg, code), { verbose, noColor });
+      printCliError(logger, packageInstallFailed(pm, pkg, code));
       process.exit(code || 1);
     }
     logger.success(`Installed ${pkg}`);

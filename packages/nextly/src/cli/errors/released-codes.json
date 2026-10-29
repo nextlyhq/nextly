@@ -27,6 +27,7 @@
   "CORE_SCHEMA_APPLY_FAILED": "The database refused a change to Nextly's own tables.",
   "CORE_TABLES_NOT_CREATED": "The command could not create the core tables on a database that has none.",
   "CORE_TABLES_NOT_RECONCILED": "The database's existing core tables could not be brought up to date before the sync.",
+  "DATABASE_ADAPTER_MISSING": "The database adapter package for the dialect `DATABASE_URL` names is not installed.",
   "DATABASE_CATALOG_UNREADABLE": "The database catalog could not be read, so the command could not tell which field-group registry table the database uses.",
   "DATABASE_DIALECT_INVALID": "`DB_DIALECT` names a database Nextly does not support.",
   "DATABASE_DIALECT_UNKNOWN": "The database type could not be told from `DATABASE_URL`, and `DB_DIALECT` is not set.",

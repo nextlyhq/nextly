@@ -26,10 +26,12 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { pruneWebhookData } from "../../domains/webhooks/prune";
-import { databaseEnvError, exitWithError } from "../errors";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
-import { validateDatabaseEnv } from "../utils/adapter";
-import { connectOrExit } from "../utils/command-prerequisites";
+import {
+  connectOrExit,
+  requireDatabaseEnv,
+} from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 interface WebhooksPruneCommandOptions {
@@ -62,10 +64,7 @@ export async function runWebhooksPruneCommand(
     return;
   }
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || dbValidation.dialect === undefined) {
-    exitWithError(logger, databaseEnvError(dbValidation));
-  }
+  const dbValidation = requireDatabaseEnv(logger);
   const configuredDialect = dbValidation.dialect;
 
   const adapter = await connectOrExit(

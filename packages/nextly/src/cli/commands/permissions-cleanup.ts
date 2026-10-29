@@ -2,17 +2,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { Command } from "commander";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
-import {
-  databaseEnvError,
-  databaseUnreachable,
-  exitWithError,
-} from "../errors";
+import { exitWithError } from "../errors";
 import { createContext } from "../program";
-import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 /**
@@ -38,22 +31,16 @@ export function createPermissionsCleanupCommand(): Command {
         });
 
         context.logger.info("Validating database environment...");
-        const dbValidation = validateDatabaseEnv();
-        if (!dbValidation.valid || dbValidation.dialect === undefined) {
-          throw databaseEnvError(dbValidation);
-        }
+        const dbValidation = databaseEnvOrThrow();
         const dialect = dbValidation.dialect;
 
         context.logger.info("Creating database adapter...");
-        try {
-          adapter = await createCliAdapter({
-            dialect,
-            databaseUrl: dbValidation.databaseUrl,
-            logger: context.options.verbose ? context.logger : undefined,
-          });
-        } catch (error) {
-          throw databaseUnreachable(dialect, error);
-        }
+        // A failure here already carries its code: `createCliAdapter` gives it one.
+        adapter = await createCliAdapter({
+          dialect,
+          databaseUrl: dbValidation.databaseUrl,
+          logger: context.options.verbose ? context.logger : undefined,
+        });
 
         context.logger.success("✅ Database connected\n");
 

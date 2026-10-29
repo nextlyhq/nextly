@@ -3,7 +3,8 @@
  *
  * @module cli/__tests__/error-cases/database
  */
-import { databaseEnvError, databaseUnreachable } from "../../errors";
+import { connectionFailure } from "../../errors/areas/database";
+import { databaseEnvError } from "../../errors";
 
 import type { ErrorCases } from "./types";
 
@@ -31,10 +32,18 @@ export const DATABASE_CASES = {
     }
   },
   DATABASE_UNREACHABLE: () =>
-    databaseUnreachable(
+    connectionFailure(
       "postgresql",
       Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), {
         code: "ECONNREFUSED",
       })
+    ),
+  // The factory's own wording when the adapter's package cannot be imported.
+  DATABASE_ADAPTER_MISSING: () =>
+    connectionFailure(
+      "mysql",
+      new Error(
+        "Failed to load database adapter for \"mysql\". Make sure @nextlyhq/adapter-mysql is installed:\n\n  npm install @nextlyhq/adapter-mysql\n\nOriginal error: Cannot find package '@nextlyhq/adapter-mysql'"
+      )
     ),
 } satisfies ErrorCases;

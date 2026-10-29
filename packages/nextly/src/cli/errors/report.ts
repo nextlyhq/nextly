@@ -16,6 +16,15 @@ import type { CliError } from "./cli-error";
 import { toCliError } from "./from-thrown";
 import { formatCliError } from "./render";
 
+/**
+ * Whether the error, which goes to standard error, is coloured. picocolors judges standard output,
+ * so `nextly migrate 2> errors.log` from a terminal would write escape codes into the log. Its
+ * answer still decides `NO_COLOR` and `--no-color`; a terminal on standard error decides the rest.
+ */
+function colorsOnStandardError(): boolean {
+  return pc.isColorSupported && process.stderr.isTTY === true;
+}
+
 export interface ReportOptions {
   verbose?: boolean;
   noColor?: boolean;
@@ -35,10 +44,22 @@ export function reportCliError(
   console.error(
     formatCliError(cliError, {
       verbose: options.verbose === true || debug,
-      color: options.noColor !== true && pc.isColorSupported,
+      color: options.noColor !== true && colorsOnStandardError(),
     })
   );
   return cliError;
+}
+
+/**
+ * Prints `error` in the error shape with the run's `--verbose` and `--no-color`, and returns it as
+ * read: for a command that sets its own exit code after.
+ */
+export function printCliError(
+  logger: Pick<Logger, "getOptions">,
+  error: unknown
+): CliError {
+  const { verbose, noColor } = logger.getOptions();
+  return reportCliError(error, { verbose, noColor });
 }
 
 /** Prints `error` in the error shape, with the run's `--verbose` and `--no-color`, and exits 1. */
@@ -46,8 +67,7 @@ export function exitWithError(
   logger: Pick<Logger, "getOptions">,
   error: unknown
 ): never {
-  const { verbose, noColor } = logger.getOptions();
-  reportCliError(error, { verbose, noColor });
+  printCliError(logger, error);
   return process.exit(1);
 }
 
@@ -59,7 +79,6 @@ export function failWithError(
   logger: Pick<Logger, "getOptions">,
   error: unknown
 ): void {
-  const { verbose, noColor } = logger.getOptions();
-  reportCliError(error, { verbose, noColor });
+  printCliError(logger, error);
   process.exitCode = 1;
 }

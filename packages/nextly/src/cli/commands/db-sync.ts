@@ -76,7 +76,7 @@ import {
 } from "../../domains/schema/migrate/data-loss-consent";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
-import { databaseUnreachable, exitWithError } from "../errors";
+import { exitWithError } from "../errors";
 import {
   createContext,
   type CommandContext,
@@ -266,7 +266,7 @@ export async function runDbSync(
     (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry);
     logger.debug("Schema registry initialized with static tables");
   } catch (error) {
-    exitWithError(logger, databaseUnreachable(dbValidation.dialect, error));
+    exitWithError(logger, error);
   }
 
   try {

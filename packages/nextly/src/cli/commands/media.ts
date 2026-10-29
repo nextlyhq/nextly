@@ -30,24 +30,15 @@ import {
 } from "../../storage/storage";
 import type { IStorageAdapter } from "../../storage/types";
 import { createContext } from "../context";
-import {
-  databaseEnvError,
-  databaseUnreachable,
-  exitWithError,
-  reportCliError,
-  type CliError,
-} from "../errors";
+import { exitWithError, printCliError, type CliError } from "../errors";
 import {
   mediaApplyOutsideProject,
   mediaConfigOutsideProject,
   mediaStorageUnlistable,
   mediaThumbnailsNotRemoved,
 } from "../errors/areas/commands";
-import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import type { Logger } from "../utils/logger";
 import { installRegistryResolver } from "../utils/registry-resolver";
@@ -436,18 +427,14 @@ export function createMediaCommand(): Command {
           cmdOptions.apply === true,
           context.logger
         );
-        const db = validateDatabaseEnv();
-        if (!db.valid || db.dialect === undefined) throw databaseEnvError(db);
+        const db = databaseEnvOrThrow();
         const dialect = db.dialect;
-        try {
-          adapter = await createCliAdapter({
-            dialect,
-            databaseUrl: db.databaseUrl,
-            logger: context.options.verbose ? context.logger : undefined,
-          });
-        } catch (error) {
-          throw databaseUnreachable(dialect, error);
-        }
+        // A failure here already carries its code: `createCliAdapter` gives it one.
+        adapter = await createCliAdapter({
+          dialect,
+          databaseUrl: db.databaseUrl,
+          logger: context.options.verbose ? context.logger : undefined,
+        });
         const drizzle = adapter as unknown as DrizzleAdapter;
         installRegistryResolver(drizzle);
         // Local disk is where the app keeps it, `public/uploads` in the
@@ -474,8 +461,7 @@ export function createMediaCommand(): Command {
           // The run's failing code is its exit status, so the reason is printed in the error
           // shape here and the exit below keeps the code `mediaOrphans` answers.
           fail: error => {
-            const { verbose, noColor } = context.logger.getOptions();
-            reportCliError(error, { verbose, noColor });
+            printCliError(context.logger, error);
           },
         });
         await adapter.disconnect();

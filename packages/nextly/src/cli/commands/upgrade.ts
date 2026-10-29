@@ -24,7 +24,7 @@ import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-de
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError } from "../../errors";
-import { databaseUnreachable, exitWithError, failWithError } from "../errors";
+import { exitWithError, failWithError } from "../errors";
 import { createContext } from "../program";
 import { createCliAdapter } from "../utils/adapter";
 import { requireDatabaseEnv } from "../utils/command-prerequisites";
@@ -269,10 +269,7 @@ export function registerUpgradeCommand(program: Command): void {
           logger: globalOpts.verbose ? context.logger : undefined,
         })) as unknown as { disconnect?: () => Promise<void> } & UpgradeAdapter;
       } catch (error) {
-        exitWithError(
-          context.logger,
-          databaseUnreachable(dbValidation.dialect, error)
-        );
+        exitWithError(context.logger, error);
       }
 
       try {

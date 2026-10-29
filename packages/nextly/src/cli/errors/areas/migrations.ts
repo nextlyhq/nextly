@@ -10,7 +10,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { deepestMessage } from "../messages";
+import { asSentence, deepestMessage, sentences } from "../messages";
 
 /**
  * The lock's refusal, as its three parts.
@@ -80,14 +80,6 @@ function splitFirst(message: string): [string, string] {
     : [message.slice(0, end + 1), message.slice(end + 2)];
 }
 
-/** A clause cut out of a sentence, as a sentence of its own. */
-function sentence(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return trimmed;
-  const capital = trimmed[0].toUpperCase() + trimmed.slice(1);
-  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
-}
-
 /** The error `error` wraps, when it wraps one of Nextly's own. */
 function wrapped(error: NextlyError): NextlyError | undefined {
   return NextlyError.is(error.cause) ? error.cause : undefined;
@@ -120,8 +112,8 @@ function lockReleasedParts(error: NextlyError): CliErrorParts {
   }
   return {
     what,
-    why: sentence(rest.slice(0, semi)),
-    next: sentence(rest.slice(semi + 2)),
+    why: asSentence(rest.slice(0, semi)),
+    next: asSentence(rest.slice(semi + 2)),
   };
 }
 
@@ -169,7 +161,7 @@ function driftParts(error: NextlyError): CliErrorParts {
   const what =
     typeof migration === "string"
       ? `Migration \`${migration}\` cannot be applied: schema drift detected.`
-      : sentence(lines[0] ?? error.publicMessage);
+      : asSentence(lines[0] ?? error.publicMessage);
   // The paragraph starting at `from`, up to the next blank line.
   const paragraph = (from: number): string[] => {
     const end = lines.indexOf("", from);
@@ -212,8 +204,8 @@ function concurrentRunParts(error: NextlyError): CliErrorParts {
   if (at !== -1) {
     return {
       what,
-      why: sentence(rest.slice(0, at)),
-      next: sentence(rest.slice(at + 2)),
+      why: asSentence(rest.slice(0, at)),
+      next: asSentence(rest.slice(at + 2)),
     };
   }
   return {
@@ -283,8 +275,8 @@ function danglingReferenceParts(error: NextlyError): CliErrorParts {
   if (at !== -1) {
     return {
       what,
-      why: sentence(rest.slice(0, at + marker.length - 2)),
-      next: sentence(rest.slice(at + marker.length)),
+      why: asSentence(rest.slice(0, at + marker.length - 2)),
+      next: asSentence(rest.slice(at + marker.length)),
     };
   }
   return {
@@ -309,8 +301,8 @@ function enforcementOnParts(error: NextlyError): CliErrorParts {
   const [cause, nothing] = splitFirst(message.slice(because + 10, semi));
   return {
     what: `${message.slice(0, because)}.`,
-    why: [sentence(cause), sentence(nothing)].filter(Boolean).join(" "),
-    next: sentence(message.slice(semi + 2)),
+    why: [asSentence(cause), asSentence(nothing)].filter(Boolean).join(" "),
+    next: asSentence(message.slice(semi + 2)),
   };
 }
 
@@ -394,14 +386,12 @@ const precondition =
  * "Nothing was changed." as the reason it is safe to run again.
  */
 function malformedConsentParts(message: string): CliErrorParts {
-  const sentences = message.split(/(?<=\.) (?=[A-Z])/);
-  const what = sentences[0] ?? message;
-  const nothing = sentences.find(
-    sentence => sentence === "Nothing was changed."
-  );
-  const next = sentences
+  const parts = sentences(message);
+  const what = parts[0] ?? message;
+  const nothing = parts.find(part => part === "Nothing was changed.");
+  const next = parts
     .slice(1)
-    .filter(sentence => sentence !== nothing)
+    .filter(part => part !== nothing)
     .join(" ");
   return {
     what,
@@ -531,7 +521,7 @@ export const MIGRATION_CODES = defineCodes({
       {
         code: "NEXTLY_MIGRATION_FILE_MISSING",
         describe: error => ({
-          what: sentence(error.publicMessage),
+          what: asSentence(error.publicMessage),
           why: "`nextly migrate:resolve` records a file of the project's migrations folder (`db.migrationsDir`), and none has this name.",
           next: "Check the name with `nextly migrate:status`, and pass it as listed there, with or without `.sql`.",
         }),

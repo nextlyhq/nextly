@@ -13,14 +13,12 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-
-/** The message's sentences: each ends at a stop followed by a space and a capital or a quote. */
-function sentences(message: string): string[] {
-  return message
-    .split(/(?<=[.!?])\s+(?=[A-Z"`(])/)
-    .map(sentence => sentence.trim())
-    .filter(Boolean);
-}
+import {
+  contextNames,
+  contextNumber,
+  contextString,
+  sentences,
+} from "../messages";
 
 /** The sentence a refusal ends with to say the run changed nothing. */
 const NOTHING_CHANGED = /^Nothing was (?:changed|applied)\.$/;
@@ -53,26 +51,6 @@ function refusal(
     next:
       next || options.next || "Run the command again once the cause is fixed.",
   };
-}
-
-/** A `logContext` value as a string, or undefined when it is not one. */
-function contextString(error: NextlyError, key: string): string | undefined {
-  const value = error.logContext?.[key];
-  return typeof value === "string" ? value : undefined;
-}
-
-/** A `logContext` value as a number, or undefined when it is not one. */
-function contextNumber(error: NextlyError, key: string): number | undefined {
-  const value = error.logContext?.[key];
-  return typeof value === "number" ? value : undefined;
-}
-
-/** A `logContext` list of names, or none. */
-function contextNames(error: NextlyError, key: string): string[] {
-  const value = error.logContext?.[key];
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 /**

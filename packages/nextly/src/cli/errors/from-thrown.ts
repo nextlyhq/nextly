@@ -49,31 +49,28 @@ const narrows = (mapping: FromError) =>
 /**
  * The mapping `error` reads by, or undefined when none declares it.
  *
- * Among the mappings for its code and reason, one whose issue the error carries, or whose `when`
- * holds, wins over the one with neither, which is what is left when no narrower one fits.
+ * A mapping that names the error's own `logContext.reason` outranks one that names no reason, so a
+ * predicate written for some other error of the same code can never take one whose reason is
+ * mapped. Within each, a mapping narrowed by an issue or `when` that holds outranks the one with
+ * neither, which is what is left when no narrower one fits.
  */
 function mappingFor(error: NextlyError): CliErrorMapping | undefined {
   const reason = error.logContext?.reason;
   const issues = issueCodes(error);
-  const candidates = CLI_ERROR_MAPPINGS.filter(
-    mapping =>
-      mapping.code === error.code &&
-      (mapping.reason === undefined || mapping.reason === reason)
+  const holds = (mapping: CliErrorMapping) =>
+    (mapping.issue === undefined || issues.includes(mapping.issue)) &&
+    (mapping.when === undefined || mapping.when(error));
+  const ofCode = CLI_ERROR_MAPPINGS.filter(m => m.code === error.code);
+  const withReason = ofCode.filter(
+    m => m.reason !== undefined && m.reason === reason
   );
-  return (
-    candidates.find(
-      mapping =>
-        (mapping.issue === undefined || issues.includes(mapping.issue)) &&
-        narrows(mapping) &&
-        (mapping.when === undefined || mapping.when(error))
-    ) ??
-    candidates.find(
-      mapping => !narrows(mapping) && mapping.reason === reason
-    ) ??
-    candidates.find(
-      mapping => !narrows(mapping) && mapping.reason === undefined
-    )
-  );
+  const withoutReason = ofCode.filter(m => m.reason === undefined);
+  for (const tier of [withReason, withoutReason]) {
+    const found =
+      tier.find(m => narrows(m) && holds(m)) ?? tier.find(m => !narrows(m));
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 export function toCliError(error: unknown): CliError {

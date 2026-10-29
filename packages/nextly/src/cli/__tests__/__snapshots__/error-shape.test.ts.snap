@@ -265,6 +265,13 @@ exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_REQUIRED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-required  (DATA_LOSS_CONSENT_REQUIRED)"
 `;
 
+exports[`each code, as a command ends with it > DATABASE_ADAPTER_MISSING 1`] = `
+"✗ The MySQL adapter, \`@nextlyhq/adapter-mysql\`, is not installed.
+  Why:  \`DATABASE_URL\` names a MySQL database, and Nextly reaches it through that package.
+  Next: Install it in the project, for example \`pnpm add @nextlyhq/adapter-mysql\`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-adapter-missing  (DATABASE_ADAPTER_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] = `
 "✗ Could not read the database catalog, so core tables were not created.
   Why:  The catalog says which field-group registry this database uses, and creating the tables without it would leave a database that cannot repair itself.

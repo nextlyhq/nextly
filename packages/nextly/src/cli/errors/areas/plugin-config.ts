@@ -16,38 +16,32 @@ import type { CrossFileIssue } from "../../../domains/schema/ui-schema/cross-fil
 import type { NextlyError } from "../../../errors/nextly-error";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes, type FromError } from "../define";
+import {
+  asSentence,
+  contextNames,
+  contextNumber,
+  contextString,
+} from "../messages";
 
 /** A string the error's log context carries under `key`, or `fallback`. */
 function field(error: NextlyError, key: string, fallback = ""): string {
-  const value = error.logContext?.[key];
-  return typeof value === "string" ? value : fallback;
+  return contextString(error, key) ?? fallback;
 }
 
 /** A number the error's log context carries under `key`, as text. */
 function count(error: NextlyError, key: string): string {
-  const value = error.logContext?.[key];
-  return typeof value === "number" ? String(value) : "";
+  const value = contextNumber(error, key);
+  return value === undefined ? "" : String(value);
 }
 
 /** The strings the error's log context lists under `key`. */
 function names(error: NextlyError, key: string): string[] {
-  const value = error.logContext?.[key];
-  return Array.isArray(value)
-    ? value.filter((name): name is string => typeof name === "string")
-    : [];
+  return contextNames(error, key);
 }
 
 /** The sentence the throw site wrote for whoever fixes it; the public message is generic. */
 function detail(error: NextlyError): string {
   return (error.logMessage ?? error.publicMessage).trim();
-}
-
-/** `text` as a sentence: a capital first letter and a closing stop. */
-function asSentence(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed === "") return trimmed;
-  const capital = trimmed[0].toUpperCase() + trimmed.slice(1);
-  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
 }
 
 /**

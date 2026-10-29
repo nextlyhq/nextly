@@ -5,6 +5,7 @@
  */
 
 import { immediateMessage } from "../../errors/describe-error";
+import type { NextlyError } from "../../errors/nextly-error";
 
 /** How far a cause chain is followed: the database path alone nests four deep. */
 const MAX_DEPTH = 5;
@@ -40,4 +41,49 @@ export function messageWithCause(message: string, cause: unknown): string {
   return /[.!?:]$/.test(message)
     ? `${message} ${deepest}`
     : `${message}: ${deepest}`;
+}
+
+/**
+ * A message's sentences, each trimmed. A stop splits only before a capital, a quote, a backtick or
+ * a bracket, so "e.g. a field" and "version 1.2 of" stay whole.
+ */
+export function sentences(message: string): string[] {
+  return message
+    .split(/(?<=[.!?])\s+(?=[A-Z"`(])/)
+    .map(sentence => sentence.trim())
+    .filter(Boolean);
+}
+
+/** `text` as a sentence: capitalised, and ending in a stop. */
+export function asSentence(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === "") return trimmed;
+  const capital = trimmed[0].toUpperCase() + trimmed.slice(1);
+  return /[.!?]$/.test(capital) ? capital : `${capital}.`;
+}
+
+/** A `logContext` value as a string, or undefined when it is not one. */
+export function contextString(
+  error: NextlyError,
+  key: string
+): string | undefined {
+  const value = error.logContext?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** A `logContext` value as a number, or undefined when it is not one. */
+export function contextNumber(
+  error: NextlyError,
+  key: string
+): number | undefined {
+  const value = error.logContext?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+/** A `logContext` list of names, or none. */
+export function contextNames(error: NextlyError, key: string): string[] {
+  const value = error.logContext?.[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }

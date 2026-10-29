@@ -229,8 +229,8 @@ export function buildMigrationsNotApplied(status: {
 
 /**
  * The build's failure, as the first step that failed reports it. A later failure in the same
- * run, which only `--strict` warnings can be beside invalid declarations, is named on the Why
- * line, so the run's every reason is printed once.
+ * run, which only `--strict` warnings can be beside invalid declarations, adds what it says and
+ * its reasons to the Why line, so the run's every reason is printed once.
  */
 export function buildFailed(failures: readonly CliError[]): CliError {
   const [first, ...rest] = failures;
@@ -246,8 +246,15 @@ export function buildFailed(failures: readonly CliError[]): CliError {
     first.code,
     {
       what: first.what,
-      why: [first.why, ...rest.map(failure => failure.what)].join("\n"),
-      next: first.next,
+      // A later failure brings its own lines, such as the warnings `--strict` failed on, which
+      // nothing else prints under `--strict`; and its next step, where it has another.
+      why: [
+        first.why,
+        ...rest.flatMap(failure => [failure.what, failure.why]),
+      ].join("\n"),
+      next: [
+        ...new Set([first.next, ...rest.map(failure => failure.next)]),
+      ].join("\n"),
     },
     first
   );

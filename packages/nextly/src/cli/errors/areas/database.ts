@@ -8,6 +8,7 @@
  * @module cli/errors/areas/database
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type {
   DatabaseEnvValidation,
   SupportedDialect,
@@ -26,6 +27,10 @@ export const DATABASE_CODES = defineCodes({
   },
   DATABASE_DIALECT_INVALID: {
     cause: "`DB_DIALECT` names a database Nextly does not support.",
+  },
+  DATABASE_ADAPTER_MISSING: {
+    cause:
+      "The database adapter package for the dialect `DATABASE_URL` names is not installed.",
   },
   DATABASE_UNREACHABLE: {
     cause:
@@ -67,7 +72,7 @@ const DIALECT_NAMES: Record<SupportedDialect, string> = {
 };
 
 /** The error for a connection that failed, with the driver's own reason. */
-export function databaseUnreachable(
+function databaseUnreachable(
   dialect: SupportedDialect,
   error: unknown
 ): CliError {
@@ -80,4 +85,41 @@ export function databaseUnreachable(
     },
     error instanceof Error ? error : undefined
   );
+}
+
+const ADAPTER_PACKAGES: Record<SupportedDialect, string> = {
+  postgresql: "@nextlyhq/adapter-postgres",
+  mysql: "@nextlyhq/adapter-mysql",
+  sqlite: "@nextlyhq/adapter-sqlite",
+};
+
+/**
+ * A failure to open the database, as the code for what failed.
+ *
+ * Every command opens its database through `createCliAdapter`, so this one place tells apart the
+ * three things that fail there: an error that already has its code (a PostgreSQL schema Nextly
+ * cannot use) keeps it; the adapter's package not being installed, which the factory reports as
+ * "Failed to load database adapter"; and the connection itself.
+ */
+export function connectionFailure(
+  dialect: SupportedDialect,
+  error: unknown
+): NextlyError {
+  if (NextlyError.is(error)) return error;
+  if (
+    error instanceof Error &&
+    error.message.startsWith("Failed to load database adapter")
+  ) {
+    const pkg = ADAPTER_PACKAGES[dialect];
+    return new CliError(
+      "DATABASE_ADAPTER_MISSING",
+      {
+        what: `The ${DIALECT_NAMES[dialect]} adapter, \`${pkg}\`, is not installed.`,
+        why: `\`DATABASE_URL\` names a ${DIALECT_NAMES[dialect]} database, and Nextly reaches it through that package.`,
+        next: `Install it in the project, for example \`pnpm add ${pkg}\`, then run the command again.`,
+      },
+      error
+    );
+  }
+  return databaseUnreachable(dialect, error);
 }

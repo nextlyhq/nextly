@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 
 const order: string[] = [];
 
+/** What the connection fails with: `createCliAdapter` gives a failure its code itself. */
+const connectionFailed = new Error("connected");
+
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: vi.fn(async (options: unknown) => {
     order.push(`config ${JSON.stringify(options)}`);
@@ -24,7 +27,7 @@ vi.mock("../../utils/adapter", () => ({
   createCliAdapter: vi.fn(async () => {
     order.push("connect");
     // Stop here: what is under test is what happened before connecting.
-    throw new Error("connected");
+    throw connectionFailed;
   }),
 }));
 
@@ -37,11 +40,8 @@ describe("nextly users:create-admin and the config", () => {
       logger: { info: vi.fn(), error: vi.fn() },
       options: { config: "apps/site/nextly.config.ts", cwd: "/srv/site" },
     } as unknown as Parameters<typeof connectToInstall>[0];
-    // The stop is the connection failing, read as the command's error for it.
-    await expect(connectToInstall(context)).rejects.toMatchObject({
-      code: "DATABASE_UNREACHABLE",
-      why: "connected",
-    });
+    // The stop is the connection failing, passed on as it came: its code is the adapter's.
+    await expect(connectToInstall(context)).rejects.toBe(connectionFailed);
     expect(order).toEqual([
       `config ${JSON.stringify({
         configPath: "apps/site/nextly.config.ts",

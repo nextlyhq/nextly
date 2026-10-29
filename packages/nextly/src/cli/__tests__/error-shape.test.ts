@@ -27,7 +27,15 @@ import {
 import type { SchemaEventRow } from "../../domains/schema/events/schema-events-repository";
 import { migrateDownCore } from "../commands/migrate-down";
 import { createProgram } from "../program";
+import { NextlyError } from "../../errors/nextly-error";
+import { REFUSAL_KIND_KEY } from "../../domains/field-groups/migration/refusal-kind";
 import { createLogger } from "../utils/logger";
+
+import {
+  buildDeclarationsInvalid,
+  buildFailed,
+  buildStrictWarnings,
+} from "../errors/areas/commands";
 
 import { ERROR_CASES } from "./error-cases";
 import { uninstallRefused } from "./error-cases/plugins";
@@ -284,5 +292,60 @@ describe("a plugin uninstall refused for want of consent", () => {
     const text = formatCliError(error);
     expectTheShape(text, code, cliErrorSlug(code));
     expect(shapeOf(text).next).toContain("--keep-data");
+  });
+});
+
+describe("the shape in colour", () => {
+  it("lines a multi-line Why up under its first line, as it does without colour", async () => {
+    // A coloured label carries escape codes a terminal does not show; the lines below it must be
+    // indented by what the terminal shows.
+    const error = toCliError(await ERROR_CASES.DATA_LOSS_CONSENT_REQUIRED());
+    expect(error.why).toContain("\n");
+    const coloured = formatCliError(error, { color: true });
+    expect(coloured).not.toBe(formatCliError(error));
+    expect(stripVTControlCharacters(coloured)).toBe(formatCliError(error));
+  });
+});
+
+describe("which code an error reads as", () => {
+  it("is the code for its own reason, even where a predicate for another error also holds", () => {
+    // The field-group storage refusals are known by a context key, with no reason of their own;
+    // a lock lost while held names its reason. One carrying both is the lock's.
+    const error = toCliError(
+      new NextlyError({
+        code: "SERVICE_UNAVAILABLE",
+        publicMessage:
+          "The schema lock was lost while held: another run took it. Run it again once that finishes.",
+        logContext: {
+          reason: "schema lock lost while held",
+          [REFUSAL_KIND_KEY]: "in-flight",
+        },
+      })
+    );
+    expect(error.code).toBe("SCHEMA_LOCK_LOST");
+  });
+});
+
+describe("a build that fails twice over", () => {
+  it("prints the warnings --strict failed on beside the invalid declarations", () => {
+    // Under --strict the warnings print only inside the error, so a merged failure that dropped
+    // them would never show them.
+    const text = formatCliError(
+      buildFailed([
+        buildDeclarationsInvalid([
+          {
+            location: "collections.posts.rating",
+            message: "unknown field type 'stars'",
+          },
+        ]),
+        buildStrictWarnings(["collections.posts has no admin title field"]),
+      ])
+    );
+    expectTheShape(text, "CONFIG_INVALID", "config-invalid");
+    expect(text).toContain(
+      "collections.posts.rating: unknown field type 'stars'"
+    );
+    expect(text).toContain("collections.posts has no admin title field");
+    expect(text).toContain("without `--strict`");
   });
 });

@@ -30,6 +30,7 @@
     "core-schema-apply-failed",
     "core-tables-not-created",
     "core-tables-not-reconciled",
+    "database-adapter-missing",
     "database-catalog-unreadable",
     "database-dialect-invalid",
     "database-dialect-unknown",

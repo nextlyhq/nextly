@@ -27,12 +27,21 @@ export interface FormatOptions {
   color?: boolean;
 }
 
-/** A labelled line, with any further lines of its value under the value's first column. */
-function labelled(label: string, value: string): string {
+/**
+ * A labelled line, with any further lines of its value under the value's first column. The
+ * indent is measured on the plain label: a coloured one carries escape codes no terminal shows.
+ */
+function labelled(
+  label: string,
+  value: string,
+  paint: (text: string) => string
+): string {
   const indent = " ".repeat(label.length + 2);
   return value
     .split("\n")
-    .map((line, i) => (i === 0 ? `  ${label}${line}` : `${indent}${line}`))
+    .map((line, i) =>
+      i === 0 ? `  ${paint(label)}${line}` : `${indent}${line}`
+    )
     .join("\n");
 }
 
@@ -87,8 +96,8 @@ export function formatCliError(
   const colors = pc.createColors(options.color === true);
   const lines = [
     `${colors.red("✗")} ${error.what}`,
-    labelled(colors.dim("Why:  "), error.why),
-    labelled(colors.dim("Next: "), error.next),
+    labelled("Why:  ", error.why, colors.dim),
+    labelled("Next: ", error.next, colors.dim),
     `  ${colors.dim("Docs: ")}${cliErrorDocsUrl(error.code)}  (${error.code})`,
   ];
   if (options.verbose === true) {

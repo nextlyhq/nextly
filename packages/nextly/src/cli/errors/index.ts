@@ -6,9 +6,14 @@
 
 export { CliError } from "./cli-error";
 export { configDeclarationError } from "./areas/config";
-export { databaseEnvError, databaseUnreachable } from "./areas/database";
+export { databaseEnvError } from "./areas/database";
 export { dataLossRefusal } from "./areas/migrations";
 export { toCliError } from "./from-thrown";
 export { formatCliError } from "./render";
-export { exitWithError, failWithError, reportCliError } from "./report";
+export {
+  exitWithError,
+  failWithError,
+  printCliError,
+  reportCliError,
+} from "./report";
 export { CLI_ERROR_CODES, cliErrorSlug, type CliErrorCode } from "./registry";

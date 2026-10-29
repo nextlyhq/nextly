@@ -13,7 +13,7 @@ import {
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
-import { databaseEnvError } from "../errors/areas/database";
+import { connectionFailure, databaseEnvError } from "../errors/areas/database";
 
 import type { Logger } from "./logger";
 
@@ -217,6 +217,9 @@ export async function createCliAdapter(
       schema === DEFAULT_POSTGRES_SCHEMA ? undefined : { schema }
     );
     return adapter;
+  } catch (error) {
+    // Read here, once, so every command that opens a database ends with the same code for it.
+    throw connectionFailure(dialect, error);
   } finally {
     if (originalDialect !== undefined) {
       process.env.DB_DIALECT = originalDialect;

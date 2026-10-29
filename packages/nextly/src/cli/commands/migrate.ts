@@ -127,7 +127,7 @@ import { UserExtSchemaService } from "../../domains/users/services/user-ext-sche
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
 import type { UserConfig } from "../../users/config/types";
-import { databaseUnreachable, exitWithError } from "../errors";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -316,7 +316,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    exitWithError(logger, databaseUnreachable(dialect, error));
+    exitWithError(logger, error);
   }
 
   installRegistryResolver(adapter as unknown as DrizzleAdapter);

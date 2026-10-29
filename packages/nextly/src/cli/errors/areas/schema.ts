@@ -11,20 +11,7 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-
-/** The message's sentences: each ends at a stop followed by a space, or at the end. */
-function sentences(message: string): string[] {
-  return message
-    .split(/(?<=[.!?])\s+/)
-    .map(sentence => sentence.trim())
-    .filter(Boolean);
-}
-
-/** A `logContext` value as a string, or undefined when it is not one. */
-function contextString(error: NextlyError, key: string): string | undefined {
-  const value = error.logContext?.[key];
-  return typeof value === "string" ? value : undefined;
-}
+import { contextString, sentences } from "../messages";
 
 /**
  * The refusal of a PostgreSQL schema other than `public`, as its three parts.

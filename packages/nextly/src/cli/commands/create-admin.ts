@@ -61,13 +61,7 @@ import {
   superAdminRoleHeld,
 } from "../../domains/users/services/last-super-admin";
 import { NextlyError } from "../../errors/nextly-error";
-import {
-  databaseEnvError,
-  databaseUnreachable,
-  failWithError,
-  reportCliError,
-  type CliError,
-} from "../errors";
+import { failWithError, printCliError, type CliError } from "../errors";
 import {
   adminEmailInUse,
   adminEmailInvalid,
@@ -81,7 +75,8 @@ import {
 // Types only: the program hands this module its context factory, so this
 // module adds no runtime import of the program that registers it.
 import type { CommandContext, GlobalOptions } from "../program";
-import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
+import { createCliAdapter } from "../utils/adapter";
+import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 export const CREATE_ADMIN_COMMAND = "users:create-admin";
@@ -324,8 +319,7 @@ async function gatherDetails(
  * printed here and the code is the caller's to set.
  */
 function refuse(logger: CommandContext["logger"], error: CliError): number {
-  const { verbose, noColor } = logger.getOptions();
-  reportCliError(error, { verbose, noColor });
+  printCliError(logger, error);
   return 1;
 }
 
@@ -385,22 +379,15 @@ export async function connectToInstall(context: CommandContext): Promise<{
     loadConfigResult.config.auth?.minPasswordLength ??
       DEFAULT_MIN_PASSWORD_LENGTH
   );
-  const database = validateDatabaseEnv();
-  if (!database.valid || database.dialect === undefined) {
-    // The settings are the operator's own, so the error names the first one
-    // to fix, under the code every command reports it with.
-    throw databaseEnvError(database);
-  }
+  // The settings are the operator's own, so the error names the first one to fix, under the
+  // code every command reports it with.
+  const database = databaseEnvOrThrow();
   const dialectSetting = database.dialect;
-  let cli: Awaited<ReturnType<typeof createCliAdapter>>;
-  try {
-    cli = await createCliAdapter({
-      dialect: dialectSetting,
-      databaseUrl: database.databaseUrl,
-    });
-  } catch (error) {
-    throw databaseUnreachable(dialectSetting, error);
-  }
+  // A failure here already carries its code: `createCliAdapter` gives it one.
+  const cli = await createCliAdapter({
+    dialect: dialectSetting,
+    databaseUrl: database.databaseUrl,
+  });
   const adapter = cli as unknown as DrizzleAdapter;
   const { dialect } = adapter.getCapabilities();
   const registry = new SchemaRegistry(dialect);

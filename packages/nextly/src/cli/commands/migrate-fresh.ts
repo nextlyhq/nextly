@@ -48,7 +48,7 @@ import {
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
-import { databaseUnreachable, dataLossRefusal, exitWithError } from "../errors";
+import { dataLossRefusal, exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -215,7 +215,7 @@ export async function runMigrateFresh(
     });
     logger.success("Database connected");
   } catch (error) {
-    exitWithError(logger, databaseUnreachable(dialect, error));
+    exitWithError(logger, error);
   }
 
   try {

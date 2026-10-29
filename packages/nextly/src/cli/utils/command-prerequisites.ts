@@ -6,10 +6,7 @@
  * @module cli/utils/command-prerequisites
  */
 
-import {
-  databaseEnvError,
-  databaseUnreachable,
-} from "../errors/areas/database";
+import { databaseEnvError } from "../errors/areas/database";
 import { exitWithError } from "../errors/report";
 
 import {
@@ -34,15 +31,18 @@ export type ValidDatabaseEnv = DatabaseEnvValidation & {
   databaseUrl: string;
 };
 
-/** The environment's database, or the command ends naming what is missing. */
-export function requireDatabaseEnv(logger: Logger): ValidDatabaseEnv {
+/**
+ * The environment's database, or the error naming what is missing, thrown: for a command whose
+ * own catch must run first, such as one that disconnects before it ends.
+ */
+export function databaseEnvOrThrow(): ValidDatabaseEnv {
   const validation = validateDatabaseEnv();
   if (
     !validation.valid ||
     validation.dialect === undefined ||
     validation.databaseUrl === undefined
   ) {
-    exitWithError(logger, databaseEnvError(validation));
+    throw databaseEnvError(validation);
   }
   return {
     ...validation,
@@ -50,6 +50,15 @@ export function requireDatabaseEnv(logger: Logger): ValidDatabaseEnv {
     dialect: validation.dialect,
     databaseUrl: validation.databaseUrl,
   };
+}
+
+/** The environment's database, or the command ends naming what is missing. */
+export function requireDatabaseEnv(logger: Logger): ValidDatabaseEnv {
+  try {
+    return databaseEnvOrThrow();
+  } catch (error) {
+    exitWithError(logger, error);
+  }
 }
 
 /** The configuration, or the command ends with the reason it could not be read. */
@@ -64,7 +73,7 @@ export async function loadConfigOrExit(
   }
 }
 
-/** A connection to the database, or the command ends with the driver's reason. */
+/** A connection to the database, or the command ends with the code `createCliAdapter` gave its failure. */
 export async function connectOrExit(
   options: CreateCliAdapterOptions & { dialect: SupportedDialect },
   logger: Logger
@@ -72,6 +81,6 @@ export async function connectOrExit(
   try {
     return await createCliAdapter(options);
   } catch (error) {
-    exitWithError(logger, databaseUnreachable(options.dialect, error));
+    exitWithError(logger, error);
   }
 }
