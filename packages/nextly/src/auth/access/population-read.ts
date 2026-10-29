@@ -91,7 +91,9 @@ async function visitorReads(
   // The decision, with or without the service: the Public role's read, then
   // a read rule answering `true`. Without the service no rule is registered,
   // so Public's read decides, as it does for the visitor's direct read.
-  return decided(visitor, target);
+  // Population applies no rule's filter to the ids it fetches, so a rule
+  // answering one refuses here, as it does a user or a key.
+  return answered(visitor, target);
 }
 
 /** Population's answer for an API key. */
