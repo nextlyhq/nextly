@@ -22,6 +22,7 @@ import type { FieldConfig } from "nextly/config";
 import type React from "react";
 import { useCallback } from "react";
 
+import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
@@ -241,6 +242,10 @@ export default function SingleEditPage({
    * produces is only read once those guards pass; while the schema or the
    * document is still loading it reports no action, which is correct.
    */
+  // The reader's own pin of this Single, offered beside "Add to release".
+  const pin = usePinAction(
+    document && slug ? { targetType: "single", targetSlug: slug } : null
+  );
   const release = useAddToReleaseAction({
     scopeKind: "single",
     scopeSlug: slug,
@@ -420,9 +425,10 @@ export default function SingleEditPage({
              omitting this control here would leave the Single half reachable
              only through the API. With the form's own actions, matching the
              collection editor. */
-            documentActions={
-              release.contributed === null ? [] : [release.contributed]
-            }
+            documentActions={[
+              ...(release.contributed === null ? [] : [release.contributed]),
+              ...(pin === null ? [] : [pin]),
+            ]}
             onSubmit={handleSubmit}
             isSubmitting={isUpdating}
             onCancel={handleCancel}

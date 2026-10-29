@@ -63,12 +63,16 @@ import {
   SITE_CONFIG,
   siteDashboardContext,
   siteDashboardFaults,
-  siteDashboardKeysNotApplied,
+  siteDashboardRulesOf,
   siteDashboardSnapshot,
   siteDefaultLayoutPlan,
 } from "../../domains/widgets/declaration/site-dashboard";
 import { setDefaultLayoutPlan } from "../../domains/widgets/default-layout";
 import { clearWidgets } from "../../domains/widgets/registry";
+import {
+  clearSiteDashboardRules,
+  setSiteDashboardRules,
+} from "../../domains/widgets/site-rules";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import {
@@ -98,6 +102,9 @@ export function resetWidgetRegistries(
   // are checked against this boot's alone.
   clearDeclaredWidgets();
   clearAttentionItems();
+  // The previous boot's hide, replace and overrides, before this config is
+  // checked: they would otherwise narrow the widget facts it is checked against.
+  clearSiteDashboardRules();
   clearSources();
   // 🔴 Cleared WITH the source store, never apart from it. The two are halves
   // of one registration and both are pinned to `globalThis`, so a reset that
@@ -167,6 +174,8 @@ export function resetWidgetRegistries(
     groups: [
       { owner: CORE_OWNER, core: true, declarations: CORE_DECLARATIONS },
       ...pluginWidgetDeclarationGroups(dashboards),
+      // The site's own widgets last, kept and published as a plugin's are.
+      ...siteWidgetGroup(site),
     ],
     legacy: pluginLegacyWidgetIds(plugins),
     references: (declared, groups) => [
@@ -177,7 +186,6 @@ export function resetWidgetRegistries(
         siteDashboardContext(declared, pluginAlternatives(dashboards), coreIds)
       ),
     ],
-    checkedOnly: siteWidgetGroup(site),
     logger,
   });
   // Only once the check above found no fault, so every item kept is whole.
@@ -187,7 +195,11 @@ export function resetWidgetRegistries(
   setDefaultLayoutPlan(
     siteDefaultLayoutPlan(site, pluginSuggestions(dashboards))
   );
-  warnSiteDashboardKeysNotApplied(site, logger);
+  // What the site keeps off the dashboard, replaces and overrides, from the
+  // same checked copies: read wherever a widget is offered, drawn or described.
+  setSiteDashboardRules(
+    siteDashboardRulesOf(site, pluginAlternatives(dashboards))
+  );
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
   // ordering fact rather than a preference: this runs before any plugin
@@ -204,9 +216,9 @@ export function resetWidgetRegistries(
 }
 
 /**
- * The site config's own widgets, as one more owner's declarations: checked
- * with the plugins', and not registered until the admin's component map also
- * reads them.
+ * The site config's own widgets, as one more owner's declarations: checked,
+ * kept and published as a plugin's are, and listed in the admin's component
+ * map beside them.
  */
 function siteWidgetGroup(dashboard: unknown): DeclaredWidgetGroup[] {
   const widgets =
@@ -216,21 +228,4 @@ function siteWidgetGroup(dashboard: unknown): DeclaredWidgetGroup[] {
   return widgets === undefined
     ? []
     : [{ owner: SITE_CONFIG, declarations: widgets }];
-}
-
-/**
- * One startup warning naming the `admin.dashboard` keys the site sets that
- * this version checks but does not apply yet, so a setting never appears to do
- * nothing in silence.
- */
-function warnSiteDashboardKeysNotApplied(
-  dashboard: unknown,
-  logger: StartupLogger
-): void {
-  const keys = siteDashboardKeysNotApplied(dashboard);
-  if (keys.length === 0) return;
-  logger.warn(
-    `${keys.map(key => `admin.dashboard.${key}`).join(", ")} ${keys.length === 1 ? "is" : "are"} accepted but not applied yet in this version.`,
-    { kind: "site-dashboard-keys-not-applied", keys }
-  );
 }

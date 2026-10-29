@@ -105,7 +105,10 @@ export function orderConfigPlugins(
   });
 }
 
-/** Merge the folded collections/singles/components + transformed plugins/storage onto base. Pure. */
+/**
+ * Merge the folded collections/singles/components + transformed plugins/storage/admin onto base.
+ * Pure.
+ */
 function applyFoldedToBase(
   base: SanitizedNextlyConfig,
   folded: NextlyServiceConfig,
@@ -118,6 +121,11 @@ function applyFoldedToBase(
     fieldGroups: folded.fieldGroups ?? base.fieldGroups,
     plugins: transformed.plugins ?? base.plugins,
     storage: transformed.storage ?? base.storage,
+    // The admin block as the boot registers it: a plugin's setup() may add or
+    // replace the site's dashboard widgets, and `generate:types` and its
+    // `--check` list their components from this config. Left at the base, the
+    // map lacked a widget the running server offers.
+    admin: transformed.admin ?? base.admin,
     // Carry a plugin setup transformer's audit decision through, so an audit
     // plugin that forces recording is not dropped back to the base value on a
     // reload. Always a resolved boolean on a sanitized config.

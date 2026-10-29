@@ -16,6 +16,11 @@
  * @module domains/audit/plugin-audit
  * @since 1.0.0
  */
+// The credential shapes a metadata value is refused for are the ones every
+// log writer takes out of what it writes: one list, so the trail and the logs
+// agree on what a credential looks like. A retained row is the wrong place
+// for any of them.
+import { looksLikeSecret } from "../../observability/credential-shapes";
 import { getNextlyLogger } from "../../observability/logger";
 import { principalRefOf } from "../../plugins/principals/ref";
 import { getPrincipalKind } from "../../plugins/principals/registry";
@@ -57,46 +62,6 @@ const MAX_VALUE_LENGTH = 256;
  * simply never exists.
  */
 const KIND_COLUMN_MAX = AUDIT_KIND_LENGTH;
-
-/**
- * The credential shapes a metadata value is refused for.
- *
- * Not a general secret detector, and not trying to be: each entry is the
- * documented shape of a token a plugin that talks to that provider could hold
- * and paste into a row by accident. A retained row is the wrong place for any
- * of them, and none is what the event is about. The user documentation lists
- * this set exactly, so it promises what this does and no more.
- */
-const CREDENTIAL_SHAPES: readonly RegExp[] = [
-  // A JWT: three base64url segments separated by dots.
-  /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/,
-  // An HTTP authorization value carrying its scheme.
-  /^(?:bearer|basic)\s+\S/i,
-  // A PEM private key or certificate block.
-  /-----BEGIN [A-Z ]+-----/,
-  // Stripe secret and restricted keys, and webhook signing secrets.
-  /^(?:sk|rk)_(?:live|test)_/,
-  /^whsec_/,
-  // GitHub tokens: personal, OAuth, user-to-server, server-to-server, refresh,
-  // and fine-grained personal.
-  /^gh[pousr]_[A-Za-z0-9]{20,}/,
-  /^github_pat_/,
-  // GitLab personal access tokens.
-  /^glpat-/,
-  // Slack bot, user and other `xox?-` tokens.
-  /^xox[abposre]-/,
-  // AWS access key ids, long-term and temporary.
-  /^(?:AKIA|ASIA)[A-Z0-9]{16}$/,
-  // Google OAuth access tokens.
-  /^ya29\./,
-  // npm tokens.
-  /^npm_[A-Za-z0-9]{20,}/,
-];
-
-/** Whether a value has one of the credential shapes a row must not keep. */
-export function looksLikeSecret(value: string): boolean {
-  return CREDENTIAL_SHAPES.some(shape => shape.test(value));
-}
 
 /**
  * Whether a metadata value is one the row can actually hold.

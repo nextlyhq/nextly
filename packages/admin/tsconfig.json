@@ -46,6 +46,11 @@
       "nextly/attention-keys": [
         "../nextly/src/domains/widgets/attention-keys.ts"
       ],
+      // Same reason: a card's body height and the rows it holds, the one
+      // formula the frame draws by and a widget's load counts by.
+      "nextly/card-geometry": [
+        "../nextly/src/domains/widgets/card-geometry.ts"
+      ],
       "@admin/*": ["./src/*"]
     }
   },

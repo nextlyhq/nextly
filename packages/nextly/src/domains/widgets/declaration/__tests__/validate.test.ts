@@ -237,10 +237,108 @@ describe("a widget declaration as startup receives it", () => {
       ]);
     }
     expect(problemsOf(valid({ access: 3 }))).toEqual([
-      'access must be a permission name such as "read-orders", { collections }, or a function of the person, got 3',
+      'access must be a permission name such as "read-orders", { anyOf }, { allOf }, { collections }, or a function of the person, got 3',
     ]);
     expect(problemsOf(valid({ shows: "always" }))).toEqual([
       "shows must be a function of the person asking",
+    ]);
+  });
+
+  it("accepts access as a permission gate: any of several, or all of several", () => {
+    expect(
+      problemsOf(valid({ access: { anyOf: ["read-orders", "update-orders"] } }))
+    ).toEqual([]);
+    expect(
+      problemsOf(
+        valid({
+          access: {
+            allOf: [
+              "read-orders",
+              { anyOf: ["update-orders", "create-orders"] },
+            ],
+          },
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses a gate whose list is empty, or names something other than a permission", () => {
+    // "Any of nothing" admits nobody and "all of nothing" everybody: each reads like the other.
+    expect(problemsOf(valid({ access: { anyOf: [] } }))).toEqual([
+      'access.anyOf must be a non-empty list of permission names such as "read-orders"',
+    ]);
+    expect(problemsOf(valid({ access: { allOf: [] } }))).toEqual([
+      "access.allOf must be a non-empty list, each entry a permission name or { anyOf: [...] }",
+    ]);
+    expect(
+      problemsOf(valid({ access: { allOf: ["read-orders", { anyOf: [] }] } }))
+    ).toEqual([
+      'access.allOf[1].anyOf must be a non-empty list of permission names such as "read-orders"',
+    ]);
+    expect(
+      problemsOf(valid({ access: { anyOf: ["read-orders", "orders:read"] } }))
+    ).toEqual([
+      'access.anyOf must be a non-empty list of permission names such as "read-orders"',
+    ]);
+    // A list inside allOf is the registry's spelling, not the declaration's.
+    expect(
+      problemsOf(valid({ access: { allOf: [["read-orders"]] } }))[0]
+    ).toContain(
+      'access.allOf[0] must be a permission name such as "read-orders" or { anyOf: [...] }'
+    );
+    // An allOf nested in an entry is no gate either: one level only.
+    expect(
+      problemsOf(valid({ access: { allOf: [{ allOf: ["read-orders"] }] } }))[0]
+    ).toContain("access.allOf[0] must be");
+    // An empty slot (`[a, , b]`) is refused as one: `every` would skip it, so an
+    // any-of with one would otherwise pass as if the entry were never written.
+    const holed = new Array<unknown>(3);
+    holed[0] = "read-orders";
+    holed[2] = "update-orders";
+    expect(problemsOf(valid({ access: { anyOf: holed } }))).toEqual([
+      "access.anyOf has an empty slot at position 2; remove the extra comma",
+    ]);
+    expect(problemsOf(valid({ access: { allOf: holed } }))).toEqual([
+      "access.allOf has an empty slot at position 2; remove the extra comma",
+    ]);
+    // One form at a time, and nothing beside it.
+    expect(
+      problemsOf(
+        valid({ access: { anyOf: ["read-orders"], collections: ["orders"] } })
+      )
+    ).toEqual(["access must take one form, but names collections and anyOf"]);
+    expect(
+      problemsOf(valid({ access: { anyOf: ["read-orders"], all: true } }))
+    ).toEqual(['access takes no "all" beside its anyOf']);
+  });
+
+  it("refuses a bare list of permissions, pointing to { anyOf } and { allOf }", () => {
+    expect(
+      problemsOf(valid({ access: ["read-orders", "update-orders"] }))
+    ).toEqual([
+      "access cannot be a list: write { anyOf: [...] } for any one of several permissions, or { allOf: [...] } for every one of them",
+    ]);
+  });
+
+  it("accepts offered per collection or on request, and refuses any other", () => {
+    expect(problemsOf(valid({ offered: "per-collection" }))).toEqual([]);
+    expect(problemsOf(valid({ offered: "on-request" }))).toEqual([]);
+    expect(problemsOf(valid({ offered: "per-colletion" }))).toEqual([
+      'has offered "per-colletion", which is not one of per-collection, on-request',
+    ]);
+    expect(problemsOf(valid({ offered: true }))).toEqual([
+      "has offered true, which is not one of per-collection, on-request",
+    ]);
+  });
+
+  it("refuses a widget offered per collection with no Collection setting, by the registry's own rule", () => {
+    // No Collection, and so no grouping setting that names one: offered's fault is the only one.
+    const settings = {
+      top: { type: "number", label: "Top", defaultValue: 5, min: 1, max: 25 },
+    };
+    expect(problemsOf(valid({ settings, offered: "on-request" }))).toEqual([]);
+    expect(problemsOf(valid({ settings, offered: "per-collection" }))).toEqual([
+      "a widget offered per collection needs a Collection setting, which each card starts set to",
     ]);
   });
 

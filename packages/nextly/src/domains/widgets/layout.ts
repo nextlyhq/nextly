@@ -65,7 +65,7 @@ import {
   MAX_GRID_ROWS,
   MIN_GRID_ROWS,
 } from "./grid-size";
-import { MAX_PLACEMENTS } from "./layout-limits";
+import { isUsableText, MAX_PLACEMENTS } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
 import { inRetiredWidgetNamespace } from "./retired-widget-namespaces";
 
@@ -141,10 +141,6 @@ export interface StoredLayout {
    * Read it through {@link layoutIsArranged}, never directly.
    */
   unarranged?: true;
-}
-
-function isUsableText(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -448,8 +444,9 @@ export function layoutIsArranged(stored: StoredLayout): boolean {
  * still honoured the day access returns, and a removed card keeps its settings
  * for when it is put back. `undefined` is a reader with no row.
  *
- * 🔴 By placement id, so two cards of one widget the default places keep a
- * choice each: keyed by widget, the last card's choice was every card's. A
+ * 🔴 By placement id and widget together, so two cards of one widget the
+ * default places keep a choice each (keyed by widget, the last card's choice
+ * was every card's), and an id reused for another widget starts afresh. A
  * widget the default and the row each hold ONE card of is matched by widget
  * too, so a row whose card was stored under another id keeps its choice.
  */
@@ -462,8 +459,12 @@ export function dismissalsApplied(
   const soleCardOf = soleCardsByWidget(placements);
   const soleInDefault = soleCardsByWidget(defaults);
   return defaults.map(placement => {
+    // The card stored under this id, only while it is still a card of the same
+    // widget: an id a config gives another widget is a new card, whose
+    // settings would read another widget's vocabulary.
+    const sameCard = byId.get(placement.id);
     const choice =
-      byId.get(placement.id) ??
+      (sameCard?.widgetId === placement.widgetId ? sameCard : undefined) ??
       (soleInDefault.has(placement.widgetId)
         ? soleCardOf.get(placement.widgetId)
         : undefined);
@@ -677,7 +678,10 @@ export function visibilityToken(
           ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
           ...[...readableCollections].sort().map(slug => `reads:${slug}`),
           ...[...collectionSettings].sort().map(entry => `settings:${entry}`),
-          ...[...notShown].sort().map(id => `hides:${id}`),
+          // As JSON, which escapes a line break: a card's id is the site
+          // config's to choose, so one holding the separator could otherwise
+          // read as two, and two different sets hash alike.
+          ...[...notShown].sort().map(id => `hides:${JSON.stringify(id)}`),
         ].join("\n")
       )
       .digest("base64url")

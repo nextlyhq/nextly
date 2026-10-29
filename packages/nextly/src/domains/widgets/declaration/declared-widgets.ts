@@ -25,6 +25,9 @@
 import { getNextlyLogger } from "../../../observability/logger";
 import type { Logger } from "../../../shared/types";
 import { validateWidgetDefinition, type WidgetDefinition } from "../definition";
+// The registry's own gate shape, which this file maps the declaration's
+// `WidgetAccessGate` (of `define-widget.ts`) onto.
+import type { WidgetPermissionGate as RequiredPermission } from "../gate";
 import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
 import {
   deregisterWidget,
@@ -35,6 +38,7 @@ import {
 } from "../registry";
 import type { AnyWidgetSetting } from "../settings";
 
+import type { WidgetAccessGate } from "./define-widget";
 import { displayOfView, type WidgetDisplay, type WidgetView } from "./displays";
 import {
   collectWidgetDeclarationFaults,
@@ -74,14 +78,17 @@ interface DeclaredWidgetShape {
   /** The card's size and the bounds it may be resized within, in grid units. */
   readonly size: WidgetSizeDeclaration;
   /**
-   * Who may be offered it: a permission name, judged when the card is handed;
-   * the collections it reads, or a predicate of the person, judged with the
-   * person before `load` runs.
+   * Who may be offered it: a permission gate (a permission name, `{ anyOf }`
+   * or `{ allOf }`), published as the registry's `requiredPermission` and
+   * judged when the card is handed; the collections it reads, or a predicate
+   * of the person, judged with the person before `load` runs.
    */
   readonly access?:
-    | string
+    | WidgetAccessGate
     | { readonly collections: readonly string[] }
     | ((input: { user: unknown }) => unknown);
+  /** Where the add panel offers it, published as the registry's own `offered`. */
+  readonly offered?: WidgetDefinition["offered"];
   /** Whether the card shows at all for the person asking, judged before `load`. */
   readonly shows?: (input: unknown) => unknown;
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
@@ -225,22 +232,61 @@ function drawnBy(
     : { archetype: "custom", component: display.component, owner };
 }
 
-/** Who is offered a declared widget, how many times, and whether it leaves while empty. */
+/**
+ * Who is offered a declared widget, where, how many times, and whether it
+ * leaves while empty.
+ */
 function publishedGates(
   declaration: DeclaredWidgetShape
 ): Pick<
   WidgetDefinition,
-  "allowsSeveral" | "hidesWhenEmpty" | "requiredPermission"
+  "allowsSeveral" | "hidesWhenEmpty" | "offered" | "requiredPermission"
 > {
+  const requiredPermission = requiredPermissionOf(declaration.access);
   return {
-    ...(declaration.several === true ? { allowsSeveral: true } : {}),
-    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
-    // A permission name gates who is offered the widget at all; the other
-    // forms are judged per card, with the person, before its `load` runs.
-    ...(typeof declaration.access === "string"
-      ? { requiredPermission: declaration.access }
+    // Published whenever it is stated, `false` included: a widget offered per
+    // collection or on request allows several unless it says otherwise, so a
+    // `several: false` left out would read as the opposite.
+    ...(typeof declaration.several === "boolean"
+      ? { allowsSeveral: declaration.several }
       : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
+    // As written: startup held it to the registry's own rule (`offeredProblem`).
+    ...(declaration.offered === undefined
+      ? {}
+      : { offered: declaration.offered }),
+    // A permission gate decides who is offered the widget at all; the other
+    // forms are judged per card, with the person, before its `load` runs.
+    ...(requiredPermission === undefined ? {} : { requiredPermission }),
   };
+}
+
+/**
+ * A declaration's permission gate as the registry's `requiredPermission`, the
+ * one shape the layout and payload gates judge (`widgetGateHolds`), or
+ * `undefined` for an access that is no gate: absent, the collections it
+ * reads, or a predicate.
+ *
+ * 🔴 Mapped, not passed through: the registry reads a bare list as any-of,
+ * which a declaration spells `{ anyOf }`, so each form is rewritten into the
+ * registry's spelling of the same rule, and every gate is judged by the one
+ * path that judges core's own widgets. A fresh value, so nothing else the
+ * author's object carries is published.
+ */
+function requiredPermissionOf(
+  access: DeclaredWidgetShape["access"]
+): RequiredPermission | undefined {
+  if (typeof access === "string") return access;
+  if (typeof access !== "object" || access === null) return undefined;
+  if ("anyOf" in access) return [...access.anyOf];
+  if ("allOf" in access) {
+    return {
+      allOf: access.allOf.map(entry =>
+        typeof entry === "string" ? entry : [...entry.anyOf]
+      ),
+    };
+  }
+  return undefined;
 }
 
 /** The ids one owner declares in today's shape. */
@@ -403,8 +449,6 @@ export interface DashboardWidgets {
     declared: ReadonlyMap<string, WidgetDefinition>,
     groups: readonly DeclaredWidgetGroup[]
   ) => readonly WidgetDeclarationFault[];
-  /** Declarations checked with the rest, duplicates and references included, but not kept or published. */
-  checkedOnly?: readonly DeclaredWidgetGroup[];
   /** Where startup's warnings go: the registration's logger, or the process-wide one. */
   logger?: StartupLogger;
 }
@@ -423,24 +467,22 @@ export function registerDashboardWidgets({
   groups: given = [],
   legacy = [],
   references,
-  checkedOnly = [],
   logger = NEXTLY_STARTUP_LOGGER,
 }: DashboardWidgets): void {
   const groups = given.map(snapshot);
-  const checked = [...groups, ...checkedOnly.map(snapshot)];
   const faults = [
     ...coreWidgetFaults(core),
-    ...collectWidgetDeclarationFaults(checked),
-    ...sharedWithLegacy(checked, legacy),
+    ...collectWidgetDeclarationFaults(groups),
+    ...sharedWithLegacy(groups, legacy),
   ];
   if (references !== undefined) {
     // Core's widgets among them: nothing is kept until every check has passed,
     // so what names a core widget finds it here rather than in the registry.
     const declared = new Map([
       ...core.map(definition => [definition.id, definition] as const),
-      ...wellFormedDefinitions(checked, faults),
+      ...wellFormedDefinitions(groups, faults),
     ]);
-    faults.push(...references(declared, checked));
+    faults.push(...references(declared, groups));
   }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
   warnSharedLegacyIds(legacy, logger);
