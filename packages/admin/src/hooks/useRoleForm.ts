@@ -180,6 +180,44 @@ export interface UseRoleFormReturn {
   setIgnoreFormChanges: (value: boolean) => void;
 }
 
+/** One permission as `GET /permissions` lists it. */
+interface ListedPermission {
+  id: string | number;
+  name: string | null;
+  action: string;
+  resource: string;
+  description: string | null;
+  owner: string | null;
+  danger?: boolean;
+}
+
+/**
+ * The most pages of permissions read: past it, a server still saying there
+ * is more is answered with an error rather than read for ever.
+ */
+const MAX_PERMISSION_PAGES = 50;
+
+/**
+ * Every permission, read page by page in the canonical paginated
+ * `{ items, meta }` shape (spec §5.1) until `meta.hasNext` is false. A row is
+ * built from its entity's permissions, so one left on an unread page would
+ * read as No access; a list that cannot be read whole is an error instead.
+ */
+async function fetchEveryPermission(): Promise<ListedPermission[]> {
+  const items: ListedPermission[] = [];
+  for (let page = 1; page <= MAX_PERMISSION_PAGES; page++) {
+    const response = await protectedApi.get<{
+      items?: ListedPermission[];
+      meta?: { hasNext?: boolean };
+    }>(
+      `/permissions?page=${page}&limit=${PAGINATION.MAX_PAGE_SIZE}&sortBy=resource&sortOrder=asc`
+    );
+    items.push(...(response?.items ?? []));
+    if (response?.meta?.hasNext !== true) return items;
+  }
+  throw new Error("Unable to load every permission");
+}
+
 /**
  * Custom hook for RoleForm data loading and form state management
  *
@@ -359,26 +397,12 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           permissions: { loaded: false, loading: true },
         }));
 
-        const query = `?page=1&limit=${PAGINATION.MAX_PAGE_SIZE}&sortBy=resource&sortOrder=asc`;
-
-        // Fetch the permissions and the roles screen's list of collections
+        // Fetch every permission and the roles screen's list of collections
         // and Singles in parallel: the list gives each permission its row,
-        // and says which resources are Singles. The permissions come in the
-        // canonical paginated `{ items, meta }` shape (spec §5.1), typed as
-        // ListEnvelope below; the list is parsed at the boundary.
-        type ListEnvelope<T> = { items: T[]; meta?: unknown };
-        const [response, screenResponse] = await Promise.all([
-          protectedApi.get<
-            ListEnvelope<{
-              id: string | number;
-              name: string | null;
-              action: string;
-              resource: string;
-              description: string | null;
-              owner: string | null;
-              danger?: boolean;
-            }>
-          >(`/permissions${query}`),
+        // and says which resources are Singles; the list is parsed at the
+        // boundary.
+        const [permissionItems, screenResponse] = await Promise.all([
+          fetchEveryPermission(),
           protectedApi.get<unknown>(`/roles/screen`),
         ]);
 
@@ -389,7 +413,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
             .map(entity => entity.slug)
         );
 
-        const mapped: Permission[] = (response?.items ?? []).map(p => {
+        const mapped: Permission[] = permissionItems.map(p => {
           const resource = String(p.resource);
           const action = String(p.action);
           const slug = `${resource}.${action}`;

@@ -75,6 +75,48 @@ describe("useRoleForm's roles screen data", () => {
     expect(askedFor("/roles/screen")).toBe(1);
   });
 
+  it("reads every page of permissions, so an entity on a later page gets its row's permissions", async () => {
+    const permission = (resource: string) => ({
+      id: `read-${resource}`,
+      name: null,
+      action: "read",
+      resource,
+      description: null,
+      owner: null,
+    });
+    vi.mocked(protectedApi.get).mockImplementation(async path => {
+      const asked = String(path);
+      if (asked.startsWith("/roles/screen")) {
+        return {
+          items: ["posts", "tags"].map(slug => ({
+            slug,
+            kind: "collection",
+            labels: { singular: slug },
+            plugin: null,
+            declaredRules: [],
+          })),
+        };
+      }
+      if (asked.startsWith("/permissions")) {
+        const second = asked.includes("page=2");
+        return {
+          items: [permission(second ? "tags" : "posts")],
+          meta: { hasNext: !second },
+        };
+      }
+      return { items: [] };
+    });
+
+    const { result } = render();
+
+    await waitFor(() => expect(result.current.levelRows).toHaveLength(2));
+    await waitFor(() =>
+      expect(
+        result.current.levelRows.map(row => row.permissions.length)
+      ).toEqual([1, 1])
+    );
+  });
+
   it("credits each base role with the permissions it gives, not the first base with all of them", async () => {
     vi.mocked(protectedApi.get).mockResolvedValue({ items: [] });
     vi.mocked(roleApi.fetchRoles).mockResolvedValue({
