@@ -142,6 +142,27 @@ describe("PluginLevelGroup", () => {
     expect(saved).toEqual(["submissions-export"]);
   });
 
+  it("names a plugin's own permission by its name even where its action is a standard one", async () => {
+    // A plugin's own "read" is not a collection's View: only its name says
+    // what it reads.
+    const user = userEvent.setup();
+    render(
+      <Harness
+        group={{
+          ...GROUP,
+          permissions: [permission("form-exports", "read", FORMS)],
+        }}
+        initial={[]}
+      />
+    );
+
+    await user.click(fold());
+
+    expect(
+      screen.getByRole("switch", { name: "Form builder: Export form-exports" })
+    ).toBeInTheDocument();
+  });
+
   it("gives a plugin with no collection a switch for each permission it declares", async () => {
     const user = userEvent.setup();
     render(<Harness group={{ ...GROUP, rows: [] }} initial={[]} />);
