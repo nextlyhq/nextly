@@ -11,10 +11,7 @@ import type {
 
 // PR 4 migration: replaced legacy result-shape returns and
 // mapDbErrorToServiceError calls with throw-based NextlyError.
-import {
-  storedAsPlain,
-  storedAsPlainLocked,
-} from "../../../../auth/access/manage-bridge";
+import { storedAsPlainLocked } from "../../../../auth/access/manage-bridge";
 import { toDbError } from "../../../../database/errors";
 import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -515,24 +512,18 @@ export class RoleMutationService extends BaseService {
           logContext: { invalidPermissionIds },
         });
       }
-      // A retired `manage-` permission is stored as the plain four it stands
-      // for, so a role made with one never holds it.
-      const storedPermissionIds = await storedAsPlain(
-        this.adapter,
-        uniqueIds,
-        this.adapter.getCapabilities().maxParamsPerQuery
-      );
 
       // Verify all child roles exist before creating the role
       await this.refuseUnknownChildRoles(uniqueChildRoleIds);
 
-      // Every mutation in one transaction. better-sqlite3 rejects an async
-      // callback in Drizzle's own transaction, so `withTransaction` runs it
-      // through the adapter on SQLite and natively elsewhere.
+      // Every mutation in one transaction: the adapter's, which is async on
+      // every dialect, where better-sqlite3 rejects an async callback in
+      // Drizzle's own.
       try {
         const runMutations = async (
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dialect-specific Drizzle typing
-          executor: any
+          executor: any,
+          storedPermissionIds: readonly string[]
         ): Promise<{
           assignedPermIds: string[];
           assignedChildRoleIds: string[];
@@ -571,9 +562,12 @@ export class RoleMutationService extends BaseService {
               .values(roleInheritanceData);
           }
 
-          const rolePermRows = await executor.query.rolePermissions.findMany({
-            where: { roleId: id },
-          });
+          // A plain select: the transaction's query builder carries no
+          // relational query API.
+          const rolePermRows = await executor
+            .select({ permissionId: this.tables.rolePermissions.permissionId })
+            .from(this.tables.rolePermissions)
+            .where(eq(this.tables.rolePermissions.roleId, id));
           const assignedPermIds = (
             rolePermRows as Array<{ permissionId: unknown }>
           ).map(rp => String(rp.permissionId));
@@ -589,10 +583,20 @@ export class RoleMutationService extends BaseService {
           return { assignedPermIds, assignedChildRoleIds };
         };
 
-        // A transaction on every dialect: on SQLite it runs through the
-        // adapter, so the decision above and these writes are not split by
-        // another request's.
-        const result = await this.withTransaction(tx => runMutations(tx));
+        // The adapter's transaction on every dialect, so the decision above
+        // and these writes are not split by another request's. A retired
+        // `manage-` permission is stored as the plain four it stands for,
+        // read under the lock on each permission row it reads, so a row
+        // edited since is stored as it is now.
+        const result = await this.adapter.transaction(async tx =>
+          runMutations(tx.getDrizzle(), [
+            ...(await storedAsPlainLocked(
+              tx,
+              uniqueIds,
+              this.adapter.getCapabilities().maxParamsPerQuery
+            )),
+          ])
+        );
 
         // Awaited, and the ordering is the invariant rather than a preference:
         // a runtime that freezes after responding can abandon an unawaited
