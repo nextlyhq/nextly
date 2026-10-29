@@ -699,11 +699,13 @@ async function handleSchemaRequest(
  */
 /**
  * The collection entry methods whose dispatcher handler reads through the
- * query service's filtered read: a list and a count.
+ * query service's filtered read: a list, a count and a read by id, which
+ * answers an entry outside a read rule's filter as missing.
  */
 const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
   "listEntries",
   "countEntries",
+  "getEntry",
 ]);
 
 export const COLLECTION_ENTRY_METHODS = new Set([
@@ -975,9 +977,9 @@ async function resolveAuthorization(
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
-        // A list and a count read through the query service's filtered read,
-        // which applies a read rule's filter; every other entry route refuses
-        // a caller whose rule answers one.
+        // A list, a count and a read by id read through the query service's
+        // filtered read, which applies a read rule's filter; every other entry
+        // route refuses a caller whose rule answers one.
         appliesReadFilter: FILTERED_READ_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
