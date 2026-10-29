@@ -22,6 +22,7 @@ import type { RuleFilter } from "../../../auth/access/rule-answer";
 import type { LocalizedQueryContext } from "../../../services/collections/drizzle-condition";
 import type { Logger } from "../../../services/shared";
 import {
+  asReadOf,
   matchColumn,
   prepareRuleFilter,
   type DynamicSchema,
@@ -104,8 +105,10 @@ export async function prepareWriteMatch(
     columns(schema, localizedCtx) {
       return {
         writes: matchColumn(write.condition(schema, localizedCtx.writes)),
+        // Matched as a read judges the read rule, fallback languages
+        // included, so the write tells apart only what a read would show.
         reads: read
-          ? matchColumn(read.condition(schema, localizedCtx.reads))
+          ? matchColumn(read.condition(schema, asReadOf(localizedCtx.reads)))
           : readKind === "every"
             ? sql<number>`1`.mapWith(Number)
             : sql<number>`0`.mapWith(Number),
