@@ -4,8 +4,9 @@
  *
  * Read-only. It compares the live database with each field as the database last had it applied,
  * and reports a table or column that is not there as not migrated, a change the configuration holds
- * and no migration has applied as pending, and a plugin's column with the plugin named. It changes
- * nothing: no table, row, registry entry or ledger row.
+ * and no migration has applied as pending (an entity no migration has applied yet included), and a
+ * plugin's column with the plugin named. A record of what was applied that cannot be read stops the
+ * run instead. It changes nothing: no table, row, registry entry or ledger row.
  *
  * The domain modules are imported when the command runs, not when the CLI loads, so listing the
  * CLI's commands does not pull in the schema services.
@@ -110,7 +111,7 @@ async function runRepairColumns(
   }
   const dialect = env.dialect;
   const cwd = options.cwd ?? context.cwd;
-  const { config } = await loadConfig({
+  const { config, projectRoot, deferredExtends } = await loadConfig({
     configPath: options.config,
     cwd,
     debug: options.verbose,
@@ -137,6 +138,10 @@ async function runRepairColumns(
       adapter,
       dialect,
       config,
+      // The manifest and the plugins' extensions of it: a Builder entity is configured as the next
+      // migration would apply it, not only as the registry last saved it.
+      projectRoot,
+      ...(deferredExtends !== undefined ? { deferredExtends } : {}),
       migrationsDir: resolve(cwd, config.db.migrationsDir),
       logger: { debug, info: debug, warn: debug, error: debug },
     });

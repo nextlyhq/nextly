@@ -4,7 +4,6 @@ import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import {
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
-  getUserFieldColumnDescriptor,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
 import { differenceCause } from "../difference-cause";
@@ -13,11 +12,31 @@ import type {
   RepairColumnOrigin,
   RepairEntityKind,
 } from "../types";
+import { userFieldColumn } from "../user-field-columns";
 
 const field = (over: Record<string, unknown>): FieldDefinition =>
   ({ name: "value", ...over }) as unknown as FieldDefinition;
 
-/** The cause for a live column against the descriptor of `f`, as the finder asks it. */
+/** The column the builder `origin` names makes for `f`, as the finder asks it. */
+function expectedColumn(args: {
+  f: FieldDefinition;
+  kind: RepairEntityKind;
+  origin: RepairColumnOrigin;
+  dialect: SupportedDialect;
+}): ColumnState | null {
+  const { origin } = args;
+  if (origin === "userFields") return userFieldColumn(args.f, args.dialect);
+  const describe =
+    args.kind === "fieldGroup"
+      ? getComponentRowColumnDescriptor
+      : getColumnDescriptor;
+  const descriptor = describe(args.f, args.dialect, origin);
+  return descriptor === null
+    ? null
+    : { type: descriptor.dialectType, nullable: descriptor.nullable };
+}
+
+/** The cause for a live column against the column `f` is expected in, as the finder asks it. */
 function causeFor(args: {
   f: FieldDefinition;
   kind: RepairEntityKind;
@@ -25,16 +44,8 @@ function causeFor(args: {
   dialect: SupportedDialect;
   live: ColumnState;
 }) {
-  const { origin } = args;
-  const describe =
-    args.kind === "fieldGroup"
-      ? getComponentRowColumnDescriptor
-      : getColumnDescriptor;
-  const descriptor =
-    origin === "userFields"
-      ? getUserFieldColumnDescriptor(args.f, args.dialect)
-      : describe(args.f, args.dialect, origin);
-  if (descriptor === null) throw new Error("the fixture names no column");
+  const expected = expectedColumn(args);
+  if (expected === null) throw new Error("the fixture names no column");
   return differenceCause({
     field: args.f,
     kind: args.kind,
@@ -42,7 +53,7 @@ function causeFor(args: {
     dialect: args.dialect,
     translation: false,
     live: args.live,
-    expected: { type: descriptor.dialectType, nullable: descriptor.nullable },
+    expected: { type: expected.type, nullable: expected.nullable },
   });
 }
 
@@ -287,17 +298,38 @@ describe("differenceCause: unknown", () => {
     ).toBeNull();
   });
 
-  it("does not take a legacy repeater for a current-generator column on a translation table", () => {
-    expect(
-      differenceCause({
-        field: field({ type: "repeater", fields: [] }),
-        kind: "collection",
-        origin: "collection",
-        dialect: "postgresql",
-        translation: true,
-        live: { type: "text", nullable: true },
-        expected: { type: "jsonb", nullable: true },
-      })
-    ).toMatchObject({ kind: "legacy", shape: "structured-as-text" });
-  });
+  it.each<[string, Record<string, unknown>, SupportedDialect, ColumnState]>([
+    [
+      "a repeater held as text",
+      { type: "repeater", fields: [] },
+      "postgresql",
+      { type: "text", nullable: true },
+    ],
+    [
+      "a MySQL select held as text",
+      { type: "select", options: [{ label: "A", value: "a" }] },
+      "mysql",
+      { type: "text", nullable: true },
+    ],
+  ])(
+    "names no legacy shape for %s in a translation table, which no legacy generator built",
+    (_, shape, dialect, live) => {
+      // The same column on the Builder's own table is legacy; the translation table has only ever
+      // been built from the descriptor, so the shape says nothing about how it came to differ.
+      const f = field(shape);
+      const descriptor = getColumnDescriptor(f, dialect, "collection");
+      if (descriptor === null) throw new Error("the fixture names no column");
+      expect(
+        differenceCause({
+          field: f,
+          kind: "collection",
+          origin: "collection",
+          dialect,
+          translation: true,
+          live,
+          expected: { type: descriptor.dialectType, nullable: true },
+        })
+      ).toBeNull();
+    }
+  );
 });

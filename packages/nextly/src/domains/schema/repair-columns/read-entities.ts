@@ -1,16 +1,25 @@
-// Read what `nextly repair-columns` compares: the configuration, the registry rows, the newest
-// applied migration snapshot that records entities, and the stored user field definitions. Every
-// read is a read; nothing here writes to the database or the migrations folder.
+// Read what `nextly repair-columns` compares: the configuration with the Builder manifest, the
+// registry rows, the newest applied migration snapshot that records entities, and the stored user
+// field definitions. Every read is a read; nothing here writes to the database, the manifest or
+// the migrations folder.
+//
+// A record it cannot read is a reason to stop, not to fall back: judging columns against an older
+// definition than the one last applied would report a correct column as wrong.
 //
 // CLI only. The registry services resolve their tables by name, so the caller installs the
 // registry resolver first, as every CLI run that reads the registry does.
 //
 // @module domains/schema/repair-columns/read-entities
 
+import { readdir } from "node:fs/promises";
+import { resolve } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../shared/types";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
@@ -20,19 +29,24 @@ import { UserExtSchemaService } from "../../users/services/user-ext-schema-servi
 import { UserFieldDefinitionService } from "../../users/services/user-field-definition-service";
 import { appliedFilenames } from "../events/newest-event";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
-import { DEFAULT_TABLE_NAME_RESOLVERS } from "../migrate/resolved-schema";
+import {
+  DEFAULT_TABLE_NAME_RESOLVERS,
+  resolveDeclaredSchema,
+} from "../migrate/resolved-schema";
 import { loadSnapshots, type LoadedSnapshot } from "../migrate/snapshot-source";
 import {
   isEntitySettingsRecord,
   type EntitySettingsRecord,
   type RecordedEntitySettings,
 } from "../migrate-create/entity-settings";
+import { loadUiSchema } from "../ui-schema/loader";
 
 import {
   resolveRepairEntities,
   type ConfiguredEntity,
   type RegistryEntity,
   type SnapshotEntity,
+  type UserFieldSources,
 } from "./resolve-entities";
 import type { RepairEntity } from "./types";
 
@@ -44,6 +58,10 @@ export interface RepairColumnsConfig {
   singles?: readonly unknown[];
   fieldGroups?: readonly unknown[];
   plugins?: readonly unknown[];
+  /** The code user fields, which the next sync stores beside the admin's. */
+  users?: { fields?: readonly unknown[] };
+  /** Where the Builder manifest is, relative to the project. */
+  db: { uiSchemaFile: string };
 }
 
 interface RawEntity {
@@ -59,39 +77,76 @@ const tableFor: Record<RecordedKind, (e: RawEntity) => string> = {
   fieldGroup: e => DEFAULT_TABLE_NAME_RESOLVERS.component(e),
 };
 
-/** The plugin that contributed each collection slug, as the configuration's plugins declare it. */
-function pluginBySlug(
-  plugins: readonly unknown[] | undefined
-): Map<string, string> {
+/** One entity of one kind, as a key: the same slug may name a collection, a Single and a group. */
+const entityKey = (kind: RecordedKind, slug: string) => `${kind}\u0000${slug}`;
+
+/** Where a plugin's `contributes` lists each kind of entity it owns. */
+const CONTRIBUTED_LISTS: Record<
+  RecordedKind,
+  "collections" | "singles" | "fieldGroups"
+> = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "fieldGroups",
+};
+
+/** As much of a plugin's declaration as says which entities it owns. */
+interface PluginDeclaration {
+  name?: unknown;
+  /** Collections an older plugin declares outside `contributes`. */
+  collections?: unknown;
+  contributes?: Partial<
+    Record<(typeof CONTRIBUTED_LISTS)[RecordedKind], unknown>
+  > | null;
+}
+
+/** The slugs a declared entity list names, ignoring anything that is not an entity with one. */
+function slugsOf(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((entry: unknown) => {
+    const slug = (entry as { slug?: unknown } | null)?.slug;
+    return typeof slug === "string" ? [slug] : [];
+  });
+}
+
+/**
+ * The plugin that contributed each entity, by kind and slug, as the configuration's plugins declare
+ * it: each kind from its own `contributes` list, and collections also from the top-level list older
+ * plugins use. A plugin that declares nothing owns nothing.
+ */
+function pluginOwners(plugins: readonly unknown[] | undefined) {
   const owners = new Map<string, string>();
   for (const plugin of plugins ?? []) {
-    const { name, contributes } = plugin as {
-      name?: unknown;
-      contributes?: { collections?: readonly { slug?: unknown }[] };
-    };
+    const { name, collections, contributes } = (plugin ??
+      {}) as PluginDeclaration;
     if (typeof name !== "string") continue;
-    for (const contributed of contributes?.collections ?? []) {
-      if (typeof contributed.slug === "string")
-        owners.set(contributed.slug, name);
+    const claim = (kind: RecordedKind, list: unknown) => {
+      for (const slug of slugsOf(list)) owners.set(entityKey(kind, slug), name);
+    };
+    for (const kind of Object.keys(CONTRIBUTED_LISTS) as RecordedKind[]) {
+      claim(kind, contributes?.[CONTRIBUTED_LISTS[kind]]);
     }
+    claim("collection", collections);
   }
   return owners;
 }
 
 /** The configuration's code-first entities, each with its table resolved. */
-function configuredEntities(config: RepairColumnsConfig): ConfiguredEntity[] {
-  const plugins = pluginBySlug(config.plugins);
+function codeFirstEntities(
+  config: RepairColumnsConfig,
+  ownerOf: (kind: RecordedKind, slug: string) => string | undefined
+): ConfiguredEntity[] {
   const of = (kind: RecordedKind, list: readonly unknown[] | undefined) =>
     (list ?? []).map((raw): ConfiguredEntity => {
       const entity = raw as RawEntity;
-      const plugin =
-        kind === "collection" ? plugins.get(entity.slug) : undefined;
+      const plugin = ownerOf(kind, entity.slug);
       return {
         kind,
         slug: entity.slug,
         table: tableFor[kind](entity),
         fields: entity.fields ?? [],
         localized: entity.localized === true,
+        origin: "codeFirst",
         ...(plugin !== undefined ? { plugin } : {}),
       };
     });
@@ -99,6 +154,83 @@ function configuredEntities(config: RepairColumnsConfig): ConfiguredEntity[] {
     ...of("collection", config.collections),
     ...of("single", config.singles),
     ...of("fieldGroup", config.fieldGroups),
+  ];
+}
+
+/** Where the manifest lists each kind of entity. */
+const MANIFEST_LISTS = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "components",
+} as const satisfies Record<RecordedKind, string>;
+
+/**
+ * The Builder entities the next migration would apply: the manifest's, with the plugins' deferred
+ * extensions of them and without those code-first shadows, merged as migration generation merges
+ * them. The resolved entities do not carry `localized`, so it is read from the manifest itself.
+ *
+ * An absent manifest is the ordinary code-first project and declares none; one that exists and
+ * cannot be read stops the run, since dropping it would drop every Builder declaration.
+ */
+async function builderEntities(
+  args: ConfigurationArgs,
+  ownerOf: (kind: RecordedKind, slug: string) => string | undefined
+): Promise<ConfiguredEntity[]> {
+  const [declared, manifest] = await Promise.all([
+    resolveDeclaredSchema({
+      projectRoot: args.projectRoot,
+      config: args.config,
+      ...(args.deferredExtends !== undefined
+        ? { deferredExtends: args.deferredExtends }
+        : {}),
+    }),
+    loadUiSchema({
+      projectRoot: args.projectRoot,
+      uiSchemaFile: args.config.db.uiSchemaFile,
+    }),
+  ]);
+  const localized = new Set(
+    (Object.keys(MANIFEST_LISTS) as RecordedKind[]).flatMap(kind =>
+      (manifest[MANIFEST_LISTS[kind]] ?? [])
+        .filter(entity => entity.localized === true)
+        .map(entity => entityKey(kind, entity.slug))
+    )
+  );
+  return declared.entities
+    .filter(entity => entity.builtBy !== "codeFirst")
+    .map((entity): ConfiguredEntity => {
+      const plugin = ownerOf(entity.kind, entity.slug);
+      return {
+        kind: entity.kind,
+        slug: entity.slug,
+        table: entity.tableName,
+        fields: entity.fields,
+        localized: localized.has(entityKey(entity.kind, entity.slug)),
+        origin: entity.builtBy,
+        ...(plugin !== undefined ? { plugin } : {}),
+      };
+    });
+}
+
+/** What the configured side is read from. */
+interface ConfigurationArgs {
+  config: RepairColumnsConfig;
+  /** The project the configuration and its manifest are in. */
+  projectRoot: string;
+  /** Plugin additions to Builder entities, as `loadConfig` returns them. */
+  deferredExtends?: readonly unknown[];
+}
+
+/** Every entity the next migration would apply: code-first, then the Builder's. */
+async function configuredEntities(
+  args: ConfigurationArgs
+): Promise<ConfiguredEntity[]> {
+  const owners = pluginOwners(args.config.plugins);
+  const ownerOf = (kind: RecordedKind, slug: string) =>
+    owners.get(entityKey(kind, slug));
+  return [
+    ...codeFirstEntities(args.config, ownerOf),
+    ...(await builderEntities(args, ownerOf)),
   ];
 }
 
@@ -204,20 +336,85 @@ function recordedEntities(record: EntitySettingsRecord): SnapshotEntity[] {
   );
 }
 
+/** The ledger filename of a snapshot's migration, as `loadSnapshots` asks the ledger about it. */
+const ledgerFilenameOf = (snapshotFile: string) =>
+  `${snapshotFile.replace(/\.snapshot\.json$/, "")}.sql`;
+
+/** The error that stops a run whose newest applied definition cannot be read. */
+function unreadableSnapshot(file: string, why: string): NextlyError {
+  return NextlyError.configuration({
+    logMessage: `The applied migration snapshot meta/${file} ${why}, so what the database last had applied cannot be known. Restore the file, then run \`nextly repair-columns\` again.`,
+    logContext: { file },
+  });
+}
+
+/**
+ * Every snapshot file in the migrations folder, whether or not it can be read. A folder that does
+ * not exist holds none; one that exists and cannot be listed stops the run, since the snapshots in
+ * it may record what was applied.
+ */
+async function snapshotFiles(migrationsDir: string): Promise<string[]> {
+  const metaDir = resolve(migrationsDir, "meta");
+  try {
+    const files = await readdir(metaDir);
+    return files.filter(file => file.endsWith(".snapshot.json")).sort();
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return [];
+    throw NextlyError.configuration({
+      logMessage: `The migration snapshots in ${metaDir} could not be listed, so what the database last had applied cannot be known.`,
+      logContext: { metaDir },
+      ...(error instanceof Error ? { cause: error } : {}),
+    });
+  }
+}
+
+/**
+ * Stop where a snapshot of an applied migration could not be read. `loadSnapshots` skips such a
+ * file, and the next older record would then stand in for it. One whose migration has not been
+ * applied says nothing about the database, so it may stay unreadable.
+ */
+function assertAppliedSnapshotsRead(
+  listed: readonly string[],
+  loaded: readonly LoadedSnapshot[],
+  applied: ReadonlySet<string>
+): void {
+  const read = new Set(loaded.map(snapshot => snapshot.file));
+  const unread = listed.find(
+    file => !read.has(file) && applied.has(ledgerFilenameOf(file))
+  );
+  if (unread !== undefined) {
+    throw unreadableSnapshot(unread, "could not be read or parsed");
+  }
+}
+
 /**
  * The entity record of the newest applied snapshot that has one, or undefined where none does.
  *
  * A snapshot whose migration has not been applied is skipped, and so is one written before
- * snapshots recorded entities: its silence says nothing about what was applied.
+ * snapshots recorded entities: its silence says nothing about what was applied. One that has an
+ * entity record this version cannot read stops the run rather than be passed over for an older one.
  */
 function newestAppliedRecord(
   loaded: readonly LoadedSnapshot[]
 ): EntitySettingsRecord | undefined {
   // Lexicographic order is migration order, so the newest is the last one that qualifies.
-  for (const { snapshot, applied } of [...loaded].reverse()) {
+  for (const { file, snapshot, applied } of [...loaded].reverse()) {
     if (!applied) continue;
-    const record = (snapshot as { entities?: unknown }).entities;
+    const parsed: unknown = snapshot;
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      throw unreadableSnapshot(file, "is not a snapshot");
+    }
+    if (!Object.hasOwn(parsed, "entities")) continue;
+    const record = (parsed as { entities?: unknown }).entities;
     if (isEntitySettingsRecord(record)) return record;
+    throw unreadableSnapshot(
+      file,
+      "records its entities in a shape that cannot be read"
+    );
   }
   return undefined;
 }
@@ -241,47 +438,88 @@ async function snapshotEntities(
   // The ledger read once for every snapshot. A file is applied where its newest event is, which is
   // what `isFileApplied` asks of each file in turn.
   const applied = appliedFilenames(await events.listFileApplies());
-  const loaded = await loadSnapshots({
-    migrationsDir,
-    isApplied: file => Promise.resolve(applied.has(file)),
-  });
+  const [listed, loaded] = await Promise.all([
+    snapshotFiles(migrationsDir),
+    loadSnapshots({
+      migrationsDir,
+      isApplied: file => Promise.resolve(applied.has(file)),
+    }),
+  ]);
+  assertAppliedSnapshotsRead(listed, loaded, applied);
   const record = newestAppliedRecord(loaded);
   return record === undefined ? [] : recordedEntities(record);
 }
 
-/** The user fields the user-extension builder builds `user_ext` from, or null with no definitions. */
-async function storedUserFields(
-  adapter: DrizzleAdapter,
-  dialect: SupportedDialect,
-  logger: Logger
-): Promise<readonly unknown[] | null> {
-  if (!(await adapter.tableExists("user_field_definitions"))) return null;
-  const builder = new UserExtSchemaService(
-    dialect,
-    new UserFieldDefinitionService(adapter, logger),
-    logger
-  );
-  await builder.loadMergedFields();
-  return builder.getMergedFieldConfigs();
+/**
+ * The user field definitions service, keeping the rows its merge read, so the comparison can tell
+ * the admin's fields from the code fields without reading the definitions a second time.
+ */
+class RecordingDefinitionService extends UserFieldDefinitionService {
+  records: readonly UserFieldDefinitionRecord[] = [];
+
+  override async getMergedFields(): Promise<UserFieldDefinitionRecord[]> {
+    const records = await super.getMergedFields();
+    this.records = records;
+    return records;
+  }
 }
 
-/** Every entity the comparison covers, with the definition each is judged against. */
+/**
+ * The user fields `user_ext` is built from, as stored and as the next sync would store them.
+ *
+ * Stored: the definitions as the user-extension builder merges them, or null with no definitions
+ * table. Configured: the configuration's code fields, which the sync writes over the stored code
+ * rows, then the stored fields the admin added, which the sync leaves alone.
+ */
+async function userFieldSources(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  logger: Logger,
+  codeFields: readonly unknown[]
+): Promise<UserFieldSources> {
+  if (!(await adapter.tableExists("user_field_definitions"))) {
+    return { stored: null, configured: codeFields };
+  }
+  const definitions = new RecordingDefinitionService(adapter, logger);
+  const builder = new UserExtSchemaService(dialect, definitions, logger);
+  await builder.loadMergedFields();
+  const stored = builder.getMergedFieldConfigs();
+  const adminNames = new Set(
+    definitions.records
+      .filter(record => record.source === "ui")
+      .map(record => record.name)
+  );
+  const adminFields = stored.filter(
+    field =>
+      "name" in field &&
+      typeof field.name === "string" &&
+      adminNames.has(field.name)
+  );
+  return { stored, configured: [...codeFields, ...adminFields] };
+}
+
+/** Every entity the comparison covers, with the definitions each is judged against. */
 export async function readRepairEntities(args: {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
   config: RepairColumnsConfig;
+  /** The project the configuration and its Builder manifest are in. */
+  projectRoot: string;
+  /** Plugin additions to Builder entities, as `loadConfig` returns them. */
+  deferredExtends?: readonly unknown[];
   migrationsDir: string;
   logger: Logger;
 }): Promise<RepairEntity[]> {
   const { adapter, dialect, logger } = args;
-  // Three independent reads, so none waits on another.
-  const [registry, snapshots, userFields] = await Promise.all([
+  // Independent reads, so none waits on another.
+  const [configured, registry, snapshots, userFields] = await Promise.all([
+    configuredEntities(args),
     registryEntities(adapter, logger),
     snapshotEntities(adapter, dialect, args.migrationsDir),
-    storedUserFields(adapter, dialect, logger),
+    userFieldSources(adapter, dialect, logger, args.config.users?.fields ?? []),
   ]);
   return resolveRepairEntities({
-    configured: configuredEntities(args.config),
+    configured,
     registry,
     snapshots,
     userFields,

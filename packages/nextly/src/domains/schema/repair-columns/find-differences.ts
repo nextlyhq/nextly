@@ -16,8 +16,6 @@ import type { ColumnSpec } from "../pipeline/diff/types";
 import {
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
-  getUserFieldColumnDescriptor,
-  type ColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 
@@ -28,8 +26,10 @@ import type {
   ColumnLocation,
   ColumnState,
   EntityDefinition,
+  RepairColumnOrigin,
   RepairEntity,
 } from "./types";
+import { userFieldColumn } from "./user-field-columns";
 
 /** The table a localized entity keeps its translatable fields in. */
 function translationTableOf(table: string): string {
@@ -44,26 +44,34 @@ interface NamedColumn {
 }
 
 /**
- * The descriptor of one field's column, asked as the builder that made its table answers it.
+ * One field's column as the builder `origin` names makes it: its name, type and nullability, or
+ * null where that builder gives the field no column.
  *
- * `user_ext` has its own builder and so its own descriptor. A field-group row answers the component
- * question, where a many-to-many keeps its ids on the row; a translation table is built from the
- * plain descriptor whatever the entity, as its own builder does.
+ * `user_ext` has its own builder, which is asked directly. Every other table is built from the
+ * descriptor: a field-group row answers the component question, where a many-to-many keeps its ids
+ * on the row, and a translation table the plain question whatever the entity, as its own builder
+ * does.
  */
 function describeColumn(
   entity: RepairEntity,
+  origin: RepairColumnOrigin,
   field: FieldDefinition,
   translation: boolean,
   dialect: SupportedDialect
-): ColumnDescriptor | null {
-  if (entity.origin === "userFields") {
-    return getUserFieldColumnDescriptor(field, dialect);
-  }
+): (ColumnState & { name: string }) | null {
+  if (origin === "userFields") return userFieldColumn(field, dialect);
   const describe =
     entity.kind === "fieldGroup" && !translation
       ? getComponentRowColumnDescriptor
       : getColumnDescriptor;
-  return describe(field, dialect, entity.origin);
+  const descriptor = describe(field, dialect, origin);
+  return descriptor === null
+    ? null
+    : {
+        name: descriptor.name,
+        type: descriptor.dialectType,
+        nullable: descriptor.nullable,
+      };
 }
 
 /**
@@ -72,28 +80,29 @@ function describeColumn(
  */
 function namedColumn(
   entity: RepairEntity,
+  origin: RepairColumnOrigin,
   field: FieldDefinition,
   translation: boolean,
   dialect: SupportedDialect
 ): NamedColumn | null {
-  const descriptor = describeColumn(entity, field, translation, dialect);
-  if (descriptor === null) return null;
+  const column = describeColumn(entity, origin, field, translation, dialect);
+  if (column === null) return null;
   return {
     location: {
       kind: entity.kind,
       slug: entity.slug,
       field: field.name,
       table: translation ? translationTableOf(entity.table) : entity.table,
-      column: descriptor.name,
+      column: column.name,
       translation,
     },
     field,
     expected: {
-      type: descriptor.dialectType,
+      type: column.type,
       // The translation table's builder makes every field column nullable, a required field's
       // included: a translatable field's `required` is enforced by the application, not by its
       // column. So nullable is what that table holds, whatever the descriptor says.
-      nullable: translation ? true : descriptor.nullable,
+      nullable: translation ? true : column.nullable,
     },
   };
 }
@@ -102,7 +111,8 @@ function namedColumn(
  * Every column a definition's fields name, in field order: on the entity's own table, or in its
  * translation table for a translatable field of a localized entity.
  *
- * Asked of the descriptor, the one answer to which fields have a column and what it is.
+ * Asked of the descriptor as the definition's own builder answers it, the one answer to which
+ * fields have a column and what it is.
  */
 function columnsNamedBy(
   entity: RepairEntity,
@@ -117,6 +127,7 @@ function columnsNamedBy(
     if (typeof field?.name !== "string" || field.name === "") continue;
     const column = namedColumn(
       entity,
+      definition.origin,
       field,
       translatable.has(field.name),
       dialect
@@ -166,7 +177,7 @@ function ownedBy(plugin: string | undefined): { plugin?: string } {
 /** One entity, with the columns its applied and configured definitions name. */
 interface PlannedEntity {
   entity: RepairEntity;
-  applied: NamedColumn[];
+  applied: NamedColumn[] | null;
   configured: NamedColumn[] | null;
 }
 
@@ -179,7 +190,7 @@ async function readLiveTables(
   const tableNames = [
     ...new Set(
       planned.flatMap(({ applied, configured }) =>
-        [...applied, ...(configured ?? [])].map(c => c.location.table)
+        [...(applied ?? []), ...(configured ?? [])].map(c => c.location.table)
       )
     ),
   ];
@@ -205,25 +216,35 @@ export async function findColumnDifferences(args: {
 }): Promise<ColumnFinding[]> {
   const { db, dialect, entities } = args;
 
+  const namedBy = (
+    definition: EntityDefinition | null,
+    entity: RepairEntity
+  ) =>
+    definition === null ? null : columnsNamedBy(entity, definition, dialect);
   const planned = entities.map(
     (entity): PlannedEntity => ({
       entity,
-      applied: columnsNamedBy(entity, entity.applied, dialect),
-      configured:
-        entity.configured === null
-          ? null
-          : columnsNamedBy(entity, entity.configured, dialect),
+      applied: namedBy(entity.applied, entity),
+      configured: namedBy(entity.configured, entity),
     })
   );
   const live = await readLiveTables(db, dialect, planned);
 
   const findings: ColumnFinding[] = [];
   for (const { entity, applied, configured } of planned) {
-    if (entity.awaitingMigration) {
-      findings.push(...awaitingMigrationFindings(entity, applied, live));
+    if (entity.applied === null || applied === null) {
+      findings.push(...awaitingMigrationFindings(entity, configured, live));
       continue;
     }
-    findings.push(...appliedColumnFindings(entity, applied, live, dialect));
+    findings.push(
+      ...appliedColumnFindings(
+        entity,
+        entity.applied.origin,
+        applied,
+        live,
+        dialect
+      )
+    );
     if (configured !== null) {
       findings.push(
         ...pendingChanges(applied, configured, live, entity.plugin)
@@ -234,18 +255,20 @@ export async function findColumnDifferences(args: {
 }
 
 /**
- * The columns of an entity awaiting a migration that are not as its registry row describes them.
+ * The columns of an entity awaiting a migration that are not as its configured definition
+ * describes them.
  *
- * The applied definition is unknown, so a column that is not as the registry row describes it may
- * be legacy or may be the change the migration will make: the migration decides.
+ * No record says what was applied, so a column that is not as configured, a missing table
+ * included, may be legacy or may be the change the migration will make: the migration decides,
+ * and it may still have to be written.
  */
 function awaitingMigrationFindings(
   entity: RepairEntity,
-  applied: readonly NamedColumn[],
+  configured: readonly NamedColumn[] | null,
   live: LiveTables
 ): ColumnFinding[] {
   const findings: ColumnFinding[] = [];
-  for (const column of applied) {
+  for (const column of configured ?? []) {
     const found = liveColumnAt(live, column.location);
     if (
       found !== undefined &&
@@ -265,16 +288,20 @@ function awaitingMigrationFindings(
   return findings;
 }
 
-/** Every applied column of one entity that the database lacks or holds differently. */
+/**
+ * Every applied column of one entity that the database lacks or holds differently. `origin` is the
+ * applied definition's builder, the one that made the live table.
+ */
 function appliedColumnFindings(
   entity: RepairEntity,
+  origin: RepairColumnOrigin,
   applied: readonly NamedColumn[],
   live: LiveTables,
   dialect: SupportedDialect
 ): ColumnFinding[] {
   const findings: ColumnFinding[] = [];
   for (const column of applied) {
-    const finding = judgeAppliedColumn(entity, column, live, dialect);
+    const finding = judgeAppliedColumn(entity, origin, column, live, dialect);
     if (finding !== null) findings.push(finding);
   }
   return findings;
@@ -282,10 +309,13 @@ function appliedColumnFindings(
 
 /**
  * How one applied column differs from the live database: missing (with its table, or alone), of
- * another type or nullability, or null where it is as its field describes it.
+ * another type or nullability, or null where it is as its field describes it. `origin` is the
+ * builder that made the table, as the applied definition records it, which is the one whose
+ * generator can explain a difference.
  */
 function judgeAppliedColumn(
   entity: RepairEntity,
+  origin: RepairColumnOrigin,
   column: NamedColumn,
   live: LiveTables,
   dialect: SupportedDialect
@@ -315,7 +345,7 @@ function judgeAppliedColumn(
     cause: differenceCause({
       field: column.field,
       kind: entity.kind,
-      origin: entity.origin,
+      origin,
       dialect,
       translation: column.location.translation,
       live: state,

@@ -17,6 +17,7 @@ import {
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { FieldGroupSchemaService } from "../../../field-groups/services/field-group-schema-service";
+import { UserExtSchemaService } from "../../../users/services/user-ext-schema-service";
 import { deriveCompanionSpec } from "../../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../../i18n/migration/generate-up";
 import { typesDiffer } from "../../pipeline/diff/declared-size";
@@ -27,6 +28,7 @@ import type {
   ColumnFinding,
   DiffersFinding,
   EntityDefinition,
+  RepairColumnOrigin,
   RepairEntity,
 } from "../types";
 
@@ -81,6 +83,32 @@ const LEGACY_CARD_FIELDS: FieldDefinition[] = CARD_FIELDS.map(field =>
     : field
 );
 
+/** A test-owned copy of `user_ext`, so the instance's own table is never touched. */
+const USER_EXT = "rc_user_ext";
+
+/** One user field of each kind of column the user-extension builder makes. */
+const USER_FIELDS: FieldDefinition[] = [
+  f({ name: "score", type: "number" }),
+  f({ name: "rank", type: "number", required: true }),
+  f({ name: "companyName", type: "text", required: true }),
+  f({ name: "shortBio", type: "text", maxLength: 80 }),
+  f({ name: "handle", type: "text", unique: true }),
+  f({ name: "about", type: "textarea" }),
+  f({ name: "workEmail", type: "email" }),
+  f({ name: "website", type: "url" }),
+  f({ name: "isActive", type: "checkbox" }),
+  f({ name: "birthday", type: "date" }),
+  f({
+    name: "teams",
+    type: "select",
+    hasMany: true,
+    options: [{ label: "A", value: "a" }],
+  }),
+  f({ name: "tier", type: "radio", options: [{ label: "A", value: "a" }] }),
+  // The builder gives a relationship no column, so it names none to look for.
+  f({ name: "manager", type: "relationship", relationTo: "users" }),
+];
+
 const ARTICLES = "dc_rc_articles";
 const LOCALIZED = "dc_rc_localized";
 const CARDS = "comp_rc_card";
@@ -100,21 +128,32 @@ function statements(sql: string): string[] {
     .filter(statement => statement.length > 0);
 }
 
+/** Where an entity is, which builder made it, and the plugin that owns it, if one does. */
+interface EntityIdentity {
+  kind: RepairEntity["kind"];
+  slug: string;
+  table: string;
+  origin: RepairColumnOrigin;
+  plugin?: string;
+}
+
+/** An entity applied and configured alike, both by the builder `origin` names. */
 function entity(
-  over: Pick<RepairEntity, "kind" | "slug" | "table" | "origin"> &
-    Partial<RepairEntity>,
+  { origin, ...over }: EntityIdentity,
   fields: FieldDefinition[]
 ): RepairEntity {
-  const definition: EntityDefinition = { fields, localized: false };
+  const definition: EntityDefinition = { fields, localized: false, origin };
   return {
     applied: { ...definition, source: "snapshot" },
     configured: definition,
-    awaitingMigration: false,
     ...over,
   };
 }
 
-const articles = (fields = ARTICLE_FIELDS, over: Partial<RepairEntity> = {}) =>
+const articles = (
+  fields = ARTICLE_FIELDS,
+  over: Partial<EntityIdentity> = {}
+) =>
   entity(
     {
       kind: "collection",
@@ -244,6 +283,7 @@ describe.each(getConfiguredTestDialects())(
         "dc_rc_missing",
         "dc_rc_partial",
         "dc_rc_pending",
+        USER_EXT,
       ]) {
         await run(`DROP TABLE IF EXISTS ${q(table)}`);
       }
@@ -416,7 +456,7 @@ describe.each(getConfiguredTestDialects())(
           },
           fields
         ),
-        configured: { fields: now, localized: false },
+        configured: { fields: now, localized: false, origin: "collection" },
       });
 
       const findings = await find([pending(applied, configured)]);
@@ -457,6 +497,7 @@ describe.each(getConfiguredTestDialects())(
           configured: {
             fields: [f({ name: "author", type: "number", required: true })],
             localized: false,
+            origin: "collection",
           },
         },
       ]);
@@ -507,8 +548,13 @@ describe.each(getConfiguredTestDialects())(
           },
           fields
         ),
-        applied: { fields, localized: true, source: "snapshot" },
-        configured: { fields, localized: true },
+        applied: {
+          fields,
+          localized: true,
+          origin: "collection",
+          source: "snapshot",
+        },
+        configured: { fields, localized: true, origin: "collection" },
       };
       // The column exists where the finder looks for it, so absence cannot pass this case.
       const companion = await schemaOf([`${LOCALIZED}_locales`]);
@@ -516,6 +562,135 @@ describe.each(getConfiguredTestDialects())(
         companion.tables[0]?.columns.map(c => c.name.toLowerCase())
       ).toContain("headline");
       expect(await find([localized])).toEqual([]);
+    });
+
+    it("reports a table awaiting its first migration as pending, never as not migrated", async () => {
+      // Only the configuration declares it: no migration file creates it yet, so the next step is
+      // `migrate:create`, not `nextly migrate`.
+      const fields = [
+        f({ name: "headline", type: "text" }),
+        f({ name: "score", type: "number" }),
+      ];
+      const findings = await find([
+        {
+          kind: "collection",
+          slug: "rc-missing",
+          table: "dc_rc_missing",
+          applied: null,
+          configured: { fields, localized: false, origin: "codeFirst" },
+        },
+      ]);
+      expect(
+        findings.map(x => [
+          x.kind,
+          at(x),
+          x.kind === "pending-migration" ? x.applied : "",
+          x.kind === "pending-migration" ? x.live : "",
+        ])
+      ).toEqual([
+        ["pending-migration", "dc_rc_missing.headline", null, null],
+        ["pending-migration", "dc_rc_missing.score", null, null],
+      ]);
+    });
+
+    it("judges a Builder collection that code adopted by the Builder until the adoption's migration applies", async () => {
+      // The Builder made the table and the last applied migration recorded it as the Builder's;
+      // the configuration now declares the same fields in code, and that migration is pending.
+      const fields = [
+        f({ name: "body", type: "text" }),
+        f({
+          name: "author",
+          type: "relationship",
+          relationTo: "users",
+          required: true,
+        }),
+        f({ name: "ratings", type: "number", hasMany: true }),
+      ];
+      await createBuilderTable("dc_rc_pending", fields);
+      const findings = await find([
+        {
+          kind: "collection",
+          slug: "rc-pending",
+          table: "dc_rc_pending",
+          applied: {
+            fields,
+            localized: false,
+            origin: "collection",
+            source: "snapshot",
+          },
+          configured: { fields, localized: false, origin: "codeFirst" },
+        },
+      ]);
+      // The columns the Builder's generator still creates are named as its, which only the
+      // applied side's owner can say: code-first tables have no generator of their own.
+      expect(
+        Object.fromEntries(differs(findings).map(x => [at(x), causeLabel(x)]))
+      ).toEqual({
+        "dc_rc_pending.author": "current-generator",
+        "dc_rc_pending.ratings": "current-generator",
+      });
+      // Code-first bounds an unbounded MySQL text field where the Builder does not, so on MySQL the
+      // adoption's migration changes `body`; each side is described by its own builder.
+      const pending = findings.filter(x => x.kind === "pending-migration");
+      expect(
+        pending.map(x =>
+          x.kind === "pending-migration"
+            ? [at(x), x.applied?.type, x.configured?.type]
+            : []
+        )
+      ).toEqual(
+        dialect === "mysql"
+          ? [["dc_rc_pending.body", "text", "varchar(255)"]]
+          : []
+      );
+    });
+
+    it("finds nothing in user fields the user-extension builder created as they are", async () => {
+      // The builder's own CREATE TABLE, under a test-owned name; its index and key statements
+      // name the instance's tables and are left out.
+      const sql = new UserExtSchemaService(dialect)
+        .generateMigrationSQL(
+          USER_FIELDS as unknown as Parameters<
+            UserExtSchemaService["generateMigrationSQL"]
+          >[0]
+        )
+        .replaceAll("user_ext", USER_EXT);
+      for (const statement of statements(sql)) {
+        if (statement.startsWith("CREATE TABLE")) await run(statement);
+      }
+      const definition: EntityDefinition = {
+        fields: USER_FIELDS,
+        localized: false,
+        origin: "userFields",
+      };
+      const users: RepairEntity = {
+        kind: "userFields",
+        slug: "users",
+        table: USER_EXT,
+        applied: { ...definition, source: "registry" },
+        configured: definition,
+      };
+      // Every column exists where the finder looks for it, so absence cannot pass this case.
+      const created = await schemaOf([USER_EXT]);
+      expect(created.tables[0]?.columns.map(c => c.name.toLowerCase())).toEqual(
+        expect.arrayContaining(["score", "rank", "company_name", "is_active"])
+      );
+      expect(await find([users])).toEqual([]);
+
+      // A change of type is found against the builder's column for the field as applied.
+      const changed = USER_FIELDS.map(field =>
+        field.name === "score" ? f({ name: "score", type: "checkbox" }) : field
+      );
+      const findings = await find([
+        {
+          ...users,
+          applied: { ...definition, fields: changed, source: "registry" },
+          configured: { ...definition, fields: changed },
+        },
+      ]);
+      expect(findings.map(x => [x.kind, at(x)])).toEqual([
+        ["differs", `${USER_EXT}.score`],
+      ]);
     });
 
     it("reports a plugin's legacy column and names the plugin", async () => {

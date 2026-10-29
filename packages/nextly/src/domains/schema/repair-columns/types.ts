@@ -23,15 +23,25 @@ export type RepairEntityKind =
 /**
  * Which builder made an entity's tables: one of the descriptor's origins, or the user-extension
  * builder that makes `user_ext`. That builder never read the descriptor and shares none of its
- * rules, so it is named here rather than among the descriptor's origins, and its columns are
- * described by `getUserFieldColumnDescriptor`.
+ * rules, so it is named here rather than among the descriptor's origins, and its columns are asked
+ * of the builder itself.
  */
 export type RepairColumnOrigin = ColumnOrigin | "userFields";
 
-/** A field list, and whether the entity keeps its translatable fields in a `_locales` table. */
+/**
+ * A field list, whether the entity keeps its translatable fields in a `_locales` table, and which
+ * builder makes its tables from it.
+ *
+ * The builder belongs to the definition rather than to the entity because the two sides can have
+ * different owners: a Builder collection that code has adopted keeps the Builder's table until the
+ * adoption's migration applies, so its applied definition is the Builder's and its configured one
+ * is code-first.
+ */
 export interface EntityDefinition {
   fields: readonly FieldDefinition[];
   localized: boolean;
+  /** Which builder makes the tables from this definition, which decides the column each field names. */
+  origin: RepairColumnOrigin;
 }
 
 /**
@@ -41,10 +51,17 @@ export interface EntityDefinition {
  *   one, which is what the database last had applied.
  * - `registry`: the entity's registry row, read where that snapshot does not record the entity (a
  *   site with no migration files, only files written before snapshots recorded entities, or an
- *   entity the snapshot no longer records).
- * - `configuration`: neither records it, so the configuration is the only definition there is.
+ *   entity the snapshot no longer records). For user fields, the stored definitions.
+ *
+ * Nothing else says what was applied. An entity neither records, or whose registry row still waits
+ * for its migration, has no applied definition: it awaits a migration.
  */
-export type AppliedDefinitionSource = "snapshot" | "registry" | "configuration";
+export type AppliedDefinitionSource = "snapshot" | "registry";
+
+/** An entity's definition as the database last had it applied, and where that was read from. */
+export type AppliedDefinition = EntityDefinition & {
+  source: AppliedDefinitionSource;
+};
 
 /** One entity, with its field list as last applied and as configured now. */
 export interface RepairEntity {
@@ -52,21 +69,18 @@ export interface RepairEntity {
   slug: string;
   /** The entity's own table; translatable fields live in `<table>_locales`. */
   table: string;
-  /** Which builder made the entity's tables, which decides the column each field names. */
-  origin: RepairColumnOrigin;
-  /** The definition every live column is judged against. */
-  applied: EntityDefinition & { source: AppliedDefinitionSource };
   /**
-   * The definition the configuration holds now, or null where it does not declare the entity.
-   * Compared with `applied` to find the changes still pending a migration.
+   * The definition every live column is judged against, or null where no record says what was
+   * applied: the configuration alone declares the entity, or its registry row waits for a
+   * migration and no applied snapshot says what it was before. Such an entity awaits a migration,
+   * so a column that differs from its configured definition is reported as pending, not judged.
+   */
+  applied: AppliedDefinition | null;
+  /**
+   * The definition the next migration would apply, or null where nothing declares the entity any
+   * more. Compared with `applied` to find the changes still pending a migration.
    */
   configured: EntityDefinition | null;
-  /**
-   * The registry row says its definition waits for a migration, and no applied snapshot says what
-   * it was before. The applied definition is then unknown, so a column that differs from the row
-   * is reported as pending a migration rather than judged.
-   */
-  awaitingMigration: boolean;
   /** The plugin that owns the entity, when one does. */
   plugin?: string;
 }

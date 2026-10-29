@@ -18,6 +18,7 @@ const configured = (
   table: "dc_posts",
   fields: [text("title"), text("body")],
   localized: false,
+  origin: "codeFirst",
   ...over,
 });
 const registry = (over: Partial<RegistryEntity> = {}): RegistryEntity => ({
@@ -54,10 +55,9 @@ describe("resolveRepairEntities: where the applied definition comes from", () =>
         snapshots: [snapshot()],
       })
     );
-    expect(entity?.applied.source).toBe("snapshot");
-    expect(entity?.applied.fields).toEqual([text("title"), number("body")]);
+    expect(entity?.applied?.source).toBe("snapshot");
+    expect(entity?.applied?.fields).toEqual([text("title"), number("body")]);
     expect(entity?.configured?.fields).toEqual([text("title"), text("body")]);
-    expect(entity?.awaitingMigration).toBe(false);
   });
 
   // Pinned for the change that makes `nextly migrate` write registry rows from the applied
@@ -72,12 +72,11 @@ describe("resolveRepairEntities: where the applied definition comes from", () =>
         snapshots: [],
       })
     );
-    expect(entity?.applied.source).toBe("registry");
-    expect(entity?.applied.fields).toEqual([text("title"), number("body")]);
-    expect(entity?.awaitingMigration).toBe(false);
+    expect(entity?.applied?.source).toBe("registry");
+    expect(entity?.applied?.fields).toEqual([text("title"), number("body")]);
   });
 
-  it("marks a registry row waiting for a migration, with no applied snapshot, as awaiting it", () => {
+  it("leaves the applied definition unknown for a registry row waiting for a migration, with no applied snapshot", () => {
     const entity = only(
       resolveRepairEntities({
         configured: [],
@@ -87,7 +86,9 @@ describe("resolveRepairEntities: where the applied definition comes from", () =>
         snapshots: [],
       })
     );
-    expect(entity?.awaitingMigration).toBe(true);
+    expect(entity?.applied).toBeNull();
+    // What the migration will apply: the row the Builder saved.
+    expect(entity?.configured?.fields).toEqual([text("title"), text("body")]);
   });
 
   it("does not mark a pending registry row as awaiting when an applied snapshot says what was applied", () => {
@@ -105,14 +106,15 @@ describe("resolveRepairEntities: where the applied definition comes from", () =>
         snapshots: [snapshot({ source: "builder" })],
       })
     );
-    expect(entity?.awaitingMigration).toBe(false);
-    expect(entity?.applied.source).toBe("snapshot");
+    expect(entity?.applied?.source).toBe("snapshot");
     // A Builder entity is not in the configuration: its configured definition is the row the
     // Builder saved, which the pending migration has not applied yet.
     expect(entity?.configured?.fields).toEqual([text("title"), text("body")]);
   });
 
-  it("uses the configuration where neither a snapshot nor a registry row records the entity", () => {
+  it("leaves an entity only the configuration declares awaiting its migration", () => {
+    // No migration file records it and no boot registered it: nothing has been applied, so the
+    // configuration is what a migration still has to create, never what the database holds.
     const entity = only(
       resolveRepairEntities({
         configured: [configured()],
@@ -120,7 +122,8 @@ describe("resolveRepairEntities: where the applied definition comes from", () =>
         snapshots: [],
       })
     );
-    expect(entity?.applied.source).toBe("configuration");
+    expect(entity?.applied).toBeNull();
+    expect(entity?.configured?.fields).toEqual([text("title"), text("body")]);
     expect(entity?.table).toBe("dc_posts");
   });
 
@@ -152,7 +155,7 @@ describe("resolveRepairEntities: which builder made the table, and who owns it",
           snapshots: [],
         })
       );
-      expect(entity?.origin).toBe(origin);
+      expect(entity?.applied?.origin).toBe(origin);
     }
   );
 
@@ -164,7 +167,46 @@ describe("resolveRepairEntities: which builder made the table, and who owns it",
         snapshots: [snapshot({ source: "builder", table: "dc_posts" })],
       })
     );
-    expect(entity?.origin).toBe("collection");
+    expect(entity?.applied?.origin).toBe("collection");
+  });
+
+  it("describes each side by its own owner when code adopts a Builder collection whose migration is pending", () => {
+    // The newest applied snapshot still records the Builder's collection; the configuration now
+    // declares it in code, and the registry row has already been taken over by code.
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry({ source: "code", locked: true })],
+        snapshots: [snapshot({ source: "builder", table: "dc_posts" })],
+      })
+    );
+    expect(entity?.applied?.origin).toBe("collection");
+    expect(entity?.configured?.origin).toBe("codeFirst");
+  });
+
+  it("takes the applied owner from the registry row where no snapshot records the entity", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [],
+        registry: [
+          registry({ kind: "fieldGroup", source: "ui", locked: false }),
+        ],
+        snapshots: [],
+      })
+    );
+    expect(entity?.applied?.origin).toBe("fieldGroup");
+  });
+
+  it("gives a Builder entity the manifest declares the Builder's owner on its configured side", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured({ origin: "collection" })],
+        registry: [registry({ source: "ui", locked: false })],
+        snapshots: [],
+      })
+    );
+    expect(entity?.configured?.origin).toBe("collection");
+    expect(entity?.applied?.origin).toBe("collection");
   });
 
   it("names the plugin a registry row records as the owner", () => {
@@ -206,27 +248,52 @@ describe("resolveRepairEntities: which builder made the table, and who owns it",
 });
 
 describe("resolveRepairEntities: user fields", () => {
-  it("judges user_ext against the stored user field definitions, by the user-extension builder", () => {
+  it("judges user_ext against the stored user field definitions, and compares them with the configured ones", () => {
     const entities = resolveRepairEntities({
       configured: [],
       registry: [],
       snapshots: [],
-      userFields: [number("score")],
+      userFields: { stored: [number("score")], configured: [text("score")] },
     });
     expect(entities).toEqual([
       {
         kind: "userFields",
         slug: "users",
         table: "user_ext",
-        origin: "userFields",
         applied: {
           fields: [number("score")],
           localized: false,
+          origin: "userFields",
           source: "registry",
         },
-        configured: null,
-        awaitingMigration: false,
+        configured: {
+          fields: [text("score")],
+          localized: false,
+          origin: "userFields",
+        },
       },
     ]);
+  });
+
+  it("leaves user fields awaiting a migration where the database stores no definitions yet", () => {
+    const [users] = resolveRepairEntities({
+      configured: [],
+      registry: [],
+      snapshots: [],
+      userFields: { stored: null, configured: [text("nickname")] },
+    });
+    expect(users?.applied).toBeNull();
+    expect(users?.configured?.fields).toEqual([text("nickname")]);
+  });
+
+  it("has no user fields entity where none is stored or configured", () => {
+    expect(
+      resolveRepairEntities({
+        configured: [],
+        registry: [],
+        snapshots: [],
+        userFields: { stored: null, configured: [] },
+      })
+    ).toEqual([]);
   });
 });

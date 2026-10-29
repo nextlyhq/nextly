@@ -52,11 +52,17 @@ describe.each(getConfiguredTestDialects())(
     let handle: TestNextly;
     let migrationsDir: string;
     const adapter = () => handle.adapter as unknown as DrizzleAdapter;
-    const read = () =>
+    const read = (users?: { fields: unknown[] }) =>
       readRepairEntities({
         adapter: adapter(),
         dialect,
-        config: { collections: [] },
+        config: {
+          collections: [],
+          db: { uiSchemaFile: "ui-schema.json" },
+          ...(users !== undefined ? { users } : {}),
+        },
+        // No manifest there: the ordinary code-first project.
+        projectRoot: migrationsDir,
         migrationsDir,
         logger: silent,
       });
@@ -84,15 +90,27 @@ describe.each(getConfiguredTestDialects())(
       await handle?.destroy();
     });
 
-    /** Write a snapshot and, when `applied`, record its migration in the ledger. */
+    /** The error naming a snapshot file the run could not read, as the command prints it. */
+    const unreadable = (name: string) => ({
+      code: "CONFIGURATION_ERROR",
+      logMessage: expect.stringContaining(
+        `meta/${name}.snapshot.json`
+      ) as unknown,
+    });
+
+    /**
+     * Write a snapshot and, when `applied`, record its migration in the ledger. `content` is the
+     * file's text where the test needs one `migrate:create` would never write.
+     */
     async function snapshot(
       name: string,
       fields: unknown[] | null,
-      applied: boolean
+      applied: boolean,
+      content: string = snapshotFile(fields)
     ) {
       writeFileSync(
         join(migrationsDir, "meta", `${name}.snapshot.json`),
-        snapshotFile(fields)
+        content
       );
       if (!applied) return;
       const events = new SchemaEventsRepository(
@@ -110,10 +128,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("reads a Builder collection from its registry row where no applied snapshot records it", async () => {
       const entity = await posts();
-      expect(entity?.applied.source).toBe("registry");
-      expect(entity?.origin).toBe("collection");
+      expect(entity?.applied?.source).toBe("registry");
+      expect(entity?.applied?.origin).toBe("collection");
       expect(entity?.table).toBe("dc_rcposts");
-      expect(entity?.applied.fields.map(f => f.name)).toContain("links");
+      expect(entity?.applied?.fields.map(f => f.name)).toContain("links");
     });
 
     it("takes the newest applied snapshot over the registry row, and skips one not yet applied", async () => {
@@ -122,11 +140,11 @@ describe.each(getConfiguredTestDialects())(
       await snapshot("0003_pending", [{ name: "later", type: "text" }], false);
 
       const entity = await posts();
-      expect(entity?.applied.source).toBe("snapshot");
-      expect(entity?.applied.fields.map(f => f.name)).toEqual(["summary"]);
+      expect(entity?.applied?.source).toBe("snapshot");
+      expect(entity?.applied?.fields.map(f => f.name)).toEqual(["summary"]);
       // The Builder's saved row is the configured definition the next migration will apply.
       expect(entity?.configured?.fields.map(f => f.name)).toContain("links");
-      expect(entity?.origin).toBe("collection");
+      expect(entity?.applied?.origin).toBe("collection");
     });
 
     it("reads no snapshot record for a collection the newest applied snapshot omits", async () => {
@@ -136,8 +154,8 @@ describe.each(getConfiguredTestDialects())(
       await snapshot("0002_removed", null, true);
 
       const entity = await posts();
-      expect(entity?.applied.source).toBe("registry");
-      expect(entity?.applied.fields.map(f => f.name)).toEqual(["links"]);
+      expect(entity?.applied?.source).toBe("registry");
+      expect(entity?.applied?.fields.map(f => f.name)).toEqual(["links"]);
     });
 
     it("reads user fields from the stored definitions", async () => {
@@ -145,8 +163,54 @@ describe.each(getConfiguredTestDialects())(
       expect(await adapter().tableExists("user_field_definitions")).toBe(true);
       const users = (await read()).find(e => e.kind === "userFields");
       expect(users?.table).toBe("user_ext");
-      expect(users?.origin).toBe("userFields");
-      expect(users?.applied.source).toBe("registry");
+      expect(users?.applied?.origin).toBe("userFields");
+      expect(users?.applied?.source).toBe("registry");
+    });
+
+    it("configures a code user field the definitions do not hold yet", async () => {
+      // Declared in code and never synced: the next migration stores it and adds its column.
+      const users = (
+        await read({ fields: [{ name: "rcBadge", type: "text" }] })
+      ).find(e => e.kind === "userFields");
+      expect(users?.applied?.fields.map(f => f.name)).not.toContain("rcBadge");
+      expect(users?.configured?.fields.map(f => f.name)).toContain("rcBadge");
+    });
+
+    it("refuses to judge from an older record where an applied snapshot cannot be read", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_broken", null, true, "{ not json");
+      await expect(read()).rejects.toMatchObject(unreadable("0002_broken"));
+    });
+
+    it("refuses to judge where the newest applied snapshot's entity record is malformed", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot(
+        "0002_malformed",
+        null,
+        true,
+        JSON.stringify({ version: 1, snapshot: { tables: [] }, entities: [] })
+      );
+      await expect(read()).rejects.toMatchObject(unreadable("0002_malformed"));
+    });
+
+    it("reads past an unreadable snapshot whose migration has not been applied", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot("0002_unapplied", null, false, "{ not json");
+      const entity = await posts();
+      expect(entity?.applied?.source).toBe("snapshot");
+      expect(entity?.applied?.fields.map(f => f.name)).toEqual(["price"]);
+    });
+
+    it("reads past an applied snapshot written before snapshots recorded entities", async () => {
+      await snapshot("0001_first", [{ name: "price", type: "number" }], true);
+      await snapshot(
+        "0002_older_format",
+        null,
+        true,
+        JSON.stringify({ version: 1, snapshot: { tables: [] } })
+      );
+      const entity = await posts();
+      expect(entity?.applied?.fields.map(f => f.name)).toEqual(["price"]);
     });
   }
 );

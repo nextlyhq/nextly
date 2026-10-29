@@ -1,4 +1,4 @@
-// Which entities `nextly repair-columns` compares, and the definition each is judged against.
+// Which entities `nextly repair-columns` compares, and the definitions each is judged against.
 //
 // A column is judged against its field as the database last had it applied. Nothing in the
 // database records that today: the registry row is rewritten from the configuration at each start
@@ -7,32 +7,45 @@
 //
 // 1. the newest applied migration snapshot that records entities, where it records this one;
 // 2. where it does not (a site with no migration files, only files written before snapshots
-//    recorded entities, or an entity that snapshot no longer records), the registry row; a row still waiting for a migration then leaves the
-//    applied definition unknown, which the finder reports as pending rather than judging;
-// 3. where there is no row either, the configuration, the only definition there is.
+//    recorded entities, or an entity that snapshot no longer records), the registry row;
+// 3. where there is no row either, or the row still waits for a migration, nothing says what was
+//    applied: the entity awaits a migration, and the finder reports its columns as pending rather
+//    than judging them against a definition no migration has applied.
 //
 // Once `nextly migrate` writes the registry from the applied snapshots, (1) and (2) agree, so the
 // order gives the same answer then as it does now.
 //
-// Pure: the command reads the configuration, the registry and the snapshots, and hands them here.
+// The configured definition is what the next migration would apply: the configuration's for a
+// code-first entity, the Builder manifest's for a Builder entity it declares, else the registry row
+// the Builder saved. Each side carries the builder that makes its tables, since the two can differ.
+//
+// Pure: the command reads the configuration, the manifest, the registry and the snapshots, and
+// hands them here.
 //
 // @module domains/schema/repair-columns/resolve-entities
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { builtByFor, isCodeOwned } from "../pipeline/registered-collections";
+import type { ColumnOrigin } from "../services/field-column-descriptor";
 
-import type { RepairEntity } from "./types";
+import type {
+  AppliedDefinition,
+  EntityDefinition,
+  RepairEntity,
+} from "./types";
 
 /** The three kinds of entity a registry row and a snapshot record. */
 type RecordedKind = "collection" | "single" | "fieldGroup";
 
-/** An entity the configuration declares, with its table name resolved. */
+/** An entity the configuration or the Builder manifest declares, with its table name resolved. */
 export interface ConfiguredEntity {
   kind: RecordedKind;
   slug: string;
   table: string;
   fields: readonly unknown[];
   localized: boolean;
+  /** The builder that will make its tables: code-first for the configuration's, else the Builder's. */
+  origin: ColumnOrigin;
   /** The plugin that contributed the entity, when one did. */
   plugin?: string;
 }
@@ -85,65 +98,63 @@ const NO_SOURCES: EntitySources = {
   recorded: undefined,
 };
 
-/**
- * Who built the table: the registry's ownership where there is a row, else who declared it when
- * the snapshot was written, else code-first, which every configured entity is.
- */
-function isBuilderOwned({ row, recorded }: EntitySources): boolean {
-  if (row !== undefined) {
-    return !isCodeOwned({ locked: row.locked, source: row.source });
-  }
-  return recorded !== undefined && recorded.source === "builder";
-}
+/** Whether the Builder owns a registry row, from the ownership the registry recorded. */
+const isBuilderRow = (row: RegistryEntity) =>
+  !isCodeOwned({ locked: row.locked, source: row.source });
 
 /**
  * The definition the entity's columns are judged against: the newest applied snapshot's, else the
- * registry row's, else the configuration's, in the order the module header gives.
+ * registry row's, in the order the module header gives, or null where neither says what was applied.
+ *
+ * Each names the builder that made the tables as it recorded the owner: the snapshot by who declared
+ * the entity when it was written, the row by the registry's ownership.
  */
 function appliedDefinition({
-  fromConfig,
   row,
   recorded,
-}: EntitySources): RepairEntity["applied"] {
+}: EntitySources): AppliedDefinition | null {
   if (recorded !== undefined) {
     return {
       fields: asFields(recorded.fields),
       localized: recorded.localized,
+      origin: builtByFor(recorded.kind, recorded.source === "builder"),
       source: "snapshot",
     };
   }
-  if (row !== undefined) {
-    return {
-      fields: asFields(row.fields),
-      localized: row.localized === true,
-      source: "registry",
-    };
-  }
+  // A row waiting for its migration describes what that migration will apply, not what was.
+  if (row === undefined || row.migrationStatus === "pending") return null;
   return {
-    fields: asFields(fromConfig?.fields),
-    localized: fromConfig?.localized === true,
-    source: "configuration",
+    fields: asFields(row.fields),
+    localized: row.localized === true,
+    origin: builtByFor(row.kind, isBuilderRow(row)),
+    source: "registry",
   };
 }
 
 /**
- * The definition the configuration holds now, which a pending change is found against.
+ * The definition the next migration would apply, which a pending change is found against.
  *
- * A Builder entity is not in the configuration: the row the Builder saved is its configured
- * definition. A code-first entity the configuration no longer declares has none.
+ * The configuration's or the manifest's where either declares the entity. A Builder entity no
+ * manifest declares has the row the Builder saved. A code-first entity the configuration no longer
+ * declares has none.
  */
-function configuredDefinition(
-  { fromConfig, row }: EntitySources,
-  builderOwned: boolean
-): RepairEntity["configured"] {
+function configuredDefinition({
+  fromConfig,
+  row,
+}: EntitySources): EntityDefinition | null {
   if (fromConfig !== undefined) {
     return {
       fields: asFields(fromConfig.fields),
       localized: fromConfig.localized,
+      origin: fromConfig.origin,
     };
   }
-  if (row !== undefined && builderOwned) {
-    return { fields: asFields(row.fields), localized: row.localized === true };
+  if (row !== undefined && isBuilderRow(row)) {
+    return {
+      fields: asFields(row.fields),
+      localized: row.localized === true,
+      origin: builtByFor(row.kind, true),
+    };
   }
   return null;
 }
@@ -160,14 +171,6 @@ function tableOf({ fromConfig, row, recorded }: EntitySources) {
   return row?.tableName ?? recorded?.table ?? fromConfig?.table;
 }
 
-/**
- * Whether the applied definition is unknown: the registry row waits for a migration and no applied
- * snapshot says what the entity was before it.
- */
-function isAwaitingMigration({ row, recorded }: EntitySources): boolean {
-  return recorded === undefined && row?.migrationStatus === "pending";
-}
-
 /** One entity, from what each source records of it, or null where it cannot be compared. */
 function resolveEntity(sources: EntitySources): RepairEntity | null {
   const identity = sources.fromConfig ?? sources.row ?? sources.recorded;
@@ -176,49 +179,72 @@ function resolveEntity(sources: EntitySources): RepairEntity | null {
   // it, so this is only a guard against a malformed row.
   if (identity === undefined || table === undefined) return null;
 
-  const builderOwned = isBuilderOwned(sources);
+  const applied = appliedDefinition(sources);
+  const configured = configuredDefinition(sources);
+  // A code-first row waiting for a migration the configuration no longer declares: nothing says
+  // what was applied or what will be, so there is nothing to compare its columns with.
+  if (applied === null && configured === null) return null;
+
   const plugin = owningPlugin(sources);
   return {
     kind: identity.kind,
     slug: identity.slug,
     table,
-    origin: builtByFor(identity.kind, builderOwned),
-    applied: appliedDefinition(sources),
-    configured: configuredDefinition(sources, builderOwned),
-    awaitingMigration: isAwaitingMigration(sources),
+    applied,
+    configured,
     ...(plugin !== undefined ? { plugin } : {}),
   };
 }
 
-/** The `user_ext` entity, whose applied definition is the stored user field definitions. */
-function userFieldsEntity(userFields: readonly unknown[]): RepairEntity {
+/**
+ * The user fields `user_ext` is built from: as stored in the definitions, and as the next sync
+ * would store them.
+ */
+export interface UserFieldSources {
+  /** The stored user field definitions, or null where the database has no definitions table. */
+  stored: readonly unknown[] | null;
+  /** The configuration's code fields, then the stored fields the admin added. */
+  configured: readonly unknown[];
+}
+
+/** A user field list as the user-extension builder makes `user_ext` from it. */
+const userFieldsDefinition = (
+  fields: readonly unknown[]
+): EntityDefinition => ({
+  fields: asFields(fields),
+  localized: false,
+  origin: "userFields",
+});
+
+/**
+ * The `user_ext` entity, whose applied definition is the stored user field definitions: no other
+ * record says which user fields were applied. With none stored, they await a migration.
+ */
+function userFieldsEntity(userFields: UserFieldSources): RepairEntity | null {
+  if (userFields.stored === null && userFields.configured.length === 0) {
+    return null;
+  }
   return {
     kind: "userFields",
     slug: "users",
     table: USER_FIELDS_TABLE,
-    origin: "userFields",
-    applied: {
-      fields: asFields(userFields),
-      localized: false,
-      source: "registry",
-    },
-    // No record says which user fields were applied apart from the definitions themselves, so
-    // there is nothing to tell a pending change from.
-    configured: null,
-    awaitingMigration: false,
+    applied:
+      userFields.stored === null
+        ? null
+        : { ...userFieldsDefinition(userFields.stored), source: "registry" },
+    configured: userFieldsDefinition(userFields.configured),
   };
 }
 
 /**
  * One entity per kind and slug, in the order they are first seen: configuration, then registry,
- * then snapshots. `userFields` is the stored user field definitions, or null where they could not
- * be read; user fields are recorded nowhere else, so they are judged against those definitions.
+ * then snapshots, and the user fields last. `userFields` is absent where they could not be read.
  */
 export function resolveRepairEntities(args: {
   configured: readonly ConfiguredEntity[];
   registry: readonly RegistryEntity[];
   snapshots: readonly SnapshotEntity[];
-  userFields?: readonly unknown[] | null;
+  userFields?: UserFieldSources;
 }): RepairEntity[] {
   // One record per entity, in the order it is first seen, each source adding what it records.
   const byEntity = new Map<string, EntitySources>();
@@ -242,8 +268,8 @@ export function resolveRepairEntities(args: {
     if (entity !== null) entities.push(entity);
   }
 
-  if (args.userFields !== undefined && args.userFields !== null) {
-    entities.push(userFieldsEntity(args.userFields));
-  }
+  const users =
+    args.userFields === undefined ? null : userFieldsEntity(args.userFields);
+  if (users !== null) entities.push(users);
   return entities;
 }

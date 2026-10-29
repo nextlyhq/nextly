@@ -262,9 +262,10 @@ const LEGACY_SHAPE_TESTS: ReadonlyArray<
 
 /** The legacy shape the live column holds, or null when it holds none of them. */
 function legacyShape(args: DifferenceCauseArgs): LegacyShape | null {
-  // Every legacy shape is one an earlier collection or field-group generator created. `user_ext`
-  // has only ever been built by the user-extension builder, so none of them can explain its columns.
-  if (args.origin === "userFields") return null;
+  // Every legacy shape is one an earlier collection or field-group generator created on the
+  // entity's own table. `user_ext` has only ever been built by the user-extension builder, and a
+  // translation table only ever from the descriptor, so none of them can explain their columns.
+  if (args.origin === "userFields" || args.translation) return null;
   const liveType = normalizeType(args.live.type);
   const expectedType = normalizeType(args.expected.type);
   const facts: ShapeFacts = {
