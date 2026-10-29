@@ -13,7 +13,7 @@
  * @packageDocumentation
  */
 
-import { actorForUser } from "../../auth/access/resolve-actor";
+import { actorForUserFailingClosed } from "../../auth/access/resolve-actor";
 import { decidedWhole } from "../../auth/access/route-gate-adapters";
 import type { AuthContext } from "../../auth/middleware";
 import {
@@ -409,9 +409,11 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
       // never answered as a visitor's public default.
       if (!args.userId) return false;
       // The one access decision, as every gate asks it, for the resource as
-      // a whole: a rule that answers a filter refuses.
+      // a whole: a rule that answers a filter refuses. A role or grant lookup
+      // that fails counts as holding nothing of its kind, so a check that
+      // cannot read the user refuses rather than throws.
       return decidedWhole(
-        await actorForUser(args.userId),
+        await actorForUserFailingClosed(args.userId),
         args.operation,
         args.resource,
         ctx.rbacAccessControlService
