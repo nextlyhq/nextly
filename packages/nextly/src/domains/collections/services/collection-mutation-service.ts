@@ -11331,6 +11331,25 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The delete gate's answer: allowed, with the delete rule's filter to match
+   * the entry against where it answered one, or the refusal to hand back.
+   * Where the delete does not apply a filter, the gate that refuses one is
+   * asked instead.
+   */
+  private async deleteAccess(
+    accessParams: Parameters<
+      CollectionAccessService["checkCollectionWrite"]
+    >[0],
+    appliesFilter: boolean
+  ): ReturnType<CollectionAccessService["checkCollectionWrite"]> {
+    if (appliesFilter) {
+      return this.accessService.checkCollectionWrite(accessParams);
+    }
+    const denied = await this.accessService.checkCollectionAccess(accessParams);
+    return denied ? { denied } : { denied: null };
+  }
+
+  /**
    * The match a write limited to a rule's filter makes of its entry, prepared
    * before any transaction opens: the filter's facts about the collection are
    * read here, so the match itself can be asked on the write's own
@@ -11577,17 +11596,12 @@ export class CollectionMutationService extends BaseService {
         // super-admin bypass does not apply to a super-admin-owned key here.
         authenticatedScope: params.authenticatedScope,
       };
-      // A delete that does not apply a filter asks the gate that refuses one.
-      let access: { filter?: RuleFilter; read?: ReadReach } = {};
-      if (params.appliesFilter === false) {
-        const denied =
-          await this.accessService.checkCollectionAccess(accessParams);
-        if (denied) return denied;
-      } else {
-        const verdict =
-          await this.accessService.checkCollectionWrite(accessParams);
-        if (verdict.denied) return verdict.denied;
-        access = verdict;
+      const access = await this.deleteAccess(
+        accessParams,
+        params.appliesFilter !== false
+      );
+      if (access.denied) {
+        return access.denied;
       }
       // An entry outside the filter is refused before any hook runs, and asked
       // again under the row lock below, so the entry removed is the one judged.
