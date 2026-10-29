@@ -172,9 +172,10 @@ export function relatedRowReads(
 ): Promise<boolean> {
   // What the service registers now; without one, the rules the app declared
   // stand in, which no answer kept without the service reads.
+  const undeclared: AccessTarget = { kind: "collection", slug };
   const target = rbac
-    ? (rbac.getRegisteredTarget(slug) ?? { kind: "collection" as const, slug })
-    : targetAsDeclared({ kind: "collection", slug });
+    ? (rbac.getRegisteredTarget(slug) ?? undeclared)
+    : targetAsDeclared(undeclared);
   const scope = caller.scope?.actorType === "apiKey" ? caller.scope : undefined;
   // A plugin's person is judged first, as the person, whatever user the read
   // also names; a user is judged by the roles their lookup finds, never by
@@ -190,11 +191,14 @@ export function relatedRowReads(
   }
   // A read with no user is a visitor's, a key scope included, as it was
   // before: no door populates for a key without naming the user it acts for.
+  // Without the service a visitor is judged as its direct read is, by the
+  // Public role's read alone: that gate has no rule registered, so a rule the
+  // process declared for the slug, perhaps for another instance, is neither
+  // asked nor run here.
   if (!caller.user) {
-    return visitorReads(
-      target,
-      rbac ? undefined : caller.visitorWithoutService
-    );
+    return rbac
+      ? visitorReads(target, undefined)
+      : visitorReads(undeclared, caller.visitorWithoutService);
   }
   if (scope) return keyReads(target, scope, caller.user, rbac);
   return userReads(target, caller.user.id, rbac);
