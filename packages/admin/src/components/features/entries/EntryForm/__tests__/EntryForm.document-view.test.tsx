@@ -356,8 +356,6 @@ describe("EntryForm with a document view", () => {
       registerComponent(VIEW, SlowView);
       const element = (locale?: string) => (
         <EntryForm
-          collection={collection}
-          entry={entry}
           mode="edit"
           onCancel={onCancel}
           documentView={{ component: VIEW, onExit }}

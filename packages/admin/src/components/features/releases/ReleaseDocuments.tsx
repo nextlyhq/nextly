@@ -313,7 +313,7 @@ function ReadinessPanel({
         "flex flex-col gap-3 rounded-lg border px-4 py-3 sm:flex-row sm:items-center",
         headline.tone === "ready"
           ? "border-border bg-card"
-          : "border-destructive/40 bg-destructive/5"
+          : "border-destructive bg-destructive/5"
       )}
     >
       <Icon

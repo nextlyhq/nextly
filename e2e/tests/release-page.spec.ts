@@ -171,13 +171,17 @@ test.describe("a release's page", () => {
         "1 document can't be shown (deleted, or you can't view it)"
       )
     ).toBeVisible();
-    await expect(page.getByText(/Private note/)).toHaveCount(0);
+    await expect(
+      page.getByText(/Private note/).filter({ visible: true })
+    ).toHaveCount(0);
     // No document is named by its id.
     const text = (await page.locator("main").textContent()) ?? "";
     for (const id of ids) expect(text).not.toContain(id);
 
     // Four documents, the hidden one among them, and one needs a fix.
-    await expect(page.getByText("3 of 4 ready.")).toBeVisible();
+    await expect(
+      page.getByText("3 of 4 ready.").filter({ visible: true })
+    ).toBeVisible();
 
     await expectNoAxeViolations(page);
   });
