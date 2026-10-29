@@ -18,6 +18,7 @@ const seedPublicRole = vi.fn();
 const seedPublicReadGrants = vi.fn();
 const withdrawUndeclaredPluginGrants = vi.fn();
 const seedPluginRoles = vi.fn();
+const rolesHoldingRetiredManage = vi.fn();
 
 /** The registered adapter: one object per registration of the services. */
 let adapter = { getCapabilities: () => ({ dialect: "postgresql" }) };
@@ -58,6 +59,10 @@ vi.mock("../../domains/auth/services/public-read-grant", () => ({
   withdrawUndeclaredPluginGrants,
 }));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
+vi.mock("../../domains/auth/retired-manage", () => ({
+  rolesHoldingRetiredManage,
+  formatRetiredManageWarning: () => "roles holding a retired permission",
+}));
 
 const { awaitBootSeeding, holdBootSeeding, seedPermissionsAndRolePresets } =
   await import("../seed-permissions");
@@ -82,6 +87,7 @@ beforeEach(() => {
   seedPublicRole.mockResolvedValue({ made: true });
   seedPublicReadGrants.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
+  rolesHoldingRetiredManage.mockResolvedValue([]);
 });
 
 describe("seedPermissionsAndRolePresets", () => {
@@ -90,6 +96,7 @@ describe("seedPermissionsAndRolePresets", () => {
     seedRolePresets.mockRejectedValue(missingTable());
     seedPublicRole.mockRejectedValue(missingTable());
     seedPluginRoles.mockRejectedValue(missingTable());
+    rolesHoldingRetiredManage.mockRejectedValue(missingTable());
 
     await expect(seedPermissionsAndRolePresets()).resolves.toBeUndefined();
 
