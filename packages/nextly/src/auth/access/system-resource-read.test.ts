@@ -70,6 +70,8 @@ const table: [string, string, boolean, boolean][] = [
   ["visitor", "media", false, false],
   ["visitor", "users", false, false],
   ["visitor-granted", "media", true, true],
+  // Public's `read-users` reaches no visitor: media is the one it reads.
+  ["visitor-granted", "users", false, false],
   ["principal", "media", false, false],
   ["user-media", "media", true, false],
   ["user-media", "users", false, false],
