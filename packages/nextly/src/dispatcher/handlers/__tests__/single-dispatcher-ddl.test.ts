@@ -358,6 +358,34 @@ describe("createSingle — what the request forwards into the DDL", () => {
     expect(executed).toEqual([]);
   });
 
+  it("names both addresses when a Single of the same snake_case form also owns the table", async () => {
+    // `team-updates` holds `single_team_updates`, so the table-family check would refuse
+    // `team_updates` too, with a message naming neither. The address check comes first.
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    adapter.select = vi.fn(async (table: string) =>
+      table === "dynamic_singles" ? [{ id: "s_1", slug: "team-updates" }] : []
+    );
+    const registry = wireRegistry();
+    registry.getAllSingles.mockResolvedValue([
+      { slug: "team-updates", tableName: "single_team_updates" },
+    ]);
+
+    await expect(
+      dispatchSingles("createSingle", {}, { ...base, slug: "team_updates" })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "SLUG_SAME_SNAKE_CASE",
+            message: expect.stringMatching(/single 'team-updates'/),
+          },
+        ],
+      },
+    });
+    expect(executed).toEqual([]);
+  });
+
   /**
    * The dialect comes from the adapter that will run the statements, never from the service's own
    * default. That default is `postgresql` and the environment variable behind it is optional, so an

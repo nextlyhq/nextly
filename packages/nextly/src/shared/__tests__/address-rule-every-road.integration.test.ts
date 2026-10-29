@@ -19,6 +19,9 @@
  * database on PostgreSQL and MySQL, one in-memory SQLite connection otherwise.
  */
 import { randomBytes } from "node:crypto";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,9 +48,11 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import { DynamicCollectionRegistryService } from "../../domains/dynamic-collections/services/dynamic-collection-registry-service";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { ServiceContainer } from "../../services";
 import { judgeAddress } from "../address-rule";
+import { consoleLogger } from "../types";
 import { _resetEnvCache } from "../lib/env";
 
 const SERVER_URL_ENV = {
@@ -57,19 +62,39 @@ const SERVER_URL_ENV = {
 
 interface CaseDatabase {
   adapter: DrizzleAdapter;
+  /**
+   * Connect again. A refused start shuts the services down and disconnects the adapter it was
+   * given, so a case that inspects the database after one reconnects first.
+   */
+  reopen(): Promise<void>;
   close(): Promise<void>;
 }
 
-/** A database every boot of one case connects to, dropped by `close`. */
+/**
+ * A database every boot of one case connects to, dropped by `close`: a throwaway database on
+ * PostgreSQL and MySQL, and a temporary file on SQLite, so it survives a reconnect.
+ */
 async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
   if (dialect === "sqlite") {
     vi.stubEnv("DB_DIALECT", "sqlite");
     _resetEnvCache();
-    const adapter = (await createAdapter({
-      type: "sqlite",
-      memory: true,
-    } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
-    return { adapter, close: () => adapter.disconnect() };
+    const dir = await mkdtemp(join(tmpdir(), "nextly-address-rule-"));
+    const connect = async () =>
+      (await createAdapter({
+        type: "sqlite",
+        url: `file:${join(dir, "test.db")}`,
+      } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+    const database: CaseDatabase = {
+      adapter: await connect(),
+      async reopen() {
+        database.adapter = await connect();
+      },
+      async close() {
+        await database.adapter.disconnect().catch(() => {});
+        await rm(dir, { recursive: true, force: true });
+      },
+    };
+    return database;
   }
   const serverUrl = process.env[SERVER_URL_ENV[dialect]];
   if (!serverUrl) throw new Error(`${SERVER_URL_ENV[dialect]} is not set`);
@@ -83,18 +108,24 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
   url.pathname = `/${name}`;
   vi.stubEnv("DATABASE_URL", url.toString());
   _resetEnvCache();
-  const adapter = (await createAdapter({
-    type: dialect,
-    url: url.toString(),
-  })) as unknown as DrizzleAdapter;
-  return {
-    adapter,
+  const connect = async () =>
+    (await createAdapter({
+      type: dialect,
+      url: url.toString(),
+    })) as unknown as DrizzleAdapter;
+  const database: CaseDatabase = {
+    adapter: await connect(),
+    async reopen() {
+      await database.adapter.disconnect().catch(() => {});
+      database.adapter = await connect();
+    },
     async close() {
-      await adapter.disconnect().catch(() => {});
+      await database.adapter.disconnect().catch(() => {});
       await server.executeQuery(dropDatabaseStatement(dialect, name));
       await server.disconnect();
     },
   };
+  return database;
 }
 
 /** Addresses the rule refuses for a reason other than a shared snake_case form. */
@@ -106,20 +137,54 @@ const REGISTRY = {
   fieldGroup: STORAGE_FORMAT.registryTable,
 } as const;
 
-/** What a refusal must leave as it was: the registry's addresses and the tables. */
+/** Where the app under test keeps its files: the Builder writes its migrations below it. */
+let projectRoot: string;
+
+/** The migration files the Builder has written for the app under test. */
+async function migrationFiles(): Promise<string[]> {
+  return (
+    await readdir(join(projectRoot, "src/db/migrations/dynamic")).catch(
+      () => [] as string[]
+    )
+  ).sort();
+}
+
+/**
+ * What a refusal must leave as it was: the registry's addresses, the tables and the migrations
+ * folder. The registry is read with a plain query, which a connection without the boot's table
+ * resolver can run.
+ */
 async function stateOf(
   adapter: DrizzleAdapter,
   kind: keyof typeof REGISTRY
-): Promise<{ addresses: string[]; tables: boolean[] }> {
-  const rows = await adapter.select<{ slug: string }>(REGISTRY[kind], {
-    columns: ["slug"],
-  });
+): Promise<{ addresses: string[]; tables: boolean[]; migrations: string[] }> {
+  const rows = await adapter.executeQuery<{ slug: string }>(
+    `SELECT slug FROM ${REGISTRY[kind]}`
+  );
   const tables = await Promise.all(
     ["dc_team_updates", "single_team_updates", "comp_team_updates"].map(t =>
       adapter.tableExists(t)
     )
   );
-  return { addresses: rows.map(r => r.slug).sort(), tables };
+  return {
+    addresses: rows.map(r => r.slug).sort(),
+    tables,
+    migrations: await migrationFiles(),
+  };
+}
+
+/**
+ * A Builder collection create, as a development server runs it: only there does the save apply
+ * its DDL before recording the collection.
+ */
+async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = "development";
+  try {
+    return await run();
+  } finally {
+    process.env.NODE_ENV = previous;
+  }
 }
 
 /** The refusal's message, or `null` when the call went through. */
@@ -152,7 +217,21 @@ for (const dialect of getConfiguredTestDialects()) {
       return current;
     }
 
+    /** A start the rule refuses, and a reconnect so the database can be inspected after it. */
+    async function refusedBoot(
+      config: Parameters<typeof createTestNextly>[0]
+    ): Promise<void> {
+      await expect(boot(config)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      current = undefined;
+      clearServices();
+      await database.reopen();
+    }
+
     beforeEach(async () => {
+      projectRoot = await mkdtemp(join(tmpdir(), "nextly-address-app-"));
+      vi.spyOn(process, "cwd").mockReturnValue(projectRoot);
       database = await openDatabase(dialect);
     });
 
@@ -160,21 +239,25 @@ for (const dialect of getConfiguredTestDialects()) {
       clearServices();
       current = undefined;
       await database.close();
+      vi.restoreAllMocks();
+      await rm(projectRoot, { recursive: true, force: true });
       vi.unstubAllEnvs();
       _resetEnvCache();
     });
 
     describe("a collection", () => {
       const create = (name: string) =>
-        dispatchCollections(
-          {} as ServiceContainer,
-          "createCollection",
-          {},
-          {
-            name,
-            label: "Team updates",
-            fields: BODY,
-          }
+        inDevelopment(() =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "createCollection",
+            {},
+            {
+              name,
+              label: "Team updates",
+              fields: BODY,
+            }
+          )
         );
 
       it("is created through a Builder save under a hyphen, and refused a twin or a refused address", async () => {
@@ -226,14 +309,12 @@ for (const dialect of getConfiguredTestDialects()) {
         // The configuration is handed over as written, not through `defineCollection`, so the start
         // is what judges it: the road `define*` cannot finish on its own.
         for (const address of ["team_updates", ...REFUSED]) {
-          await expect(
-            boot({
-              collections: [
-                teamUpdates,
-                { slug: address, fields: [text({ name: "body" })] } as never,
-              ],
-            })
-          ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+          await refusedBoot({
+            collections: [
+              teamUpdates,
+              { slug: address, fields: [text({ name: "body" })] } as never,
+            ],
+          });
           expect(await stateOf(database.adapter, "collection")).toEqual(before);
         }
       });
@@ -297,14 +378,12 @@ for (const dialect of getConfiguredTestDialects()) {
 
         const before = await stateOf(database.adapter, "single");
         for (const address of ["team_updates", ...REFUSED]) {
-          await expect(
-            boot({
-              singles: [
-                teamUpdates,
-                { slug: address, fields: [text({ name: "body" })] } as never,
-              ],
-            })
-          ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+          await refusedBoot({
+            singles: [
+              teamUpdates,
+              { slug: address, fields: [text({ name: "body" })] } as never,
+            ],
+          });
           expect(await stateOf(database.adapter, "single")).toEqual(before);
         }
       });
@@ -313,28 +392,30 @@ for (const dialect of getConfiguredTestDialects()) {
     describe("a field group", () => {
       /** A collection holding the field group, so an entry of it can be written and read. */
       async function writeAndRead(t: TestNextly): Promise<string | undefined> {
-        await dispatchCollections(
-          {} as ServiceContainer,
-          "createCollection",
-          {},
-          {
-            name: "holders",
-            label: "Holders",
-            fields: [
-              { name: "update", type: "component", component: "team-updates" },
-            ],
-          }
+        await inDevelopment(() =>
+          dispatchCollections(
+            {} as ServiceContainer,
+            "createCollection",
+            {},
+            {
+              name: "holders",
+              label: "Holders",
+              fields: [
+                { name: "news", type: "component", component: "team-updates" },
+              ],
+            }
+          )
         );
         const written = await t.nextly.create({
           collection: "holders",
-          data: { title: "One", update: { body: "hello" } },
+          data: { title: "One", news: { body: "hello" } },
         });
         const read = await t.nextly.findByID({
           collection: "holders",
           id: (written.item as { id: string }).id,
           depth: 1,
         });
-        return (read as { update?: { body?: string } } | null)?.update?.body;
+        return (read as { news?: { body?: string } } | null)?.news?.body;
       }
 
       const roads = {
@@ -391,14 +472,12 @@ for (const dialect of getConfiguredTestDialects()) {
 
         const before = await stateOf(database.adapter, "fieldGroup");
         for (const address of ["team_updates", ...REFUSED]) {
-          await expect(
-            boot({
-              fieldGroups: [
-                teamUpdates,
-                { slug: address, fields: [text({ name: "body" })] } as never,
-              ],
-            })
-          ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+          await refusedBoot({
+            fieldGroups: [
+              teamUpdates,
+              { slug: address, fields: [text({ name: "body" })] } as never,
+            ],
+          });
           expect(await stateOf(database.adapter, "fieldGroup")).toEqual(before);
         }
       });
@@ -439,12 +518,21 @@ for (const dialect of getConfiguredTestDialects()) {
           );
         }
 
-        // Edited in the Builder: a field added to the collection under `admin`.
+        // Edited in the Builder: a field added to the collection under `admin`, applied as the
+        // Builder's save applies it.
+        const { schemaVersion } = (await new DynamicCollectionRegistryService(
+          t.adapter as never,
+          consoleLogger
+        ).getCollection("admin")) as { schemaVersion?: number };
         await dispatchCollections(
           {} as ServiceContainer,
-          "updateCollection",
+          "applySchemaChanges",
           { collectionName: "admin" },
-          { fields: [...BODY, { name: "summary", type: "text" }] }
+          {
+            fields: [...BODY, { name: "summary", type: "text" }],
+            confirmed: true,
+            schemaVersion: schemaVersion ?? 1,
+          }
         );
         const edited = await t.nextly.create({
           collection: "admin",

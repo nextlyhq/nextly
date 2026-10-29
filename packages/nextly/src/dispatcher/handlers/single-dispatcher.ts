@@ -563,6 +563,22 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
 
+      // Refused for a slug a COLLECTION already owns, one reserved by a system resource, or one
+      // with the same snake_case form as another collection's or Single's address; asked before
+      // the table-family check below so that refusal names both addresses. `registerSingle` makes
+      // this check too, but it makes it after the table has been created, so a conflicting slug
+      // rejected the request and left `single_<slug>` behind with nothing describing it. Checked
+      // here, the rejection costs nothing and creates nothing. The registry keeps its own call
+      // because other callers reach it without passing through this handler.
+      const conflictAdapter = container.has("adapter")
+        ? container.get<DrizzleAdapter>("adapter")
+        : undefined;
+      if (conflictAdapter) {
+        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug, {
+          addressKind: "single",
+        });
+      }
+
       // Refused before any DDL runs, and keyed on the TABLE FAMILY rather than the slug. A slug is
       // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
       // while looking like two free slugs — and a Single's storage spans its main table AND the
@@ -580,21 +596,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             tableName,
             ownedBy: owner.slug,
           },
-        });
-      }
-
-      // The same refusal for a slug a COLLECTION already owns, or one reserved by a system
-      // resource. `registerSingle` makes this check too, but it makes it after the table has been
-      // created, so a conflicting slug rejected the request and left `single_<slug>` behind with
-      // nothing describing it. Checked here, the rejection costs nothing and creates nothing.
-      // The registry keeps its own call because other callers reach it without passing through
-      // this handler.
-      const conflictAdapter = container.has("adapter")
-        ? container.get<DrizzleAdapter>("adapter")
-        : undefined;
-      if (conflictAdapter) {
-        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug, {
-          addressKind: "single",
         });
       }
 
