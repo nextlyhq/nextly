@@ -758,9 +758,6 @@ service key-full-access update collection returns-filter at widget  # holds-perm
 service key-role-based update collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-role-based-super-admin update collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-partial update collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-full-access delete collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based delete collection returns-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin delete collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-full-access publish collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-role-based publish collection returns-filter at widget  # holds-permission-key-skips-rules
 service key-role-based-super-admin publish collection returns-filter at widget  # holds-permission-key-skips-rules
@@ -792,9 +789,6 @@ service key-full-access update collection async-filter at widget  # holds-permis
 service key-role-based update collection async-filter at widget  # holds-permission-key-skips-rules
 service key-role-based-super-admin update collection async-filter at widget  # holds-permission-key-skips-rules
 service key-partial update collection async-filter at widget  # holds-permission-key-skips-rules
-service key-full-access delete collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based delete collection async-filter at widget  # holds-permission-key-skips-rules
-service key-role-based-super-admin delete collection async-filter at widget  # holds-permission-key-skips-rules
 service key-full-access publish collection async-filter at widget  # holds-permission-key-skips-rules
 service key-role-based publish collection async-filter at widget  # holds-permission-key-skips-rules
 service key-role-based-super-admin publish collection async-filter at widget  # holds-permission-key-skips-rules
@@ -1042,3 +1036,23 @@ service visitor read collection async-filter at direct  # visitor-public-default
 service visitor read collection async-filter at service  # visitor-public-default
 service visitor read collection returns-filter at direct  # visitor-public-default
 service visitor read collection returns-filter at service  # visitor-public-default
+service custom-role delete collection async-filter at rest
+service custom-role delete collection async-filter at route  # filter-not-applied
+service custom-role delete collection returns-filter at rest
+service custom-role delete collection returns-filter at route  # filter-not-applied
+service key-full-access delete collection async-filter at rest
+service key-full-access delete collection async-filter at route  # filter-not-applied
+service key-full-access delete collection returns-filter at rest
+service key-full-access delete collection returns-filter at route  # filter-not-applied
+service key-role-based delete collection async-filter at rest
+service key-role-based delete collection async-filter at route  # filter-not-applied
+service key-role-based delete collection returns-filter at rest
+service key-role-based delete collection returns-filter at route  # filter-not-applied
+service key-role-based-super-admin delete collection async-filter at rest
+service key-role-based-super-admin delete collection async-filter at route  # filter-not-applied
+service key-role-based-super-admin delete collection returns-filter at rest
+service key-role-based-super-admin delete collection returns-filter at route  # filter-not-applied
+service user-with delete collection async-filter at rest
+service user-with delete collection async-filter at route  # filter-not-applied
+service user-with delete collection returns-filter at rest
+service user-with delete collection returns-filter at route  # filter-not-applied

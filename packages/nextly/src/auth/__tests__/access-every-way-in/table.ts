@@ -714,7 +714,8 @@ function rulesLet(
   const says = RULE_SAYS[rule](action, caller);
   if (says === "filter") {
     const collection = target !== "single" && target !== "single-pub";
-    return action === "read" && collection ? "matching" : "none";
+    const applied = action === "read" || FILTERED_WRITES.has(action);
+    return applied && collection ? "matching" : "none";
   }
   return says === null || says === true ? "all" : "none";
 }
@@ -727,7 +728,33 @@ function rulesLet(
 function answerFor(row: Row, lets: RulesLet): Verdict {
   if (lets === "none") return "refuse";
   if (lets === "all") return "allow";
-  return row.action === "list" || row.action === "count" ? "matching" : "allow";
+  const many = row.action === "list" || row.action === "count";
+  return many || FILTERED_WRITES.has(row.action) ? "matching" : "allow";
+}
+
+/**
+ * The writes a rule's filter limits to the entries it matches. Each asks an
+ * entry inside the filter and its twin outside it, so its answer can show
+ * that the one was changed and the other refused and left as it was.
+ */
+export const FILTERED_WRITES: ReadonlySet<Action> = new Set<Action>(["delete"]);
+
+/** Whether a rule answers its collection's writes with a filter. */
+export function isFilterRule(rule: Rule): boolean {
+  return RULE_SAYS[rule]("delete", "user-with") === "filter";
+}
+
+/**
+ * Whether a door asks the row's write of an entry outside the rule's filter as
+ * well as of one inside it: a filtered write of a collection whose rule
+ * answers with a filter.
+ */
+export function hasOutsideTwin(row: Row): boolean {
+  return (
+    row.target === "collection" &&
+    FILTERED_WRITES.has(row.action) &&
+    isFilterRule(row.rule)
+  );
 }
 
 /**
@@ -754,7 +781,8 @@ function answerFor(row: Row, lets: RulesLet): Verdict {
  * - a collection's read rule may answer a well-formed filter instead of
  *   `true`, which allows the entries it matches: a list or a count returns
  *   those alone, and a read of the probe entry, which it matches, is allowed.
- *   A filter from any other rule refuses.
+ *   A delete rule may answer one too: the entry inside it is deleted and its
+ *   twin outside it refused. A filter from any other rule refuses.
  */
 export function oneAnswer(row: Row): Verdict {
   if (row.action === "new-pub") {
@@ -785,13 +813,31 @@ export function oneAnswer(row: Row): Verdict {
   return answerFor(row, rulesLet(rule, action, caller, target));
 }
 
+/**
+ * The doors that answer yes or no about a collection, not about one entry.
+ * Where the one answer lets the caller act on the entries a filter matches,
+ * theirs is yes: the caller may act on the collection, on those entries.
+ */
+const COLLECTION_DOORS: ReadonlySet<Door> = new Set<Door>([
+  "can",
+  "capabilities",
+  "widget",
+]);
+
+/** The one answer as `door` gives it (see {@link COLLECTION_DOORS}). */
+export function oneAnswerAt(row: Row, door: Door): Verdict {
+  const answer = oneAnswer(row);
+  return answer === "matching" && COLLECTION_DOORS.has(door) ? "allow" : answer;
+}
+
 // ---------------------------------------------------------------------------
 // The answers file
 // ---------------------------------------------------------------------------
 
 /**
  * One door's answer as the file spells it: `A` allowed, `M` a list or a count
- * that returned only the entries a rule's filter matches, `R` refused, an HTTP
+ * that returned only the entries a rule's filter matches, or a filtered write
+ * that changed the entry inside the filter and refused its twin, `R` refused, an HTTP
  * status for a refusal or failure that carried one, `E` for a failure without
  * one, and `.` where the door does not ask the row. `S` is a media row a read
  * was refused and still populated with its file, its internal columns taken
