@@ -325,59 +325,35 @@ function onlyOnClose(triggers) {
   return events.length === 1 && String(events[0][1]?.types) === "closed";
 }
 
-describe("Integration on request", () => {
+describe("Integration on every pull-request push", () => {
   /*
-   * A pull request runs the database legs only while it carries the
-   * `run-integration` label; the queue and `main` always run them. One step of
-   * the `changes` job answers (`scripts/integration-request.mjs`, tested on its
-   * own), so each leg's condition reads the same for every event, as the queue
-   * checks below require. Adding the label is a separate workflow's job, so no
-   * other label ever starts an Integration run.
+   * A pull request runs the database legs on every push that changes more
+   * than documentation, as the queue and `main` do. The legs skip for two
+   * reasons only: a newer push to `main` already tests this commit, or the
+   * change is documentation alone. A label or a path rule would skip changes
+   * that later break `main`, so neither may gate them.
    */
   const workflow = read(".github/workflows/integration.yml");
-  const request = read(".github/workflows/integration-request.yml");
+  const legs = Object.values(workflow.jobs).filter(job => String(job.name).startsWith("Integration ("));
 
-  it("asks one unconditional step, whose output is the answer", () => {
-    const step = workflow.jobs.changes.steps.find(candidate => candidate.id === "requested");
-    expect(step.run).toBe("node scripts/integration-request.mjs requested");
-    expect(step.if).toBeUndefined();
-    expect(workflow.jobs.changes.outputs.requested).toBe("${{ steps.requested.outputs.requested }}");
-    expect(workflow.jobs.changes.permissions["pull-requests"]).toBe("read");
-  });
-
-  it("skips a leg only on an answer of no, so a question that failed still runs it", () => {
+  it("skips a leg only when the commit is superseded or the change is documentation", () => {
     // Every job of a leg, the shards that run the suite and the required check
     // that reads them, so neither runs where the other skips.
-    const legs = Object.values(workflow.jobs).filter(job => String(job.name).startsWith("Integration ("));
     for (const check of QUEUE_CHECKS[".github/workflows/integration.yml"]) expect(legs.map(leg => leg.name)).toContain(check);
-    for (const leg of legs) expect(leg.if, leg.name).toContain("needs.changes.outputs.requested != 'false'");
+    for (const leg of legs) {
+      const outputs = [...String(leg.if).matchAll(/needs\.changes\.outputs\.([\w-]+)/g)].map(match => match[1]);
+      expect(new Set(outputs), leg.name).toEqual(new Set(["superseded", "inert"]));
+    }
   });
 
-  it("is not started by a label, so another label cannot repeat, cancel or hide a run", () => {
+  it("reads no pull request labels, so none can turn the legs off", () => {
+    expect(workflow.jobs.changes.permissions?.["pull-requests"]).toBeUndefined();
+    expect(Object.keys(workflow.jobs.changes.outputs).sort()).toEqual(["inert", "superseded"]);
+  });
+
+  it("is not started by a label, so a label cannot repeat, cancel or hide a run", () => {
     const types = triggersOf(workflow).pull_request?.types;
     expect(types ?? ["opened", "synchronize", "reopened"]).not.toContain("labeled");
-  });
-
-  it("leaves adding the label to a workflow that only re-runs, and only for that label", () => {
-    expect(triggersOf(request)).toEqual({ pull_request: { branches: ["main"], types: ["labeled"] } });
-    const jobs = Object.values(request.jobs);
-    expect(jobs.length).toBe(1);
-    expect(jobs[0].if).toBe("github.event.label.name == 'run-integration'");
-    expect(jobs[0].steps.at(-1).run).toBe("node scripts/integration-request.mjs rerun");
-    expect(request.permissions).toEqual({ contents: "read" });
-    expect(jobs[0].permissions).toEqual({ contents: "read", actions: "write" });
-  });
-
-  it("keys the request by the label too, so another label never cancels a waiting request", () => {
-    const group = String(request.concurrency.group);
-    const groupFor = (label, run) =>
-      group.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) =>
-        String(evaluate(conditionTokens(expression), expression, { "github.event.pull_request.number": 7, "github.event.label.name": label, "github.run_id": run, "github.sha": `sha-${run}` }))
-      );
-    expect(groupFor("run-integration", 1)).not.toBe(groupFor("enhancement", 1));
-    // Two separate requests for the same pull request share one group, so the later replaces the earlier.
-    expect(groupFor("run-integration", 1)).toBe(groupFor("run-integration", 2));
-    expect(request.concurrency["cancel-in-progress"]).toBe(true);
   });
 });
 
