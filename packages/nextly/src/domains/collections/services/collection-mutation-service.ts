@@ -38,6 +38,10 @@ import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 // PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
 import { toDbError } from "../../../database/errors";
+import {
+  asNotMigrated,
+  collectionNotMigrated,
+} from "../../../database/with-db-errors";
 // The public CollectionServiceResult shape is preserved because the legacy
 // CollectionEntryService facade and CollectionBulkService still consume it;
 // only the internal error mapping changed. fromDatabaseError keeps driver
@@ -4067,7 +4071,11 @@ export class CollectionMutationService extends BaseService {
       };
     } catch (error: unknown) {
       return errorToServiceResult(
-        error,
+        // A write the database is not migrated for answers as such.
+        await asNotMigrated(
+          error,
+          collectionNotMigrated(this.collectionService, params.collectionName)
+        ),
         { defaultMessage: "Failed to take the live values" },
         this.dialect
       );
@@ -6105,7 +6113,11 @@ export class CollectionMutationService extends BaseService {
       // Pass dialect explicitly so the helper can normalise raw driver errors.
       return {
         ...errorToServiceResult(
-          error,
+          // A write the database is not migrated for answers as such.
+          await asNotMigrated(
+            error,
+            collectionNotMigrated(this.collectionService, params.collectionName)
+          ),
           { defaultMessage: "Failed to create entry" },
           this.dialect
         ),
@@ -11297,7 +11309,11 @@ export class CollectionMutationService extends BaseService {
       // Pass dialect explicitly so the helper can normalise raw driver errors.
       return {
         ...errorToServiceResult(
-          error,
+          // A write the database is not migrated for answers as such.
+          await asNotMigrated(
+            error,
+            collectionNotMigrated(this.collectionService, params.collectionName)
+          ),
           { defaultMessage: "Failed to update entry" },
           this.dialect
         ),
@@ -11725,7 +11741,12 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
         committed: committedWrite,
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A delete the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName)
+      );
       return {
         success: false,
         statusCode: 500,
@@ -12305,7 +12326,16 @@ export class CollectionMutationService extends BaseService {
       if (isWriteIntegrityFailure(error)) throw error;
       return {
         ...errorToServiceResult(
-          error,
+          // A write the database is not migrated for answers as such. Read on
+          // the batch's own transaction, which holds this write's connection.
+          await asNotMigrated(
+            error,
+            collectionNotMigrated(
+              this.collectionService,
+              params.collectionName,
+              tx.getDrizzle()
+            )
+          ),
           { defaultMessage: options.failureMessage },
           this.dialect
         ),
@@ -13534,7 +13564,16 @@ export class CollectionMutationService extends BaseService {
       if (isWriteIntegrityFailure(error)) throw error;
       return {
         ...errorToServiceResult(
-          error,
+          // A write the database is not migrated for answers as such. Read on
+          // the batch's own transaction, which holds this write's connection.
+          await asNotMigrated(
+            error,
+            collectionNotMigrated(
+              this.collectionService,
+              params.collectionName,
+              tx.getDrizzle()
+            )
+          ),
           { defaultMessage: options.failureMessage },
           this.dialect
         ),

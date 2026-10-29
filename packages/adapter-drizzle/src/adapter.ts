@@ -62,7 +62,11 @@ import type {
   AlterTableOperation,
   TableResolver,
 } from "./types";
-import { createDatabaseError, isDatabaseError } from "./types";
+import {
+  createDatabaseError,
+  isDatabaseError,
+  tableNotRegisteredError,
+} from "./types";
 import { buildUpdateStatement } from "./update-statement";
 
 /**
@@ -881,7 +885,8 @@ export abstract class DrizzleAdapter {
    * Set the table resolver for Drizzle query API support.
    * When a resolver is set, CRUD methods (select, insert, update, delete, upsert)
    * will use Drizzle's query API (db.select().from(), etc.) instead of raw SQL
-   * string building. Falls back to raw SQL if the resolver doesn't have the table.
+   * string building. A table the resolver does not hold is refused with
+   * `TABLE_NOT_REGISTERED_CODE` (`tableNotRegisteredError`).
    *
    * @param resolver - TableResolver implementation (e.g. SchemaRegistry)
    */
@@ -1648,12 +1653,9 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    // Table not found in schema registry - cannot use Drizzle query API
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    // A table the resolver does not hold: refused with the adapters' own code,
+    // so core answers it as an entity this instance has not registered.
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -1680,11 +1682,7 @@ export abstract class DrizzleAdapter {
   private requireTableObject(table: string): unknown {
     const tableObj = this.getTableObject(table);
     if (tableObj) return tableObj;
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -1888,11 +1886,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -2003,11 +1997,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -2055,11 +2045,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -2112,11 +2098,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   /**
@@ -2248,11 +2230,7 @@ export abstract class DrizzleAdapter {
       }
     }
 
-    throw this.createDatabaseError(
-      "query",
-      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-      undefined
-    );
+    throw tableNotRegisteredError(table);
   }
 
   // ============================================================
@@ -2894,11 +2872,7 @@ export abstract class DrizzleAdapter {
   private resolvedTableObject(table: string): Record<string, unknown> {
     const tableObj = this.getTableObject(table);
     if (!tableObj || typeof tableObj !== "object") {
-      throw this.createDatabaseError(
-        "query",
-        `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
-        undefined
-      );
+      throw tableNotRegisteredError(table);
     }
     return tableObj as Record<string, unknown>;
   }

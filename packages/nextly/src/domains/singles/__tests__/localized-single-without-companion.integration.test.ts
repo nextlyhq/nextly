@@ -191,8 +191,13 @@ describe.each(getConfiguredTestDialects())(
       const result = await service.get("swin_settings", { locale: "en" });
 
       expect(result.success).toBe(false);
-      // The canonical envelope, not the driver's text.
-      expect(result.message).not.toMatch(/headline|_locales|column|relation/i);
+      // A declared field's column is missing, so the answer names the field and what to run;
+      // the companion table, and the driver's wording around it, stay off the wire.
+      expect(result).toMatchObject({
+        code: "ENTITY_NOT_MIGRATED",
+        publicData: { reason: "column", field: "headline" },
+      });
+      expect(result.message).not.toMatch(/_locales|column|relation/i);
     });
   }
 );

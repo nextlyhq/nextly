@@ -41,6 +41,10 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  asNotMigrated,
+  collectionNotMigrated,
+} from "../../../database/with-db-errors";
 import { container } from "../../../di/container";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -3557,7 +3561,12 @@ export class CollectionQueryService extends BaseService {
         message: "Entries fetched successfully",
         data: paginatedResponse,
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName)
+      );
       // Determine appropriate status code based on error type
       const message =
         error instanceof Error ? error.message : "Failed to fetch entries";
@@ -3975,10 +3984,15 @@ export class CollectionQueryService extends BaseService {
    * A count that failed, as both counts report it: logged, and returned with
    * the error's own status and code.
    */
-  private countFailed(
+  private async countFailed(
     collectionName: string,
-    error: unknown
-  ): CollectionServiceResult<never> {
+    caught: unknown
+  ): Promise<CollectionServiceResult<never>> {
+    // A count the database is not migrated for answers as such, not as a 500.
+    const error = await asNotMigrated(
+      caught,
+      collectionNotMigrated(this.collectionService, collectionName)
+    );
     const message =
       error instanceof Error ? error.message : "Failed to count entries";
     this.logger.error("Error counting entries", {
@@ -4136,7 +4150,12 @@ export class CollectionQueryService extends BaseService {
           truncated: rows.length > cap,
         },
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName)
+      );
       const message =
         error instanceof Error ? error.message : "Failed to group entries";
       this.logger.error("Error grouping entries", {
@@ -4280,7 +4299,12 @@ export class CollectionQueryService extends BaseService {
       const counted = countedByBucket(rows);
 
       return this.timeseriesAnswer(window, interval, counted);
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName)
+      );
       const message =
         error instanceof Error ? error.message : "Failed to build timeseries";
       this.logger.error("Error building timeseries", {
@@ -5032,7 +5056,12 @@ export class CollectionQueryService extends BaseService {
         data: finalData,
         resolvedEntryId,
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName)
+      );
       return {
         success: false,
         statusCode: 500,

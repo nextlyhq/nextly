@@ -10,6 +10,7 @@ import {
   type NextlyErrorCode,
 } from "./error-codes";
 import type {
+  NotMigratedPublicData,
   PublicData,
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
@@ -445,6 +446,38 @@ export class NextlyError extends Error {
         `nextly.config.ts.`,
       publicData: { kind: opts.kind, slug: opts.slug },
       logContext: { kind: opts.kind, slug: opts.slug, ...opts.logContext },
+    });
+  }
+
+  /**
+   * A read or write of a collection or Single the database has not been
+   * migrated for: the column of one of its declared fields is missing, its
+   * table is missing, or this running instance never registered it (an
+   * entity a migration added after the instance started). The message names
+   * the entity, the field or the table, and `nextly migrate`; the driver's
+   * error stays on `cause`, for the log, so no SQL reaches the answer.
+   */
+  static notMigrated(
+    opts: NotMigratedPublicData & {
+      cause?: Error;
+      logContext?: Record<string, unknown>;
+    }
+  ): NextlyError {
+    const { cause, logContext, ...publicData } = opts;
+    const entity = `${publicData.kind === "single" ? "Single" : "collection"} "${publicData.slug}"`;
+    const publicMessage =
+      publicData.reason === "column"
+        ? `The database has not been migrated for the field "${publicData.field}" of the ${entity}. Run \`nextly migrate\`.`
+        : publicData.reason === "table"
+          ? `The database has not been migrated for the ${entity}: its table "${publicData.table}" does not exist. Run \`nextly migrate\`.`
+          : `The ${entity} (table "${publicData.table}") is not registered in this running instance. Run \`nextly migrate\`, then restart the server.`;
+    return new NextlyError({
+      code: "ENTITY_NOT_MIGRATED",
+      publicMessage,
+      publicData,
+      logMessage: "The database has not been migrated for this entity",
+      logContext: { ...publicData, ...logContext },
+      cause,
     });
   }
 

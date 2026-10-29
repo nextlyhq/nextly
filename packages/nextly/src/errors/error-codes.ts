@@ -38,6 +38,12 @@ export const NEXTLY_ERROR_STATUS = {
   // disagree about: the caller's permissions are not the problem, retrying
   // cannot change it, and declaring it again or retiring it does.
   ENTITY_REMOVED_FROM_CODE: 409,
+  // A read or write of a collection or Single the database has not been
+  // migrated for: a declared field's column or the entity's table is missing,
+  // or this running instance never registered the entity. 409 for the reason
+  // ENTITY_REMOVED_FROM_CODE gives: retrying cannot change it, and
+  // `nextly migrate` does.
+  ENTITY_NOT_MIGRATED: 409,
   // The path exists and this verb is not one it serves. Distinct from NOT_FOUND, which would
   // tell the caller the address is wrong when only the method is; the response carries `Allow`.
   METHOD_NOT_ALLOWED: 405,

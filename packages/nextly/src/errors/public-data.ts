@@ -107,9 +107,25 @@ export type RemovedFromCodePublicData = {
   slug: string;
 };
 
+/**
+ * Which entity an `ENTITY_NOT_MIGRATED` answer is about and what the database
+ * lacks for it: a field's column (`field` names it), the entity's table, or
+ * any registration in this running instance. Enough for a client to point at
+ * the entity and say what to run, and no SQL and no driver text.
+ */
+export type NotMigratedPublicData = {
+  kind: "collection" | "single";
+  slug: string;
+  table: string;
+} & (
+  | { reason: "column"; field: string }
+  | { reason: "table" | "unregistered" }
+);
+
 export type PublicData =
   | ValidationPublicData
   | RemovedFromCodePublicData
+  | NotMigratedPublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
   | SingleAbsentPublicData

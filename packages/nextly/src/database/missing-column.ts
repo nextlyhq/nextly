@@ -56,8 +56,9 @@ const WORDINGS: ReadonlyArray<readonly [RegExp, MissingColumnKind]> = [
   // MySQL ER_KEY_COLUMN_DOES_NOT_EXIST. Listed before the generic wordings because it is
   // the more specific of the two MySQL forms.
   [/key column .* doesn't exist in table/i, "index"],
-  // SQLite
+  // SQLite, for a statement that reads the column and for an INSERT naming it
   [/no such column/i, "statement"],
+  [/has no column named/i, "statement"],
   // MySQL ER_BAD_FIELD_ERROR
   [/unknown column/i, "statement"],
   // PostgreSQL
@@ -179,5 +180,160 @@ export function isMissingNamedColumnError(
         ? true
         : undefined
     ) ?? false
+  );
+}
+
+/**
+ * What a failed statement found missing from the database: a column, a table,
+ * or a table this running instance never registered.
+ *
+ * The last is not a database failure at all. The adapters refuse a CRUD call
+ * naming a table their resolver does not hold, with a code of their own, before
+ * any statement runs; on a running site that is an entity a migration added
+ * after the instance started. All three mean the same to whoever reads the
+ * answer, that the database and the running code disagree, which is why one
+ * function answers them.
+ */
+export type MissingSchemaObject = "column" | "table" | "unregistered";
+
+/**
+ * The adapters' code for a CRUD call naming a table their resolver does not
+ * hold, as core reads it.
+ *
+ * Kept here rather than imported from `@nextlyhq/adapter-drizzle/types`, where
+ * the adapters define it, for the reason `pool-wait-code.ts` gives: this module
+ * has no imports, and a runtime import of a database package would follow it
+ * into every client-safe entry. The same string as the adapters', held to it
+ * by `missing-column.test.ts`.
+ */
+export const TABLE_NOT_REGISTERED_CODE = "NEXTLY_TABLE_NOT_REGISTERED";
+
+/** PostgreSQL: undefined_table. */
+const POSTGRES_UNDEFINED_TABLE = "42P01";
+/** MySQL: ER_NO_SUCH_TABLE, as its string code, its errno and its SQLSTATE. */
+const MYSQL_NO_SUCH_TABLE = new Set(["1146", "ER_NO_SUCH_TABLE", "42S02"]);
+
+/**
+ * A missing table's wording, read only where a level's code does not classify,
+ * as {@link WORDINGS} is. SQLite has no code for it; the other two are listed
+ * for a level a wrapper stripped the code from.
+ */
+const TABLE_WORDINGS: readonly RegExp[] = [
+  // SQLite
+  /no such table/i,
+  // MySQL ER_NO_SUCH_TABLE
+  /table .* doesn't exist/i,
+  // PostgreSQL
+  /relation .* does not exist/i,
+];
+
+/**
+ * What one level of the chain reports missing, ignoring every other level.
+ *
+ * Codes first, as everywhere in this module. Of the wordings, the column's are
+ * read before the table's: PostgreSQL's for a write names the relation as well
+ * (`column "x" of relation "t" does not exist`), and no table wording names a
+ * column.
+ */
+function objectOfLevel(link: unknown): MissingSchemaObject | undefined {
+  const code = ownCode(link);
+  if (code === TABLE_NOT_REGISTERED_CODE) return "unregistered";
+  if (
+    code === POSTGRES_UNDEFINED_TABLE ||
+    MYSQL_NO_SUCH_TABLE.has(code ?? "")
+  ) {
+    return "table";
+  }
+  if (kindOfLevel(link) !== undefined) return "column";
+  const message = ownMessage(link);
+  return TABLE_WORDINGS.some(pattern => pattern.test(message))
+    ? "table"
+    : undefined;
+}
+
+/**
+ * What this error reports missing from the database, and the text of the
+ * level that reports it, or undefined when it reports nothing missing.
+ *
+ * The text is the DEEPEST reporting level's own message, the driver's. A
+ * wrapper above it may also classify, from a code it copied, and its message
+ * is the statement or a context line, which names every table and column the
+ * statement touched; only the driver's says which one is missing. So a caller
+ * reading a name out of the text reads it from the level that knows.
+ */
+export function missingSchemaObject(
+  error: unknown
+): { object: MissingSchemaObject; text: string } | undefined {
+  let found: { object: MissingSchemaObject; text: string } | undefined;
+  firstAnswer(error, link => {
+    const object = objectOfLevel(link);
+    if (object !== undefined) found = { object, text: ownMessage(link) };
+    // Never an answer, so the walk reaches the deepest level.
+    return undefined;
+  });
+  return found;
+}
+
+/**
+ * Where `name` stands in `text` as an identifier, or -1 when it does not.
+ *
+ * An identifier, in every dialect's wording, is quoted (`'x'`, `"x"`,
+ * `` `x` ``), qualified (`t.x`), or follows SQLite's `: ` or `named `; the
+ * words of the sentence around it are none of these. So a field named `table`
+ * or `column` is not read out of "table t has no column named x", and `title`
+ * is not read out of `subtitle`, nor a table out of its companion's name.
+ */
+function identifierAt(text: string, name: string): number {
+  if (name.length === 0) return -1;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(
+    `(['"\`.]|: |named )${escaped}(?![A-Za-z0-9_$])`,
+    "i"
+  ).exec(text);
+  return match ? match.index + match[1].length : -1;
+}
+
+/**
+ * Which of `candidates` the text names as an identifier, the one named first
+ * when several are, or undefined when it names none.
+ *
+ * Identifiers are matched rather than parsed out of a dialect's template
+ * because MySQL translates its templates and writes the identifiers into them
+ * untranslated, so the name is readable in any language where the template is
+ * not. The earliest wins because each dialect's wording names the missing
+ * column before any other column, and the missing table before any other
+ * table.
+ */
+export function firstIdentifierNamed(
+  text: string,
+  candidates: Iterable<string>
+): string | undefined {
+  let best: { name: string; at: number } | undefined;
+  for (const name of candidates) {
+    const at = identifierAt(text, name);
+    if (at >= 0 && (!best || at < best.at)) best = { name, at };
+  }
+  return best?.name;
+}
+
+/**
+ * The table `text` says the missing `column` belongs to, or undefined when it
+ * names none, as MySQL's unqualified wording does.
+ *
+ * Read from the three places a dialect puts it: a qualifier (`t.x`, in
+ * PostgreSQL's and MySQL's wording for a read), PostgreSQL's `of relation "t"`
+ * for a write, and SQLite's `table t has no column named x` for an INSERT.
+ */
+export function tableOfMissingColumn(
+  text: string,
+  column: string
+): string | undefined {
+  const at = identifierAt(text, column);
+  if (at > 0 && text[at - 1] === ".") {
+    return /([A-Za-z0-9_$]+)["`]?$/.exec(text.slice(0, at - 1))?.[1];
+  }
+  return (
+    /of relation "([^"]+)"/i.exec(text)?.[1] ??
+    /^table (\S+) has no column named/i.exec(text)?.[1]
   );
 }

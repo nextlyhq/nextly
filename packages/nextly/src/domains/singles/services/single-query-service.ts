@@ -36,6 +36,10 @@ import { currentPrincipal } from "../../../auth/principal-scope";
 import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
@@ -1301,7 +1305,14 @@ export class SingleQueryService extends BaseService {
       };
     } catch (error) {
       this.logger.error("Failed to get Single document", { slug, error });
-      return buildSingleErrorResult(error, "Failed to get Single document");
+      // A read the database is not migrated for answers as such, not as a 500.
+      return buildSingleErrorResult(
+        await asNotMigrated(
+          error,
+          singleNotMigrated(this.singleRegistryService, slug)
+        ),
+        "Failed to get Single document"
+      );
     }
   }
 

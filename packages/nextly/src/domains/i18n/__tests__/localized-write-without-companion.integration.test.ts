@@ -544,7 +544,13 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(listed.success).toBe(false);
-      expect(listed.message).not.toMatch(/title|_locales|column|relation/i);
+      // A declared field's column is missing, so the answer names the field and what to run;
+      // the companion table, and the driver's wording around it, stay off the wire.
+      expect(listed).toMatchObject({
+        code: "ENTITY_NOT_MIGRATED",
+        publicData: { reason: "column", field: "title" },
+      });
+      expect(listed.message).not.toMatch(/_locales|column|relation/i);
     });
   }
 );

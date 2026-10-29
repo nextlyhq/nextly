@@ -366,3 +366,77 @@ describe("serviceUnavailable public message", () => {
     expect(error.code).toBe("SERVICE_UNAVAILABLE");
   });
 });
+
+describe("NextlyError.notMigrated", () => {
+  // The database and the running code disagree: 409, as for an entity removed
+  // from code, since a retry cannot change it and `nextly migrate` does.
+  it("names the field and the entity for a missing column", () => {
+    const e = NextlyError.notMigrated({
+      reason: "column",
+      kind: "collection",
+      slug: "posts",
+      table: "dc_posts",
+      field: "subtitle",
+    });
+    expect(e.code).toBe("ENTITY_NOT_MIGRATED");
+    expect(e.statusCode).toBe(409);
+    expect(e.publicMessage).toBe(
+      'The database has not been migrated for the field "subtitle" of the collection "posts". Run `nextly migrate`.'
+    );
+    expect(e.publicData).toEqual({
+      reason: "column",
+      kind: "collection",
+      slug: "posts",
+      table: "dc_posts",
+      field: "subtitle",
+    });
+  });
+
+  it("names the entity and its table for a missing table", () => {
+    const e = NextlyError.notMigrated({
+      reason: "table",
+      kind: "single",
+      slug: "banner",
+      table: "single_banner",
+    });
+    expect(e.statusCode).toBe(409);
+    expect(e.publicMessage).toBe(
+      'The database has not been migrated for the Single "banner": its table "single_banner" does not exist. Run `nextly migrate`.'
+    );
+    expect(e.publicData).toEqual({
+      reason: "table",
+      kind: "single",
+      slug: "banner",
+      table: "single_banner",
+    });
+  });
+
+  it("says an entity this instance has not registered is not registered", () => {
+    const e = NextlyError.notMigrated({
+      reason: "unregistered",
+      kind: "collection",
+      slug: "posts",
+      table: "dc_posts",
+    });
+    expect(e.statusCode).toBe(409);
+    expect(e.publicMessage).toBe(
+      'The collection "posts" (table "dc_posts") is not registered in this running instance. Run `nextly migrate`, then restart the server.'
+    );
+  });
+
+  it("keeps the cause for the log, never in the answer", () => {
+    const cause = new Error('column "subtitle" does not exist');
+    const e = NextlyError.notMigrated({
+      reason: "column",
+      kind: "collection",
+      slug: "posts",
+      table: "dc_posts",
+      field: "subtitle",
+      cause,
+    });
+    expect(e.cause).toBe(cause);
+    expect(JSON.stringify(e.toResponseJSON("req_1"))).not.toContain(
+      "does not exist"
+    );
+  });
+});

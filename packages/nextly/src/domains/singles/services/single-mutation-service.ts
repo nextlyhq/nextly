@@ -30,6 +30,10 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -717,7 +721,14 @@ export class SingleMutationService extends BaseService {
       return { success: true, statusCode: 200, data };
     } catch (error) {
       return {
-        ...buildSingleErrorResult(error, "Failed to take the live values"),
+        // A write the database is not migrated for answers as such.
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            error,
+            singleNotMigrated(this.singleRegistryService, params.slug)
+          ),
+          "Failed to take the live values"
+        ),
         data: undefined,
       };
     }
@@ -4646,7 +4657,14 @@ export class SingleMutationService extends BaseService {
       // can throw after the event is already durable; carry `eventRecorded` so
       // the fast-drain still fires for a committed-but-hook-failed write.
       return {
-        ...buildSingleErrorResult(error, "Failed to update Single document"),
+        // A write the database is not migrated for answers as such.
+        ...buildSingleErrorResult(
+          await asNotMigrated(
+            error,
+            singleNotMigrated(this.singleRegistryService, slug)
+          ),
+          "Failed to update Single document"
+        ),
         eventRecorded,
         revalidationIntent,
         committed: committedWrite,
