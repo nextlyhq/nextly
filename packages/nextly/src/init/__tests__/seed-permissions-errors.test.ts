@@ -104,22 +104,29 @@ describe("seedPermissionsAndRolePresets", () => {
   });
 
   it("goes on without the retired manage check when its read stalls", async () => {
-    // A read that never answers holds the boot only for the check's bound.
+    // A read that has not answered holds the boot only for the check's bound.
+    // It answers in `finally`, so an unbounded check fails here rather than
+    // leaving the seeding, and every later test that joins it, waiting.
     vi.useFakeTimers();
+    let answer: () => void = () => {};
+    rolesHoldingRetiredManage.mockReturnValue(
+      new Promise(resolve => {
+        answer = () => resolve([]);
+      })
+    );
+    let finished = false;
+    const seeding = seedPermissionsAndRolePresets().then(() => {
+      finished = true;
+    });
     try {
-      rolesHoldingRetiredManage.mockReturnValue(new Promise(() => {}));
-      let finished = false;
-      const seeding = seedPermissionsAndRolePresets().then(() => {
-        finished = true;
-      });
-
       await vi.advanceTimersByTimeAsync(1_900);
       expect(finished).toBe(false);
       await vi.advanceTimersByTimeAsync(200);
-      await seeding;
       expect(finished).toBe(true);
       expect(error).not.toHaveBeenCalled();
     } finally {
+      answer();
+      await seeding;
       vi.useRealTimers();
     }
   });
