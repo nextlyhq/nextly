@@ -287,6 +287,20 @@ describe("a read rule's filter on a field the read may show from a fallback lang
       })) as { card?: { note?: unknown } };
       return populatedId(read.card?.note);
     };
+    // The control: read with trust, the component populates its note.
+    const trustedShelf = await t.nextly.create({
+      collection: SHELVES,
+      data: { card: { note: withEnglishSecret } },
+    });
+    const trusted = (await t.nextly.findByID({
+      collection: SHELVES,
+      id: idOf(trustedShelf),
+      depth: 1,
+      ...frenchFallingBack,
+    })) as { card?: { note?: unknown } };
+    expect(populatedId(trusted.card?.note)).toEqual({
+      populated: withEnglishSecret,
+    });
     expect(await shelved(withoutSecret)).toEqual({ populated: withoutSecret });
     expect(await shelved(withEnglishSecret)).toEqual({
       withheld: withEnglishSecret,
