@@ -5,9 +5,9 @@
  * - With no user named, never.
  * - A super-admin may do anything.
  * - Where the collection or Single declares a rule for the operation, the
- *   user needs the permission first, and then the rule must answer exactly
- *   `true`: a filter, `false` or a throw refuses, since the answer is for the
- *   whole resource, not for the entries a filter matches.
+ *   user needs the permission first, and then the rule decides: `true`
+ *   allows; `false` or a throw refuses; a filter allows a read, since the
+ *   user may read the entries it matches, and refuses a write.
  * - Where no rule is declared, the permission alone answers, on a system
  *   resource as on a collection.
  *
@@ -148,13 +148,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await check("acchk-reader", "update", RULE_TRUE)).toBe(false);
     });
 
-    it("refuses where the rule answers false, a filter or a throw", async () => {
+    it("refuses where the rule answers false or throws", async () => {
       expect(await check("acchk-ruled-writer", "update", RULE_FALSE)).toBe(
-        false
-      );
-      // A filter allows only the entries it matches, so the resource as a
-      // whole is refused.
-      expect(await check("acchk-ruled-writer", "update", RULE_FILTER)).toBe(
         false
       );
       expect(await check("acchk-ruled-writer", "update", RULE_THROWS)).toBe(
@@ -162,13 +157,17 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    it("refuses a read whose rule answers a filter", async () => {
-      // A list applies the filter and shows the entries it matches; this
-      // check is about the resource as a whole, which the filter does not
-      // allow.
-      expect(await check("acchk-ruled-writer", "read", READ_FILTER)).toBe(
+    it("a write whose rule answers a filter is refused", async () => {
+      // A write applies no rule's filter, so a filter does not allow it.
+      expect(await check("acchk-ruled-writer", "update", RULE_FILTER)).toBe(
         false
       );
+    });
+
+    it("allows a read whose rule answers a filter: the user may read some entries", async () => {
+      // A read in the user's context applies the filter and returns the
+      // entries it matches, so the user may read some.
+      expect(await check("acchk-ruled-writer", "read", READ_FILTER)).toBe(true);
       // The control: the same user, without the permission, is refused too,
       // and a holder of a rule that allows reads it.
       expect(await check("acchk-reader", "read", READ_FILTER)).toBe(false);
