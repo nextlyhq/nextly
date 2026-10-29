@@ -193,6 +193,18 @@ interface ResolvedMigrateCreateOptions extends MigrateCreateCommandOptions {
 // ============================================================================
 
 /**
+ * `--record-snapshot` with nothing to record exits 2, as a plain run with
+ * nothing to write does, so a script can tell it from a record to commit.
+ */
+function nothingToRecord(logger: CommandContext["logger"]): never {
+  logger.newline();
+  logger.info(
+    "Nothing to record: no snapshot here predates the record of which fields are translated."
+  );
+  process.exit(2);
+}
+
+/**
  * Whether the app stream has nothing it could possibly emit.
  *
  * Needs BOTH sides empty. A config that has just removed its last entity or
@@ -223,11 +235,9 @@ export async function runMigrateCreate(
   // The app's snapshot is the one that records translated fields; a blank
   // file and a plugin module have none.
   if (options.recordSnapshot === true && (options.blank || options.plugin)) {
-    throw new NextlyError({
-      code: "INVALID_INPUT",
-      publicMessage:
+    throw NextlyError.invalidInput({
+      message:
         "--record-snapshot writes the app's migration and snapshot, so it can't be combined with --blank or --plugin.",
-      statusCode: 400,
     });
   }
 
@@ -465,13 +475,15 @@ export async function runMigrateCreate(
     new Set(),
     dialect
   );
-  if (
-    nothingToGenerate({
-      entityCount: collections.length + singles.length + components.length,
-      appStream,
-      recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
-    })
-  ) {
+  const nothing = nothingToGenerate({
+    entityCount: collections.length + singles.length + components.length,
+    appStream,
+    recordedTableCount: latest?.data.snapshot.tables.length ?? 0,
+  });
+  // A project with no tables has no translated field to record, and says so as any recording run
+  // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
+  if (nothing && options.recordSnapshot === true) nothingToRecord(logger);
+  if (nothing) {
     logger.warn(
       "No collections, singles, components, or extension tables defined in config."
     );
@@ -514,11 +526,7 @@ export async function runMigrateCreate(
   }
 
   if (result === null && options.recordSnapshot === true) {
-    logger.newline();
-    logger.info(
-      "Nothing to record. The latest snapshot already records which fields are translated."
-    );
-    process.exit(2);
+    nothingToRecord(logger);
   }
 
   if (result === null) {
@@ -532,7 +540,14 @@ export async function runMigrateCreate(
   }
 
   const duration = Date.now() - startTime;
-  if (options.recordSnapshot === true) {
+  // A settings change is written as the settings-only migration it is, below; its snapshot is
+  // the record.
+  if (options.recordSnapshot === true && result.settingsChanges.length > 0) {
+    logger.newline();
+    logger.info(
+      "The config's settings have changes to migrate, so they are written as a settings-only migration, whose snapshot records which fields are translated."
+    );
+  } else if (options.recordSnapshot === true) {
     logger.newline();
     logger.success(`Recorded translated fields → ${result.snapshotPath}`);
     logger.success(`Migration (changes nothing) → ${result.sqlPath}`);

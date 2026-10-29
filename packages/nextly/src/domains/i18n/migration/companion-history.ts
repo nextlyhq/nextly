@@ -15,9 +15,9 @@
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { SNAPSHOT_RECORD_MARKER } from "../../schema/migrate-create/format-file";
+import { parseEntityHeaders } from "../../schema/migrate-create/format-file";
 
-import { parseLocalizationIntent } from "./migration-intent";
+import { headerLines, parseLocalizationIntent } from "./migration-intent";
 import type { I18nTransitionKind } from "./transition-state";
 import type { LocalizedColumnSpec } from "./types";
 import { LOCALIZATION_MIGRATION_MARKER } from "./write-migration-file";
@@ -41,16 +41,16 @@ export interface CompanionHistory {
    */
   present: Set<string>;
   /**
-   * The entities whose first file here makes their companion (`enable` or `create-only`), so the
-   * files describe every column it has had.
+   * Whether `columns` and `present` describe this entity's companion: no localization file this
+   * build cannot read (one written before companion files recorded their intent, or one whose
+   * intent does not parse) may be about it, or the last that may comes before a file that makes or
+   * drops the companion whole (`create-only` or `enable` with no companion there, or `disable`).
+   * Such a file is about the slugs its header names, under any kind, since older files named every
+   * kind under `-- Collections:`; one that names none, or cannot be opened, may be about any entity.
    */
-  founded: Set<string>;
-  /**
-   * Whether a companion file this build cannot read comes after the last snapshot record: one
-   * written before companion files recorded their intent, or one whose intent does not parse. The
-   * columns such a file made or dropped are missing from `columns`, for any entity it may be for.
-   */
-  unread: boolean;
+  describes(kind: I18nTransitionKind, slug: string): boolean;
+  /** Whether any localization file, read or not, may be about this entity. */
+  mentions(kind: I18nTransitionKind, slug: string): boolean;
 }
 
 /**
@@ -67,7 +67,8 @@ export async function readCompanionColumnHistory(
 /**
  * The companion files in `migrationsDir` replayed in the order they run (by name): each entity's
  * columns, and whether its table is still there. A file whose header cannot be read is left out
- * rather than guessed at, and said to be there (`unread`).
+ * rather than guessed at, and the entities it may be about are no longer described by the replay
+ * (`describes`).
  *
  * Read only: the files are this generator's own, and their SQL is never run or parsed here.
  */
@@ -76,48 +77,77 @@ export async function readCompanionHistory(
 ): Promise<CompanionHistory> {
   const history = new Map<string, Map<string, LocalizedColumnSpec>>();
   const present = new Set<string>();
-  const founded = new Set<string>();
-  let unread = false;
+  // Positions in the run order: where each companion was last made or dropped whole, by key, and
+  // where the last unreadable file comes that may be about each slug, or about any entity.
+  const settled = new Map<string, number>();
+  const unreadBySlug = new Map<string, number>();
+  let unreadAny = -1;
+  const unreadAt = (content: string, at: number) => {
+    const headers = parseEntityHeaders(content);
+    const slugs = [
+      ...headers.collections,
+      ...headers.singles,
+      ...headers.components,
+    ];
+    if (slugs.length === 0) unreadAny = at;
+    for (const slug of slugs) unreadBySlug.set(slug, at);
+  };
+  const lastUnread = (slug: string) =>
+    Math.max(unreadAny, unreadBySlug.get(slug) ?? -1);
+  const result = (): CompanionHistory => ({
+    columns: history,
+    present,
+    describes: (kind, slug) =>
+      lastUnread(slug) < 0 ||
+      (settled.get(companionHistoryKey(kind, slug)) ?? -1) > lastUnread(slug),
+    mentions: (kind, slug) =>
+      history.has(companionHistoryKey(kind, slug)) || lastUnread(slug) >= 0,
+  });
+
   let names: string[];
   try {
     names = (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
   } catch {
-    return { columns: history, present, founded, unread };
+    return result();
   }
-  for (const name of names.sort()) {
+  for (const [at, name] of names.sort().entries()) {
     let content: string;
     try {
       content = await readFile(resolve(migrationsDir, name), "utf-8");
     } catch {
-      unread = true;
-      continue;
-    }
-    if (content.includes(SNAPSHOT_RECORD_MARKER)) {
-      unread = false;
+      unreadAny = at;
       continue;
     }
     let intent;
     try {
       intent = parseLocalizationIntent(content, name);
     } catch {
-      unread = true;
+      unreadAt(content, at);
       continue;
     }
     if (intent === null) {
-      if (content.includes(LOCALIZATION_MIGRATION_MARKER)) unread = true;
+      // A localization file says so in its header; a migration that only mentions the marker
+      // further down is not one.
+      if (
+        headerLines(content).some(line =>
+          line.trim().startsWith(LOCALIZATION_MIGRATION_MARKER)
+        )
+      ) {
+        unreadAt(content, at);
+      }
       continue;
     }
     const key = companionHistoryKey(intent.entity, intent.spec.collection);
-    if (
-      !history.has(key) &&
-      (intent.kind === "enable" || intent.kind === "create-only")
-    ) {
-      founded.add(key);
-    }
     const columns = history.get(key) ?? new Map<string, LocalizedColumnSpec>();
     switch (intent.kind) {
       case "create-only":
       case "enable":
+        if (!present.has(key)) settled.set(key, at);
+        for (const column of intent.spec.columns) {
+          columns.set(column.name, column);
+        }
+        present.add(key);
+        break;
       case "joins":
         for (const column of intent.spec.columns) {
           columns.set(column.name, column);
@@ -127,6 +157,7 @@ export async function readCompanionHistory(
       case "disable":
         columns.clear();
         present.delete(key);
+        settled.set(key, at);
         break;
       case "shared":
         for (const column of intent.spec.columns) columns.delete(column.name);
@@ -137,5 +168,5 @@ export async function readCompanionHistory(
     }
     history.set(key, columns);
   }
-  return { columns: history, present, founded, unread };
+  return result();
 }

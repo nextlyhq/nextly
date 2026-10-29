@@ -211,17 +211,11 @@ ${downBody}
 }
 
 /**
- * Header line of the migration `nextly migrate:create --record-snapshot` writes. Its
- * snapshot records which fields are translated, so the localization files before it no longer
- * need to say (`readCompanionHistory`).
- */
-export const SNAPSHOT_RECORD_MARKER = "-- Generated: snapshot record";
-
-/**
  * The migration `nextly migrate:create --record-snapshot` writes beside its snapshot. Applying it
  * or rolling it back changes nothing: its UP is comments only, and its DOWN a statement that reads
  * nothing, since `nextly migrate:down` refuses a file with none as one that cannot be rolled back.
- * It names no entity, and says so.
+ * It names no entity, and says so. The record itself is the snapshot's (`translatedFieldsRecorded`);
+ * nothing reads this file for it.
  */
 export function formatSnapshotRecordFile(
   name: string,
@@ -229,7 +223,7 @@ export function formatSnapshotRecordFile(
   now: Date
 ): string {
   return `-- Migration: ${name}
-${SNAPSHOT_RECORD_MARKER}
+-- Generated: snapshot record
 ${SCOPED_ENTITIES_MARKER}
 -- Generated at: ${now.toISOString()}
 -- Dialect: ${getDialectDisplayName(dialect)}

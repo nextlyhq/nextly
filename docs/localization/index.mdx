@@ -124,19 +124,25 @@ A field whose type, length or precision changes in the same change is refused, b
 
 ### When your migrations predate the record of translated fields
 
-Snapshots written by early versions of Nextly don't record which fields are translated, and neither do the localization migration files from that time. When the snapshot doesn't say, `nextly migrate:create` reads it from the localization files that do. When neither says, and a change could move a field between translated and shared, `migrate:create` refuses and writes nothing, because guessing either way could lose the field's values. It names the fields. Changes that move no field go through as usual.
+Snapshots written by early versions of Nextly don't record which fields are translated, and neither do the localization migration files from that time. Every snapshot written now says that it records them. When the latest snapshot doesn't, `nextly migrate:create` reads which fields were translated from the localization files that record it. When they don't, and a change could move a field between translated and shared, `migrate:create` refuses and writes nothing, because guessing either way could lose the field's values. It names the fields.
+
+- Adding a shared field to a translated collection, Single or field group counts as such a change: without the record, a new column reads the same as a field leaving translation. A field whose type can never be translated, such as a password, doesn't count.
+- Turning translation off for a whole collection, Single or field group is refused too, since that's planned only from the snapshot's record.
+- Changes to entities that aren't translated go through as usual.
 
 To record the translated fields, take two steps:
 
-1. Undo the change in your config, so it matches what was last migrated, and run:
+1. Put your config back as it was at the last migration, and run:
 
    ```bash
    npx nextly migrate:create --record-snapshot
    ```
 
-   It writes a migration that changes nothing when it runs or rolls back, and a snapshot that records which fields are translated. Commit both. Run again with nothing new to record, it writes nothing. It's refused while the config has changes to migrate.
+   It writes a migration that changes nothing when it runs or rolls back, and a snapshot that records which fields are translated. Commit both. Run again, it writes nothing. While the config has changes to migrate, it's refused and names their tables. When those changes move no field between translated and shared, run `npx nextly migrate:create --name <name>` instead: its snapshot records the translated fields too.
 
 2. Make the change again and run `npx nextly migrate:create --name <name>`.
+
+The record names the translated fields but not how each is stored. After recording, change a field's type and make it shared in separate migrations: `migrate:create` warns that it can't check the type, and copying values into a column of another type can fail when the migration runs.
 
 ### When a translated field is renamed
 

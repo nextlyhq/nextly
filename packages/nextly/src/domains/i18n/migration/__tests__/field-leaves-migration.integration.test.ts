@@ -256,6 +256,42 @@ for (const entry of DIALECTS) {
         expect(await columnsOf(companion)).not.toContain("body");
       }
 
+      it("makes the companion of a collection that becomes translated with only a new translated field", async () => {
+        await migrateCreate({
+          ...translated,
+          localized: false,
+          fields: [{ name: "price", type: "number" }],
+        });
+        await migrate();
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e1', 'One', 'one')`
+        );
+
+        // `body` is new and translated; `weight` gives the main migration a change of its own.
+        await migrateCreate({
+          ...translated,
+          fields: [...translated.fields, { name: "weight", type: "number" }],
+        });
+        await migrate();
+        await adapter.executeQuery(
+          `INSERT INTO ${q(companion)} (${q("_parent")}, ${q("_locale")}, ${q("body")}) VALUES ('e1', 'en', 'Hello'), ('e1', 'es', 'Hola')`
+        );
+        expect(
+          await adapter.executeQuery<{ locale: string; body: string }>(
+            `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' ORDER BY ${q("_locale")}`
+          )
+        ).toEqual([
+          { locale: "en", body: "Hello" },
+          { locale: "es", body: "Hola" },
+        ]);
+
+        // It goes back with its migration, and comes again.
+        expect(await migrateDown(2)).toHaveLength(2);
+        expect(await columnsOf(companion)).toEqual([]);
+        await migrate();
+        expect(await columnsOf(companion)).toContain("body");
+      });
+
       it("keeps every language: up, then down, then up again", async () => {
         await migrateCreate(translated);
         await migrate();
@@ -300,8 +336,10 @@ for (const entry of DIALECTS) {
         for (const name of await readdir(resolve(migrationsDir, "meta"))) {
           const path = resolve(migrationsDir, "meta", name);
           const file = JSON.parse(await readFile(path, "utf-8")) as {
+            translatedFieldsRecorded?: boolean;
             snapshot: { tables: Record<string, unknown>[] };
           };
+          delete file.translatedFieldsRecorded;
           for (const t of file.snapshot.tables) {
             delete t.localized;
             delete t.localizedColumns;

@@ -26,6 +26,7 @@ import type { Command } from "commander";
 
 import {
   chooseRestoreEntity,
+  KIND_NAMES,
   kindOption,
   resolveEntityTables,
 } from "../../domains/i18n/migration/resolve-entity-table";
@@ -134,7 +135,7 @@ export async function runI18nRestore(
         logger.warn(
           `${result.rowsUnattributed} archived value(s) for "${slug}" were written before the archive ` +
             "recorded which kind of entity they belong to, and could not be matched to one. " +
-            `They are kept. If they are this ${entity.kind === "fieldGroup" ? "field group" : entity.kind}'s, ` +
+            `They are kept. If they are this ${KIND_NAMES[entity.kind]}'s, ` +
             `restore them with --kind ${kindOption(entity.kind)}.`
         );
       };
