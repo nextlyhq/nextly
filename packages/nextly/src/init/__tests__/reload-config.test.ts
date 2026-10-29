@@ -24,6 +24,8 @@ import {
 } from "../../domains/field-groups/migration/manifest";
 import { MIGRATION_MARKER_VERSION } from "../../domains/field-groups/migration/state";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { judgeAddress } from "../../shared/address-rule";
+import { ADDRESS_CASES } from "../../shared/__tests__/helpers/address-cases";
 
 /** The registry rename every run performs, spelled from the catalog so it stays a valid plan. */
 const IN_FLIGHT_PLAN: ManifestEntry[] = [
@@ -360,6 +362,42 @@ describe("reloadNextlyConfig", () => {
       })),
     };
   }
+
+  /**
+   * A configuration reload is a road that creates addresses, as a start is: a collection added to
+   * `nextly.config.ts` while `next dev` runs arrives here. It gives each new address the rule's
+   * verdict and reason (the same list every other road is given, `address-rule-roads.test.ts`),
+   * and a refused reload keeps the previous configuration and runs no DDL.
+   */
+  describe("the addresses a reload adds", () => {
+    it.each(ADDRESS_CASES)(
+      "gives a new collection '%s' the rule's verdict",
+      async address => {
+        loadConfigSpy.mockResolvedValue({
+          config: { collections: [{ slug: address, fields: [] }] },
+        });
+        introspectSpy.mockResolvedValue(buildSnapshot([]));
+        const resolver = buildResolver();
+        // The collection is new: no table of its own exists yet. Only the lock's does, which the
+        // reload's exclusion reads.
+        Object.assign(resolver("adapter") as object, {
+          tableExists: async (name: string) =>
+            name === "nextly_field_group_lock",
+        });
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver });
+
+        const refusal = judgeAddress("collection", address);
+        const logged = errorSpy.mock.calls.map(([line]) => String(line));
+        if (refusal === null) {
+          expect(logged.filter(line => line.includes("address"))).toEqual([]);
+          return;
+        }
+        expect(logged).toEqual([expect.stringContaining(refusal.message)]);
+        expect(pipelineApplySpy).not.toHaveBeenCalled();
+      }
+    );
+  });
 
   it("re-reads the config from disk on every call (clears the loader cache first)", async () => {
     loadConfigSpy.mockResolvedValue({ config: { collections: [] } });

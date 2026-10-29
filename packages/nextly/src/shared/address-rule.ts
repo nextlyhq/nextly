@@ -392,9 +392,9 @@ function configuredTable(
 }
 
 /**
- * The start's check of configuration in code, run before the boot writes
- * anything, so a refused configuration leaves the registries and tables as
- * they were.
+ * The addresses in configuration in code the rule refuses, as a start or a
+ * configuration reload judges them, before either writes anything, so a
+ * refused configuration leaves the registries and tables as they were.
  *
  * An entity a registry row holds exists and keeps its address. One no row
  * holds is new and judged by the whole rule and against every address used,
@@ -404,7 +404,7 @@ function configuredTable(
  * address too. The tables are asked about only for an address the rule would
  * refuse.
  */
-export async function assertConfiguredAddresses(
+export async function refusedConfiguredAddresses(
   config: {
     collections?: Slugged;
     singles?: Slugged;
@@ -416,7 +416,7 @@ export async function assertConfiguredAddresses(
     components: Registered;
   },
   tableExists: (table: string) => Promise<boolean>
-): Promise<void> {
+): Promise<JudgedAddress[]> {
   const configured: Array<[AddressKind, Slugged, Registered]> = [
     ["collection", config.collections ?? [], registered.collections],
     ["single", config.singles ?? [], registered.singles],
@@ -459,6 +459,17 @@ export async function assertConfiguredAddresses(
       refused.push(judged);
     }
   }
+  return refused;
+}
+
+/**
+ * The start's check: throws the refusals {@link refusedConfiguredAddresses}
+ * finds, one validation error naming each address and its reason.
+ */
+export async function assertConfiguredAddresses(
+  ...args: Parameters<typeof refusedConfiguredAddresses>
+): Promise<void> {
+  const refused = await refusedConfiguredAddresses(...args);
   if (refused.length === 0) return;
   throw NextlyError.validation({
     errors: refused.map(({ refusal }) => ({

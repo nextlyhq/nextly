@@ -6,7 +6,10 @@
  * of its own (as three did before this rule) fails here for the address it
  * judges differently. The Builder's Single create and the field-group service
  * are judged with the same list beside their harnesses
- * (`single-dispatcher-ddl.test.ts`, `field-group-metadata-apply-contract.test.ts`).
+ * (`single-dispatcher-ddl.test.ts`, `field-group-metadata-apply-contract.test.ts`), as are the
+ * Builder's collection create (`collections-handler-address.test.ts`), the field-group Direct API
+ * (`field-groups-address-rule.test.ts`), a configuration reload under `next dev`
+ * (`reload-config.test.ts`) and the migrate commands (`migrate-create/__tests__/addresses.test.ts`).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

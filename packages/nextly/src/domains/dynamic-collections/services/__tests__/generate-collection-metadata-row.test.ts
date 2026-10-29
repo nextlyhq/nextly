@@ -244,3 +244,23 @@ describe("the migration a Builder create writes", () => {
     expect(migrationSQL).toContain(expected);
   });
 });
+
+describe("the table a Builder create names", () => {
+  // Every name the Builder accepted before hyphens did keeps the exact table it always had,
+  // including one that already starts with the prefix; a hyphen is written as an underscore, as
+  // configuration names the table for the same address.
+  it.each([
+    ["articles", "dc_articles"],
+    ["team_updates", "dc_team_updates"],
+    ["dc_posts", "dc_dc_posts"],
+    ["b2", "dc_b2"],
+    ["team-updates", "dc_team_updates"],
+  ])("names '%s' the table '%s'", async (name, table) => {
+    const generated = (await generate({ name })) as unknown as {
+      tableName: string;
+      metadata: { tableName: string };
+    };
+    expect(generated.tableName).toBe(table);
+    expect(generated.metadata.tableName).toBe(table);
+  });
+});
