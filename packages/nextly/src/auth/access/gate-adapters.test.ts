@@ -425,6 +425,70 @@ describe("a super-admin named only by id", () => {
   });
 });
 
+describe("a yes-or-no asker under a read rule that answers a filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  beforeEach(() => {
+    callerMay("read");
+  });
+
+  it("answers yes: the caller may read the entries the filter matches", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+  });
+
+  it("is refused without the flag, where the asker neither applies nor only asks", async () => {
+    // The control: the yes above is the flag's.
+    const verdict = await collectionGateVerdict(
+      asked({ read: () => OWN as unknown as boolean }, { user: { id: "u1" } })
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("still refuses a caller without the read permission", async () => {
+    callerMayNot("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("answers a visitor yes where the Public role grants the read, naming no refusal", async () => {
+    // A visitor is judged as a signed-in user is: Public's read held, the
+    // filter answers yes to a yes-or-no asker, and no "now refused" notice
+    // is named for an answer that refuses nothing.
+    clearRuleAnswerNotices();
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    publicHolds("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("still refuses a visitor the Public role does not grant the read", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: false, refusal: "unauthenticated" });
+  });
+});
+
 describe("a read whose route already authorized it", () => {
   const OWN = { author: { equals: "u1" } };
   const filtering = () => vi.fn(() => OWN as unknown as boolean);

@@ -119,9 +119,13 @@ A read by id, through the Direct API, a plugin service or REST, reads an entry t
 matches and answers one it does not match exactly as an entry that does not exist. It
 returns the published entry the filter matched, and does not show a pending draft of it yet. A
 populated relationship shows the related rows the filter matches, and a row it does not match
-comes back as a row the caller may not read does. Every other REST route still refuses a
-caller whose rule answers with a filter, as it did before. The rule's type still says it
-returns a boolean.
+comes back as a row the caller may not read does. A check of whether the caller may read the
+collection at all answers yes: `ctx.caller.can`, `GET /me/capabilities`, which collections the
+dashboard and its widgets count and list, and the entity reader behind versions, translations
+and content events. What those then read is limited to the entries the filter matches, and a
+document lock is read only for a document the filter matches. Every other REST route still
+refuses a caller whose rule answers with a filter, as it did before. The rule's type still
+says it returns a boolean.
 
 A rule's filter can't use `near` or `within` yet, nor a field inside a component, nor the
 keys a list's `where` reserves for a request's own view: `_translated`, `_pendingChange` and
