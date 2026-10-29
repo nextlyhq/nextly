@@ -29,8 +29,8 @@ const hooks = vi.hoisted(() => ({
   previewPanesProps: vi.fn(),
 }));
 
-vi.mock("../EntrySystemHeader", () => ({
-  EntrySystemHeader: (props: Record<string, unknown>) => {
+vi.mock("../DocumentBar", () => ({
+  DocumentBar: (props: Record<string, unknown>) => {
     hooks.headerProps(props);
     return null;
   },

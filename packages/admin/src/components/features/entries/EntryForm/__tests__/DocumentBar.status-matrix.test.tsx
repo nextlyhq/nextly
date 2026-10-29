@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
-import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
+import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 // The Publish and Unpublish affordances are permission-gated. The matrix cases
 // below are about lifecycle state, not authorization, so the caller holds every
@@ -56,7 +56,7 @@ function Harness({
   const methods = useForm({ defaultValues: { title: entry?.title ?? "" } });
   return (
     <FormProvider {...methods}>
-      <EntrySystemHeader
+      <DocumentBar
         mode={mode}
         hasStatus={hasStatus}
         draftsEnabled={draftsEnabled}
@@ -74,7 +74,7 @@ function Harness({
   );
 }
 
-describe("EntrySystemHeader — button matrix", () => {
+describe("DocumentBar — button matrix", () => {
   it("create + hasStatus → Save Draft + Publish", () => {
     render(<Harness mode="create" hasStatus />);
     expect(
@@ -210,7 +210,7 @@ describe("EntrySystemHeader — button matrix", () => {
   });
 });
 
-describe("EntrySystemHeader — drafts-enabled working-draft matrix", () => {
+describe("DocumentBar — drafts-enabled working-draft matrix", () => {
   it("published + drafts on, no pending draft → Save leads, no Publish", () => {
     render(
       <Harness
@@ -267,7 +267,7 @@ describe("EntrySystemHeader — drafts-enabled working-draft matrix", () => {
   });
 });
 
-describe("EntrySystemHeader — discard working draft menu", () => {
+describe("DocumentBar — discard working draft menu", () => {
   it("offers Discard draft in the More menu for a Changed document", async () => {
     const user = userEvent.setup();
     render(
@@ -349,7 +349,7 @@ describe("EntrySystemHeader — discard working draft menu", () => {
   });
 });
 
-describe("EntrySystemHeader — publish permission gating", () => {
+describe("DocumentBar — publish permission gating", () => {
   it("hides Publish for a caller without publish-<slug>, keeping Save Draft", () => {
     // An author who may edit but not publish: the primary action for them is
     // to save a draft, and the server would refuse a publish anyway.

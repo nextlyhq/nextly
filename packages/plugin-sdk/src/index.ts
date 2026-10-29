@@ -22,9 +22,12 @@ export { definePlugin } from "nextly";
  * component is handed `WidgetProps<typeof widget>`; the types are here and in
  * `./widgets`. Its `size` is a `WidgetSizeDeclaration` of `GridSize`s, `{ w, h }`
  * on a grid twelve columns wide, the one way a card's size is stated. The
- * types its other fields are written in (`view`, `access`, `preview`,
- * `summary`) come from here too, so an author annotating one imports it from
- * where `defineWidget` came from.
+ * types its other fields are written in (`view`, `access` and its
+ * `WidgetAccessGate`, `preview`, `summary`) come from here too, and so do
+ * `WidgetInterval` and `WidgetRange`, a series read's interval and range, so
+ * an author annotating one imports it from where `defineWidget` came from.
+ * `WidgetLoadSize` is the `size` a `load` is handed: the card's `{ w, h }` and
+ * its tier, the shape `WidgetRenderSize` hands its component.
  */
 export { defineWidget } from "nextly";
 /**
@@ -41,9 +44,13 @@ export type {
   CoreView,
   GridSize,
   WidgetAccess,
+  WidgetAccessGate,
   WidgetData,
+  WidgetInterval,
+  WidgetLoadSize,
   WidgetPreviewCase,
   WidgetProps,
+  WidgetRange,
   WidgetRenderSize,
   WidgetSizeDeclaration,
   WidgetSummary,
@@ -74,6 +81,16 @@ export {
   formatCount as formatWidgetNumber,
   type ChartSlot as WidgetChartSlot,
 } from "@nextlyhq/ui/format";
+
+/**
+ * @experimental `rowsThatFit(size, { density })` — how many list rows a card of
+ * `size` draws at a density (`"default"` or `"compact"`): its body's height
+ * over one row's, in whole rows, at most ten. A widget's `load` reads it from
+ * the `size` it is handed, to ask for no more rows than its card shows. Core's
+ * own, the formula its list cards are drawn by, and at this server-safe root
+ * beside the formatters for the reason they are: a `load` runs on the server.
+ */
+export { rowsThatFit } from "nextly";
 
 /**
  * @experimental `defineAttentionItem` — declares one line of the Needs
