@@ -257,11 +257,10 @@ export function createMockCollectionService(
 /**
  * The coarse access gate every collection read and write consults.
  *
- * `checkAccess` decides the operation for an ordinary caller;
- * `getRegisteredAccess` is what the API-key branch asks for the collection's
- * code-defined `access` functions, and returns nothing unless a test registers
- * one. Allowing by default so a test that does not care about access does not
- * have to say so.
+ * The access decision judges an ordinary caller, from the caller the gate
+ * reads (below); `getRegisteredAccess` is what the gate asks for the
+ * collection's code-defined `access` functions, and returns nothing unless a
+ * test registers one.
  */
 // ── The caller the collection gate reads ────────────────────────────────
 
@@ -279,7 +278,6 @@ export {
 export function createMockRbacAccessControlService(): MockRecord {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {
-    checkAccess: vi.fn().mockResolvedValue(true),
     // Answers `undefined`: no code-defined rule governs the operation, so an
     // anonymous caller falls through to the public default.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),

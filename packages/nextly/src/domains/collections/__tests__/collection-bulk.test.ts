@@ -521,8 +521,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       // throws NextlyError.forbidden so the dispatcher emits a canonical
       // 403 error envelope instead of fabricating a synthetic row in
       // `failures[]` with no real id to attach it to.
+      // The real collection gate refuses: `user-1` holds no role in the
+      // mocked database, which answers every select with no rows, so the
+      // decision finds no permission for the write.
       const mockACS = createMockRbacAccessControlService();
-      mockACS.checkAccess.mockResolvedValueOnce(false);
 
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(
@@ -579,8 +581,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       // See bulkUpdateByQuery analogue above: a collection-wide access denial
       // is a request-level authorization failure (403), not a partial-success
       // entry in `failures[]`.
+      // The real collection gate refuses: `user-1` holds no role in the
+      // mocked database, which answers every select with no rows, so the
+      // decision finds no permission for the write.
       const mockACS = createMockRbacAccessControlService();
-      mockACS.checkAccess.mockResolvedValueOnce(false);
 
       const mockAdapter = createMockAdapter(mockDb);
       const restrictedService = new CollectionEntryService(

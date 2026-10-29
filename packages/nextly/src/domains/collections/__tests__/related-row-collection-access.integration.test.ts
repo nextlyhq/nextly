@@ -279,7 +279,7 @@ describe("related-row collection access — rule context (integration)", () => {
    *
    * The rules above read only `user.id`, which every path supplies. This one
    * reads the caller's effective permissions, which only the canonical context
-   * — the one `checkAccess` builds from the database — carries for a session
+   * — the one the access decision builds from the database — carries for a session
    * caller. A narrower reconstruction admits by `user.id` and still fails
    * here, so the direct read is asserted first: a row the caller can read
    * directly but that vanishes from a relationship is the ghost this guards.

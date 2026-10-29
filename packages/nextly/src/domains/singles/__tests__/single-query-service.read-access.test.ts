@@ -72,7 +72,7 @@ function createService(
     fields: [textField("siteName")],
   });
 
-  const rbac = createMockRBACService(rbacAllows);
+  const rbac = createMockRBACService();
   if (readRule) rbac.getRegisteredAccess.mockReturnValue({ read: readRule });
 
   const service = new SingleQueryService(

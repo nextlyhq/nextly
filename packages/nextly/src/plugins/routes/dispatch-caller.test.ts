@@ -7,8 +7,8 @@
  * gated stayed green while a read-only key could write. The separating property
  * is that a key whose scope is NARROWER than its owner's is judged on the
  * narrower set — so every scoped-key case here is paired with an owner allowed
- * EVERYTHING and a fake RBAC that says yes to all of it. An implementation that
- * resolved the owner gets `true` and these fail.
+ * EVERYTHING: the session's permission lookup says yes to all of it. An
+ * implementation that resolved the owner gets `true` and these fail.
  *
  * Whether the scope REACHES the services is a different question with a
  * different owner, proved end to end against real keys and real access services
@@ -62,15 +62,6 @@ const reqAuth = vi.mocked(requireAuthentication);
 const reqPerm = vi.mocked(requirePermission);
 const holds = vi.mocked(hasPermission);
 
-/**
- * The owner is allowed EVERYTHING, deliberately.
- *
- * This is the control that makes a scoped-key refusal meaningful. `checkAccess`
- * is the session path's whole decision — super-admin bypass included — so an
- * implementation that resolves the key's owner instead of the key gets `true`
- * here and the refusal assertions fail.
- */
-const checkAccess = vi.fn(async () => true);
 const getRegisteredAccess = vi.fn(() => undefined);
 
 /** Every access method the plugin collection wrapper gates, and its call log. */
@@ -176,17 +167,18 @@ beforeEach(() => {
   listCalls = [];
   reqAuth.mockReset();
   reqPerm.mockReset();
-  checkAccess.mockClear();
-  checkAccess.mockResolvedValue(true);
   holds.mockReset();
-  holds.mockResolvedValue(false);
+  // The owner is allowed EVERYTHING, deliberately. This is the control that
+  // makes a scoped-key refusal meaningful: the session decision asks this
+  // permission, so an implementation that judges the key's owner instead of
+  // the key gets `true` here and the refusal assertions fail.
+  holds.mockResolvedValue(true);
   getRegisteredAccess.mockReset();
   getRegisteredAccess.mockReturnValue(undefined);
   container.register(
     "rbacAccessControlService",
     () =>
       ({
-        checkAccess,
         getRegisteredAccess,
         // Derived from `getRegisteredAccess`, as the service derives it.
         getRegisteredTarget: (slug: string) => {
@@ -204,10 +196,8 @@ describe("a plugin route is told what the caller may do", () => {
 
     await expect(seen!.caller!.can("read", "posts")).resolves.toBe(true);
     await expect(seen!.caller!.can("create", "posts")).resolves.toBe(false);
-    // A super-admin OWNER does not lift a key's scope: the bypass lives on the
-    // session path, and neither the owner's permissions nor `checkAccess` is
-    // consulted.
-    expect(checkAccess).not.toHaveBeenCalled();
+    // An owner allowed everything does not lift a key's scope: the owner's
+    // permissions are never consulted.
     expect(holds).not.toHaveBeenCalled();
   });
 

@@ -301,7 +301,8 @@ export interface SingleAccessControl {
 // ============================================================
 
 /**
- * Parameters for the `RBACAccessControlService.checkAccess()` method.
+ * Parameters for the `RBACAccessControlService.checkAccessApplyingFilter()`
+ * method.
  */
 export interface CheckAccessParams {
   /** The authenticated user's ID (null for unauthenticated requests) */

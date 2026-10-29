@@ -86,7 +86,7 @@ function createCtx(
   const registry = createMockSingleRegistry();
   const hookRegistry = createMockHookRegistry();
   const fieldGroupDataService = createMockComponentDataService();
-  const rbac = createMockRBACService(true);
+  const rbac = createMockRBACService();
   const logger = createSilentLogger();
 
   const service = new SingleEntryService(

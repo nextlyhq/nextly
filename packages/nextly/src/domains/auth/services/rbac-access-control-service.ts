@@ -17,8 +17,11 @@
  * the user has no database permission for the resource+action, access is denied.
  *
  * Code-defined access configs are registered at startup via `registerCollectionAccess()`
- * and `registerSingleAccess()`. The service auto-resolves them during `checkAccess()`
- * when no explicit `codeAccess` parameter is provided.
+ * and `registerSingleAccess()`. The service auto-resolves them during
+ * `checkAccessApplyingFilter()` when no explicit `codeAccess` parameter is
+ * provided. Whether a user may act is asked of `nextly.access.check` or the
+ * access decision (`decide()`); this method serves the readers that apply a
+ * read rule's filter to what they read.
  *
  * @module domains/auth/services/rbac-access-control-service
  * @since 1.0.0
@@ -33,8 +36,8 @@
  *   read: true,
  * });
  *
- * // Simple check — auto-resolves registered access, then DB permissions
- * const canRead = await rbac.checkAccess({
+ * // A filtered read — auto-resolves registered access, then DB permissions
+ * const { allowed, filter } = await rbac.checkAccessApplyingFilter({
  *   userId: 'user-123',
  *   operation: 'read',
  *   resource: 'posts',
@@ -269,43 +272,22 @@ export class RBACAccessControlService {
   }
 
   /**
-   * Check if a user is allowed to perform an operation on a resource.
+   * Whether a signed-in user may perform an operation on a resource, asked by
+   * a reader that applies a collection read rule's filter to the entries it
+   * reads: a rule answering one allows the entries it matches, and the filter
+   * is handed back to apply.
    *
    * If no explicit `codeAccess` is provided, auto-resolves from the
    * in-memory registry (populated at startup from `defineCollection`/`defineSingle`).
-   *
-   * @param params - Access check parameters
-   * @returns `true` if access is allowed, `false` if denied
-   *
-   * @example
-   * ```typescript
-   * const allowed = await rbac.checkAccess({
-   *   userId: 'user-123',
-   *   operation: 'update',
-   *   resource: 'posts',
-   * });
-   * ```
-   */
-  async checkAccess(params: CheckAccessParams): Promise<boolean> {
-    return (await this.userAccess(params, false)).allowed;
-  }
-
-  /**
-   * {@link checkAccess}, asked by a reader that applies a collection read
-   * rule's filter to the entries it reads: a rule answering one allows the
-   * entries it matches, and the filter is handed back to apply.
    */
   async checkAccessApplyingFilter(
     params: CheckAccessParams
   ): Promise<FilteredRead> {
-    return this.userAccess(params, true);
+    return this.userAccess(params);
   }
 
-  /** A signed-in user's access, the filter handed back where it is applied. */
-  private async userAccess(
-    params: CheckAccessParams,
-    appliesFilter: boolean
-  ): Promise<FilteredRead> {
+  /** A signed-in user's access, a read rule's filter handed back to apply. */
+  private async userAccess(params: CheckAccessParams): Promise<FilteredRead> {
     const { userId, operation, resource, executor } = params;
 
     if (!userId) {
@@ -345,13 +327,7 @@ export class RBACAccessControlService {
           target,
           executor
         );
-        return this.userRuleRead(
-          operationAccess,
-          ctx,
-          operation,
-          target,
-          appliesFilter
-        );
+        return this.userRuleRead(operationAccess, ctx, operation, target);
       }
     }
 
@@ -360,17 +336,18 @@ export class RBACAccessControlService {
 
   /**
    * What a signed-in user's rule function allows: every entry only by
-   * answering `true`, or, to a caller that applies it, the entries a read
-   * rule's filter matches. A rule that throws refuses. A truthy answer that
-   * refuses let the user in before, so that refusal is named once.
+   * answering `true`, or the entries a read rule's filter matches, which the
+   * caller applies. A rule that throws refuses. A truthy answer that refuses
+   * let the user in before, so that refusal is named once.
    */
   private async userRuleRead(
     rule: (ctx: AccessControlContext) => unknown,
     ctx: AccessControlContext,
     operation: AccessOperation,
-    target: AccessTarget,
-    appliesFilter: boolean
+    target: AccessTarget
   ): Promise<FilteredRead> {
+    // Every caller of this path applies a read rule's filter.
+    const appliesFilter = true;
     // Asked only of a user who holds the permission, whom the decision would
     // let read the entries a filter matches.
     const asked = await askRuleFunction(
@@ -402,7 +379,7 @@ export class RBACAccessControlService {
   /**
    * A collection's code-defined rule, judged for a caller with NO session.
    *
-   * `checkAccess` above cannot answer this: it returns `false` at `!userId`
+   * `checkAccessApplyingFilter` above cannot answer this: it refuses at `!userId`
    * before it reads the rule, because everything below that line resolves roles
    * and permissions from a user id. So an anonymous caller reached no rule at
    * all, and a collection declaring `create: false` or `read: ({ user }) =>
@@ -442,7 +419,7 @@ export class RBACAccessControlService {
    * plugin-defined person.
    *
    * The rule is the whole decision. A person holds no role and no permission
-   * and is never a super-admin, so nothing `checkAccess` resolves from a user
+   * and is never a super-admin, so nothing `userAccess` resolves from a user
    * id applies; and where an anonymous caller's read with no rule falls
    * through to the public default, a person is refused. A collection admits a
    * person only where its author wrote a rule that does, or one set to
@@ -531,7 +508,7 @@ export class RBACAccessControlService {
     operation: AccessOperation,
     target: AccessTarget,
     // Optional transaction-bound executor so the role/permission reads run on the
-    // caller's transaction connection instead of the pool; see `checkAccess`.
+    // caller's transaction connection instead of the pool; see `userAccess`.
     executor?: unknown
   ): Promise<AccessControlContext> {
     const [roleSlugs, grants] = await Promise.all([

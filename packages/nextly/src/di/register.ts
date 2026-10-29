@@ -3223,7 +3223,7 @@ function logStorageConfiguration(
 /**
  * Publish every code-defined `access` block to the RBAC service.
  *
- * `checkAccess` resolves these from an in-memory registry, and a slug missing
+ * The access decision resolves these from an in-memory registry, and a slug missing
  * from it falls through to the caller's stored permissions — so a rule that is
  * never registered does not fail closed, it stops applying. A restrictive
  * `access.read` silently stops restricting.
