@@ -15,7 +15,6 @@
  * @module shared/types/rule-filter
  * @experimental
  */
-import type { FieldType } from "../../collections/fields/types/base";
 import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
 import type { FilterOperator } from "../../domains/collections/query/filter-shape";
 
@@ -75,9 +74,6 @@ interface BuiltInFilterKinds {
   relationship: EqualityKind<EntryId>;
   upload: EqualityKind<EntryId>;
 }
-
-/** A field a plugin contributed, compared by equality on what it may hold. */
-type PluginKind = EqualityKind<string | number | boolean | Date>;
 
 /**
  * The system fields a collection's filter may name, whatever it declares.
@@ -152,9 +148,10 @@ type KindOf<Field> = Field extends { type: infer Type }
       ? never
       : Type extends keyof BuiltInFilterKinds
         ? BuiltInFilterKinds[Type]
-        : Type extends FieldType
-          ? never
-          : PluginKind
+        : // A field a plugin contributed is no key either: how its type is
+          // stored is registered at runtime, where a JSON-backed one is
+          // refused in a rule's filter, and its declaration does not say.
+          never
   : never;
 
 /** The fields of `Fields` a filter may name. */
@@ -292,6 +289,18 @@ export type CollectionFilterRule<
 ) => CollectionRuleAnswer<Fields> | Promise<CollectionRuleAnswer<Fields>>;
 
 /**
+ * Whether `Holder` gives `Key` a value that may be `undefined`. Only a key the
+ * answer always holds is asked: an optional one, as a rule typed with
+ * {@link CollectionRuleFilter} has, is one the filter may leave out.
+ */
+type IsGivenNoValue<Holder, Key extends keyof Holder> =
+  Pick<Holder, Key> extends Required<Pick<Holder, Key>>
+    ? undefined extends Holder[Key]
+      ? true
+      : false
+    : false;
+
+/**
  * What `Condition` may hold, operator by operator, for a field of `Kind`. A
  * condition naming no operator, and an operator given `undefined`, are
  * refused when the rule runs, so each becomes a type no value has.
@@ -309,7 +318,7 @@ type ExactCondition<Kind, Condition> = Condition extends Date
               infer Names
             >
               ? Operator extends Names
-                ? undefined extends Condition[Operator]
+                ? IsGivenNoValue<Condition, Operator> extends true
                   ? `${Operator & string} is given no value`
                   : Condition[Operator]
                 : `${Operator & string} is not an operator for this field`
@@ -324,7 +333,7 @@ type ExactFilter<Kinds, Filter> = {
       ? readonly ExactFilter<Kinds, Member>[]
       : Filter[Key]
     : Key extends keyof Kinds
-      ? undefined extends Filter[Key]
+      ? IsGivenNoValue<Filter, Key> extends true
         ? `${Key & string} is given no value`
         : ExactCondition<Kinds[Key], Filter[Key]>
       : `${Key & string} is not a field this filter can name`;

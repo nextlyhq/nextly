@@ -32,6 +32,8 @@ import type {
   FieldConfig,
   TextFieldConfig,
 } from "../../collections/fields/types";
+import { pluginField } from "../../collections/fields/types/plugin-field";
+import type { CollectionFilterRuleInput as ConfigFilterRuleInput } from "../../config";
 
 import type {
   AccessControlFunction,
@@ -269,6 +271,22 @@ expectTypeOf<
   ExactAnswer<Fields, { team: { equals: string | undefined } }>
 >().toEqualTypeOf<{ team: { equals: "equals is given no value" } }>();
 
+// The config entry point exports the input type defineCollection reads.
+expectTypeOf<ConfigFilterRuleInput<Fields, { team: string }>>().toEqualTypeOf<
+  CollectionFilterRuleInput<Fields, { team: string }>
+>();
+
+// A rule already typed with the exported types is taken as it is: the keys
+// it may leave out are not read as given no value.
+const typedRule: CollectionFilterRule<Fields> = () => ({ team: "a" });
+defineCollection({ slug: "reused", fields, access: { read: typedRule } });
+const typedFilter: CollectionRuleFilter<Fields> = { team: { equals: "a" } };
+defineCollection({
+  slug: "reused-filter",
+  fields,
+  access: { read: () => typedFilter },
+});
+
 // ---------------------------------------------------------------------------
 // A field stored as a JSON document, or owning no column, is no key
 // ---------------------------------------------------------------------------
@@ -325,6 +343,13 @@ const maybeMany = [number({ name: "maybeMany", hasMany: either })];
 expectTypeOf<
   ExactAnswer<typeof maybeMany, { maybeMany: number }>
 >().toEqualTypeOf<{ maybeMany: ReturnType<typeof notAField<"maybeMany">> }>();
+
+// A field a plugin contributed is no key: its storage is registered at
+// runtime, and its declaration does not say whether it is a JSON document.
+const contributed = [pluginField({ name: "rating", type: "star-rating" })];
+expectTypeOf<
+  ExactAnswer<typeof contributed, { rating: number }>
+>().toEqualTypeOf<{ rating: ReturnType<typeof notAField<"rating">> }>();
 
 // A field owning no column leaves the system field of its name in place,
 // compared as that field is, and is no key itself.
