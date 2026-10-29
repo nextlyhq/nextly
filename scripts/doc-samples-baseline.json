@@ -157,7 +157,7 @@
       "compiled": 3
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 18,
+      "samples": 19,
       "compiled": 9
     },
     "docs/plugins/api-reference.mdx": {
@@ -245,8 +245,8 @@
       "compiled": 1
     },
     "docs/widgets/index.mdx": {
-      "samples": 1,
-      "compiled": 0
+      "samples": 3,
+      "compiled": 2
     },
     "packages/adapter-mysql/README.md": {
       "samples": 1,
@@ -367,13 +367,13 @@
       "reader-name #7 error TS2304: Cannot find name 'Page'.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "#15 error TS2552: Cannot find name 'Skeleton'. Did you mean 'Selection'?": 1,
-      "uninstalled #17 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "#16 error TS2552: Cannot find name 'Skeleton'. Did you mean 'Selection'?": 1,
+      "uninstalled #18 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '../../../types/generated/plugin-admin-imports.generated'.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1,
-      "reader-name #15 error TS2304: Cannot find name 'Chart'.": 1
+      "reader-name #16 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
       "#3 error TS2304: Cannot find name 'isTotpEnabled'.": 1,

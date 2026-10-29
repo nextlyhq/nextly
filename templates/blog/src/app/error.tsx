@@ -4,10 +4,10 @@ import { useEffect } from "react";
 
 export default function Error({
   error,
-  reset,
+  retry,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  retry: () => void;
 }) {
   useEffect(() => {
     console.error("Root Error:", error);
@@ -20,7 +20,7 @@ export default function Error({
         {error.message || "An unexpected error occurred at the root level."}
       </p>
       <button
-        onClick={() => reset()}
+        onClick={() => retry()}
         className="mt-6 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
       >
         Try again

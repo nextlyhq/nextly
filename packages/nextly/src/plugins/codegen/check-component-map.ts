@@ -86,7 +86,9 @@ export async function checkComponentMapFiles(
   plugins: readonly PluginDefinition[],
   typesOutputPath: string,
   cwd: string,
-  configFile: string | undefined
+  configFile: string | undefined,
+  /** The site config's `admin.dashboard`, whose own widgets the map must list too. */
+  siteDashboard?: unknown
 ): Promise<ComponentMapAgreement> {
   const dir = resolve(cwd, dirname(typesOutputPath));
   const files = [
@@ -95,7 +97,7 @@ export async function checkComponentMapFiles(
   ] as const;
   const [map, list] = await Promise.all(files.map(contentOf));
   const listed = list === undefined ? [] : listedPathsOf(list);
-  const declared = componentImportMapEntries(plugins);
+  const declared = componentImportMapEntries(plugins, siteDashboard);
   const held = new Set(listed ?? []);
   const declaredPaths = new Set(declared.map(each => each.path));
   return {

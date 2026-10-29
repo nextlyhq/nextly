@@ -11,9 +11,14 @@ import {
   sizeFacts,
   type CanonicalWidget,
 } from "../canonical";
+import {
+  collectionWidgets,
+  unreadableCollectionCard,
+} from "../collection-cards";
 import type { WidgetDefinition } from "../definition";
 import { sizeBounds } from "../grid-size";
 import { clearWidgets, registerWidget } from "../registry";
+import { setSiteDashboardRules } from "../site-rules";
 import { UNSTATED_WIDGET_SIZE } from "../unstated-size";
 
 function registered(patch: Partial<WidgetDefinition>): WidgetDefinition {
@@ -400,6 +405,87 @@ describe("the canonical widget set", () => {
 
   it("is empty when neither channel has anything", () => {
     expect(canonicalWidgets([])).toEqual([]);
+  });
+});
+
+describe("a widget the site config overrides", () => {
+  it("withholds a card whose Collection setting the override starts at a collection the reader may not read", () => {
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([["acme/pinned", { settings: { source: "secret" } }]]),
+    });
+    try {
+      // Contributed, so the canonical summary's own copy of the setting is
+      // the one withholding and the token read.
+      const listed = canonicalWidgets([
+        {
+          id: "acme/pinned",
+          collectionSetting: {
+            name: "source",
+            type: "collection",
+            label: "Collection",
+            defaultValue: "posts",
+          },
+        },
+      ]);
+      const withheld = unreadableCollectionCard(
+        collectionWidgets(listed),
+        new Set(["posts"])
+      );
+      // A card that stores no value reads the starting value, now "secret".
+      expect(
+        withheld({
+          id: "c",
+          widgetId: "acme/pinned",
+          w: 3,
+          h: 2,
+          removed: false,
+        })
+      ).toBe(true);
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
+  });
+
+  it("is listed as the override changes it, whichever channel supplied it", () => {
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([
+        ["acme/stats", { description: "Ours", size: { max: { w: 6, h: 3 } } }],
+      ]),
+    });
+    try {
+      // Contributed, so only the canonical list's own reading applies it.
+      const [stats] = canonicalWidgets([
+        {
+          id: "acme/stats",
+          description: "Theirs",
+          size: { default: { w: 4, h: 3 }, max: { w: 12, h: 6 } },
+        },
+      ]);
+      expect(stats.description).toBe("Ours");
+      expect(stats.size).toEqual({
+        default: { w: 4, h: 3 },
+        min: { w: 4, h: 3 },
+        max: { w: 6, h: 3 },
+      });
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
   });
 });
 

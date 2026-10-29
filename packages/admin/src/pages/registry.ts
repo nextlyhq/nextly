@@ -27,6 +27,11 @@ import {
   overridableBy,
 } from "../lib/navigation/section-resolvers";
 import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
+import {
+  CHANGE_SETTINGS,
+  CREATE_SETTINGS,
+  READ_SETTINGS,
+} from "../lib/permissions/system-policy";
 import type { PageProps } from "../lib/routing";
 import type { RouteSection } from "../types/route-section";
 
@@ -595,11 +600,11 @@ export const routeConfig: Record<string, RouteConfig> = {
 
   // Settings routes
   // Any grant that reaches SOMETHING in the panel may open the panel's own URL.
-  // Narrowing it to `manage-settings` turned the rail entry into a door that
+  // Narrowing it to `read-settings` turned the rail entry into a door that
   // closed in the face of anyone whose only destination was further in.
   //
   // This guard admits them; it does not place them. The page behind it is
-  // General Settings, whose own query answers to `manage-settings`, so a reader
+  // General Settings, whose own query answers to `read-settings`, so a reader
   // admitted here without that grant sees a 403. Nothing on the page sends them
   // elsewhere. The rail is what keeps them off this URL: `resolveSettingsLanding`
   // picks the first destination in the panel they can actually open, and every
@@ -799,30 +804,33 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: ImageSizesSettingsPage,
     screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_IMAGE_SIZES_CREATE]: {
     component: CreateImageSizePage,
     screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: CREATE_SETTINGS,
     section: overridableBy("settings"),
   },
+  // Opened on read, since the page first loads what it shows and that read
+  // asks `read-settings`; the form is read-only without `update-settings`.
   [ROUTES.SETTINGS_IMAGE_SIZES_EDIT]: {
     component: EditImageSizePage,
     screenName: settingsScreen(ROUTES.SETTINGS_IMAGE_SIZES),
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
 
-  // Plugin routes
+  // Plugin routes. The plugins area configures settings, so any settings
+  // change opens it, as it opens the plugins rail (`canManageSettings`).
   [ROUTES.PLUGINS]: {
     component: PluginsOverviewPage,
     screenName: railScreen("plugins"),
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: [...CHANGE_SETTINGS],
     section: "plugins",
   },
   // Registered outside `/admin/plugins/`, so no ordering rule holds this in
@@ -834,14 +842,14 @@ export const routeConfig: Record<string, RouteConfig> = {
     // declaration, so its label is repeated here.
     screenName: "Browse plugins",
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: [...CHANGE_SETTINGS],
     section: "plugins",
   },
   [ROUTES.PLUGIN_DETAIL]: {
     component: PluginDetailPage,
     screenName: railScreen("plugins"),
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: [...CHANGE_SETTINGS],
     section: "plugins",
   },
   // No fixed permission: a plugin may keep its settings to a permission of
@@ -860,21 +868,23 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: UserFieldsPage,
     screenName: settingsScreen(ROUTES.USERS_FIELDS),
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
   [ROUTES.USERS_FIELDS_CREATE]: {
     component: CreateUserFieldPage,
     screenName: settingsScreen(ROUTES.USERS_FIELDS),
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: CREATE_SETTINGS,
     section: overridableBy("settings"),
   },
+  // Opened on read, since the page first loads what it shows and that read
+  // asks `read-settings`; the form is read-only without `update-settings`.
   [ROUTES.USERS_FIELDS_EDIT]: {
     component: EditUserFieldPage,
     screenName: settingsScreen(ROUTES.USERS_FIELDS),
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
 };

@@ -69,13 +69,23 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * The judged project's pins, each a margin above what it measured when it was
  * set (62 heavy files, and a mean of 1,191 modules over the heaviest tenth,
  * over 597 files; CI's runs measured 61 and 1,190), and the heavy files of
- * that measurement. Each pin is the higher measurement plus its margin, at
+ * that measurement. The heavy files' pin was raised when three tests that
+ * load the service registry by design joined them (the boot refusal of an
+ * unsupported framework and two migrate commands' tests): 65 measured, so 67
+ * holds whether CI measures one fewer, as it has before. The tail mean's pin
+ * was raised when the dashboard's pins joined the service registry (their
+ * route and service) beside the logger's credential shapes: 1,228 measured,
+ * the heavy files' chains unchanged, so 1,262 holds whether CI measures one
+ * fewer. It came down to 1,257 when the suite measured 1,223 (the CLI's
+ * upgrade and plugin-rollback tests now heavy, the boot refusal and the
+ * seeding wait no longer), so it holds whether CI measures one fewer. Each
+ * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
  * measures below a pin by more than its margin fails, naming the pin to set;
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 64, tailMeanModules: 1_225 };
+export const BUDGET = { heavyFiles: 67, tailMeanModules: 1_257 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

@@ -4,9 +4,10 @@
  *
  * Every fault is gathered and refused together with the widget declarations'
  * own, each naming "the site config" and the entry, so one restart shows the
- * author everything to fix. `defaultLayout` and `suggestions` are applied
- * through `siteDefaultLayoutPlan`; which keys are not applied yet is
- * `siteDashboardKeysNotApplied`'s to say.
+ * author everything to fix. Every key it accepts is applied: `widgets` are
+ * registered with the plugins', `defaultLayout` and `suggestions` through
+ * `siteDefaultLayoutPlan`, and `hide`, `replace` and `overrides` through the
+ * site's rules.
  *
  * @module domains/widgets/declaration/site-dashboard
  */
@@ -27,16 +28,18 @@ import {
   type WidgetSizeBounds,
   type WidgetSizeDeclaration,
 } from "../grid-size";
-import { MAX_PLACEMENTS } from "../layout-limits";
+import { isUsableText, MAX_PLACEMENTS } from "../layout-limits";
 import { getWidget } from "../registry";
 import {
   inRetiredWidgetNamespace,
   retiredWidgetReplacement,
 } from "../retired-widget-namespaces";
 import { startingValueProblem, type AnyWidgetSetting } from "../settings";
+import type { SiteDashboardRules } from "../site-rules";
 
-import type { DefaultLayoutCard } from "./dashboard";
+import type { DefaultLayoutCard, WidgetOverride } from "./dashboard";
 import { quote } from "./quote";
+import { SITE_CONFIG, siteComponentProblem } from "./site-component";
 import {
   descriptionProblem,
   requiredTextProblem,
@@ -44,8 +47,9 @@ import {
   type WidgetDeclarationFault,
 } from "./validate";
 
-/** Who a site config fault names as its owner. */
-export const SITE_CONFIG = "the site config";
+// Who a site config fault names as its owner: declared beside the rule for a
+// site widget's component, which the code generator reads too.
+export { SITE_CONFIG } from "./site-component";
 
 /** What the check needs to know of one widget. */
 export interface SiteWidgetFacts {
@@ -602,7 +606,9 @@ function cardIdShapeProblem(
   widgetIds: ReadonlySet<string>
 ): string | undefined {
   if (id === undefined) return undefined;
-  if (typeof id !== "string" || id === "") {
+  // The layout endpoint's own test, so a card startup accepts is one a
+  // reader's save can carry back.
+  if (!isUsableText(id)) {
     return `defaultLayout id must be a non-empty string, got ${quote(id)}`;
   }
   return widgetIds.has(id)
@@ -721,6 +727,29 @@ function replaceFaults(
  * Every fault of the site config's `admin.dashboard`, other than its own
  * widgets' declarations, which are checked with the plugins'.
  */
+/**
+ * Each of the site's own widgets whose view component the component map could
+ * not resolve: its module neither relative to the config file nor a package
+ * name. The rest of a widget's declaration is checked with every owner's.
+ */
+function siteWidgetComponentFaults(
+  dashboard: Record<string, unknown>
+): WidgetDeclarationFault[] {
+  if (!Array.isArray(dashboard.widgets)) return [];
+  return (dashboard.widgets as readonly unknown[]).flatMap(widget => {
+    const view = isRecord(widget) ? widget.view : undefined;
+    const component = isRecord(view) ? view.component : undefined;
+    if (typeof component !== "string") return [];
+    const problem = siteComponentProblem(component);
+    if (problem === undefined) return [];
+    const id =
+      isRecord(widget) && typeof widget.id === "string"
+        ? widget.id
+        : "(widgets)";
+    return [fault(id, problem)];
+  });
+}
+
 export function siteDashboardFaults(
   dashboard: unknown,
   ctx: SiteDashboardContext
@@ -746,19 +775,8 @@ export function siteDashboardFaults(
     ...defaultLayoutFaults(dashboard, ctx),
     ...suggestions,
     ...replaceFaults(dashboard, ctx),
+    ...siteWidgetComponentFaults(dashboard),
   ];
-}
-
-/** The keys this version accepts and checks but does not yet apply. */
-const NOT_APPLIED_YET = ["widgets", "hide", "overrides", "replace"] as const;
-
-/**
- * The keys the site config sets that this version does not apply yet, so
- * startup can say so rather than let a setting appear to do nothing.
- */
-export function siteDashboardKeysNotApplied(dashboard: unknown): string[] {
-  if (!isRecord(dashboard)) return [];
-  return NOT_APPLIED_YET.filter(key => dashboard[key] !== undefined);
 }
 
 /**
@@ -831,14 +849,64 @@ export function siteDefaultLayoutPlan(
   const given = site.defaultLayout as
     | readonly (string | DefaultLayoutCard)[]
     | undefined;
-  return {
-    cards:
-      given === undefined
-        ? CORE_DEFAULT_LAYOUT
-        : given.map(entry =>
+  const replaced = replacements(site);
+  const cards =
+    given === undefined
+      ? CORE_DEFAULT_LAYOUT
+      : given.map(
+          (entry): DefaultLayoutCard =>
             typeof entry === "string" ? { widget: entry } : { ...entry }
-          ),
+        );
+  return {
+    // An alternative takes the place of the built-in it replaces: the card keeps its own id, its
+    // place and its size (held within the alternative's bounds where it is placed), and drops
+    // the settings, which are the built-in's vocabulary, not the alternative's.
+    cards: cards.map(card => {
+      const alternative = replaced.get(card.widget);
+      return alternative === undefined
+        ? card
+        : {
+            widget: alternative,
+            ...(card.id === undefined ? {} : { id: card.id }),
+            ...(card.w === undefined ? {} : { w: card.w }),
+            ...(card.h === undefined ? {} : { h: card.h }),
+            ...(card.optional === undefined ? {} : { optional: card.optional }),
+          };
+    }),
     suggestions: site.suggestions !== false,
     suggested,
+  };
+}
+
+/** The site's `replace`, built-in to alternative, from the copy startup checked. */
+function replacements(site: Record<string, unknown>): Map<string, string> {
+  return new Map(
+    isRecord(site.replace)
+      ? Object.entries(site.replace).filter(
+          (pair): pair is [string, string] => typeof pair[1] === "string"
+        )
+      : []
+  );
+}
+
+/**
+ * The site's rules about other widgets, from the copy startup checked: what it hides, what it
+ * replaces, what it overrides, and every alternative the plugins offer (`alternatives`), which
+ * the site keeps off the dashboard unless it replaces a built-in with one.
+ */
+export function siteDashboardRulesOf(
+  dashboard: unknown,
+  alternatives: ReadonlyMap<string, string>
+): SiteDashboardRules {
+  const site = isRecord(dashboard) ? dashboard : {};
+  return {
+    hidden: hiddenIds(site),
+    replaced: replacements(site),
+    alternatives: new Set(alternatives.keys()),
+    overrides: new Map(
+      isRecord(site.overrides)
+        ? (Object.entries(site.overrides) as [string, WidgetOverride][])
+        : []
+    ),
   };
 }

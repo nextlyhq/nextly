@@ -17,3 +17,12 @@
  * is a ceiling at all, beside the payload's byte limit it shares a reason with.
  */
 export const MAX_PLACEMENTS = 200;
+
+/**
+ * Whether a value is text with something in it: what a placement's id must
+ * be. One reading, so the site config's check accepts exactly the card ids
+ * the layout endpoint accepts on a write.
+ */
+export function isUsableText(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
