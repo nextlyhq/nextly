@@ -4,6 +4,7 @@
  * once that Save has stored, under the editor's latch; and the form is let go
  * however the recovery ends.
  */
+import { defaultScheduler, notifyManager } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -64,6 +65,37 @@ describe("useRefusedForm", () => {
     expect(editor.resetToDocument).toHaveBeenCalledTimes(1);
     expect(result.current.recovering).toBe(false);
     expect(editor.latch.current).toBe(false);
+  });
+
+  it("starts the form afresh only once React Query has told the editor of the reloaded document, on whatever scheduler it uses", async () => {
+    // A host can schedule React Query's notifications its own way, such as on
+    // the next animation frame: until they run, the editor still shows the
+    // document from before the take.
+    const scheduled: (() => void)[] = [];
+    notifyManager.setScheduler(callback => {
+      scheduled.push(callback);
+    });
+    try {
+      const editor = gate(async () => ({ ok: true }));
+      const { result } = renderHook(() => useRefusedForm(editor));
+      let running: Promise<void> | undefined;
+      await act(async () => {
+        running = result.current.refusedForm.recover(async () => undefined);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      });
+
+      expect(editor.resetToDocument).not.toHaveBeenCalled();
+      expect(result.current.recovering).toBe(true);
+
+      await act(async () => {
+        for (const notify of scheduled.splice(0)) notify();
+        await running;
+      });
+      expect(editor.resetToDocument).toHaveBeenCalledTimes(1);
+      expect(result.current.recovering).toBe(false);
+    } finally {
+      notifyManager.setScheduler(defaultScheduler);
+    }
   });
 
   it("takes nothing, and lets the form go untouched, when the Save didn't store", async () => {

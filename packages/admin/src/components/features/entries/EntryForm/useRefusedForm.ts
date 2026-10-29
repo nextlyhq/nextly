@@ -11,6 +11,7 @@
  *
  * @module components/features/entries/EntryForm/useRefusedForm
  */
+import { notifyManager } from "@tanstack/react-query";
 import { type RefObject, useMemo, useRef, useState } from "react";
 
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
@@ -59,15 +60,16 @@ export const quickEditSave: RefObject<() => Promise<DocumentActionOutcome>> = {
 };
 
 /**
- * Answers once what is already on its way to the editor has reached it, a
- * task later. React renders a store change at once, running its effects as
- * it commits, and React Query tells a query's observers of new data on a
- * zero-delay timeout, queued when the refetch settled. A timeout queued after
- * it runs after both.
+ * Answers once what is already on its way to the editor has reached it.
+ * React Query tells a query's observers of new data through its scheduler,
+ * queued when the refetch settled, and React renders that change at once,
+ * running its effects as it commits. Scheduled after it, on the same
+ * scheduler rather than a timeout of its own, this runs after both, however
+ * the host has React Query schedule (by default, a zero-delay timeout).
  */
-function nextTask(): Promise<void> {
+function afterQueryNotifications(): Promise<void> {
   return new Promise(resolve => {
-    setTimeout(resolve, 0);
+    notifyManager.schedule(resolve);
   });
 }
 
@@ -135,9 +137,9 @@ export function useRefusedForm(gate: {
           holdsLatch = true;
           await take();
           // The reload the take awaited has settled, but the editor is handed
-          // the reloaded document a task later: the form stays held until
-          // then, and then starts afresh from it.
-          await nextTask();
+          // the reloaded document once React Query notifies it: the form
+          // stays held until then, and then starts afresh from it.
+          await afterQueryNotifications();
           gateNow.current.resetToDocument();
         } finally {
           if (holdsLatch) latch.current = false;
