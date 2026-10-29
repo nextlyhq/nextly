@@ -355,44 +355,6 @@ describe("the entry form's save, when the entry changes hands while it validates
     }
   );
 
-  it("leaves another language's form alone when a write settles after the editor moved to it", async () => {
-    let settle: (value: unknown) => void = () => {};
-    update.mockImplementation(
-      () =>
-        new Promise(resolve => {
-          settle = resolve;
-        })
-    );
-    const rendered = render();
-    act(() => {
-      rendered.result.current.form.setValue("bio", "Mine in English", {
-        shouldDirty: true,
-      });
-    });
-    let saving: Promise<unknown> | undefined;
-    act(() => {
-      saving = rendered.result.current.handleSubmit(
-        undefined,
-        "save-working-draft"
-      );
-    });
-    await vi.waitFor(() => expect(update).toHaveBeenCalled());
-
-    // A switch to a cached language while the write is in flight: the form
-    // starts afresh from that language's values.
-    act(() => {
-      rendered.rerender({ entry: stored, locale: "de" });
-    });
-    expect(rendered.result.current.form.getValues("bio")).toBe("Wrote things");
-    await act(async () => {
-      settle({ item: { ...stored, bio: "Mine in English" } });
-      await saving;
-    });
-
-    // The language on screen keeps its own values, for its own next Save.
-    expect(rendered.result.current.form.getValues("bio")).toBe("Wrote things");
-  });
-
   it("stores nothing once the editor went to another language and back while it validated", async () => {
     const rendered = render();
     act(() => {

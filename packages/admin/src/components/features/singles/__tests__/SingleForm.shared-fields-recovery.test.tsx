@@ -279,6 +279,44 @@ describe("a Single's form, for a publish refused over shared values", () => {
       tagline: "Mine!",
     });
   });
+  it("leaves another language's form alone when a write settles after the editor moved to it", async () => {
+    // The page answers with no stored Single, so the form would take in what
+    // it sent: the language the write was for.
+    let settle: () => void = () => {};
+    const onSubmit = vi.fn<ComponentProps<typeof SingleForm>["onSubmit"]>(
+      () =>
+        new Promise<undefined>(resolve => {
+          settle = () => resolve(undefined);
+        })
+    );
+    const view = (locale?: string) => (
+      <SingleForm
+        schema={schema}
+        document={first}
+        onSubmit={onSubmit}
+        documentView={{ component: VIEW, onExit: vi.fn() }}
+        {...(locale === undefined ? {} : { locale })}
+      />
+    );
+    const { rerender } = render(view(), { wrapper: Providers });
+    await userEvent.setup().type(screen.getByLabelText("Tagline"), " edited");
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Save from the view" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+
+    // A switch to a cached language while the write is in flight: the form
+    // starts afresh from that language's values.
+    rerender(view("de"));
+    expect(screen.getByLabelText("Tagline")).toHaveValue("Short");
+    await act(async () => {
+      settle();
+    });
+
+    // The language on screen keeps its own values, for its own next Save.
+    expect(screen.getByLabelText("Tagline")).toHaveValue("Short");
+  });
+
   it("takes the live values that arrive after the recovery, under the same key, into its clean form", async () => {
     const onSubmit = refusedOnce();
     const { rerenderWith } = renderSingle(onSubmit);
