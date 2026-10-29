@@ -44,26 +44,24 @@ export interface CompanionHistory {
    */
   present: Set<string>;
   /**
-   * Whether `columns` and `present` describe this entity's companion: a file makes or drops it
-   * whole (`create-only` or `enable` with no companion there, or `disable`) after every localization
-   * file this build cannot read (one written before companion files recorded their intent, or one
-   * whose intent does not parse) that may be about it. Such a file is about the slugs its header
-   * names, under any kind, since older files named every kind under `-- Collections:`; one that
-   * names none, or cannot be opened, may be about any entity. An entity no file makes or drops is not
-   * described: its companion may have come from outside the files, as a development sync or
-   * `db:sync` makes one.
+   * Whether `columns` and `present` describe this entity's companion: its first file here makes
+   * the companion (`create-only` or `enable`), and no localization file this build cannot read
+   * (one written before companion files recorded their intent, or one whose intent does not parse)
+   * may be about it. Such a file is about the slugs its header names, under any kind, since older
+   * files named every kind under `-- Collections:`; one that names none, or cannot be opened, may
+   * be about any entity. Whatever runs after one, a later file cannot vouch for what it did: a
+   * create runs only where the companion is not there already. An entity whose first file is not a
+   * create may have had its companion made outside the files, as `db:sync` or a development sync
+   * makes one.
    */
   describes(kind: I18nTransitionKind, slug: string): boolean;
-  /**
-   * Whether a localization file may be about this entity: one this build reads for it, or one of
-   * its `unreadable` files.
-   */
-  mayBeAbout(kind: I18nTransitionKind, slug: string): boolean;
   /**
    * The files this build cannot read that may be about this entity: those whose header names its
    * slug, and those that name no entity or cannot be opened, which may be anyone's.
    */
   unreadable(kind: I18nTransitionKind, slug: string): string[];
+  /** Whether there is any localization file here, read or not. */
+  anyFile: boolean;
 }
 
 /**
@@ -91,7 +89,7 @@ export async function readCompanionHistory(
   const replay: Replay = {
     columns: new Map(),
     present: new Set(),
-    settled: new Map(),
+    founded: new Set(),
     unread: [],
   };
   let names: string[];
@@ -99,36 +97,32 @@ export async function readCompanionHistory(
     names = (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
   } catch (error) {
     // A directory that isn't there holds no history. One that can't be listed may hold any, so it
-    // counts as a file this build cannot read, about any entity, after every other.
+    // counts as a file this build cannot read, which may be about any entity.
     if ((error as { code?: string }).code !== "ENOENT") {
-      replay.unread.push({
-        at: Number.POSITIVE_INFINITY,
-        name: migrationsDir,
-        slugs: [],
-      });
+      replay.unread.push({ name: migrationsDir, slugs: [] });
     }
     return historyOf(replay);
   }
-  for (const [at, name] of names.sort().entries()) {
+  for (const name of names.sort()) {
     const reading = await readFileIntent(migrationsDir, name);
-    if (reading.kind === "intent") replayIntent(replay, reading.intent, at);
+    if (reading.kind === "intent") replayIntent(replay, reading.intent);
     if (reading.kind === "unread") {
-      replay.unread.push({ at, name, slugs: namedSlugs(reading.content) });
+      replay.unread.push({ name, slugs: namedSlugs(reading.content) });
     }
   }
   return historyOf(replay);
 }
 
 /**
- * The replay as it stands after the files read so far. Positions are in the run order: where
- * each companion was last made or dropped whole, by key (`settled`), and where each unreadable
- * file comes, with the slugs its header names (none: it may be about any entity).
+ * The replay as it stands after the files read so far: each companion's columns, whether it is
+ * there, the entities whose first file made it (`founded`), and each unreadable file with the slugs
+ * its header names (none: it may be about any entity).
  */
 interface Replay {
   columns: Map<string, Map<string, LocalizedColumnSpec>>;
   present: Set<string>;
-  settled: Map<string, number>;
-  unread: { at: number; name: string; slugs: readonly string[] }[];
+  founded: Set<string>;
+  unread: { name: string; slugs: readonly string[] }[];
 }
 
 /** What one migration file says about a companion. */
@@ -161,35 +155,24 @@ async function readFileIntent(
     : { kind: "other" };
 }
 
-/** Applies one file's intent, at position `at` in the run order. */
+/** Applies one file's intent, in the order the files run. */
 function replayIntent(
   replay: Replay,
-  intent: LocalizationMigrationIntent,
-  at: number
+  intent: LocalizationMigrationIntent
 ): void {
   const key = companionHistoryKey(intent.entity, intent.spec.collection);
+  if (!replay.columns.has(key) && MAKES_COMPANION.has(intent.kind)) {
+    replay.founded.add(key);
+  }
   const columns =
     replay.columns.get(key) ?? new Map<string, LocalizedColumnSpec>();
-  if (settlesCompanion(intent.kind, replay.present.has(key))) {
-    replay.settled.set(key, at);
-  }
   const companion = COMPANION_EFFECT[intent.kind](columns, intent.spec.columns);
   if (companion === "made") replay.present.add(key);
   if (companion === "dropped") replay.present.delete(key);
   replay.columns.set(key, columns);
 }
 
-/**
- * Whether a file makes or drops the companion whole, so the files after it describe every column
- * it has: a `disable`, or a `create-only` or `enable` with no companion there.
- */
-function settlesCompanion(
-  kind: LocalizationMigrationIntent["kind"],
-  present: boolean
-): boolean {
-  return kind === "disable" || (!present && MAKES_COMPANION.has(kind));
-}
-
+/** The kinds of file that make a companion, which an entity's history has to begin with. */
 const MAKES_COMPANION = new Set<LocalizationMigrationIntent["kind"]>([
   "create-only",
   "enable",
@@ -237,17 +220,13 @@ function namedSlugs(content: string | null): string[] {
 function historyOf(replay: Replay): CompanionHistory {
   const unreadFor = (slug: string) =>
     replay.unread.filter(u => u.slugs.length === 0 || u.slugs.includes(slug));
-  const lastUnread = (slug: string) =>
-    Math.max(-1, ...unreadFor(slug).map(u => u.at));
   return {
     columns: replay.columns,
     present: replay.present,
     describes: (kind, slug) =>
-      (replay.settled.get(companionHistoryKey(kind, slug)) ?? -1) >
-      lastUnread(slug),
-    mayBeAbout: (kind, slug) =>
-      replay.columns.has(companionHistoryKey(kind, slug)) ||
-      unreadFor(slug).length > 0,
+      replay.founded.has(companionHistoryKey(kind, slug)) &&
+      unreadFor(slug).length === 0,
     unreadable: (_kind, slug) => unreadFor(slug).map(u => u.name),
+    anyFile: replay.columns.size > 0 || replay.unread.length > 0,
   };
 }

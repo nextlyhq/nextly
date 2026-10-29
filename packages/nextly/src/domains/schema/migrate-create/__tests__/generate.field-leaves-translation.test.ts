@@ -757,7 +757,8 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect(files).toEqual([expect.stringMatching(/_next\.sql$/)]);
     });
 
-    it("reads a disable it can read as the companion gone, whatever came before it", async () => {
+    it("refuses a column change once a file it can't read may be the collection's, whatever comes after it", async () => {
+      // docs' first file can't be read; a readable disable after it vouches for nothing it did.
       const dir = await projectAfter(dialect, [
         { collections: [TRANSLATED], after: d => forgetCompanionIntents(d) },
         {
@@ -766,13 +767,41 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         },
       ]);
 
-      expect(
-        await filesOfRun(dialect, dir, [
+      await expect(
+        filesOfRun(dialect, dir, [
           withField({ name: "tagline", type: "text", localized: false }),
         ])
-      ).toEqual([
+      ).rejects.toThrow(/in collection "docs".*--record-snapshot/s);
+    });
+
+    it("refuses a column change after a create that may run over a companion an unreadable file made", async () => {
+      // An older file of docs' can't be read, and comes before the create that recorded `body`:
+      // that create runs only where no companion is there, so it says nothing of what the older
+      // file left.
+      const dir = await projectAfter(dialect, [
+        { collections: [{ ...TRANSLATED, localized: false }] },
+        { collections: [TRANSLATED], after: forgetTranslatedFieldRecord },
+      ]);
+      await writeFile(
+        resolve(dir, "20261016_095000_000_create_localization_docs.sql"),
+        "-- Collections: docs\n" +
+          "-- Generated: localization companion (create-only) (i18n)\n\n" +
+          "-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n",
+        "utf-8"
+      );
+
+      const run = filesOfRun(dialect, dir, [SHARED]);
+      await expect(run).rejects.toThrow(/"body" in collection "docs"/);
+      await expect(run).rejects.toThrow(/create_localization_docs\.sql/);
+    });
+
+    it("lets a field be added in a project that was never translated", async () => {
+      const dir = await projectAfter(dialect, [
+        { collections: [NOTES], after: forgetTranslatedFieldRecord },
+      ]);
+
+      expect(await filesOfRun(dialect, dir, [NOTES_GROWN])).toEqual([
         expect.stringMatching(/_next\.sql$/),
-        expect.stringMatching(/_enable_localization_docs\.sql$/),
       ]);
     });
 
@@ -948,13 +977,13 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       }
     );
 
-    it("lets a change to a collection that isn't translated through", async () => {
+    it("refuses a column a collection that isn't translated gains, in a project whose translations no record settles", async () => {
       const notes = (fields: MinimalConfigEntity["fields"]) => ({
         slug: "notes",
         tableName: "dc_notes",
         fields,
       });
-      const files = await secondRun(
+      const files = secondRun(
         dialect,
         [
           TRANSLATED,
@@ -969,32 +998,24 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         }
       );
 
-      expect(files.map(f => f.name)).toEqual([
-        expect.stringMatching(/_two\.sql$/),
-      ]);
-      expect(files[0].sql).toContain(
-        `ALTER TABLE ${dialect === "mysql" ? "`dc_notes`" : '"dc_notes"'} ADD COLUMN`
-      );
+      // No file made notes' companion, so none says it never had one.
+      await expect(files).rejects.toThrow(/"summary" in collection "notes"/);
     });
 
-    it("makes a collection that was never translated translated, in a project with older files", async () => {
+    it("refuses turning translation on for a collection no file is about, in a project with older files", async () => {
       const pages: MinimalConfigEntity = {
         ...TRANSLATED,
         slug: "pages",
         tableName: "dc_pages",
       };
-      const warnings: string[] = [];
-      const files = await secondRun(dialect, [pages, TRANSLATED], {
+      // A companion made outside the files reads the same as none.
+      const run = secondRun(dialect, [pages, TRANSLATED], {
         first: [pages, { ...TRANSLATED, localized: false }],
-        onWarning: message => warnings.push(message),
         beforeSecond: forgetEverything,
       });
 
-      expect(files.map(f => f.name)).toEqual([
-        expect.stringMatching(/_two\.sql$/),
-        expect.stringMatching(/_enable_localization_docs\.sql$/),
-      ]);
-      expect(warnings).toEqual([]);
+      await expect(run).rejects.toThrow(/"body" in collection "docs"/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
     });
 
     describe("--record-snapshot", () => {
