@@ -87,11 +87,26 @@ import type {
  * The factory of every field a rule's filter may name keeps the name as
  * written, so `defineCollection` can type a read rule's filter by the
  * collection's fields. A name the checker cannot know, such as one built at
- * runtime, is `string`, and the filter is untyped.
+ * runtime, is `string`, and the filter is untyped. It keeps what decides how
+ * the field is stored as written too: `virtual`, and where the field has
+ * them, `hasMany` and `relationTo`. A field stored as a JSON document, or
+ * owning no column, is then no key of the filter.
  */
-export const text = <const Name extends string>(
-  config: Omit<TextFieldConfig, "type"> & { name: Name }
-): TextFieldConfig & { name: Name } => ({
+export const text = <
+  const Name extends string,
+  Many extends boolean = false,
+  Virtual extends boolean = false,
+>(
+  config: Omit<TextFieldConfig, "type"> & {
+    name: Name;
+    hasMany?: Many;
+    virtual?: Virtual;
+  }
+): TextFieldConfig & {
+  name: Name;
+  hasMany?: NoInfer<Many>;
+  virtual?: NoInfer<Virtual>;
+} => ({
   ...config,
   type: "text",
 });
@@ -114,9 +129,12 @@ export const text = <const Name extends string>(
  * textarea({ name: 'bio', admin: { rows: 5, resize: 'none' } })
  * ```
  */
-export const textarea = <const Name extends string>(
-  config: Omit<TextareaFieldConfig, "type"> & { name: Name }
-): TextareaFieldConfig & { name: Name } => ({
+export const textarea = <
+  const Name extends string,
+  Virtual extends boolean = false,
+>(
+  config: Omit<TextareaFieldConfig, "type"> & { name: Name; virtual?: Virtual }
+): TextareaFieldConfig & { name: Name; virtual?: NoInfer<Virtual> } => ({
   ...config,
   type: "textarea",
 });
@@ -166,9 +184,12 @@ export const richText = (
  * email({ name: 'contactEmail', label: 'Contact Email' })
  * ```
  */
-export const email = <const Name extends string>(
-  config: Omit<EmailFieldConfig, "type"> & { name: Name }
-): EmailFieldConfig & { name: Name } => ({
+export const email = <
+  const Name extends string,
+  Virtual extends boolean = false,
+>(
+  config: Omit<EmailFieldConfig, "type"> & { name: Name; virtual?: Virtual }
+): EmailFieldConfig & { name: Name; virtual?: NoInfer<Virtual> } => ({
   ...config,
   type: "email",
 });
@@ -224,9 +245,12 @@ export const password = (
  * })
  * ```
  */
-export const code = <const Name extends string>(
-  config: Omit<CodeFieldConfig, "type"> & { name: Name }
-): CodeFieldConfig & { name: Name } => ({
+export const code = <
+  const Name extends string,
+  Virtual extends boolean = false,
+>(
+  config: Omit<CodeFieldConfig, "type"> & { name: Name; virtual?: Virtual }
+): CodeFieldConfig & { name: Name; virtual?: NoInfer<Virtual> } => ({
   ...config,
   type: "code",
 });
@@ -253,9 +277,21 @@ export const code = <const Name extends string>(
  * number({ name: 'amount', min: 0, dbType: 'decimal', scale: 2 })
  * ```
  */
-export const number = <const Name extends string>(
-  config: Omit<NumberFieldConfig, "type"> & { name: Name }
-): NumberFieldConfig & { name: Name } => ({
+export const number = <
+  const Name extends string,
+  Many extends boolean = false,
+  Virtual extends boolean = false,
+>(
+  config: Omit<NumberFieldConfig, "type"> & {
+    name: Name;
+    hasMany?: Many;
+    virtual?: Virtual;
+  }
+): NumberFieldConfig & {
+  name: Name;
+  hasMany?: NoInfer<Many>;
+  virtual?: NoInfer<Virtual>;
+} => ({
   ...config,
   type: "number",
 });
@@ -281,9 +317,12 @@ export const number = <const Name extends string>(
  * checkbox({ name: 'featured', label: 'Featured Post' })
  * ```
  */
-export const checkbox = <const Name extends string>(
-  config: Omit<CheckboxFieldConfig, "type"> & { name: Name }
-): CheckboxFieldConfig & { name: Name } => ({
+export const checkbox = <
+  const Name extends string,
+  Virtual extends boolean = false,
+>(
+  config: Omit<CheckboxFieldConfig, "type"> & { name: Name; virtual?: Virtual }
+): CheckboxFieldConfig & { name: Name; virtual?: NoInfer<Virtual> } => ({
   ...config,
   type: "checkbox",
 });
@@ -315,9 +354,12 @@ export const checkbox = <const Name extends string>(
  * })
  * ```
  */
-export const date = <const Name extends string>(
-  config: Omit<DateFieldConfig, "type"> & { name: Name }
-): DateFieldConfig & { name: Name } => ({
+export const date = <
+  const Name extends string,
+  Virtual extends boolean = false,
+>(
+  config: Omit<DateFieldConfig, "type"> & { name: Name; virtual?: Virtual }
+): DateFieldConfig & { name: Name; virtual?: NoInfer<Virtual> } => ({
   ...config,
   type: "date",
 });
@@ -356,9 +398,21 @@ export const date = <const Name extends string>(
  * })
  * ```
  */
-export const select = <const Name extends string>(
-  config: Omit<SelectFieldConfig, "type"> & { name: Name }
-): SelectFieldConfig & { name: Name } => ({
+export const select = <
+  const Name extends string,
+  Many extends boolean = false,
+  Virtual extends boolean = false,
+>(
+  config: Omit<SelectFieldConfig, "type"> & {
+    name: Name;
+    hasMany?: Many;
+    virtual?: Virtual;
+  }
+): SelectFieldConfig & {
+  name: Name;
+  hasMany?: NoInfer<Many>;
+  virtual?: NoInfer<Virtual>;
+} => ({
   ...config,
   type: "select",
 });
@@ -388,9 +442,12 @@ export const select = <const Name extends string>(
  * })
  * ```
  */
-export const radio = <const Name extends string>(
-  config: Omit<RadioFieldConfig, "type"> & { name: Name }
-): RadioFieldConfig & { name: Name } => ({
+export const radio = <
+  const Name extends string,
+  Virtual extends boolean = false,
+>(
+  config: Omit<RadioFieldConfig, "type"> & { name: Name; virtual?: Virtual }
+): RadioFieldConfig & { name: Name; virtual?: NoInfer<Virtual> } => ({
   ...config,
   type: "radio",
 });
@@ -428,9 +485,24 @@ export const radio = <const Name extends string>(
  * })
  * ```
  */
-export const upload = <const Name extends string>(
-  config: Omit<UploadFieldConfig, "type"> & { name: Name }
-): UploadFieldConfig & { name: Name } => ({
+export const upload = <
+  const Name extends string,
+  Target extends string | string[] = string,
+  Many extends boolean = false,
+  Virtual extends boolean = false,
+>(
+  config: Omit<UploadFieldConfig, "type"> & {
+    name: Name;
+    relationTo: Target;
+    hasMany?: Many;
+    virtual?: Virtual;
+  }
+): UploadFieldConfig & {
+  name: Name;
+  relationTo: NoInfer<Target>;
+  hasMany?: NoInfer<Many>;
+  virtual?: NoInfer<Virtual>;
+} => ({
   ...config,
   type: "upload",
 });
@@ -468,9 +540,24 @@ export const upload = <const Name extends string>(
  * })
  * ```
  */
-export const relationship = <const Name extends string>(
-  config: Omit<RelationshipFieldConfig, "type"> & { name: Name }
-): RelationshipFieldConfig & { name: Name } => ({
+export const relationship = <
+  const Name extends string,
+  Target extends string | string[] = string,
+  Many extends boolean = false,
+  Virtual extends boolean = false,
+>(
+  config: Omit<RelationshipFieldConfig, "type"> & {
+    name: Name;
+    relationTo: Target;
+    hasMany?: Many;
+    virtual?: Virtual;
+  }
+): RelationshipFieldConfig & {
+  name: Name;
+  relationTo: NoInfer<Target>;
+  hasMany?: NoInfer<Many>;
+  virtual?: NoInfer<Virtual>;
+} => ({
   ...config,
   type: "relationship",
 });
