@@ -447,10 +447,15 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       const permissionIds = Array.isArray(b?.permissionIds)
         ? b.permissionIds
         : [];
-      await c.rolePermissions.setRolePermissions(p.roleId, permissionIds);
+      // Counted from what the role holds now: a retired `manage-` permission
+      // asked for is stored as the plain four it stands for.
+      const stored = await c.rolePermissions.setRolePermissions(
+        p.roleId,
+        permissionIds
+      );
       return respondAction("Role permissions updated.", {
         roleId: p.roleId,
-        permissionCount: permissionIds.length,
+        permissionCount: stored.length,
       });
     },
   },

@@ -992,7 +992,7 @@ describe("PUT /api/dashboard/layout", () => {
 
     const collection = await refused("collection/posts-count");
     expect(collection).toContain(
-      '\\"collection/posts-count\\" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.'
+      '\\"collection/posts-count\\" is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.'
     );
     const single = await refused("single/about-card");
     expect(single).toContain(
@@ -2688,7 +2688,17 @@ describe("the one default", () => {
 
   it("is the site's defaultLayout, in its order, at its sizes and with its settings", async () => {
     registerWidget(widget({ id: "site/a" }));
-    registerWidget(widget({ id: "site/b" }));
+    // Bounds that allow the entry's 6 by 4, as startup holds a site's entry to.
+    registerWidget(
+      widget({
+        id: "site/b",
+        size: {
+          default: { w: 12, h: 3 },
+          min: { w: 4, h: 2 },
+          max: { w: 12, h: 6 },
+        },
+      })
+    );
     plan({
       cards: [
         { widget: "site/b", w: 6, h: 4, settings: { top: 5 } },

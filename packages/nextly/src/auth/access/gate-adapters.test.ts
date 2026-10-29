@@ -425,6 +425,70 @@ describe("a super-admin named only by id", () => {
   });
 });
 
+describe("a yes-or-no asker under a read rule that answers a filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  beforeEach(() => {
+    callerMay("read");
+  });
+
+  it("answers yes: the caller may read the entries the filter matches", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+  });
+
+  it("is refused without the flag, where the asker neither applies nor only asks", async () => {
+    // The control: the yes above is the flag's.
+    const verdict = await collectionGateVerdict(
+      asked({ read: () => OWN as unknown as boolean }, { user: { id: "u1" } })
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("still refuses a caller without the read permission", async () => {
+    callerMayNot("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("answers a visitor yes where the Public role grants the read, naming no refusal", async () => {
+    // A visitor is judged as a signed-in user is: Public's read held, the
+    // filter answers yes to a yes-or-no asker, and no "now refused" notice
+    // is named for an answer that refuses nothing.
+    clearRuleAnswerNotices();
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    publicHolds("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("still refuses a visitor the Public role does not grant the read", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: false, refusal: "unauthenticated" });
+  });
+});
+
 describe("a read whose route already authorized it", () => {
   const OWN = { author: { equals: "u1" } };
   const filtering = () => vi.fn(() => OWN as unknown as boolean);
@@ -735,6 +799,43 @@ describe("a read whose route already authorized it", () => {
     expect(first).toMatchObject({ filter: OWN });
     expect(second).toMatchObject({ filter: { author: { equals: "nobody" } } });
     expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a rule again for a visitor once the Public role's grants change", async () => {
+    // A visitor's rule is told the Public role's grants: one revoked between
+    // two asks in the same request, the read kept, is a different question.
+    const NOBODY = { author: { equals: "nobody" } };
+    const rule = vi.fn(({ permissions }: { permissions: readonly string[] }) =>
+      permissions.includes("update-posts")
+        ? (OWN as unknown as boolean)
+        : (NOBODY as unknown as boolean)
+    );
+    const visitorRead = () =>
+      collectionGateVerdict(asked({ read: rule }, { appliesFilter: true }));
+    const [first, second] = await runWithAccessMemo(async () => {
+      publicHolds("read", "update");
+      const before = await visitorRead();
+      publicHolds("read");
+      return [before, await visitorRead()];
+    });
+    expect(first).toMatchObject({ filter: OWN });
+    expect(second).toMatchObject({ filter: NOBODY });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a visitor's rule once in a request while the Public role's grants stand", async () => {
+    // The control: the same visitor asked twice is one question.
+    const rule = filtering();
+    publicHolds("read");
+    await runWithAccessMemo(async () => {
+      await collectionGateVerdict(
+        asked({ read: rule }, { appliesFilter: true })
+      );
+      await collectionGateVerdict(
+        asked({ read: rule }, { appliesFilter: true })
+      );
+    });
+    expect(rule).toHaveBeenCalledTimes(1);
   });
 
   it("is allowed as before, asking no rule, where the asker applies no filter", async () => {

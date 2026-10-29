@@ -17,7 +17,13 @@ import { describe, expect, it } from "vitest";
 import { manageCounts } from "../../../../nextly/src/auth/access/manage-bridge";
 import { SYSTEM_RESOURCES } from "../../../../nextly/src/schemas/_zod/rbac";
 
-import { MANAGE_BRIDGE_RESOURCES, levelOf, standardActions } from "./levels";
+import { holdsPermission } from "./holds-permission";
+import {
+  MANAGE_BRIDGE_RESOURCES,
+  levelOf,
+  manageCountsFor,
+  standardActions,
+} from "./levels";
 
 /** Every access operation, so an action core starts counting is seen here. */
 const OPERATIONS = [
@@ -46,6 +52,24 @@ describe("the resources whose manage stands for edit", () => {
           : [];
       expect(admin).toEqual(core);
       expect(MANAGE_BRIDGE_RESOURCES.has(resource)).toBe(core.length > 0);
+    }
+  );
+});
+
+describe("the permission check's manage bridge", () => {
+  it.each([...SYSTEM_RESOURCES])(
+    "counts manage-%s as each action core counts it for, and no other",
+    resource => {
+      const held = new Set([`manage-${resource}`]);
+      for (const action of [...OPERATIONS, "manage"]) {
+        const counted = manageCounts(action, resource);
+        expect(manageCountsFor(action, resource), action).toBe(counted);
+        // Holding manage alone holds an action exactly where it counts, or
+        // where the action asked is manage itself.
+        expect(holdsPermission(held, `${action}-${resource}`), action).toBe(
+          counted || action === "manage"
+        );
+      }
     }
   );
 });

@@ -117,7 +117,7 @@ export interface PluginAdminMeta {
   /**
    * Settings UI — present only for enabled plugins. `permission` is the one a
    * change to the plugin's settings needs, which the settings page asks for:
-   * the plugin's own `settingsPermission`, or `manage-settings`.
+   * the plugin's own `settingsPermission`, or `update-settings`.
    */
   settings?: { component: string; permission: string };
   /** Admin header-slot component — present only for enabled plugins. */

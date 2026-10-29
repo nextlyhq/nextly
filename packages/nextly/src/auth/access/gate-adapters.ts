@@ -17,6 +17,7 @@ import type { AccessOperation } from "../../services/access/types";
 import { canonicalJson } from "../../shared/lib/canonical-json";
 import {
   apiKeyWriteAllowed,
+  scopeHoldsSuperAdmin,
   scopeRowsAgree,
   slugGrants,
   type AuthenticatedScope,
@@ -25,6 +26,7 @@ import { effectiveCallerScope } from "../caller-scope";
 
 import {
   holdsPermission,
+  isSuperAdmin,
   type Actor,
   type KeyActor,
   type UserActor,
@@ -58,7 +60,7 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { allowsSome, mayAnswerFilter, type RuleFilter } from "./rule-answer";
+import { allowsSome, readFilterIn, type RuleFilter } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
@@ -153,10 +155,8 @@ function readFilterOf(
   action: AccessOperation,
   outcome: RuleOutcome
 ): RuleFilter | undefined {
-  if (action !== "read" || !mayAnswerFilter(target.kind, action)) return;
   if (!outcome.declared || "threw" in outcome) return;
-  const answer = outcomeAnswer(outcome);
-  return answer.kind === "filter" ? answer.filter : undefined;
+  return readFilterIn(target.kind, action, outcomeAnswer(outcome));
 }
 
 /**
@@ -174,6 +174,9 @@ async function onlyMatching(
   if (q.appliesFilter) {
     return { allowed: false, refusal: "only-matching-entries", filter };
   }
+  // A yes or no to "may the caller read the collection" is yes: the caller
+  // may read the entries the filter matches, as the decision says.
+  if (q.asksSomeEntries) return ALLOWED;
   await deviate("filter-not-applied", false, () => decisionAllows);
   return INSUFFICIENT;
 }
@@ -204,6 +207,12 @@ export interface GateQuestion {
    * as it cannot limit what it reads to the entries the filter matches.
    */
   readonly appliesFilter?: boolean;
+  /**
+   * The asker wants only a yes or no to "may the caller read the
+   * collection", and reads no entries on the answer, so a read rule's filter
+   * answers yes: the caller may read the entries it matches.
+   */
+  readonly asksSomeEntries?: boolean;
   /** The access-control service's rules; absent without the service. */
   readonly rules?: RuleSource;
   /**
@@ -374,26 +383,25 @@ function readsRouteFilter(
  * the request names it, and nothing it is not told: a signed-in user and a
  * key are each the user id, the roles and the grants' slugs; a plugin person
  * is the whole person, its attributes included, which the rule is told; a
- * visitor is told nothing. So a narrower scope, or a person whose attributes
- * changed, never reuses an earlier answer, and two asks that hand the rule
- * the same context, whichever way they built the actor, share one.
+ * visitor is the Public role's grants' slugs. So a narrower scope, a person
+ * whose attributes changed, or a Public role whose grants changed, never
+ * reuses an earlier answer, and two asks that hand the rule the same context,
+ * whichever way they built the actor, share one.
  * `undefined` for a person no key can name, whose answer is not kept.
  */
 function ruleContextKeyOf(
   actor: Exclude<Actor, { kind: "system" }>
 ): string | undefined {
+  // The slugs of the grants the rule is handed as its `permissions`.
+  const slugs = (held: UserActor | KeyActor | VisitorActor) =>
+    held.permissions.map(grant => grant.slug);
   switch (actor.kind) {
     case "user":
     case "key":
       // In the order the rule is handed them: a rule may read `roles[0]`,
       // so two scopes holding the same roles in another order are told
       // different things.
-      return JSON.stringify([
-        "staff",
-        actor.userId,
-        actor.roles,
-        actor.permissions.map(grant => grant.slug),
-      ]);
+      return JSON.stringify(["staff", actor.userId, actor.roles, slugs(actor)]);
     case "principal": {
       const person = canonicalJson(actor.principal);
       return person === undefined
@@ -401,7 +409,9 @@ function ruleContextKeyOf(
         : JSON.stringify(["principal", person]);
     }
     case "visitor":
-      return "visitor";
+      // A visitor's rule reads the Public role's grants, which another
+      // instance may change within a long request.
+      return JSON.stringify(["visitor", slugs(actor)]);
   }
 }
 
@@ -504,7 +514,8 @@ function visitorOf(q: GateQuestion): Promise<VisitorActor> {
 /**
  * A visitor whose read rule answered a filter, and whom the Public role
  * grants the action. An asker that applies it shows the visitor the entries
- * it matches; any other asker refuses, as the decision does.
+ * it matches, one asking only whether the visitor may read some entries is
+ * told yes, and any other asker refuses, as the decision does.
  */
 function visitorFilterVerdict(
   q: GateQuestion,
@@ -513,7 +524,7 @@ function visitorFilterVerdict(
 ): Promise<GateVerdict> {
   // The Public role's permission for the action was asked before the rule,
   // so the visitor holds it: the filter alone narrows what it is shown.
-  if (!q.appliesFilter) {
+  if (!q.appliesFilter && !q.asksSomeEntries) {
     noticeWhereRuleAllowedBefore(outcome, allowedVisitorBefore, q, "visitor");
   }
   return onlyMatching(q, filter, true);
@@ -548,6 +559,9 @@ async function keyVerdict(
 ): Promise<GateVerdict> {
   const rows = scopeRowsAgree(scope);
   const actor = keyActorOf(scope, user);
+  // A key carrying its maker's super-admin authority passes every collection
+  // and Single rule, as the decision gives a super-admin.
+  if (isSuperAdmin(actor)) return ALLOWED;
   // A key holds an action by its stored slug, `<action>-<target>`. The
   // decision reads the grant's action and target, which agree with the slug
   // unless the grant was stored under a slug of its own.
@@ -572,6 +586,7 @@ function keyActorOf(
         userId: user.id,
         grants: slugGrants(scope.permissions),
         roles: scope.roles ?? user.roles ?? [],
+        superAdmin: scopeHoldsSuperAdmin(scope),
       });
 }
 
@@ -794,7 +809,7 @@ async function ruleVerdict({
   );
   const filter = readFilterOf(target, q.action, outcome);
   if (filter) {
-    if (!q.appliesFilter) {
+    if (!q.appliesFilter && !q.asksSomeEntries) {
       noticeWhereRuleAllowedBefore(
         outcome,
         allowedUserBefore,

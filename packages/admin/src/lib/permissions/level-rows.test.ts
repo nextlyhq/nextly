@@ -12,8 +12,11 @@ import { describe, expect, it } from "vitest";
 import type { Permission } from "../../types/ui/form";
 
 import {
+  groupLevel,
   levelRows,
   offeredLevels,
+  ownWithLevel,
+  pluginGroups,
   rowLevel,
   screenEntitiesFrom,
   withLevel,
@@ -68,6 +71,11 @@ function rows(): { posts: LevelRow; homepage: LevelRow; rest: Permission[] } {
 }
 
 describe("levelRows", () => {
+  it("names each row by its plural as well, or its singular where it has none", () => {
+    const { rows: built } = levelRows(ENTITIES, PERMISSIONS);
+    expect(built.map(row => row.plural)).toEqual(["Posts", "Home page"]);
+  });
+
   it("makes one row per entity, in the server's order, labelled by its singular", () => {
     const { rows: built } = levelRows(ENTITIES, PERMISSIONS);
     expect(
@@ -207,6 +215,49 @@ describe("withLevel", () => {
   });
 });
 
+describe("ownWithLevel", () => {
+  it("saves the level's ids the base does not give, and none it does", () => {
+    const { posts } = rows();
+    const value = ownWithLevel(["pages-read"], posts, "edit", ["read-posts"]);
+    expect([...value].sort()).toEqual(
+      ["pages-read", "create-posts", "update-posts", "delete-posts"].sort()
+    );
+  });
+
+  it("reads the base's ids with the role's own, so a level they make is kept", () => {
+    const { posts } = rows();
+    // Can view comes from the base alone: the role adds nothing of its own.
+    expect(ownWithLevel([], posts, "view", ["read-posts"])).toEqual([]);
+  });
+
+  it("drops the role's own copy of a row's id the base gives, as the level then rests on the base", () => {
+    const { posts } = rows();
+    expect(ownWithLevel(["read-posts"], posts, "view", ["read-posts"])).toEqual(
+      []
+    );
+  });
+
+  it("keeps the role's own copy of a base-given id outside what the level decides", () => {
+    const { posts } = rows();
+    // An action under the row's switch, and another row's grant.
+    expect(
+      ownWithLevel(["export-posts", "read-settings"], posts, "view", [
+        "export-posts",
+        "read-settings",
+      ])
+    ).toEqual(["export-posts", "read-settings", "read-posts"]);
+  });
+
+  it("takes away the role's own ids above the level", () => {
+    const { posts } = rows();
+    expect(
+      ownWithLevel(["update-posts", "export-posts"], posts, "view", [
+        "read-posts",
+      ])
+    ).toEqual(["export-posts"]);
+  });
+});
+
 describe("offeredLevels", () => {
   it("offers every level of the row's kind when nothing is inherited", () => {
     const { posts, homepage } = rows();
@@ -246,6 +297,128 @@ describe("offeredLevels", () => {
       "edit",
       "publish",
     ]);
+  });
+});
+
+const FORMS = "@nextlyhq/plugin-form-builder";
+
+/** The app's posts, the form builder's forms, and its declared export. */
+function withPlugin() {
+  const entities: ScreenEntity[] = [
+    ...ENTITIES,
+    {
+      slug: "forms",
+      kind: "collection",
+      labels: { singular: "Form", plural: "Forms" },
+      plugin: FORMS,
+      declaredRules: [],
+    },
+  ];
+  const permissions: Permission[] = [
+    ...PERMISSIONS,
+    ...["read", "create", "update", "delete"].map(action =>
+      permission("forms", action)
+    ),
+  ];
+  return levelRows(entities, permissions);
+}
+
+describe("pluginGroups", () => {
+  it("keeps the app's own rows apart and gathers each plugin's rows and declared permissions", () => {
+    const { rows, rest } = withPlugin();
+    const grouped = pluginGroups(rows, rest);
+
+    expect(grouped.appRows.map(row => row.slug)).toEqual(["posts", "homepage"]);
+    expect(grouped.groups).toHaveLength(1);
+    expect(grouped.groups[0].plugin).toBe(FORMS);
+    expect(grouped.groups[0].rows.map(row => row.slug)).toEqual(["forms"]);
+    expect(grouped.groups[0].permissions.map(p => p.id)).toEqual([
+      "read-form-exports",
+    ]);
+    // POPULATION CONTROL: a permission no plugin declared stays outside.
+    expect(grouped.rest.map(p => p.id)).toEqual(["read-settings"]);
+  });
+
+  it("makes a group for a plugin that declares permissions but contributes no collection", () => {
+    const { rows, rest } = levelRows(ENTITIES, PERMISSIONS);
+    const grouped = pluginGroups(rows, rest);
+
+    expect(grouped.groups.map(group => group.plugin)).toEqual([FORMS]);
+    expect(grouped.groups[0].rows).toEqual([]);
+  });
+});
+
+describe("pluginGroups, for the app's own declared permissions", () => {
+  it('keeps a permission the app declares (owner "app") out of every plugin group', () => {
+    const { rows, rest } = levelRows(ENTITIES, [
+      ...PERMISSIONS,
+      permission("reports", "export", "app"),
+    ]);
+    const grouped = pluginGroups(rows, rest);
+
+    expect(grouped.groups.map(group => group.plugin)).toEqual([FORMS]);
+    expect(grouped.rest.map(p => p.id)).toContain("export-reports");
+  });
+});
+
+describe("groupLevel", () => {
+  it("does not count another plugin's action on this plugin's collection", () => {
+    const entities: ScreenEntity[] = [
+      {
+        slug: "forms",
+        kind: "collection",
+        labels: { singular: "Form", plural: "Forms" },
+        plugin: FORMS,
+        declaredRules: [],
+      },
+    ];
+    const { rows, rest } = levelRows(entities, [
+      permission("forms", "read"),
+      permission("forms", "audit", "@acme/plugin-audit"),
+    ]);
+    const [group] = pluginGroups(rows, rest).groups;
+
+    expect(groupLevel(group, ["read-forms", "audit-forms"])).toBe("view");
+  });
+
+  it("reads custom where a plugin's own action on one of its collections is held", () => {
+    // A plugin may declare an action of its own on a collection it
+    // contributes; the row takes it, under its switch.
+    const entities: ScreenEntity[] = [
+      {
+        slug: "forms",
+        kind: "collection",
+        labels: { singular: "Form", plural: "Forms" },
+        plugin: FORMS,
+        declaredRules: [],
+      },
+    ];
+    const { rows, rest } = levelRows(entities, [
+      permission("forms", "read"),
+      permission("forms", "manage", FORMS),
+    ]);
+    const [group] = pluginGroups(rows, rest).groups;
+
+    expect(groupLevel(group, ["read-forms"])).toBe("view");
+    expect(groupLevel(group, ["read-forms", "manage-forms"])).toBe("custom");
+  });
+
+  it("reads the level every row of the group reads", () => {
+    const { rows, rest } = withPlugin();
+    const [group] = pluginGroups(rows, rest).groups;
+
+    expect(groupLevel(group, ["read-forms"])).toBe("view");
+    expect(groupLevel(group, [])).toBe("none");
+  });
+
+  it("reads custom where a row reads custom or the plugin's own permission is held beside a level", () => {
+    const { rows, rest } = withPlugin();
+    const [group] = pluginGroups(rows, rest).groups;
+
+    expect(groupLevel(group, ["read-forms", "create-forms"])).toBe("custom");
+    expect(groupLevel(group, ["read-forms", "read-form-exports"])).toBe(
+      "custom"
+    );
   });
 });
 

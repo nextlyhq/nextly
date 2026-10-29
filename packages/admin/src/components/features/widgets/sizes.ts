@@ -40,10 +40,12 @@ import {
 } from "nextly/config";
 import type { CSSProperties } from "react";
 
-/** One row's height, in pixels rather than rem so it does not follow the root font size. */
-export const ROW_HEIGHT_PX = 72;
-/** The gap down the grid, between rows, at every width. */
-export const ROW_GAP_PX = 16;
+// One row's height and the gap down the grid, in pixels, and a card's height from its rows: core's
+// own (`nextly/card-geometry`), the numbers a widget's server `load` counts its rows by, so the
+// grid drawn here and the rows a load reads cannot come to disagree. Re-exported for the grid's
+// readers, which name them from here.
+export { cardHeightPx, ROW_GAP_PX, ROW_HEIGHT_PX } from "nextly/card-geometry";
+
 /** The gap across the grid, between columns, below {@link WIDE_GAP_FROM_PX}. */
 export const COLUMN_GAP_PX = 16;
 /** The gap across the grid from {@link WIDE_GAP_FROM_PX}. */
@@ -70,6 +72,15 @@ const HALF_GRID = GRID_COLUMNS / 2;
  */
 export const GRID_CLASS =
   "grid grid-flow-row grid-cols-12 auto-rows-[72px] gap-x-[16px] gap-y-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
+
+/**
+ * The grid's columns and the gap across them, without its rows: for a grid that draws cards at
+ * the dashboard's widths but lays its rows out itself (the widget preview page, where each card
+ * sits under a label). The same classes as {@link GRID_CLASS}, which a test holds it to, so a
+ * card drawn there is as wide as on the dashboard and lands in the same tier.
+ */
+export const GRID_COLUMNS_CLASS =
+  "grid-cols-12 gap-x-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
 
 /** The gap across the grid, in pixels, on a dashboard `dashboardWidth` wide. */
 export function columnGapPx(dashboardWidth: number): number {
@@ -153,11 +164,6 @@ export function cardSpanClass(w: number): string {
  */
 export function cardRowStyle(h: number): CSSProperties {
   return { gridRow: `span ${h} / span ${h}` };
-}
-
-/** A card's height in pixels at `h` rows: its rows and the gaps between them, at every width. */
-export function cardHeightPx(h: number): number {
-  return h * ROW_HEIGHT_PX + (h - 1) * ROW_GAP_PX;
 }
 
 /** The widths the card menu offers wherever a widget's bounds allow them: the common fractions. */

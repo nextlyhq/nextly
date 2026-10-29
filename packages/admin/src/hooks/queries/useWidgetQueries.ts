@@ -39,6 +39,7 @@ import {
   type ListDensity,
   type WidgetQuery,
 } from "nextly/config";
+import type { WidgetRenderSize } from "nextly/widget-result";
 import { useMemo } from "react";
 
 import type {
@@ -48,7 +49,11 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { fetchWidgetBatch, type CardAsk } from "./widget-query-stream";
+import {
+  fetchWidgetBatch,
+  type CardAsk,
+  type SentCardAsk,
+} from "./widget-query-stream";
 
 export type { CardAsk } from "./widget-query-stream";
 
@@ -100,6 +105,16 @@ export interface WidgetQueryRequest {
    * unsaved. Present exactly when `query` is absent.
    */
   card?: CardAsk;
+  /**
+   * The size a card core answers on the server is drawn at: its grid size and the tier predicted
+   * for it, sent beside `card` and handed to the widget's `load`, which may read it.
+   *
+   * 🔴 Part of what the answer is filed as asked with (`appliedKey`), and kept out of the cache
+   * key, as `sized` is. The size a load saw is part of its answer's identity, so a card resized or
+   * crossing a tier asks again; filed by `appliedKey` it asks again ALONE (`useCardRetries`),
+   * while a size in the key would make one card's resize a new question for its whole partition.
+   */
+  cardSize?: WidgetRenderSize;
   /**
    * The stored settings a card asked for by id was asked with: what its answer
    * is filed under, so a saved change of them asks this card again alone.
@@ -171,23 +186,38 @@ export type CellsApplied = Readonly<Record<string, string>>;
  * The question a request asks with, before sizing, as one comparable string: what an answer is
  * filed as having been asked with, and what a card compares against when its settings change.
  *
- * A card's is its ask with the stored settings it was asked with, so a saved change of them is
- * a different question, and a preview's ask, which carries its own settings, never reads as the
- * stored card's.
+ * A card's is its ask with the stored settings it was asked with and the size it is drawn at, so
+ * a saved change of them, a resize or a change of tier is a different question, and a preview's
+ * ask, which carries its own settings, never reads as the stored card's.
  */
 export function appliedKey(request: WidgetQueryRequest): string {
   return request.card === undefined
     ? JSON.stringify(request.applied ?? request.query)
-    : JSON.stringify({ card: request.card, config: request.config ?? null });
+    : JSON.stringify({
+        card: request.card,
+        config: request.config ?? null,
+        // Its three numbers in one fixed order, so two equal sizes are one key however the object
+        // holding them was built.
+        size:
+          request.cardSize === undefined
+            ? null
+            : [request.cardSize.w, request.cardSize.h, request.cardSize.tier],
+      });
 }
 
-/** What one request sends as its entry of the batch: its card, or its query as sized and applied. */
+/**
+ * What one request sends as its entry of the batch: its card with the size it is drawn at, or its
+ * query as sized and applied.
+ */
 export function sentEntry(
   request: WidgetQueryRequest
-): WidgetQuery | CardAsk | undefined {
-  return (
-    request.card ?? request.sized?.query ?? request.applied ?? request.query
-  );
+): WidgetQuery | SentCardAsk | undefined {
+  if (request.card !== undefined) {
+    return request.cardSize === undefined
+      ? request.card
+      : { ...request.card, size: request.cardSize };
+  }
+  return request.sized?.query ?? request.applied ?? request.query;
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -1351,14 +1381,15 @@ function sizesSent(
 }
 
 /**
- * A request as the cache keys it: everything but the sizing and the settings it is sent with.
+ * A request as the cache keys it: everything but the sizing (`sized`, `cardSize`) and the settings
+ * it is sent with.
  * Named field by field, so a field added to the request is a decision about the key rather than
  * an accident; TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as
  * before.
  */
 function unsized(
   request: WidgetQueryRequest
-): Omit<WidgetQueryRequest, "sized" | "applied" | "undrawn"> {
+): Omit<WidgetQueryRequest, "sized" | "applied" | "undrawn" | "cardSize"> {
   return {
     placementId: request.placementId,
     cellKey: request.cellKey,

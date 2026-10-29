@@ -179,6 +179,12 @@ const clientEntries = [
   // every domain it counts -- so the card reaching the vocabulary through it
   // would take all of them, and one writing its own copy would drift.
   "src/domains/widgets/attention-keys.ts",
+  // A card's body height and the list rows it holds, as their own entry. The
+  // admin draws its grid and frame by these numbers and a widget's server
+  // `load` counts its rows by the same formula, so neither keeps a copy; the
+  // module imports only the row limits, so the admin reaching it takes nothing
+  // more.
+  "src/domains/widgets/card-geometry.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.

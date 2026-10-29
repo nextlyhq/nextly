@@ -53,6 +53,11 @@ import {
   getDashboardActivity,
 } from "./api/dashboard";
 import {
+  deleteDashboardPin,
+  getDashboardPins,
+  postDashboardPin,
+} from "./api/dashboard-pins";
+import {
   acquireLock,
   readLock,
   releaseLock,
@@ -114,6 +119,7 @@ import {
   getWidgetLayout,
   putWidgetLayout,
 } from "./api/widget-layout";
+import { getWidgetPreviews } from "./api/widget-previews";
 import { postWidgetQuery } from "./api/widget-query";
 import { runWithAccessMemo } from "./auth/access/request-memo";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
@@ -541,9 +547,9 @@ async function handleImageSizesRequest(
 /**
  * Delegate a dashboard request directly to the named handler.
  *
- * Dashboard handlers manage their own auth (requireAuthentication) and are
- * read-only (GET). Intercepting here — before req.text() — keeps the pattern
- * consistent with API keys and general settings.
+ * Dashboard handlers manage their own auth (requireAuthentication) and read
+ * their own bodies (the layout's and a pin's). Intercepting here — before
+ * req.text() — keeps the pattern consistent with API keys and general settings.
  */
 async function handleDashboardRequest(
   req: Request,
@@ -566,6 +572,12 @@ async function handleDashboardRequest(
       return putWidgetLayout(req);
     case "deleteWidgetLayout":
       return deleteWidgetLayout(req);
+    case "getDashboardPins":
+      return getDashboardPins(req);
+    case "postDashboardPin":
+      return postDashboardPin(req);
+    case "deleteDashboardPin":
+      return deleteDashboardPin(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
@@ -699,11 +711,13 @@ async function handleSchemaRequest(
  */
 /**
  * The collection entry methods whose dispatcher handler reads through the
- * query service's filtered read: a list and a count.
+ * query service's filtered read: a list, a count and a read by id, which
+ * answers an entry outside a read rule's filter as missing.
  */
 const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
   "listEntries",
   "countEntries",
+  "getEntry",
 ]);
 
 export const COLLECTION_ENTRY_METHODS = new Set([
@@ -975,9 +989,9 @@ async function resolveAuthorization(
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
-        // A list and a count read through the query service's filtered read,
-        // which applies a read rule's filter; every other entry route refuses
-        // a caller whose rule answers one.
+        // A list, a count and a read by id read through the query service's
+        // filtered read, which applies a read rule's filter; every other entry
+        // route refuses a caller whose rule answers one.
         appliesReadFilter: FILTERED_READ_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
@@ -1071,7 +1085,7 @@ async function resolveAuthorization(
   // could use the API at all.
   if (service === "pluginSettings") {
     // A plugin may name its own permission for its settings in place of
-    // `manage-settings` (`contributes.settingsPermission`), checked at boot to
+    // `update-settings` (`contributes.settingsPermission`), checked at boot to
     // be one it declares.
     //
     // Services are booted before the declaration is read, as the dispatch
@@ -1119,8 +1133,8 @@ async function resolveAuthorization(
     }
     // A write to a plugin's configuration is a settings change, so it takes
     // the same permission a settings change takes anywhere else, unless the
-    // plugin named its own: then that one alone, so `manage-settings` does
-    // not reach settings the plugin kept to a narrower role.
+    // plugin named its own: then that one alone, so a settings role does not
+    // reach settings the plugin kept to a narrower role.
     return authorizeCaller(caller, write.action, write.resource);
   }
 
@@ -2129,6 +2143,13 @@ async function buildAdminMeta(
   // would dial exists.
   workspace.devReload = isDevServerRuntime();
 
+  // Whether the widget preview page exists, from the same comparison that
+  // gates its read below, so the admin registers the page exactly when the
+  // read it draws from answers. Its own field rather than `devReload`: each
+  // says what the admin may do with it, and a later rule for one (a config
+  // switch, say) must not move the other.
+  workspace.widgetPreviews = isDevServerRuntime();
+
   // The site's languages for the admin (present only when i18n is enabled): the language list as
   // it is now, so a language added in Settings shows without a restart.
   const localization = appLocalization() ?? config?.localization;
@@ -2516,7 +2537,47 @@ async function handleGet(req: Request, params: string[]) {
   if (params[0] === "dev-reload" && isDevServerRuntime()) {
     return withinBuiltInLimit(() => devReloadStream());
   }
+  if (isWidgetPreviewsPath(params) && isDevServerRuntime()) {
+    return withinBuiltInLimit(() => widgetPreviewsRead(req));
+  }
   return handleServiceRequest(req, params, "GET");
+}
+
+/**
+ * Whether the path is exactly `/_dev/widget-previews`, nothing beneath it.
+ * Under `_dev`, the first segment kept for development-only endpoints, which
+ * a plugin's root route can never claim (`root-mount-reach`).
+ */
+function isWidgetPreviewsPath(params: string[]): boolean {
+  return (
+    params.length === 2 &&
+    params[0] === "_dev" &&
+    params[1] === "widget-previews"
+  );
+}
+
+/**
+ * The widget preview read, for the dev server only.
+ *
+ * 🔴 Matched here, before the built-in router, and only while
+ * `isDevServerRuntime()` holds: anywhere else the request falls through to
+ * the router, which has no such route, so a production server answers it as
+ * it answers any path it does not serve, and nothing in the answer says a
+ * preview read exists. A gate inside a routed handler would answer a refusal
+ * of its own, which a caller could tell apart from an unknown path.
+ *
+ * Services start only for a request that presents a credential, as for the
+ * dashboard's other reads (`DIRECT_DISPATCH_SERVICES`): one with none is
+ * refused by the read's own authentication without starting anything.
+ */
+async function widgetPreviewsRead(req: Request): Promise<Response> {
+  if (
+    req.headers.get("authorization") !== null ||
+    readAccessTokenCookie(req) !== null
+  ) {
+    await ensureServicesInitialized();
+  }
+  return getWidgetPreviews(req);
 }
 
 /** The development reload stream, for the dev server only. */
