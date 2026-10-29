@@ -5,7 +5,9 @@ import { NextlyError } from "../../errors/nextly-error";
 import { collectCustomPermissions } from "../permissions/collect-permissions";
 import type { PluginDefinition } from "../plugin-context";
 import { assertPluginManifests } from "../resolve";
+import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import {
+  CORE_SETTINGS_PERMISSION,
   assertSettingsPermissionsOwned,
   settingsWritePermission,
 } from "../settings-permission";
@@ -197,8 +199,18 @@ describe("settingsWritePermission", () => {
 
   it("is core's permission for another plugin", () => {
     expect(settingsWritePermission(plugins, "@acme/other")).toEqual({
-      action: "manage",
+      action: "update",
       resource: "settings",
     });
+  });
+});
+
+describe("core's permission for a plugin's settings", () => {
+  it("is the settings change the system write policy names", () => {
+    expect(
+      SYSTEM_WRITE_POLICY.settings.update.anyOf.map(
+        ({ action, resource }) => `${action}-${resource}`
+      )
+    ).toEqual([CORE_SETTINGS_PERMISSION]);
   });
 });

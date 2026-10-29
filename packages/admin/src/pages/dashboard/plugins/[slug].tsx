@@ -30,9 +30,11 @@ import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
+import { pluginSettingsPermission } from "@admin/lib/plugins/plugin-settings-permission";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
 import {
@@ -173,6 +175,9 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   // The tab names the plugin as the heading below does. Called here, above
   // the returns below, because the tab's hook cannot follow them.
   useDocumentTitle(pluginDisplayName(plugin));
+  // The settings page asks the plugin's own permission, which any settings
+  // change does not imply, so its link is offered only to a holder of it.
+  const { hasPermission } = useCurrentUserPermissions();
 
   // Installed metadata is observed; the catalogue is a claim, so the observed
   // one decides. Only when the project has no such plugin is the catalogue
@@ -271,17 +276,19 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
             <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
               {/* The settings UI gets its own page; the detail page stays
               informational and links to it. */}
-              {plugin.enabled !== false && plugin.settings?.component && (
-                <Link
-                  href={buildRoute(ROUTES.PLUGIN_SETTINGS, {
-                    slug: pluginSlug(plugin.name),
-                  })}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-                >
-                  <SettingsIcon className="h-3.5 w-3.5" />
-                  Open settings
-                </Link>
-              )}
+              {plugin.enabled !== false &&
+                plugin.settings?.component &&
+                hasPermission(pluginSettingsPermission(plugin)) && (
+                  <Link
+                    href={buildRoute(ROUTES.PLUGIN_SETTINGS, {
+                      slug: pluginSlug(plugin.name),
+                    })}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                  >
+                    <SettingsIcon className="h-3.5 w-3.5" />
+                    Open settings
+                  </Link>
+                )}
             </div>
           </div>
 
