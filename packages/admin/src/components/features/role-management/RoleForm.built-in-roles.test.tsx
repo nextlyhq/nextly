@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   screenMode: "editable" as "super-admin" | "public" | "preset" | "editable",
   copyRole: vi.fn(),
+  copying: false,
   section: undefined as Record<string, unknown> | undefined,
   inheritance: false,
 }));
@@ -52,7 +53,7 @@ vi.mock("@admin/hooks/useRoleForm", async () => {
 });
 
 vi.mock("@admin/hooks/useRoleCopy", () => ({
-  useRoleCopy: () => state.copyRole,
+  useRoleCopy: () => ({ copyRole: state.copyRole, copying: state.copying }),
 }));
 
 vi.mock("./RoleBasicInfo", () => ({ RoleBasicInfo: () => null }));
@@ -84,6 +85,7 @@ beforeEach(() => {
   state.section = undefined;
   state.inheritance = false;
   state.copyRole.mockClear();
+  state.copying = false;
 });
 
 describe("the role form for a built-in role", () => {
@@ -138,5 +140,14 @@ describe("the role form for a built-in role", () => {
     expect(
       screen.getByRole("button", { name: /update role/i })
     ).toBeInTheDocument();
+  });
+
+  it("holds the save and the permissions while a copied role loads", () => {
+    state.screenMode = "editable";
+    state.copying = true;
+    render(<RoleForm roleId="r1" />);
+
+    expect(screen.getByRole("button", { name: /update role/i })).toBeDisabled();
+    expect(state.section).toMatchObject({ isLoading: true });
   });
 });

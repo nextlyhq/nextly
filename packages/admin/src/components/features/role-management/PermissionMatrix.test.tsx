@@ -218,4 +218,18 @@ describe("PermissionMatrix", () => {
       screen.getByRole("region", { name: "Permissions table" })
     ).not.toHaveAttribute("tabindex");
   });
+
+  it("keeps Search open on a read-only role, while its permissions can't change", () => {
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+        readOnly
+      />
+    );
+
+    expect(screen.getByPlaceholderText("Search...")).toBeEnabled();
+    expect(readTags()).toBeDisabled();
+  });
 });

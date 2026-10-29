@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { roleScreenMode } from "./role-screen-mode";
+import { givesVisitorsAWrite, roleScreenMode } from "./role-screen-mode";
 
 describe("roleScreenMode", () => {
   it("reads super-admin and Public from the server's marker", () => {
@@ -33,5 +33,22 @@ describe("roleScreenMode", () => {
   it("reads a role someone made, and a role not yet made, as editable", () => {
     expect(roleScreenMode({ isSystemRole: false })).toBe("editable");
     expect(roleScreenMode(null)).toBe("editable");
+  });
+});
+
+describe("givesVisitorsAWrite", () => {
+  const permission = (action: string) => ({
+    id: `${action}-media`,
+    name: `${action} media`,
+    resource: "media",
+    action,
+  });
+
+  it("counts a retired manage grant as a write, since saving it stores the four", () => {
+    const manage = permission("manage");
+    expect(givesVisitorsAWrite([manage], new Set([manage.id]))).toBe(true);
+    // CONTROL: a read alone gives visitors no write.
+    const read = permission("read");
+    expect(givesVisitorsAWrite([read], new Set([read.id]))).toBe(false);
   });
 });

@@ -75,7 +75,7 @@ function wrapper({ children }: { children: ReactNode }) {
 /** The role form, with the copy its screen offers beside it. */
 function useRoleScreen(roleId?: string) {
   const roleForm = useRoleForm(roleId);
-  return { ...roleForm, copyRole: useRoleCopy(roleId, roleForm.form) };
+  return { ...roleForm, copyRole: useRoleCopy(roleId, roleForm.form).copyRole };
 }
 
 /** The role form for `role`, loaded. */
