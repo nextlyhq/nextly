@@ -61,6 +61,8 @@ const draft = {
 const colleague = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 
 beforeEach(() => {
+  // Each test counts only its own reads.
+  lockHolder.mockReset();
   lockHolder.mockResolvedValue({ holder: null });
 });
 
@@ -102,7 +104,9 @@ describe("a Single for a user who may publish it but not change it", () => {
     const onSubmit = vi.fn(async () => ({ ...draft, status: "published" }));
     render(<SingleForm schema={schema} document={draft} onSubmit={onSubmit} />);
 
-    await waitFor(() => expect(lockHolder).toHaveBeenCalled());
+    // Clicked once the colleague's claim is known, not while the lock is still
+    // unread, which holds Publish too.
+    await screen.findByText("Bob is editing this document right now.");
     await userEvent.click(screen.getByRole("button", { name: "Publish" }));
 
     expect(onSubmit).not.toHaveBeenCalled();
