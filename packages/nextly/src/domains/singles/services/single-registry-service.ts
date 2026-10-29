@@ -763,6 +763,7 @@ export class SingleRegistryService extends BaseRegistryService<
           where: this.whereEq("slug", to),
         });
       },
+      logger: this.logger,
     });
     return row ? [row] : [];
   }

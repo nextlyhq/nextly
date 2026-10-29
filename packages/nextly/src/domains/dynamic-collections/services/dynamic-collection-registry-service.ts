@@ -394,6 +394,7 @@ export class DynamicCollectionRegistryService extends BaseService {
             // that did not move.
             return affectedRowCount(written, this.dialect) === 0 ? null : move;
           },
+          logger: this.logger,
         });
         if (renamed === null) {
           throw NextlyError.notFound({

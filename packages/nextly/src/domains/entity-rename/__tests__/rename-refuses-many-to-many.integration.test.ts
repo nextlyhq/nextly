@@ -10,12 +10,15 @@
  *
  * The collections are Builder-authored, because only the Schema Builder can
  * declare a many-to-many field, and only a Builder entity can be renamed.
+ *
+ * A rename also holds the schema lock, as every other schema change does: one
+ * started while a migration holds it is refused at once, with nothing written,
+ * and a refused rename leaves the lock free for the next change.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import { clearServices } from "../../../di/register";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
@@ -24,6 +27,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+import { withSchemaLock } from "../../schema/pipeline/schema-lock";
+import { renameEntity } from "../rename-entity";
 
 const silentLogger = {
   debug: () => undefined,
@@ -46,9 +51,9 @@ function t(): TestNextly {
 
 /**
  * `tags`, `posts` with a many-to-many to `tags`, and `notes` with neither,
- * seeded through the Builder path so the real junction table exists; then a
- * reboot on the same database, so the relationship service is reachable, and
- * one link written through it.
+ * seeded through the Builder path so the real junction table exists, and one
+ * link written through the relationship service. All in one boot: a re-boot
+ * on a server dialect drops the database the first boot provisioned.
  */
 async function seed(dialect: TestDialect): Promise<void> {
   handle = await createTestNextly({ dialect });
@@ -72,8 +77,9 @@ async function seed(dialect: TestDialect): Promise<void> {
     slug: "notes",
     fields: [{ name: "body", type: "text" }],
   });
-  clearServices();
-  handle = await createTestNextly({ dialect, adapter });
+  // The collection service's factory registers the relationship service, so
+  // it is resolved first, after the seed, for the relationship service to be
+  // reachable below.
   handle.getService("collectionService");
   const now = Math.floor(Date.now() / 1000);
   const stamp = dialect === "sqlite" ? `${now}` : "CURRENT_TIMESTAMP";
@@ -120,6 +126,55 @@ async function slugs(): Promise<string[]> {
     .sort();
 }
 
+/**
+ * Take the schema lock as `nextly migrate` does and hold it until the returned
+ * function is called, which releases it and waits for the holder to finish.
+ * The rename under test runs outside the holder's async context, so it is a
+ * second contender rather than work inside the holder.
+ */
+async function holdSchemaLock(): Promise<() => Promise<void>> {
+  let release = (): void => undefined;
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  let held = (): void => undefined;
+  const isHeld = new Promise<void>(resolve => {
+    held = resolve;
+  });
+  const holder = withSchemaLock(
+    {
+      adapter: t().adapter,
+      command: "nextly migrate",
+      whenHeld: "refuse",
+      mayCreateTables: true,
+      releaseOnInterrupt: false,
+    },
+    async () => {
+      held();
+      await released;
+    }
+  );
+  await Promise.race([isHeld, holder]);
+  return async () => {
+    release();
+    await holder;
+  };
+}
+
+/** A migration taking the schema lock now, refused at once if it is held. */
+function migrationTakesTheLock() {
+  return withSchemaLock(
+    {
+      adapter: t().adapter,
+      command: "nextly migrate",
+      whenHeld: "refuse",
+      mayCreateTables: true,
+      releaseOnInterrupt: false,
+    },
+    () => Promise.resolve("ran")
+  );
+}
+
 /** The tags `posts`' first entry links to, read through the relationship. */
 async function linkedTags(): Promise<string[]> {
   const read = await t()
@@ -159,6 +214,60 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await slugs()).toEqual(before);
       expect(await linkedTags()).toEqual(["tag-1"]);
+    }, 120_000);
+
+    it("refuses before the registry row is written", async () => {
+      await seed(dialect);
+      // Answers as a write that moved the row would, without moving it: the
+      // refusal must not depend on what the write leaves behind.
+      const writeRegistry = vi.fn(async () => ({}));
+
+      await expect(
+        renameEntity(t().adapter, {
+          dialect,
+          move: { kind: "collection", from: "posts", to: "articles" },
+          writeRegistry,
+          logger: silentLogger,
+        })
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining("posts.tags"),
+      });
+
+      expect(writeRegistry).not.toHaveBeenCalled();
+    }, 120_000);
+
+    it("refuses a rename at once, writing nothing, while a migration holds the schema lock", async () => {
+      await seed(dialect);
+      const before = await slugs();
+      const releaseLock = await holdSchemaLock();
+      try {
+        await expect(rename("notes", "journal")).rejects.toMatchObject({
+          code: "SERVICE_UNAVAILABLE",
+          publicMessage:
+            "A migration is running on this database, so this change was not saved. " +
+            "Save it again once the migration ends.",
+        });
+      } finally {
+        await releaseLock();
+      }
+
+      expect(await slugs()).toEqual(before);
+    }, 120_000);
+
+    it("leaves the schema lock free after a refused rename, for the next change to take", async () => {
+      await seed(dialect);
+
+      await expect(rename("posts", "articles")).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+
+      await expect(migrationTakesTheLock()).resolves.toEqual({
+        ran: true,
+        value: "ran",
+      });
+      await rename("notes", "journal");
+      expect(await slugs()).toContain("journal");
     }, 120_000);
 
     it("renames a collection with no many-to-many on either side", async () => {

@@ -66,13 +66,18 @@ describe("manyToManyLinks", () => {
     ).toEqual([]);
   });
 
-  it("reads nothing from a row with no slug or unreadable fields", () => {
+  it("reads nothing from a row with no slug or no fields", () => {
     expect(
       manyToManyLinks([
         { slug: null, fields: [manyToMany("tags", "tags")] },
-        { slug: "posts", fields: "{not json" },
         { slug: "notes", fields: null },
       ])
     ).toEqual([]);
+  });
+
+  it("throws on fields it cannot read, rather than reading them as none", () => {
+    expect(() =>
+      manyToManyLinks([{ slug: "posts", fields: "{not json" }])
+    ).toThrow(SyntaxError);
   });
 });

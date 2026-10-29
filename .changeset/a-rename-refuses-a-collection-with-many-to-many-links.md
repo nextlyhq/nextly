@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A collection on either side of a many-to-many relationship is no longer renamed. Its links live in a junction table spelled from both collections' slugs, which a rename keeps, so after a rename the relationship read every link as empty. The rename is now refused with a conflict naming the fields, and the links stay readable.
+A collection on either side of a many-to-many relationship is no longer renamed. Its links live in a junction table spelled from both collections' slugs, which a rename keeps, so after a rename the relationship read every link as empty. The rename is now refused with a conflict naming the fields, and the links stay readable. A collection or Single rename also holds the schema lock now, as every other schema change does, so one started while a migration or another schema change is running is refused at once, with nothing changed.
