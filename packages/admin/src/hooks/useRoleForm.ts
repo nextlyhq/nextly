@@ -603,7 +603,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         const res = await roleApi.fetchRoles({
           pagination: { page: 0, pageSize: PAGINATION.MAX_PAGE_SIZE },
           populate: ["permissions"],
-        });
+        } as FetchRolesParams);
 
         // Only roles another role may build on: never the Public role.
         const rolesWithPermissions = assignableRoles(res?.items || []).map(
