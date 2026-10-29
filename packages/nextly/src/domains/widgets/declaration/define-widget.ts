@@ -18,6 +18,7 @@ import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetSizeDeclaration } from "../grid-size";
 import type { RangeInterval, TimeseriesRange } from "../query";
 import type { DeclaredComponentProps, WidgetRenderSize } from "../result";
+import type { WidgetFieldChoice, WidgetSourceFieldType } from "../sources";
 import type { WidgetScope } from "../widget-scope";
 
 import type {
@@ -33,6 +34,7 @@ import type {
   WidgetFilter,
   WidgetSettings,
 } from "./setting-builders";
+import type { WidgetSkeleton } from "./skeleton";
 import type { TransportableFields, TransportableValue } from "./transportable";
 
 /**
@@ -64,6 +66,62 @@ export type WidgetRange = Extract<DateRange, TimeseriesRange>;
 type WidgetReadStatus = "published" | "all";
 
 /**
+ * The window a count reads over: the entries whose `dateField` (their
+ * `createdAt` when absent) falls in the range's window, the one a series over
+ * the same range is drawn across, from the instant that range reaches back to
+ * the batch's. With `previous: true`, the window as long that ends where that
+ * one starts, so a count of the last 30 days and of the 30 before them never
+ * share an entry.
+ *
+ * `dateField` must name a date field of the collection that may be read by
+ * everyone the collection is read by: anything else is refused, as an invalid
+ * option is, whoever asks.
+ *
+ * @experimental
+ */
+export interface WidgetCountWindow {
+  range: WidgetRange;
+  dateField?: string;
+  previous?: true;
+}
+
+/**
+ * One field of a collection, as a widget's reads may use it: its name, what a
+ * person calls it, what kind of value it holds, and, for a field of choices,
+ * what each stored value is called. `groupable: false` marks a field a
+ * grouping read will not divide by, `presentable: false` one a row cannot
+ * print.
+ *
+ * `label` is the collection's own label for the field, or, where it gives
+ * none (as on its `createdAt`), the field's name made readable ("Created
+ * At"), as the admin names it on screen.
+ *
+ * @experimental
+ */
+export interface WidgetCollectionField {
+  name: string;
+  label: string;
+  type: WidgetSourceFieldType;
+  choices?: readonly WidgetFieldChoice[];
+  groupable?: false;
+  presentable?: false;
+}
+
+/**
+ * A collection as a widget's reads see it (`describe`): the field that names
+ * an entry, when it has one this person may read; whether it has a draft and
+ * published `status`, as `defineCollection({ status: true })` gives it; and
+ * the fields a read may use, every one this person may read and no other.
+ *
+ * @experimental
+ */
+export interface WidgetCollectionDescription {
+  title?: string;
+  status: boolean;
+  fields: readonly WidgetCollectionField[];
+}
+
+/**
  * Reads a data function may make, already bound to the person asking.
  *
  * 🔴 They take no person, user or access option: core binds the person before
@@ -82,6 +140,13 @@ export interface WidgetReadServices {
        * @experimental
        */
       status?: WidgetReadStatus;
+      /**
+       * Counts only the entries in a window of time (`WidgetCountWindow`),
+       * beside the `where`.
+       *
+       * @experimental
+       */
+      window?: WidgetCountWindow;
       signal?: AbortSignal;
     }
   ): Promise<number>;
@@ -90,6 +155,11 @@ export interface WidgetReadServices {
     options?: {
       where?: WidgetFilter;
       sort?: string;
+      /**
+       * The most rows to answer. `0` answers none, as `rowsThatFit` answers
+       * for a card whose body holds no row; with `total: true` the total is
+       * still counted.
+       */
       limit?: number;
       select?: readonly string[];
       /**
@@ -98,9 +168,32 @@ export interface WidgetReadServices {
        * @experimental
        */
       status?: WidgetReadStatus;
+      /**
+       * `true` to be answered how many entries the read matched in all
+       * (`total`), from the same read as the rows, so a card's "View all (N)"
+       * names what the list it links to holds.
+       *
+       * @experimental
+       */
+      total?: true;
       signal?: AbortSignal;
     }
-  ): Promise<{ items: { readonly [field: string]: TransportableValue }[] }>;
+  ): Promise<{
+    items: { readonly [field: string]: TransportableValue }[];
+    /**
+     * How many entries the read matched in all, when the call asked for it
+     * with `total: true`.
+     *
+     * @experimental
+     */
+    total?: number;
+    /**
+     * Whether `total` is a floor: at least this many. Absent, it is whole.
+     *
+     * @experimental
+     */
+    atLeast?: boolean;
+  }>;
   /**
    * How many entries hold each value of one field, largest group first: the
    * data the `bars` view draws, so a function may answer it as it is.
@@ -121,7 +214,22 @@ export interface WidgetReadServices {
       limit?: number;
       signal?: AbortSignal;
     }
-  ): Promise<{ buckets: readonly { value: string | null; count: number }[] }>;
+  ): Promise<{
+    buckets: readonly { value: string | null; count: number }[];
+    /**
+     * `true` when groups were left out because the read reached its cap:
+     * the buckets are the largest, but not every one.
+     *
+     * @experimental
+     */
+    truncated?: boolean;
+    /**
+     * `true` when each count is a floor: at least this many.
+     *
+     * @experimental
+     */
+    atLeast?: boolean;
+  }>;
   /**
    * How many entries fall in each interval of a range, oldest first, every
    * interval present, a quiet one at zero: the data the `series` view draws,
@@ -130,7 +238,8 @@ export interface WidgetReadServices {
    * The range decides the interval (a day for `7d` and `30d`, a week for
    * `90d`, a month for `12m`), and `interval` is the one the points were
    * counted in. Entries are placed by `dateField`, their `createdAt` when
-   * absent.
+   * absent: a date field of the collection that may be read by everyone the
+   * collection is read by, or the read is refused, whoever asks.
    *
    * @experimental
    */
@@ -147,6 +256,18 @@ export interface WidgetReadServices {
     points: readonly { start: string; count: number }[];
     interval: WidgetInterval;
   }>;
+  /**
+   * The collection as a widget's reads may use it (`WidgetCollectionDescription`):
+   * what titles an entry, whether it has a draft and published status, and
+   * the fields this person may read, for naming a grouping's values and
+   * choosing a list's columns. Checked as every read is, so a collection the
+   * person may not read is refused as a read of it would be.
+   *
+   * @experimental
+   */
+  describe(
+    collection: string
+  ): Promise<WidgetCollectionDescription | undefined>;
 }
 
 /**
@@ -382,6 +503,14 @@ export interface WidgetDeclarationInput<
   isEmpty?: (data: DataFor<DisplayOf<View>, Data>) => boolean;
   /** What the empty state says and offers, in place of the frame's own. */
   empty?: WidgetEmpty;
+  /**
+   * The shape of the card while its data is on the way, and of its row in the
+   * add panel: one of `WidgetSkeleton`. The frame's own, generic one when
+   * absent.
+   *
+   * @experimental
+   */
+  skeleton?: WidgetSkeleton;
   /**
    * Cases the preview page and the scaffold draw the ready state from, of the
    * widget's own data type, so a case that drifts from the data it stands in
@@ -638,6 +767,9 @@ export type WidgetSettingValues<W> = W extends { settings?: infer S }
 export type WidgetData<W> = W extends { readonly [widgetData]?: infer D }
   ? D
   : never;
+
+// A card's loading shape, published from here beside the declaration that states it.
+export type { WidgetSkeleton } from "./skeleton";
 
 // A card's size, declared beside the props the admin builds so both read one
 // shape, and published from here as it always was.

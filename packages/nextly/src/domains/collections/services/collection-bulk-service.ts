@@ -707,6 +707,10 @@ export class CollectionBulkService extends BaseService {
               request: params.request,
               // Judge the key's own delete grant per row.
               authenticatedScope: params.authenticatedScope,
+              // A bulk delete refuses a delete rule's filter, as the bulk
+              // delete by query does, rather than deleting the matching ids
+              // and refusing the rest.
+              appliesFilter: false,
             });
 
             if (deleteResult.success) {

@@ -212,3 +212,20 @@ export function sentAsJson(value: unknown): TransportableValue {
   // no value for it, so the browser would receive nothing, which is `null`.
   return text === undefined ? null : (JSON.parse(text) as TransportableValue);
 }
+
+/** One row of fields as JSON carries it: an object of transportable values. */
+export type TransportableRow = { readonly [field: string]: TransportableValue };
+
+/**
+ * The rows among `sent`, a list as {@link sentAsJson} answers it: each entry
+ * that arrived as an object of fields, never a list or a lone value. Nothing
+ * when `sent` is not a list at all.
+ */
+export function sentRows(sent: TransportableValue): TransportableRow[] {
+  if (!Array.isArray(sent)) return [];
+  const entries: readonly TransportableValue[] = sent;
+  return entries.filter(
+    (value): value is TransportableRow =>
+      typeof value === "object" && value !== null && !Array.isArray(value)
+  );
+}

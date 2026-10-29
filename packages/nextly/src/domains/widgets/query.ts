@@ -242,6 +242,24 @@ export function rangeWindow(range: TimeseriesRange, now: Date): RangeWindow {
 }
 
 /**
+ * The exclusive upper bound of a window that ends at `now`: one millisecond
+ * past the whole second at or after it, so the window keeps that second.
+ *
+ * 🔴 MySQL stores a DATETIME to the second, rounding to the nearest, so a row
+ * written just before `now` can be stored up to half a second after it, and a
+ * window ending at `now` would miss it until the clock passes the stored
+ * value. Every stored value of a row written by `now` is at most that whole
+ * second. On a dialect that keeps milliseconds, the most this admits is a row
+ * written later in the same second. Only the open end moves: interval edges,
+ * and a window's start, are where they were.
+ *
+ * @experimental
+ */
+export function openWindowEnd(now: Date): Date {
+  return new Date(Math.ceil(now.getTime() / 1000) * 1000 + 1);
+}
+
+/**
  * The same instant a calendar year before `now`, its day clamped to the
  * month's last: February 29 steps back to February 28, where `setUTCMonth`
  * would roll over into March 1 and drop the window's first day.
