@@ -603,6 +603,14 @@ jobs:
       # bare-Error allowlist's size and per-file counts and proves each guard
       # still reaches the files it exempts, so the allowlist cannot be edited
       # to silence lint without this step going red.
+      #
+      # The visual check's own tests drive Chromium against a stubbed server,
+      # so the browser comes first, provisioned the one way the browser jobs
+      # provision it: the same action, so a cache hit is the same entry.
+      - name: Chromium for the visual check's tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: ./.github/actions/chromium
+
       - name: Script tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm test:scripts
