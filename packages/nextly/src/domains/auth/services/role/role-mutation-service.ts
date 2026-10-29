@@ -11,7 +11,10 @@ import type {
 
 // PR 4 migration: replaced legacy result-shape returns and
 // mapDbErrorToServiceError calls with throw-based NextlyError.
-import { storedAsPlain } from "../../../../auth/access/manage-bridge";
+import {
+  storedAsPlain,
+  storedAsPlainLocked,
+} from "../../../../auth/access/manage-bridge";
 import { toDbError } from "../../../../database/errors";
 import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -870,12 +873,15 @@ export class RoleMutationService extends BaseService {
             // removal and the insert below.
             await tx.lockRow("roles", storedRoleId);
             // A retired `manage-` permission is stored as the plain four it
-            // stands for, so a role saved with one never holds it.
-            const storedPermissionIds = await storedAsPlain(
-              tx,
-              uniquePermissionIds,
-              this.adapter.getCapabilities().maxParamsPerQuery
-            );
+            // stands for, so a role saved with one never holds it, read under
+            // the lock on each permission row it reads.
+            const storedPermissionIds = [
+              ...(await storedAsPlainLocked(
+                tx,
+                uniquePermissionIds,
+                this.adapter.getCapabilities().maxParamsPerQuery
+              )),
+            ];
             // Delete all existing role-permission mappings
             await tx.delete(
               "role_permissions",

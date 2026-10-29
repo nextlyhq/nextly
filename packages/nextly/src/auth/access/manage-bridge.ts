@@ -143,6 +143,26 @@ export async function storedAsPlain(
   return [...new Set([...ids.filter(id => !replaced.has(id)), ...added])];
 }
 
+/**
+ * `storedAsPlain` inside a writer's transaction, with every permission row it
+ * reads locked first: the ids asked for, then the plain ones it chose, read
+ * again once those are locked too. A row edited into another permission since
+ * an earlier read is stored as it is now, never as it was.
+ */
+export async function storedAsPlainLocked(
+  tx: Pick<TransactionContext, "select" | "lockRow">,
+  permissionIds: readonly string[],
+  maxParams: number
+): Promise<Set<string>> {
+  const asked = [...new Set(permissionIds.map(String))];
+  for (const id of asked) await tx.lockRow("permissions", id);
+  const first = await storedAsPlain(tx, asked, maxParams);
+  const chosen = first.filter(id => !asked.includes(id));
+  if (chosen.length === 0) return new Set(first);
+  for (const id of chosen) await tx.lockRow("permissions", id);
+  return new Set(await storedAsPlain(tx, asked, maxParams));
+}
+
 /** `items` in runs of at most `size`, and never less than one per run. */
 export function batches<T>(items: readonly T[], size: number): T[][] {
   const step = Math.max(1, Math.floor(size));
