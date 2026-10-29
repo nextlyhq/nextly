@@ -30,6 +30,7 @@ import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
+import { addressSchema } from "../shared/address-rule";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
@@ -61,26 +62,9 @@ async function getCollectionRegistry(): Promise<CollectionRegistryService> {
 }
 
 const createCollectionSchema = z.object({
-  // 🔴 This endpoint's own slug rules, NOT `collectionNameSchema`. The Schema
-  // Builder posts to `POST /collections`, which validates with that schema --
-  // 50 characters, a curated reserved list, a SQL-keyword refusal. This is a
-  // different door: a manifest-shaped create for callers driving the schema
-  // API directly, and it has always accepted names that one rejects.
-  //
-  // Kept apart deliberately rather than by omission: 255 is the limit every
-  // caller of this endpoint has been accepted under, and the Builder's 50 would
-  // reject a slug it has always taken. Anything deciding whether a name is
-  // creatable through the ADMIN surface reads
-  // `domains/collections/creatable-slug`, which asks the Builder's validator,
-  // rather than borrowing these limits.
-  slug: z
-    .string()
-    .min(1, "Slug is required")
-    .max(255, "Slug must be 255 characters or less")
-    .regex(
-      /^[a-z][a-z0-9_]*$/,
-      "Slug must start with a letter and contain only lowercase letters, numbers, and underscores"
-    ),
+  // The one address rule every road shares, so this manifest-shaped create
+  // refuses exactly what the Builder's create and configuration refuse.
+  slug: addressSchema("collection"),
   labels: z.object({
     singular: z.string().trim().min(1, "Singular label is required"),
     plural: z.string().trim().min(1, "Plural label is required").optional(),

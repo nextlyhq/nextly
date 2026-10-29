@@ -32,9 +32,9 @@ import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/fie
 import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../../errors";
 import { isReservedSystemColumn } from "../../lib/system-columns";
+import { FIELD_GROUP_ROUTE_SLUGS } from "../../shared/address-rule";
 import {
   type BaseValidationError,
-  DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldBasicsShared,
@@ -163,15 +163,9 @@ export interface FieldGroupValidationResult {
  */
 export const RESERVED_FIELD_GROUP_SLUGS = [
   ...RESERVED_SLUGS,
-  // API namespace. A slug matching a live route segment would make the two
-  // indistinguishable in a URL.
-  "field-groups",
-  "field-group",
+  // API namespace, stated with the one address rule that judges a slug.
+  ...FIELD_GROUP_ROUTE_SLUGS,
 ] as const;
-
-const RESERVED_COMPONENT_SLUGS_SET: Set<string> = new Set<string>(
-  RESERVED_FIELD_GROUP_SLUGS
-);
 
 // ============================================================
 // Domain-Specific Field Validation
@@ -415,11 +409,7 @@ export function validateFieldGroupConfig(
   const errors: FieldGroupValidationError[] = [];
   const errsBase = errors as unknown as BaseValidationError[];
 
-  validateSlugShared(config.slug, errsBase, {
-    entityLabel: "Component",
-    reservedSlugsSet: RESERVED_COMPONENT_SLUGS_SET,
-    sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
-  });
+  validateSlugShared(config.slug, errsBase, "fieldGroup");
 
   validateFields(config.fields, errors);
 

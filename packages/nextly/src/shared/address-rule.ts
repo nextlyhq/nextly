@@ -17,6 +17,8 @@
  * @module shared/address-rule
  */
 
+import { z } from "zod";
+
 import {
   identifierBytes,
   MAX_INDEX_NAME_LENGTH,
@@ -26,6 +28,7 @@ import {
   resolveComponentTableName,
 } from "../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../domains/singles/services/resolve-single-table-name";
+import { NextlyError } from "../errors/nextly-error";
 import {
   isReservedResourceSlug,
   NEWLY_RESERVED_SLUG_NOTES,
@@ -332,4 +335,84 @@ export function judgeAddresses(
     if (refusal) refused.push({ entity, refusal });
   }
   return { refused, existing };
+}
+
+/** A refusal as the error every road throws: a validation error on `slug`. */
+export function addressRefusalError(
+  refusal: AddressRefusal,
+  address?: unknown
+): NextlyError {
+  return NextlyError.validation({
+    errors: [{ path: "slug", code: refusal.code, message: refusal.message }],
+    logContext: { reason: "address-rule", code: refusal.code, address },
+  });
+}
+
+/** Throws the rule's refusal of a new or changed address, if it has one. */
+export function assertAddressAllowed(
+  kind: AddressKind,
+  address: unknown
+): void {
+  const refusal = judgeAddress(kind, address);
+  if (refusal) throw addressRefusalError(refusal, address);
+}
+
+type Slugged = ReadonlyArray<{ slug: string }>;
+
+/**
+ * The start's check of configuration in code. An entity no registry row holds
+ * yet is new, and is judged by the whole rule and against every address used;
+ * one a row holds already exists and keeps its address. Run before the boot
+ * writes anything, so a refused configuration leaves the registries and tables
+ * as they were.
+ */
+export function assertConfiguredAddresses(
+  config: {
+    collections?: Slugged;
+    singles?: Slugged;
+    fieldGroups?: Slugged;
+  },
+  registered: { collections: Slugged; singles: Slugged; components: Slugged }
+): void {
+  const configured: Array<[AddressKind, Slugged, Slugged]> = [
+    ["collection", config.collections ?? [], registered.collections],
+    ["single", config.singles ?? [], registered.singles],
+    ["fieldGroup", config.fieldGroups ?? [], registered.components],
+  ];
+  const entities: AddressedEntity[] = [];
+  const used: UsedAddress[] = [];
+  for (const [kind, declared, rows] of configured) {
+    const held = new Set(rows.map(row => row.slug));
+    const declaredSlugs = new Set(declared.map(entity => entity.slug));
+    for (const { slug } of declared) {
+      entities.push({ kind, address: slug, isNew: !held.has(slug) });
+    }
+    for (const { slug } of rows) {
+      if (!declaredSlugs.has(slug)) used.push({ kind, address: slug });
+    }
+  }
+  const { refused } = judgeAddresses(entities, used);
+  if (refused.length === 0) return;
+  throw NextlyError.validation({
+    errors: refused.map(({ refusal }) => ({
+      path: "slug",
+      code: refusal.code,
+      message: refusal.message,
+    })),
+    logContext: {
+      reason: "address-rule",
+      refused: refused.map(({ entity }) => `${entity.kind}:${entity.address}`),
+    },
+  });
+}
+
+/**
+ * The rule as a zod string schema, for a road that parses its input with zod:
+ * an address the rule refuses fails with the refusal's message.
+ */
+export function addressSchema(kind: AddressKind): z.ZodType<string> {
+  return z.string().superRefine((address, ctx) => {
+    const refusal = judgeAddress(kind, address);
+    if (refusal) ctx.addIssue({ code: "custom", message: refusal.message });
+  });
 }

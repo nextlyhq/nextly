@@ -1,7 +1,6 @@
 import safeRegex from "safe-regex2";
 import { z } from "zod";
 
-import { isReservedResourceSlug } from "@nextly/schemas/_zod/rbac";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 /**
@@ -13,6 +12,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
+import { addressSchema } from "../../../shared/address-rule";
 import {
   BUILDER_RESERVED_COLLECTION_NAMES,
   BUILDER_SQL_KEYWORDS,
@@ -54,33 +54,12 @@ export const RESERVED_COLLECTION_NAMES = BUILDER_RESERVED_COLLECTION_NAMES;
 export const RESERVED_FIELD_NAMES: readonly string[] =
   reservedSystemFieldNames("builder");
 
-export const collectionNameSchema = z
-  .string()
-  .min(1, "Collection name cannot be empty")
-  .max(50, "Collection name must be 50 characters or less")
-  .regex(
-    /^[a-z][a-z0-9_]*$/,
-    "Collection name must start with lowercase letter and contain only lowercase letters, numbers, and underscores"
-  )
-  .refine(
-    (name: string) => !RESERVED_COLLECTION_NAMES.includes(name as never),
-    {
-      message: "Collection name is reserved",
-    }
-  )
-  // A name that collides with a system resource's permissions is rejected here,
-  // during name validation inside `generateCollection` — before the migration
-  // and table are built — so the Builder path cannot leave an orphan table when
-  // the registry guard later refuses the same name.
-  .refine((name: string) => !isReservedResourceSlug(name), {
-    message: "Collection name is reserved by Nextly",
-  })
-  .refine(
-    (name: string) => !SQL_KEYWORDS.includes(name.toLowerCase() as never),
-    {
-      message: "Collection name is a reserved SQL keyword",
-    }
-  );
+/**
+ * A Builder-created collection's name, judged by the one address rule every
+ * road shares (`shared/address-rule`), so the Builder refuses exactly what
+ * configuration, the schema endpoints and the migrate commands refuse.
+ */
+export const collectionNameSchema = addressSchema("collection");
 
 export const fieldNameSchema = z
   .string()

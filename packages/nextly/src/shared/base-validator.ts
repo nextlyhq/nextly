@@ -24,6 +24,11 @@ import type { FieldAccess } from "../collections/fields/types/base";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
+import {
+  type AddressKind,
+  judgeConfiguredAddress,
+  MAX_SLUG_LENGTH,
+} from "./address-rule";
 import { MAX_DECIMAL_PRECISION, MAX_DECIMAL_SCALE } from "./decimal-bounds";
 import { pluginFieldOptionIssues } from "./lib/plugin-field-options";
 import { SLUG_PATTERN } from "./slug-pattern";
@@ -52,33 +57,6 @@ export interface BaseValidationError {
 
   /** Machine-readable error code. */
   code: string;
-}
-
-/**
- * Parameter bundle for {@link validateSlugShared}.
- *
- * `entityLabel` is injected into error messages (e.g., "Single", "Collection").
- * `reservedSlugsSet` and `sqlKeywordsSet` are the Sets of disallowed names.
- */
-export interface SlugValidationContext {
-  /** Human label for error messages — "Single", "Collection", "Component". */
-  entityLabel: string;
-
-  /** Reserved slugs (Set for O(1) lookup). */
-  reservedSlugsSet: Set<string>;
-
-  /** SQL keywords (Set for O(1) lookup). */
-  sqlKeywordsSet: Set<string>;
-
-  /**
-   * Extra guidance for particular reserved slugs, appended to the refusal.
-   *
-   * Optional because most reservations need none: a name that has always been
-   * reserved is only ever met by somebody naming something new. A name that
-   * became reserved is met by an upgrade, where the bare refusal describes a
-   * config that worked in the previous version and says nothing about why.
-   */
-  reservedSlugNotes?: ReadonlyMap<string, string>;
 }
 
 // ============================================================
@@ -167,115 +145,29 @@ export function isSQLKeyword(
 // ============================================================
 
 /**
- * Longest slug the product accepts, for every resource that becomes a table.
- *
- * Bounded well below what the databases allow rather than at it. A slug is prefixed on its way to a
- * physical name (`dc_`, `single_`, `comp_`) and a companion suffix can be appended after that, so
- * the identifier that finally reaches the engine is longer than the slug by an amount the caller
- * never sees. PostgreSQL silently TRUNCATES identifiers past 63 bytes and MySQL rejects past 64,
- * and truncation is the worse of the two: the table is created under a name that no longer matches
- * the one the caller asked about.
- *
- * Exported so the value is stated once. A route that re-declares its own bound is how an input this
- * rejects reaches the DDL anyway.
+ * Longest slug the product accepts, stated by the one address rule and
+ * re-exported here for this module's existing importers.
  */
-export const MAX_SLUG_LENGTH = 50;
+export { MAX_SLUG_LENGTH };
 
 /**
- * Validate a slug against the standard Nextly rules: required, string,
- * length 1-50, pattern-conformant, not reserved, not a SQL keyword.
+ * Validate a configured slug by the one address rule, as configuration in code
+ * is judged at import (`judgeConfiguredAddress`): the refusals configuration
+ * made before the rule, with the rest left to the start and the migrate
+ * commands, which can tell a new address from one an entity already holds.
  *
- * Pushes errors onto `errors` using shared error codes. Domain validators
- * cast their typed error array to {@link BaseValidationError}[] at the
- * call site — every domain's error code union includes the codes pushed
- * here.
+ * Pushes the rule's refusal onto `errors` under its code. Domain validators
+ * cast their typed error array to {@link BaseValidationError}[] at the call
+ * site — every domain's error code union includes the codes pushed here.
  */
 export function validateSlugShared(
   slug: unknown,
   errors: BaseValidationError[],
-  ctx: SlugValidationContext
+  kind: AddressKind
 ): void {
-  const path = "slug";
-
-  if (!slug) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug is required`,
-      code: "SLUG_REQUIRED",
-    });
-    return;
-  }
-
-  if (typeof slug !== "string") {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug must be a string`,
-      code: "SLUG_INVALID_TYPE",
-    });
-    return;
-  }
-
-  if (slug.length < 1) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug must be at least 1 character`,
-      code: "SLUG_TOO_SHORT",
-    });
-  }
-
-  if (slug.length > MAX_SLUG_LENGTH) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug must be at most ${MAX_SLUG_LENGTH} characters`,
-      code: "SLUG_TOO_LONG",
-    });
-  }
-
-  if (!SLUG_PATTERN.test(slug)) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug must start with a lowercase letter and contain only lowercase letters, numbers, hyphens, and underscores`,
-      code: "SLUG_INVALID_FORMAT",
-    });
-  }
-
-  if (ctx.reservedSlugsSet.has(slug.toLowerCase())) {
-    const note = ctx.reservedSlugNotes?.get(slug.toLowerCase());
-    errors.push({
-      path,
-      message:
-        `${ctx.entityLabel} slug '${slug}' is reserved and cannot be used` +
-        (note === undefined ? "" : `. ${note}`),
-      code: "SLUG_RESERVED",
-    });
-  }
-
-  // a slug ending in `_locales` produces a physical table name
-  // (`dc_<slug>_locales` / `single_<slug>_locales`) that collides with the localization
-  // companion-table naming, so the schema-diff pipeline would treat the user's table as
-  // migration-owned (excluded from diff, its DROP silently blocked). Reserve the suffix.
-  // Normalize non-alphanumerics to `_` first (matching table-name generation) so a
-  // hyphenated slug like `posts-locales` → `dc_posts_locales` is caught too.
-  if (
-    typeof slug === "string" &&
-    slug
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .endsWith("_locales")
-  ) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug '${slug}' cannot end with '_locales' (reserved for localization companion tables)`,
-      code: "SLUG_RESERVED",
-    });
-  }
-
-  if (isSQLKeyword(slug, ctx.sqlKeywordsSet)) {
-    errors.push({
-      path,
-      message: `${ctx.entityLabel} slug '${slug}' is a SQL reserved keyword. Use a different name or set 'dbName' to customize the table name`,
-      code: "SLUG_SQL_KEYWORD",
-    });
+  const refusal = judgeConfiguredAddress(kind, slug);
+  if (refusal) {
+    errors.push({ path: "slug", message: refusal.message, code: refusal.code });
   }
 }
 
