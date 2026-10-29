@@ -99,12 +99,55 @@ function toColumn(name: string): string {
 }
 
 /**
+ * Companion schemas already built, by everything that decides one. A Single's and a component's
+ * reads ask for their companion on every read, once per dynamic-zone row for a component, and
+ * building one makes a Drizzle table. The schema is a function of its inputs alone, so keying it
+ * on them needs no invalidation: a changed field list is another key, on any connection and in any
+ * transaction. Bounded, oldest first out, since every schema change in a process adds a key.
+ */
+const builtCompanionSchemas = new Map<string, CompanionSchema | null>();
+const BUILT_COMPANION_SCHEMA_LIMIT = 500;
+
+/**
  * Build the companion schema for a localized entity from its physical inputs. Entity-agnostic:
  * the caller supplies the resolved table name (`dc_*` / `single_*` / `comp_*`) and fields, so this
  * works for collections, singles, and components alike. Returns `null` when the entity has no
- * translatable fields (nothing lives in a companion).
+ * translatable fields (nothing lives in a companion). Built once per set of inputs; each caller
+ * gets its own copy of the field list, sharing the Drizzle table, which nothing changes.
  */
 export function buildCompanionSchema(args: {
+  slug: string;
+  tableName: string;
+  fields: CompanionFieldLike[];
+  dialect: SupportedDialect;
+  status?: boolean;
+}): CompanionSchema | null {
+  const key = JSON.stringify([
+    args.slug,
+    args.tableName,
+    args.dialect,
+    args.status === true,
+    args.fields,
+  ]);
+  let built = builtCompanionSchemas.get(key);
+  if (built === undefined && !builtCompanionSchemas.has(key)) {
+    built = companionSchemaOf(args);
+    if (builtCompanionSchemas.size >= BUILT_COMPANION_SCHEMA_LIMIT) {
+      const oldest = builtCompanionSchemas.keys().next().value;
+      if (oldest !== undefined) builtCompanionSchemas.delete(oldest);
+    }
+    builtCompanionSchemas.set(key, built);
+  }
+  return built
+    ? {
+        ...built,
+        localizedFields: built.localizedFields.map(field => ({ ...field })),
+      }
+    : null;
+}
+
+/** The companion schema for `args`, built now. */
+function companionSchemaOf(args: {
   slug: string;
   tableName: string;
   fields: CompanionFieldLike[];
