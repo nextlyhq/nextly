@@ -40,6 +40,7 @@ import type { AnyWidgetSetting } from "../settings";
 
 import type { WidgetAccessGate } from "./define-widget";
 import { displayOfView, type WidgetDisplay, type WidgetView } from "./displays";
+import { WIDGET_SKELETON_SKETCH, type WidgetSkeleton } from "./skeleton";
 import {
   collectWidgetDeclarationFaults,
   widgetDeclarationsRefused,
@@ -104,6 +105,26 @@ interface DeclaredWidgetShape {
   };
   readonly several?: boolean;
   readonly hidesWhenEmpty?: boolean;
+  /** The card's loading shape and add-panel sketch, checked at startup. */
+  readonly skeleton?: WidgetSkeleton;
+  /**
+   * The cases the development preview page draws the card's ready state from,
+   * each held at startup to what JSON carries (`previewProblems`).
+   *
+   * 🔴 Kept here, on the server, and never published: `toDefinition` names
+   * every field the registry carries and this is not one of them, so the
+   * admin's workspace payload never holds a case. Only the preview read, which
+   * answers in development alone, sends them, and only for the widgets its
+   * reader may see.
+   */
+  readonly preview?: readonly DeclaredPreviewCase[];
+}
+
+/** One preview case as a declaration states it, checked at startup. */
+interface DeclaredPreviewCase {
+  readonly name: string;
+  readonly data: unknown;
+  readonly settings?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -193,6 +214,11 @@ function toDefinition(
     description: declaration.description,
     ...publishedLabels(declaration, owner),
     ...drawnBy(displayOfView(declaration.view), owner),
+    // The display its loading state and its add-panel row are drawn as: the
+    // registry's own `sketch`, which both read.
+    ...(declaration.skeleton === undefined
+      ? {}
+      : { sketch: WIDGET_SKELETON_SKETCH[declaration.skeleton] }),
     ...(settings.length > 0 ? { settings } : {}),
     size: sizeBounds(declaration.size),
     ...publishedGates(declaration),

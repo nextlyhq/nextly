@@ -63,6 +63,7 @@ import {
   PROBES_WHERE,
   USER_MARKER,
   collectionOf,
+  handleForCell,
   outsideKey,
   ownKey,
   personRoute,
@@ -1002,8 +1003,9 @@ async function answer(
   deviations: Deviation[];
   refusal?: Refusal;
 }> {
-  const who = world.callers.get(row.caller);
-  if (!who) throw new Error(`no caller ${row.caller}`);
+  const seeded = world.callers.get(row.caller);
+  if (!seeded) throw new Error(`no caller ${row.caller}`);
+  const who = await handleForCell(seeded);
   const adapter =
     row.setup === "no-service" && door === "direct"
       ? directWithoutService

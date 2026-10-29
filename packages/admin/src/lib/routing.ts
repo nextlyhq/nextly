@@ -1,5 +1,6 @@
 import React from "react";
 
+import { widgetPreviewsRoute } from "@admin/components/features/widgets/preview/preview-route";
 import { NotFoundPage } from "@admin/components/shared/not-found-page";
 import { PluginPageHold } from "@admin/components/shared/plugin-page-hold";
 import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
@@ -314,6 +315,13 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       section: "plugins",
     };
   }
+
+  // The widget preview page, for a development server only: the page on the
+  // server's explicit yes, held while it has not answered, and otherwise left
+  // to the not-found answer below, as any address the admin does not serve.
+  // Before the dynamic routes, so no pattern can answer for it either way.
+  const preview = widgetPreviewsRoute(pathname, parseSearchParams(rawSearch));
+  if (preview) return preview;
 
   // Dynamic match
   const dynamic = matchDynamicRoute(pathname);
