@@ -736,16 +736,69 @@ describe("a write rule's filter", () => {
     expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
   });
 
-  it("still refuses an update's filter, which no write applies yet", async () => {
-    callerMay("update");
-    const verdict = await collectionGateVerdict(
-      asked(
-        { update: filtering() },
-        { action: "update", user: { id: "u1" }, appliesFilter: true }
-      )
+  it.each(["update", "publish", "unpublish"] as const)(
+    "is handed back for a user's %s to an asker that matches its entry against it",
+    async action => {
+      callerMay(action);
+      const verdict = await collectionGateVerdict(
+        asked(
+          { [action]: filtering() },
+          { action, user: { id: "u1" }, appliesFilter: true }
+        )
+      );
+      expect(verdict).toEqual({
+        allowed: false,
+        refusal: "only-matching-entries",
+        filter: OWN,
+      });
+    }
+  );
+
+  describe("for a key holding the grant", () => {
+    const keyScope = (action: string) =>
+      apiKeyScope(
+        [{ slug: `${action}-posts`, action, resource: "posts" }],
+        ["editor"]
+      );
+
+    it.each(["update", "publish", "unpublish"] as const)(
+      "is handed back for its %s to an asker that matches its entry against it",
+      async action => {
+        // A publish or unpublish is judged by its own rule alone, so this is
+        // a path of its own beside an update's.
+        const verdict = await collectionGateVerdict(
+          asked(
+            { [action]: filtering() },
+            {
+              action,
+              user: { id: "owner" },
+              scope: keyScope(action),
+              appliesFilter: true,
+            }
+          )
+        );
+        expect(verdict).toEqual({
+          allowed: false,
+          refusal: "only-matching-entries",
+          filter: OWN,
+        });
+      }
     );
-    expect(verdict.allowed).toBe(false);
-    expect(verdict).not.toHaveProperty("filter");
+
+    it("refuses its publish to an asker that cannot match its entry against it", async () => {
+      // The control: the filter is handed back only where it is applied.
+      const verdict = await collectionGateVerdict(
+        asked(
+          { publish: filtering() },
+          {
+            action: "publish",
+            user: { id: "owner" },
+            scope: keyScope("publish"),
+          }
+        )
+      );
+      expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+    });
   });
 
   it("refuses a visitor's delete, whose writes no filter limits yet", async () => {

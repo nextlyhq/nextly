@@ -679,8 +679,15 @@ async function seedCollections(
           [...FILTERED_WRITES].map(action => outsideKey(door, caller, action))
         )
       );
+      // An unpublish's twin starts published, as the entry it pairs with
+      // does, so a refused unpublish that changed it would show.
       const twinIds = await inBatches(twins, batch, key =>
-        create(slug, "draft", key.replace(/ /g, "-"), OUTSIDE)
+        create(
+          slug,
+          key.endsWith(" unpublish outside") ? "published" : "draft",
+          key.replace(/ /g, "-"),
+          OUTSIDE
+        )
       );
       twins.forEach((key, i) => own.set(key, twinIds[i]));
     }
