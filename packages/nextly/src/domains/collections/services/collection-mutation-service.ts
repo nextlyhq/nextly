@@ -8774,7 +8774,9 @@ export class CollectionMutationService extends BaseService {
     let transitionDeniedResult: CollectionServiceResult | undefined;
     // Rolls the transaction back with `refusal`, where there is one, for the
     // catch to return.
-    const refuseWith = (refusal: CollectionServiceResult | undefined): void => {
+    const refuseWith = (
+      refusal: CollectionServiceResult | null | undefined
+    ): void => {
       if (!refusal) return;
       transitionDeniedResult = refusal;
       throw new StatusTransitionDeniedError();
