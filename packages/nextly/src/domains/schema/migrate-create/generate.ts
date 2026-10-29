@@ -322,6 +322,12 @@ export async function generateMigration(
     ...(await readCompanionHistory(args.migrationsDir)),
     snapshotRecords: recordsTranslatedFields(previous?.data ?? null),
   };
+  // Nothing to record, whatever else the config holds: the snapshot already says which tables
+  // are translated. Decided before any planner, whose refusals and warnings are about a change
+  // this run does not make.
+  if (args.recordSnapshot === true && companionHistory.snapshotRecords) {
+    return null;
+  }
   const entities = [
     ...args.collections.map(e => tagged(e, "collection")),
     ...args.singles.map(e => tagged(e, "single")),
@@ -404,9 +410,6 @@ export async function generateMigration(
   const hasSettingsChanges = changedSettings.length > 0;
 
   if (args.recordSnapshot === true) {
-    // Nothing to record, whatever else the config holds: the snapshot already says which tables
-    // are translated.
-    if (companionHistory.snapshotRecords) return null;
     refuseChangesToRecord([
       ...operations.map(operationTableName),
       ...[
@@ -586,19 +589,14 @@ export async function generateMigration(
     now,
   });
 
-  const baseName = `${formatTimestamp(now)}_${slugify(args.name)}`;
-  await mkdir(args.migrationsDir, { recursive: true });
-  const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
-  await writeFile(sqlPath, sqlContent, "utf-8");
-
-  const snapshotPath = await writeSnapshot(
+  const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
     metaDir,
-    baseName,
-    stream.written,
+    now,
     sqlContent,
-    stream.contributions,
-    settingsRecord
-  );
+    written: stream.written,
+    contributions: stream.contributions,
+    entities: settingsRecord,
+  });
 
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
   //    - ENABLE / create-only: the companion's FK references the main table, so it must run
@@ -750,27 +748,12 @@ function refuseChangesToRecord(tables: readonly string[]): void {
  */
 async function recordSnapshot(
   args: GenerateArgs,
-  run: {
-    written: NextlySchemaSnapshot;
-    contributions: Parameters<typeof writeSnapshot>[4];
-    entities: Parameters<typeof writeSnapshot>[5];
-    metaDir: string;
-    now: Date;
-  }
+  run: Omit<MigrationPair, "sqlContent">
 ): Promise<GenerateResult> {
-  const sqlContent = formatSnapshotRecordFile(args.name, args.dialect, run.now);
-  const baseName = `${formatTimestamp(run.now)}_${slugify(args.name)}`;
-  await mkdir(args.migrationsDir, { recursive: true });
-  const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
-  await writeFile(sqlPath, sqlContent, "utf-8");
-  const snapshotPath = await writeSnapshot(
-    run.metaDir,
-    baseName,
-    run.written,
-    sqlContent,
-    run.contributions,
-    run.entities
-  );
+  const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
+    ...run,
+    sqlContent: formatSnapshotRecordFile(args.name, args.dialect, run.now),
+  });
   return {
     sqlPath,
     snapshotPath,
@@ -778,6 +761,39 @@ async function recordSnapshot(
     renamesAccepted: 0,
     settingsChanges: [],
   };
+}
+
+/** A migration's `.sql` content and what its paired snapshot records. */
+interface MigrationPair {
+  sqlContent: string;
+  written: NextlySchemaSnapshot;
+  contributions: Parameters<typeof writeSnapshot>[4];
+  entities: Parameters<typeof writeSnapshot>[5];
+  metaDir: string;
+  now: Date;
+}
+
+/**
+ * Writes a migration's `.sql` file, named for the run's name and time, then its paired snapshot:
+ * the order every `migrate:create` writes them in.
+ */
+async function writeMigrationPair(
+  args: Pick<GenerateArgs, "migrationsDir" | "name">,
+  pair: MigrationPair
+): Promise<{ sqlPath: string; snapshotPath: string }> {
+  const baseName = `${formatTimestamp(pair.now)}_${slugify(args.name)}`;
+  await mkdir(args.migrationsDir, { recursive: true });
+  const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
+  await writeFile(sqlPath, pair.sqlContent, "utf-8");
+  const snapshotPath = await writeSnapshot(
+    pair.metaDir,
+    baseName,
+    pair.written,
+    pair.sqlContent,
+    pair.contributions,
+    pair.entities
+  );
+  return { sqlPath, snapshotPath };
 }
 
 /**
@@ -1346,8 +1362,9 @@ interface TranslationRecords extends CompanionHistory {
  * The previous snapshot says first: a table with the record (`localized` and `localizedColumns`)
  * was translated with those columns, and one without it was not, when the snapshot records them
  * for every table (`snapshotRecords`). An older snapshot may not; then the companion files say,
- * replayed in order, when no file this build cannot read may have changed this entity's companion
- * since the files last made or dropped it whole (`describes`).
+ * replayed in order, when a file made or dropped this entity's companion whole and no file this
+ * build cannot read may have changed it since (`describes`). An entity no file makes or drops has
+ * no record: its companion, if any, came from outside the files.
  */
 function previousTranslation(
   c: MinimalConfigEntity,
@@ -1390,9 +1407,10 @@ function canBeTranslated(field: MinimalConfigField): boolean {
  *   entity becoming translated.
  *
  * For an entity not translated now that the previous snapshot doesn't record as translated, when
- * no record says or the migration files say its companion was there: a shared field the main
- * table gains, which may be coming back from the companion. A disable is planned only from the
- * snapshot's record.
+ * the migration files say its companion was there, or no record says and a localization file is
+ * about it: a shared field the main table gains, which may be coming back from the companion. A
+ * disable is planned only from the snapshot's record. One no file is about was never translated
+ * through the files, and goes through.
  */
 function fieldsThatMayChangeTranslation(
   { entity: c, kind }: TaggedConfigEntity,
@@ -1408,6 +1426,13 @@ function fieldsThatMayChangeTranslation(
     return [];
   }
   if (!translatedNow && previous?.companion === false) return [];
+  if (
+    !translatedNow &&
+    previous === undefined &&
+    !history.mentions(kind, c.slug)
+  ) {
+    return [];
+  }
   const onMain = new Set(prevMain.columns.map(col => col.name));
   const columned = c.fields.flatMap(field => {
     const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");

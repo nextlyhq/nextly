@@ -93,15 +93,20 @@ describe("migrate:create --record-snapshot with nothing to record", () => {
     expect(await migrateCreate(project([]), true)).toBe(2);
   });
 
-  it("exits 2 for a project whose snapshot records its translated fields", async () => {
-    const config = project([
-      defineCollection({
-        slug: "posts",
-        fields: [text({ name: "headline" })],
-      }),
-    ]);
-    expect(await migrateCreate(config, false)).toBeUndefined();
+  it("exits 2 for a project whose snapshot records its translated fields, whatever the config holds", async () => {
+    const posts = (fields: ReturnType<typeof text>[]) =>
+      project([defineCollection({ slug: "posts", fields })]);
+    expect(
+      await migrateCreate(posts([text({ name: "headline" })]), false)
+    ).toBeUndefined();
 
-    expect(await migrateCreate(config, true)).toBe(2);
+    // A change still to migrate, which a recording run refuses only where there is a record to
+    // write.
+    expect(
+      await migrateCreate(
+        posts([text({ name: "headline" }), text({ name: "summary" })]),
+        true
+      )
+    ).toBe(2);
   });
 });

@@ -329,6 +329,46 @@ for (const entry of DIALECTS) {
         await expectShared();
       });
 
+      it("refuses a field leaving translation on a collection whose companion no migration file made, keeping its values", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        // As a project whose companion a development sync or `db:sync` made, outside its migration
+        // files, with a snapshot from before translated fields were recorded.
+        for (const name of await readdir(resolve(migrationsDir, "meta"))) {
+          const path = resolve(migrationsDir, "meta", name);
+          const file = JSON.parse(await readFile(path, "utf-8")) as {
+            translatedFieldsRecorded?: boolean;
+            snapshot: { tables: Record<string, unknown>[] };
+          };
+          delete file.translatedFieldsRecorded;
+          for (const t of file.snapshot.tables) {
+            delete t.localized;
+            delete t.localizedColumns;
+            delete t.uniqueLocalizedColumns;
+          }
+          await writeFile(path, JSON.stringify(file), "utf-8");
+        }
+        for (const name of await readdir(migrationsDir)) {
+          if (name.includes("_localization_")) {
+            await rm(resolve(migrationsDir, name));
+          }
+        }
+
+        await expect(migrateCreate(shared)).rejects.toThrow(
+          /--record-snapshot/
+        );
+        expect(
+          await adapter.executeQuery<{ locale: string; body: string }>(
+            `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' ORDER BY ${q("_locale")}`
+          )
+        ).toEqual([
+          { locale: "en", body: "Hello" },
+          { locale: "es", body: "Hola" },
+        ]);
+        expect(await columnsOf(table)).not.toContain("body");
+      });
+
       it("keeps every language in a project from before translated fields were recorded, once recorded", async () => {
         await migrateCreate(translated);
         // As an early version left the project: no snapshot records the translated fields, and the

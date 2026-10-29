@@ -169,28 +169,26 @@ export function parseSnapshotFile(
       "expected snapshot.tables to be an array"
     );
   }
+  const problem = optionalPartProblem(obj);
+  if (problem !== undefined) throw new SnapshotFileError(filename, problem);
+  return obj as unknown as SnapshotFile;
+}
+
+/** What is wrong with the envelope's optional parts, each checked only when present. */
+function optionalPartProblem(obj: Record<string, unknown>): string | undefined {
   if (obj.contributions !== undefined && !isContributions(obj.contributions)) {
-    throw new SnapshotFileError(
-      filename,
-      "expected contributions to map table names to their contributed element names"
-    );
+    return "expected contributions to map table names to their contributed element names";
   }
   if (obj.entities !== undefined && !isEntitySettingsRecord(obj.entities)) {
-    throw new SnapshotFileError(
-      filename,
-      "expected entities to record each collection's, single's and field group's settings by slug"
-    );
+    return "expected entities to record each collection's, single's and field group's settings by slug";
   }
   if (
     obj.translatedFieldsRecorded !== undefined &&
     obj.translatedFieldsRecorded !== true
   ) {
-    throw new SnapshotFileError(
-      filename,
-      `expected translatedFieldsRecorded to be true when present, got ${JSON.stringify(obj.translatedFieldsRecorded)}`
-    );
+    return `expected translatedFieldsRecorded to be true when present, got ${JSON.stringify(obj.translatedFieldsRecorded)}`;
   }
-  return obj as unknown as SnapshotFile;
+  return undefined;
 }
 
 /**

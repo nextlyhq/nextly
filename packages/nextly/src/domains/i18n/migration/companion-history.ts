@@ -17,7 +17,10 @@ import { resolve } from "node:path";
 
 import { parseEntityHeaders } from "../../schema/migrate-create/format-file";
 
-import { headerLines, parseLocalizationIntent } from "./migration-intent";
+import {
+  type LocalizationMigrationIntent,
+  parseLocalizationIntent,
+} from "./migration-intent";
 import type { I18nTransitionKind } from "./transition-state";
 import type { LocalizedColumnSpec } from "./types";
 import { LOCALIZATION_MIGRATION_MARKER } from "./write-migration-file";
@@ -41,15 +44,20 @@ export interface CompanionHistory {
    */
   present: Set<string>;
   /**
-   * Whether `columns` and `present` describe this entity's companion: no localization file this
-   * build cannot read (one written before companion files recorded their intent, or one whose
-   * intent does not parse) may be about it, or the last that may comes before a file that makes or
-   * drops the companion whole (`create-only` or `enable` with no companion there, or `disable`).
-   * Such a file is about the slugs its header names, under any kind, since older files named every
-   * kind under `-- Collections:`; one that names none, or cannot be opened, may be about any entity.
+   * Whether `columns` and `present` describe this entity's companion: a file makes or drops it
+   * whole (`create-only` or `enable` with no companion there, or `disable`) after every localization
+   * file this build cannot read (one written before companion files recorded their intent, or one
+   * whose intent does not parse) that may be about it. Such a file is about the slugs its header
+   * names, under any kind, since older files named every kind under `-- Collections:`; one that
+   * names none, or cannot be opened, may be about any entity. An entity no file makes or drops is not
+   * described: its companion may have come from outside the files, as a development sync or
+   * `db:sync` makes one.
    */
   describes(kind: I18nTransitionKind, slug: string): boolean;
-  /** Whether any localization file, read or not, may be about this entity. */
+  /**
+   * Whether a localization file is about this entity: one this build reads for it, or one it
+   * cannot read whose header names its slug. A file that names no entity is not counted.
+   */
   mentions(kind: I18nTransitionKind, slug: string): boolean;
 }
 
@@ -75,98 +83,135 @@ export async function readCompanionColumnHistory(
 export async function readCompanionHistory(
   migrationsDir: string
 ): Promise<CompanionHistory> {
-  const history = new Map<string, Map<string, LocalizedColumnSpec>>();
-  const present = new Set<string>();
-  // Positions in the run order: where each companion was last made or dropped whole, by key, and
-  // where the last unreadable file comes that may be about each slug, or about any entity.
-  const settled = new Map<string, number>();
-  const unreadBySlug = new Map<string, number>();
-  let unreadAny = -1;
-  const unreadAt = (content: string, at: number) => {
-    const headers = parseEntityHeaders(content);
-    const slugs = [
-      ...headers.collections,
-      ...headers.singles,
-      ...headers.components,
-    ];
-    if (slugs.length === 0) unreadAny = at;
-    for (const slug of slugs) unreadBySlug.set(slug, at);
+  const replay: Replay = {
+    columns: new Map(),
+    present: new Set(),
+    settled: new Map(),
+    unreadBySlug: new Map(),
+    unreadAny: -1,
   };
-  const lastUnread = (slug: string) =>
-    Math.max(unreadAny, unreadBySlug.get(slug) ?? -1);
-  const result = (): CompanionHistory => ({
-    columns: history,
-    present,
-    describes: (kind, slug) =>
-      lastUnread(slug) < 0 ||
-      (settled.get(companionHistoryKey(kind, slug)) ?? -1) > lastUnread(slug),
-    mentions: (kind, slug) =>
-      history.has(companionHistoryKey(kind, slug)) || lastUnread(slug) >= 0,
-  });
-
   let names: string[];
   try {
     names = (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
   } catch {
-    return result();
+    return historyOf(replay);
   }
   for (const [at, name] of names.sort().entries()) {
-    let content: string;
-    try {
-      content = await readFile(resolve(migrationsDir, name), "utf-8");
-    } catch {
-      unreadAny = at;
-      continue;
-    }
-    let intent;
-    try {
-      intent = parseLocalizationIntent(content, name);
-    } catch {
-      unreadAt(content, at);
-      continue;
-    }
-    if (intent === null) {
-      // A localization file says so in its header; a migration that only mentions the marker
-      // further down is not one.
-      if (
-        headerLines(content).some(line =>
-          line.trim().startsWith(LOCALIZATION_MIGRATION_MARKER)
-        )
-      ) {
-        unreadAt(content, at);
-      }
-      continue;
-    }
-    const key = companionHistoryKey(intent.entity, intent.spec.collection);
-    const columns = history.get(key) ?? new Map<string, LocalizedColumnSpec>();
-    switch (intent.kind) {
-      case "create-only":
-      case "enable":
-        if (!present.has(key)) settled.set(key, at);
-        for (const column of intent.spec.columns) {
-          columns.set(column.name, column);
-        }
-        present.add(key);
-        break;
-      case "joins":
-        for (const column of intent.spec.columns) {
-          columns.set(column.name, column);
-        }
-        present.add(key);
-        break;
-      case "disable":
-        columns.clear();
-        present.delete(key);
-        settled.set(key, at);
-        break;
-      case "shared":
-        for (const column of intent.spec.columns) columns.delete(column.name);
-        break;
-      case "archive":
-      case "unique":
-        break;
-    }
-    history.set(key, columns);
+    const reading = await readFileIntent(migrationsDir, name);
+    if (reading.kind === "intent") replayIntent(replay, reading.intent, at);
+    if (reading.kind === "unread") replayUnread(replay, reading.content, at);
   }
-  return result();
+  return historyOf(replay);
+}
+
+/**
+ * The replay as it stands after the files read so far. Positions are in the run order: where
+ * each companion was last made or dropped whole, by key (`settled`), and where the last
+ * unreadable file comes that may be about each slug, or about any entity.
+ */
+interface Replay {
+  columns: Map<string, Map<string, LocalizedColumnSpec>>;
+  present: Set<string>;
+  settled: Map<string, number>;
+  unreadBySlug: Map<string, number>;
+  unreadAny: number;
+}
+
+/** What one migration file says about a companion. */
+type FileReading =
+  | { kind: "intent"; intent: LocalizationMigrationIntent }
+  /** A localization file this build cannot read, with its text when it could be opened. */
+  | { kind: "unread"; content: string | null }
+  | { kind: "other" };
+
+async function readFileIntent(
+  migrationsDir: string,
+  name: string
+): Promise<FileReading> {
+  let content: string;
+  try {
+    content = await readFile(resolve(migrationsDir, name), "utf-8");
+  } catch {
+    return { kind: "unread", content: null };
+  }
+  let intent: LocalizationMigrationIntent | null;
+  try {
+    intent = parseLocalizationIntent(content, name);
+  } catch {
+    return { kind: "unread", content };
+  }
+  if (intent !== null) return { kind: "intent", intent };
+  // Read as a localization file the way `migrate:check` reads one: by its marker.
+  return content.includes(LOCALIZATION_MIGRATION_MARKER)
+    ? { kind: "unread", content }
+    : { kind: "other" };
+}
+
+/** Applies one file's intent, at position `at` in the run order. */
+function replayIntent(
+  replay: Replay,
+  intent: LocalizationMigrationIntent,
+  at: number
+): void {
+  const key = companionHistoryKey(intent.entity, intent.spec.collection);
+  const columns =
+    replay.columns.get(key) ?? new Map<string, LocalizedColumnSpec>();
+  const makesWhole =
+    (intent.kind === "create-only" || intent.kind === "enable") &&
+    !replay.present.has(key);
+  if (makesWhole || intent.kind === "disable") replay.settled.set(key, at);
+  switch (intent.kind) {
+    case "create-only":
+    case "enable":
+    case "joins":
+      for (const column of intent.spec.columns) {
+        columns.set(column.name, column);
+      }
+      replay.present.add(key);
+      break;
+    case "disable":
+      columns.clear();
+      replay.present.delete(key);
+      break;
+    case "shared":
+      for (const column of intent.spec.columns) columns.delete(column.name);
+      break;
+    case "archive":
+    case "unique":
+      break;
+  }
+  replay.columns.set(key, columns);
+}
+
+/**
+ * Counts an unreadable file at `at` against the slugs its header names, or against every entity
+ * when it names none or could not be opened.
+ */
+function replayUnread(
+  replay: Replay,
+  content: string | null,
+  at: number
+): void {
+  const headers = content === null ? null : parseEntityHeaders(content);
+  const slugs = headers
+    ? [...headers.collections, ...headers.singles, ...headers.components]
+    : [];
+  if (slugs.length === 0) replay.unreadAny = at;
+  for (const slug of slugs) replay.unreadBySlug.set(slug, at);
+}
+
+/** The history the replay leaves. */
+function historyOf(replay: Replay): CompanionHistory {
+  const lastUnread = (slug: string) =>
+    Math.max(replay.unreadAny, replay.unreadBySlug.get(slug) ?? -1);
+  return {
+    columns: replay.columns,
+    present: replay.present,
+    describes: (kind, slug) =>
+      (replay.settled.get(companionHistoryKey(kind, slug)) ?? -1) >
+      lastUnread(slug),
+    mentions: (kind, slug) =>
+      replay.columns.has(companionHistoryKey(kind, slug)) ||
+      replay.unreadBySlug.has(slug),
+  };
 }

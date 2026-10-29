@@ -366,6 +366,29 @@ async function forgetEverything(dir: string): Promise<void> {
   await forgetCompanionIntents(dir);
 }
 
+/**
+ * A project whose companions came from outside its migration files, as a development sync or
+ * `db:sync` makes them, and whose snapshot predates the record: no file and no snapshot says
+ * which fields are translated.
+ */
+async function forgetCompanionFiles(dir: string): Promise<void> {
+  await forgetTranslatedFieldRecord(dir);
+  for (const name of await readdir(dir)) {
+    if (name.includes("_localization_")) await rm(resolve(dir, name));
+  }
+}
+
+/** A collection that isn't translated, with one field more in `NOTES_GROWN`. */
+const NOTES: MinimalConfigEntity = {
+  slug: "notes",
+  tableName: "dc_notes",
+  fields: [{ name: "title", type: "text" }],
+};
+const NOTES_GROWN: MinimalConfigEntity = {
+  ...NOTES,
+  fields: [...NOTES.fields, { name: "summary", type: "text" }],
+};
+
 /** `migrate:create` on `dir` for `collections`, as `name`, at the minute `at` past 10:00. */
 function generate(
   dialect: SupportedDialect,
@@ -525,6 +548,55 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
 describe.each(["sqlite", "postgresql", "mysql"] as const)(
   "migrate:create when the last snapshot predates its record of translated fields (%s)",
   dialect => {
+    it("refuses a field leaving translation on a collection no localization file is about, writing nothing", async () => {
+      let dir = "";
+      let before: Record<string, string> = {};
+      const run = secondRun(dialect, SHARED, {
+        beforeSecond: async d => {
+          await forgetCompanionFiles(d);
+          dir = d;
+          before = await contentsOf(d);
+        },
+      });
+
+      await expect(run).rejects.toThrow(/"body"/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
+      expect(await contentsOf(dir)).toEqual(before);
+    });
+
+    it("plans no companion over one no localization file is about", async () => {
+      // Its translated column is not on the main table, so the companion is there; a file that
+      // made it again would drop it on rollback.
+      const files = await secondRun(dialect, [TRANSLATED, NOTES], {
+        first: [TRANSLATED],
+        beforeSecond: forgetCompanionFiles,
+      });
+
+      expect(files.map(f => f.name)).toEqual([
+        expect.stringMatching(/_two\.sql$/),
+      ]);
+    });
+
+    it("lets a collection that isn't translated change beside a localization file that names no collection", async () => {
+      const files = await secondRun(dialect, [TRANSLATED, NOTES_GROWN], {
+        first: [TRANSLATED, NOTES],
+        beforeSecond: async d => {
+          await forgetTranslatedFieldRecord(d);
+          // Hand-edited: the marker, and no header saying which entity it is about.
+          await writeFile(
+            resolve(d, "20261016_103000_000_hand_edited.sql"),
+            "-- Generated: localization companion (create-only) (i18n)\n\n" +
+              "-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n",
+            "utf-8"
+          );
+        },
+      });
+
+      expect(files.map(f => f.name)).toEqual([
+        expect.stringMatching(/_two\.sql$/),
+      ]);
+    });
+
     it("refuses as before beside a record migration whose snapshot was never written", async () => {
       const run = secondRun(dialect, SHARED, {
         beforeSecond: async d => {
@@ -551,19 +623,23 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         slug: "pages",
         tableName: "dc_pages",
       };
+      // docs' companion file is written first and pages' after it, so a file of pages' that may be
+      // anyone's would leave docs' history unread too.
       const files = await secondRun(
         dialect,
-        [pages, withField({ name: "tagline", type: "text", localized: false })],
+        [withField({ name: "tagline", type: "text", localized: false }), pages],
         {
-          first: [pages, { ...TRANSLATED, localized: false }],
-          beforeSecond: forgetEverything,
+          first: [TRANSLATED, pages],
+          beforeSecond: async d => {
+            await forgetTranslatedFieldRecord(d);
+            await forgetCompanionIntents(d, /_localization_pages\.sql$/);
+          },
         }
       );
 
-      // pages' files can't be read, but they name pages, so nothing says docs had a companion.
+      // pages' file can't be read, but it names pages: docs' own files still say `tagline` is new.
       expect(files.map(f => f.name)).toEqual([
         expect.stringMatching(/_two\.sql$/),
-        expect.stringMatching(/_enable_localization_docs\.sql$/),
       ]);
     });
 
@@ -1015,6 +1091,27 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
           await record(dir, SHARED, "2026-10-16T11:00:00.000Z")
         ).toBeNull();
         expect(await contentsOf(dir)).toEqual(before);
+      });
+
+      it("records nothing for a recording snapshot before a planner can refuse the config", async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED] },
+        ]);
+
+        // A field that changes type as it leaves translation, which a plain run refuses.
+        expect(
+          await record(
+            dir,
+            {
+              ...TRANSLATED,
+              fields: [
+                { name: "body", type: "number" },
+                { name: "price", type: "number" },
+              ],
+            },
+            "2026-10-16T11:00:00.000Z"
+          )
+        ).toBeNull();
       });
     });
   }

@@ -179,7 +179,7 @@ export function isUpSectionMarker(line: string): boolean {
  * beginning with this prefix is read as intent, and prose behind the prefix would then abort the
  * whole run rather than merely being ignored.
  */
-export function headerLines(content: string): string[] {
+function headerLines(content: string): string[] {
   const out: string[] = [];
   for (const line of content.split("\n")) {
     if (isUpSectionMarker(line)) break;

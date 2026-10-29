@@ -124,11 +124,11 @@ A field whose type, length or precision changes in the same change is refused, b
 
 ### When your migrations predate the record of translated fields
 
-Snapshots written by early versions of Nextly don't record which fields are translated, and neither do the localization migration files from that time. Every snapshot written now says that it records them. When the latest snapshot doesn't, `nextly migrate:create` reads which fields were translated from the localization files that record it. When they don't, and a change could move a field between translated and shared, `migrate:create` refuses and writes nothing, because guessing either way could lose the field's values. It names the fields.
+Snapshots written by early versions of Nextly don't record which fields are translated, and neither do the localization migration files from that time. Every snapshot written now says that it records them. When the latest snapshot doesn't, `nextly migrate:create` reads which fields were translated from the localization files that record it. When they don't, and a change could move a field between translated and shared, `migrate:create` refuses and writes nothing, because guessing either way could lose the field's values. It names the fields. That includes an entity no localization file is about, such as one whose companion a development sync or `db:sync` made.
 
 - Adding a shared field to a translated collection, Single or field group counts as such a change: without the record, a new column reads the same as a field leaving translation. A field whose type can never be translated, such as a password, doesn't count.
 - Turning translation off for a whole collection, Single or field group is refused too, since that's planned only from the snapshot's record.
-- Changes to entities that aren't translated go through as usual.
+- Changes to entities that aren't translated, and that no localization file is about, go through as usual.
 
 To record the translated fields, take two steps:
 
