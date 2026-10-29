@@ -113,33 +113,12 @@ export function PermissionLevelRow({
       data-slot="permission-level-row"
     >
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-6">
-        {/* The name takes what the controls leave, and a long slug breaks
-            across lines rather than squeezing the levels or hiding part of
-            itself. */}
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium text-foreground">{row.label}</span>
-            {level === "custom" && <Badge variant="warning">Custom</Badge>}
-            {fromBase && <Badge variant="outline">from {listed(givers)}</Badge>}
-            {row.declaredRules.length > 0 && (
-              <Badge variant="outline">Narrowed in code</Badge>
-            )}
-          </div>
-          <span className="font-mono text-xs break-all text-muted-foreground">
-            {row.slug}
-            {summary && (
-              <>
-                {" · "}
-                <span>{summary}</span>
-              </>
-            )}
-          </span>
-          {row.declaredRules.length > 0 && (
-            <span className="text-xs text-muted-foreground">
-              {narrowedInCode(row.kind, row.declaredRules)}
-            </span>
-          )}
-        </div>
+        <RowHeading
+          row={row}
+          custom={level === "custom"}
+          summary={summary}
+          givers={givers}
+        />
 
         <div className="flex flex-col gap-3 md:shrink-0 md:flex-row md:items-center md:gap-6">
           <RadioGroupPrimitive.Root
@@ -190,32 +169,112 @@ export function PermissionLevelRow({
       </div>
 
       {eachAction && (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-          {inActionOrder(row.permissions).map(permission => {
-            const action = actionLabel(permission);
-            // Given by the base alone: the role has no copy of its own to
-            // take away, so the way to drop it is to change the base.
-            const baseOnly =
-              locked.has(permission.id) && !owned.has(permission.id);
-            return (
-              <label
-                key={permission.id}
-                className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
-              >
-                <span aria-hidden="true">{action}</span>
-                <Switch
-                  aria-label={`${name}: ${action}`}
-                  // A base role's grant shows held. Where the role also holds
-                  // it, turning it off takes away the role's own copy.
-                  checked={held.has(permission.id)}
-                  disabled={disabled || baseOnly}
-                  onCheckedChange={on => setAction(permission.id, on)}
-                />
-              </label>
-            );
-          })}
-        </div>
+        <ActionSwitches
+          row={row}
+          name={name}
+          held={held}
+          locked={locked}
+          owned={owned}
+          disabled={disabled}
+          onChange={setAction}
+        />
       )}
+    </div>
+  );
+}
+
+/**
+ * A row's name and what is known about it: Custom, the bases that give it
+ * something, a rule its code declares, and its slug. The name takes what the
+ * controls leave, and a long slug breaks across lines rather than squeezing
+ * the levels or hiding part of itself.
+ */
+function RowHeading({
+  row,
+  custom,
+  summary,
+  givers,
+}: {
+  row: LevelRow;
+  custom: boolean;
+  /** A Custom row's actions in words, or an empty string. */
+  summary: string;
+  /** The names of the bases that give the row something. */
+  givers: readonly string[];
+}): JSX.Element {
+  const narrowed = row.declaredRules.length > 0;
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-foreground">{row.label}</span>
+        {custom && <Badge variant="warning">Custom</Badge>}
+        {givers.length > 0 && (
+          <Badge variant="outline">from {listed(givers)}</Badge>
+        )}
+        {narrowed && <Badge variant="outline">Narrowed in code</Badge>}
+      </div>
+      <span className="font-mono text-xs break-all text-muted-foreground">
+        {row.slug}
+        {summary && (
+          <>
+            {" · "}
+            <span>{summary}</span>
+          </>
+        )}
+      </span>
+      {narrowed && (
+        <span className="text-xs text-muted-foreground">
+          {narrowedInCode(row.kind, row.declaredRules)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A switch for each of the row's permissions, under "Each action". A base
+ * role's grant shows held; where the role also holds it, turning it off takes
+ * away the role's own copy, and where the base gives it alone it is locked,
+ * since the way to drop it is to change the base.
+ */
+function ActionSwitches({
+  row,
+  name,
+  held,
+  locked,
+  owned,
+  disabled,
+  onChange,
+}: {
+  row: LevelRow;
+  /** The row's accessible name, label and slug. */
+  name: string;
+  held: ReadonlySet<string>;
+  locked: ReadonlySet<string>;
+  owned: ReadonlySet<string>;
+  disabled: boolean;
+  onChange: (id: string, on: boolean) => void;
+}): JSX.Element {
+  return (
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+      {inActionOrder(row.permissions).map(permission => {
+        const action = actionLabel(permission);
+        const baseOnly = locked.has(permission.id) && !owned.has(permission.id);
+        return (
+          <label
+            key={permission.id}
+            className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
+          >
+            <span aria-hidden="true">{action}</span>
+            <Switch
+              aria-label={`${name}: ${action}`}
+              checked={held.has(permission.id)}
+              disabled={disabled || baseOnly}
+              onCheckedChange={on => onChange(permission.id, on)}
+            />
+          </label>
+        );
+      })}
     </div>
   );
 }
