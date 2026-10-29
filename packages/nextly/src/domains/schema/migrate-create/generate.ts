@@ -1403,8 +1403,8 @@ function canBeTranslated(field: MinimalConfigField): boolean {
  * - a shared field the main table gains, which is new or leaving translation, unless its type can
  *   never be translated;
  * - a translated field the main table holds, which is joining translation, unless every
- *   translated field the table holds is and no localization file may be the entity's: that is the
- *   entity becoming translated.
+ *   translated field the table holds is and no localization file may be the entity's
+ *   (`mayBeAbout`, which counts a file naming no entity): that is the entity becoming translated.
  *
  * For an entity not translated now that the previous snapshot doesn't record as translated, when
  * the migration files say its companion was there, or no record says and a localization file is
@@ -1413,46 +1413,89 @@ function canBeTranslated(field: MinimalConfigField): boolean {
  * through the files, and goes through.
  */
 function fieldsThatMayChangeTranslation(
-  { entity: c, kind }: TaggedConfigEntity,
+  entry: TaggedConfigEntity,
   previousSnapshot: NextlySchemaSnapshot,
   history: TranslationRecords,
   dialect: SupportedDialect
 ): MinimalConfigField[] {
+  const { entity: c, kind } = entry;
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
   if (!prevMain) return [];
-  const translatedNow = c.localized === true;
   const previous = previousTranslation(c, kind, previousSnapshot, history);
-  if (translatedNow ? previous !== undefined : prevMain.localized === true) {
-    return [];
-  }
-  if (!translatedNow && previous?.companion === false) return [];
-  if (
-    !translatedNow &&
-    previous === undefined &&
-    !history.mentions(kind, c.slug)
-  ) {
-    return [];
-  }
+  const columned = fieldsByMainColumn(c, prevMain, dialect);
+  const moving =
+    c.localized === true
+      ? translatedFieldsThatMayMove(entry, columned, previous, history)
+      : sharedFieldsThatMayReturn(entry, prevMain, columned, previous, history);
+  return moving.map(f => f.field);
+}
+
+/** A field that stores a column, and whether the previous main table holds that column. */
+interface ColumnedField {
+  field: MinimalConfigField;
+  onMain: boolean;
+}
+
+function fieldsByMainColumn(
+  c: MinimalConfigEntity,
+  prevMain: TableSpec,
+  dialect: SupportedDialect
+): ColumnedField[] {
   const onMain = new Set(prevMain.columns.map(col => col.name));
-  const columned = c.fields.flatMap(field => {
+  return c.fields.flatMap(field => {
     const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
     return column ? [{ field, onMain: onMain.has(column.name) }] : [];
   });
-  const mayLeave = columned.filter(
+}
+
+/** The shared fields the main table gains, of a type that can be translated. */
+function gainedSharedFields(
+  columned: readonly ColumnedField[],
+  translatedNow: boolean
+): ColumnedField[] {
+  return columned.filter(
     f =>
       !isFieldLocalized(f.field, translatedNow) &&
       !f.onMain &&
       canBeTranslated(f.field)
   );
-  if (!translatedNow) return mayLeave.map(f => f.field);
+}
+
+/** `fieldsThatMayChangeTranslation` for an entity translated now. */
+function translatedFieldsThatMayMove(
+  { entity: c, kind }: TaggedConfigEntity,
+  columned: readonly ColumnedField[],
+  previous: PreviousTranslation | undefined,
+  history: TranslationRecords
+): ColumnedField[] {
+  if (previous !== undefined) return [];
   const translated = columned.filter(f => isFieldLocalized(f.field, true));
   const translatedOnMain = translated.filter(f => f.onMain);
+  // A file that names no entity may be this one's, and may have made the companion an enable
+  // would then make again, so it withholds the exemption; it never refuses an untranslated one.
   const becomingTranslated =
     translatedOnMain.length === translated.length &&
-    !history.mentions(kind, c.slug);
-  return [...mayLeave, ...(becomingTranslated ? [] : translatedOnMain)].map(
-    f => f.field
-  );
+    !history.mayBeAbout(kind, c.slug);
+  return [
+    ...gainedSharedFields(columned, true),
+    ...(becomingTranslated ? [] : translatedOnMain),
+  ];
+}
+
+/** `fieldsThatMayChangeTranslation` for an entity not translated now. */
+function sharedFieldsThatMayReturn(
+  { entity: c, kind }: TaggedConfigEntity,
+  prevMain: TableSpec,
+  columned: readonly ColumnedField[],
+  previous: PreviousTranslation | undefined,
+  history: TranslationRecords
+): ColumnedField[] {
+  if (prevMain.localized === true) return [];
+  const companionMayHaveBeen =
+    previous === undefined
+      ? history.mentions(kind, c.slug)
+      : previous.companion;
+  return companionMayHaveBeen ? gainedSharedFields(columned, false) : [];
 }
 
 /**

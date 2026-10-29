@@ -378,6 +378,26 @@ async function forgetCompanionFiles(dir: string): Promise<void> {
   }
 }
 
+/**
+ * A project whose snapshot predates the record and whose localization files say neither what
+ * they are for nor which entity they are about, as a hand-edited one may.
+ */
+async function forgetCompanionHeaders(dir: string): Promise<void> {
+  await forgetTranslatedFieldRecord(dir);
+  for (const name of await readdir(dir)) {
+    if (!name.includes("_localization_")) continue;
+    const path = resolve(dir, name);
+    const kept = (await readFile(path, "utf-8"))
+      .split("\n")
+      .filter(
+        line =>
+          !line.startsWith("-- Localization:") &&
+          !/^-- (Collections|Singles|Field groups|Components):/.test(line)
+      );
+    await writeFile(path, kept.join("\n"), "utf-8");
+  }
+}
+
 /** A collection that isn't translated, with one field more in `NOTES_GROWN`. */
 const NOTES: MinimalConfigEntity = {
   slug: "notes",
@@ -575,6 +595,33 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect(files.map(f => f.name)).toEqual([
         expect.stringMatching(/_two\.sql$/),
       ]);
+    });
+
+    it("refuses what reads as a collection becoming translated beside a localization file that names no collection, writing nothing", async () => {
+      // docs was translated with `headline`; its companion file now says neither what it did nor
+      // whose it is. Dropping `headline` and translating `body` reads the same as turning
+      // translation on, over a companion that file may have made.
+      let dir = "";
+      let before: Record<string, string> = {};
+      const run = secondRun(
+        dialect,
+        {
+          ...BODY_SHARED,
+          fields: [{ name: "body", type: "text", localized: true }],
+        },
+        {
+          first: BODY_SHARED,
+          beforeSecond: async d => {
+            await forgetCompanionHeaders(d);
+            dir = d;
+            before = await contentsOf(d);
+          },
+        }
+      );
+
+      await expect(run).rejects.toThrow(/"body"/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
+      expect(await contentsOf(dir)).toEqual(before);
     });
 
     it("lets a collection that isn't translated change beside a localization file that names no collection", async () => {

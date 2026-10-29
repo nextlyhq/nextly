@@ -59,6 +59,11 @@ export interface CompanionHistory {
    * cannot read whose header names its slug. A file that names no entity is not counted.
    */
   mentions(kind: I18nTransitionKind, slug: string): boolean;
+  /**
+   * Whether a localization file may be about this entity: one that `mentions` it, or one this
+   * build cannot read that names no entity at all, which may be anyone's.
+   */
+  mayBeAbout(kind: I18nTransitionKind, slug: string): boolean;
 }
 
 /**
@@ -156,31 +161,60 @@ function replayIntent(
   const key = companionHistoryKey(intent.entity, intent.spec.collection);
   const columns =
     replay.columns.get(key) ?? new Map<string, LocalizedColumnSpec>();
-  const makesWhole =
-    (intent.kind === "create-only" || intent.kind === "enable") &&
-    !replay.present.has(key);
-  if (makesWhole || intent.kind === "disable") replay.settled.set(key, at);
-  switch (intent.kind) {
-    case "create-only":
-    case "enable":
-    case "joins":
-      for (const column of intent.spec.columns) {
-        columns.set(column.name, column);
-      }
-      replay.present.add(key);
-      break;
-    case "disable":
-      columns.clear();
-      replay.present.delete(key);
-      break;
-    case "shared":
-      for (const column of intent.spec.columns) columns.delete(column.name);
-      break;
-    case "archive":
-    case "unique":
-      break;
+  if (settlesCompanion(intent.kind, replay.present.has(key))) {
+    replay.settled.set(key, at);
   }
+  const companion = COMPANION_EFFECT[intent.kind](columns, intent.spec.columns);
+  if (companion === "made") replay.present.add(key);
+  if (companion === "dropped") replay.present.delete(key);
   replay.columns.set(key, columns);
+}
+
+/**
+ * Whether a file makes or drops the companion whole, so the files after it describe every column
+ * it has: a `disable`, or a `create-only` or `enable` with no companion there.
+ */
+function settlesCompanion(
+  kind: LocalizationMigrationIntent["kind"],
+  present: boolean
+): boolean {
+  return kind === "disable" || (!present && MAKES_COMPANION.has(kind));
+}
+
+const MAKES_COMPANION = new Set<LocalizationMigrationIntent["kind"]>([
+  "create-only",
+  "enable",
+]);
+
+/** What a file of each kind does to the companion's columns, and to whether it is there. */
+const COMPANION_EFFECT: Record<
+  LocalizationMigrationIntent["kind"],
+  (
+    columns: Map<string, LocalizedColumnSpec>,
+    named: readonly LocalizedColumnSpec[]
+  ) => "made" | "dropped" | "kept"
+> = {
+  "create-only": addColumns,
+  enable: addColumns,
+  joins: addColumns,
+  disable: columns => {
+    columns.clear();
+    return "dropped";
+  },
+  shared: (columns, named) => {
+    for (const column of named) columns.delete(column.name);
+    return "kept";
+  },
+  archive: () => "kept",
+  unique: () => "kept",
+};
+
+function addColumns(
+  columns: Map<string, LocalizedColumnSpec>,
+  named: readonly LocalizedColumnSpec[]
+): "made" {
+  for (const column of named) columns.set(column.name, column);
+  return "made";
 }
 
 /**
@@ -204,14 +238,16 @@ function replayUnread(
 function historyOf(replay: Replay): CompanionHistory {
   const lastUnread = (slug: string) =>
     Math.max(replay.unreadAny, replay.unreadBySlug.get(slug) ?? -1);
+  const mentions = (kind: I18nTransitionKind, slug: string) =>
+    replay.columns.has(companionHistoryKey(kind, slug)) ||
+    replay.unreadBySlug.has(slug);
   return {
     columns: replay.columns,
     present: replay.present,
     describes: (kind, slug) =>
       (replay.settled.get(companionHistoryKey(kind, slug)) ?? -1) >
       lastUnread(slug),
-    mentions: (kind, slug) =>
-      replay.columns.has(companionHistoryKey(kind, slug)) ||
-      replay.unreadBySlug.has(slug),
+    mentions,
+    mayBeAbout: (kind, slug) => mentions(kind, slug) || replay.unreadAny >= 0,
   };
 }

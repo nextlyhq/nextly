@@ -329,6 +329,58 @@ for (const entry of DIALECTS) {
         await expectShared();
       });
 
+      it("refuses what reads as turning translation on, beside the nameless localization file that made the companion, keeping its values", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        // As an early or hand-edited project: no snapshot records the translated fields, and the
+        // companion file says neither what it is for nor whose it is.
+        for (const name of await readdir(resolve(migrationsDir, "meta"))) {
+          const path = resolve(migrationsDir, "meta", name);
+          const file = JSON.parse(await readFile(path, "utf-8")) as {
+            translatedFieldsRecorded?: boolean;
+            snapshot: { tables: Record<string, unknown>[] };
+          };
+          delete file.translatedFieldsRecorded;
+          for (const t of file.snapshot.tables) {
+            delete t.localized;
+            delete t.localizedColumns;
+            delete t.uniqueLocalizedColumns;
+          }
+          await writeFile(path, JSON.stringify(file), "utf-8");
+        }
+        for (const name of await readdir(migrationsDir)) {
+          if (!name.includes("_localization_")) continue;
+          const path = resolve(migrationsDir, name);
+          const kept = (await readFile(path, "utf-8"))
+            .split("\n")
+            .filter(
+              line =>
+                !line.startsWith("-- Localization:") &&
+                !/^-- (Collections|Singles|Field groups):/.test(line)
+            );
+          await writeFile(path, kept.join("\n"), "utf-8");
+        }
+
+        // `body` goes and `price`, still on the main table, becomes translated: from the main
+        // table alone, the same as the collection becoming translated.
+        await expect(
+          migrateCreate({
+            ...translated,
+            fields: [{ name: "price", type: "number", localized: true }],
+          })
+        ).rejects.toThrow(/--record-snapshot/);
+        expect(
+          await adapter.executeQuery<{ locale: string; body: string }>(
+            `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' ORDER BY ${q("_locale")}`
+          )
+        ).toEqual([
+          { locale: "en", body: "Hello" },
+          { locale: "es", body: "Hola" },
+        ]);
+        expect(await columnsOf(table)).toContain("price");
+      });
+
       it("refuses a field leaving translation on a collection whose companion no migration file made, keeping its values", async () => {
         await migrateCreate(translated);
         await migrate();
