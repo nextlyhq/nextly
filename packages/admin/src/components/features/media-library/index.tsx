@@ -243,15 +243,18 @@ export function MediaLibrary({
   const foldersToDisplay = activeFolderId ? childSubfolders : rootFoldersList;
   const hasFoldersToDisplay = foldersToDisplay && foldersToDisplay.length > 0;
 
-  // Debounce search input
+  // Debounce search input. Nothing to settle while the box matches the
+  // search in use: on mount it does, and a page picked within the delay would
+  // otherwise be undone by a reset for a search that never changed.
   React.useEffect(() => {
+    if (search === debouncedSearch) return;
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
       resetPage(); // Reset to page 1 when search changes
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [search, resetPage]);
+  }, [search, debouncedSearch, resetPage]);
 
   // Build query params. Local React state name `pageSize` (admin-
   // internal) maps to canonical wire field `limit`.
