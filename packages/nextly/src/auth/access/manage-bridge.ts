@@ -76,7 +76,7 @@ function wholeFour(rows: readonly PermissionRow[], resource: string): string[] {
  * The ids of the plain four a retired `manage-` permission on `resource` is
  * stored as, or none where one of them is missing and it is kept as it is.
  */
-export async function plainFourOn(
+async function plainFourOn(
   reader: PermissionReader,
   resource: string
 ): Promise<string[]> {
@@ -90,6 +90,20 @@ export async function plainFourOn(
     },
   });
   return wholeFour(rows, resource);
+}
+
+/**
+ * `plainFourOn` inside a writer's transaction, with the rows it chose locked
+ * and read again, so one edited into another permission since is not taken
+ * for what it was.
+ */
+export async function plainFourOnLocked(
+  tx: Pick<TransactionContext, "select" | "lockRow">,
+  resource: string
+): Promise<string[]> {
+  const chosen = await plainFourOn(tx, resource);
+  for (const id of chosen) await tx.lockRow("permissions", id);
+  return chosen.length === 0 ? chosen : plainFourOn(tx, resource);
 }
 
 /**

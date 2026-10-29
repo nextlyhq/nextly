@@ -12,7 +12,7 @@ import type {
 import {
   batches,
   isRetiredManage,
-  plainFourOn,
+  plainFourOnLocked,
   storedAsPlain,
   storedAsPlainLocked,
 } from "../../../auth/access/manage-bridge";
@@ -88,7 +88,7 @@ export class RolePermissionService extends BaseService {
       let added = false;
       await this.adapter.transaction(async tx => {
         await tx.lockRow("roles", roleId);
-        const four = await plainFourOn(tx, perm.resource);
+        const four = await plainFourOnLocked(tx, perm.resource);
         if (four.length === 0) return;
         const held = await this.heldIn(tx, roleId);
         await this.insertAssignments(
@@ -274,7 +274,7 @@ export class RolePermissionService extends BaseService {
         ...(permission ? [String(permission.id)] : []),
         // A retired `manage-` permission is stored as the plain four it
         // stands for, so taking it off takes them off too.
-        ...(retired ? await plainFourOn(tx, perm.resource) : []),
+        ...(retired ? await plainFourOnLocked(tx, perm.resource) : []),
       ];
       if (ids.length === 0) return;
       await tx.delete("role_permissions", {
