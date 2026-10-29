@@ -71,19 +71,29 @@ const E2E_DB = path.resolve(
 /**
  * A role still holding the retired `manage-settings` permission, as an
  * install not yet converted holds one. Written to the database directly,
- * since the roles route now stores the plain permissions in its place.
+ * since the roles route now stores the plain permissions in its place, and
+ * the permission itself is no longer seeded: an install from an earlier
+ * release keeps its row, so one is written here where the suite lacks it.
  */
 async function unconvertedRole(): Promise<string> {
   const roleId = await roleHolding(["read-tags"]);
-  const permissionId = permissionIds.get("manage-settings");
-  if (permissionId === undefined) {
-    throw new Error('[e2e] No permission "manage-settings".');
-  }
   // The dev server holds the same file: wait for its lock rather than fail.
   const db = new DatabaseSync(E2E_DB);
   db.exec("PRAGMA busy_timeout = 5000");
   try {
-    // created_at is stored as Unix seconds.
+    // Timestamps are stored as Unix seconds. Another test may have written
+    // the row already; the slug is unique, so this one is then left out.
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(
+      "INSERT OR IGNORE INTO permissions (id, name, slug, action, resource, created_at, updated_at) VALUES (?, 'Manage settings', 'manage-settings', 'manage', 'settings', ?, ?)"
+    ).run(randomUUID(), now, now);
+    const row = db
+      .prepare("SELECT id FROM permissions WHERE slug = 'manage-settings'")
+      .get() as { id: string } | undefined;
+    if (row === undefined) {
+      throw new Error('[e2e] No permission "manage-settings".');
+    }
+    const permissionId = row.id;
     db.prepare(
       "INSERT INTO role_permissions (id, role_id, permission_id, created_at) VALUES (?, ?, ?, ?)"
     ).run(randomUUID(), roleId, permissionId, Math.floor(Date.now() / 1000));

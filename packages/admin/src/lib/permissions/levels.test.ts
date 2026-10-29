@@ -158,11 +158,12 @@ describe("saving a level", () => {
 
   it("moves a legacy manage row to plain permissions when its level changes", () => {
     // Settings as it is seeded before `nextly upgrade`: read and manage, both
-    // held. The row reads Can edit; set to Can view, what the caller keeps is
-    // the held actions outside the level, and manage is not among them.
+    // held. The row reads Can view, the retired manage counting for nothing;
+    // saved at Can view, what the caller keeps is the held actions outside the
+    // level, and manage is not among them.
     const seeded = resource("read", "manage");
     const held = ["read", "manage"];
-    expect(levelOf("system", held, "settings")).toBe("edit");
+    expect(levelOf("system", held, "settings")).toBe("view");
     const kept = held.filter(
       action => !standardActions("system", "settings").has(action)
     );
