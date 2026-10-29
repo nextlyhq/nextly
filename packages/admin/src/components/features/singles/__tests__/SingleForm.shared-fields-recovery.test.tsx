@@ -34,17 +34,38 @@ import {
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
 
-const { useDocumentLock, autosaveOffer, savedCount } = vi.hoisted(() => ({
-  useDocumentLock: vi.fn(),
-  // A recovery point the editor offers back, when a test sets one.
-  autosaveOffer: {
-    current: null as { savedAt: Date; snapshot: unknown } | null,
-  },
-  // How many saves the editor last reported, which its preview follows.
-  savedCount: { current: 0 },
-}));
+const { useDocumentLock, autosaveOffer, savedCount, publishAllHeld } =
+  vi.hoisted(() => ({
+    useDocumentLock: vi.fn(),
+    // A recovery point the editor offers back, when a test sets one.
+    autosaveOffer: {
+      current: null as { savedAt: Date; snapshot: unknown } | null,
+    },
+    // How many saves the editor last reported, which its preview follows.
+    savedCount: { current: 0 },
+    // Whether each language panel drawn was told to hold publishing every
+    // language, in the order they were drawn.
+    publishAllHeld: { current: [] as boolean[] },
+  }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+// The language panels, inline and in the rail, as what the Single hands them.
+vi.mock(
+  "@admin/components/features/entries/LanguagePanel",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("@admin/components/features/entries/LanguagePanel")
+    >()),
+    DocumentLanguagePanel: ({
+      publishAllDisabled,
+    }: {
+      publishAllDisabled?: boolean;
+    }) => {
+      publishAllHeld.current.push(publishAllDisabled === true);
+      return null;
+    },
+  })
+);
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   // As the hook does: an offer is withdrawn once a save lands, which the
   // editor reports through `savedCount` (see the hook's own tests).
@@ -162,6 +183,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   autosaveOffer.current = null;
   savedCount.current = 0;
+  publishAllHeld.current = [];
   heldWork.current = false;
   registerComponent(VIEW, EditorView);
   useDocumentLock.mockReturnValue({
@@ -520,6 +542,50 @@ describe("a Single's form, for a publish refused over shared values", () => {
     // take once more, once the form starts afresh from what it wrote.
     expect(take).toHaveBeenCalledTimes(1);
     expect(savedCount.current).toBe(2);
+  });
+
+  it("holds publishing every language while the recovery runs, as it holds the Single's other writes", async () => {
+    const onSubmit = refusedOnce();
+    render(
+      <SingleForm schema={schema} document={first} onSubmit={onSubmit} />,
+      { wrapper: Providers }
+    );
+    // An edit, so the Single has a Save to offer.
+    fireEvent.change(screen.getByRole("textbox", { name: "Hero Title" }), {
+      target: { value: "Edited" },
+    });
+    fireEvent.submit(document.querySelector("form") as HTMLFormElement);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    // The author's own Single: publishing every language is offered.
+    expect(publishAllHeld.current.length).toBeGreaterThan(0);
+    expect(publishAllHeld.current).not.toContain(true);
+
+    let finishTake: () => void = () => {};
+    const take = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finishTake = resolve;
+        })
+    );
+    publishAllHeld.current = [];
+    let running: Promise<unknown> | undefined;
+    act(() => {
+      running = refusedFormOf(onSubmit)?.recover(take);
+    });
+    await act(async () => {
+      await waitFor(() => expect(take).toHaveBeenCalled());
+    });
+
+    // Every panel drawn from the action on holds it.
+    expect(publishAllHeld.current.length).toBeGreaterThan(0);
+    expect(publishAllHeld.current).not.toContain(false);
+
+    await act(async () => {
+      finishTake();
+      await running;
+    });
+    // Let go with the rest of the Single.
+    expect(publishAllHeld.current.at(-1)).toBe(false);
   });
 
   it("takes nothing where every Save of the Single would publish it", async () => {

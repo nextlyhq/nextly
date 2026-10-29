@@ -20,12 +20,16 @@ const {
   updateOptions,
   autosaveOffer,
   savedCount,
+  publishAllHeld,
   update,
   answer,
 } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
   // How many saves the editor last reported, which its preview follows.
   savedCount: { current: 0 },
+  // Whether each language panel drawn was told to hold publishing every
+  // language, in the order they were drawn.
+  publishAllHeld: { current: [] as boolean[] },
   // The server's answer on changing the entry in the language on screen.
   answer: { current: "allowed" as "allowed" | "switching" },
   // The entry's update, where a save leaves the editor.
@@ -60,6 +64,23 @@ vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
     };
   },
 }));
+// The language panels, inline and in the rail, as what the editor hands them.
+vi.mock(
+  "@admin/components/features/entries/LanguagePanel",
+  async importOriginal => ({
+    ...(await importOriginal<
+      typeof import("@admin/components/features/entries/LanguagePanel")
+    >()),
+    DocumentLanguagePanel: ({
+      publishAllDisabled,
+    }: {
+      publishAllDisabled?: boolean;
+    }) => {
+      publishAllHeld.current.push(publishAllDisabled === true);
+      return null;
+    },
+  })
+);
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   ...(await importOriginal<
     typeof import("@admin/hooks/useDocumentAutosave")
@@ -125,6 +146,7 @@ beforeEach(() => {
   updateOptions.current = undefined;
   autosaveOffer.current = null;
   savedCount.current = 0;
+  publishAllHeld.current = [];
 });
 
 afterEach(() => {
@@ -341,6 +363,43 @@ describe("the entry editor's recovery from a refused publish", () => {
     // take once more, once the form starts afresh from what it wrote.
     expect(take).toHaveBeenCalledTimes(1);
     expect(savedCount.current).toBe(2);
+  });
+
+  it("holds publishing every language while the recovery runs, as it holds the entry's other writes", async () => {
+    lockedBy("held-by-me");
+    render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+    // The author's own entry: publishing every language is offered.
+    expect(publishAllHeld.current.length).toBeGreaterThan(0);
+    expect(publishAllHeld.current).not.toContain(true);
+
+    let finishTake: () => void = () => {};
+    const take = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finishTake = resolve;
+        })
+    );
+    publishAllHeld.current = [];
+    let running: Promise<unknown> | undefined;
+    act(() => {
+      running = updateOptions.current?.refusedForm?.recover(take);
+    });
+    await act(async () => {
+      await vi.waitFor(() => expect(take).toHaveBeenCalled());
+    });
+
+    // Every panel drawn from the action on holds it.
+    expect(publishAllHeld.current.length).toBeGreaterThan(0);
+    expect(publishAllHeld.current).not.toContain(false);
+
+    await act(async () => {
+      finishTake();
+      await running;
+    });
+    // Let go with the rest of the editor.
+    expect(publishAllHeld.current.at(-1)).toBe(false);
   });
 
   it("keeps the entry's claim and its editor through the recovery", async () => {
