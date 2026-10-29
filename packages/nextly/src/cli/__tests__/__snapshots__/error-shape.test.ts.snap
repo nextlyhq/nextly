@@ -155,6 +155,14 @@ exports[`each code, as a command ends with it > BUILDER_SLUG_COLLISION 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/builder-slug-collision  (BUILDER_SLUG_COLLISION)"
 `;
 
+exports[`each code, as a command ends with it > COMPONENT_MAP_OUT_OF_DATE 1`] = `
+"✗ The component map is out of date (src/types/generated/plugin-admin-imports.generated.ts and src/types/generated/plugin-admin-components.generated.ts).
+  Why:  - missing: plugin "@acme/shop", widget "acme/revenue": @acme/shop/admin#Revenue
+        - no longer declared: @gone/old/admin#Chart
+  Next: Run \`npx nextly generate:types\` and commit both files.
+  Docs: https://nextlyhq.com/docs/cli/errors/component-map-out-of-date  (COMPONENT_MAP_OUT_OF_DATE)"
+`;
+
 exports[`each code, as a command ends with it > CONFIG_IMPORT_NOT_FOUND 1`] = `
 "✗ \`nextly.config.ts\` imports something that could not be found.
   Why:  nextly.config.ts:2:22: Could not resolve "./collections/posts"
@@ -327,6 +335,13 @@ exports[`each code, as a command ends with it > DATABASE_URL_MISSING 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/database-url-missing  (DATABASE_URL_MISSING)"
 `;
 
+exports[`each code, as a command ends with it > DATABASE_VERSION_UNSUPPORTED 1`] = `
+"✗ The PostgreSQL server is version 12.4, older than Nextly supports.
+  Why:  Nextly needs PostgreSQL 15 or later.
+  Next: Upgrade the PostgreSQL server, or point \`DATABASE_URL\` at one that is 15 or later.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-version-unsupported  (DATABASE_VERSION_UNSUPPORTED)"
+`;
+
 exports[`each code, as a command ends with it > DEMOTE_COLLECTION_NOT_FOUND 1`] = `
 "✗ Collection 'posts' not found in nextly.config.ts collections.
   Why:  \`--demote\` moves a collection defined in \`nextly.config.ts\` to the Schema Builder, and its \`collections\` array has none with this slug.
@@ -402,6 +417,13 @@ exports[`each code, as a command ends with it > LEGACY_BOOKKEEPING_FOUND 1`] = `
   Why:  They hold the history an earlier release recorded, which this release keeps in \`nextly_schema_events\`.
   Next: Run \`pnpm nextly upgrade\` once to consolidate them into nextly_schema_events before continuing.
   Docs: https://nextlyhq.com/docs/cli/errors/legacy-bookkeeping-found  (LEGACY_BOOKKEEPING_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > LOCALIZATION_NOT_PROVISIONED 1`] = `
+"✗ Localization could not be brought into step for \`posts\`.
+  Why:  Their translation tables could not be created, so their translations are either unwritable or unreadable until they are.
+  Next: Run \`nextly db:sync --verbose\` to see the statement that failed, fix its cause, then run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/localization-not-provisioned  (LOCALIZATION_NOT_PROVISIONED)"
 `;
 
 exports[`each code, as a command ends with it > MEDIA_APPLY_OUTSIDE_PROJECT 1`] = `
@@ -546,6 +568,13 @@ exports[`each code, as a command ends with it > MIGRATION_TAMPERED 1`] = `
   Why:  Its checksum no longer matches the one recorded when it ran on this database.
   Next: Restore the file as it was when it ran, and put the change in a new migration with \`nextly migrate:create\`.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-tampered  (MIGRATION_TAMPERED)"
+`;
+
+exports[`each code, as a command ends with it > NO_TRANSACTION_NEEDS_BLANK 1`] = `
+"✗ --no-transaction writes a blank migration file (with --blank) or a plugin module (with --plugin).
+  Why:  A generated migration file is not marked: marking it changes the contents its snapshot was taken over.
+  Next: Put the statements that need to run outside a transaction in a file of their own: nextly migrate:create --blank --no-transaction.
+  Docs: https://nextlyhq.com/docs/cli/errors/no-transaction-needs-blank  (NO_TRANSACTION_NEEDS_BLANK)"
 `;
 
 exports[`each code, as a command ends with it > PACKAGE_INSTALL_FAILED 1`] = `
@@ -767,6 +796,20 @@ exports[`each code, as a command ends with it > PLUGIN_DOWN_LEFT_TABLES 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-down-left-tables  (PLUGIN_DOWN_LEFT_TABLES)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_ENTRY_EXPORTS_SEVERAL 1`] = `
+"✗ The plugin entry src/plugin.ts exports more than one plugin (seo, sitemap).
+  Why:  \`nextly migrate:create --plugin\` generates the migrations of one plugin at a time.
+  Next: Point --plugin at a file that exports one, or export it as the default.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-entry-exports-several  (PLUGIN_ENTRY_EXPORTS_SEVERAL)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ENTRY_UNNAMED 1`] = `
+"✗ The plugin entry src/plugin.ts exports no definition with a name, so its migrations cannot be attributed.
+  Why:  A plugin's migrations are recorded under its name.
+  Next: Point \`--plugin\` at the file that exports the plugin, made with \`definePlugin\` and given a \`name\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-entry-unnamed  (PLUGIN_ENTRY_UNNAMED)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_EVENT_NAME_RESERVED 1`] = `
 "✗ Plugin "reviews" declares the event "collection.review-created", whose prefix core reserves for its own events.
   Why:  Events under that prefix are Nextly's own, so a plugin's would be taken for one of them.
@@ -795,6 +838,13 @@ exports[`each code, as a command ends with it > PLUGIN_EXTEND_TARGET_UNKNOWN 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-extend-target-unknown  (PLUGIN_EXTEND_TARGET_UNKNOWN)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_EXTENDS_OUTSIDE_ITS_SCHEMA 1`] = `
+"✗ Plugin "@acme/seo" has a schema.extend hook that extends "posts", which is not in the schema this command compiles.
+  Why:  A plugin's migration module ships inside the plugin, so it is compiled from the plugin and its DECLARED DEPENDENCIES alone — never from the app's entity tables, which differ per installation.
+  Next: If "posts" belongs to a dependency, add that dependency to dependsOn and make sure it is present in the config this command loads. If it is one of the app's collections, Singles or field groups, what the hook adds to it is migrated by the APP: \`nextly migrate:create\` in the app writes it, whoever contributed it. Guard the hook with \`schema.getTable("posts")\` so it skips the table when compiled for this module.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-extends-outside-its-schema  (PLUGIN_EXTENDS_OUTSIDE_ITS_SCHEMA)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_HAS_DEPENDENTS 1`] = `
 "✗ "@acme/seo" cannot be uninstalled while "@acme/sitemap" depends on it.
   Why:  Removing it would leave the plugin that depends on it reading tables that are no longer there. Nothing was changed.
@@ -814,6 +864,13 @@ exports[`each code, as a command ends with it > PLUGIN_HOOK_CHANGED_TABLES 1`] =
   Why:  A full uninstall reads each table's identity before and after the plugin's \`onUninstall\`, so its DOWN migrations never drop a table the hook put in place of the one they were judged against.
   Next: Put the original table back under its name, in place of any table created there, then run the uninstall again.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-changed-tables  (PLUGIN_HOOK_CHANGED_TABLES)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_HOOK_HANDLERS_RUNNING 1`] = `
+"✗ Event handlers that @acme/seo's onUninstall set off were still running after 30s, so the command stopped there.
+  Why:  Going on while they run could remove tables they are still reading, so the plugin's state was left as it was.
+  Next: Run it again once what they do can finish.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-handlers-running  (PLUGIN_HOOK_HANDLERS_RUNNING)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_HOOK_POINT_COLLISION 1`] = `
@@ -844,11 +901,25 @@ exports[`each code, as a command ends with it > PLUGIN_HOOK_POINT_RESERVED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-reserved  (PLUGIN_HOOK_POINT_RESERVED)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_HOOK_SERVICES_REGISTERED 1`] = `
+"✗ Services are already registered in this process, so @acme/seo's onInstall was not run.
+  Why:  The hook runs with services of its own, and tearing them down afterwards would take the existing ones with them.
+  Next: Run the plugin command on its own, as \`nextly plugins install\` or \`nextly plugins uninstall\`, outside a process that has already started Nextly.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-services-registered  (PLUGIN_HOOK_SERVICES_REGISTERED)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_INSTALL_TARGET_UNCLEAR 1`] = `
 "✗ \`nextly plugins install\` was not told which plugin to install.
   Why:  It installs one named plugin, or every configured plugin with \`--all\`, never both.
   Next: Name one plugin to install, or pass --all to install every configured plugin: "nextly plugins install <name>" or "nextly plugins install --all".
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-install-target-unclear  (PLUGIN_INSTALL_TARGET_UNCLEAR)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_LIFECYCLE_LOCK_BUSY 1`] = `
+"✗ Another migration is holding the migrate lock, so @acme/seo was not installed.
+  Why:  Plugins are installed and removed under the same lock as every schema change. Nothing was changed.
+  Next: Re-run once it finishes.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-lifecycle-lock-busy  (PLUGIN_LIFECYCLE_LOCK_BUSY)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_LIMIT_RULE_INVALID 1`] = `
@@ -914,6 +985,13 @@ exports[`each code, as a command ends with it > PLUGIN_MIGRATION_SQL_MISSING 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-sql-missing  (PLUGIN_MIGRATION_SQL_MISSING)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_MIGRATIONS_BARREL_UNREADABLE 1`] = `
+"✗ The plugin's migrations barrel at \`src/migrations/index.ts\` could not be loaded.
+  Why:  Cannot find module './0002_add_redirects' imported from src/migrations/index.ts. Generating anyway would rewrite the barrel and orphan the modules it lists.
+  Next: Fix the barrel, or the module it imports, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migrations-barrel-unreadable  (PLUGIN_MIGRATIONS_BARREL_UNREADABLE)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_MIGRATIONS_OUT_OF_ORDER 1`] = `
 "✗ Plugin "@acme/seo" lists its migration "20261019_090000_add_index" after "20261020_120000_add_redirects", but its migrations run in the order of their names, so "20261019_090000_add_index" runs first.
   Why:  Every reader of a plugin's migrations runs them by name, so a list in another order is refused rather than sorted in silence. Nothing was applied.
@@ -926,6 +1004,13 @@ exports[`each code, as a command ends with it > PLUGIN_NAME_TOO_LONG_FOR_SETTING
   Why:  Settings are stored under the plugin's name, in a column of that width.
   Next: Use a release of the plugin whose name is 191 characters or fewer.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-name-too-long-for-settings  (PLUGIN_NAME_TOO_LONG_FOR_SETTINGS)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_NEEDS_MIGRATED_DATABASE 1`] = `
+"✗ This database has not been migrated yet, so no plugin can be installed or uninstalled on it.
+  Why:  It has none of \`nextly_schema_events\`, \`nextly_schema_owners\`, which record what each plugin owns.
+  Next: Run \`nextly migrate\`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-needs-migrated-database  (PLUGIN_NEEDS_MIGRATED_DATABASE)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_NEXTLY_INCOMPATIBLE 1`] = `
@@ -1019,6 +1104,13 @@ exports[`each code, as a command ends with it > PLUGIN_RENAME_TARGET_UNKNOWN 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-rename-target-unknown  (PLUGIN_RENAME_TARGET_UNKNOWN)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_ROLLBACK_MODULE_NOT_SHIPPED 1`] = `
+"✗ plugin:@acme/seo/0002_redirects is recorded in the ledger, but plugin "@acme/seo" does not currently ship a module named "0002_redirects".
+  Why:  A module's DOWN lives in the version of the plugin that shipped it. Nothing was changed.
+  Next: Reinstall the version that shipped it before rolling it back.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-rollback-module-not-shipped  (PLUGIN_ROLLBACK_MODULE_NOT_SHIPPED)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_ROUTE_COLLISION 1`] = `
 "✗ Duplicate route GET /feeds/rss contributed by feeds and syndication.
   Why:  Both patterns match the same requests with as many fixed segments each, so nothing decides which of them answers.
@@ -1066,6 +1158,13 @@ exports[`each code, as a command ends with it > PLUGIN_SCHEMA_VERSION_INVALID 1`
   Why:  It must be a positive integer.
   Next: Set the plugin's \`schemaVersion\` to a positive integer, such as \`1\`, or install a release of the plugin that does.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-version-invalid  (PLUGIN_SCHEMA_VERSION_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SCHEMA_VERSION_MISSING 1`] = `
+"✗ Plugin "@acme/seo" declares no schemaVersion.
+  Why:  A plugin needs one before migrations can be generated for it.
+  Next: Add \`schemaVersion: 1\` to the plugin's definition, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-version-missing  (PLUGIN_SCHEMA_VERSION_MISSING)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_SCHEMA_VERSION_NOT_ADVANCED 1`] = `
@@ -1438,4 +1537,11 @@ exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] =
   Why:  \`nextly upgrade\` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
   Next: Rename it, or re-run with \`--target-table-name <name>\`.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
+`;
+
+exports[`each code, as a command ends with it > WORKFLOW_CANNOT_ATTACH 1`] = `
+"✗ A workflow cannot be attached where the configuration attaches it.
+  Why:  \`editorial\` cannot be attached to \`pages\`: it does not keep drafts: set \`status: true\` and \`versions: { drafts: true }\`.
+  Next: Give each target what its workflow needs, such as drafts, or attach the workflow elsewhere, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/workflow-cannot-attach  (WORKFLOW_CANNOT_ATTACH)"
 `;

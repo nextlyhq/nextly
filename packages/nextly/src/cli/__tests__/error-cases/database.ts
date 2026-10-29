@@ -46,4 +46,20 @@ export const DATABASE_CASES = {
         "Failed to load database adapter for \"mysql\". Make sure @nextlyhq/adapter-mysql is installed:\n\n  npm install @nextlyhq/adapter-mysql\n\nOriginal error: Cannot find package '@nextlyhq/adapter-mysql'"
       )
     ),
+  // As the PostgreSQL adapter's version check throws it at connect.
+  DATABASE_VERSION_UNSUPPORTED: () =>
+    connectionFailure(
+      "postgresql",
+      Object.assign(
+        new Error(
+          "PostgreSQL 12.4 is not supported; Nextly needs 15 or later."
+        ),
+        {
+          kind: "unsupported_version",
+          dialect: "postgresql",
+          detectedVersion: "12.4",
+          requiredVersion: "15",
+        }
+      )
+    ),
 } satisfies ErrorCases;

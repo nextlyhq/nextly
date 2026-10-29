@@ -1,0 +1,23 @@
+---
+title: PLUGIN_ROLLBACK_MODULE_NOT_SHIPPED
+description: "`nextly migrate:down --plugin` names a module the ledger records as applied that the configured version of the plugin no longer ships."
+---
+
+## Cause
+
+`nextly migrate:down --plugin` names a module the ledger records as applied that the configured version of the plugin no longer ships.
+
+Rolling a plugin module back runs that module's DOWN, which lives in the version of the plugin that shipped it. The ledger records the module as applied, but the version installed now does not include it, so there is no DOWN to run. Nothing was changed.
+
+## Fix
+
+Reinstall the version of the plugin that shipped the module, then roll it back.
+
+## Example
+
+```text
+✗ plugin:@acme/seo/0002_redirects is recorded in the ledger, but plugin "@acme/seo" does not currently ship a module named "0002_redirects".
+  Why:  A module's DOWN lives in the version of the plugin that shipped it. Nothing was changed.
+  Next: Reinstall the version that shipped it before rolling it back.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-rollback-module-not-shipped  (PLUGIN_ROLLBACK_MODULE_NOT_SHIPPED)
+```

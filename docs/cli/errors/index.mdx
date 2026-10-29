@@ -34,6 +34,7 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`BUILD_GENERATION_FAILED`](/docs/cli/errors/build-generation-failed) | The build could not generate its type or Zod schema files. |
 | [`BUILD_MIGRATIONS_NOT_APPLIED`](/docs/cli/errors/build-migrations-not-applied) | `nextly build --strict` found migrations the database has not applied, or that failed. |
 | [`BUILD_STRICT_WARNINGS`](/docs/cli/errors/build-strict-warnings) | `nextly build --strict` found validation warnings, and `--strict` fails the build on any warning. |
+| [`COMPONENT_MAP_OUT_OF_DATE`](/docs/cli/errors/component-map-out-of-date) | `nextly generate:types --check` found the committed component map out of step with the configuration. |
 | [`CONFIG_IMPORT_NOT_FOUND`](/docs/cli/errors/config-import-not-found) | The configuration file imports a file or package that could not be found. |
 | [`CONFIG_INVALID`](/docs/cli/errors/config-invalid) | The configuration declares something Nextly cannot use, such as a field type no installed plugin offers. |
 | [`CONFIG_INVALID_EXPORT`](/docs/cli/errors/config-invalid-export) | The configuration file's default export is not a configuration object. |
@@ -53,6 +54,7 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`DATABASE_NOT_BASELINED`](/docs/cli/errors/database-not-baselined) | The database already has tables but no migration history, and the first migration starts from an empty database. |
 | [`DATABASE_UNREACHABLE`](/docs/cli/errors/database-unreachable) | The command could not connect to the database `DATABASE_URL` names. |
 | [`DATABASE_URL_MISSING`](/docs/cli/errors/database-url-missing) | `DATABASE_URL` is not set, so the command has no database to use. |
+| [`DATABASE_VERSION_UNSUPPORTED`](/docs/cli/errors/database-version-unsupported) | The database server is older than the oldest version Nextly supports for its dialect. |
 | [`DATA_LOSS_CONSENT_MALFORMED`](/docs/cli/errors/data-loss-consent-malformed) | The data-loss consent names its targets in a form it cannot read, so the command changed nothing. |
 | [`DATA_LOSS_CONSENT_NOT_COVERED`](/docs/cli/errors/data-loss-consent-not-covered) | The data-loss consent names what may be deleted, and leaves out something the command would delete. |
 | [`DATA_LOSS_CONSENT_REQUIRED`](/docs/cli/errors/data-loss-consent-required) | The command would delete data, no consent covers it, and no terminal is attached to ask. |
@@ -67,6 +69,7 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`I18N_RESTORE_KIND_INVALID`](/docs/cli/errors/i18n-restore-kind-invalid) | `i18n:restore --kind` is not `collection`, `single` or `field-group`. |
 | [`INTERRUPTED_BEFORE_START`](/docs/cli/errors/interrupted-before-start) | The command was interrupted while it waited to take a schema lock, before it changed anything. |
 | [`LEGACY_BOOKKEEPING_FOUND`](/docs/cli/errors/legacy-bookkeeping-found) | The database still has the migration bookkeeping tables of an earlier Nextly release. |
+| [`LOCALIZATION_NOT_PROVISIONED`](/docs/cli/errors/localization-not-provisioned) | `db:sync` could not create the translation tables of a localized entity, so its translations cannot be written or read. |
 | [`MEDIA_APPLY_OUTSIDE_PROJECT`](/docs/cli/errors/media-apply-outside-project) | `nextly media orphans --apply` was run from outside the project `--cwd` names, so the database settings it read may be another project's. |
 | [`MEDIA_CONFIG_OUTSIDE_PROJECT`](/docs/cli/errors/media-config-outside-project) | `nextly media orphans --apply` was given a configuration from outside the project, whose storage may be another project's. |
 | [`MEDIA_STORAGE_UNLISTABLE`](/docs/cli/errors/media-storage-unlistable) | The media storage cannot list its files, so it cannot be searched for left-behind thumbnails. |
@@ -86,6 +89,7 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`MIGRATION_SNAPSHOT_MISSING`](/docs/cli/errors/migration-snapshot-missing) | A migration file has no snapshot file beside it in `meta/`. |
 | [`MIGRATION_SQL_UNCHECKABLE`](/docs/cli/errors/migration-sql-uncheckable) | A migration's SQL is in a form the schema guard cannot read, so it cannot check the migration leaves other owners' tables alone. |
 | [`MIGRATION_TAMPERED`](/docs/cli/errors/migration-tampered) | A migration recorded as applied has a file that no longer matches its recorded checksum. |
+| [`NO_TRANSACTION_NEEDS_BLANK`](/docs/cli/errors/no-transaction-needs-blank) | `--no-transaction` was given to `nextly migrate:create` without `--blank` or `--plugin`. |
 | [`PACKAGE_INSTALL_FAILED`](/docs/cli/errors/package-install-failed) | The package manager could not install the package `nextly add` was given. |
 | [`PASSWORD_CLEAR_UNCONFIRMED`](/docs/cli/errors/password-clear-unconfirmed) | `nextly users:clear-plaintext-passwords --apply` was run without `--confirm-default-hasher`. |
 | [`PLUGIN_ADMIN_SLUG_COLLISION`](/docs/cli/errors/plugin-admin-slug-collision) | Two plugins' names resolve to the same admin slug. |
@@ -117,21 +121,28 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`PLUGIN_DOCUMENT_VIEW_INVALID`](/docs/cli/errors/plugin-document-view-invalid) | A plugin declares a document view with no component, a label that is not text, or a path the admin cannot route. |
 | [`PLUGIN_DOWN_KEEPS_TABLES`](/docs/cli/errors/plugin-down-keeps-tables) | A plugin's DOWN migrations, as written, do not drop every table it owns, so a full uninstall would leave some. |
 | [`PLUGIN_DOWN_LEFT_TABLES`](/docs/cli/errors/plugin-down-left-tables) | A plugin's DOWN migrations ran and left a table it owns in place, so the uninstall was not recorded. |
+| [`PLUGIN_ENTRY_EXPORTS_SEVERAL`](/docs/cli/errors/plugin-entry-exports-several) | The file given to `--plugin` exports more than one plugin, so it is not clear which to generate for. |
+| [`PLUGIN_ENTRY_UNNAMED`](/docs/cli/errors/plugin-entry-unnamed) | The file given to `--plugin` exports no plugin definition with a name. |
 | [`PLUGIN_EVENT_NAME_RESERVED`](/docs/cli/errors/plugin-event-name-reserved) | A plugin declares an event under the prefix Nextly reserves. |
 | [`PLUGIN_EVENT_OUTSIDE_NAMESPACE`](/docs/cli/errors/plugin-event-outside-namespace) | A plugin declares an event whose name does not start with the plugin's prefix. |
+| [`PLUGIN_EXTENDS_OUTSIDE_ITS_SCHEMA`](/docs/cli/errors/plugin-extends-outside-its-schema) | A plugin's `schema.extend` hook extends an entity that is not in the schema its migration module is compiled from. |
 | [`PLUGIN_EXTEND_FIELD_DUPLICATE`](/docs/cli/errors/plugin-extend-field-duplicate) | A plugin extends an entity with a field whose name the entity already has. |
 | [`PLUGIN_EXTEND_TARGET_UNKNOWN`](/docs/cli/errors/plugin-extend-target-unknown) | A plugin extends an entity that neither the configuration, a plugin nor the Schema Builder declares. |
 | [`PLUGIN_HAS_DEPENDENTS`](/docs/cli/errors/plugin-has-dependents) | Another configured plugin depends on the plugin to uninstall. |
 | [`PLUGIN_HOOK_CHANGED_SCHEMA`](/docs/cli/errors/plugin-hook-changed-schema) | On SQLite, a plugin's `onUninstall` changed the database schema before its DOWN migrations ran. |
 | [`PLUGIN_HOOK_CHANGED_TABLES`](/docs/cli/errors/plugin-hook-changed-tables) | A plugin's `onUninstall` dropped, renamed or replaced a table its DOWN migrations were to drop. |
+| [`PLUGIN_HOOK_HANDLERS_RUNNING`](/docs/cli/errors/plugin-hook-handlers-running) | Event handlers a plugin's install or uninstall hook set off were still running when the command's wait ran out. |
 | [`PLUGIN_HOOK_POINT_COLLISION`](/docs/cli/errors/plugin-hook-point-collision) | Two plugins declare the same hook point. |
 | [`PLUGIN_HOOK_POINT_KIND_MISMATCH`](/docs/cli/errors/plugin-hook-point-kind-mismatch) | A hook point was executed as a kind other than the one its plugin declares. |
 | [`PLUGIN_HOOK_POINT_OUTSIDE_NAMESPACE`](/docs/cli/errors/plugin-hook-point-outside-namespace) | A plugin declares a hook point whose name does not start with the plugin's prefix. |
 | [`PLUGIN_HOOK_POINT_RESERVED`](/docs/cli/errors/plugin-hook-point-reserved) | A plugin declares a hook point under the prefix Nextly reserves. |
+| [`PLUGIN_HOOK_SERVICES_REGISTERED`](/docs/cli/errors/plugin-hook-services-registered) | A plugin's install or uninstall hook was not run, because the process already had services registered. |
 | [`PLUGIN_INSTALL_TARGET_UNCLEAR`](/docs/cli/errors/plugin-install-target-unclear) | `nextly plugins install` was given both a plugin name and `--all`, or neither. |
+| [`PLUGIN_LIFECYCLE_LOCK_BUSY`](/docs/cli/errors/plugin-lifecycle-lock-busy) | Another migration held the migrate lock, so a plugin install or uninstall ran nothing. |
 | [`PLUGIN_LIMIT_RULE_INVALID`](/docs/cli/errors/plugin-limit-rule-invalid) | A plugin declares a limit rule that cannot be enforced. |
 | [`PLUGIN_MANIFEST_INVALID`](/docs/cli/errors/plugin-manifest-invalid) | A plugin's definition has a field of the wrong shape. |
 | [`PLUGIN_MENU_COLLECTION_UNOWNED`](/docs/cli/errors/plugin-menu-collection-unowned) | A plugin's menu item names a collection the plugin does not contribute. |
+| [`PLUGIN_MIGRATIONS_BARREL_UNREADABLE`](/docs/cli/errors/plugin-migrations-barrel-unreadable) | The plugin's existing migrations barrel could not be loaded, so `nextly migrate:create` stopped rather than rewrite it. |
 | [`PLUGIN_MIGRATIONS_OUT_OF_ORDER`](/docs/cli/errors/plugin-migrations-out-of-order) | A plugin lists its migrations in an order other than the order of their names. |
 | [`PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN`](/docs/cli/errors/plugin-migration-adds-unfillable-column) | A plugin migration would add a NOT NULL column with no default to a table that already has rows. |
 | [`PLUGIN_MIGRATION_BEFORE_APPLIED`](/docs/cli/errors/plugin-migration-before-applied) | A plugin lists a migration that has not run ahead of one that has. |
@@ -140,6 +151,7 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`PLUGIN_MIGRATION_NOT_SHIPPED`](/docs/cli/errors/plugin-migration-not-shipped) | A full uninstall needs the DOWN of an applied migration the configured version of the plugin no longer ships. |
 | [`PLUGIN_MIGRATION_SQL_MISSING`](/docs/cli/errors/plugin-migration-sql-missing) | A plugin migration changes the schema on this database's dialect and has no statements for it. |
 | [`PLUGIN_NAME_TOO_LONG_FOR_SETTINGS`](/docs/cli/errors/plugin-name-too-long-for-settings) | A plugin that stores settings has a name longer than the settings storage holds. |
+| [`PLUGIN_NEEDS_MIGRATED_DATABASE`](/docs/cli/errors/plugin-needs-migrated-database) | A plugin was installed or uninstalled on a database `nextly migrate` has not run on yet. |
 | [`PLUGIN_NEXTLY_INCOMPATIBLE`](/docs/cli/errors/plugin-nextly-incompatible) | A plugin requires a version of Nextly other than the one installed. |
 | [`PLUGIN_NEXTLY_RANGE_INVALID`](/docs/cli/errors/plugin-nextly-range-invalid) | A plugin's `nextly` field is not a valid range of Nextly versions. |
 | [`PLUGIN_NOT_FOUND`](/docs/cli/errors/plugin-not-found) | The plugin named on the command line is not among the plugins the configuration lists. |
@@ -153,6 +165,7 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`PLUGIN_PRINCIPAL_KIND_INVALID`](/docs/cli/errors/plugin-principal-kind-invalid) | A plugin registers a kind of signed-in person that cannot be used. |
 | [`PLUGIN_RELATION_DEPENDENCY_UNDECLARED`](/docs/cli/errors/plugin-relation-dependency-undeclared) | A plugin relates to another plugin's entity without declaring that plugin in `dependsOn`. |
 | [`PLUGIN_RENAME_TARGET_UNKNOWN`](/docs/cli/errors/plugin-rename-target-unknown) | A plugin's `.rename()` names an entity the plugin does not contribute. |
+| [`PLUGIN_ROLLBACK_MODULE_NOT_SHIPPED`](/docs/cli/errors/plugin-rollback-module-not-shipped) | `nextly migrate:down --plugin` names a module the ledger records as applied that the configured version of the plugin no longer ships. |
 | [`PLUGIN_ROUTE_COLLISION`](/docs/cli/errors/plugin-route-collision) | Two plugin routes answer the same method and path. |
 | [`PLUGIN_ROUTE_MOUNT_INVALID`](/docs/cli/errors/plugin-route-mount-invalid) | A plugin declares a route whose `mount` is neither "plugin" nor "root". |
 | [`PLUGIN_ROUTE_OPTIONS_INVALID`](/docs/cli/errors/plugin-route-options-invalid) | A plugin declares a route option that cannot mean what it says, such as a raw body on a method without one. |
@@ -160,6 +173,7 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`PLUGIN_ROUTE_ROOT_UNREACHABLE`](/docs/cli/errors/plugin-route-root-unreachable) | A plugin declares a root-mounted route at a path a request never reaches it on. |
 | [`PLUGIN_SCHEMA_BEHIND`](/docs/cli/errors/plugin-schema-behind) | In production, a plugin expects a schema version its applied migrations have not reached. |
 | [`PLUGIN_SCHEMA_VERSION_INVALID`](/docs/cli/errors/plugin-schema-version-invalid) | A plugin's `schemaVersion` is not a positive integer. |
+| [`PLUGIN_SCHEMA_VERSION_MISSING`](/docs/cli/errors/plugin-schema-version-missing) | The plugin given to `--plugin` declares no `schemaVersion`, which its migrations are numbered by. |
 | [`PLUGIN_SCHEMA_VERSION_NOT_ADVANCED`](/docs/cli/errors/plugin-schema-version-not-advanced) | A plugin's declared `schemaVersion` does not move past the one on its last migration. |
 | [`PLUGIN_SECRETS_WITHOUT_SETTINGS`](/docs/cli/errors/plugin-secrets-without-settings) | A plugin declares secret paths but no settings schema. |
 | [`PLUGIN_SECRET_PATH_DUPLICATE`](/docs/cli/errors/plugin-secret-path-duplicate) | A plugin declares the same secret path twice. |
@@ -213,3 +227,4 @@ Each code stands for one cause and keeps that meaning in later releases, so scri
 | [`UPGRADE_BACKUP_NOT_CONFIRMED`](/docs/cli/errors/upgrade-backup-not-confirmed) | `nextly upgrade` would change the database, and no backup was confirmed, with no terminal attached to ask. |
 | [`UPGRADE_CANCELLED`](/docs/cli/errors/upgrade-cancelled) | The backup prompt of `nextly upgrade` was answered no, so the upgrade did not run. |
 | [`UPGRADE_EVENTS_TABLE_TAKEN`](/docs/cli/errors/upgrade-events-table-taken) | A table of another shape already has the name `nextly upgrade` moves the migration records into. |
+| [`WORKFLOW_CANNOT_ATTACH`](/docs/cli/errors/workflow-cannot-attach) | A workflow in the configuration is attached to a collection or Single it cannot run on. |

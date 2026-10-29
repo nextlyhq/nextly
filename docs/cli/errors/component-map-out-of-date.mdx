@@ -1,0 +1,24 @@
+---
+title: COMPONENT_MAP_OUT_OF_DATE
+description: "`nextly generate:types --check` found the committed component map out of step with the configuration."
+---
+
+## Cause
+
+`nextly generate:types --check` found the committed component map out of step with the configuration.
+
+`nextly generate:types` writes the component map, a pair of files that tell the admin which components plugins and the site register. `--check` compares the committed pair with what the configuration declares, writes nothing, and exits 1 when they differ. The Why line lists each difference.
+
+## Fix
+
+Run `npx nextly generate:types` and commit both files it writes.
+
+## Example
+
+```text
+✗ The component map is out of date (src/types/generated/plugin-admin-imports.generated.ts and src/types/generated/plugin-admin-components.generated.ts).
+  Why:  - missing: plugin "@acme/shop", widget "acme/revenue": @acme/shop/admin#Revenue
+        - no longer declared: @gone/old/admin#Chart
+  Next: Run `npx nextly generate:types` and commit both files.
+  Docs: https://nextlyhq.com/docs/cli/errors/component-map-out-of-date  (COMPONENT_MAP_OUT_OF_DATE)
+```

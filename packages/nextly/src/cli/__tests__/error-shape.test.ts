@@ -11,8 +11,9 @@
  *
  * @module cli/__tests__/error-shape.test
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
@@ -26,6 +27,7 @@ import {
 } from "../errors";
 import type { SchemaEventRow } from "../../domains/schema/events/schema-events-repository";
 import { migrateDownCore } from "../commands/migrate-down";
+import { readBlockManifestState } from "../commands/generate-manifest";
 import { createProgram } from "../program";
 import { NextlyError } from "../../errors/nextly-error";
 import { REFUSAL_KIND_KEY } from "../../domains/field-groups/migration/refusal-kind";
@@ -63,7 +65,7 @@ afterEach(() => {
 /** Runs `nextly <args>` in the project folder, returning what it wrote to standard error. */
 async function runCli(
   args: string[]
-): Promise<{ stderr: string; code: number | undefined }> {
+): Promise<{ stderr: string; stdout: string; code: number | undefined }> {
   const lines: string[] = [];
   // A real process stops at its first exit. Here the stopped exit is a throw, which a command's
   // own outer catch can meet and report again, so nothing written after the first exit counts.
@@ -73,7 +75,10 @@ async function runCli(
   };
   vi.spyOn(console, "error").mockImplementation(capture);
   vi.spyOn(console, "warn").mockImplementation(capture);
-  vi.spyOn(console, "log").mockImplementation(() => {});
+  const out: string[] = [];
+  vi.spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
+    if (first === null) out.push(parts.map(String).join(" "));
+  });
   vi.spyOn(process, "exit").mockImplementation(code => {
     const exitCode = typeof code === "number" ? code : undefined;
     if (first === null) first = exitCode;
@@ -97,7 +102,7 @@ async function runCli(
   const stderr = stripVTControlCharacters(lines.join("\n"))
     .split(project)
     .join("<project>");
-  return { stderr, code };
+  return { stderr, stdout: out.join("\n"), code };
 }
 
 /** The four lines of the shape, each found by its label, or undefined where one is missing. */
@@ -347,5 +352,81 @@ describe("a build that fails twice over", () => {
     );
     expect(text).toContain("collections.posts has no admin title field");
     expect(text).toContain("without `--strict`");
+  });
+});
+
+describe("a configuration that imports a package that is not installed", () => {
+  it("names the package, as CONFIG_IMPORT_NOT_FOUND rather than a configuration that threw", () => {
+    // A package import is left for Node to load when the compiled configuration runs, so it
+    // fails as Node's own module-not-found error, with no esbuild message to read. That load
+    // cannot run inside the test runner's sandbox, so Node raises the error in a process of its
+    // own, and it is wrapped as the config loader wraps a load failure.
+    const probe = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        'import("@acme/not-installed-plugin").catch(e => console.log(JSON.stringify({ code: e.code, message: e.message })))',
+      ],
+      { cwd: project, encoding: "utf8" }
+    );
+    const raised = JSON.parse(probe.stdout) as {
+      code: string;
+      message: string;
+    };
+    expect(raised.code).toBe("ERR_MODULE_NOT_FOUND");
+    const cause = Object.assign(new Error(raised.message), {
+      code: raised.code,
+    });
+
+    const error = toCliError(
+      new NextlyError({
+        code: "INVALID_INPUT",
+        publicMessage: "Failed to load Nextly configuration.",
+        statusCode: 400,
+        logMessage: "Config loader error",
+        logContext: {
+          configPath: join(project, "nextly.config.ts"),
+          reason: "load-error",
+          cause: raised.message,
+        },
+        cause,
+      })
+    );
+    expect(error.code).toBe("CONFIG_IMPORT_NOT_FOUND");
+    expect(error.why).toBe(
+      "`@acme/not-installed-plugin` is not installed in the project."
+    );
+  });
+});
+
+describe("a --json run that fails", () => {
+  it("prints one JSON document and nothing else, as before", async () => {
+    vi.stubEnv("DATABASE_URL", "");
+    vi.stubEnv("DB_DIALECT", "");
+    const { stdout, stderr, code } = await runCli(["migrate:status", "--json"]);
+    expect(code).toBe(1);
+    expect(JSON.parse(stdout)).toEqual({ error: expect.any(String) });
+    // A reader taking standard output and error together still gets one document.
+    expect(stderr).not.toContain("✗");
+    expect(stderr).not.toContain("Docs:");
+  });
+});
+
+describe("a block manifest that cannot be read", () => {
+  it("is BLOCK_MANIFEST_UNREADABLE, read from the real read's own refusal", async () => {
+    // A folder where the manifest goes: present, and not a file a read can open.
+    const types = join(project, "src", "types", "nextly-types.ts");
+    mkdirSync(join(project, "src", "types", "blocks.manifest.json"), {
+      recursive: true,
+    });
+    const thrown = await readBlockManifestState([], types, project).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    const error = toCliError(thrown);
+    expect(error.code).toBe("BLOCK_MANIFEST_UNREADABLE");
+    expect(error.what).toContain("blocks.manifest.json");
+    expect(error.why).toMatch(/EISDIR/);
   });
 });

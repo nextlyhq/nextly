@@ -375,4 +375,58 @@ export const PLUGIN_CASES = {
   DROP_OF_FOREIGN_TABLE: () => guarded("DROP TABLE dc_posts"),
   MIGRATION_SQL_UNCHECKABLE: () =>
     guarded("DROP TABLE seo_redirects /* left open"),
+  // As `cli/commands/plugin-module-rollback.ts` throws it.
+  PLUGIN_ROLLBACK_MODULE_NOT_SHIPPED: () =>
+    new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage:
+        'plugin:@acme/seo/0002_redirects is recorded in the ledger, but plugin "@acme/seo" does not currently ship a module named "0002_redirects". Reinstall the version that shipped it before rolling it back.',
+      statusCode: 400,
+      logContext: {
+        reason: "plugin-module-not-shipped",
+        filename: "plugin:@acme/seo/0002_redirects",
+        plugin: "@acme/seo",
+        module: "0002_redirects",
+      },
+    }),
+  // The refusals below are built as `cli/commands/plugin-lifecycle-runner.ts` throws them.
+  PLUGIN_NEEDS_MIGRATED_DATABASE: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        'This database has not been migrated yet. Run "nextly migrate" before installing or uninstalling a plugin.',
+      logContext: {
+        reason: "database-not-migrated",
+        missing: ["nextly_schema_events", "nextly_schema_owners"],
+      },
+    }),
+  PLUGIN_LIFECYCLE_LOCK_BUSY: () =>
+    new NextlyError({
+      code: "CONFLICT",
+      publicMessage:
+        "Another migration is holding the migrate lock, so @acme/seo was not installed. Nothing was changed — re-run once it finishes.",
+      logContext: { reason: "plugin-lifecycle-lock-busy", outcome: "settled" },
+    }),
+  PLUGIN_HOOK_SERVICES_REGISTERED: () =>
+    new NextlyError({
+      code: "CONFLICT",
+      publicMessage:
+        "Services are already registered in this process, so @acme/seo's onInstall was not run.",
+      logContext: {
+        reason: "plugin-hook-services-registered",
+        plugin: "@acme/seo",
+        hook: "onInstall",
+      },
+    }),
+  PLUGIN_HOOK_HANDLERS_RUNNING: () =>
+    new NextlyError({
+      code: "CONFLICT",
+      publicMessage:
+        "Event handlers that @acme/seo's onUninstall set off were still running after 30s, so the command stopped there. Run it again once what they do can finish.",
+      logContext: {
+        reason: "plugin-hook-handlers-running",
+        plugin: "@acme/seo",
+        hook: "onUninstall",
+      },
+    }),
 } satisfies ErrorCases;

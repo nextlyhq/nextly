@@ -37,6 +37,27 @@ function buildMessages(error: NextlyError): BuildMessage[] {
   );
 }
 
+/**
+ * The package Node could not find when the compiled configuration ran, from its
+ * `ERR_MODULE_NOT_FOUND` (or CommonJS `MODULE_NOT_FOUND`), or undefined for any other failure.
+ */
+function missingModule(error: NextlyError): string | undefined {
+  // Read by shape: Node's loader raises it from its own realm, where `instanceof Error` can fail.
+  const cause = error.cause as
+    | { code?: unknown; message?: unknown }
+    | undefined;
+  if (typeof cause !== "object" || cause === null) return undefined;
+  if (
+    cause.code !== "ERR_MODULE_NOT_FOUND" &&
+    cause.code !== "MODULE_NOT_FOUND"
+  ) {
+    return undefined;
+  }
+  return typeof cause.message === "string"
+    ? /Cannot find (?:package|module) '([^']+)'/.exec(cause.message)?.[1]
+    : undefined;
+}
+
 /** esbuild's wording for an import it could not find. */
 const isUnresolved = (message: BuildMessage) =>
   message.text.startsWith("Could not resolve");
@@ -117,6 +138,18 @@ export const CONFIG_CODES = defineCodes({
       "The configuration file imports a file or package that could not be found.",
     from: [
       {
+        // A package the configuration imports is left for Node to load when the bundle runs, so
+        // one that is not installed fails then, as Node's own module-not-found error.
+        code: "INVALID_INPUT",
+        reason: "load-error",
+        when: error => missingModule(error) !== undefined,
+        describe: error => ({
+          what: `\`${configFile(error)}\` imports something that could not be found.`,
+          why: `\`${missingModule(error) ?? "a package"}\` is not installed in the project.`,
+          next: "Install the package it names, or correct the import, then run the command again.",
+        }),
+      },
+      {
         code: "INVALID_INPUT",
         reason: "load-error",
         when: error => buildMessages(error).some(isUnresolved),
@@ -185,6 +218,33 @@ export const CONFIG_CODES = defineCodes({
     cause:
       "The configuration declares something Nextly cannot use, such as a field type no installed plugin offers.",
   },
+  WORKFLOW_CANNOT_ATTACH: {
+    cause:
+      "A workflow in the configuration is attached to a collection or Single it cannot run on.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        issue: "workflow_needs_drafts",
+        describe: error => {
+          const issues = (
+            (
+              error.publicData as
+                | { errors?: Array<{ code?: string; message?: string }> }
+                | undefined
+            )?.errors ?? []
+          ).filter(issue => issue.code === "workflow_needs_drafts");
+          return {
+            what:
+              issues.length === 1
+                ? "A workflow cannot be attached where the configuration attaches it."
+                : `${issues.length} workflows cannot be attached where the configuration attaches them.`,
+            why: issues.map(issue => issue.message ?? "").join("\n"),
+            next: "Give each target what its workflow needs, such as drafts, or attach the workflow elsewhere, then run the command again.",
+          };
+        },
+      },
+    ],
+  },
   CONFIG_TOOLING_UNAVAILABLE: {
     cause:
       "Reading the configuration needs the optional `esbuild` package, which is not installed.",
@@ -201,6 +261,9 @@ export const CONFIG_CODES = defineCodes({
   },
 });
 
+/** The issue code the field-declaration check gives each declaration at fault. */
+const FIELD_DECLARATION_ISSUE = "FIELD_TYPE_INVALID";
+
 /**
  * A failed check of the configuration's declarations, as the command's error: one line per
  * declaration at fault, by its path in the configuration. Undefined when `error` is not such a
@@ -210,10 +273,12 @@ export function configDeclarationError(error: unknown): CliError | undefined {
   if (!NextlyError.is(error) || error.code !== "VALIDATION_ERROR")
     return undefined;
   const data = error.publicData as
-    | { errors?: Array<{ path?: string; message?: string }> }
+    | { errors?: Array<{ path?: string; code?: string; message?: string }> }
     | undefined;
+  // Only the field-declaration check's own issues: another check's (a workflow that cannot
+  // attach) has a cause and a fix of its own, and reads as its own code.
   const issues = (data?.errors ?? []).filter(
-    issue => issue.path !== undefined || issue.message !== undefined
+    issue => issue.code === FIELD_DECLARATION_ISSUE
   );
   if (issues.length === 0) return undefined;
   return new CliError(

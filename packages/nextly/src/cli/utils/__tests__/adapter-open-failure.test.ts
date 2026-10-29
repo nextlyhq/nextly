@@ -50,6 +50,21 @@ describe("a database that cannot be opened", () => {
     });
   });
 
+  it("is DATABASE_VERSION_UNSUPPORTED when the server is older than Nextly supports", async () => {
+    // As the adapters' version check throws it: by kind, with both versions.
+    createAdapterFromEnv.mockRejectedValue(
+      Object.assign(new Error("PostgreSQL 12.4 is not supported."), {
+        kind: "unsupported_version",
+        detectedVersion: "12.4",
+        requiredVersion: "15",
+      })
+    );
+    await expect(open()).rejects.toMatchObject({
+      code: "DATABASE_VERSION_UNSUPPORTED",
+      what: "The PostgreSQL server is version 12.4, older than Nextly supports.",
+    });
+  });
+
   it("keeps an error that already has its code", async () => {
     const refusal = new NextlyError({
       code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED",

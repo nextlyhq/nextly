@@ -18,6 +18,10 @@ function counted(count: number, noun: string): string {
 }
 
 export const COMMAND_CODES = defineCodes({
+  COMPONENT_MAP_OUT_OF_DATE: {
+    cause:
+      "`nextly generate:types --check` found the committed component map out of step with the configuration.",
+  },
   PROJECT_ALREADY_INITIALIZED: {
     cause:
       "The folder already has a `nextly.config.ts`, so `nextly init` did not overwrite it.",
@@ -474,5 +478,17 @@ export function passwordClearUnconfirmed(
     what: `Nothing was changed: --apply also needs ${confirmFlag}.`,
     why: `${confirmFlag} is your statement that no stored password was written by a custom passwordHasher, now or earlier. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.`,
     next: `If no custom passwordHasher ever wrote a password, run \`nextly ${command} --apply ${confirmFlag}\`.`,
+  });
+}
+
+/** The committed component map disagrees with what the configuration declares. */
+export function componentMapOutOfDate(report: {
+  files: string;
+  disagreements: readonly string[];
+}): CliError {
+  return new CliError("COMPONENT_MAP_OUT_OF_DATE", {
+    what: `The component map is out of date (${report.files}).`,
+    why: report.disagreements.join("\n"),
+    next: "Run `npx nextly generate:types` and commit both files.",
   });
 }

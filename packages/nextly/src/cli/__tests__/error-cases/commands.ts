@@ -32,6 +32,7 @@ import {
   setupAlreadyComplete,
   setupInProgress,
   setupTokenSetByEnv,
+  componentMapOutOfDate,
 } from "../../errors/areas/commands";
 
 import { PROJECT, type ErrorCases } from "./types";
@@ -100,4 +101,13 @@ export const COMMAND_CASES = {
       "--confirm-default-hasher",
       "users:clear-plaintext-passwords"
     ),
+  COMPONENT_MAP_OUT_OF_DATE: () =>
+    componentMapOutOfDate({
+      files:
+        "src/types/generated/plugin-admin-imports.generated.ts and src/types/generated/plugin-admin-components.generated.ts",
+      disagreements: [
+        '- missing: plugin "@acme/shop", widget "acme/revenue": @acme/shop/admin#Revenue',
+        "- no longer declared: @gone/old/admin#Chart",
+      ],
+    }),
 } satisfies ErrorCases;

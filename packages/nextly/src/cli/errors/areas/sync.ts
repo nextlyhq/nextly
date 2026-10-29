@@ -26,6 +26,26 @@ function fieldGroupCommand(error: NextlyError): string {
 }
 
 export const SYNC_CODES = defineCodes({
+  LOCALIZATION_NOT_PROVISIONED: {
+    cause:
+      "`db:sync` could not create the translation tables of a localized entity, so its translations cannot be written or read.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "localization-not-provisioned",
+        describe: error => {
+          const entities = Array.isArray(error.logContext?.entities)
+            ? (error.logContext.entities as unknown[]).map(String)
+            : [];
+          return {
+            what: `Localization could not be brought into step for ${entities.map(e => `\`${e}\``).join(", ") || "some entities"}.`,
+            why: "Their translation tables could not be created, so their translations are either unwritable or unreadable until they are.",
+            next: "Run `nextly db:sync --verbose` to see the statement that failed, fix its cause, then run it again.",
+          };
+        },
+      },
+    ],
+  },
   PROMOTE_COLLECTION_NOT_FOUND: {
     cause:
       "`db:sync --promote` names a collection the Schema Builder has no record of.",

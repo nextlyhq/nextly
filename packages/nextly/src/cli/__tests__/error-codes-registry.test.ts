@@ -201,15 +201,32 @@ describe("the errors a command can end with", () => {
   });
 
   it("no command ends with exit 1 except through the error shape", () => {
-    // `exitWithError` prints the shape and exits; the entry point's catch reports through the
-    // same function. Any other exit 1 is a command printing its own text before it ends.
-    // The entry point exits after `reportCliError`, and its last handler covers the CLI failing to
-    // load before any command exists.
+    // `exitWithError` prints the shape and exits; the entry point exits after `reportCliError`,
+    // and its last handler covers the CLI failing to load before any command exists.
     const allowed = new Set([
       join("cli", "errors", "report.ts"),
       join("cli", "nextly.ts"),
     ]);
-    const ending = /process\.exit\(\s*1\s*\)|process\.exitCode\s*=\s*1\b/;
+    const literal = /process\.exit\(\s*1\s*\)|process\.exitCode\s*=\s*1\b/;
+    // A status worked out at run time ends a command too. Each is a command's own verdict, and
+    // allowed only where the file named beside it prints the shape before the status is set.
+    const computed =
+      /process\.exit\(\s*(?![0-9]+\s*\))[^)\s]|process\.exitCode\s*=\s*(?![0-9]+\b)\S/;
+    const verdicts = new Map([
+      [
+        join("cli", "commands", "generate-types.ts"),
+        join("cli", "commands", "component-map-check-command.ts"),
+      ],
+      [join("cli", "commands", "add.ts"), join("cli", "commands", "add.ts")],
+      [
+        join("cli", "commands", "media.ts"),
+        join("cli", "commands", "media.ts"),
+      ],
+      [
+        join("cli", "commands", "create-admin.ts"),
+        join("cli", "commands", "create-admin.ts"),
+      ],
+    ]);
     const found: string[] = [];
     for (const file of sourceFiles(join(SRC, "cli"))) {
       const path = relative(SRC, file);
@@ -217,9 +234,128 @@ describe("the errors a command can end with", () => {
       readFileSync(file, "utf8")
         .split("\n")
         .forEach((line, i) => {
-          if (ending.test(line)) found.push(`${path}:${i + 1}`);
+          if (literal.test(line)) found.push(`${path}:${i + 1}`);
+          else if (computed.test(line) && !verdicts.has(path)) {
+            found.push(`${path}:${i + 1} (a computed status)`);
+          }
         });
     }
     expect(found).toEqual([]);
+    for (const printer of new Set(verdicts.values())) {
+      expect(readFileSync(join(SRC, printer), "utf8"), printer).toMatch(
+        /\bprintCliError\(/
+      );
+    }
+  });
+});
+
+/** The code each `NextlyError` factory gives what it builds. */
+const FACTORY_CODES: Record<string, string> = {
+  invalidInput: "INVALID_INPUT",
+  conflict: "CONFLICT",
+  validation: "VALIDATION_ERROR",
+  serviceUnavailable: "SERVICE_UNAVAILABLE",
+  internal: "INTERNAL_ERROR",
+};
+
+/**
+ * Each `NextlyError` built in `text`, with its code and the `logContext.reason` it is given:
+ * a literal, or the fixed start of a template (`data-loss-${…}`).
+ */
+function constructions(
+  text: string
+): Array<{ code: string; reason?: string; prefix?: string; at: number }> {
+  const found: Array<{
+    code: string;
+    reason?: string;
+    prefix?: string;
+    at: number;
+  }> = [];
+  const start = /new NextlyError\(|NextlyError\.(\w+)\(/g;
+  for (const match of text.matchAll(start)) {
+    // The call's own text: up to the parenthesis that closes it.
+    let depth = 0;
+    let end = match.index + match[0].length - 1;
+    for (; end < text.length; end += 1) {
+      if (text[end] === "(") depth += 1;
+      else if (text[end] === ")" && --depth === 0) break;
+    }
+    const call = text.slice(match.index, end + 1);
+    const code =
+      match[1] === undefined
+        ? /code:\s*"([A-Z][A-Z0-9_]*)"/.exec(call)?.[1]
+        : FACTORY_CODES[match[1]];
+    if (code === undefined) continue;
+    const context = call.slice(Math.max(0, call.indexOf("logContext")));
+    const literal = /\breason:\s*"([^"]+)"/.exec(context)?.[1];
+    const template = /\breason:\s*`([^`$]*)\$\{/.exec(context)?.[1];
+    found.push({
+      code,
+      reason: call.includes("logContext") ? literal : undefined,
+      prefix: call.includes("logContext") ? template : undefined,
+      at: match.index,
+    });
+  }
+  return found;
+}
+
+describe("the reasons a mapping reads", () => {
+  it("every INVALID_INPUT or CONFLICT a command throws carries a reason a mapping reads", () => {
+    // These codes stand for many causes at once, so one without a reason, or with one nothing
+    // maps, ends as UNEXPECTED_ERROR: an ordinary refusal told it was not expected.
+    const unread: string[] = [];
+    let seen = 0;
+    for (const file of sourceFiles(join(SRC, "cli"))) {
+      const path = relative(SRC, file);
+      if (path.startsWith(join("cli", "errors"))) continue;
+      const text = readFileSync(file, "utf8");
+      for (const built of constructions(text)) {
+        if (built.code !== "INVALID_INPUT" && built.code !== "CONFLICT")
+          continue;
+        seen += 1;
+        const read = CLI_ERROR_MAPPINGS.some(
+          m =>
+            m.code === built.code &&
+            m.reason !== undefined &&
+            (m.reason === built.reason ||
+              (built.prefix !== undefined && m.reason.startsWith(built.prefix)))
+        );
+        if (!read) {
+          const line = text.slice(0, built.at).split("\n").length;
+          unread.push(
+            `${path}:${line} ${built.code} reason=${built.reason ?? built.prefix ?? "none"}`
+          );
+        }
+      }
+    }
+    // The scan reaches the throws it reads: the commands throw dozens of these.
+    expect(seen).toBeGreaterThan(10);
+    expect(unread).toEqual([]);
+  });
+
+  it("every reason a mapping reads is one a throw site writes", () => {
+    // A throw site that drops or misspells its reason leaves its mapping reading nothing, and the
+    // error ends as another code; the cases cannot see that, since they build the error themselves.
+    const product = [
+      ...sourceFiles(SRC).filter(
+        file => !file.startsWith(join(SRC, "cli", "errors"))
+      ),
+    ]
+      .map(file => readFileSync(file, "utf8"))
+      .join("\n");
+    const unwritten = [
+      ...new Set(
+        CLI_ERROR_MAPPINGS.flatMap(m =>
+          m.reason === undefined ? [] : [m.reason]
+        )
+      ),
+    ].filter(
+      reason =>
+        !product.includes(`"${reason}"`) &&
+        !product.includes(`\`${reason}\``) &&
+        // A reason made from a template, such as data-loss-${verdict.reason}.
+        !(/^data-loss-/.test(reason) && product.includes("`data-loss-${"))
+    );
+    expect(unwritten).toEqual([]);
   });
 });

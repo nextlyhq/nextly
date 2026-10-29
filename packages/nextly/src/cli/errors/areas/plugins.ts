@@ -14,6 +14,7 @@ import type { NextlyError } from "../../../errors/nextly-error";
 import { CliError, type CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
 import {
+  asSentence,
   contextNames,
   contextNumber,
   contextString,
@@ -109,6 +110,98 @@ const IDENTITY_CHECK =
   "A full uninstall reads each table's identity before and after the plugin's `onUninstall`, so its DOWN migrations never drop a table the hook put in place of the one they were judged against.";
 
 export const PLUGIN_CODES = defineCodes({
+  PLUGIN_ROLLBACK_MODULE_NOT_SHIPPED: {
+    cause:
+      "`nextly migrate:down --plugin` names a module the ledger records as applied that the configured version of the plugin no longer ships.",
+    from: [
+      {
+        code: "INVALID_INPUT",
+        reason: "plugin-module-not-shipped",
+        describe: error => {
+          const [what, ...next] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "A module's DOWN lives in the version of the plugin that shipped it. Nothing was changed.",
+            next:
+              next.join(" ") ||
+              "Reinstall the version that shipped it before rolling it back.",
+          };
+        },
+      },
+    ],
+  },
+  PLUGIN_LIFECYCLE_LOCK_BUSY: {
+    cause:
+      "Another migration held the migrate lock, so a plugin install or uninstall ran nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "plugin-lifecycle-lock-busy",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "Plugins are installed and removed under the same lock as every schema change. Nothing was changed.",
+            next: asSentence(
+              rest.join(" ").replace(/^Nothing was changed — /, "") ||
+                "Run it again once that migration finishes."
+            ),
+          };
+        },
+      },
+    ],
+  },
+  PLUGIN_HOOK_SERVICES_REGISTERED: {
+    cause:
+      "A plugin's install or uninstall hook was not run, because the process already had services registered.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "plugin-hook-services-registered",
+        describe: error => ({
+          what: error.publicMessage,
+          why: "The hook runs with services of its own, and tearing them down afterwards would take the existing ones with them.",
+          next: "Run the plugin command on its own, as `nextly plugins install` or `nextly plugins uninstall`, outside a process that has already started Nextly.",
+        }),
+      },
+    ],
+  },
+  PLUGIN_HOOK_HANDLERS_RUNNING: {
+    cause:
+      "Event handlers a plugin's install or uninstall hook set off were still running when the command's wait ran out.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "plugin-hook-handlers-running",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "Going on while they run could remove tables they are still reading, so the plugin's state was left as it was.",
+            next:
+              rest.join(" ") || "Run it again once what they do can finish.",
+          };
+        },
+      },
+    ],
+  },
+  PLUGIN_NEEDS_MIGRATED_DATABASE: {
+    cause:
+      "A plugin was installed or uninstalled on a database `nextly migrate` has not run on yet.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "database-not-migrated",
+        describe: error => ({
+          what: "This database has not been migrated yet, so no plugin can be installed or uninstalled on it.",
+          why: `It has none of ${contextNames(error, "missing")
+            .map(table => `\`${table}\``)
+            .join(", ")}, which record what each plugin owns.`,
+          next: "Run `nextly migrate`, then run the command again.",
+        }),
+      },
+    ],
+  },
   PLUGIN_NOT_FOUND: {
     cause:
       "The plugin named on the command line is not among the plugins the configuration lists.",

@@ -82,3 +82,12 @@ export function failWithError(
   printCliError(logger, error);
   process.exitCode = 1;
 }
+
+/**
+ * Exits 1 after a `--json` command has printed its one document, which carries the error. The
+ * shape is not printed as well: a caller reading standard output and error together must still
+ * get exactly one JSON document.
+ */
+export function exitAfterJsonError(): never {
+  return process.exit(1);
+}

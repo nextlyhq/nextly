@@ -89,4 +89,16 @@ export const SYNC_CASES = {
         missing: ["comp_hero"],
       },
     }),
+  // As `provisionLocalization` in `cli/commands/dev-build.ts` refuses the sync.
+  LOCALIZATION_NOT_PROVISIONED: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        "Localization could not be brought into step for: posts. Until it succeeds, translations for these entities are either unwritable or unreadable.",
+      logContext: {
+        reason: "localization-not-provisioned",
+        cause: "companion-provisioning-failed",
+        entities: ["posts"],
+      },
+    }),
 } satisfies ErrorCases;

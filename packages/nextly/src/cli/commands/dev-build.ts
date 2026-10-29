@@ -1147,6 +1147,7 @@ export async function ensureLocalizedCompanions(
       reason: "state",
       message: `Localization could not be brought into step for: ${failures.join(", ")}. Until it succeeds, translations for these entities are either unwritable or unreadable.`,
       logContext: {
+        reason: "localization-not-provisioned",
         cause: "companion-provisioning-failed",
         entities: failures,
       },

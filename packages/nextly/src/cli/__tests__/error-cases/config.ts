@@ -110,4 +110,16 @@ export const CONFIG_CASES = {
         cause: "Cannot find package 'esbuild'",
       },
     }),
+  // As `serverProblems` in `domains/workflows/registry.ts` lists it, refused by `buildWorkflowRegistry`.
+  WORKFLOW_CANNOT_ATTACH: () =>
+    NextlyError.validation({
+      errors: [
+        {
+          path: "collections.pages.workflow",
+          code: "workflow_needs_drafts",
+          message:
+            "`editorial` cannot be attached to `pages`: it does not keep drafts: set `status: true` and `versions: { drafts: true }`.",
+        },
+      ],
+    }),
 } satisfies ErrorCases;

@@ -229,6 +229,7 @@ export async function runMigrateCreate(
       publicMessage:
         "--no-transaction writes a blank migration file (with --blank) or a plugin module (with --plugin). A generated migration file is not marked: marking it changes the contents its snapshot was taken over. Put the statements that need to run outside a transaction in a file of their own: nextly migrate:create --blank --no-transaction.",
       statusCode: 400,
+      logContext: { reason: "no-transaction-not-blank" },
     });
   }
 
@@ -713,6 +714,7 @@ async function buildPluginDraft(args: {
         `Singles or field groups, what the hook adds to it is migrated by the APP: \`nextly migrate:create\` ` +
         `in the app writes it, whoever contributed it. Guard the hook with ` +
         `\`schema.getTable("${missing}")\` so it skips the table when compiled for this module.`,
+      logContext: { reason: "plugin-extend-target-outside", target: missing },
     });
   }
 }
@@ -855,7 +857,7 @@ function pluginDefinitionFrom(
         .join(
           ", "
         )}). Point --plugin at a file that exports one, or export it as the default.`,
-      logContext: { entry },
+      logContext: { reason: "plugin-entry-exports-several", entry },
     });
   }
   if (named.length === 1) return named[0][1] as Partial<PluginDefinition>;
@@ -888,6 +890,7 @@ async function loadPluginEntry(
       code: "INVALID_INPUT",
       publicMessage: `The plugin entry ${relative(cwd, entryPath)} exports no definition with a name, so its migrations cannot be attributed.`,
       statusCode: 400,
+      logContext: { reason: "plugin-entry-unnamed" },
     });
   }
   if (typeof definition.schemaVersion !== "number") {
@@ -895,6 +898,7 @@ async function loadPluginEntry(
       code: "INVALID_INPUT",
       publicMessage: `Plugin "${definition.name}" declares no schemaVersion. A plugin needs one before migrations can be generated for it.`,
       statusCode: 400,
+      logContext: { reason: "plugin-schema-version-missing" },
     });
   }
   return definition as GeneratablePlugin;
@@ -957,6 +961,11 @@ async function loadShippedMigrations(
         `Generation stops here rather than treating it as a first generation — doing that would rewrite the barrel and orphan the modules it lists. ` +
         `Fix the barrel (or the module it imports) and run this again.`,
       statusCode: 400,
+      logContext: {
+        reason: "plugin-migrations-barrel-unreadable",
+        barrel: relative(cwd, barrelPath),
+        detail: describeError(error),
+      },
     });
   }
   const shipped = (loaded.mod as { migrations?: PluginMigration[] }).migrations;

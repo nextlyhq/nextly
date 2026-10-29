@@ -6,6 +6,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,16 +43,22 @@ const shop = {
 
 const DIR = "src/types/generated";
 let root: string;
-let lines: { error: string[]; success: string[] };
+let lines: { success: string[] };
+/** What the command printed in the error shape, on standard error, without colour. */
+let printed: string;
 
 function context(): CommandContext {
-  lines = { error: [], success: [] };
+  lines = { success: [] };
+  printed = "";
+  vi.spyOn(console, "error").mockImplementation((...parts: unknown[]) => {
+    printed += stripVTControlCharacters(parts.map(String).join(" ")) + "\n";
+  });
   return {
     logger: {
-      error: vi.fn((line: string) => lines.error.push(line)),
       success: vi.fn((line: string) => lines.success.push(line)),
       info: vi.fn(),
       warn: vi.fn(),
+      getOptions: () => ({ verbose: false, noColor: true }),
     },
   } as unknown as CommandContext;
 }
@@ -69,6 +76,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
   vi.mocked(loadConfig).mockReset();
+  vi.restoreAllMocks();
 });
 
 /** A map registering `paths`, in the shape the generator writes its `registered` object. */
@@ -102,7 +110,7 @@ describe("the check's verdict", () => {
       COMPONENT_MAP_CHECK_EXIT.agrees
     );
     expect(lines.success).toEqual(["Component map: agrees with the config."]);
-    expect(lines.error).toEqual([]);
+    expect(printed).toBe("");
   });
 
   it("exits 1 when it does not, the verdict first, each disagreement, then the fix", async () => {
@@ -110,12 +118,16 @@ describe("the check's verdict", () => {
     expect(await runComponentMapCheck({ cwd: root }, context())).toBe(
       COMPONENT_MAP_CHECK_EXIT.outOfDate
     );
-    expect(lines.error).toEqual([
-      `Component map: OUT OF DATE (${DIR}/${COMPONENT_IMPORT_MAP_FILENAME} and ${DIR}/${COMPONENT_PATHS_FILENAME}).`,
-      '- missing: plugin "@acme/shop", widget "acme/revenue": @acme/shop/admin#Revenue',
-      "- no longer declared: @gone/old/admin#Chart",
-      "Run `npx nextly generate:types` and commit both files.",
-    ]);
+    expect(printed).toBe(
+      [
+        `✗ The component map is out of date (${DIR}/${COMPONENT_IMPORT_MAP_FILENAME} and ${DIR}/${COMPONENT_PATHS_FILENAME}).`,
+        '  Why:  - missing: plugin "@acme/shop", widget "acme/revenue": @acme/shop/admin#Revenue',
+        "        - no longer declared: @gone/old/admin#Chart",
+        "  Next: Run `npx nextly generate:types` and commit both files.",
+        "  Docs: https://nextlyhq.com/docs/cli/errors/component-map-out-of-date  (COMPONENT_MAP_OUT_OF_DATE)",
+        "",
+      ].join("\n")
+    );
   });
 
   it("exits 1 when the map checks its widgets against another config than the one loaded", async () => {
@@ -131,7 +143,7 @@ describe("the check's verdict", () => {
     expect(await runComponentMapCheck({ cwd: root }, context())).toBe(
       COMPONENT_MAP_CHECK_EXIT.outOfDate
     );
-    expect(lines.error).toContain(
+    expect(printed).toContain(
       `- checks its widgets against no config, not ../../../nextly.config: ${DIR}/${COMPONENT_IMPORT_MAP_FILENAME}`
     );
   });
@@ -141,9 +153,9 @@ describe("the check's verdict", () => {
     expect(await runComponentMapCheck({ cwd: root }, context())).toBe(
       COMPONENT_MAP_CHECK_EXIT.couldNotCheck
     );
-    expect(lines.error).toHaveLength(1);
-    expect(lines.error[0]).toMatch(/^Component map: could not be checked\. /);
-    expect(lines.error[0]).toContain("config threw");
+    // The reason it could not ask, in the error shape, with the error's own words.
+    expect(printed).toMatch(/^✗ /);
+    expect(printed).toContain("  Why:  config threw");
   });
 
   it("writes nothing, even where it finds the map out of date", async () => {
@@ -156,8 +168,6 @@ describe("the check's verdict", () => {
     expect(await readdir(join(root, DIR))).toEqual([
       COMPONENT_IMPORT_MAP_FILENAME,
     ]);
-    expect(lines.error).toContain(
-      `- absent: ${DIR}/${COMPONENT_PATHS_FILENAME}`
-    );
+    expect(printed).toContain(`- absent: ${DIR}/${COMPONENT_PATHS_FILENAME}`);
   });
 });

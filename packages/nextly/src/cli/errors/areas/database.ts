@@ -28,6 +28,10 @@ export const DATABASE_CODES = defineCodes({
   DATABASE_DIALECT_INVALID: {
     cause: "`DB_DIALECT` names a database Nextly does not support.",
   },
+  DATABASE_VERSION_UNSUPPORTED: {
+    cause:
+      "The database server is older than the oldest version Nextly supports for its dialect.",
+  },
   DATABASE_ADAPTER_MISSING: {
     cause:
       "The database adapter package for the dialect `DATABASE_URL` names is not installed.",
@@ -94,18 +98,57 @@ const ADAPTER_PACKAGES: Record<SupportedDialect, string> = {
 };
 
 /**
+ * The versions an adapter reports when the server is below its minimum: its error has
+ * `kind: "unsupported_version"` with the version found and the one required. Read by shape, as
+ * it crosses the package boundary.
+ */
+function unsupportedVersion(
+  error: unknown
+): { detected: string; required: string } | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const fields = error as {
+    kind?: unknown;
+    detectedVersion?: unknown;
+    requiredVersion?: unknown;
+  };
+  if (fields.kind !== "unsupported_version") return undefined;
+  return {
+    detected:
+      typeof fields.detectedVersion === "string"
+        ? fields.detectedVersion
+        : "unknown",
+    required:
+      typeof fields.requiredVersion === "string"
+        ? fields.requiredVersion
+        : "the supported minimum",
+  };
+}
+
+/**
  * A failure to open the database, as the code for what failed.
  *
  * Every command opens its database through `createCliAdapter`, so this one place tells apart the
- * three things that fail there: an error that already has its code (a PostgreSQL schema Nextly
- * cannot use) keeps it; the adapter's package not being installed, which the factory reports as
- * "Failed to load database adapter"; and the connection itself.
+ * what fails there: an error that already has its code (a PostgreSQL schema Nextly cannot use)
+ * keeps it; a server older than Nextly supports; the adapter's package not being installed,
+ * which the factory reports as "Failed to load database adapter"; and the connection itself.
  */
 export function connectionFailure(
   dialect: SupportedDialect,
   error: unknown
 ): NextlyError {
   if (NextlyError.is(error)) return error;
+  const version = unsupportedVersion(error);
+  if (version !== undefined) {
+    return new CliError(
+      "DATABASE_VERSION_UNSUPPORTED",
+      {
+        what: `The ${DIALECT_NAMES[dialect]} server is version ${version.detected}, older than Nextly supports.`,
+        why: `Nextly needs ${DIALECT_NAMES[dialect]} ${version.required} or later.`,
+        next: `Upgrade the ${DIALECT_NAMES[dialect]} server, or point \`DATABASE_URL\` at one that is ${version.required} or later.`,
+      },
+      error instanceof Error ? error : undefined
+    );
+  }
   if (
     error instanceof Error &&
     error.message.startsWith("Failed to load database adapter")

@@ -481,6 +481,20 @@ function stopWatching(): void {
   watcherGeneration += 1;
 }
 
+/**
+ * The thrown value as the error's cause. An error raised in another realm, as Node's module
+ * loader raises a missing package, fails `instanceof Error` while being one, and dropping it
+ * would lose the code that says what failed.
+ */
+function asCause(error: unknown): Error | undefined {
+  if (error instanceof Error) return error;
+  return typeof error === "object" &&
+    error !== null &&
+    typeof (error as { message?: unknown }).message === "string"
+    ? (error as Error)
+    : undefined;
+}
+
 async function loadConfigInternal(
   options: LoadConfigOptions
 ): Promise<LoadConfigResult> {
@@ -631,7 +645,7 @@ async function loadConfigInternal(
                 pluginName: plugin.name,
                 cause: describeError(error),
               },
-              cause: error instanceof Error ? error : undefined,
+              cause: asCause(error),
             });
           }
         }
@@ -766,7 +780,7 @@ async function loadConfigInternal(
         reason: "load-error",
         cause: describeError(error),
       },
-      cause: error instanceof Error ? error : undefined,
+      cause: asCause(error),
     });
   }
 }

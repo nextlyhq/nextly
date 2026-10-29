@@ -1,0 +1,23 @@
+---
+title: PLUGIN_MIGRATIONS_BARREL_UNREADABLE
+description: "The plugin's existing migrations barrel could not be loaded, so `nextly migrate:create` stopped rather than rewrite it."
+---
+
+## Cause
+
+The plugin's existing migrations barrel could not be loaded, so `nextly migrate:create` stopped rather than rewrite it.
+
+Before it adds a module, `nextly migrate:create --plugin` reads the plugin's existing migrations barrel, the file that lists every module it ships. Treating a barrel that fails to load as a first generation would rewrite it and orphan the modules it lists, so the command stops instead. The Why line is the load's own error.
+
+## Fix
+
+Fix the barrel, or the module it imports that fails to load, then run the command again.
+
+## Example
+
+```text
+✗ The plugin's migrations barrel at `src/migrations/index.ts` could not be loaded.
+  Why:  Cannot find module './0002_add_redirects' imported from src/migrations/index.ts. Generating anyway would rewrite the barrel and orphan the modules it lists.
+  Next: Fix the barrel, or the module it imports, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migrations-barrel-unreadable  (PLUGIN_MIGRATIONS_BARREL_UNREADABLE)
+```

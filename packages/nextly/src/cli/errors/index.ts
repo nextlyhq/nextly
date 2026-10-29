@@ -11,6 +11,7 @@ export { dataLossRefusal } from "./areas/migrations";
 export { toCliError } from "./from-thrown";
 export { formatCliError } from "./render";
 export {
+  exitAfterJsonError,
   exitWithError,
   failWithError,
   printCliError,
