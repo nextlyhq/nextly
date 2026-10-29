@@ -562,9 +562,12 @@ export class RoleMutationService extends BaseService {
               .values(roleInheritanceData);
           }
 
-          const rolePermRows = await executor.query.rolePermissions.findMany({
-            where: { roleId: id },
-          });
+          // A plain select: the transaction's query builder carries no
+          // relational query API.
+          const rolePermRows = await executor
+            .select({ permissionId: this.tables.rolePermissions.permissionId })
+            .from(this.tables.rolePermissions)
+            .where(eq(this.tables.rolePermissions.roleId, id));
           const assignedPermIds = (
             rolePermRows as Array<{ permissionId: unknown }>
           ).map(rp => String(rp.permissionId));
