@@ -7,7 +7,8 @@
  * shipped ones to it, so a button wired to anything else fails here.
  */
 import { readdirSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createElement, type ComponentType } from "react";
@@ -28,8 +29,10 @@ function boundaryFiles(dir: string): string[] {
   });
 }
 
+// Named with forward slashes on every platform, so the names compare equal to
+// the paths below on Windows too, where `relative` answers with backslashes.
 const boundaries = boundaryFiles(TEMPLATES).map(path =>
-  relative(TEMPLATES, path)
+  relative(TEMPLATES, path).split(sep).join("/")
 );
 
 type Boundary = ComponentType<{ error: Error; retry: () => void }>;
@@ -55,9 +58,12 @@ describe("template error boundaries", () => {
     // Each boundary logs the error it was given, and `global-error` renders
     // its own <html>, which React reports inside a test container.
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const { default: Boundary } = (await import(join(TEMPLATES, file))) as {
-      default: Boundary;
-    };
+    // Imported by file URL: a Windows path such as `D:\...` is not a module
+    // specifier. node:url's own `pathToFileURL`, which jsdom's URL does not
+    // replace, and its `href`, a string every loader accepts.
+    const { default: Boundary } = (await import(
+      pathToFileURL(join(TEMPLATES, file)).href
+    )) as { default: Boundary };
     const retry = vi.fn();
 
     render(
