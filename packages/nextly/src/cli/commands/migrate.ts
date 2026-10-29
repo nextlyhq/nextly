@@ -795,18 +795,20 @@ export async function previewMigrate(args: {
   const pendingModules = modules.filter(module => !module.recorded);
 
   const appStep = appStepAfter(args.step, pendingModules.length);
+  // The files a real run with this step applies, a move out of translation run whole included.
   const pendingFiles =
     appStep === 0
       ? []
-      : (
-          await findPendingFiles(
+      : filesWithinStep(
+          await listMigrationFiles(
             adapter,
             db,
             dialect,
             args.migrationsDir,
             logger
-          )
-        ).slice(0, appStep);
+          ),
+          appStep
+        ).run;
 
   logger.newline();
   logger.keyValue(
@@ -1642,19 +1644,35 @@ export async function findPendingFiles(
   migrationsDir: string,
   logger: CommandContext["logger"]
 ): Promise<ParsedMigration[]> {
+  return (
+    await listMigrationFiles(adapter, db, dialect, migrationsDir, logger)
+  ).flatMap(({ file, applied }) => (applied ? [] : [file]));
+}
+
+/** The app's migration files in run order, each with whether the ledger records it applied. */
+async function listMigrationFiles(
+  adapter: CLIDatabaseAdapter,
+  db: unknown,
+  dialect: SupportedDialect,
+  migrationsDir: string,
+  logger: CommandContext["logger"]
+): Promise<{ file: ParsedMigration; applied: boolean }[]> {
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
   const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
-  if (!hasLedger) return all;
+  if (!hasLedger) return all.map(file => ({ file, applied: false }));
 
   const repo = new SchemaEventsRepository(db, dialect);
-  const pending: ParsedMigration[] = [];
-  for (const m of all) {
-    if (!(await repo.isFileApplied(`${m.name}.sql`))) pending.push(m);
+  const listed: { file: ParsedMigration; applied: boolean }[] = [];
+  for (const file of all) {
+    listed.push({
+      file,
+      applied: await repo.isFileApplied(`${file.name}.sql`),
+    });
   }
-  return pending;
+  return listed;
 }
 
 async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
@@ -1871,34 +1889,33 @@ export async function runFileMigrations(args: {
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
   let beforeContributions: Record<string, ContributedElements> = {};
   let applied = 0;
-  let remaining =
-    args.step && args.step > 0 ? args.step : Number.POSITIVE_INFINITY;
-  // The moves out of translation whose archive file has run and whose shared file has not. A
-  // `--step` budget never ends inside one: between its main file and its shared file the main
-  // column is there and empty, so an app storing the field there could write a value the shared
-  // file's copy then overwrites.
-  const moves = fieldLeavesMoves(all);
-  let toldContinuing = false;
+  const listed: { file: ParsedMigration; applied: boolean }[] = [];
+  for (const file of all) {
+    listed.push({
+      file,
+      applied: await repo.isFileApplied(`${file.name}.sql`),
+    });
+  }
+  const within = filesWithinStep(listed, args.step);
+  const runs = new Set(within.run);
 
-  for (const m of all) {
+  for (const [i, m] of all.entries()) {
     const filename = `${m.name}.sql`;
     const targetFile = await loadTargetSnapshot(metaDir, m.name);
     const target = targetFile?.snapshot ?? null;
 
-    if (await repo.isFileApplied(filename)) {
+    if (listed[i]?.applied === true) {
       // Advance the baseline past applied files.
       if (targetFile) {
         before = targetFile.snapshot;
         beforeContributions = targetFile.contributions ?? {};
       }
-      moves.ran(m);
       continue;
     }
-    if (remaining <= 0 && !moves.open()) break;
-    if (remaining <= 0 && !toldContinuing) {
-      toldContinuing = true;
+    if (!runs.has(m)) break;
+    if (applied === within.budget && within.continued !== undefined) {
       logger.info(
-        `--step ends inside a move out of translation (${moves.describe()}): running on through its ` +
+        `--step ends inside a move out of translation (${within.continued}): running on through its ` +
           "shared file, so nothing can write between its main and shared files."
       );
     }
@@ -1986,8 +2003,6 @@ export async function runFileMigrations(args: {
         throw err;
       }
       applied++;
-      remaining--;
-      moves.ran(m);
       logger.success(`Applied ${filename}`);
       continue;
     }
@@ -2045,12 +2060,40 @@ export async function runFileMigrations(args: {
     before = target;
     beforeContributions = targetFile?.contributions ?? {};
     applied++;
-    remaining--;
-    moves.ran(m);
     logger.success(`Applied ${filename}`);
   }
 
   return applied;
+}
+
+/**
+ * The pending files a run with `step` applies, in run order: `step` of them, or every pending file
+ * when there is no step, and past the budget on through the shared file of a move out of
+ * translation it would otherwise end inside (`fieldLeavesMoves`). Between such a move's main file
+ * and its shared file the main column is there and empty, so an app already storing the field there
+ * could write a value the shared file's copy then replaces. `continued` names the moves the run goes
+ * on for. The run and its dry-run preview both read it, so the preview lists what the run does.
+ */
+function filesWithinStep<T extends Pick<ParsedMigration, "localization">>(
+  files: readonly { file: T; applied: boolean }[],
+  step: number | undefined
+): { run: T[]; budget: number; continued: string | undefined } {
+  const moves = fieldLeavesMoves(files.map(f => f.file));
+  const budget =
+    step !== undefined && step > 0 ? step : Number.POSITIVE_INFINITY;
+  const run: T[] = [];
+  let continued: string | undefined;
+  for (const { file, applied } of files) {
+    if (!applied) {
+      if (run.length >= budget) {
+        if (!moves.open()) break;
+        continued ??= moves.describe();
+      }
+      run.push(file);
+    }
+    moves.ran(file);
+  }
+  return { run, budget, continued };
 }
 
 /**

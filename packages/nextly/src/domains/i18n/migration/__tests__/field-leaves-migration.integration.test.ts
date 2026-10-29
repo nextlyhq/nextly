@@ -330,7 +330,7 @@ for (const entry of DIALECTS) {
         await migrateCreate(translated);
         await migrateCreate(shared);
 
-        // The first run's main file and companion file, and the archive file: none inside a move.
+        // The first run's main file, then its companion file: neither is inside a move.
         expect(await migrate(1)).toBe(1);
         expect(await migrate(1)).toBe(1);
       });
@@ -395,6 +395,42 @@ for (const entry of DIALECTS) {
           `ALTER TABLE ${q(companion)} DROP COLUMN ${q("body")}`
         );
         expect(await archived()).toEqual([]);
+        expect(await columnsOf(companion)).toContain("body");
+      });
+
+      it("lists the whole move out of translation in a dry run with --step", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        await migrateCreate(shared);
+        const printed: string[] = [];
+        const capture = new Proxy(
+          {},
+          {
+            get:
+              () =>
+              (...parts: unknown[]) => {
+                printed.push(parts.map(String).join(" "));
+              },
+          }
+        ) as Parameters<typeof previewMigrate>[0]["logger"];
+
+        // As `nextly migrate --dry-run --step 2`: what a real `--step 2` run applies.
+        await previewMigrate({
+          adapter: adapter as never,
+          db: adapter.getDrizzle(),
+          dialect,
+          migrationsDir,
+          plugins: [],
+          logger: capture,
+          step: 2,
+        });
+
+        const output = printed.join("\n");
+        expect(output).toMatch(/3 migrations/);
+        expect(output).toContain(
+          `ALTER TABLE ${q(companion)} DROP COLUMN ${q("body")}`
+        );
         expect(await columnsOf(companion)).toContain("body");
       });
 
