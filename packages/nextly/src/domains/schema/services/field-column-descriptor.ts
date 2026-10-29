@@ -40,7 +40,10 @@ import {
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
-import { getFieldType } from "../field-types/field-type-registry";
+import {
+  getFieldType,
+  isPluginFieldTypeOnSurface,
+} from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
 
@@ -1074,4 +1077,220 @@ export function renderSystemColumnSql(
   if (!column.nullable) clauses.push("NOT NULL");
 
   return clauses.join(" ");
+}
+
+// ============================================================================
+// User fields (`user_ext`)
+// ============================================================================
+
+/** What the user-extension builder reads from a user field to choose its column. */
+interface UserFieldFacts {
+  name: string;
+  nullable: boolean;
+  dialect: SupportedDialect;
+  /** The stated width, where the field states a positive one. */
+  maxLength: number | undefined;
+  unique: boolean;
+}
+
+/** The facts the user-extension builder reads from a user field on this dialect. */
+function userFieldFacts(
+  field: FieldDefinition,
+  dialect: SupportedDialect
+): UserFieldFacts {
+  const declared = field as { maxLength?: unknown; unique?: unknown };
+  return {
+    name: toSnakeCase(field.name),
+    // Required is enforced by the column itself here: the builder writes NOT NULL for it.
+    nullable: field.required !== true,
+    dialect,
+    maxLength:
+      typeof declared.maxLength === "number" && declared.maxLength > 0
+        ? declared.maxLength
+        : undefined,
+    unique: declared.unique === true,
+  };
+}
+
+/** A bounded text column, which SQLite has no bounded type for and so holds as `text`. */
+function userVarcharColumn(
+  { name, nullable, dialect }: UserFieldFacts,
+  length: number
+): ColumnDescriptor {
+  return dialect === "sqlite"
+    ? { name, dialectType: "text", nullable, kind: "longText" }
+    : {
+        name,
+        dialectType: `varchar(${length})`,
+        length,
+        nullable,
+        kind: "shortText",
+      };
+}
+
+/** An unbounded text column. */
+function userLongTextColumn({
+  name,
+  nullable,
+}: UserFieldFacts): ColumnDescriptor {
+  return { name, dialectType: "text", nullable, kind: "longText" };
+}
+
+/**
+ * A text value's column. It is bounded by a stated width, and on MySQL a unique one is bounded at
+ * 255 because MySQL cannot index an unbounded string; otherwise it is unbounded.
+ */
+function userTextColumn(facts: UserFieldFacts): ColumnDescriptor {
+  if (facts.maxLength !== undefined) {
+    return userVarcharColumn(facts, facts.maxLength);
+  }
+  if (facts.dialect === "mysql" && facts.unique) {
+    return userVarcharColumn(facts, 255);
+  }
+  return userLongTextColumn(facts);
+}
+
+/** A number's column: `DOUBLE` on MySQL and `REAL` on the other two. */
+function userFloatColumn({
+  name,
+  nullable,
+  dialect,
+}: UserFieldFacts): ColumnDescriptor {
+  return dialect === "mysql"
+    ? { name, dialectType: "double", nullable, kind: "double" }
+    : {
+        name,
+        dialectType: renderDialectType("real", dialect, {}),
+        nullable,
+        kind: "real",
+      };
+}
+
+/** A checkbox's column. */
+function userBooleanColumn({
+  name,
+  nullable,
+  dialect,
+}: UserFieldFacts): ColumnDescriptor {
+  return {
+    name,
+    dialectType: renderDialectType("boolean", dialect, {}),
+    nullable,
+    kind: "boolean",
+  };
+}
+
+/** The timestamp type the user-extension builder writes on each dialect. */
+const USER_TIMESTAMP_TYPES: Record<SupportedDialect, string> = {
+  postgresql: "timestamptz",
+  mysql: "datetime",
+  sqlite: "integer",
+};
+
+/**
+ * A date's column. PostgreSQL keeps the time zone and MySQL uses DATETIME, unlike the collection
+ * builders' date.
+ */
+function userTimestampColumn({
+  name,
+  nullable,
+  dialect,
+}: UserFieldFacts): ColumnDescriptor {
+  return {
+    name,
+    dialectType: USER_TIMESTAMP_TYPES[dialect],
+    nullable,
+    kind: "timestamp",
+  };
+}
+
+/** A JSON column, for a value that is a list. */
+function userJsonColumn({
+  name,
+  nullable,
+  dialect,
+}: UserFieldFacts): ColumnDescriptor {
+  return {
+    name,
+    dialectType: renderDialectType("json", dialect, {}),
+    nullable,
+    kind: "json",
+  };
+}
+
+/** The column each built-in user field type gets, keyed by the field's type. */
+const USER_BUILT_IN_COLUMNS = new Map<
+  string,
+  (facts: UserFieldFacts, field: FieldDefinition) => ColumnDescriptor
+>([
+  // The users surface's own text types, which the canonical field union leaves out.
+  ["url", facts => userVarcharColumn(facts, facts.maxLength ?? 255)],
+  ["phone", facts => userVarcharColumn(facts, facts.maxLength ?? 255)],
+  ["text", userTextColumn],
+  ["textarea", userLongTextColumn],
+  ["email", facts => userVarcharColumn(facts, 255)],
+  ["radio", facts => userVarcharColumn(facts, 255)],
+  ["number", userFloatColumn],
+  ["checkbox", userBooleanColumn],
+  ["date", userTimestampColumn],
+  [
+    "select",
+    (facts, field) =>
+      field.hasMany ? userJsonColumn(facts) : userVarcharColumn(facts, 255),
+  ],
+]);
+
+/** The column a plugin type on the users surface gets, keyed by its declared storage primitive. */
+const USER_STORAGE_COLUMNS = new Map<
+  string,
+  (facts: UserFieldFacts) => ColumnDescriptor
+>([
+  ["text", userTextColumn],
+  ["longText", userLongTextColumn],
+  ["number", userFloatColumn],
+  ["boolean", userBooleanColumn],
+  ["timestamp", userTimestampColumn],
+  ["json", userJsonColumn],
+]);
+
+/**
+ * The column a plugin field type gets in `user_ext`, or null where it gets none.
+ *
+ * A plugin type has a column only when it opted into the users surface, and then it is stored as
+ * its declared primitive. Every other type gets no column from this builder.
+ */
+function getUserPluginFieldColumn(
+  type: string,
+  facts: UserFieldFacts
+): ColumnDescriptor | null {
+  if (!isPluginFieldTypeOnSurface(type, "users")) return null;
+  const storage = getFieldType(type)?.storage;
+  const describe =
+    storage === undefined ? undefined : USER_STORAGE_COLUMNS.get(storage);
+  return describe === undefined ? null : describe(facts);
+}
+
+/**
+ * The column the user-extension builder creates for a user field, or null when it creates none.
+ *
+ * That builder (`UserExtSchemaService`) maps types with its own table and never asked this module,
+ * so the columns it has created follow its rules, not the collection builders'. Describing them
+ * with any other origin would report every number and date in `user_ext` as a type change on a
+ * column nobody touched. These rules restate that builder exactly; the test beside this module
+ * holds them to the builder's own CREATE TABLE on every dialect.
+ *
+ * Its `kind` is the builder family that matches the rendered type on this dialect, which is why a
+ * number is `real` on PostgreSQL and SQLite but `double` on MySQL: the builder writes `REAL` on the
+ * first two and `DOUBLE` on the third.
+ */
+export function getUserFieldColumnDescriptor(
+  field: FieldDefinition,
+  dialect: SupportedDialect
+): ColumnDescriptor | null {
+  const facts = userFieldFacts(field, dialect);
+  const type = String(field.type);
+  const builtIn = USER_BUILT_IN_COLUMNS.get(type);
+  return builtIn !== undefined
+    ? builtIn(facts, field)
+    : getUserPluginFieldColumn(type, facts);
 }
