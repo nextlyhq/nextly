@@ -65,4 +65,16 @@ describe("useRoleCopy", () => {
     const { result } = renderHook(() => useCopying());
     expect(result.current.copy.copying).toBe(false);
   });
+
+  it("holds nothing for a copy that names no role", () => {
+    // An address with an empty `copyFrom` names nothing to load, so the form
+    // is not held waiting for it.
+    window.history.replaceState(
+      {},
+      "",
+      "/admin/security/roles/create?copyFrom="
+    );
+    const { result } = renderHook(() => useCopying());
+    expect(result.current.copy.copying).toBe(false);
+  });
 });
