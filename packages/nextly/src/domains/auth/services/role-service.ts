@@ -76,41 +76,16 @@ export class RoleService extends BaseService {
 
   /**
    * List all roles with pagination, search, and filtering.
+   * Typed as the query service's own list, which it hands back unchanged:
+   * one definition of what a listed role carries.
    *
    * @param options - Pagination, search, filter, and sort options
    * @returns Paginated list of roles with metadata
    * @throws NextlyError on DB errors.
    */
-  listRoles(options?: {
-    page?: number;
-    limit?: number;
-    search?: string;
-    isSystem?: boolean;
-    levelMin?: number;
-    levelMax?: number;
-    sortBy?: "name" | "level";
-    sortOrder?: "asc" | "desc";
-    includePermissions?: boolean;
-  }): Promise<{
-    data: Array<{
-      id: string;
-      name: string;
-      slug: string;
-      description: string | null;
-      level: number;
-      isSystem: boolean;
-      /** Whether it may be given to someone or inherited. */
-      assignable: boolean;
-      /** Which built-in role it is, if one. */
-      builtIn?: BuiltInRole;
-    }>;
-    meta: {
-      total: number;
-      page: number;
-      limit: number;
-      totalPages: number;
-    };
-  }> {
+  listRoles(
+    options?: Parameters<RoleQueryService["listRoles"]>[0]
+  ): ReturnType<RoleQueryService["listRoles"]> {
     return this.queryService.listRoles(options);
   }
 
