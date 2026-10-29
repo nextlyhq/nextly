@@ -25,7 +25,8 @@ import {
 import { defineCollection, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import { container } from "../../../di/container";
-import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { decide } from "../../../auth/access/decide";
+import { actorForUser } from "../../../auth/access/resolve-actor";
 import {
   refreshEndpointPresence,
   setWebhookAuditEnabled,
@@ -273,22 +274,21 @@ describePg(
             }),
           ],
         });
-        const rbac = handle.getService<RBACAccessControlService>(
-          "rbacAccessControlService"
-        );
-
         // Judge a publish transition from INSIDE a caller-owned transaction,
-        // passing the transaction's executor. The RBAC reads run on that
-        // connection; a pooled read would block forever on the second checkout.
+        // reading the user with the transaction's executor, as a gate inside
+        // one does. The role and grant reads run on that connection; a pooled
+        // read would block forever on the second checkout.
         const allowed = await withTimeout(
-          handle.adapter.transaction(tx =>
-            rbac.checkAccess({
-              userId: "editor",
-              operation: "publish",
-              resource: RBAC_SLUG,
+          handle.adapter.transaction(async tx => {
+            const actor = await actorForUser("editor", {
               executor: tx.getDrizzle(),
-            })
-          ),
+            });
+            const decision = await decide(actor, "publish", {
+              kind: "collection",
+              slug: RBAC_SLUG,
+            });
+            return decision.allowed;
+          }),
           15_000
         );
 
