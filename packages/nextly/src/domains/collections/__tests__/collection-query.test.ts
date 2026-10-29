@@ -604,6 +604,8 @@ describe("CollectionEntryService — Query Contracts", () => {
         targetPolicies: expect.any(Map),
         targetCompanions: expect.any(Map),
         targetVerdicts: expect.any(Map),
+        // Which of a target's rows its read rule's filter matched, per target.
+        targetRuleMatches: expect.any(Map),
       });
     });
 
@@ -625,6 +627,8 @@ describe("CollectionEntryService — Query Contracts", () => {
         targetPolicies: expect.any(Map),
         targetCompanions: expect.any(Map),
         targetVerdicts: expect.any(Map),
+        // Which of a target's rows its read rule's filter matched, per target.
+        targetRuleMatches: expect.any(Map),
       });
     });
 

@@ -3,8 +3,16 @@
  * in `registerServices()`, which both boots reach: `getNextly()`, and a route
  * handler's request-path boot for an app that never calls it. The installed
  * versions are the one thing faked, and the app directory they are read from
- * is the one the boot names. One file for both, since each boot loads
- * the whole service registry.
+ * is the one the boot names. One file for both.
+ *
+ * The boots are real up to the refusal. What lies past it is mocked empty, so
+ * this file stays under the module budget's heavy line: what a registration
+ * does once the gate passes (the service registrations, the plugins' contexts,
+ * the extension schema's publish and the code-first collections' sync), the
+ * dispatcher that serves a request once services are up, and the config
+ * reload, which runs on a change. An empty mock has no exports, so a boot that
+ * reached any of them before the gate would fail on Vitest's missing-export
+ * error rather than the refusal.
  */
 import { resolve } from "node:path";
 
@@ -29,6 +37,13 @@ vi.mock("../shared/lib/installed-package-version", () => ({
     return "19.3.1";
   },
 }));
+
+vi.mock("../di/registrations", () => ({}));
+vi.mock("../plugins/plugin-context", () => ({}));
+vi.mock("../domains/schema/extension/publish", () => ({}));
+vi.mock("../domains/collections/services/collection-sync-service", () => ({}));
+vi.mock("../dispatcher/dispatcher", () => ({}));
+vi.mock("../init/reload-config", () => ({}));
 
 const { getNextly } = await import("../init");
 const { createDynamicHandlers } = await import("../routeHandler");

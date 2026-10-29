@@ -20,7 +20,16 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { date, defineCollection, text } from "../../../config";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
+import {
+  date,
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  relationship,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -30,6 +39,12 @@ import {
 // own collection slugs.
 const EVENTS = "rulefilter_localized_events";
 const NOTES = "rulefilter_localized_notes";
+// A collection, a Single and a component that each point at a note, so each
+// populates it through the note's rule.
+const PINS = "rulefilter_localized_pins";
+const BOARD = "rulefilter_localized_board";
+const CARD = "rulefilter_localized_card";
+const SHELVES = "rulefilter_localized_shelves";
 
 /** A read rule answering `value`, which the rule type does not allow yet. */
 const answering = (value: unknown) => () => value as boolean;
@@ -42,6 +57,9 @@ afterEach(async () => {
 
 async function boot(): Promise<TestNextly> {
   current = await createTestNextly({
+    // The cases read as a visitor, judged by the Public role a real boot
+    // makes, which reads each target whose rule answers `true`.
+    seedPublic: true,
     localization: { locales: ["en", "fr"], defaultLocale: "en" },
     collections: [
       defineCollection({
@@ -62,8 +80,34 @@ async function boot(): Promise<TestNextly> {
           text({ name: "secret", localized: true }),
         ],
       }),
+      defineCollection({
+        slug: PINS,
+        access: { read: () => true },
+        fields: [relationship({ name: "note", relationTo: NOTES })],
+      }),
+      defineCollection({
+        slug: SHELVES,
+        access: { read: () => true },
+        fields: [fieldGroup({ name: "card", component: CARD })],
+      }),
+    ],
+    fieldGroups: [
+      defineFieldGroup({
+        slug: CARD,
+        fields: [relationship({ name: "note", relationTo: NOTES })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: BOARD,
+        access: { read: () => true },
+        fields: [relationship({ name: "note", relationTo: NOTES })],
+      }),
     ],
   });
+  // Granted as a site admin would: these rules answer a filter, so boot
+  // grants Public no read of them, and the filter decides what is shown.
+  await grantPublic(current, [`read-${EVENTS}`, `read-${NOTES}`]);
   return current;
 }
 
@@ -185,6 +229,92 @@ describe("a read rule's filter on a field the read may show from a fallback lang
     expect(await byId(t, NOTES, withEnglishSecret, frenchFallingBack)).not.toBe(
       "english-secret"
     );
+  });
+
+  /** The id a populated relation holds, whether populated or withheld. */
+  const populatedId = (relation: unknown) =>
+    typeof relation === "string"
+      ? { withheld: relation }
+      : { populated: (relation as { id?: unknown } | null)?.id };
+
+  it("withholds such an entry where a read populates it", async () => {
+    const t = await boot();
+    const { withEnglishSecret, withoutSecret } = await seed(t);
+    const pinned = async (note: string) => {
+      const pin = await t.nextly.create({ collection: PINS, data: { note } });
+      const read = (await t.nextly.findByID({
+        collection: PINS,
+        id: idOf(pin),
+        depth: 1,
+        ...frenchFallingBack,
+        ...asVisitor,
+      })) as Record<string, unknown>;
+      return populatedId(read.note);
+    };
+    expect(await pinned(withoutSecret)).toEqual({ populated: withoutSecret });
+    // Withheld as a row the caller may not read is: the stored id, not the row.
+    expect(await pinned(withEnglishSecret)).toEqual({
+      withheld: withEnglishSecret,
+    });
+  });
+
+  it("withholds such an entry where a Single populates it", async () => {
+    const t = await boot();
+    const { withEnglishSecret, withoutSecret } = await seed(t);
+    const onBoard = async (note: string) => {
+      await t.nextly.updateSingle({ slug: BOARD, data: { note } } as never);
+      const read = (await t.nextly.findSingle({
+        slug: BOARD,
+        depth: 1,
+        ...frenchFallingBack,
+        ...asVisitor,
+      } as never)) as Record<string, unknown>;
+      return populatedId(read.note);
+    };
+    expect(await onBoard(withoutSecret)).toEqual({ populated: withoutSecret });
+    expect(await onBoard(withEnglishSecret)).toEqual({
+      withheld: withEnglishSecret,
+    });
+  });
+
+  it("withholds such an entry where a component populates it", async () => {
+    const t = await boot();
+    const { withEnglishSecret, withoutSecret } = await seed(t);
+    // A component is a level of its own, so its relationship populates one
+    // level below the shelf: at depth 1 the note stays an id for every caller.
+    const throughComponent = { depth: 2 } as const;
+    const shelved = async (note: string) => {
+      const shelf = await t.nextly.create({
+        collection: SHELVES,
+        data: { card: { note } },
+      });
+      const read = (await t.nextly.findByID({
+        collection: SHELVES,
+        id: idOf(shelf),
+        ...throughComponent,
+        ...frenchFallingBack,
+        ...asVisitor,
+      })) as { card?: { note?: unknown } };
+      return populatedId(read.card?.note);
+    };
+    // The control: read with trust, the component populates its note.
+    const trustedShelf = await t.nextly.create({
+      collection: SHELVES,
+      data: { card: { note: withEnglishSecret } },
+    });
+    const trusted = (await t.nextly.findByID({
+      collection: SHELVES,
+      id: idOf(trustedShelf),
+      ...throughComponent,
+      ...frenchFallingBack,
+    })) as { card?: { note?: unknown } };
+    expect(populatedId(trusted.card?.note)).toEqual({
+      populated: withEnglishSecret,
+    });
+    expect(await shelved(withoutSecret)).toEqual({ populated: withoutSecret });
+    expect(await shelved(withEnglishSecret)).toEqual({
+      withheld: withEnglishSecret,
+    });
   });
 
   it("judges a read with no fallback in its own language alone", async () => {

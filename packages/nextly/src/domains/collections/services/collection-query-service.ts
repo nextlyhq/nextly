@@ -33,11 +33,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { readsAsVisitor } from "../../../auth/access/resolve-actor";
-import {
-  FILTER_NAMES_A_COMPONENT_FIELD,
-  reportRuleFilterMisuse,
-  type RuleFilter,
-} from "../../../auth/access/rule-answer";
+import type { RuleFilter } from "../../../auth/access/rule-answer";
 import {
   currentRuleLanguage,
   withRuleLanguage,
@@ -87,6 +83,7 @@ import type {
 import {
   readExpansionCaches,
   type ReadExpansionCaches,
+  type RelatedRowReadContext,
 } from "../../../services/collections/related-row-read-context";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
@@ -199,9 +196,10 @@ import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import {
   componentTableNamesFor,
+  localizedFilterContext,
   prepareFilterCondition,
+  ruleFilterCondition,
   type FilterConditionSources,
-  type PreparedFilterCondition,
 } from "../query/filter-condition";
 import {
   isPlainObject,
@@ -1708,32 +1706,6 @@ export class CollectionQueryService extends BaseService {
     );
   }
 
-  private buildLocalizedQueryContext(
-    companion: CompanionSchema | null,
-    localeChain: string[] | null,
-    schema: DynamicSchema,
-    statusFilterValues?: readonly string[] | null
-  ): LocalizedQueryContext | null {
-    if (!companion || !localeChain || localeChain.length === 0) return null;
-    // The caller resolves the Draft/Published filter before building the context and
-    // passes it as `statusFilterValues`, so per-locale where/search/order subqueries
-    // constrain by the resolved status too (a public read never matches a draft).
-    return {
-      companionTableName: companion.companionTableName,
-      localizedFields: companion.localizedFields,
-      mainIdColumn: schema.id,
-      locale: localeChain[0],
-      localeChain,
-      companionTable: companion.table,
-      // Only constrain by status when the collection has per-locale status and the
-      // read resolved to a single status; otherwise leave it unfiltered.
-      statusValues:
-        companion.hasStatus && statusFilterValues
-          ? statusFilterValues
-          : undefined,
-    };
-  }
-
   /**
    * The coarse collection-level read gate, asked once for every read verb.
    *
@@ -1936,67 +1908,6 @@ export class CollectionQueryService extends BaseService {
     };
   }
 
-  /**
-   * The condition a read rule's filter adds to a read. A filter that cannot be
-   * built against the collection as it stands, one naming a field it no
-   * longer has, matches no entry: a read by id then answers as a missing
-   * entry does, and a list finds nothing. The rule's own error is logged for
-   * whoever maintains the rule, by its code alone, and never handed to the
-   * caller, to whom it would describe the rule.
-   */
-  private async ruleFilterCondition(
-    collectionName: string,
-    filter: RuleFilter,
-    schema: DynamicSchema,
-    localizedCtx: LocalizedQueryContext | null
-  ): Promise<SQLWrapper | undefined> {
-    const unbuildable = (error: unknown): SQLWrapper => {
-      // Only the builder's own refusal of the filter, a validation error
-      // naming what the collection lacks, is a filter that cannot be built.
-      // Anything else, a lookup the build needs failing as a lost connection
-      // does, fails the read as it would any other.
-      if (!NextlyError.isValidation(error)) throw error;
-      this.logger.error("A read rule's filter could not be built", {
-        collectionName,
-        code: error.code,
-      });
-      return sql`1 = 0`;
-    };
-    let prepared: PreparedFilterCondition;
-    try {
-      prepared = await prepareFilterCondition(
-        { collectionName, filter },
-        this.filterSources()
-      );
-    } catch (error) {
-      return unbuildable(error);
-    }
-    // A field inside a component cannot be used in a rule's filter yet: it is
-    // refused as a filter that is not well formed, reported once and raised
-    // in development, and matches no entry. Asked before any condition is
-    // built, so no query runs on a component path the component may not have.
-    if (prepared.namesComponentFields) {
-      reportRuleFilterMisuse(
-        collectionName,
-        "read",
-        "collection",
-        FILTER_NAMES_A_COMPONENT_FIELD
-      );
-      return sql`1 = 0`;
-    }
-    try {
-      // A localized field the read shows from a fallback language is judged
-      // on that language's value too, so the read shows nothing the rule
-      // refuses.
-      return prepared.condition(
-        schema,
-        localizedCtx ? { ...localizedCtx, inEveryFallbackLanguage: true } : null
-      );
-    } catch (error) {
-      return unbuildable(error);
-    }
-  }
-
   /** Where the filter builder reads its facts about a collection. */
   private filterSources(): FilterConditionSources {
     const fieldGroups = this.fieldGroupDataService;
@@ -2149,7 +2060,7 @@ export class CollectionQueryService extends BaseService {
     // AFTER the status filter, so localized where/search EXISTS checks
     // constrain by the per-locale status too — a published read must not match
     // a draft translation.
-    const localizedCtx = this.buildLocalizedQueryContext(
+    const localizedCtx = localizedFilterContext(
       companion,
       localeChain,
       schema,
@@ -2231,11 +2142,15 @@ export class CollectionQueryService extends BaseService {
     conditions.push(...filter.conditions);
     const { componentTables, componentTypeColumns } = filter;
     if (params.ruleFilter) {
-      const limited = await this.ruleFilterCondition(
-        params.collectionName,
-        params.ruleFilter,
-        schema,
-        localizedCtx
+      const limited = await ruleFilterCondition(
+        {
+          collectionName: params.collectionName,
+          filter: params.ruleFilter,
+          schema,
+          localizedCtx,
+        },
+        this.filterSources(),
+        this.logger
       );
       if (limited) conditions.push(limited);
     }
@@ -2832,6 +2747,55 @@ export class CollectionQueryService extends BaseService {
       // The language a target collection's read rule is evaluated in when its
       // predicate names a localized field.
       locale: localeChain?.[0],
+      localeChain: localeChain ?? undefined,
+      // Only "read everything" propagates, and only when the caller actually
+      // asked for it. Deriving this from the parent having resolved to no
+      // filter would unfilter every target behind a status-less collection.
+      status: expansionStatusScope({
+        status: params.status,
+        overrideAccess: params.overrideAccess,
+        bounded: narrows(params.trusted),
+      }),
+    };
+  }
+
+  /**
+   * The caller a list's or a detail read's components carry to the rows
+   * their relationships populate. A component's relationship copies whole
+   * rows out of the target collection, which this collection's field rules
+   * say nothing about, so the caller travels down to reach the related row's
+   * own rules, exactly as it does for direct relationships. Built once for
+   * both reads, as {@link buildDetailExpansionOptions} is: an option one of
+   * them dropped would widen that read's components without failing.
+   */
+  private buildComponentReadAccess(
+    params: {
+      fieldAccessUser?: UserContext;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      trusted?: TrustBound;
+      authenticatedScope?: AuthenticatedScope;
+      status?: StatusOption;
+    },
+    localeChain: string[] | null,
+    caches: ReadExpansionCaches
+  ): RelatedRowReadContext {
+    return {
+      enforceFieldAccess: true,
+      fieldAccessUser: params.fieldAccessUser,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      // Narrows that bypass per RELATED collection. Absent means unchanged;
+      // dropping it here would silently restore the full bypass.
+      trusted: assumedBound(params.trusted),
+      authenticatedScope: params.authenticatedScope,
+      // The read's caches, so every component row pointing at a target the
+      // read already judged resolves its policy and verdict once.
+      ...caches,
+      // A relationship inside a component points at a collection whose read
+      // rule may filter on one of its own localized fields.
+      locale: localeChain?.[0],
+      localeChain: localeChain ?? undefined,
       // Only "read everything" propagates, and only when the caller actually
       // asked for it. Deriving this from the parent having resolved to no
       // filter would unfilter every target behind a status-less collection.
@@ -3480,6 +3444,7 @@ export class CollectionQueryService extends BaseService {
             // read rule filters on a localized field can have that filter
             // applied against the right companion rows instead of withholding.
             locale: localeChain?.[0],
+            localeChain: localeChain ?? undefined,
             // Only "read everything" propagates, and only when the caller
             // actually asked for it. Deriving this from the parent having
             // resolved to no filter would unfilter every target behind a
@@ -3521,36 +3486,7 @@ export class CollectionQueryService extends BaseService {
             // untranslated embedded field blank instead of showing default text.
             locale: params.locale,
             fallbackLocale: params.fallbackLocale,
-            // A component's relationship fields copy whole rows out of the
-            // target collection, which this collection's field rules say nothing
-            // about — so the caller travels down to reach the related row's own
-            // rules, exactly as it does for direct relationships.
-            access: {
-              enforceFieldAccess: true,
-              fieldAccessUser: params.fieldAccessUser,
-              user: params.user,
-              overrideAccess: params.overrideAccess,
-              // Narrows that bypass per RELATED collection. Absent means unchanged;
-              // dropping it here would silently restore the full bypass.
-              trusted: assumedBound(params.trusted),
-              authenticatedScope: params.authenticatedScope,
-              // Shared across every component row this listing expands, and
-              // with the listing's own relationships, so rows pointing at the
-              // same target resolve its policy and verdict once.
-              ...caches,
-              // A relationship inside a component points at a collection whose
-              // read rule may filter on one of its own localized fields.
-              locale: localeChain?.[0],
-              // Only "read everything" propagates, and only when the caller
-              // actually asked for it. Deriving this from the parent having
-              // resolved to no filter would unfilter every target behind a
-              // status-less collection.
-              status: expansionStatusScope({
-                status: params.status,
-                overrideAccess: params.overrideAccess,
-                bounded: narrows(params.trusted),
-              }),
-            },
+            access: this.buildComponentReadAccess(params, localeChain, caches),
           });
       }
 
@@ -4647,16 +4583,20 @@ export class CollectionQueryService extends BaseService {
       // so an entry it does not match is not found: the same `404` a missing
       // entry gets, and nothing that tells the two apart.
       const ruleCondition = access.filter
-        ? await this.ruleFilterCondition(
-            params.collectionName,
-            access.filter,
-            schema,
-            this.buildLocalizedQueryContext(
-              companion,
-              localeChain,
+        ? await ruleFilterCondition(
+            {
+              collectionName: params.collectionName,
+              filter: access.filter,
               schema,
-              statusFilter?.values
-            )
+              localizedCtx: localizedFilterContext(
+                companion,
+                localeChain,
+                schema,
+                statusFilter?.values
+              ),
+            },
+            this.filterSources(),
+            this.logger
           )
         : undefined;
       const whereParts = [
@@ -4787,33 +4727,9 @@ export class CollectionQueryService extends BaseService {
           // fields blank rather than showing default-language text.
           locale: params.locale,
           fallbackLocale: params.fallbackLocale,
-          // Same reasoning as the list path: a related row reached through a
-          // component is judged by its own collection's field rules.
-          access: {
-            enforceFieldAccess: true,
-            fieldAccessUser: params.fieldAccessUser,
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            // Narrows that bypass per RELATED collection. Absent means
-            // unchanged; dropping it restores the full bypass silently.
-            trusted: assumedBound(params.trusted),
-            authenticatedScope: params.authenticatedScope,
-            // The parent's caches, so every component instance relating to a
-            // target the parent already judged asks nothing more.
-            ...caches,
-            // As on the list path: a component's relationship reaches a
-            // collection that may scope reads by a localized field.
-            locale: localeChain?.[0],
-            // Only "read everything" propagates, and only when the caller
-            // actually asked for it. Deriving this from the parent having
-            // resolved to no filter would unfilter every target behind a
-            // status-less collection.
-            status: expansionStatusScope({
-              status: params.status,
-              overrideAccess: params.overrideAccess,
-              bounded: narrows(params.trusted),
-            }),
-          },
+          // As on the list path: a related row reached through a component
+          // is judged by its own collection's field rules.
+          access: this.buildComponentReadAccess(params, localeChain, caches),
         });
       }
 

@@ -37,9 +37,13 @@ function onlySlugOf(grant: RouteGrant): string {
 export const READ_SETTINGS = onlySlugOf(SYSTEM_READ_POLICY.settings.read);
 
 /** Adding, changing and removing settings, as their routes ask it. */
-export const CREATE_SETTINGS = onlySlugOf(SYSTEM_WRITE_POLICY.imageSizes.create);
+export const CREATE_SETTINGS = onlySlugOf(
+  SYSTEM_WRITE_POLICY.imageSizes.create
+);
 export const UPDATE_SETTINGS = onlySlugOf(SYSTEM_WRITE_POLICY.settings.update);
-export const DELETE_SETTINGS = onlySlugOf(SYSTEM_WRITE_POLICY.imageSizes.delete);
+export const DELETE_SETTINGS = onlySlugOf(
+  SYSTEM_WRITE_POLICY.imageSizes.delete
+);
 
 /** Any change to settings: the plugins area, which configures them. */
 export const CHANGE_SETTINGS: readonly string[] = [
