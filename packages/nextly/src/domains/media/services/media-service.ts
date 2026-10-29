@@ -79,6 +79,7 @@ import type {
 import type { IStorageAdapter } from "../../../storage/types";
 import {
   isImageMimeType,
+  UpdateMediaInputSchema,
   validateFileSize,
   type MediaParams,
   type Media as LegacyMedia,
@@ -189,6 +190,41 @@ function isRefusedInput(result: {
 // ============================================================
 // MediaService
 // ============================================================
+
+/** The focus point fields of the update body, as the REST route parses them. */
+const FocalPointSchema = UpdateMediaInputSchema.pick({
+  focalX: true,
+  focalY: true,
+});
+
+/**
+ * The focus point an update names, or nothing when it names none.
+ *
+ * Whole percentages from 0 to 100, refused otherwise with a validation error
+ * naming each bad field, as the REST route refuses them.
+ */
+function parseFocalPoint(input: UpdateMediaInput): {
+  focalX?: number;
+  focalY?: number;
+} {
+  const parsed = FocalPointSchema.safeParse({
+    focalX: input.focalX,
+    focalY: input.focalY,
+  });
+  if (!parsed.success) {
+    throw NextlyError.validation({
+      errors: parsed.error.issues.map(issue => ({
+        path: issue.path.join("."),
+        code: issue.code,
+        message: issue.message,
+      })),
+    });
+  }
+  return {
+    ...(parsed.data.focalX !== undefined ? { focalX: parsed.data.focalX } : {}),
+    ...(parsed.data.focalY !== undefined ? { focalY: parsed.data.focalY } : {}),
+  };
+}
 
 /**
  * MediaService - Unified service for media files and folders
@@ -580,6 +616,11 @@ export class MediaService {
       await this.findFolderById(input.folderId, context);
     }
 
+    // The focus point is checked against the rule the REST body is parsed
+    // with, so a Direct API call can't store a point the route would refuse.
+    // Checked before the write: a refused point changes nothing.
+    const focalPoint = parseFocalPoint(input);
+
     const result = await this.legacyMediaService.updateMedia(
       mediaId,
       {
@@ -587,6 +628,9 @@ export class MediaService {
         caption: input.caption ?? undefined,
         tags: input.tags,
         ...(input.folderId !== undefined ? { folderId: input.folderId } : {}),
+        // Passed on only when named, so an update that doesn't mention the
+        // point leaves the stored one as it is.
+        ...focalPoint,
       },
       resolvedActor
     );

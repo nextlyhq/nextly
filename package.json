@@ -18,6 +18,7 @@
     "dev:postgres": "NEXTLY_DEV_DIALECT=postgres node scripts/dev-playground.mjs",
     "dev:mysql": "NEXTLY_DEV_DIALECT=mysql node scripts/dev-playground.mjs",
     "dev:doctor": "node scripts/dev-doctor.mjs",
+    "visual-check": "node scripts/visual-check/run.mjs",
     "db:seed": "pnpm --filter playground run db:seed",
     "dev:reset": "pnpm --filter playground run dev:reset",
     "_comment_quality": "=== Code Quality ===",
