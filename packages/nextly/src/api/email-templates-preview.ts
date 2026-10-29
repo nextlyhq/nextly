@@ -67,7 +67,9 @@ const previewSchema = z.object({
  */
 export const POST = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailTemplates.preview.anyOf]);
+    await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.emailTemplates.preview.anyOf,
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailTemplateService();

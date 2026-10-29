@@ -13,7 +13,7 @@ import {
 } from "@nextlyhq/ui";
 import type React from "react";
 import { useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type Control } from "react-hook-form";
 import { z } from "zod";
 
 import {
@@ -29,6 +29,10 @@ import {
 } from "@admin/hooks/queries/useGeneralSettings";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
+import type {
+  GeneralSettingsRecord,
+  UpdateGeneralSettingsPayload,
+} from "@admin/services/generalSettingsApi";
 
 import { GeneralSettingsSkeleton } from "./components/GeneralSettingsSkeleton";
 
@@ -137,6 +141,96 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
+/** The form's values for the stored settings: each one as stored, or empty. */
+function formValuesFrom(
+  settings: GeneralSettingsRecord | undefined
+): FormValues {
+  const stored = (key: keyof FormValues) => settings?.[key] ?? "";
+  return {
+    applicationName: stored("applicationName"),
+    siteUrl: stored("siteUrl"),
+    adminEmail: stored("adminEmail"),
+    timezone: stored("timezone"),
+    dateFormat: stored("dateFormat"),
+    timeFormat: stored("timeFormat"),
+    logoUrl: stored("logoUrl"),
+  };
+}
+
+/**
+ * What a save sends: an empty text field clears its setting, and so does a
+ * choice left empty or blank.
+ */
+function payloadFrom(values: FormValues): UpdateGeneralSettingsPayload {
+  const textOrNull = (value?: string) => value || null;
+  const choiceOrNull = (value?: string) => (value?.trim() ? value : null);
+  return {
+    applicationName: textOrNull(values.applicationName),
+    siteUrl: textOrNull(values.siteUrl),
+    adminEmail: textOrNull(values.adminEmail),
+    timezone: choiceOrNull(values.timezone),
+    dateFormat: choiceOrNull(values.dateFormat),
+    timeFormat: choiceOrNull(values.timeFormat),
+    logoUrl: textOrNull(values.logoUrl),
+  };
+}
+
+/** One of the page's choices: a labelled select over its options. */
+function SettingSelect({
+  control,
+  name,
+  label,
+  description,
+  placeholder,
+  options,
+  disabled,
+}: {
+  control: Control<FormValues>;
+  name: "timezone" | "dateFormat" | "timeFormat";
+  label: string;
+  description: string;
+  placeholder: string;
+  options: readonly { value: string; label: string }[];
+  disabled: boolean;
+}) {
+  return (
+    <FormField
+      control={control}
+      name={name}
+      render={({ field, fieldState }) => (
+        <FieldShell
+          label={label}
+          description={description}
+          error={fieldState.error?.message}
+        >
+          {({ id, describedBy, invalid }) => (
+            <Select
+              onValueChange={field.onChange}
+              value={field.value ?? ""}
+              disabled={disabled}
+            >
+              <SelectTrigger
+                id={id}
+                aria-describedby={describedBy}
+                aria-invalid={invalid}
+              >
+                <SelectValue placeholder={placeholder} />
+              </SelectTrigger>
+              <SelectContent>
+                {options.map(opt => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </FieldShell>
+      )}
+    />
+  );
+}
+
 // ============================================================
 // Page
 // ============================================================
@@ -151,67 +245,31 @@ const SettingsGeneralPage: React.FC = () => {
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: {
-      applicationName: settings?.applicationName ?? "",
-      siteUrl: settings?.siteUrl ?? "",
-      adminEmail: settings?.adminEmail ?? "",
-      timezone: settings?.timezone ?? "",
-      dateFormat: settings?.dateFormat ?? "",
-      timeFormat: settings?.timeFormat ?? "",
-      logoUrl: settings?.logoUrl ?? "",
-    },
+    defaultValues: formValuesFrom(settings),
   });
 
   // When settings data arrives or changes, update the form immediately.
   useEffect(() => {
     if (settings) {
-      form.reset({
-        applicationName: settings.applicationName ?? "",
-        siteUrl: settings.siteUrl ?? "",
-        adminEmail: settings.adminEmail ?? "",
-        timezone: settings.timezone ?? "",
-        dateFormat: settings.dateFormat ?? "",
-        timeFormat: settings.timeFormat ?? "",
-        logoUrl: settings.logoUrl ?? "",
-      });
+      form.reset(formValuesFrom(settings));
     }
   }, [settings, form]);
 
   function onSubmit(values: FormValues) {
-    const timezoneToSave = values.timezone?.trim() ? values.timezone : null;
-
-    const dateFormatToSave = values.dateFormat?.trim()
-      ? values.dateFormat
-      : null;
-    const timeFormatToSave = values.timeFormat?.trim()
-      ? values.timeFormat
-      : null;
-
-    updateSettings(
-      {
-        applicationName: values.applicationName || null,
-        siteUrl: values.siteUrl || null,
-        adminEmail: values.adminEmail || null,
-        timezone: timezoneToSave,
-        dateFormat: dateFormatToSave,
-        timeFormat: timeFormatToSave,
-        logoUrl: values.logoUrl || null,
+    updateSettings(payloadFrom(values), {
+      onSuccess: () => {
+        // Reset the form to make it "clean" again after a successful save.
+        form.reset(values);
+        toast.success("Settings saved", {
+          description: "General settings have been updated.",
+        });
       },
-      {
-        onSuccess: () => {
-          // Reset the form to make it "clean" again after a successful save.
-          form.reset(values);
-          toast.success("Settings saved", {
-            description: "General settings have been updated.",
-          });
-        },
-        onError: err => {
-          toast.error("Failed to save settings", {
-            description: err.message,
-          });
-        },
-      }
-    );
+      onError: err => {
+        toast.error("Failed to save settings", {
+          description: err.message,
+        });
+      },
+    });
   }
 
   return (
@@ -231,109 +289,34 @@ const SettingsGeneralPage: React.FC = () => {
             ) : (
               // ── Section: Locale & Formatting ──
               <SettingsSection label="Locale & Formatting">
-                <FormField
+                <SettingSelect
                   control={form.control}
                   name="timezone"
-                  render={({ field, fieldState }) => (
-                    <FieldShell
-                      label="Timezone"
-                      description="Time zone used across the admin and email notifications."
-                      error={fieldState.error?.message}
-                    >
-                      {({ id, describedBy, invalid }) => (
-                        <Select
-                          onValueChange={field.onChange}
-                          value={field.value ?? ""}
-                          disabled={isLoading || !mayUpdate}
-                        >
-                          <SelectTrigger
-                            id={id}
-                            aria-describedby={describedBy}
-                            aria-invalid={invalid}
-                          >
-                            <SelectValue placeholder="Select a timezone" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TIMEZONE_OPTIONS.map(opt => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </FieldShell>
-                  )}
+                  label="Timezone"
+                  description="Time zone used across the admin and email notifications."
+                  placeholder="Select a timezone"
+                  options={TIMEZONE_OPTIONS}
+                  disabled={isLoading || !mayUpdate}
                 />
 
-                <FormField
+                <SettingSelect
                   control={form.control}
                   name="dateFormat"
-                  render={({ field, fieldState }) => (
-                    <FieldShell
-                      label="Date Format"
-                      description="How dates appear in lists and detail pages."
-                      error={fieldState.error?.message}
-                    >
-                      {({ id, describedBy, invalid }) => (
-                        <Select
-                          onValueChange={field.onChange}
-                          value={field.value ?? ""}
-                          disabled={isLoading || !mayUpdate}
-                        >
-                          <SelectTrigger
-                            id={id}
-                            aria-describedby={describedBy}
-                            aria-invalid={invalid}
-                          >
-                            <SelectValue placeholder="Select a date format" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {DATE_FORMAT_OPTIONS.map(opt => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </FieldShell>
-                  )}
+                  label="Date Format"
+                  description="How dates appear in lists and detail pages."
+                  placeholder="Select a date format"
+                  options={DATE_FORMAT_OPTIONS}
+                  disabled={isLoading || !mayUpdate}
                 />
 
-                <FormField
+                <SettingSelect
                   control={form.control}
                   name="timeFormat"
-                  render={({ field, fieldState }) => (
-                    <FieldShell
-                      label="Time Format"
-                      description="12-hour vs 24-hour clock."
-                      error={fieldState.error?.message}
-                    >
-                      {({ id, describedBy, invalid }) => (
-                        <Select
-                          onValueChange={field.onChange}
-                          value={field.value ?? ""}
-                          disabled={isLoading || !mayUpdate}
-                        >
-                          <SelectTrigger
-                            id={id}
-                            aria-describedby={describedBy}
-                            aria-invalid={invalid}
-                          >
-                            <SelectValue placeholder="Select a time format" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TIME_FORMAT_OPTIONS.map(opt => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </FieldShell>
-                  )}
+                  label="Time Format"
+                  description="12-hour vs 24-hour clock."
+                  placeholder="Select a time format"
+                  options={TIME_FORMAT_OPTIONS}
+                  disabled={isLoading || !mayUpdate}
                 />
               </SettingsSection>
             )}
