@@ -45,10 +45,6 @@ export function buildRss({
   description,
   items,
 }: FeedInput): string {
-  // The newest item's date rather than the clock: a feed changes when a post
-  // does, and a render that reads the clock cannot be prerendered under Cache
-  // Components.
-  const lastBuildDate = newestDate(items);
   const itemsXml = items
     .map(item => {
       const cats = (item.categories ?? [])
@@ -67,28 +63,19 @@ export function buildRss({
     })
     .join("");
 
+  // No `lastBuildDate`: RSS makes it optional, and it means when the channel
+  // last changed, which the posts do not record. The clock cannot stand in
+  // under Cache Components, and the newest post's date moves backward when
+  // that post is unpublished or deleted. Each item keeps its `pubDate`.
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
     <title>${escapeXml(title)}</title>
     <link>${escapeXml(link)}</link>
     <description>${escapeXml(description)}</description>
-    <language>en-us</language>
-    ${lastBuildDate ? `<lastBuildDate>${lastBuildDate.toUTCString()}</lastBuildDate>` : ""}${itemsXml}
+    <language>en-us</language>${itemsXml}
   </channel>
 </rss>`;
-}
-
-/** The latest publish date among `items`, or none when no item has one. */
-function newestDate(items: FeedItem[]): Date | undefined {
-  let newest: Date | undefined;
-  for (const item of items) {
-    if (!item.pubDate) continue;
-    const date = new Date(item.pubDate);
-    if (Number.isNaN(date.getTime())) continue;
-    if (!newest || date > newest) newest = date;
-  }
-  return newest;
 }
 
 /**

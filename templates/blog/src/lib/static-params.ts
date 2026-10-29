@@ -16,14 +16,28 @@
  *
  * So with no real entries the list holds one placeholder, which the build
  * renders as a not-found page. It is only used when no entry exists, so it
- * shadows none, and an entry created later with that slug renders like any
- * other.
+ * shadows none. An archive created later with that slug renders like any
+ * other, since its page renders on each request; a post or an author would
+ * not. A post's slug field refuses it (`refuseReservedSlug`).
  *
  * At build, the placeholder's render reads nothing from the database (see
  * `isBuildPlaceholder`), so the build depends only on the page's shape, not
  * on what the database holds or whether it can be read at build time.
  */
 const PLACEHOLDER_SLUG = "__none__";
+
+/**
+ * A slug field's `validate`, for posts: a post's page keeps what the build
+ * rendered for the placeholder, a not-found page that read nothing and so
+ * carries no cache tag that publishing a post would invalidate. A post given
+ * the placeholder's slug later would stay not found, so that one value is
+ * refused; every other slug is accepted as before.
+ */
+export function refuseReservedSlug(value: unknown): string | true {
+  return value === PLACEHOLDER_SLUG
+    ? "This slug is reserved by the template; choose another"
+    : true;
+}
 
 export function detailStaticParams(slugs: string[]): { slug: string }[] {
   return (slugs.length > 0 ? slugs : [PLACEHOLDER_SLUG]).map(slug => ({

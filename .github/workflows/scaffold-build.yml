@@ -943,8 +943,12 @@ jobs:
         shell: bash
         run: |
           cd /tmp/scaffold-build/scaffolded-app
+          # In a session of its own, so `stop` ends npm and the `next start` it runs
+          # together: signalling npm alone leaves Next.js holding the port, and the
+          # next serve would be answered by the server it was meant to replace.
+          server=""
           serve() {
-            PORT=3102 NEXT_TELEMETRY_DISABLED=1 NEXTLY_TELEMETRY_DISABLED=1 npm start > "$1" 2>&1 &
+            PORT=3102 NEXT_TELEMETRY_DISABLED=1 NEXTLY_TELEMETRY_DISABLED=1 setsid npm start > "$1" 2>&1 &
             server=$!
             for _ in $(seq 1 60); do
               curl -s -o /dev/null http://localhost:3102/api/health && return 0
@@ -952,7 +956,18 @@ jobs:
             done
             echo "the app did not start"; tail -40 "$1"; exit 1
           }
-          stop() { kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true; }
+          stop() {
+            [ -n "$server" ] || return 0
+            kill -- -"$server" 2>/dev/null || true
+            wait "$server" 2>/dev/null || true
+            server=""
+            # curl exits non-zero once nothing listens on the port.
+            for _ in $(seq 1 30); do
+              curl -s -o /dev/null http://localhost:3102/ || return 0
+              sleep 1
+            done
+            echo "port 3102 still answers after the server was stopped"; exit 1
+          }
           trap stop EXIT
           clean_log() {
             if grep -nE 'uncached or runtime data|unstable value' "$1"; then
@@ -989,7 +1004,15 @@ jobs:
           stop
           clean_log /tmp/blog-cc-empty.log
 
+          # Inside the app, since it imports `nextly` and the app's own config, which
+          # resolve from the script's folder. A file the scaffold already has at
+          # that path is refused rather than replaced, so the check never runs a
+          # substitute in place of the app's own file.
           mkdir -p scripts
+          if [ -e scripts/seed-for-check.mts ]; then
+            echo "the scaffold already has scripts/seed-for-check.mts"; exit 1
+          fi
+          set -o noclobber
           cat > scripts/seed-for-check.mts <<'TS'
           import { getNextly } from "nextly";
 
@@ -1001,6 +1024,7 @@ jobs:
           console.log(JSON.stringify(result.summary));
           process.exit(0);
           TS
+          set +o noclobber
           cp package.json /tmp/package.json.bak
           npm pkg set type=module
           npx --yes tsx@4.21.0 --env-file=.env scripts/seed-for-check.mts

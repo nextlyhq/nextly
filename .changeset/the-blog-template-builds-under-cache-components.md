@@ -33,6 +33,7 @@ The blog template builds and serves with Next.js Cache Components and Partial Pr
 
 - The route segment exports Cache Components refuses are gone: `runtime = "nodejs"` from the five Open Graph routes (Node.js is the default), `dynamicParams = true` from the post page (the default), and `dynamic = "force-static"` from the search page (it is static without it).
 - The post and author pages, like the category and tag pages before them, prerender one placeholder path when the database has none. Cache Components refuses an empty `generateStaticParams`, and the placeholder answers not found.
-- The footer's year is read inside a cached read, and the RSS feeds take their dates from the posts rather than the clock, so no render reads the clock outside a cache.
+- A post's slug can no longer be `__none__`, the placeholder's: the post page keeps the not-found page the build stored for it. Every other slug is accepted as before.
+- The footer's year is read inside a cached read, and the RSS feeds no longer carry a `lastBuildDate`, an optional element the posts cannot supply honestly, so no render reads the clock outside a cache. Each item keeps its own `pubDate`.
 - An unknown category or tag is now decided before the page reads `?page=`. Under Cache Components, the first request for a slug that does not exist gets the not-found page with `noindex`, and every later request gets a 404.
 - The error pages' "Try again" button calls `retry()`, which fetches the page again, rather than `reset()`, which only re-rendered what had already failed.
