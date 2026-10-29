@@ -14,7 +14,7 @@
  */
 
 import { actorForUserFailingClosed } from "../../auth/access/resolve-actor";
-import { decidedWhole } from "../../auth/access/route-gate-adapters";
+import { decidedOne } from "../../auth/access/route-gate-adapters";
 import type { AuthContext } from "../../auth/middleware";
 import {
   apiKeyPermissionsFor,
@@ -395,6 +395,13 @@ export function createPermissionsNamespace(
  * `nextly.access.*` namespace — programmatic access checks + API key validation.
  */
 export interface AccessNamespace {
+  /**
+   * Whether the user may perform `operation` on `resource`, as every route
+   * decides it. For a read, `true` means the user may read some entries:
+   * where a `read` rule answers a filter, only the entries it matches, which
+   * a read made in the user's context (`overrideAccess: false`) applies and a
+   * trusted read does not. A write whose rule answers a filter is `false`.
+   */
   check(args: CheckAccessArgs): Promise<boolean>;
   checkApiKey(args: CheckApiKeyArgs): Promise<CheckApiKeyResult>;
 }
@@ -408,11 +415,12 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
       // The question is about a signed-in user, so naming none is refused,
       // never answered as a visitor's public default.
       if (!args.userId) return false;
-      // The one access decision, as every gate asks it, for the resource as
-      // a whole: a rule that answers a filter refuses. A role or grant lookup
-      // that fails counts as holding nothing of its kind, so a check that
-      // cannot read the user refuses rather than throws.
-      return decidedWhole(
+      // The one access decision, as every gate asks it. A read a rule's filter
+      // limits answers yes, since the user may read some entries; a read made
+      // in the user's context applies the filter. A role or grant lookup that
+      // fails counts as holding nothing of its kind, so a check that cannot
+      // read the user refuses rather than throws.
+      return decidedOne(
         await actorForUserFailingClosed(args.userId),
         args.operation,
         args.resource,

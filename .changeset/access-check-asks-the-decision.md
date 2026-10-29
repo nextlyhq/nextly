@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-`nextly.access.check` answers with the access decision every gate asks. Its answers are unchanged except one: on media, settings and the Email hub, a `manage-` permission now counts as the plain read, create, update and delete it stands for, as every route gate already counts it, so a role holding only `manage-settings` may update settings by `access.check` too.
+`nextly.access.check` answers with the access decision every route asks. Two answers change. On media, settings and the Email hub, a `manage-` permission now counts as the plain read, create, update and delete it stands for, as every route already counts it, so a role holding only `manage-settings` may update settings by `access.check` too. And for a read, `true` now means the user may read some entries: where a collection's `read` rule answers a filter, the user may read only the entries the filter matches, so read with the user's context (`overrideAccess: false`) rather than as a trusted call, which returns every entry. A write whose rule answers a filter is still refused, and a check that cannot read the user's roles or grants refuses rather than throws.
