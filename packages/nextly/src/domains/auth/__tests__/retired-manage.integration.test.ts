@@ -398,6 +398,51 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("takes off only what is still the permission named, when its row was edited before the removal", async () => {
+        const ids = await idsBySlug();
+        const manageMedia = ids.get("manage-media")!;
+        const roleId = await plantedRole("edited-before-removal", [
+          "manage-media",
+          "read-users",
+        ]);
+        const { permissions } = getDialectTables();
+        const db = t.adapter.getDrizzle() as unknown as {
+          update: (table: unknown) => {
+            set: (values: unknown) => {
+              where: (condition: unknown) => Promise<unknown>;
+            };
+          };
+        };
+        const actionOf = (action: string) =>
+          db
+            .update(permissions)
+            .set({ action })
+            .where(eq(permissions.id, manageMedia));
+        const transaction = t.adapter.transaction.bind(t.adapter);
+        const between = vi
+          .spyOn(t.adapter, "transaction")
+          .mockImplementationOnce(async work => {
+            // Another writer turns the role's `manage-media` row into a
+            // publish permission before the removal is written.
+            await actionOf("publish");
+            return transaction(work);
+          });
+        try {
+          await services().rolePermissions.removePermissionFromRole(roleId, {
+            action: "manage",
+            resource: "media",
+          });
+          // The edited row is no longer `manage-media`, so it stays.
+          expect((await holds(roleId)).sort()).toEqual(
+            ["publish-media", "read-users"].sort()
+          );
+        } finally {
+          between.mockRestore();
+          await actionOf("manage");
+          await services().rolePermissions.setRolePermissions(roleId, []);
+        }
+      });
+
       it("leaves no role holding a retired manage permission after a reboot, presets and the super-admin seeder included", async () => {
         await seedSuperAdmin(t.adapter, {
           email: "root@retired-manage.test",
