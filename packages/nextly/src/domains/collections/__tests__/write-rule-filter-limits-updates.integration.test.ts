@@ -473,6 +473,62 @@ describe("an update rule's filter on a collection with languages", () => {
     expect(refused.statusCode).toBe(404);
     expect(refused.code).toBe("NOT_FOUND");
   });
+
+  it("refuses an update writing French whose French value is blank, though the English one matches", async () => {
+    // A write's filter on a translated field is matched against the value
+    // stored in the language it writes. With no French value the filter does
+    // not match, and the write is refused, though a read in French would
+    // show the English value as its fallback.
+    const FALLBACK = "updfilter_fallback_posts";
+    current = await createTestNextly({
+      localization: { locales: ["en", "fr"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: FALLBACK,
+          localized: true,
+          access: {
+            read: () => true,
+            update: () => ({ title: { equals: "mine" } }) as unknown as boolean,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "note", localized: false }),
+          ],
+        }),
+      ],
+    });
+    const t = current;
+    await userWhoMay(t, AUTHOR, "read", [FALLBACK]);
+    await grantTo(t, AUTHOR, "update", [FALLBACK]);
+    const created = await t.nextly.create({
+      collection: FALLBACK,
+      data: { title: "mine", note: "kept" },
+    });
+    const id = String(created.item.id);
+    const before = await stored(t, FALLBACK, id);
+
+    const refused = await errorOf(() =>
+      t.nextly.update({
+        collection: FALLBACK,
+        id,
+        locale: "fr",
+        data: { note: "changed in French" },
+        ...asAuthor,
+      } as never)
+    );
+
+    expect(refused.statusCode).toBe(403);
+    expect(await stored(t, FALLBACK, id)).toEqual(before);
+    // The control: the same update writing English, whose value matches.
+    await t.nextly.update({
+      collection: FALLBACK,
+      id,
+      locale: "en",
+      data: { note: "changed in English" },
+      ...asAuthor,
+    } as never);
+    expect((await stored(t, FALLBACK, id))?.note).toBe("changed in English");
+  });
 });
 
 describe("a publish or unpublish rule that answers a filter", () => {
