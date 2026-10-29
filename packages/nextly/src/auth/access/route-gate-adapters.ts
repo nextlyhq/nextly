@@ -45,6 +45,7 @@ import {
   type CollectionQuestion,
   type GateVerdict,
 } from "./gate-adapters";
+import { MANAGE_BRIDGED_ACTIONS, isRetiredManage } from "./manage-bridge";
 import {
   actorForKey,
   actorForUser,
@@ -641,6 +642,17 @@ async function permissionVerdict(
   resource: string,
   rules: RouteRules
 ): Promise<GateVerdict> {
+  // A retired `manage-` permission, asked by a gate written before it was
+  // retired, is held only by holding all four plain permissions it stood
+  // for, each asked here as any other: the decision answers it the same way.
+  if (isRetiredManage(action, resource)) {
+    for (const plain of MANAGE_BRIDGED_ACTIONS) {
+      if (!(await permissionVerdict(caller, plain, resource, rules)).allowed) {
+        return verdictOf(false);
+      }
+    }
+    return verdictOf(true);
+  }
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
     if (keyHoldsEveryPermission(actor)) return verdictOf(true);
@@ -874,7 +886,13 @@ async function heldPermission(
     // A key carrying its maker's super-admin authority holds every
     // permission, as a super-admin's session does.
     if (isSuperAdmin(actor)) return true;
-    const today = storedSlugHolds(caller.permissions, action, resource);
+    // A retired `manage-` permission is held as the route gate holds it: by
+    // all four plain permissions it stood for, each by its stored slug.
+    const today = isRetiredManage(action, resource)
+      ? MANAGE_BRIDGED_ACTIONS.every(plain =>
+          storedSlugHolds(caller.permissions, plain, resource)
+        )
+      : storedSlugHolds(caller.permissions, action, resource);
     // Two steps from today's answer to the decision's, each named apart: the
     // grant rather than the stored slug, then the target's rules read.
     const byPermission = decidePermission(actor, action, resource).allowed;

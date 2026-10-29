@@ -250,12 +250,10 @@ function readServicesSuite(label: string, boot: () => Promise<TestNextly>) {
 
     it("counts entries over a range in the interval the range draws, as the series view draws them", async () => {
       await bootWithParcels();
-      // One instant for the reads and the windows they are compared with, a
-      // second after the rows were made: MySQL stores a DATETIME to the
-      // second, rounding to the nearest, so a row made at x.6s is stored at
-      // x+1s and would sit past a `now` taken straight after it, outside the
-      // window that ends there.
-      const now = new Date(Date.now() + 1000);
+      // One instant for the reads and the windows they are compared with,
+      // taken straight after the rows were made: a window ending now keeps
+      // that whole second, where MySQL may store a row it rounded up.
+      const now = new Date();
       const services = servicesFor(reader, undefined, now);
       for (const range of ["7d", "30d", "90d", "12m"] as const) {
         const series = await services.timeseries(PARCELS, {
@@ -286,6 +284,77 @@ function readServicesSuite(label: string, boot: () => Promise<TestNextly>) {
       expect(await total()).toBe(1);
       expect(await total("published")).toBe(1);
       expect(await total("all")).toBe(3);
+    });
+
+    it("counts the entries in a range's window, none in the one before it, and only by a date field", async () => {
+      await bootWithParcels();
+      const now = new Date();
+      const services = servicesFor(reader, undefined, now);
+      // The rows were made just now: in the last 7 days, none in the 7 before.
+      expect(
+        await services.count(PARCELS, {
+          where: thisRun,
+          window: { range: "7d" },
+        })
+      ).toBe(3);
+      expect(
+        await services.count(PARCELS, {
+          where: thisRun,
+          window: { range: "7d", previous: true },
+        })
+      ).toBe(0);
+      // A field holding no date places nothing in time: refused, for a count's
+      // window and a series alike, by the real check every read passes.
+      await expect(
+        services.count(PARCELS, {
+          window: { range: "7d", dateField: "label" },
+        })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      await expect(
+        services.timeseries(PARCELS, { range: "7d", dateField: "label" })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+
+    it("counts a row read the moment it was made, in a count's window and a series alike", async () => {
+      await bootWithParcels();
+      // Each row is made late in a second and read straight after, with the
+      // instant taken then. MySQL rounds a stored DATETIME to the nearest
+      // second, so such a row is stored at the next whole second, after the
+      // instant the read is taken at; elsewhere it is stored as made.
+      const booted = handle;
+      if (booted === undefined) throw new Error("the suite did not boot");
+      for (let made = 1; made <= 4; made += 1) {
+        while (Date.now() % 1000 < 600) {
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        const created = await booted.nextly.create({
+          collection: PARCELS,
+          data: {
+            run: RUN,
+            label: `fresh-${made}`,
+            weight: 1,
+            fragile: false,
+            size: "small",
+          },
+        });
+        written.push({ collection: PARCELS, id: String(created.item.id) });
+        const services = servicesFor(reader, undefined, new Date());
+        expect(
+          await services.count(PARCELS, {
+            where: thisRun,
+            window: { range: "7d" },
+          }),
+          `count after row ${made}`
+        ).toBe(3 + made);
+        const series = await services.timeseries(PARCELS, {
+          range: "7d",
+          where: thisRun,
+        });
+        expect(
+          series.points.reduce((sum, point) => sum + point.count, 0),
+          `series after row ${made}`
+        ).toBe(3 + made);
+      }
     });
 
     it("counts and finds the published entries unless the read asks for all", async () => {
