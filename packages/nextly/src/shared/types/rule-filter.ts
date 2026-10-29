@@ -76,9 +76,11 @@ interface BuiltInFilterKinds {
 }
 
 /**
- * The system fields a collection's filter may name, whatever it declares.
- * `status` is present when the collection has `status: true`; on one without
- * it, a rule filtering on it matches nothing.
+ * The system fields a collection's filter may name, whatever it declares:
+ * the columns `lib/system-columns.ts` publishes under their camel-case names.
+ * `status` and `firstPublishedAt` are present when the collection has
+ * `status: true`; on one without them, a rule filtering on either matches
+ * nothing.
  */
 interface SystemFilterKinds {
   id: EqualityKind<EntryId>;
@@ -88,6 +90,7 @@ interface SystemFilterKinds {
   updatedAt: OrderedKind<DateOperand>;
   createdBy: EqualityKind<string>;
   status: TextKind;
+  firstPublishedAt: OrderedKind<DateOperand>;
 }
 
 /**
@@ -167,6 +170,15 @@ type FilterableField<Fields extends readonly AuthorableFieldConfig[]> =
 /** The names of the fields of `Fields` a filter may name. */
 type FilterNames<Fields extends readonly AuthorableFieldConfig[]> =
   FilterableField<Fields>["name"];
+
+/**
+ * Whether the checker cannot know a name `Fields` declares: a field built at
+ * runtime, or annotated with its config type. Asked of every declared field,
+ * not only the filterable ones, because a field whose kind cannot be told
+ * apart is left out of those, and the filter would then be typed without it.
+ */
+type NamesUnknown<Fields extends readonly AuthorableFieldConfig[]> =
+  string extends Fields[number]["name"] ? true : false;
 
 /**
  * The names `Fields` declares as written, of the fields that own a column. A
@@ -250,9 +262,9 @@ export interface UntypedRuleFilter {
 /**
  * The filter a read rule on a collection with `Fields` may answer.
  *
- * Typed by the fields where every filterable field's name is a literal, as
- * a field factory or an inline declaration gives it. Where one is not, the
- * names are unknown and the filter is {@link UntypedRuleFilter}.
+ * Typed by the fields where every field's name is a literal, as a field
+ * factory or an inline declaration gives it. Where one is not, the names are
+ * unknown and the filter is {@link UntypedRuleFilter}.
  *
  * @experimental
  */
@@ -260,7 +272,7 @@ export type CollectionRuleFilter<
   Fields extends
     readonly AuthorableFieldConfig[] = readonly AuthorableFieldConfig[],
 > =
-  string extends FilterNames<Fields>
+  NamesUnknown<Fields> extends true
     ? UntypedRuleFilter
     : TypedRuleFilter<FilterKindsOf<Fields>>;
 
@@ -329,9 +341,11 @@ type ExactCondition<Kind, Condition> = Condition extends Date
 /** What `Filter` may hold, key by key and at every depth, on `Kinds`. */
 type ExactFilter<Kinds, Filter> = {
   [Key in keyof Filter]: Key extends "and" | "or"
-    ? Filter[Key] extends readonly (infer Member)[]
-      ? readonly ExactFilter<Kinds, Member>[]
-      : Filter[Key]
+    ? IsGivenNoValue<Filter, Key> extends true
+      ? `${Key & string} is given no value`
+      : Filter[Key] extends readonly (infer Member)[]
+        ? readonly ExactFilter<Kinds, Member>[]
+        : Filter[Key]
     : Key extends keyof Kinds
       ? IsGivenNoValue<Filter, Key> extends true
         ? `${Key & string} is given no value`
@@ -356,7 +370,7 @@ export type ExactAnswer<
   Answer,
 > = Answer extends boolean
   ? Answer
-  : string extends FilterNames<Fields>
+  : NamesUnknown<Fields> extends true
     ? Answer
     : ExactFilter<FilterKindsOf<Fields>, Answer>;
 

@@ -287,6 +287,39 @@ defineCollection({
   access: { read: () => typedFilter },
 });
 
+// A logical branch given no value is refused when the rule runs too.
+expectTypeOf<ExactAnswer<Fields, { or: undefined }>>().toEqualTypeOf<{
+  or: "or is given no value";
+}>();
+expectTypeOf<
+  ExactAnswer<Fields, { and: { team: string }[] | undefined }>
+>().toEqualTypeOf<{ and: "and is given no value" }>();
+
+// The first-publication date is a system field, compared as a date.
+expectTypeOf<{
+  firstPublishedAt: { exists: boolean; less_than: string };
+}>().toExtend<CollectionRuleFilter<Fields>>();
+
+// A field annotated with its config type has a name the checker cannot know,
+// so the filter is untyped and checked when the rule runs, as for a name
+// built at runtime.
+const annotatedTeam: TextFieldConfig = text({ name: "team" });
+expectTypeOf<
+  CollectionRuleFilter<[typeof annotatedTeam]>
+>().toEqualTypeOf<UntypedRuleFilter>();
+defineCollection({
+  slug: "annotated",
+  fields: [annotatedTeam],
+  access: { read: () => ({ team: "a" }) },
+});
+
+// A field no filter may name still takes its column's name: a rich text
+// `title` replaces the system title, so `title` is no key.
+const richTitled = [richText({ name: "title" })];
+expectTypeOf<
+  ExactAnswer<typeof richTitled, { title: string }>
+>().toEqualTypeOf<{ title: ReturnType<typeof notAField<"title">> }>();
+
 // ---------------------------------------------------------------------------
 // A field stored as a JSON document, or owning no column, is no key
 // ---------------------------------------------------------------------------

@@ -84,11 +84,11 @@ import type {
  * text({ name: 'tags', hasMany: true, minRows: 1, maxRows: 10 })
  * ```
  *
- * The factory of every field a rule's filter may name keeps the name as
- * written, so `defineCollection` can type a read rule's filter by the
- * collection's fields. A name the checker cannot know, such as one built at
- * runtime, is `string`, and the filter is untyped. It keeps what decides how
- * the field is stored as written too: `virtual`, and where the field has
+ * Every field factory keeps the name as written, so `defineCollection` can
+ * type a read rule's filter by the collection's fields. A name the checker
+ * cannot know, such as one built at runtime, is `string`, and the filter is
+ * untyped. The factories of the fields a filter may name keep what decides
+ * how the field is stored as written too: `virtual`, and where the field has
  * them, `hasMany` and `relationTo`. A field stored as a JSON document, or
  * owning no column, is then no key of the filter.
  */
@@ -160,9 +160,9 @@ export const textarea = <
  * })
  * ```
  */
-export const richText = (
-  config: Omit<RichTextFieldConfig, "type">
-): RichTextFieldConfig => ({
+export const richText = <const Name extends string>(
+  config: Omit<RichTextFieldConfig, "type"> & { name: Name }
+): RichTextFieldConfig & { name: Name } => ({
   ...config,
   type: "richText",
 });
@@ -216,9 +216,9 @@ export const email = <
  * })
  * ```
  */
-export const password = (
-  config: Omit<PasswordFieldConfig, "type">
-): PasswordFieldConfig => ({
+export const password = <const Name extends string>(
+  config: Omit<PasswordFieldConfig, "type"> & { name: Name }
+): PasswordFieldConfig & { name: Name } => ({
   ...config,
   type: "password",
 });
@@ -598,9 +598,9 @@ export const relationship = <
  * })
  * ```
  */
-export const array = (
-  config: Omit<RepeaterFieldConfig, "type">
-): RepeaterFieldConfig => ({
+export const array = <const Name extends string>(
+  config: Omit<RepeaterFieldConfig, "type"> & { name: Name }
+): RepeaterFieldConfig & { name: Name } => ({
   ...config,
   type: "repeater",
 });
@@ -625,9 +625,9 @@ export const array = (
  * })
  * ```
  */
-export const repeater = (
-  config: Omit<RepeaterFieldConfig, "type">
-): RepeaterFieldConfig => ({
+export const repeater = <const Name extends string>(
+  config: Omit<RepeaterFieldConfig, "type"> & { name: Name }
+): RepeaterFieldConfig & { name: Name } => ({
   ...config,
   type: "repeater",
 });
@@ -664,16 +664,16 @@ export const repeater = (
  * })
  * ```
  */
-export const group = (
-  config: Omit<GroupFieldConfig, "type">
-): GroupFieldConfig => ({
+export const group = <const Name extends string>(
+  config: Omit<GroupFieldConfig, "type"> & { name: Name }
+): GroupFieldConfig & { name: Name } => ({
   ...config,
   type: "group",
 });
 
-export const json = (
-  config: Omit<JSONFieldConfig, "type">
-): JSONFieldConfig => ({
+export const json = <const Name extends string>(
+  config: Omit<JSONFieldConfig, "type"> & { name: Name }
+): JSONFieldConfig & { name: Name } => ({
   ...config,
   type: "json",
 });
@@ -714,9 +714,9 @@ export const json = (
  * })
  * ```
  */
-export const fieldGroup = (
-  config: Omit<FieldGroupFieldConfig, "type">
-): FieldGroupFieldConfig => ({
+export const fieldGroup = <const Name extends string>(
+  config: Omit<FieldGroupFieldConfig, "type"> & { name: Name }
+): FieldGroupFieldConfig & { name: Name } => ({
   ...config,
   type: STORAGE_FORMAT.fieldType,
 });
@@ -747,9 +747,9 @@ export const fieldGroup = (
  * chips({ name: 'categories', required: true, minChips: 1, maxChips: 5 })
  * ```
  */
-export const chips = (
-  config: Omit<ChipsFieldConfig, "type">
-): ChipsFieldConfig => ({
+export const chips = <const Name extends string>(
+  config: Omit<ChipsFieldConfig, "type"> & { name: Name }
+): ChipsFieldConfig & { name: Name } => ({
   ...config,
   type: "chips",
 });
