@@ -90,6 +90,11 @@ describe("asNotMigrated", () => {
   });
   const driver = (message: string, code: string) =>
     Object.assign(new Error(message), { code });
+  /** The driver's error under the query builder's, which quotes the statement. */
+  const statementOn = (table: string, cause: Error) =>
+    new Error(`Failed query: select \`title\` from \`${table}\`\nparams: `, {
+      cause,
+    });
   /**
    * The adapter's error, as it wraps the driver's: under its own context line,
    * which quotes the statement, and with the driver's code copied onto it, so
@@ -193,7 +198,10 @@ describe("asNotMigrated", () => {
       "Unknown column 'title' in 'field list'",
     ]) {
       expect(
-        await asNotMigrated(driver(message, "SQLITE_ERROR"), worded),
+        await asNotMigrated(
+          statementOn("dc_posts", driver(message, "SQLITE_ERROR")),
+          worded
+        ),
         message
       ).toMatchObject({ publicData: { field: "title" } });
     }
@@ -210,6 +218,49 @@ describe("asNotMigrated", () => {
     ] as const) {
       const error = driver(message, code);
       expect(await asNotMigrated(error, entity()), message).toBe(error);
+    }
+  });
+
+  it("places an unqualified missing column by the statement that failed", async () => {
+    // MySQL names no table: "Unknown column 'title' in 'field list'". Only the
+    // failed statement says whose column it is, and a cascade into another
+    // table is not the entity's field.
+    const unqualified = () =>
+      driver("Unknown column 'title' in 'field list'", "ER_BAD_FIELD_ERROR");
+    expect(
+      await asNotMigrated(statementOn("dc_posts", unqualified()), entity())
+    ).toMatchObject({ publicData: { reason: "column", field: "title" } });
+    expect(
+      await asNotMigrated(
+        Object.assign(unqualified(), {
+          sql: "INSERT INTO `dc_posts` (`title`) VALUES (?)",
+        }),
+        entity()
+      )
+    ).toMatchObject({ publicData: { reason: "column", field: "title" } });
+    for (const error of [
+      statementOn("comp_hero", unqualified()),
+      Object.assign(
+        new Error(
+          "insert operation failed on table 'comp_hero': Unknown column 'title' in 'field list'",
+          { cause: unqualified() }
+        ),
+        {
+          name: "DatabaseError",
+          kind: "query",
+          code: "1054",
+          table: "comp_hero",
+        }
+      ),
+      // mysql2 keeps the statement on its own error, for a raw statement no
+      // query builder wrapped.
+      Object.assign(unqualified(), {
+        sql: "INSERT INTO `comp_hero` (`title`) VALUES (?)",
+      }),
+      // Nothing says where it was: left as it was, not guessed.
+      unqualified(),
+    ]) {
+      expect(await asNotMigrated(error, entity())).toBe(error);
     }
   });
 

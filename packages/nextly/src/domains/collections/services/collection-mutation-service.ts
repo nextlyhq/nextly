@@ -41,6 +41,7 @@ import { toDbError } from "../../../database/errors";
 import {
   asNotMigrated,
   collectionNotMigrated,
+  collectionRowNotMigrated,
 } from "../../../database/with-db-errors";
 // The public CollectionServiceResult shape is preserved because the legacy
 // CollectionEntryService facade and CollectionBulkService still consume it;
@@ -11833,6 +11834,9 @@ export class CollectionMutationService extends BaseService {
     // post-write return, so a committed item whose after-hook then throws still
     // surfaces its intent to the batch caller. Hoisted so the catch return sees it.
     let revalidationIntent: RevalidationIntent | undefined;
+    // The registry row this write read, kept for the catch: a failed statement
+    // can leave the transaction unable to read it again (PostgreSQL aborts it).
+    let writeRow: Record<string, unknown> | undefined;
     try {
       // A direct caller runs this inside its own transaction, so every metadata
       // and access read below is bound to that transaction's connection — a
@@ -11871,6 +11875,7 @@ export class CollectionMutationService extends BaseService {
           params.collectionName,
           tx.getDrizzle()
         );
+      writeRow = collection as Record<string, unknown>;
 
       // The transaction API has always shaped the caller's own object in place;
       // the batch worker shapes a copy. Both are preserved so neither caller's
@@ -12326,15 +12331,11 @@ export class CollectionMutationService extends BaseService {
       if (isWriteIntegrityFailure(error)) throw error;
       return {
         ...errorToServiceResult(
-          // A write the database is not migrated for answers as such. Read on
-          // the batch's own transaction, which holds this write's connection.
+          // A write the database is not migrated for answers as such, judged
+          // from the row read before the failed statement.
           await asNotMigrated(
             error,
-            collectionNotMigrated(
-              this.collectionService,
-              params.collectionName,
-              tx.getDrizzle()
-            )
+            collectionRowNotMigrated(params.collectionName, writeRow)
           ),
           { defaultMessage: options.failureMessage },
           this.dialect
@@ -12424,6 +12425,9 @@ export class CollectionMutationService extends BaseService {
     // return, so a committed item whose after-hook then throws still surfaces
     // its intent to the batch caller.
     let revalidationIntent: RevalidationIntent | undefined;
+    // The registry row this write read, kept for the catch: a failed statement
+    // can leave the transaction unable to read it again (PostgreSQL aborts it).
+    let writeRow: Record<string, unknown> | undefined;
     try {
       // Get collection metadata to identify relation fields. Runs on the
       // caller's transaction connection so this per-entry read does not re-enter
@@ -12433,6 +12437,7 @@ export class CollectionMutationService extends BaseService {
           params.collectionName,
           tx.getDrizzle()
         );
+      writeRow = collection as Record<string, unknown>;
       // Read once, as plain data: a caller's object may compute a key on each
       // read, and the gate a write asks and the write itself must read the same
       // body.
@@ -13564,15 +13569,11 @@ export class CollectionMutationService extends BaseService {
       if (isWriteIntegrityFailure(error)) throw error;
       return {
         ...errorToServiceResult(
-          // A write the database is not migrated for answers as such. Read on
-          // the batch's own transaction, which holds this write's connection.
+          // A write the database is not migrated for answers as such, judged
+          // from the row read before the failed statement.
           await asNotMigrated(
             error,
-            collectionNotMigrated(
-              this.collectionService,
-              params.collectionName,
-              tx.getDrizzle()
-            )
+            collectionRowNotMigrated(params.collectionName, writeRow)
           ),
           { defaultMessage: options.failureMessage },
           this.dialect
@@ -13657,6 +13658,9 @@ export class CollectionMutationService extends BaseService {
     // The tags this delete invalidates; the batch caller collects it per item and
     // flushes them together after the shared transaction commits.
     let revalidationIntent: RevalidationIntent | undefined;
+    // The registry row this write read, kept for the catch: a failed statement
+    // can leave the transaction unable to read it again (PostgreSQL aborts it).
+    let writeRow: Record<string, unknown> | undefined;
     try {
       // Get collection metadata early. Runs on the caller's transaction
       // connection so this read does not re-enter the pool from inside the
@@ -13665,6 +13669,7 @@ export class CollectionMutationService extends BaseService {
         params.collectionName,
         tx.getDrizzle()
       );
+      writeRow = collection as Record<string, unknown>;
 
       const tableName = collectionTableName(collection, params.collectionName);
 
@@ -13991,12 +13996,18 @@ export class CollectionMutationService extends BaseService {
         eventRecorded,
         revalidationIntent,
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
       // Only a failure in the delete→event window propagates (to roll back an
       // eventless delete). Pre-delete failures and post-event failures (e.g. an
       // afterDelete hook) stay soft: the row is either untouched or already
       // consistent with its event, so a returned failure is safe.
-      if (deleteNeedsRollback) throw error;
+      if (deleteNeedsRollback) throw caught;
+      // A delete the database is not migrated for answers as such, judged from
+      // the row read before the failed statement.
+      const error = await asNotMigrated(
+        caught,
+        collectionRowNotMigrated(params.collectionName, writeRow)
+      );
       return {
         success: false,
         statusCode: 500,

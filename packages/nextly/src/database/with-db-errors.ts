@@ -5,6 +5,7 @@ import { isDbError } from "./errors";
 import {
   firstIdentifierNamed,
   missingSchemaObject,
+  statementTableOf,
   tableOfMissingColumn,
 } from "./missing-column";
 
@@ -53,27 +54,26 @@ export interface NotMigratedEntity {
   load: () => Promise<RegistryRowShape | null | undefined>;
 }
 
-/**
- * A collection, read from the registry service its entry services hold. A
- * failure inside a transaction passes the transaction's executor, so the read
- * never waits on the pool for a second connection while the transaction holds
- * one.
- */
+/** A collection, read from the registry service its entry services hold. */
 export function collectionNotMigrated(
-  registry: {
-    getCollection(
-      slug: string,
-      executor?: unknown
-    ): Promise<RegistryRowShape | null>;
-  },
-  slug: string,
-  executor?: unknown
+  registry: { getCollection(slug: string): Promise<RegistryRowShape | null> },
+  slug: string
 ): NotMigratedEntity {
-  return {
-    kind: "collection",
-    slug,
-    load: () => registry.getCollection(slug, executor),
-  };
+  return { kind: "collection", slug, load: () => registry.getCollection(slug) };
+}
+
+/**
+ * A collection, judged from the registry row its write already read. For a
+ * failure inside a transaction: a failed statement can leave it unable to run
+ * another (PostgreSQL aborts it), and a read on the pool instead would wait
+ * for a second connection while the transaction holds one. A failure before
+ * the row was read has no row, and is left as it was.
+ */
+export function collectionRowNotMigrated(
+  slug: string,
+  row: RegistryRowShape | undefined
+): NotMigratedEntity {
+  return { kind: "collection", slug, load: () => Promise.resolve(row) };
 }
 
 /** A Single, read from the registry service its document services hold. */
@@ -127,24 +127,32 @@ export async function asNotMigrated(
       ? NextlyError.notMigrated({ ...subject, reason: report.object })
       : error;
   }
-  const field = fieldWhoseColumnIsNamed(report.text, row?.fields, table);
-  return field === undefined
-    ? error
-    : NextlyError.notMigrated({ ...subject, reason: "column", field });
+  const field = fieldWhoseColumnIsNamed(report.text, row?.fields);
+  // Whose column it is: the driver's message names the table where it can,
+  // and the failed statement's own table where it does not (MySQL's).
+  const owner =
+    field === undefined
+      ? undefined
+      : (tableOfMissingColumn(report.text, field.column) ??
+        statementTableOf(error));
+  return field !== undefined && isEntityTable(owner, table)
+    ? NextlyError.notMigrated({
+        ...subject,
+        reason: "column",
+        field: field.name,
+      })
+    : error;
 }
 
 /**
  * The field, of a registry row's `fields`, whose column `text` names as
- * missing from the entity's own table or its `_locales` companion, where a
- * translatable field's column lives; or undefined when it names none, or says
- * the column belongs to another table. Each field's column is the one
- * `columnsDeclaredBy` gives it, the schema's own rule.
+ * missing, with that column; or undefined when it names none. Each field's
+ * column is the one `columnsDeclaredBy` gives it, the schema's own rule.
  */
 function fieldWhoseColumnIsNamed(
   text: string,
-  fields: unknown,
-  table: string
-): string | undefined {
+  fields: unknown
+): { name: string; column: string } | undefined {
   const fieldByColumn = new Map<string, string>();
   for (const field of Array.isArray(fields) ? fields : []) {
     const name = (field as { name?: unknown } | null)?.name;
@@ -154,17 +162,17 @@ function fieldWhoseColumnIsNamed(
     }
   }
   const column = firstIdentifierNamed(text, fieldByColumn.keys());
-  if (column === undefined) return undefined;
-  return isEntityTable(tableOfMissingColumn(text, column), table)
-    ? fieldByColumn.get(column)
-    : undefined;
+  const name = column === undefined ? undefined : fieldByColumn.get(column);
+  return column === undefined || name === undefined
+    ? undefined
+    : { name, column };
 }
 
 /**
- * Whether the table a driver says a missing column belongs to is the entity's
- * own or its `_locales` companion. A message that names no table (MySQL's,
- * unqualified) is taken as the statement's own table.
+ * Whether the table a missing column belongs to is the entity's own or its
+ * `_locales` companion, where a translatable field's column lives. Unknown is
+ * not the entity's: a column nothing places is left as it was, not guessed.
  */
 function isEntityTable(owner: string | undefined, table: string): boolean {
-  return owner === undefined || owner === table || owner === `${table}_locales`;
+  return owner === table || owner === `${table}_locales`;
 }

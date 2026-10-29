@@ -435,6 +435,87 @@ describe.each(getConfiguredTestDialects())(
       });
     }, 120_000);
 
+    it.each([
+      ["a declared field's column", "column"],
+      ["the entity's table", "table"],
+    ] as const)(
+      "answers the same inside a caller's transaction when %s is missing",
+      async (_what, reason) => {
+        // The transactional writes a plugin or a batch makes. On PostgreSQL
+        // the failed statement aborts the transaction, so the answer cannot
+        // depend on reading anything more through it.
+        const target = await boot(dialect);
+        await execute(
+          reason === "column"
+            ? `ALTER TABLE ${quoted(dialect, POSTS_TABLE)} DROP COLUMN ${quoted(dialect, "subtitle")}`
+            : `DROP TABLE ${quoted(dialect, POSTS_TABLE)}`
+        );
+        const entries = (
+          t().getService("collectionsHandler") as unknown as {
+            getEntryService(): Record<
+              string,
+              (...args: unknown[]) => Promise<Record<string, unknown>>
+            >;
+          }
+        ).getEntryService();
+        const params = { collectionName: POSTS, overrideAccess: true };
+        const writes: Array<
+          [string, (tx: unknown) => Promise<Record<string, unknown>>]
+        > = [
+          [
+            "create",
+            tx =>
+              entries.createEntryInTransaction(tx, params, {
+                title: "Second",
+                subtitle: "Two",
+              }),
+          ],
+          [
+            "update",
+            tx =>
+              entries.updateEntryInTransaction(
+                tx,
+                { ...params, entryId: target.id },
+                { subtitle: "Uno" }
+              ),
+          ],
+          [
+            "delete",
+            tx =>
+              entries.deleteEntryInTransaction(tx, {
+                ...params,
+                entryId: target.id,
+              }),
+          ],
+        ];
+        for (const [name, write] of writes) {
+          let result: Record<string, unknown> | undefined;
+          // The transaction itself may refuse to commit after the failure;
+          // what the write answered inside it is what is asserted.
+          await t()
+            .adapter.transaction(async tx => {
+              result = await write(tx);
+              if (result.success === false) throw new Error("roll back");
+            })
+            .catch(() => undefined);
+          expect
+            .soft(
+              result,
+              `${name} in a transaction answers ENTITY_NOT_MIGRATED`
+            )
+            .toMatchObject({
+              success: false,
+              code: "ENTITY_NOT_MIGRATED",
+              publicData:
+                reason === "column"
+                  ? { reason, slug: POSTS, field: "subtitle" }
+                  : { reason, slug: POSTS, table: POSTS_TABLE },
+            });
+        }
+      },
+      120_000
+    );
+
     it("refuses a write to an entity this instance has not registered, naming it and its table", async () => {
       const target = await boot(dialect);
       // An instance that started before a migration added the entity holds

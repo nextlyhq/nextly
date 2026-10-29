@@ -337,3 +337,46 @@ export function tableOfMissingColumn(
     /^table (\S+) has no column named/i.exec(text)?.[1]
   );
 }
+
+/** A statement's target table: what follows `from`, `into` or `update`. */
+const STATEMENT_TARGET =
+  /^\s*(?:select\b[\s\S]*?\bfrom|insert into|update|delete from)\s+[`"]?([A-Za-z0-9_$]+)/i;
+
+/**
+ * The table the failed statement was written against, or undefined when
+ * nothing in the chain says.
+ *
+ * Read from where each layer keeps it: a level's own `table` (an adapter sets
+ * it on the error it raises for a CRUD call), the adapter's context line
+ * (`<operation> operation failed on table 't'`), the query builder's
+ * `Failed query: <statement>`, and mysql2's own `sql`, the statement it ran.
+ * This is where a missing column belongs when the driver's message does not
+ * say, as MySQL's does not.
+ */
+export function statementTableOf(error: unknown): string | undefined {
+  return firstAnswer(
+    error,
+    link => ownStatementTable(link) ?? contextStatementTable(ownMessage(link))
+  );
+}
+
+/** The table a level carries itself: its `table`, or the target of its `sql`. */
+function ownStatementTable(link: unknown): string | undefined {
+  const record = (link ?? {}) as { table?: unknown; sql?: unknown };
+  if (typeof record.table === "string" && record.table.length > 0) {
+    return record.table;
+  }
+  return typeof record.sql === "string"
+    ? STATEMENT_TARGET.exec(record.sql)?.[1]
+    : undefined;
+}
+
+/** The table a level's message names as its statement's, in either wrapper's form. */
+function contextStatementTable(message: string): string | undefined {
+  const context = /operation failed on table '([^']+)'/.exec(message)?.[1];
+  if (context !== undefined) return context;
+  const prefix = "Failed query: ";
+  return message.startsWith(prefix)
+    ? STATEMENT_TARGET.exec(message.slice(prefix.length))?.[1]
+    : undefined;
+}
