@@ -48,6 +48,7 @@ export function PluginLevelGroup({
   const [open, setOpen] = useState(false);
   const { owned, locked, held } = useHeldPermissions(value, lockedIds);
   const level = groupLevel(group, held);
+  const levelWord = level === "custom" ? "Custom" : LEVEL_LABELS[level];
   const ownCount = group.permissions.length;
   const summary =
     group.rows.length > 0
@@ -76,7 +77,13 @@ export function PluginLevelGroup({
       className="border-b border-border last:border-b-0"
       data-slot="plugin-level-group"
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-3 px-6 py-4 text-left hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <CollapsibleTrigger
+        // Named in words, as the parts read: the name, the summary and the
+        // badge are side-by-side text a screen reader would otherwise run
+        // together.
+        aria-label={`${displayName}, ${summary}, ${levelWord}`}
+        className="flex w-full items-center gap-3 px-6 py-4 text-left hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         <ChevronRight
           aria-hidden="true"
           className={cn(
@@ -89,7 +96,7 @@ export function PluginLevelGroup({
           {summary}
         </span>
         <Badge variant={level === "custom" ? "warning" : "outline"}>
-          {level === "custom" ? "Custom" : LEVEL_LABELS[level]}
+          {levelWord}
         </Badge>
       </CollapsibleTrigger>
       <CollapsibleContent>
