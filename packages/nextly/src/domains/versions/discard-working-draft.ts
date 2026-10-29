@@ -29,6 +29,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import type { UserContext } from "../singles/types";
 
 /**
@@ -93,6 +94,12 @@ export interface DiscardedWorkingDraft {
 export async function discardWorkingDraft(
   args: DiscardWorkingDraftArgs
 ): Promise<DiscardedWorkingDraft> {
+  // Refused first when the collection or Single is removed from code, before
+  // the live document is read for the editor to reset to.
+  await refuseHistoryWriteIfRemovedFromCode({
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+  });
   // Read the live published row FIRST, through the full read pipeline (hooks,
   // redaction, field-level access) and WITHOUT the working-draft overlay, so it
   // is the live document the editor resets to. The delete below never touches

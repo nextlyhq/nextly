@@ -13,6 +13,7 @@ import type {
   EmailProviderDescriptor,
   EmailProviderRecord,
 } from "@admin/services/emailProviderApi";
+import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 
 import { EmailProviderTable } from "../index";
 
@@ -64,7 +65,9 @@ const RESEND: EmailProviderDescriptor = {
 
 function holding(slugs: string[]) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
-    hasPermission: (slug: string) => slugs.includes(slug),
+    // Asked as the product asks: a `manage-` permission counts as the plain
+    // ones it stands for.
+    hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
     isLoading: false,
     hasAnswer: true,
     error: null,

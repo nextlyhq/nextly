@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { MAX_WIDGET_SETTINGS } from "../../settings";
-import { settings } from "../setting-builders";
+import { setting } from "../setting-builders";
 import {
   assertWidgetDeclarations,
   collectWidgetDeclarationFaults,
@@ -33,9 +33,20 @@ function valid(overrides: Record<string, unknown> = {}): unknown {
       max: { w: 6, h: 6 },
     },
     settings: {
-      collection: { type: "collection" },
-      by: { type: "groupBy", of: "collection", defaultValue: "state" },
-      top: { type: "number", defaultValue: 5, min: 1, max: 25 },
+      collection: { type: "collection", label: "Collection" },
+      by: {
+        type: "groupBy",
+        label: "Group by",
+        of: "collection",
+        defaultValue: "state",
+      },
+      top: {
+        type: "number",
+        label: "Top",
+        defaultValue: 5,
+        min: 1,
+        max: 25,
+      },
     },
     load: async () => ({ buckets: [] }),
     view: "bars",
@@ -226,10 +237,108 @@ describe("a widget declaration as startup receives it", () => {
       ]);
     }
     expect(problemsOf(valid({ access: 3 }))).toEqual([
-      'access must be a permission name such as "read-orders", { collections }, or a function of the person, got 3',
+      'access must be a permission name such as "read-orders", { anyOf }, { allOf }, { collections }, or a function of the person, got 3',
     ]);
     expect(problemsOf(valid({ shows: "always" }))).toEqual([
       "shows must be a function of the person asking",
+    ]);
+  });
+
+  it("accepts access as a permission gate: any of several, or all of several", () => {
+    expect(
+      problemsOf(valid({ access: { anyOf: ["read-orders", "update-orders"] } }))
+    ).toEqual([]);
+    expect(
+      problemsOf(
+        valid({
+          access: {
+            allOf: [
+              "read-orders",
+              { anyOf: ["update-orders", "create-orders"] },
+            ],
+          },
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses a gate whose list is empty, or names something other than a permission", () => {
+    // "Any of nothing" admits nobody and "all of nothing" everybody: each reads like the other.
+    expect(problemsOf(valid({ access: { anyOf: [] } }))).toEqual([
+      'access.anyOf must be a non-empty list of permission names such as "read-orders"',
+    ]);
+    expect(problemsOf(valid({ access: { allOf: [] } }))).toEqual([
+      "access.allOf must be a non-empty list, each entry a permission name or { anyOf: [...] }",
+    ]);
+    expect(
+      problemsOf(valid({ access: { allOf: ["read-orders", { anyOf: [] }] } }))
+    ).toEqual([
+      'access.allOf[1].anyOf must be a non-empty list of permission names such as "read-orders"',
+    ]);
+    expect(
+      problemsOf(valid({ access: { anyOf: ["read-orders", "orders:read"] } }))
+    ).toEqual([
+      'access.anyOf must be a non-empty list of permission names such as "read-orders"',
+    ]);
+    // A list inside allOf is the registry's spelling, not the declaration's.
+    expect(
+      problemsOf(valid({ access: { allOf: [["read-orders"]] } }))[0]
+    ).toContain(
+      'access.allOf[0] must be a permission name such as "read-orders" or { anyOf: [...] }'
+    );
+    // An allOf nested in an entry is no gate either: one level only.
+    expect(
+      problemsOf(valid({ access: { allOf: [{ allOf: ["read-orders"] }] } }))[0]
+    ).toContain("access.allOf[0] must be");
+    // An empty slot (`[a, , b]`) is refused as one: `every` would skip it, so an
+    // any-of with one would otherwise pass as if the entry were never written.
+    const holed = new Array<unknown>(3);
+    holed[0] = "read-orders";
+    holed[2] = "update-orders";
+    expect(problemsOf(valid({ access: { anyOf: holed } }))).toEqual([
+      "access.anyOf has an empty slot at position 2; remove the extra comma",
+    ]);
+    expect(problemsOf(valid({ access: { allOf: holed } }))).toEqual([
+      "access.allOf has an empty slot at position 2; remove the extra comma",
+    ]);
+    // One form at a time, and nothing beside it.
+    expect(
+      problemsOf(
+        valid({ access: { anyOf: ["read-orders"], collections: ["orders"] } })
+      )
+    ).toEqual(["access must take one form, but names collections and anyOf"]);
+    expect(
+      problemsOf(valid({ access: { anyOf: ["read-orders"], all: true } }))
+    ).toEqual(['access takes no "all" beside its anyOf']);
+  });
+
+  it("refuses a bare list of permissions, pointing to { anyOf } and { allOf }", () => {
+    expect(
+      problemsOf(valid({ access: ["read-orders", "update-orders"] }))
+    ).toEqual([
+      "access cannot be a list: write { anyOf: [...] } for any one of several permissions, or { allOf: [...] } for every one of them",
+    ]);
+  });
+
+  it("accepts offered per collection or on request, and refuses any other", () => {
+    expect(problemsOf(valid({ offered: "per-collection" }))).toEqual([]);
+    expect(problemsOf(valid({ offered: "on-request" }))).toEqual([]);
+    expect(problemsOf(valid({ offered: "per-colletion" }))).toEqual([
+      'has offered "per-colletion", which is not one of per-collection, on-request',
+    ]);
+    expect(problemsOf(valid({ offered: true }))).toEqual([
+      "has offered true, which is not one of per-collection, on-request",
+    ]);
+  });
+
+  it("refuses a widget offered per collection with no Collection setting, by the registry's own rule", () => {
+    // No Collection, and so no grouping setting that names one: offered's fault is the only one.
+    const settings = {
+      top: { type: "number", label: "Top", defaultValue: 5, min: 1, max: 25 },
+    };
+    expect(problemsOf(valid({ settings, offered: "on-request" }))).toEqual([]);
+    expect(problemsOf(valid({ settings, offered: "per-collection" }))).toEqual([
+      "a widget offered per collection needs a Collection setting, which each card starts set to",
     ]);
   });
 
@@ -363,6 +472,26 @@ describe("a widget declaration as startup receives it", () => {
     ]);
   });
 
+  it("refuses a preview case drawn with a setting the widget does not declare, or a value its setting refuses", () => {
+    const withCase = (settings: Record<string, unknown>) =>
+      problemsOf(
+        valid({
+          preview: [{ name: "Some", data: { buckets: [] }, settings }],
+        })
+      );
+    // The control: a declared setting at a value it accepts.
+    expect(withCase({ top: 3, by: "state" })).toEqual([]);
+    expect(withCase({ tops: 3 })).toEqual([
+      'preview[0].settings sets "tops", which the widget does not declare',
+    ]);
+    expect(withCase({ top: 30 })).toEqual([
+      'preview[0].settings: setting "top" defaults to 30, outside the range it declares',
+    ]);
+    expect(withCase({ top: "3" })).toEqual([
+      'preview[0].settings: setting "top" is typed "number" but defaults to "3"',
+    ]);
+  });
+
   it("refuses a preview case that cannot be sent to the browser as it is", () => {
     const listOf = (data: unknown) =>
       valid({ view: "list", preview: [{ name: "Case", data }] });
@@ -457,7 +586,9 @@ describe("a widget declaration as startup receives it", () => {
   describe("refuses invalid settings", () => {
     it("of a type no setting has", () => {
       expect(
-        problemsOf(valid({ settings: { a: { type: "colour" } } }))[0]
+        problemsOf(
+          valid({ settings: { a: { type: "colour", label: "A" } } })
+        )[0]
       ).toContain('"colour"');
     });
 
@@ -468,6 +599,7 @@ describe("a widget declaration as startup receives it", () => {
             settings: {
               tone: {
                 type: "select",
+                label: "Tone",
                 options: [{ label: "Calm", value: "calm" }],
                 defaultValue: "loud",
               },
@@ -484,10 +616,14 @@ describe("a widget declaration as startup receives it", () => {
         problemsOf(
           valid({
             settings: {
-              collection: settings.collection(),
-              where: settings.filter({ of: "collection" }),
-              order: settings.sort({ of: "collection", default: "-updatedAt" }),
-              by: settings.groupBy({ of: "collection" }),
+              collection: setting.collection({ label: "Collection" }),
+              where: setting.filter({ of: "collection", label: "Filter" }),
+              order: setting.sort({
+                of: "collection",
+                label: "Sort",
+                defaultValue: "-updatedAt",
+              }),
+              by: setting.groupBy({ of: "collection", label: "Group by" }),
             },
           })
         )
@@ -499,8 +635,8 @@ describe("a widget declaration as startup receives it", () => {
         problemsOf(
           valid({
             settings: {
-              collection: { type: "collection" },
-              by: { type: "groupBy", of: "colection" },
+              collection: { type: "collection", label: "Collection" },
+              by: { type: "groupBy", label: "Group by", of: "colection" },
             },
           })
         )
@@ -516,8 +652,8 @@ describe("a widget declaration as startup receives it", () => {
         valid({
           settings: {
             broken: null,
-            limit: { type: "number", defaultValue: "five" },
-            by: { type: "groupBy", of: "missing" },
+            limit: { type: "number", label: "Limit", defaultValue: "five" },
+            by: { type: "groupBy", label: "Group by", of: "missing" },
           },
         })
       );
@@ -534,11 +670,29 @@ describe("a widget declaration as startup receives it", () => {
       );
     });
 
+    it("without a label, or with a blank one, named by its key", () => {
+      // 🔴 The builders' types require a label; plain JavaScript meets this.
+      expect(
+        problemsOf(
+          valid({
+            settings: {
+              top: { type: "number", defaultValue: 5 },
+              note: { type: "text", label: "  " },
+              tone: { type: "text", label: "Tone" },
+            },
+          })
+        )
+      ).toEqual([
+        'setting "top" needs a label: the settings sheet names every setting by what its label says, never by its key',
+        'setting "note" needs a label: the settings sheet names every setting by what its label says, never by its key',
+      ]);
+    });
+
     it("over the limit, still saying so when one is malformed", () => {
       const many = Object.fromEntries(
         Array.from({ length: MAX_WIDGET_SETTINGS }, (_, index) => [
           `s${index}`,
-          { type: "number" },
+          { type: "number", label: `S${index}` },
         ])
       );
       const problems = problemsOf(valid({ settings: { ...many, broken: 7 } }));

@@ -697,8 +697,19 @@ export const chips = (
  *   ],
  * })
  * ```
+ *
+ * With a value given, the option keeps it as the literal written, so a widget
+ * setting's select (`setting.select`) is typed by exactly the values it
+ * offers; an option whose value comes from its label is a plain string.
  */
-export const option = (label: string, value?: string): SelectOption => ({
-  label,
-  value: value ?? label.toLowerCase().replace(/\s+/g, "_"),
-});
+export function option<const Value extends string>(
+  label: string,
+  value: Value
+): SelectOption & { value: Value };
+export function option(label: string, value?: string): SelectOption;
+export function option(label: string, value?: string): SelectOption {
+  return {
+    label,
+    value: value ?? label.toLowerCase().replace(/\s+/g, "_"),
+  };
+}

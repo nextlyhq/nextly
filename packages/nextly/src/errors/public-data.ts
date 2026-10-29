@@ -97,8 +97,19 @@ export type SharedFieldsConflictPublicData = {
   hiddenCount?: number;
 };
 
+/**
+ * Which entity an `ENTITY_REMOVED_FROM_CODE` refusal is about: its kind and
+ * the slug the caller named. Enough for a client to mark the entity and say
+ * what to do, and nothing the caller did not already send.
+ */
+export type RemovedFromCodePublicData = {
+  kind: "collection" | "single";
+  slug: string;
+};
+
 export type PublicData =
   | ValidationPublicData
+  | RemovedFromCodePublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
   | SingleAbsentPublicData

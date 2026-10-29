@@ -10,38 +10,40 @@ import {
   MAX_WIDGET_LIMIT,
   MAX_WIDGET_ROWS,
 } from "nextly/config";
+import { rowsThatFit } from "nextly/card-geometry";
 import { describe, expect, it } from "vitest";
 
+import { LIST_ROW_HEIGHT_CLASS } from "../geometry";
 import {
   LIST_ROW_HEIGHT_PX,
   listDensityOf,
-  rowsThatFit,
+  rowsInBody,
   tierBodyHeight,
 } from "../list-rows";
 import { rowsDrawn } from "../tier";
 
-describe("rowsThatFit", () => {
+describe("rowsInBody", () => {
   it("counts whole rows only, never part of one", () => {
     const row = LIST_ROW_HEIGHT_PX.default;
-    expect(rowsThatFit(row * 4, "default")).toBe(4);
+    expect(rowsInBody(row * 4, "default")).toBe(4);
     // One pixel short of a fifth row is still four.
-    expect(rowsThatFit(row * 5 - 1, "default")).toBe(4);
+    expect(rowsInBody(row * 5 - 1, "default")).toBe(4);
   });
 
   it("fits more compact rows in the same height", () => {
     // 🔴 The separating pair: a rule that ignored density gives both the same.
-    expect(rowsThatFit(260, "default")).toBe(5);
-    expect(rowsThatFit(260, "compact")).toBe(7);
+    expect(rowsInBody(260, "default")).toBe(5);
+    expect(rowsInBody(260, "compact")).toBe(7);
   });
 
   it("never fits more than the card maximum", () => {
     expect(MAX_WIDGET_ROWS).toBe(10);
-    expect(rowsThatFit(10_000, "compact")).toBe(MAX_WIDGET_ROWS);
+    expect(rowsInBody(10_000, "compact")).toBe(MAX_WIDGET_ROWS);
   });
 
   it("fits nothing in a body with no room or no height", () => {
     for (const height of [0, -40, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(rowsThatFit(height, "default")).toBe(0);
+      expect(rowsInBody(height, "default")).toBe(0);
     }
   });
 });
@@ -55,7 +57,7 @@ describe("rowsDrawn", () => {
 
   it("draws more rows at the same tier when compact", () => {
     expect(rowsDrawn("medium", 10, "compact")).toBe(
-      rowsThatFit(tierBodyHeight("medium"), "compact")
+      rowsInBody(tierBodyHeight("medium"), "compact")
     );
     expect(rowsDrawn("medium", 10, "compact")).toBeGreaterThan(
       rowsDrawn("medium", 10)
@@ -107,6 +109,32 @@ describe("listDensityOf", () => {
   it("reads none, or a value no density has, as default", () => {
     for (const settings of [undefined, null, {}, { density: "tight" }, "x"]) {
       expect(listDensityOf(settings)).toBe("default");
+    }
+  });
+});
+
+describe("the rows a widget's load is told fit", () => {
+  it("are the rows the admin draws for a card of that height, at either density", () => {
+    // 🔴 A load that reads `rowsThatFit(size, { density })` asks for exactly the rows the card's
+    // list then draws: a count of its own, one row off at any height, would leave a row empty or
+    // ask for one the card hides. At a full "Number of items", so only the body decides.
+    for (const h of [2, 3, 4, 6, 8, 12]) {
+      for (const density of ["default", "compact"] as const) {
+        expect(rowsThatFit({ h }, { density })).toBe(
+          rowsDrawn({ tier: "medium", h }, MAX_WIDGET_ROWS, density)
+        );
+      }
+    }
+  });
+
+  it("follow the row heights the list rows are drawn in", () => {
+    // Each density's row class is Tailwind's height utility of that many pixels: a step of the
+    // spacing scale is 0.25rem, 4 px at the root size the admin's grid is measured in. The
+    // class text has to be written out for Tailwind to see it, so it is held to the number here.
+    for (const density of ["default", "compact"] as const) {
+      expect(LIST_ROW_HEIGHT_CLASS[density]).toBe(
+        `h-${LIST_ROW_HEIGHT_PX[density] / 4}`
+      );
     }
   });
 });
