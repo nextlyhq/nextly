@@ -717,11 +717,9 @@ async function anyDecided(
  * The decision's answer for one permission: an entity's operation asked of
  * the target with the rules it declares, whether or not the access-control
  * service is there to read them, and anything else of the permission alone,
- * as {@link gateVerdict} routes them. A read the decision allows only for the
- * entries a rule's filter matches answers yes: the caller may read some
- * entries. `nextly.access.check` asks it.
+ * as {@link gateVerdict} routes them.
  */
-export async function decidedOne(
+async function decidedOne(
   actor: Actor,
   action: string,
   resource: string,
@@ -880,6 +878,31 @@ async function sessionAnswer(
   if (!rules) return refusedWithoutService(caller, action, resource);
   const verdict = await gateVerdict(
     caller,
+    action,
+    resource,
+    rules,
+    () => Promise.resolve(false),
+    "some-entries"
+  );
+  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
+  return verdict.allowed;
+}
+
+/**
+ * Whether the signed-in user `userId` may perform `action` on `resource`, as
+ * the route gate decides it for that user's session, with the rules `rules`
+ * holds now: a read a rule's filter limits answers yes, since the user may
+ * read the entries it matches (`nextly.access.check`). A lookup that fails
+ * throws, as the gate's does.
+ */
+export async function sessionMayPerform(
+  userId: string,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<boolean> {
+  const verdict = await gateVerdict(
+    { userId },
     action,
     resource,
     rules,

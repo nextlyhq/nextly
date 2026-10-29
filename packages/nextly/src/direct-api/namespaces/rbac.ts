@@ -13,8 +13,7 @@
  * @packageDocumentation
  */
 
-import { actorForUserFailingClosed } from "../../auth/access/resolve-actor";
-import { decidedOne } from "../../auth/access/route-gate-adapters";
+import { sessionMayPerform } from "../../auth/access/route-gate-adapters";
 import type { AuthContext } from "../../auth/middleware";
 import {
   apiKeyPermissionsFor,
@@ -29,6 +28,7 @@ import {
   SYSTEM_WRITE_POLICY,
 } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
+import { consoleLogger } from "../../shared/types";
 import type {
   CheckAccessArgs,
   CheckApiKeyArgs,
@@ -415,17 +415,27 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
       // The question is about a signed-in user, so naming none is refused,
       // never answered as a visitor's public default.
       if (!args.userId) return false;
-      // The one access decision, as every gate asks it. A read a rule's filter
-      // limits answers yes, since the user may read some entries; a read made
-      // in the user's context applies the filter. A role or grant lookup that
-      // fails counts as holding nothing of its kind, so a check that cannot
-      // read the user refuses rather than throws.
-      return decidedOne(
-        await actorForUserFailingClosed(args.userId),
-        args.operation,
-        args.resource,
-        ctx.rbacAccessControlService
-      );
+      try {
+        // The route gate's answer for the user's session, with the rules
+        // registered now. A read a rule's filter limits answers yes, since
+        // the user may read some entries; a read made in the user's context
+        // applies the filter.
+        return await sessionMayPerform(
+          args.userId,
+          args.operation,
+          args.resource,
+          ctx.rbacAccessControlService
+        );
+      } catch (error) {
+        // A user whose roles or grants cannot be read is refused rather than
+        // failed: the answer is a boolean, and a rule is never asked with a
+        // role set that could not be read.
+        consoleLogger.error("[rbac] access.check could not read the user", {
+          userId: args.userId,
+          error,
+        });
+        return false;
+      }
     },
 
     async checkApiKey(args: CheckApiKeyArgs): Promise<CheckApiKeyResult> {
