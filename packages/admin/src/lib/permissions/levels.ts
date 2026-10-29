@@ -85,7 +85,7 @@ const LEGACY_MANAGE = "manage";
  * The roles screen still reads a stored `manage` row there as Can edit; the
  * server counts it for nothing until `nextly upgrade` has converted the role.
  */
-export const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set([
+const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set([
   "media",
   "settings",
   "email-providers",
