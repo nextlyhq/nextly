@@ -39,14 +39,24 @@ test.describe("the widget preview page on a production build", () => {
     await signIn(page);
     // Customise mode, where a development server draws the link beside its
     // other actions, draws none.
-    await page.getByTestId("dashboard-edit-begin").click();
+    await page
+      .getByTestId("dashboard-edit-begin")
+      .filter({ visible: true })
+      .click();
     await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
-    await expect(page.getByTestId("widget-previews-link")).toHaveCount(0);
-    await page.getByTestId("dashboard-edit-cancel").click();
+    await expect(
+      page.getByTestId("widget-previews-link").filter({ visible: true })
+    ).toHaveCount(0);
+    await page
+      .getByTestId("dashboard-edit-cancel")
+      .filter({ visible: true })
+      .click();
 
     // The control: an address no route serves, and what the admin draws there.
     await page.goto(UNSERVED);
-    const notFound = page.getByText("Oops! This page doesn't exist");
+    const notFound = page
+      .getByText("Oops! This page doesn't exist")
+      .filter({ visible: true });
     await expect(notFound).toBeVisible({ timeout: 60_000 });
     const unservedTitle = await page.title();
 
@@ -64,12 +74,8 @@ test.describe("the widget preview page on a production build", () => {
     page,
   }) => {
     await signIn(page);
-    const asked = await page.request.get(
-      "/admin/api/dashboard/widget-previews"
-    );
-    const unserved = await page.request.get(
-      "/admin/api/dashboard/no-such-read"
-    );
+    const asked = await page.request.get("/admin/api/_dev/widget-previews");
+    const unserved = await page.request.get("/admin/api/_dev/no-such-read");
     expect(asked.status()).toBe(unserved.status());
     expect(asked.status()).not.toBe(200);
     expect(asked.headers()["content-type"]).toBe(

@@ -75,7 +75,9 @@ async function blockingStatesIn(
   else await expect(adminRoot).not.toHaveClass(/\bdark\b/);
   await page.addScriptTag({ path: AXE_SCRIPT });
   await page.getByRole("button", { name: "Check accessibility" }).click();
-  const status = page.getByTestId("accessibility-status");
+  const status = page
+    .getByTestId("accessibility-status")
+    .filter({ visible: true });
   await expect(status).toHaveAttribute("data-check", "done", {
     timeout: 300_000,
   });
@@ -165,9 +167,14 @@ test("customise mode offers the page beside its other actions, and the link open
   // The production spec finds no such link; this is the same place on a
   // development server, where it is drawn.
   await gotoAdmin(page, "");
-  await page.getByTestId("dashboard-edit-begin").click();
+  await page
+    .getByTestId("dashboard-edit-begin")
+    .filter({ visible: true })
+    .click();
   await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
-  const link = page.getByTestId("widget-previews-link");
+  const link = page
+    .getByTestId("widget-previews-link")
+    .filter({ visible: true });
   await expect(link).toBeVisible();
   await link.click();
   await expect(
