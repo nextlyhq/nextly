@@ -97,7 +97,16 @@ export async function readCompanionHistory(
   let names: string[];
   try {
     names = (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
-  } catch {
+  } catch (error) {
+    // A directory that isn't there holds no history. One that can't be listed may hold any, so it
+    // counts as a file this build cannot read, about any entity, after every other.
+    if ((error as { code?: string }).code !== "ENOENT") {
+      replay.unread.push({
+        at: Number.POSITIVE_INFINITY,
+        name: migrationsDir,
+        slugs: [],
+      });
+    }
     return historyOf(replay);
   }
   for (const [at, name] of names.sort().entries()) {

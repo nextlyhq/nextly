@@ -13,7 +13,14 @@
  *      the column back and refills it, from main for the default language and from the archive
  *      for the others.
  */
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -822,17 +829,59 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       await expect(run).rejects.toThrow(/"weight"/);
     });
 
-    it("lets a field that can never be translated join a translated collection", async () => {
-      const files = await secondRun(
-        dialect,
-        withField({ name: "secret", type: "password" }),
-        { beforeSecond: forgetEverything }
-      );
+    it.each([
+      {
+        change: "a translated field made a password",
+        next: {
+          ...TRANSLATED,
+          fields: [
+            { name: "body", type: "password" },
+            { name: "price", type: "number" },
+          ],
+        },
+        named: /"body"/,
+      },
+      {
+        // Read the same way from the main table alone: a column it gains.
+        change: "a password field added",
+        next: withField({ name: "secret", type: "password" }),
+        named: /"secret"/,
+      },
+    ])(
+      "refuses $change on a translated collection no record settles",
+      async ({ next, named }) => {
+        const run = secondRun(dialect, next, {
+          beforeSecond: forgetEverything,
+        });
 
-      expect(files.map(f => f.name)).toEqual([
-        expect.stringMatching(/_two\.sql$/),
-      ]);
-    });
+        await expect(run).rejects.toThrow(named);
+        await expect(run).rejects.toThrow(/--record-snapshot/);
+      }
+    );
+
+    it.skipIf(process.getuid?.() === 0)(
+      "refuses turning translation off when the migrations directory can't be listed, naming it",
+      async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED], after: forgetTranslatedFieldRecord },
+        ]);
+        // Written to and entered, but not listed: its files may have made the companion.
+        await chmod(dir, 0o300);
+        try {
+          const run = generate(
+            dialect,
+            dir,
+            [{ ...TRANSLATED, localized: false }],
+            "next",
+            60
+          );
+          await expect(run).rejects.toThrow(/"body" in collection "docs"/);
+          await expect(run).rejects.toThrow(new RegExp(escape(dir)));
+        } finally {
+          await chmod(dir, 0o755);
+        }
+      }
+    );
 
     it("names the run to make again by the name its file takes, after putting the config back", async () => {
       const dir = await projectAfter(dialect, [

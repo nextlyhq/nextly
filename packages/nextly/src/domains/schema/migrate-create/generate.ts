@@ -1390,18 +1390,12 @@ function previousTranslation(
   };
 }
 
-/** Whether a field of a translated entity can be translated at all, whatever it declares. */
-function canBeTranslated(field: MinimalConfigField): boolean {
-  return isFieldLocalized({ ...field, localized: true }, true);
-}
-
 /**
  * The fields this change may move between translated and shared on an entity whose translated
  * fields before it no record settles, by what the previous main table holds. For an entity
  * translated now, when no record says (`previousTranslation` is `undefined`):
  *
- * - a shared field the main table gains, which is new or leaving translation, unless its type can
- *   never be translated;
+ * - a shared field the main table gains, which is new or leaving translation, whatever its type;
  * - a translated field the main table holds, which is joining translation, unless every
  *   translated field the table holds is and no localization file may be the entity's
  *   (`mayBeAbout`, which counts a file naming no entity): that is the entity becoming translated.
@@ -1448,16 +1442,16 @@ function fieldsByMainColumn(
   });
 }
 
-/** The shared fields the main table gains, of a type that can be translated. */
+/**
+ * The shared fields the main table gains. Whatever their type now: with no record, a field of a
+ * type that can never be translated may still be one that was translated under another type.
+ */
 function gainedSharedFields(
   columned: readonly ColumnedField[],
   translatedNow: boolean
 ): ColumnedField[] {
   return columned.filter(
-    f =>
-      !isFieldLocalized(f.field, translatedNow) &&
-      !f.onMain &&
-      canBeTranslated(f.field)
+    f => !isFieldLocalized(f.field, translatedNow) && !f.onMain
   );
 }
 
@@ -1528,7 +1522,7 @@ function refuseUnrecordedTranslationChanges(
     const because =
       unreadable.length === 0
         ? ""
-        : ` This build can't read ${unreadable.length === 1 ? "the localization migration file" : "the localization migration files"} ${unreadable.join(", ")}.`;
+        : ` This build can't read ${unreadable.join(", ")}, which may be about it.`;
     throw new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage:
