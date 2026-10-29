@@ -32,9 +32,9 @@ export interface UseDocumentLockHolderOptions {
 /**
  * The document's holder: `null` when nobody holds it, or while off;
  * `undefined` until the first read answers, and while a read is still out at
- * the next beat. A read that fails keeps the last answer, so a colleague is
- * not forgotten over one lost request, and a first read that fails leaves the
- * holder unknown rather than reporting nobody.
+ * the next beat. A read that fails keeps a colleague the last read named, so
+ * they are not forgotten over one lost request, and makes "nobody" unknown,
+ * since it cannot confirm it.
  */
 export function useDocumentLockHolder({
   scopeKind,
@@ -69,7 +69,16 @@ export function useDocumentLockHolder({
         }>(`/document-lock?${query}`);
         if (!stopped) setAnswer({ documentKey, holder: reply.holder });
       } catch {
-        // The last answer stands until a read says otherwise.
+        // A colleague the last read named still holds it as far as this
+        // knows, so that answer stands. "Nobody" does not: a colleague may
+        // have claimed it since, so it is unknown until a read confirms it.
+        if (!stopped) {
+          setAnswer(last =>
+            last?.documentKey === documentKey && last.holder === null
+              ? { documentKey, holder: undefined }
+              : last
+          );
+        }
       } finally {
         reading = false;
       }
