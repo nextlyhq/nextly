@@ -13,6 +13,8 @@
  * @packageDocumentation
  */
 
+import { actorForUser } from "../../auth/access/resolve-actor";
+import { decidedWhole } from "../../auth/access/route-gate-adapters";
 import type { AuthContext } from "../../auth/middleware";
 import {
   apiKeyPermissionsFor,
@@ -403,11 +405,17 @@ export interface AccessNamespace {
 export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
   return {
     async check(args: CheckAccessArgs): Promise<boolean> {
-      return await ctx.rbacAccessControlService.checkAccess({
-        userId: args.userId,
-        operation: args.operation,
-        resource: args.resource,
-      });
+      // The question is about a signed-in user, so naming none is refused,
+      // never answered as a visitor's public default.
+      if (!args.userId) return false;
+      // The one access decision, as every gate asks it, for the resource as
+      // a whole: a rule that answers a filter refuses.
+      return decidedWhole(
+        await actorForUser(args.userId),
+        args.operation,
+        args.resource,
+        ctx.rbacAccessControlService
+      );
     },
 
     async checkApiKey(args: CheckApiKeyArgs): Promise<CheckApiKeyResult> {

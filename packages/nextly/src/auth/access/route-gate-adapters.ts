@@ -52,7 +52,7 @@ import {
   userIsSuperAdmin,
   withHeldPermissions,
 } from "./resolve-actor";
-import { allowsSome } from "./rule-answer";
+import { allowedUnfiltered, allowsSome } from "./rule-answer";
 import {
   askEachLanguage,
   withRuleLanguage,
@@ -711,21 +711,50 @@ async function decidedOne(
   resource: string,
   rules: RouteRules
 ): Promise<boolean> {
-  const declared =
-    resource === ""
-      ? undefined
-      : (declaredTarget(resource) ?? rules?.getRegisteredTarget(resource));
-  if (!asksTheEntity(action, resource, declared)) {
-    return decidePermission(actor, action, resource).allowed;
-  }
-  const target: AccessTarget = declared ?? {
-    kind: "collection",
-    slug: resource,
-  };
+  const target = entityTargetOf(action, resource, rules);
+  if (!target) return decidePermission(actor, action, resource).allowed;
   return allowsSome(
     await decide(actor, action as AccessOperation, target),
     action
   );
+}
+
+/**
+ * The decision's answer for `action` on the whole of `resource`, for a way in
+ * that applies no rule's filter: routed as {@link decidedOne} routes it, and
+ * allowed only where the decision allows every entry, so a rule that answers
+ * a filter refuses (`nextly.access.check`).
+ */
+export async function decidedWhole(
+  actor: Actor,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<boolean> {
+  const target = entityTargetOf(action, resource, rules);
+  if (!target) return decidePermission(actor, action, resource).allowed;
+  return allowedUnfiltered(
+    await decide(actor, action as AccessOperation, target),
+    action
+  );
+}
+
+/**
+ * The collection or Single `action` on `resource` asks, with the rules it
+ * declares, or `undefined` where the permission alone answers: a system
+ * resource, an action no rule is declared for, or an empty resource.
+ */
+function entityTargetOf(
+  action: string,
+  resource: string,
+  rules: RouteRules
+): AccessTarget | undefined {
+  const declared =
+    resource === ""
+      ? undefined
+      : (declaredTarget(resource) ?? rules?.getRegisteredTarget(resource));
+  if (!asksTheEntity(action, resource, declared)) return undefined;
+  return declared ?? { kind: "collection", slug: resource };
 }
 
 /**
