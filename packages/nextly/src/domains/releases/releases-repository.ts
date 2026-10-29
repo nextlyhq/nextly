@@ -870,6 +870,29 @@ export interface MembersWritten {
 }
 
 /**
+ * Refuse a {@link MembersWrite} whose rows name a release other than the one
+ * it locks, fences and counts: a release to create under another id, or a
+ * document naming another release, would land in a release nobody locked or
+ * counted. Asked over the values in hand, before the transaction opens.
+ */
+function assertNamesOneRelease(write: MembersWrite): void {
+  const others = write.members
+    .map(member => member.releaseId)
+    .filter(releaseId => releaseId !== write.releaseId);
+  if (write.create !== undefined && write.create.id !== write.releaseId) {
+    others.push(write.create.id);
+  }
+  if (others.length === 0) return;
+  throw NextlyError.internal({
+    logContext: {
+      reason: "members-write-names-another-release",
+      releaseId: write.releaseId,
+      others,
+    },
+  });
+}
+
+/**
  * The key a batched lookup groups by.
  *
  * Exported and used by BOTH sides of that lookup so a caller cannot invent a
@@ -2584,6 +2607,7 @@ export class ReleasesRepository {
    * @experimental
    */
   async addMembers(write: MembersWrite): Promise<MembersWritten> {
+    assertNamesOneRelease(write);
     const by = write.by ?? SYSTEM_RELEASE_EVENT_ACTOR;
     // Told apart from a database failure by these, as in `addMember`.
     let fenceMissed = false;

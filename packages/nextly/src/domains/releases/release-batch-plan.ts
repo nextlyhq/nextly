@@ -8,8 +8,9 @@
  * add offered. Both are all-or-nothing, so everything a request can be
  * refused for on its own face is refused here, before a document is read or
  * a row is written: an empty batch, one larger than a release may hold, a
- * document named twice, a path that is not one of the three, and linked
- * documents offered with a document that is coming down.
+ * document named twice, a path that is not one of the three, linked
+ * documents offered with a document that is coming down, and a schedule whose
+ * instant is not a date or whose zone is not text.
  *
  * Pure, so its rules are tested without a database.
  *
@@ -233,7 +234,7 @@ export function planDocumentSchedule(
         description: null,
         kind: linked.length > 0 ? "release" : "single",
       },
-      schedule: { at: input.at, timezone: input.timezone },
+      schedule: scheduleOf(input),
     },
   };
 }
@@ -273,6 +274,33 @@ function requireTitle(title: unknown): string {
     });
   }
   return title;
+}
+
+/**
+ * The schedule as given: an instant that is a date, and a zone given as text.
+ * A JavaScript caller of the Direct API can send anything here, and the
+ * schedule's own checks (a real zone, an instant still to come) read the two
+ * as a Date and a string. So what neither could read is refused as invalid
+ * input here, before anything is read or written.
+ */
+function scheduleOf(input: { at?: unknown; timezone?: unknown }): {
+  at: Date;
+  timezone: string;
+} {
+  const { at, timezone } = input;
+  if (!(at instanceof Date) || Number.isNaN(at.getTime())) {
+    throw NextlyError.invalidInput({
+      message: "`at` must be a date: the instant the document goes out.",
+      logContext: { reason: "schedule-document-invalid-at" },
+    });
+  }
+  if (typeof timezone !== "string" || timezone.length === 0) {
+    throw NextlyError.invalidInput({
+      message: "`timezone` names the time zone the document is scheduled in.",
+      logContext: { reason: "schedule-document-without-timezone" },
+    });
+  }
+  return { at, timezone };
 }
 
 /** A description as given: text, `null` or absent, which is `null`. */

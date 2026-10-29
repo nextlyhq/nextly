@@ -236,3 +236,43 @@ describe("scheduling a document in one step", () => {
     expect(scheduleDocument).not.toHaveBeenCalled();
   });
 });
+
+describe("taking a document out of a release", () => {
+  /** The route's answer, with the namespace reporting `releaseCancelled`. */
+  async function remove(releaseCancelled: boolean) {
+    const removeMember = vi.fn(async () => ({ releaseCancelled }));
+    getCachedNextly.mockResolvedValue({ releases: { removeMember } });
+    const answer = await post(
+      "removeReleaseMember",
+      {},
+      { releaseId: "r1", memberId: "m1" }
+    );
+    expect(removeMember).toHaveBeenCalledWith(
+      expect.objectContaining({ releaseId: "r1", memberId: "m1" })
+    );
+    return answer;
+  }
+
+  it("says the release was cancelled when its only document was taken out", async () => {
+    const answer = await remove(true);
+    expect(answer.status).toBe(200);
+    expect(answer.json).toEqual({
+      message:
+        "The release was cancelled, because its only document was taken out.",
+      memberId: "m1",
+      releaseId: "r1",
+      releaseCancelled: true,
+    });
+  });
+
+  it("says the document was removed when the release goes on without it", async () => {
+    const answer = await remove(false);
+    expect(answer.status).toBe(200);
+    expect(answer.json).toEqual({
+      message: "Removed from release.",
+      memberId: "m1",
+      releaseId: "r1",
+      releaseCancelled: false,
+    });
+  });
+});

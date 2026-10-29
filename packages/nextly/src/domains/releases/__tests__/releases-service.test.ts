@@ -714,7 +714,10 @@ describe("ReleasesService fences a membership change on its judgement", () => {
   it("treats removing an already-gone member as done, not as an error", async () => {
     const { svc, repo } = service({ holds: ["create"] });
     repo.findMember.mockResolvedValueOnce(undefined);
-    await expect(svc.removeMember("gone", ADMIN)).resolves.toBeUndefined();
+    // Done, and nothing cancelled: the member was already gone.
+    await expect(svc.removeMember("gone", ADMIN)).resolves.toEqual({
+      releaseCancelled: false,
+    });
     expect(repo.removeMember).not.toHaveBeenCalled();
   });
 });

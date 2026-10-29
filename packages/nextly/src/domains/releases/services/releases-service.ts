@@ -402,6 +402,19 @@ export interface ReleaseWithAddedMembers {
 }
 
 /**
+ * What taking a document out of a release did. Taking the only document out
+ * of a single-document release that has not run cancels that release and
+ * keeps the document in it, so a caller is told which of the two happened
+ * rather than told the document was removed.
+ *
+ * @experimental
+ */
+export interface ReleaseMemberRemoval {
+  /** True when the release was cancelled instead of the document removed. */
+  releaseCancelled: boolean;
+}
+
+/**
  * The report for a member with nothing to report: a new one each time, since
  * it is handed to the caller, who may change it.
  */
@@ -3578,9 +3591,10 @@ export class ReleasesService {
       }
       throw error;
     }
-    if (written.release.state === "scheduled") {
-      await this.stopAfterCommit(written.members);
-    }
+    // No second check after the commit: a step is judged before its write as
+    // one add is, and a scheduled release is judged again at its instant by
+    // the drain, so several documents added at once are held to exactly what
+    // adding them one at a time would be.
     return {
       release: written.release,
       members: written.members.map((member, index) => ({
@@ -3592,36 +3606,12 @@ export class ReleasesService {
     };
   }
 
-  /**
-   * The early stop for these just-added documents, after the commit: the
-   * path every event takes once its write has committed. Never fails the
-   * step it follows; the drain checks every release again at its instant.
-   */
-  private async stopAfterCommit(
-    members: readonly ReleaseMemberRow[]
-  ): Promise<void> {
-    try {
-      await this.stopOnHardProblems({
-        documents: members.map(member => ({
-          scopeKind: member.scopeKind,
-          scopeSlug: member.scopeSlug,
-          entryId: member.entryId,
-        })),
-      });
-    } catch (error) {
-      this.deps.logger?.warn(
-        "The documents just added could not be checked again; the release is checked at its instant",
-        { error: error instanceof Error ? error.message : String(error) }
-      );
-    }
-  }
-
   async removeMember(
     memberId: string,
     actor: ReleaseActor,
     /** The release the caller believes this member belongs to, when it knows. */
     expectedReleaseId?: string
-  ): Promise<void> {
+  ): Promise<ReleaseMemberRemoval> {
     await this.authorize(actor, "create");
 
     // An earlier version of this method reasoned that removing a member "can
@@ -3634,7 +3624,7 @@ export class ReleasesService {
     // Already gone. Idempotent rather than a 404: the caller's intent is
     // satisfied, and answering not-found for a member somebody else removed
     // makes a retry look like a failure.
-    if (member === undefined) return;
+    if (member === undefined) return { releaseCancelled: false };
 
     // A member id that belongs to a DIFFERENT release than the caller named is
     // refused, not followed. Nothing joins the two in the path, so a stale
@@ -3666,7 +3656,7 @@ export class ReleasesService {
     // finished release is.
     if (removalCancels(release) && release !== undefined) {
       await this.cancelForRemoval(release.id, actor);
-      return;
+      return { releaseCancelled: true };
     }
     await this.assertNotEmptyingCommittedSingle(release, actor);
     const allowedStates = await this.judgeMembershipChange(
@@ -3687,6 +3677,7 @@ export class ReleasesService {
       allowedStates,
       releaseEventActorOf(actor)
     );
+    return { releaseCancelled: false };
   }
 
   /**

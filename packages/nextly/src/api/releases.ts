@@ -1124,8 +1124,20 @@ const RELEASE_OPERATIONS: Record<
     // `/api/releases/A/members/B` removes B even when B belongs to release C —
     // a stale client URL then quietly edits a release the caller never named,
     // and the response says it worked.
-    await releases.removeMember({ ...caller, memberId, releaseId });
-    return respondAction("Removed from release.", { memberId, releaseId });
+    const { releaseCancelled } = await releases.removeMember({
+      ...caller,
+      memberId,
+      releaseId,
+    });
+    // Taking the only document out of an unrun single-document release
+    // cancels it and keeps the document, so the answer says so rather than
+    // telling a client the document is gone and the release goes on.
+    return respondAction(
+      releaseCancelled
+        ? "The release was cancelled, because its only document was taken out."
+        : "Removed from release.",
+      { memberId, releaseId, releaseCancelled }
+    );
   },
 
   scheduleRelease: async ({ request, caller, releases, releaseId }) => {

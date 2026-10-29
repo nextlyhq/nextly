@@ -123,6 +123,24 @@ describe("planDocumentSchedule", () => {
     });
   });
 
+  it("refuses an instant that is not a date, or a zone that is not text, as invalid input", () => {
+    // A JavaScript caller of the Direct API can send either; neither may reach
+    // the schedule's own checks, which read them as a Date and a string.
+    const malformed: unknown[] = [
+      { ...own(), at: "2099-01-10T09:00:00Z" },
+      { ...own(), at: new Date("not a date") },
+      { ...own(), at: undefined },
+      { ...own(), timezone: undefined },
+      { ...own(), timezone: 3 },
+    ];
+    for (const input of malformed) {
+      expect(
+        () => planDocumentSchedule(input as ScheduleDocumentInput),
+        JSON.stringify(input)
+      ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+    }
+  });
+
   it("makes it an ordinary release holding all of them when linked documents go with it", () => {
     const plan = planDocumentSchedule(
       own([

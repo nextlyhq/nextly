@@ -42,6 +42,7 @@ import type {
   ReleaseCalendarQuery,
   ReleaseCountQuery,
   ReleaseDetailsChange,
+  ReleaseMemberRemoval,
   ReleaseMembersView,
   ReleaseReadinessEntry,
   ReleaseReadinessView,
@@ -314,7 +315,8 @@ export interface ReleasesNamespace {
    * Out of a single-document release that has not run (draft, scheduled or
    * stopped), it cancels that release instead, under the cancel authority
    * (`publish`), and the release is kept as cancelled. This is
-   * `@experimental`.
+   * `@experimental`. The answer says which happened: `releaseCancelled` is
+   * true when the release was cancelled instead of the document removed.
    *
    * `releaseId` is optional but SHOULD be supplied by any caller that knows it —
    * a transport addressing `/releases/A/members/B` knows which release it meant,
@@ -323,7 +325,7 @@ export interface ReleasesNamespace {
    */
   removeMember(
     args: { memberId: string; releaseId?: string } & ReleaseCallerArgs
-  ): Promise<void>;
+  ): Promise<ReleaseMemberRemoval>;
   /**
    * The release's documents the caller may read, in the order they were
    * added. A caller acting for a user is given only the documents that user

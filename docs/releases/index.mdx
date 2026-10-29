@@ -91,6 +91,11 @@ document as the record of what it was for, and is never deleted by this: deletin
 separate act, with its own permission. Out of a single-document release that ran (published
 or cancelled), the document can't be taken at all. This is experimental.
 
+The answer says which of the two happened. `releases.removeMember` resolves to
+`{ releaseCancelled }`, true when the release was cancelled instead of the document removed,
+and `DELETE /api/releases/:id/members/:memberId` returns the same `releaseCancelled` field,
+with the message "The release was cancelled, because its only document was taken out."
+
 ## Adding several documents, and scheduling a document, in one step
 
 <Callout type="info">

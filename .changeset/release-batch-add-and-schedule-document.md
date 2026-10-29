@@ -54,4 +54,7 @@ the cancel operation, under its permission (`publish-content-releases`), and
 keeps it as cancelled. Before, a draft or stopped one was left empty, and
 the document of a scheduled one could not be taken out. Whoever may create
 but not publish releases is now refused this, and the release's
-`can.removeMember` says so.
+`can.removeMember` says so. The answer says which happened:
+`nextly.releases.removeMember` now resolves to `{ releaseCancelled }`
+instead of nothing, and `DELETE /api/releases/:id/members/:memberId`
+returns the same field.
