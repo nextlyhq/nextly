@@ -21,8 +21,11 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { runWithRequestCaller } from "../../../auth/caller-scope";
 import { defineCollection, defineSingle, text } from "../../../config";
 import type { SchemaRegistry } from "../../../database/schema-registry";
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
@@ -31,12 +34,16 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { ServiceContainer } from "../../../services/index";
 
 const POSTS = "um_posts";
 const BANNER = "um_banner";
 /** Their tables, as the registry names them. */
 const POSTS_TABLE = `dc_${POSTS}`;
 const BANNER_TABLE = `single_${BANNER}`;
+/** Translated, with Draft/Published, for publishing every language at once. */
+const PUB = "um_pub";
+const PUB_BANNER = "um_pub_banner";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -85,21 +92,37 @@ const direct = (): DirectApi => t().nextly as unknown as DirectApi;
  * an API key whose role holds every permission on both, so a REST request
  * reaches the read or write rather than stopping at authorization.
  */
-async function boot(
-  dialect: TestDialect
-): Promise<{ key: string; id: string }> {
+async function boot(dialect: TestDialect): Promise<{
+  key: string;
+  id: string;
+  owner: string;
+  pubId: string;
+}> {
   current = await createTestNextly({
     dialect,
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
     collections: [
       defineCollection({
         slug: POSTS,
         fields: [text({ name: "title" }), text({ name: "subtitle" })],
+      }),
+      defineCollection({
+        slug: PUB,
+        status: true,
+        localized: true,
+        fields: [text({ name: "title" })],
       }),
     ],
     singles: [
       defineSingle({
         slug: BANNER,
         fields: [text({ name: "title" }), text({ name: "subtitle" })],
+      }),
+      defineSingle({
+        slug: PUB_BANNER,
+        status: true,
+        localized: true,
+        fields: [text({ name: "title" })],
       }),
     ],
   });
@@ -158,7 +181,52 @@ async function boot(
     data: { title: "First", subtitle: "One" },
   });
   await api.updateSingle({ slug: BANNER, data: { title: "First" } });
-  return { key, id: entry.item.id };
+  const pub = await api.create({ collection: PUB, data: { title: "Draft" } });
+  await api.updateSingle({ slug: PUB_BANNER, data: { title: "Draft" } });
+  return { key, id: entry.item.id, owner: owner.item.id, pubId: pub.item.id };
+}
+
+/** Run `work` as the install's owner, signed in, as a REST dispatch is. */
+function asOwner<T>(owner: string, work: () => Promise<T>): Promise<T> {
+  return runWithRequestCaller(
+    {
+      userId: owner,
+      actor: { type: "user", id: owner },
+      roles: ["super-admin"],
+    },
+    work
+  );
+}
+
+/** The entry service, for the writes a caller's transaction makes. */
+function entryService(): Record<
+  string,
+  (...args: unknown[]) => Promise<Record<string, unknown>>
+> {
+  return (
+    t().getService("collectionsHandler") as unknown as {
+      getEntryService(): Record<
+        string,
+        (...args: unknown[]) => Promise<Record<string, unknown>>
+      >;
+    }
+  ).getEntryService();
+}
+
+/** What `write` answered inside a transaction of the caller's own. */
+async function inTransaction(
+  write: (tx: unknown) => Promise<Record<string, unknown>>
+): Promise<Record<string, unknown> | undefined> {
+  let result: Record<string, unknown> | undefined;
+  // The transaction itself may refuse to commit after the failure; what the
+  // write answered inside it is what is asserted.
+  await t()
+    .adapter.transaction(async tx => {
+      result = await write(tx);
+      if (result.success === false) throw new Error("roll back");
+    })
+    .catch(() => undefined);
+  return result;
 }
 
 /** What a caller is answered, from either door. */
@@ -450,14 +518,7 @@ describe.each(getConfiguredTestDialects())(
             ? `ALTER TABLE ${quoted(dialect, POSTS_TABLE)} DROP COLUMN ${quoted(dialect, "subtitle")}`
             : `DROP TABLE ${quoted(dialect, POSTS_TABLE)}`
         );
-        const entries = (
-          t().getService("collectionsHandler") as unknown as {
-            getEntryService(): Record<
-              string,
-              (...args: unknown[]) => Promise<Record<string, unknown>>
-            >;
-          }
-        ).getEntryService();
+        const entries = entryService();
         const params = { collectionName: POSTS, overrideAccess: true };
         const writes: Array<
           [string, (tx: unknown) => Promise<Record<string, unknown>>]
@@ -489,15 +550,7 @@ describe.each(getConfiguredTestDialects())(
           ],
         ];
         for (const [name, write] of writes) {
-          let result: Record<string, unknown> | undefined;
-          // The transaction itself may refuse to commit after the failure;
-          // what the write answered inside it is what is asserted.
-          await t()
-            .adapter.transaction(async tx => {
-              result = await write(tx);
-              if (result.success === false) throw new Error("roll back");
-            })
-            .catch(() => undefined);
+          const result = await inTransaction(write);
           expect
             .soft(
               result,
@@ -515,6 +568,63 @@ describe.each(getConfiguredTestDialects())(
       },
       120_000
     );
+
+    it("names the entity and its table when publishing every language finds its table missing", async () => {
+      const target = await boot(dialect);
+      // Neither was migrated: each companion goes first, since it references
+      // its main table.
+      for (const table of [
+        `dc_${PUB}_locales`,
+        `dc_${PUB}`,
+        `single_${PUB_BANNER}_locales`,
+        `single_${PUB_BANNER}`,
+      ]) {
+        await execute(`DROP TABLE ${quoted(dialect, table)}`);
+      }
+      const publishes: Array<[string, string, string, () => Promise<unknown>]> =
+        [
+          [
+            "collection publish-all",
+            "collection",
+            PUB,
+            () =>
+              asOwner(target.owner, () =>
+                dispatchCollections(
+                  new ServiceContainer(t().adapter),
+                  "publishAllLocales",
+                  { collectionName: PUB, entryId: target.pubId } as never,
+                  undefined
+                )
+              ),
+          ],
+          [
+            "Single publish-all",
+            "single",
+            PUB_BANNER,
+            () =>
+              asOwner(target.owner, () =>
+                dispatchSingles(
+                  "publishAllSingleLocales",
+                  { slug: PUB_BANNER } as never,
+                  undefined
+                )
+              ),
+          ],
+        ];
+      for (const [name, kind, slug, run] of publishes) {
+        const answer = await viaDirect(run);
+        expect.soft(answer, name).toMatchObject({
+          status: 409,
+          code: "ENTITY_NOT_MIGRATED",
+          data: {
+            reason: "table",
+            kind,
+            slug,
+            table: kind === "single" ? `single_${slug}` : `dc_${slug}`,
+          },
+        });
+      }
+    }, 120_000);
 
     it("refuses a write to an entity this instance has not registered, naming it and its table", async () => {
       const target = await boot(dialect);

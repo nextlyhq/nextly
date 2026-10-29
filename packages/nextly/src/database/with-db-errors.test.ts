@@ -3,7 +3,11 @@ import { describe, it, expect } from "vitest";
 import { NextlyError } from "../errors/nextly-error";
 
 import { DbError } from "./errors";
-import { asNotMigrated, withDbErrors } from "./with-db-errors";
+import {
+  asNotMigrated,
+  singleNotMigrated,
+  withDbErrors,
+} from "./with-db-errors";
 
 describe("withDbErrors", () => {
   it("passes through successful results", async () => {
@@ -305,6 +309,68 @@ describe("asNotMigrated", () => {
       })
     ).toBe(error);
     expect(await asNotMigrated(error, entity(null))).toBe(error);
+  });
+
+  it("leaves a failure after the write's row was written as it was", async () => {
+    // Its committed-write answer says the change was saved; naming a migration
+    // would invite sending it again.
+    const error = wrapped(
+      driver('column "hero_image" does not exist', "42703")
+    );
+    expect(await asNotMigrated(error, entity(), { written: true })).toBe(error);
+    expect(
+      await asNotMigrated(error, entity(), { written: false })
+    ).toMatchObject({ code: "ENTITY_NOT_MIGRATED" });
+  });
+
+  it("names a field the configuration declares and the served registry lacks", async () => {
+    // The registry row the instance serves predates the field; the running
+    // configuration declares it, and the database has no column for it.
+    const served = {
+      kind: "single" as const,
+      slug: "banner",
+      load: () =>
+        Promise.resolve({
+          tableName: "single_banner",
+          fields: [{ name: "title", type: "text" }],
+        }),
+      declaredFields: () => [
+        { name: "title", type: "text" },
+        { name: "subtitle", type: "text" },
+      ],
+    };
+    const error = statementOn(
+      "single_banner",
+      driver('column "subtitle" does not exist', "42703")
+    );
+    expect(await asNotMigrated(error, served)).toMatchObject({
+      code: "ENTITY_NOT_MIGRATED",
+      publicData: { reason: "column", kind: "single", field: "subtitle" },
+    });
+    // Without the configuration's fields, nothing names it.
+    expect(
+      await asNotMigrated(error, { ...served, declaredFields: undefined })
+    ).toBe(error);
+  });
+
+  it("reads a Single's declared fields from its code-first configuration", async () => {
+    const entity = singleNotMigrated(
+      {
+        getSingleBySlug: () =>
+          Promise.resolve({ tableName: "single_banner", fields: [] }),
+        getCodeFirstFields: () => [{ name: "subtitle", type: "text" }],
+      },
+      "banner"
+    );
+    expect(
+      await asNotMigrated(
+        statementOn(
+          "single_banner",
+          driver('column "subtitle" does not exist', "42703")
+        ),
+        entity
+      )
+    ).toMatchObject({ publicData: { field: "subtitle" } });
   });
 
   it("leaves a NextlyError as it was", async () => {

@@ -6117,7 +6117,11 @@ export class CollectionMutationService extends BaseService {
           // A write the database is not migrated for answers as such.
           await asNotMigrated(
             error,
-            collectionNotMigrated(this.collectionService, params.collectionName)
+            collectionNotMigrated(
+              this.collectionService,
+              params.collectionName
+            ),
+            { written: committedWrite }
           ),
           { defaultMessage: "Failed to create entry" },
           this.dialect
@@ -7318,7 +7322,12 @@ export class CollectionMutationService extends BaseService {
       if (publishDocDenied) {
         return publishDocDenied;
       }
-      const thrown = publishRefused ?? error;
+      // A publish the database is not migrated for answers as such.
+      const thrown = await asNotMigrated(
+        publishRefused ?? error,
+        collectionNotMigrated(this.collectionService, params.collectionName),
+        { written: committedWrite }
+      );
       return {
         success: false,
         statusCode: 500,
@@ -11313,7 +11322,11 @@ export class CollectionMutationService extends BaseService {
           // A write the database is not migrated for answers as such.
           await asNotMigrated(
             error,
-            collectionNotMigrated(this.collectionService, params.collectionName)
+            collectionNotMigrated(
+              this.collectionService,
+              params.collectionName
+            ),
+            { written: committedWrite }
           ),
           { defaultMessage: "Failed to update entry" },
           this.dialect
@@ -11746,7 +11759,8 @@ export class CollectionMutationService extends BaseService {
       // A delete the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
         caught,
-        collectionNotMigrated(this.collectionService, params.collectionName)
+        collectionNotMigrated(this.collectionService, params.collectionName),
+        { written: committedWrite }
       );
       return {
         success: false,
@@ -12335,7 +12349,9 @@ export class CollectionMutationService extends BaseService {
           // from the row read before the failed statement.
           await asNotMigrated(
             error,
-            collectionRowNotMigrated(params.collectionName, writeRow)
+            collectionRowNotMigrated(params.collectionName, writeRow),
+            // Set only once the row was written.
+            { written: revalidationIntent !== undefined }
           ),
           { defaultMessage: options.failureMessage },
           this.dialect
@@ -13573,7 +13589,9 @@ export class CollectionMutationService extends BaseService {
           // from the row read before the failed statement.
           await asNotMigrated(
             error,
-            collectionRowNotMigrated(params.collectionName, writeRow)
+            collectionRowNotMigrated(params.collectionName, writeRow),
+            // Set only once the row was written.
+            { written: revalidationIntent !== undefined }
           ),
           { defaultMessage: options.failureMessage },
           this.dialect
@@ -14006,7 +14024,9 @@ export class CollectionMutationService extends BaseService {
       // the row read before the failed statement.
       const error = await asNotMigrated(
         caught,
-        collectionRowNotMigrated(params.collectionName, writeRow)
+        collectionRowNotMigrated(params.collectionName, writeRow),
+        // Set only once the row was deleted.
+        { written: revalidationIntent !== undefined }
       );
       return {
         success: false,

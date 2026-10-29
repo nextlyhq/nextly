@@ -4661,7 +4661,8 @@ export class SingleMutationService extends BaseService {
         ...buildSingleErrorResult(
           await asNotMigrated(
             error,
-            singleNotMigrated(this.singleRegistryService, slug)
+            singleNotMigrated(this.singleRegistryService, slug),
+            { written: committedWrite }
           ),
           "Failed to update Single document"
         ),

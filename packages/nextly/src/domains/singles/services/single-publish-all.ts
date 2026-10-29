@@ -23,6 +23,11 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { askEachLanguage } from "../../../auth/access/rule-language";
 import { actorForWrite } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  asNotMigrated,
+  type NotMigratedEntity,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -325,11 +330,10 @@ export class SinglePublishAllService extends BaseService {
       };
     } catch (error) {
       if (refused.denied) return refused.denied;
-      if (error instanceof NextlyError) throw error;
-      throw NextlyError.internal({
-        cause: error instanceof Error ? error : undefined,
-        logContext: { reason: "single-publish-all", single: slug },
-      });
+      throw await publishAllFailure(
+        error,
+        singleNotMigrated(this.singleRegistryService, slug)
+      );
     }
   }
 
@@ -2034,4 +2038,23 @@ function withSharedState(
       ),
     },
   };
+}
+
+/**
+ * What a Single's publish-all throws for `error`: a typed error as it is, the
+ * not-migrated answer for a database not migrated for the Single, and an
+ * internal error for anything else. Nothing after the publish's transaction
+ * reads the database, so a failure here never follows a written row.
+ */
+async function publishAllFailure(
+  error: unknown,
+  single: NotMigratedEntity
+): Promise<NextlyError> {
+  if (error instanceof NextlyError) return error;
+  const notMigrated = await asNotMigrated(error, single);
+  if (NextlyError.is(notMigrated)) return notMigrated;
+  return NextlyError.internal({
+    cause: error instanceof Error ? error : undefined,
+    logContext: { reason: "single-publish-all", single: single.slug },
+  });
 }

@@ -52,6 +52,12 @@ export interface NotMigratedEntity {
   kind: "collection" | "single";
   slug: string;
   load: () => Promise<RegistryRowShape | null | undefined>;
+  /**
+   * The fields the running configuration declares for it, where known. A
+   * field declared there and missing from the served registry row is still
+   * one of its fields, whose column the database has not been given.
+   */
+  declaredFields?: () => unknown;
 }
 
 /** A collection, read from the registry service its entry services hold. */
@@ -80,10 +86,16 @@ export function collectionRowNotMigrated(
 export function singleNotMigrated(
   registry: {
     getSingleBySlug(slug: string): Promise<RegistryRowShape | null>;
+    getCodeFirstFields?(slug: string): unknown;
   },
   slug: string
 ): NotMigratedEntity {
-  return { kind: "single", slug, load: () => registry.getSingleBySlug(slug) };
+  return {
+    kind: "single",
+    slug,
+    load: () => registry.getSingleBySlug(slug),
+    declaredFields: () => registry.getCodeFirstFields?.(slug),
+  };
 }
 
 /**
@@ -105,8 +117,13 @@ export function singleNotMigrated(
  */
 export async function asNotMigrated(
   error: unknown,
-  entity: NotMigratedEntity
+  entity: NotMigratedEntity,
+  options: { written?: boolean } = {}
 ): Promise<unknown> {
+  // After the write's row was written, a failure is answered as it was: the
+  // committed-write answer says the change was saved, and naming a migration
+  // instead would invite a retry that makes the change a second time.
+  if (options.written === true) return error;
   // A typed answer keeps its meaning. An internal error says only that the
   // failure was unexpected, and a layer below may have made one of the
   // driver's error, so its cause is read like any other.
@@ -127,7 +144,10 @@ export async function asNotMigrated(
       ? NextlyError.notMigrated({ ...subject, reason: report.object })
       : error;
   }
-  const field = fieldWhoseColumnIsNamed(report.text, row?.fields);
+  const field = fieldWhoseColumnIsNamed(report.text, [
+    ...listOf(row?.fields),
+    ...listOf(entity.declaredFields?.()),
+  ]);
   // Whose column it is: the driver's message names the table where it can,
   // and the failed statement's own table where it does not (MySQL's).
   const owner =
@@ -154,8 +174,8 @@ function fieldWhoseColumnIsNamed(
   fields: unknown
 ): { name: string; column: string } | undefined {
   const fieldByColumn = new Map<string, string>();
-  for (const field of Array.isArray(fields) ? fields : []) {
-    const name = (field as { name?: unknown } | null)?.name;
+  for (const field of listOf(fields)) {
+    const name = field.name;
     if (typeof name !== "string") continue;
     for (const column of columnsDeclaredBy([field])) {
       fieldByColumn.set(column, name);
@@ -175,4 +195,16 @@ function fieldWhoseColumnIsNamed(
  */
 function isEntityTable(owner: string | undefined, table: string): boolean {
   return owner === table || owner === `${table}_locales`;
+}
+
+/** A field definition, as far as its column is concerned. */
+type FieldShape = { name?: unknown; type?: unknown; options?: unknown };
+
+/** The field definitions of `value`, when it is a list of them. */
+function listOf(value: unknown): FieldShape[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is FieldShape => typeof item === "object" && item !== null
+      )
+    : [];
 }
