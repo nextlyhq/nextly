@@ -284,14 +284,28 @@ async function seedEverything(): Promise<void> {
   // step never wrote, for good. So it waits for a boot whose permissions all
   // seeded. A preset is different: it is brought back to its whole set on every
   // boot, so the next one completes it.
-  if (!permissionsSeeded) return;
-  await seedingStep("plugin roles", () => {
-    const config = getService("config");
-    return seedPluginRoles(
-      getService("adapter"),
-      collectRoles(config, config.plugins ?? []),
-      getService("logger")
-    );
+  if (permissionsSeeded) {
+    await seedingStep("plugin roles", () => {
+      const config = getService("config");
+      return seedPluginRoles(
+        getService("adapter"),
+        collectRoles(config, config.plugins ?? []),
+        getService("logger")
+      );
+    });
+  }
+  // Roles an earlier release gave a retired `manage-` permission, each named
+  // at every start until `nextly upgrade` converts it. Named last: the writers
+  // above store a retired permission as the plain four, so a preset, the
+  // Public role or a plugin role holding one is converted by this seeding, and
+  // naming it before would ask for an upgrade this boot already did.
+  await seedingStep("retired manage check", async () => {
+    const { formatRetiredManageWarning, rolesHoldingRetiredManage } =
+      await import("../domains/auth/retired-manage");
+    const holding = await rolesHoldingRetiredManage(getService("adapter"));
+    if (holding.length > 0) {
+      getService("logger").warn(formatRetiredManageWarning(holding));
+    }
   });
 }
 
