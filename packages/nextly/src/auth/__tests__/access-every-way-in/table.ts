@@ -815,19 +815,32 @@ export function oneAnswer(row: Row): Verdict {
 
 /**
  * The doors that answer yes or no about a collection, not about one entry.
- * Where the one answer lets the caller act on the entries a filter matches,
- * theirs is yes: the caller may act on the collection, on those entries.
+ * Where the one answer lets the caller read the entries a filter matches,
+ * theirs is yes: the caller may read the collection, those entries. A write
+ * under a filter is no there: the answer names no entry and applies no
+ * filter, so a yes would let the caller act past it.
  */
-const COLLECTION_DOORS: ReadonlySet<Door> = new Set<Door>([
-  "can",
-  "capabilities",
-  "widget",
-]);
+const YES_OR_NO_DOORS: ReadonlySet<Door> = new Set<Door>(["can", "widget"]);
 
-/** The one answer as `door` gives it (see {@link COLLECTION_DOORS}). */
+/**
+ * The doors that show a capability cell: a hint of what the caller may try,
+ * whose request applies the rule's filter. Where the one answer lets the
+ * caller act on the entries a filter matches, for any action, theirs is yes.
+ */
+const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities"]);
+
+/**
+ * The one answer as `door` gives it (see {@link YES_OR_NO_DOORS} and
+ * {@link CELL_DOORS}).
+ */
 export function oneAnswerAt(row: Row, door: Door): Verdict {
   const answer = oneAnswer(row);
-  return answer === "matching" && COLLECTION_DOORS.has(door) ? "allow" : answer;
+  if (answer !== "matching") return answer;
+  if (CELL_DOORS.has(door)) return "allow";
+  if (YES_OR_NO_DOORS.has(door)) {
+    return judgedAs(row.action) === "read" ? "allow" : "refuse";
+  }
+  return answer;
 }
 
 // ---------------------------------------------------------------------------

@@ -220,6 +220,9 @@ const RULES: Record<string, Rule | undefined> = {
     throw new Error("rule failed");
   },
   "role-name": ({ roles }) => roles.includes("editor"),
+  // A filter, which allows only the entries it matches. A yes or no answers
+  // yes to it for a read alone: a write under it names no entry.
+  "returns-filter": () => ({ id: { exists: true } }) as unknown as boolean,
   // The spelling rules were once handed, `<resource>:<operation>`. No rule
   // is handed it any more, so this one never allows.
   "permission-spelling": ({ permissions, operation }) =>

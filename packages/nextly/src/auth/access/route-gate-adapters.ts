@@ -559,7 +559,10 @@ async function capability(
       resource,
       rules,
       () => userHoldsPermission(caller.userId, action, resource),
-      "some-entries"
+      // A cell is a hint of what the caller may try, and the write it offers
+      // applies the rule's filter, so a cell answers yes under a filter for
+      // every action.
+      "cell"
     )
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
@@ -601,7 +604,13 @@ function gateVerdict(
     rules,
     permissionWithoutService,
     appliesFilter: readFilter === "applied",
-    asksSomeEntries: readFilter === "some-entries",
+    // A yes or no answers yes under a filter for a read alone: the caller may
+    // read the entries the filter matches. A write under a filter names no
+    // entry and applies no filter here, so its yes would let the caller act
+    // past the filter.
+    asksSomeEntries:
+      readFilter === "cell" ||
+      (readFilter === "some-entries" && action === "read"),
   });
 }
 
@@ -622,12 +631,13 @@ async function userHoldsAnswering(
 }
 
 /**
- * What an asker does with a collection read rule's filter: applies it to the
- * entries it reads (`applied`); asks only whether the caller may read the
- * collection, which the filter answers yes (`some-entries`); or neither, and
- * refuses it (`refused`).
+ * What an asker does with a collection rule's filter: applies it to the
+ * entries it reads (`applied`); asks only a yes or no, which a read's filter
+ * answers yes and a write's no (`some-entries`); shows a capability cell,
+ * which any action's filter answers yes, as the request it offers applies the
+ * filter (`cell`); or neither, and refuses it (`refused`).
  */
-type ReadFilterUse = "applied" | "some-entries" | "refused";
+type ReadFilterUse = "applied" | "some-entries" | "cell" | "refused";
 
 /**
  * The verdict for an action no rule can name. A key holds it by its stored
