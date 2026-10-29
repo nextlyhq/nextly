@@ -1,8 +1,10 @@
 /**
- * `nextly.access.check` refuses, rather than throws, when it cannot read the
- * user: a role or grant lookup that fails refuses the check, so a caller
- * branching on the answer is told `false`, never a failure, and a rule is
- * never asked with a role set that could not be read.
+ * `nextly.access.check` refuses, rather than throws, when it cannot read what
+ * its answer needs: a grant lookup that fails refuses, and a role lookup that
+ * fails refuses wherever a rule would be asked, so a rule is never asked with
+ * a role set that could not be read. A caller branching on the answer is told
+ * `false`, never a failure. Where no rule is asked, the grants that were read
+ * answer alone, as they do at the route gates.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -124,7 +126,10 @@ describe("nextly.access.check when it cannot read the user", () => {
     user.roles = ["editor", "suspended"];
     user.rolesFail = true;
     await expect(readsPosts()).resolves.toBe(false);
-    await expect(updatesSettings()).resolves.toBe(false);
     expect(user.ruleAsked).toEqual([]);
+    // Where no rule is asked the grants it read answer alone: an unreadable
+    // role set only means the user is not taken for a super-admin, and the
+    // grant to update settings was read.
+    await expect(updatesSettings()).resolves.toBe(true);
   });
 });
