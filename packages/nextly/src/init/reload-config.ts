@@ -168,6 +168,8 @@ interface AdapterLike {
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   // Whether the server can key the per-language unique index a translated unique field needs.
   getCapabilities(): ReturnType<DrizzleAdapter["getCapabilities"]>;
+  // Holds one connection for a statement the companion reconcile builds from the catalog.
+  transaction: DrizzleAdapter["transaction"];
 }
 
 type CollectionDef = {
@@ -1076,11 +1078,26 @@ async function ensureLocalizedCompanionsForReload(
     versionScopeForEntityKind,
     mainTableExists,
     resolveCompanionSeedDebt,
+    survivingCompanionRefusal,
   } = await import("../domains/i18n/runtime/companion-io");
   const { resolveCollectionTableName, resolveComponentTableName } =
     await import("../domains/schema/utils/resolve-table-name");
   const { resolveSingleTableName } = await import(
     "../domains/singles/services/resolve-single-table-name"
+  );
+  // Every entity as the registry records it before this reload's metadata sync rewrites it, which
+  // every pass of this function runs before. It tells an entity whose translation this reload
+  // starts, and a field it newly translates, from what was translated before.
+  const { readRecordedEntities, recordedBeforeOf } = await import(
+    "../domains/i18n/migration/recorded-before"
+  );
+  const recordedBefore = await readRecordedEntities(
+    adapter as unknown as DrizzleAdapter,
+    config,
+    error =>
+      consoleLogger.warn(
+        `[nextly] The registry could not be read, so no translations column is judged this reload: ${error instanceof Error ? error.message : String(error)}`
+      )
   );
 
   type Localizable = {
@@ -1174,6 +1191,25 @@ async function ensureLocalizedCompanionsForReload(
         // creates this entity's companion once the apply has produced its main table.
         continue;
       }
+      // Before copying anything into a translations table that survived turning translation
+      // off: a column there that can no longer hold its field keeps the apply from running.
+      if (phase === "beforeApply") {
+        const refused = await survivingCompanionRefusal(adapter, {
+          builtBy: "codeFirst",
+          tableName,
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
+        });
+        if (refused) {
+          preservationFailed.push(entity.slug);
+          consoleLogger.warn(
+            `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
+              `Nothing was copied into it: ${refused.message}`
+          );
+          continue;
+        }
+      }
       const provisioned = await ensureCompanionTable(
         adapter,
         {
@@ -1248,7 +1284,7 @@ async function ensureLocalizedCompanionsForReload(
       // for. Running it early would compare the companion against a main table the apply has not
       // finished shaping.
       if (phase === "beforeApply") continue;
-      await reconcileCompanionColumns(
+      const columnsInStep = await reconcileCompanionColumns(
         adapter,
         {
           // Same config-edit path as the companion creation above.
@@ -1261,6 +1297,7 @@ async function ensureLocalizedCompanionsForReload(
           // Decides whether `_updated_at` can be seeded from version history for this
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
+          recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
         },
         error => {
           consoleLogger.warn(
@@ -1268,9 +1305,16 @@ async function ensureLocalizedCompanionsForReload(
               `Newly translatable fields may fail to save until it is in step: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
+        },
+        message => {
+          consoleLogger.warn(
+            `[nextly] The translations table for "${entity.slug}": ${message}`
+          );
         }
       );
-      // Its per-language unique indexes, once its columns are in step. Best-effort, as above.
+      // Its per-language unique indexes, once its columns are in step. Best-effort, as above, and
+      // not after a column failure: a refused column is not the field's to index.
+      if (!columnsInStep) continue;
       const { reconcileCompanionUniqueIndexes } = await import(
         "../domains/i18n/runtime/companion-unique-reconcile"
       );

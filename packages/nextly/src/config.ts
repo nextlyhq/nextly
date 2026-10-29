@@ -27,6 +27,14 @@ export type {
   PreviewViewport,
   PreviewViewportsDeclaration,
 } from "./domains/collections/services/preview-viewports";
+// What a collection's read rule may answer: a filter typed by its fields.
+export type {
+  CollectionFilterRule,
+  CollectionFilterRuleInput,
+  CollectionRuleAnswer,
+  CollectionRuleFilter,
+  UntypedRuleFilter,
+} from "./shared/types/rule-filter";
 
 // The context a FIELD-level hook is handed. `FieldHooks` is already public
 // through the field types below, so the handler it is declared with is too.

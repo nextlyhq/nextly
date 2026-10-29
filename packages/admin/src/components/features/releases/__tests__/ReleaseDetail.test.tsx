@@ -1,122 +1,679 @@
 /**
- * A release's page tells its reader how many of its documents they cannot
- * view, and never reads as empty, or smaller, because of them.
+ * A release's own page: its documents by title, grouped by collection, each
+ * with its readiness, the reader's hidden documents as counts, its history,
+ * and each action offered only to a reader the server says may take it.
  *
- * The server names only the documents the reader may read and counts the
- * rest by collection; the page shows that count beside the contents.
+ * The release's `can` is the server's verdict; each permission set below is
+ * one the server could send, and the page must offer exactly what it allows.
+ *
+ * And taking the only document out of a single-document release says what it
+ * does: it cancels the release, so the page asks to confirm a cancellation,
+ * and the answer says the release was cancelled when the server says so.
  *
  * @module components/features/releases/__tests__/ReleaseDetail.test
  */
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
+import type {
+  Release,
+  ReleaseCapabilities,
+  ReleaseDocumentInfo,
+  ReleaseMember,
+  ReleaseReadiness,
+} from "@admin/types/releases";
 
-const { releaseMock, membersMock } = vi.hoisted(() => ({
-  releaseMock: vi.fn(),
-  membersMock: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  release: vi.fn(),
+  members: vi.fn(),
+  readiness: vi.fn(),
+  history: vi.fn(),
+  update: vi.fn(),
+  change: vi.fn(),
+  remove: vi.fn(),
+  navigateTo: vi.fn(),
+  overdue: vi.fn(),
 }));
 
-const idle = {
-  mutate: vi.fn(),
-  isPending: false,
-  isError: false,
-  error: null,
-  reset: vi.fn(),
+function idle(mutate: (...args: unknown[]) => void = vi.fn()) {
+  return {
+    mutate,
+    isPending: false,
+    isError: false,
+    error: null,
+    reset: vi.fn(),
+  };
+}
+
+/** The titles the page's document read answers with, by entry id. */
+const DOCUMENTS: Record<string, ReleaseDocumentInfo> = {
+  e1: {
+    title: "Launch post",
+    status: "published",
+    everPublished: true,
+    updatedAt: null,
+  },
+  e2: {
+    title: "Old post",
+    status: "draft",
+    everPublished: false,
+    updatedAt: null,
+  },
+  e3: { title: "Ada", status: "draft", everPublished: false, updatedAt: null },
+};
+
+const NAMES: Record<string, { singular: string; plural: string }> = {
+  posts: { singular: "Post", plural: "Posts" },
+  authors: { singular: "Author", plural: "Authors" },
 };
 
 vi.mock("@admin/hooks/queries/useReleases", () => ({
-  useRelease: (...args: unknown[]) => releaseMock(...args),
-  useReleaseMembers: (...args: unknown[]) => membersMock(...args),
-  useRemoveReleaseMember: () => idle,
-  useCancelRelease: () => idle,
-  useScheduleRelease: () => idle,
+  useRelease: () => mocks.release(),
+  useReleaseMembers: () => mocks.members(),
+  useReleaseReadiness: () => mocks.readiness(),
+  useReleaseHistory: () => mocks.history(),
+  useReleaseCreation: () => ({ data: null, isPending: false }),
+  useEveryReleaseId: (...args: unknown[]) => mocks.overdue(...args),
+  useReleaseTitles: () => () => undefined,
+  useReleaseDocumentNames: () => ({
+    documentOf: (member: { entryId: string }) => DOCUMENTS[member.entryId],
+    scopeNamesOf: (slug: string) => NAMES[slug],
+    isPending: () => false,
+    isError: () => false,
+  }),
+  useUpdateRelease: () => idle(mocks.update),
+  useChangeReleaseMemberAction: () => idle(mocks.change),
+  useRemoveReleaseMember: () => idle(mocks.remove),
+  useScheduleRelease: () => idle(),
+  useCancelRelease: () => idle(),
+  useDeleteRelease: () => idle(),
+  usePublishReleaseNow: () => idle(),
   useReleaseBlockers: () => ({
     data: { items: [], meta: { total: 0, hasNext: false } },
     isPending: false,
     isFetching: false,
     isError: false,
   }),
+  releaseKeys: { all: () => ["releases"] },
+}));
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({
+    user: { id: "u-me", name: "Mobeen Abdullah", email: "m@example.com" },
+  }),
+}));
+vi.mock("@admin/lib/navigation", () => ({ navigateTo: mocks.navigateTo }));
+vi.mock("../release-timezone", async importOriginal => ({
+  ...(await importOriginal<typeof import("../release-timezone")>()),
+  readerZone: () => "America/New_York",
 }));
 
 import { ReleaseDetail } from "../ReleaseDetail";
 
-const RELEASE = {
-  id: "r1",
-  title: "Autumn launch",
-  description: null,
-  scheduledAt: null,
-  timezone: null,
-  state: "draft",
-  publishedAt: null,
-  can: { removeMember: true },
+const NOTHING: ReleaseCapabilities = {
+  schedule: false,
+  cancel: false,
+  addMember: false,
+  removeMember: false,
+  publishNow: false,
+  update: false,
+  delete: false,
 };
 
-const MEMBER = {
-  id: "m1",
-  releaseId: "r1",
-  scopeKind: "collection",
-  scopeSlug: "posts",
-  entryId: "e1",
-  locale: null,
-  action: "publish",
-  createdBy: "u1",
-  createdAt: "2026-10-20T09:00:00Z",
-};
-
-/** The members read, answered as the server does. */
-function members(items: unknown[], hidden?: unknown[]) {
+function release(overrides: Partial<Release> = {}): Release {
   return {
-    data: {
-      items,
-      meta: {
-        total: items.length,
-        hasNext: false,
-        ...(hidden ? { hidden } : {}),
-      },
-    },
-    isPending: false,
-    isError: false,
+    id: "r1",
+    title: "Spring launch",
+    description: "Three launch posts.",
+    scheduledAt: null,
+    timezone: null,
+    state: "draft",
+    kind: "release",
+    publishedAt: null,
+    createdBy: "u-me",
+    createdAt: "2026-10-20T09:00:00Z",
+    updatedAt: "2026-10-20T09:00:00Z",
+    can: NOTHING,
+    ...overrides,
   };
 }
 
-const text = () => document.body.textContent ?? "";
+function member(
+  id: string,
+  scopeSlug: string,
+  entryId: string,
+  action: ReleaseMember["action"] = "publish"
+): ReleaseMember {
+  return {
+    id,
+    releaseId: "r1",
+    scopeKind: "collection",
+    scopeSlug,
+    entryId,
+    locale: null,
+    action,
+    createdBy: "u-me",
+    createdAt: "2026-10-20T09:00:00Z",
+  };
+}
 
-beforeEach(() => {
-  releaseMock.mockReturnValue({
-    data: RELEASE,
+const MEMBERS = [
+  member("m1", "posts", "e1"),
+  member("m2", "posts", "e2"),
+  member("m3", "authors", "e3", "unpublish"),
+];
+
+const HIDDEN = [
+  {
+    scopeKind: "collection" as const,
+    scopeSlug: "history-notes",
+    count: 2,
+    labels: { singular: "History note", plural: "History notes" },
+  },
+];
+
+const ONE_HARD: ReleaseReadiness = {
+  releaseId: "r1",
+  hard: [
+    {
+      memberId: "m2",
+      code: "AUTHOR_MAY_NOT_ACT",
+      source: "core.permission",
+      action: "publish",
+      scopeKind: "collection",
+      scopeSlug: "posts",
+      entryId: "e2",
+    },
+  ],
+  soft: [],
+  hidden: [{ ...HIDDEN[0], hard: 0, soft: 0 }],
+};
+
+const READY: ReleaseReadiness = { ...ONE_HARD, hard: [] };
+
+function setUp({
+  can = NOTHING,
+  readiness = READY,
+  members = MEMBERS,
+  ...overrides
+}: Partial<Release> & {
+  readiness?: ReleaseReadiness;
+  members?: ReleaseMember[];
+} = {}) {
+  mocks.release.mockReturnValue({
+    data: release({ can, ...overrides }),
     isPending: false,
     isError: false,
   });
+  mocks.members.mockReturnValue({
+    data: {
+      items: members,
+      meta: { total: members.length, hasNext: false, hidden: HIDDEN },
+    },
+    isPending: false,
+    isError: false,
+  });
+  mocks.readiness.mockReturnValue({
+    data: readiness,
+    isPending: false,
+    isError: false,
+    refetch: vi.fn(),
+  });
+}
+
+/** A collection's group, by its heading. */
+function group(name: string) {
+  return within(screen.getByRole("group", { name: new RegExp(name) }));
+}
+
+/** A document's row, by its title. */
+function row(title: string) {
+  return within(screen.getByRole("listitem", { name: title }));
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.overdue.mockReturnValue({ data: [], isError: false });
+  mocks.history.mockReturnValue({
+    data: { pages: [{ items: [], meta: { total: 0, hasNext: false } }] },
+    isPending: false,
+    isError: false,
+    hasNextPage: false,
+  });
+  setUp();
 });
 
-describe("a release holding documents its reader cannot view", () => {
-  it("counts them beside the ones it names", () => {
-    membersMock.mockReturnValue(
-      members(
-        [MEMBER],
-        [{ scopeKind: "collection", scopeSlug: "secrets", count: 2 }]
+describe("a release's documents", () => {
+  it("lists them by title, grouped by collection, each with its readiness", () => {
+    setUp({ readiness: ONE_HARD });
+    render(<ReleaseDetail id="r1" />);
+
+    expect(group("Posts").getByText("Launch post")).toBeTruthy();
+    expect(group("Posts").getByText("Old post")).toBeTruthy();
+    expect(group("Authors").getByText("Ada")).toBeTruthy();
+    // Named by title, never by the id the members list carries.
+    expect(document.body.textContent).not.toMatch(/\be[123]\b/);
+
+    expect(row("Launch post").getByText("Ready")).toBeTruthy();
+    expect(row("Ada").getByText("Comes down")).toBeTruthy();
+    expect(row("Old post").getByText("Needs a fix")).toBeTruthy();
+    expect(row("Old post").getByText(/may no longer publish it/)).toBeTruthy();
+  });
+
+  it("counts the reader's hidden documents in their collection, and in the summary", () => {
+    setUp({ readiness: ONE_HARD });
+    render(<ReleaseDetail id="r1" />);
+
+    expect(
+      group("History notes").getByText(
+        "2 documents can't be shown (deleted, or you can't view them)"
       )
-    );
-    render(<ReleaseDetail id="r1" />);
-    expect(text()).toMatch(/2 documents you can't view · secrets/);
-    // The headline is about what the reader can see, not the whole release.
-    expect(text()).toMatch(/Of those you can view, 1 document go live/);
+    ).toBeTruthy();
+    // Five in all, the two hidden ones included; one needs a fix.
+    expect(screen.getByText("4 of 5 ready.")).toBeTruthy();
   });
 
-  it("does not read as empty when every document is one they cannot view", () => {
-    membersMock.mockReturnValue(
-      members([], [{ scopeKind: "collection", scopeSlug: "secrets", count: 3 }])
-    );
+  it("does not name the documents of a release the reader cannot see into", () => {
+    setUp({ members: [] });
     render(<ReleaseDetail id="r1" />);
-    expect(text()).not.toMatch(/nothing has been added/i);
-    expect(text()).not.toMatch(/nothing in it yet/i);
-    expect(text()).toMatch(/3 documents you can't view · secrets/);
+    expect(
+      screen.getByText(
+        "2 documents can't be shown (deleted, or you can't view them)"
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/nothing has been added/i)).toBeNull();
+  });
+});
+
+describe("the actions each permission set is offered", () => {
+  it("offers nothing to a reader who may only read", async () => {
+    const user = userEvent.setup();
+    render(<ReleaseDetail id="r1" />);
+    expect(screen.queryByRole("button", { name: "Rename release" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Schedule/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Publish now/ })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "More release actions" })
+    ).toBeNull();
+    // What a document does is said, not offered as a switch.
+    expect(
+      screen.queryByRole("button", { name: /change what “Launch post” does/ })
+    ).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Launch post" })
+    );
+    expect(
+      screen.getByRole("menuitem", { name: "Open document" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Remove/ })).toBeNull();
   });
 
-  it("still reads as empty when it is, which is the control", () => {
-    membersMock.mockReturnValue(members([]));
+  it("lets a reader who may edit releases rename it in place", async () => {
+    const user = userEvent.setup();
+    setUp({ can: { ...NOTHING, update: true } });
     render(<ReleaseDetail id="r1" />);
-    expect(text()).toMatch(/nothing has been added yet/i);
-    expect(text()).not.toMatch(/you can't view/);
+    expect(screen.queryByRole("button", { name: /Schedule/ })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Rename release" }));
+    const name = screen.getByRole("textbox", { name: "Release name" });
+    await user.clear(name);
+    await user.type(name, "  Autumn launch ");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mocks.update).toHaveBeenCalledWith(
+      { title: "Autumn launch" },
+      expect.anything()
+    );
+    expect(
+      screen.getByRole("button", { name: "Edit description" })
+    ).toBeTruthy();
+  });
+
+  it("offers Schedule and Publish now to a publisher, held back while a document needs a fix", () => {
+    const can = { ...NOTHING, schedule: true, publishNow: true };
+    setUp({ can, readiness: ONE_HARD });
+    const { unmount } = render(<ReleaseDetail id="r1" />);
+    const schedule = screen.getByRole("button", { name: "Schedule…" });
+    expect(schedule).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Publish now…" })).toHaveProperty(
+      "disabled",
+      true
+    );
+    expect(
+      screen.getByText("Fix the document marked below first.")
+    ).toBeTruthy();
+    unmount();
+
+    setUp({ can, readiness: READY });
+    render(<ReleaseDetail id="r1" />);
+    expect(screen.getByRole("button", { name: "Schedule…" })).toHaveProperty(
+      "disabled",
+      false
+    );
+    expect(screen.getByRole("button", { name: "Publish now…" })).toHaveProperty(
+      "disabled",
+      false
+    );
+  });
+
+  it("offers Delete for a draft that may be deleted, and Cancel for a scheduled one", async () => {
+    const user = userEvent.setup();
+    setUp({ can: { ...NOTHING, cancel: true, delete: true } });
+    const { unmount } = render(<ReleaseDetail id="r1" />);
+    await user.click(
+      screen.getByRole("button", { name: "More release actions" })
+    );
+    expect(screen.getByRole("menuitem", { name: "Delete…" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Discard/ })).toBeNull();
+    unmount();
+
+    setUp({
+      state: "scheduled",
+      scheduledAt: "2026-11-01T14:00:00Z",
+      timezone: "Asia/Karachi",
+      can: { ...NOTHING, cancel: true },
+    });
+    render(<ReleaseDetail id="r1" />);
+    await user.click(
+      screen.getByRole("button", { name: "More release actions" })
+    );
+    expect(
+      screen.getByRole("menuitem", { name: "Cancel release…" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Delete…" })).toBeNull();
+  });
+
+  it("lets a reader who may change its documents switch and remove them", async () => {
+    const user = userEvent.setup();
+    setUp({ can: { ...NOTHING, removeMember: true } });
+    render(<ReleaseDetail id="r1" />);
+
+    await user.click(
+      screen.getByRole("button", { name: /change what “Launch post” does/ })
+    );
+    await user.click(screen.getByRole("menuitemradio", { name: "Comes down" }));
+    expect(mocks.change).toHaveBeenCalledWith({
+      memberId: "m1",
+      action: "unpublish",
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Launch post" })
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: "Remove from release…" })
+    );
+    const dialog = within(screen.getByRole("alertdialog"));
+    expect(dialog.queryByText(/cancels the release/)).toBeNull();
+    await user.click(dialog.getByRole("button", { name: "Remove" }));
+    expect(mocks.remove).toHaveBeenCalledWith("m1", expect.anything());
+  });
+});
+
+describe("a single-document release", () => {
+  const single = [member("m1", "posts", "e1")];
+
+  it("says that taking its document out cancels it", async () => {
+    const user = userEvent.setup();
+    setUp({
+      kind: "single",
+      members: single,
+      can: { ...NOTHING, removeMember: true, cancel: true },
+    });
+    render(<ReleaseDetail id="r1" />);
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Launch post" })
+    );
+    await user.click(
+      screen.getByRole("menuitem", { name: "Remove and cancel release…" })
+    );
+    const dialog = within(screen.getByRole("alertdialog"));
+    expect(dialog.getByText(/This cancels the release\./)).toBeTruthy();
+    await user.click(
+      dialog.getByRole("button", { name: "Remove and cancel release" })
+    );
+    expect(mocks.remove).toHaveBeenCalledWith("m1", expect.anything());
+  });
+
+  it("holds the removal back, with the reason, from a reader who may not cancel", async () => {
+    const user = userEvent.setup();
+    setUp({
+      kind: "single",
+      members: single,
+      can: { ...NOTHING, removeMember: true },
+    });
+    render(<ReleaseDetail id="r1" />);
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Launch post" })
+    );
+    const item = screen.getByRole("menuitem", {
+      name: "Remove and cancel release…",
+    });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText(/cancels this release, which needs/)).toBeTruthy();
+    await user.click(item);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+describe("a release's history", () => {
+  it("says who did what, by document title, gathering a run of additions", async () => {
+    const user = userEvent.setup();
+    const event = (
+      id: string,
+      kind: string,
+      payload: Record<string, unknown> | null = null,
+      actorKind = "person"
+    ) => ({
+      id,
+      kind,
+      actorKind,
+      actorId: actorKind === "person" ? "u-2" : null,
+      actorName: actorKind === "person" ? "Aqib Khan" : null,
+      occurredAt: "2026-10-20T09:00:00Z",
+      fromState: null,
+      toState: null,
+      note: null,
+      versionNo: null,
+      payload,
+      parts: [],
+    });
+    const added = (id: string, entryId: string) =>
+      event(id, "release-document-added", {
+        scopeKind: "collection",
+        scopeSlug: "posts",
+        entryId,
+        locale: null,
+        action: "publish",
+      });
+    mocks.history.mockReturnValue({
+      data: {
+        pages: [
+          {
+            items: [
+              event("h5", "release-published", null, "system"),
+              event("h4", "release-renamed", {
+                from: "Spring",
+                to: "Spring launch",
+              }),
+              added("h3", "e1"),
+              added("h2", "e2"),
+              {
+                ...event("h1", "release-created"),
+                actorId: "u-me",
+                actorName: "Mobeen Abdullah",
+              },
+            ],
+            meta: { total: 5, hasNext: false },
+          },
+        ],
+      },
+      isPending: false,
+      isError: false,
+      hasNextPage: false,
+    });
+    render(<ReleaseDetail id="r1" />);
+    const history = within(screen.getByRole("region", { name: "History" }));
+    expect(history.getByText("Published")).toBeTruthy();
+    expect(history.getByText("renamed it “Spring launch”")).toBeTruthy();
+    expect(history.getByText("added 2 documents")).toBeTruthy();
+    expect(history.getByText("created the release")).toBeTruthy();
+    expect(history.getAllByText("Aqib Khan").length).toBe(2);
+    // The reader's own act, named as About names them.
+    expect(history.getByText("You")).toBeTruthy();
+
+    await user.click(history.getByText("Show them"));
+    expect(history.getByText("“Launch post” · goes live")).toBeTruthy();
+    expect(history.getByText("“Old post” · goes live")).toBeTruthy();
+  });
+});
+
+describe("where a release stands", () => {
+  const past = {
+    state: "scheduled" as const,
+    scheduledAt: "2026-01-01T09:00:00.000Z",
+    timezone: "UTC",
+  };
+
+  it("says a release past its time is overdue when the list's read says so", () => {
+    mocks.overdue.mockReturnValue({ data: ["r1"], isError: false });
+    setUp(past);
+    render(<ReleaseDetail id="r1" />);
+    expect(screen.getByText("Overdue")).toBeTruthy();
+    expect(screen.queryByText("Scheduled")).toBeNull();
+    // The Needs attention read the list uses, narrowed to this release's time.
+    expect(mocks.overdue).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "overdue" }),
+      true
+    );
+  });
+
+  it("says Scheduled when the read does not hold it", () => {
+    mocks.overdue.mockReturnValue({ data: ["someone-else"], isError: false });
+    setUp(past);
+    render(<ReleaseDetail id="r1" />);
+    expect(screen.getByText("Scheduled")).toBeTruthy();
+  });
+
+  it("claims no state while overdue is unknown, loading or failed", () => {
+    for (const read of [
+      { data: undefined, isError: false },
+      { data: undefined, isError: true },
+    ]) {
+      mocks.overdue.mockReturnValue(read);
+      setUp(past);
+      const { unmount } = render(<ReleaseDetail id="r1" />);
+      expect(screen.queryByText("Scheduled")).toBeNull();
+      expect(screen.queryByText("Overdue")).toBeNull();
+      unmount();
+    }
+  });
+});
+
+describe("Schedule and Publish now while the checks are read", () => {
+  const can = { ...NOTHING, schedule: true, publishNow: true };
+  const buttons = () => [
+    screen.getByRole("button", { name: "Schedule…" }),
+    screen.getByRole("button", { name: "Publish now…" }),
+  ];
+
+  it("waits, saying so, while readiness loads", () => {
+    setUp({ can });
+    mocks.readiness.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    render(<ReleaseDetail id="r1" />);
+    for (const button of buttons()) {
+      expect(button).toHaveProperty("disabled", true);
+    }
+    expect(screen.getByText("Checking…")).toBeTruthy();
+  });
+
+  it("holds both back, saying why, while its documents load or after they fail to", () => {
+    // The instant is chosen with what ships on screen, so neither commit is
+    // offered while the reader cannot see what they would be committing,
+    // whatever the checks say. Readiness answers ready here, so only the
+    // documents' read can be what holds them.
+    for (const read of [
+      { data: undefined, isPending: true, isError: false },
+      { data: undefined, isPending: false, isError: true },
+    ]) {
+      setUp({ can });
+      mocks.members.mockReturnValue(read);
+      const { unmount } = render(<ReleaseDetail id="r1" />);
+      for (const button of buttons()) {
+        expect(button, JSON.stringify(read)).toHaveProperty("disabled", true);
+      }
+      expect(
+        screen.getByText("Available once the contents have loaded.")
+      ).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it("does not lock the reader out when readiness fails, and offers a retry", async () => {
+    const user = userEvent.setup();
+    const refetch = vi.fn();
+    setUp({ can });
+    mocks.readiness.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      refetch,
+    });
+    render(<ReleaseDetail id="r1" />);
+    for (const button of buttons()) {
+      expect(button).toHaveProperty("disabled", false);
+    }
+    expect(screen.getByText("Readiness couldn't be checked")).toBeTruthy();
+    // Each document says it, as the releases list does, rather than loading.
+    expect(row("Launch post").getByText("Could not check")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Try again/i }));
+    expect(refetch).toHaveBeenCalled();
+  });
+
+  it("never asks the reader to fix a document they cannot see", () => {
+    setUp({
+      can,
+      readiness: {
+        ...ONE_HARD,
+        hidden: [{ ...HIDDEN[0], hard: 1, soft: 0 }],
+      },
+    });
+    render(<ReleaseDetail id="r1" />);
+    expect(
+      screen.getByText(
+        "Fix the document marked below first; 1 more needs someone who can view it."
+      )
+    ).toBeTruthy();
+    expect(
+      group("History notes").getByText(
+        "1 document that can't be shown needs a fix"
+      )
+    ).toBeTruthy();
+  });
+
+  it("leads to the first document to fix", () => {
+    setUp({ can, readiness: ONE_HARD });
+    render(<ReleaseDetail id="r1" />);
+    expect(
+      screen.getByRole("button", { name: "Show the first to fix" })
+    ).toBeTruthy();
+  });
+});
+
+describe("the answer to taking a document out", () => {
+  it("says the release was cancelled when the server answers that it was", async () => {
+    const { releaseRemovalMessage } = await vi.importActual<
+      typeof import("@admin/hooks/queries/useReleases")
+    >("@admin/hooks/queries/useReleases");
+    expect(releaseRemovalMessage({ message: "", releaseCancelled: true })).toBe(
+      "Release cancelled."
+    );
+    expect(
+      releaseRemovalMessage({ message: "", releaseCancelled: false })
+    ).toBe("Removed from release.");
   });
 });

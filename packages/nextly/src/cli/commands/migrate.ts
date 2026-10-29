@@ -45,6 +45,7 @@ import {
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
+import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -383,6 +384,17 @@ export async function runMigrate(
     // crashed prior run), then proceed with the normal migrate.
     await maybeForceUnlock(options, db, dialect);
 
+    // Every entity as the registry records it before any file applies, so the companion pass
+    // after the migrations can tell a field this run newly translates from one translated before.
+    const recordedBefore = await readRecordedEntities(
+      adapter as unknown as DrizzleAdapter,
+      configResult.config,
+      error =>
+        logger.warn(
+          `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+        )
+    );
+
     // Delegate to the non-exiting core (Phase 1 + Phase 2 under the lock). The
     // ledger (`nextly_schema_events`) is bootstrapped out-of-band by
     // `ensureLedger` — AFTER applyCore (so pushSchema doesn't see it as an
@@ -423,6 +435,28 @@ export async function runMigrate(
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
+        // A translations column already in place that cannot hold a field the config newly
+        // translates, judged as the files left it and before the registry records them: refused
+        // here, the registry keeps its definitions and the next run is refused the same way.
+        // Judged only once no file is pending, since a later one may still change the column.
+        beforeMetadata: async () => {
+          const pending = await findPendingFiles(
+            adapter,
+            db,
+            dialect,
+            appMigrationsDir,
+            logger
+          );
+          if (pending.length > 0) return;
+          const { refuseCompanionColumnsThatCannotHold } = await import(
+            "../../domains/i18n/runtime/companion-io"
+          );
+          await refuseCompanionColumnsThatCannotHold(
+            adapter as unknown as DrizzleAdapter,
+            configResult.config,
+            recordedBefore
+          );
+        },
       });
 
       logger.newline();
@@ -493,6 +527,7 @@ export async function runMigrate(
             // Never by default: an entity with no transition record may be a legacy install or one
             // localized since birth, and nothing distinguishes them. See `repairLocalization`.
             repairUntracked: options.repairLocalization === true,
+            recordedBefore,
           }
         );
         // After the migrations too, and for the same reason: the user fields'
@@ -702,6 +737,14 @@ export interface MigrateCoreDeps {
    * against the database.
    */
   syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
+  /**
+   * Runs inside the lock once the migration files have applied and before their metadata is
+   * recorded (Phase 3). A throw stops the run there: the files that ran stay applied and in the
+   * ledger, and the registry keeps the definitions it had, so the next run judges the same change
+   * again. `nextly migrate` refuses here a translations column that cannot hold a field the config
+   * newly translates.
+   */
+  beforeMetadata?: () => Promise<void>;
   /**
    * Refuse, before anything changes, a pending migration file the Schema
    * Builder wrote with no snapshot beside it (`isBuilderWrittenMigration`),
@@ -1561,6 +1604,9 @@ export async function migrateCore(
       // longer holds it. Each stream's reconcile ignores elements it does not
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
+
+      // What the caller must hold true before the registry records the files' metadata.
+      await deps.beforeMetadata?.();
 
       /*
        * Phase 3 — make the registry agree with the tables Phase 2 just created.

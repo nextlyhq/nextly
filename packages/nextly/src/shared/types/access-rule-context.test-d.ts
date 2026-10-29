@@ -21,6 +21,7 @@ import type {
   MinimalUser,
   SingleAccessControl,
 } from "./access";
+import type { CollectionFilterRule } from "./rule-filter";
 
 // One context: what a collection or Single rule is handed, and what a field
 // rule is handed, are the same type, however each is reached. A rule may also
@@ -30,9 +31,7 @@ type HandedContexts = [
   Parameters<AccessControlFunction>[0],
   Parameters<AccessFunction>[0],
   Parameters<Extract<FieldAccess["read"], AccessFunction>>[0],
-  Parameters<
-    Extract<CollectionAccessControl["read"], AccessControlFunction>
-  >[0],
+  Parameters<Extract<CollectionAccessControl["read"], CollectionFilterRule>>[0],
   Parameters<Extract<SingleAccessControl["update"], AccessControlFunction>>[0],
 ];
 expectTypeOf<HandedContexts>().toEqualTypeOf<

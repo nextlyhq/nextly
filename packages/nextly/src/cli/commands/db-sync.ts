@@ -68,6 +68,7 @@ import { SchemaRegistry } from "../../database/schema-registry";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
+import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import {
   ACCEPT_DATA_LOSS_ENV,
@@ -356,6 +357,21 @@ export async function runDbSync(
 
           assertPluginFieldDeclarations(configResult.config);
 
+          // Every entity as the registry records it before the syncs below rewrite it, so the
+          // companion pass after them can tell a field this run newly translates from one
+          // translated before it.
+          const recordedBefore =
+            options.autoSync !== false
+              ? await readRecordedEntities(
+                  adapter as unknown as DrizzleAdapter,
+                  configResult.config,
+                  error =>
+                    logger.warn(
+                      `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+                    )
+                )
+              : undefined;
+
           // Before the pushes, so an entity gaining localization has its existing content copied
           // into the companion while the main table still carries it. The drop the push then
           // applies is a cleanup rather than a loss.
@@ -368,7 +384,8 @@ export async function runDbSync(
               configResult.config,
               adapter,
               context,
-              "beforeApply"
+              "beforeApply",
+              { recordedBefore }
             );
           }
 
@@ -396,7 +413,9 @@ export async function runDbSync(
             await ensureLocalizedCompanions(
               configResult.config,
               adapter,
-              context
+              context,
+              "afterApply",
+              { recordedBefore }
             );
           }
 

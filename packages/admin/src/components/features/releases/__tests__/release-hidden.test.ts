@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import {
   describeHidden,
   describeHiddenNeedFix,
+  describeUnshown,
+  describeUnshownNeedFix,
   hiddenTotal,
 } from "../release-hidden";
 
@@ -82,6 +84,23 @@ describe("describeHiddenNeedFix", () => {
     );
     expect(describeHiddenNeedFix(2)).toBe(
       "2 documents you can't view need a fix"
+    );
+  });
+});
+
+describe("describeUnshown and describeUnshownNeedFix", () => {
+  it("say a document is not shown without claiming why, true for a deleted one too", () => {
+    expect(describeUnshown(1)).toBe(
+      "1 document can't be shown (deleted, or you can't view it)"
+    );
+    expect(describeUnshown(3)).toBe(
+      "3 documents can't be shown (deleted, or you can't view them)"
+    );
+    expect(describeUnshownNeedFix(1)).toBe(
+      "1 document that can't be shown needs a fix"
+    );
+    expect(describeUnshownNeedFix(2)).toBe(
+      "2 documents that can't be shown need a fix"
     );
   });
 });

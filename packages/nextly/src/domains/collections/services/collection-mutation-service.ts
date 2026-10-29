@@ -8418,6 +8418,59 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The refusal of a held edit its update filter refused, answered as a write
+   * that moved the entry out of the filter is; none where nothing refused it.
+   */
+  private async heldEditRefusal(
+    draftWrite: WorkingDraftWriteResult
+  ): Promise<CollectionServiceResult | undefined> {
+    if (!draftWrite.refusedBy) return undefined;
+    return this.accessService.refusalOutsideFilter(
+      draftWrite.refusedBy.params,
+      draftWrite.refusedBy.reads,
+      true
+    );
+  }
+
+  /**
+   * The held component values in `draftDocument`, judged as the publish would
+   * judge them: merged into the draft, since a save carries only the
+   * sub-fields it changed, and without the type tags the draft holds, which no
+   * ordinary write shows a validator. Judged by the pass the component write
+   * runs, so a value the publish would refuse is refused now, with the same
+   * issues, before any draft or version is recorded.
+   */
+  private async validateHeldComponents(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext,
+    draftDocument: Record<string, unknown>
+  ): Promise<void> {
+    const { collection, draftLocale, fields, params, splitComponentSchemas } =
+      ctx;
+    const heldComponentNames = Object.keys(ctx.componentFieldData ?? {});
+    if (!this.fieldGroupDataService || heldComponentNames.length === 0) return;
+    await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
+      parentId: params.entryId,
+      parentTable: collectionTableName(collection, params.collectionName),
+      fields: fields as unknown as FieldConfig[],
+      data: stripSingleComponentTags(
+        Object.fromEntries(
+          heldComponentNames.map(name => [name, draftDocument[name]])
+        ),
+        fields as unknown as FieldConfig[],
+        componentSlug => splitComponentSchemas?.get(componentSlug)?.fields
+      ),
+      // The language this held write is keyed under: the request's, or the
+      // companion's write locale when the patch touched localized columns.
+      locale: draftLocale ?? undefined,
+      req: params.user ? { user: params.user } : {},
+      // Who the write is made as, for each instance's own field rules: the
+      // caller and trust the entry's own fields are judged with.
+      access: fieldGroupWriteAccessOf(params),
+    });
+  }
+
+  /**
    * The held field-group values in `draftDocument`, judged by their own rules
    * before anything is recorded, in place, each denied one kept at what the
    * draft replaces: no save judges a held instance, and a later publisher
@@ -8525,34 +8578,7 @@ export class CollectionMutationService extends BaseService {
     );
     if (refusedBy) return { refusedBy };
     await this.judgeHeldFieldGroups(tx, ctx, draftDocument, replaces);
-    // The held component values are judged as the publish would judge them:
-    // merged into the draft, since a save carries only the sub-fields it
-    // changed, and without the type tags the draft holds, which no ordinary
-    // write shows a validator. Judged by the pass the component write runs, so
-    // a value the publish would refuse is refused now, with the same issues,
-    // before any draft or version is recorded.
-    const heldComponentNames = Object.keys(ctx.componentFieldData ?? {});
-    if (this.fieldGroupDataService && heldComponentNames.length > 0) {
-      await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
-        parentId: params.entryId,
-        parentTable: collectionTableName(collection, params.collectionName),
-        fields: fields as unknown as FieldConfig[],
-        data: stripSingleComponentTags(
-          Object.fromEntries(
-            heldComponentNames.map(name => [name, draftDocument[name]])
-          ),
-          fields as unknown as FieldConfig[],
-          componentSlug => splitComponentSchemas?.get(componentSlug)?.fields
-        ),
-        // The language this held write is keyed under: the request's, or the
-        // companion's write locale when the patch touched localized columns.
-        locale: draftLocale ?? undefined,
-        req: params.user ? { user: params.user } : {},
-        // Who the write is made as, for each instance's own field rules: the
-        // caller and trust the entry's own fields are judged with.
-        access: fieldGroupWriteAccessOf(params),
-      });
-    }
+    await this.validateHeldComponents(tx, ctx, draftDocument);
     // The response and hooks see the draft as an ordinary read, so
     // shape the accumulated snapshot through the current schema the
     // same way the read overlay does. The persisted `draftDocument`
@@ -8775,6 +8801,15 @@ export class CollectionMutationService extends BaseService {
     // no longer identifies the sentinel after the throw, but this result stays
     // correct regardless of how the error is wrapped.
     let transitionDeniedResult: CollectionServiceResult | undefined;
+    // Rolls the transaction back with `refusal`, where there is one, for the
+    // catch to return.
+    const refuseWith = (
+      refusal: CollectionServiceResult | null | undefined
+    ): void => {
+      if (!refusal) return;
+      transitionDeniedResult = refusal;
+      throw new StatusTransitionDeniedError();
+    };
     // The shared fields a pending change may not publish, and the live
     // document they were judged against; see `SharedValuesOutOfDateError`.
     let outOfDateShared:
@@ -9673,16 +9708,14 @@ export class CollectionMutationService extends BaseService {
           // Each filter that judged the write, matched again on the row as it
           // is locked, so a write that moved the entry out of one since it was
           // judged above changes nothing.
-          const outside = await this.refusalOutsideWriteFilters(
-            tx,
-            schema,
-            params.entryId,
-            writeFilters
+          refuseWith(
+            await this.refusalOutsideWriteFilters(
+              tx,
+              schema,
+              params.entryId,
+              writeFilters
+            )
           );
-          if (outside) {
-            transitionDeniedResult = outside;
-            throw new StatusTransitionDeniedError();
-          }
 
           // The status event uses the true prior value even after a conflict
           // retry. Only recorded for versioned collections (the only ones that
@@ -10524,16 +10557,14 @@ export class CollectionMutationService extends BaseService {
           // relations are written, and rolled back where it left one. The
           // caller could see the entry, which was inside the filter, so the
           // refusal is in words.
-          const movedOut = await this.refusalMovedOutOfWriteFilters(
-            tx,
-            schema,
-            params.entryId,
-            writeFilters
+          refuseWith(
+            await this.refusalMovedOutOfWriteFilters(
+              tx,
+              schema,
+              params.entryId,
+              writeFilters
+            )
           );
-          if (movedOut) {
-            transitionDeniedResult = movedOut;
-            throw new StatusTransitionDeniedError();
-          }
 
           // Capture a version snapshot of the post-update document atomically
           // with the write when the collection opts into versioning. The parent
@@ -10795,15 +10826,7 @@ export class CollectionMutationService extends BaseService {
                 });
                 // Refused as a write moving the entry out of its filter is,
                 // before anything of the edit is held.
-                if (draftWrite.refusedBy) {
-                  transitionDeniedResult =
-                    await this.accessService.refusalOutsideFilter(
-                      draftWrite.refusedBy.params,
-                      draftWrite.refusedBy.reads,
-                      true
-                    );
-                  throw new StatusTransitionDeniedError();
-                }
+                refuseWith(await this.heldEditRefusal(draftWrite));
                 workingDraftDocument = draftWrite.workingDraftDocument;
                 priorWorkingDraftDocument =
                   draftWrite.priorWorkingDraftDocument;

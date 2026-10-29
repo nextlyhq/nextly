@@ -52,7 +52,7 @@ const META = "rulefilter_meta";
 const COMPONENTED = "rulefilter_componented";
 let shiftingCalls = 0;
 
-/** A read rule answering `value`, which the rule type does not allow yet. */
+/** A read rule answering `value`, unchecked by the filter type, as untyped code may. */
 const answering = (value: unknown) => () => value as boolean;
 /** A read rule answering what `next` returns on each call. */
 const answeringEach = (next: () => unknown) => () => next() as boolean;

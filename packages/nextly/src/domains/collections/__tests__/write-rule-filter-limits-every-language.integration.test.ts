@@ -28,6 +28,8 @@ import { resetSessionStandingForTests } from "../../../auth/session/session-stan
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
@@ -59,12 +61,13 @@ afterEach(async () => {
   clearRuleFilterReports();
 });
 
-async function boot(): Promise<TestNextly> {
+async function boot(dialect: TestDialect): Promise<TestNextly> {
   const fields = [
     text({ name: "title" }),
     text({ name: "owner", localized: false }),
   ];
   current = await createTestNextly({
+    dialect,
     localization: { locales: ["en", "de"], defaultLocale: "en" },
     collections: [
       defineCollection({
@@ -192,40 +195,43 @@ const everyLanguage = (
     { status }
   );
 
-describe("a publish of every language whose rule answers a filter", () => {
-  it("publishes an entry the filter matches, and refuses another's, leaving it", async () => {
-    const t = await boot();
-    const own = await seed(t, POSTS, AUTHOR);
-    const others = await seed(t, POSTS, OTHER);
-    const before = await stored(t, POSTS, others);
+describe.each(getConfiguredTestDialects())(
+  "a publish of every language whose rule answers a filter (%s)",
+  dialect => {
+    it("publishes an entry the filter matches, and refuses another's, leaving it", async () => {
+      const t = await boot(dialect);
+      const own = await seed(t, POSTS, AUTHOR);
+      const others = await seed(t, POSTS, OTHER);
+      const before = await stored(t, POSTS, others);
 
-    const published = await everyLanguage(t, POSTS, own, "published");
-    const refused = await everyLanguage(t, POSTS, others, "published");
+      const published = await everyLanguage(t, POSTS, own, "published");
+      const refused = await everyLanguage(t, POSTS, others, "published");
 
-    expect(published.success).toBe(true);
-    expect(
-      ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
-        ?.status
-    ).toBe("published");
-    expect(refused.success).toBe(false);
-    expect(refused.statusCode).toBe(403);
-    expect(await stored(t, POSTS, others)).toEqual(before);
-  });
+      expect(published.success).toBe(true);
+      expect(
+        ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
+          ?.status
+      ).toBe("published");
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+      expect(await stored(t, POSTS, others)).toEqual(before);
+    });
 
-  it("refuses an entry the filter answered in one of its languages does not match, changing nothing", async () => {
-    // The author's own post: the English filter matches it, the German one
-    // matches no entry, and the publish puts German live too.
-    const t = await boot();
-    const own = await seed(t, GERMAN_REFUSED, AUTHOR);
-    const before = await stored(t, GERMAN_REFUSED, own);
+    it("refuses an entry the filter answered in one of its languages does not match, changing nothing", async () => {
+      // The author's own post: the English filter matches it, the German one
+      // matches no entry, and the publish puts German live too.
+      const t = await boot(dialect);
+      const own = await seed(t, GERMAN_REFUSED, AUTHOR);
+      const before = await stored(t, GERMAN_REFUSED, own);
 
-    const refused = await everyLanguage(t, GERMAN_REFUSED, own, "published");
+      const refused = await everyLanguage(t, GERMAN_REFUSED, own, "published");
 
-    expect(refused.success).toBe(false);
-    expect(refused.statusCode).toBe(403);
-    expect(await stored(t, GERMAN_REFUSED, own)).toEqual(before);
-  });
-});
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+      expect(await stored(t, GERMAN_REFUSED, own)).toEqual(before);
+    });
+  }
+);
 
 /** A REST write as the author, answered with its status. */
 async function rest(
@@ -263,13 +269,15 @@ async function rest(
   return res.status;
 }
 
+// On SQLite alone: what it adds to the cases above is the route, whose code
+// is the same on every database.
 describe("a publish of every language over REST", () => {
   // Admitted at the route on the publish grant alone, and judged by the
   // service in each language it puts live, which applies the filter.
   const entry = (id: string) => ["collections", POSTS, "entries", id];
 
   it("publishes the author's own entry by publish-all, and refuses another's", async () => {
-    const t = await boot();
+    const t = await boot("sqlite");
     const own = await seed(t, POSTS, AUTHOR);
     const others = await seed(t, POSTS, OTHER);
     const before = await stored(t, POSTS, others);
@@ -284,7 +292,7 @@ describe("a publish of every language over REST", () => {
   });
 
   it("unpublishes the author's own entry by unpublish-all, and refuses another's", async () => {
-    const t = await boot();
+    const t = await boot("sqlite");
     const own = await seed(t, POSTS, AUTHOR, "published");
     const others = await seed(t, POSTS, OTHER, "published");
     const before = await stored(t, POSTS, others);
@@ -301,7 +309,7 @@ describe("a publish of every language over REST", () => {
   });
 
   it("publishes the author's own entry by a status-only write to every language, and refuses another's", async () => {
-    const t = await boot();
+    const t = await boot("sqlite");
     const own = await seed(t, POSTS, AUTHOR);
     const others = await seed(t, POSTS, OTHER);
     const before = await stored(t, POSTS, others);
@@ -320,40 +328,48 @@ describe("a publish of every language over REST", () => {
   });
 });
 
-describe("a publish of every language whose filter names a translated field", () => {
-  it("matches each language's filter in that language", async () => {
-    // Each language's filter matches its own translation, "english" or
-    // "deutsch": matched in another language, either would refuse.
-    const t = await boot();
-    const own = await seed(t, BY_TITLE, AUTHOR);
+describe.each(getConfiguredTestDialects())(
+  "a publish of every language whose filter names a translated field (%s)",
+  dialect => {
+    it("matches each language's filter in that language", async () => {
+      // Each language's filter matches its own translation, "english" or
+      // "deutsch": matched in another language, either would refuse.
+      const t = await boot(dialect);
+      const own = await seed(t, BY_TITLE, AUTHOR);
 
-    const published = await everyLanguage(t, BY_TITLE, own, "published");
+      const published = await everyLanguage(t, BY_TITLE, own, "published");
 
-    expect(published.success).toBe(true);
-    expect(
-      ((await stored(t, BY_TITLE, own)) as { main?: { status?: string } }).main
-        ?.status
-    ).toBe("published");
-  });
-});
+      expect(published.success).toBe(true);
+      expect(
+        ((await stored(t, BY_TITLE, own)) as { main?: { status?: string } })
+          .main?.status
+      ).toBe("published");
+    });
+  }
+);
 
-describe("an unpublish of every language whose rule answers a filter", () => {
-  it("unpublishes an entry the filter matches, and refuses another's, leaving it", async () => {
-    const t = await boot();
-    const own = await seed(t, POSTS, AUTHOR, "published");
-    const others = await seed(t, POSTS, OTHER, "published");
-    const before = await stored(t, POSTS, others);
+// A write in every language reads and writes each language's row, so it runs
+// on each database this run reaches.
+describe.each(getConfiguredTestDialects())(
+  "an unpublish of every language whose rule answers a filter (%s)",
+  dialect => {
+    it("unpublishes an entry the filter matches, and refuses another's, leaving it", async () => {
+      const t = await boot(dialect);
+      const own = await seed(t, POSTS, AUTHOR, "published");
+      const others = await seed(t, POSTS, OTHER, "published");
+      const before = await stored(t, POSTS, others);
 
-    const unpublished = await everyLanguage(t, POSTS, own, "draft");
-    const refused = await everyLanguage(t, POSTS, others, "draft");
+      const unpublished = await everyLanguage(t, POSTS, own, "draft");
+      const refused = await everyLanguage(t, POSTS, others, "draft");
 
-    expect(unpublished.success).toBe(true);
-    expect(
-      ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
-        ?.status
-    ).toBe("draft");
-    expect(refused.success).toBe(false);
-    expect(refused.statusCode).toBe(403);
-    expect(await stored(t, POSTS, others)).toEqual(before);
-  });
-});
+      expect(unpublished.success).toBe(true);
+      expect(
+        ((await stored(t, POSTS, own)) as { main?: { status?: string } }).main
+          ?.status
+      ).toBe("draft");
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(403);
+      expect(await stored(t, POSTS, others)).toEqual(before);
+    });
+  }
+);

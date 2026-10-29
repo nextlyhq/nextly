@@ -45,7 +45,7 @@ const BOARD = "rulefilter_localized_board";
 const CARD = "rulefilter_localized_card";
 const SHELVES = "rulefilter_localized_shelves";
 
-/** A read rule answering `value`, which the rule type does not allow yet. */
+/** A read rule answering `value`, unchecked by the filter type, as untyped code may. */
 const answering = (value: unknown) => () => value as boolean;
 
 let current: TestNextly | undefined;

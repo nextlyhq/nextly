@@ -43,6 +43,7 @@ import { getDialectTables } from "../../../../database/index";
 import { makeTestContext } from "../../../../database/__tests__/integration/helpers/test-db";
 import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
+import { getColumnDescriptor } from "../../services/field-column-descriptor";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import { introspectLiveSnapshot } from "../diff/introspect-live";
 import { freshPushSchema } from "../fresh-push";
@@ -201,6 +202,61 @@ function desiredFor(
 }
 
 /**
+ * `desired` with the posts' fields as the registry records them before the save, as a Schema
+ * Builder save states them: the named ones among the fields the posts were made with.
+ */
+function recordingPosts(
+  desired: DesiredSchema,
+  pair: Pair,
+  recorded: readonly string[]
+): DesiredSchema {
+  const recordedFields = postFields(pair, "text").filter(field =>
+    recorded.includes(field.name)
+  );
+  return {
+    ...desired,
+    collections: {
+      ...desired.collections,
+      posts: {
+        ...desired.collections.posts,
+        recordedFields: recordedFields as never,
+      },
+    },
+  };
+}
+
+/**
+ * The real executor, failing once its first batch has run, as when a later statement of an apply
+ * fails. The rename runs before that point, in the batch or ahead of it, so MySQL has committed it
+ * by then; PostgreSQL rolls it back.
+ */
+function failingAfterRename(target: Target): DrizzleStatementExecutor {
+  const executor = new DrizzleStatementExecutor(target.dialect, target.db);
+  const execute = executor.executeStatements.bind(executor);
+  executor.executeStatements = async (tx, statements) => {
+    await execute(tx, statements);
+    throw new Error("a later statement of the apply failed");
+  };
+  return executor;
+}
+
+/**
+ * The posts' author column, added the way an apply that stopped before the key leaves it: MySQL
+ * commits each schema statement, so the column can land without the key that follows it.
+ */
+function authorColumnWithoutKey(dialect: SupportedDialect, pair: Pair): string {
+  const column = getColumnDescriptor(
+    authorField(pair) as never,
+    dialect,
+    "collection"
+  );
+  if (!column) throw new Error("the relationship has no column");
+  const quote = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+  return `ALTER TABLE ${quote(pair.posts)} ADD COLUMN ${quote(column.name)} ${column.dialectType}`;
+}
+
+/**
  * One Schema Builder save, as the Builder's save applies it. With
  * `confirmRenames`, a dropped column and an added one of the same type are
  * paired as a rename and the author confirms it, as the Builder's prompt does.
@@ -208,10 +264,13 @@ function desiredFor(
 function save(
   target: Target,
   desired: DesiredSchema,
-  { confirmRenames = false }: { confirmRenames?: boolean } = {}
+  {
+    confirmRenames = false,
+    executor = new DrizzleStatementExecutor(target.dialect, target.db),
+  }: { confirmRenames?: boolean; executor?: DrizzleStatementExecutor } = {}
 ) {
   return new PushSchemaPipeline({
-    executor: new DrizzleStatementExecutor(target.dialect, target.db),
+    executor,
     renameDetector: confirmRenames
       ? new RegexRenameDetector()
       : noopRenameDetector,
@@ -259,6 +318,23 @@ const keyTo = (pair: Pair) => ({
   referencesTable: pair.authors,
   onDelete: "cascade",
 });
+
+/** The posts' column names as the database has them. */
+const postColumns = async (target: Target, pair: Pair) =>
+  (await introspectLiveSnapshot(target.db, target.dialect, [pair.posts])).tables
+    .find(table => table.name === pair.posts)
+    ?.columns.map(column => column.name) ?? [];
+
+/** The posts' author relationship renamed to `writer`, the save answering the rename. */
+const postsWithAuthorRenamed = (pair: Pair) =>
+  recordingPosts(
+    desiredFor(pair, authorFields("text"), [
+      ...postFields(pair, "text", false),
+      { ...authorField(pair), name: "writer" },
+    ]),
+    pair,
+    ["title", "score", "leadAuthor"]
+  );
 
 describe("a Schema Builder collection's foreign keys (sqlite)", () => {
   const pair = pairNamed("bfk");
@@ -337,6 +413,71 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
     expect(
       sqlite.prepare(`SELECT id, lead_author FROM "${pair.posts}"`).all()
     ).toEqual([{ id: "p1", lead_author: null }]);
+  });
+
+  // An earlier apply added the relationship's column and stopped before its key. Where the
+  // registry still records the fields from before, the change adds the relationship and this apply
+  // keys it; where it records the relationship, the column is one from before keys were created
+  // this way, and is left without one rather than keyed unasked.
+  it.each([
+    { recorded: ["title", "score"], keyed: true },
+    { recorded: ["title", "score", "leadAuthor"], keyed: false },
+  ])(
+    "keys a keyless relationship column only when the change adds it (recorded: $recorded)",
+    async ({ recorded, keyed }) => {
+      createTables(false);
+      sqlite.exec(authorColumnWithoutKey("sqlite", pair));
+      expect(await postKeys(target, pair)).toEqual([]);
+
+      const result = await save(
+        target,
+        recordingPosts(
+          desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+          pair,
+          recorded
+        )
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(await postKeys(target, pair)).toEqual(keyed ? [keyTo(pair)] : []);
+    }
+  );
+
+  // The keys are planned before the save's renames are answered, so the renamed relationship's
+  // new column reads as added. Its old column had no key, and the rename adds none.
+  it("keeps a renamed relationship without a key when its column had none", async () => {
+    createTables(false);
+    sqlite.exec(authorColumnWithoutKey("sqlite", pair));
+
+    const result = await save(target, postsWithAuthorRenamed(pair), {
+      confirmRenames: true,
+    });
+
+    expect(result.error).toBeUndefined();
+    // The premise: the column was renamed, not dropped and re-added.
+    expect(await postColumns(target, pair)).toContain("writer");
+    expect(await postColumns(target, pair)).not.toContain("lead_author");
+    expect(await postKeys(target, pair)).toEqual([]);
+  });
+
+  // The same rename, saved again after an apply that failed once it had renamed the column.
+  it("keeps a renamed relationship without a key when the save is retried after a failure", async () => {
+    createTables(false);
+    sqlite.exec(authorColumnWithoutKey("sqlite", pair));
+    const failed = await save(target, postsWithAuthorRenamed(pair), {
+      confirmRenames: true,
+      executor: failingAfterRename(target),
+    });
+    expect(failed.success).toBe(false);
+
+    const retried = await save(target, postsWithAuthorRenamed(pair), {
+      confirmRenames: true,
+    });
+
+    expect(retried.error).toBeUndefined();
+    expect(await postColumns(target, pair)).toContain("writer");
+    expect(await postColumns(target, pair)).not.toContain("lead_author");
+    expect(await postKeys(target, pair)).toEqual([]);
   });
 
   it("keeps a child's rows and key when a type change rebuilds the parent", async () => {
@@ -790,6 +931,127 @@ for (const server of SERVERS) {
         expect(
           preview.operations.filter(op => op.type.endsWith("foreign_key"))
         ).toEqual([]);
+      });
+
+      // As on SQLite: keyed only when the registry does not record the relationship yet.
+      it.each([
+        { recorded: ["title", "score"], keyed: true },
+        { recorded: ["title", "score", "leadAuthor"], keyed: false },
+      ])(
+        "keys a keyless relationship column only when the change adds it (recorded: $recorded)",
+        async ({ recorded, keyed }) => {
+          await dropTables();
+          for (const statement of [
+            ...builderStatements(
+              server.dialect,
+              pair.authors,
+              authorFields("text")
+            ),
+            ...builderStatements(
+              server.dialect,
+              pair.posts,
+              postFields(pair, "text", false)
+            ),
+            authorColumnWithoutKey(server.dialect, pair),
+          ]) {
+            await connection.run(statement);
+          }
+          expect(await postKeys(connection.target, pair)).toEqual([]);
+
+          const result = await save(
+            connection.target,
+            recordingPosts(
+              desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+              pair,
+              recorded
+            )
+          );
+
+          expect(result.error).toBeUndefined();
+          expect(await postKeys(connection.target, pair)).toEqual(
+            keyed ? [keyTo(pair)] : []
+          );
+        }
+      );
+
+      // As on SQLite: the rename adds no key its old column never had.
+      it("keeps a renamed relationship without a key when its column had none", async () => {
+        await dropTables();
+        for (const statement of [
+          ...builderStatements(
+            server.dialect,
+            pair.authors,
+            authorFields("text")
+          ),
+          ...builderStatements(
+            server.dialect,
+            pair.posts,
+            postFields(pair, "text", false)
+          ),
+          authorColumnWithoutKey(server.dialect, pair),
+        ]) {
+          await connection.run(statement);
+        }
+
+        const result = await save(
+          connection.target,
+          postsWithAuthorRenamed(pair),
+          { confirmRenames: true }
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(await postColumns(connection.target, pair)).toContain("writer");
+        expect(await postColumns(connection.target, pair)).not.toContain(
+          "lead_author"
+        );
+        expect(await postKeys(connection.target, pair)).toEqual([]);
+      });
+
+      // MySQL commits the rename before the failure, so the retry finds the column renamed and the
+      // registry still on the old name, with no rename left to answer. PostgreSQL rolls the rename
+      // back, and the retry answers it as the first save did.
+      it("keeps a renamed relationship without a key when the save is retried after a failure", async () => {
+        await dropTables();
+        for (const statement of [
+          ...builderStatements(
+            server.dialect,
+            pair.authors,
+            authorFields("text")
+          ),
+          ...builderStatements(
+            server.dialect,
+            pair.posts,
+            postFields(pair, "text", false)
+          ),
+          authorColumnWithoutKey(server.dialect, pair),
+        ]) {
+          await connection.run(statement);
+        }
+        const failed = await save(
+          connection.target,
+          postsWithAuthorRenamed(pair),
+          {
+            confirmRenames: true,
+            executor: failingAfterRename(connection.target),
+          }
+        );
+        expect(failed.success).toBe(false);
+        expect(await postColumns(connection.target, pair)).toContain(
+          server.dialect === "mysql" ? "writer" : "lead_author"
+        );
+
+        const retried = await save(
+          connection.target,
+          postsWithAuthorRenamed(pair),
+          { confirmRenames: true }
+        );
+
+        expect(retried.error).toBeUndefined();
+        expect(await postColumns(connection.target, pair)).toContain("writer");
+        expect(await postColumns(connection.target, pair)).not.toContain(
+          "lead_author"
+        );
+        expect(await postKeys(connection.target, pair)).toEqual([]);
       });
 
       it("keeps a one-to-one column unique when a relationship is added", async () => {
