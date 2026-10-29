@@ -12,9 +12,11 @@ import { randomUUID } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray } from "drizzle-orm";
+import type { z } from "zod";
 
 import { getDialectTables } from "../../../database";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { RoleSchema } from "../../../schemas/_zod/rbac";
 import { SUPER_ADMIN_SLUG } from "../../../services/access/super-admin";
 import type { Logger } from "../../../services/shared";
 import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
@@ -38,8 +40,11 @@ export function isAssignableRole(role: { slug: string }): boolean {
   return role.slug !== PUBLIC_ROLE_SLUG;
 }
 
-/** A built-in role the admin treats apart from every other. */
-export type BuiltInRole = "public" | "super-admin";
+/**
+ * A built-in role the admin treats apart from every other, as the published
+ * role schema names it.
+ */
+export type BuiltInRole = NonNullable<z.infer<typeof RoleSchema>["builtIn"]>;
 
 /**
  * Which built-in role `role` is: the Public role, whose permissions are what
