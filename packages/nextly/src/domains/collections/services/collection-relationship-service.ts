@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { getTableColumns, inArray, sql, type SQL } from "drizzle-orm";
+import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -1666,7 +1666,7 @@ export class CollectionRelationshipService extends BaseService {
       match === undefined
         ? this.db.select().from(schema)
         : this.db
-            .select({ ...getTableColumns(schema), [RULE_MATCH]: match })
+            .select({ ...getColumns(schema), [RULE_MATCH]: match })
             .from(schema)
     ).where(inArray(schema.id, ids))) as Record<string, unknown>[];
 
