@@ -93,6 +93,25 @@ describe("PermissionMatrix", () => {
     ).toBeDisabled();
   });
 
+  it("names the button that opens each row on a phone", () => {
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+      />
+    );
+
+    // The phone layout's expand button holds only an icon, so its name is
+    // all a screen reader has to say which row it opens.
+    expect(
+      screen.getByRole("button", { name: "posts permissions" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "tags permissions" })
+    ).toBeInTheDocument();
+  });
+
   it("offers only the tabs it has permissions in", () => {
     render(
       <PermissionMatrix

@@ -98,13 +98,16 @@ export function PermissionLevelRow({
       data-slot="permission-level-row"
     >
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-6">
-        <div className="flex min-w-0 flex-col gap-1">
+        {/* The name takes what the controls leave, and a long slug breaks
+            across lines rather than squeezing the levels or hiding part of
+            itself. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">{row.label}</span>
             {level === "custom" && <Badge variant="warning">Custom</Badge>}
             {fromBase && <Badge variant="outline">from {baseName}</Badge>}
           </div>
-          <span className="font-mono text-xs text-muted-foreground">
+          <span className="font-mono text-xs break-all text-muted-foreground">
             {row.slug}
             {summary && (
               <>
@@ -115,7 +118,7 @@ export function PermissionLevelRow({
           </span>
         </div>
 
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6">
+        <div className="flex flex-col gap-3 md:shrink-0 md:flex-row md:items-center md:gap-6">
           <RadioGroupPrimitive.Root
             aria-label={`${row.label} level`}
             orientation="horizontal"
@@ -131,7 +134,7 @@ export function PermissionLevelRow({
                 value={candidate}
                 disabled={!offered.includes(candidate)}
                 className={cn(
-                  "rounded-sm px-3 py-1.5 text-sm text-muted-foreground transition-colors",
+                  "rounded-sm px-3 py-1.5 text-sm whitespace-nowrap text-muted-foreground transition-colors",
                   "hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                   "data-[state=checked]:bg-background data-[state=checked]:font-medium data-[state=checked]:text-foreground data-[state=checked]:shadow-sm",
                   "disabled:cursor-not-allowed disabled:opacity-50"
@@ -152,7 +155,7 @@ export function PermissionLevelRow({
             onChange={setLevel}
           />
 
-          <label className="flex items-center justify-between gap-3 text-sm text-foreground md:justify-start">
+          <label className="flex items-center justify-between gap-3 text-sm whitespace-nowrap text-foreground md:justify-start">
             <span aria-hidden="true">Each action</span>
             <Switch
               aria-label={`${row.label}: each action`}
