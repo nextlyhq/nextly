@@ -782,6 +782,7 @@ describe("something no rule can name", () => {
         userId: "u13",
         roles: [],
         permissions: plain(resource, four),
+        superAdmin: false,
       });
       expect(
         decidePermission(person(four), "manage", resource).allowed,
