@@ -16,6 +16,8 @@
  * @module services/collections/related-row-read-context
  */
 
+import type { SQL } from "drizzle-orm";
+
 import type { FilteredRead } from "../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { CompanionSchema } from "../collection-file-manager";
@@ -176,13 +178,26 @@ export interface RelatedRowReadContext {
    * PENDING verdict, as the policy map does, and for the same reason.
    */
   targetVerdicts?: Map<string, Promise<FilteredRead>>;
+
+  /**
+   * Each target's read-rule filter as the match column a fetch selects,
+   * built once per expansion. Keyed by the target and the status and
+   * language the condition is built under, so a `hasMany` field fetching its
+   * references one by one builds the condition, and reads the metadata it
+   * needs, once rather than once per reference. Holds the PENDING column, as
+   * the verdict map does.
+   */
+  targetRuleMatches?: Map<string, Promise<SQL<number> | undefined>>;
 }
 
 /** The per-read caches a {@link RelatedRowReadContext} carries. */
 export type ReadExpansionCaches = Required<
   Pick<
     RelatedRowReadContext,
-    "targetPolicies" | "targetCompanions" | "targetVerdicts"
+    | "targetPolicies"
+    | "targetCompanions"
+    | "targetVerdicts"
+    | "targetRuleMatches"
   >
 >;
 
@@ -198,5 +213,6 @@ export function readExpansionCaches(): ReadExpansionCaches {
     targetPolicies: new Map(),
     targetCompanions: new Map(),
     targetVerdicts: new Map(),
+    targetRuleMatches: new Map(),
   };
 }

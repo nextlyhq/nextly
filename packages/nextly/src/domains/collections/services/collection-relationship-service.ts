@@ -511,6 +511,14 @@ export interface RelationshipExpansionOptions {
   targetVerdicts?: Map<string, Promise<FilteredRead>>;
 
   /**
+   * Target match columns already built during this expansion, carried by a
+   * nested hop for the same reason the verdict map is.
+   *
+   * @internal
+   */
+  targetRuleMatches?: Map<string, Promise<SQL<number> | undefined>>;
+
+  /**
    * The caller's authenticated scope, when one applies.
    *
    * A scoped API key is judged on its OWN stamped grant rather than its
@@ -800,6 +808,8 @@ function relatedRowAccessOf(
     // And the access verdicts, likewise: the caller is the same on every hop,
     // so a target already judged for it is not asked again.
     targetVerdicts: options.targetVerdicts ?? new Map(),
+    // And the match columns, built from those verdicts' filters.
+    targetRuleMatches: options.targetRuleMatches ?? new Map(),
   };
 }
 
@@ -1639,15 +1649,22 @@ export class CollectionRelationshipService extends BaseService {
     // fetch rather than added to its WHERE, so a row the filter does not
     // match is still fetched and recorded below as withheld on purpose, and
     // an id no row has stays unrecorded, as a dangling reference.
+    const filter = read.filter;
     const match =
-      read.filter === undefined
+      filter === undefined
         ? undefined
-        : await this.ruleMatch(
+        : await this.memoizedRuleMatch(
+            access,
             targetCollection,
-            read.filter,
-            schema,
             statusFilter,
-            access
+            () =>
+              this.ruleMatch(
+                targetCollection,
+                filter,
+                schema,
+                statusFilter,
+                access
+              )
           );
     const entries = (await (
       match === undefined
@@ -1952,6 +1969,30 @@ export class CollectionRelationshipService extends BaseService {
     if (cached) return cached;
     const pending = decide();
     access.targetVerdicts?.set(targetCollection, pending);
+    return pending;
+  }
+
+  /**
+   * The match column this expansion already built for the target, or
+   * `build`'s, kept for the rest of the expansion. The target's filter is its
+   * kept verdict's, fixed for the expansion, so the column depends only on the
+   * target, the status filter and the language it is built under.
+   */
+  private memoizedRuleMatch(
+    access: RelatedRowAccess,
+    targetCollection: string,
+    statusFilter: StatusFilter | null,
+    build: () => Promise<SQL<number> | undefined>
+  ): Promise<SQL<number> | undefined> {
+    const key = JSON.stringify([
+      targetCollection,
+      statusFilter?.values ?? null,
+      access.locale ?? null,
+    ]);
+    const cached = access.targetRuleMatches?.get(key);
+    if (cached) return cached;
+    const pending = build();
+    access.targetRuleMatches?.set(key, pending);
     return pending;
   }
 

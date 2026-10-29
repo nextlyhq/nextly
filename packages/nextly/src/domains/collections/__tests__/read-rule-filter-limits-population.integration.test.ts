@@ -14,13 +14,14 @@
  *
  * @module domains/collections/__tests__/read-rule-filter-limits-population.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, relationship, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { readExpansionCaches } from "../../../services/collections/related-row-read-context";
 import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 
 // Integration files share fixed system-table names, so this file keeps its
@@ -144,5 +145,44 @@ describe("populating a relationship under a read rule that answers a filter", ()
       name: null,
       withheld: true,
     });
+  });
+
+  it("builds a target's filter once for every reference one expansion fetches", async () => {
+    // A `hasMany` field fetched one reference at a time shares one
+    // expansion's caches. The filter's condition, and the collection metadata
+    // it is built from, is the same for every reference, so fetching three
+    // reads the metadata as often as fetching one.
+    const t = await boot();
+    const ids = [
+      await made(t, TEAMS, { name: "public" }),
+      await made(t, TEAMS, { name: "private" }),
+      await made(t, TEAMS, { name: "public" }),
+    ];
+    const service = t.getService("relationshipService");
+    const lookups = vi.spyOn(
+      (
+        service as unknown as {
+          collectionService: { getCollection: () => unknown };
+        }
+      ).collectionService,
+      "getCollection"
+    );
+    const lookupsFetching = async (wanted: readonly string[]) => {
+      const caches = readExpansionCaches();
+      lookups.mockClear();
+      for (const id of wanted) {
+        await service.fetchRelatedEntry(TEAMS, id, {
+          trusted: TRUSTS_EVERY_COLLECTION,
+          enforceCollectionAccess: true,
+          withheldByAccess: new Set<string>(),
+          ...caches,
+        });
+      }
+      return lookups.mock.calls.length;
+    };
+    const one = await lookupsFetching(ids.slice(0, 1));
+    expect(one).toBeGreaterThan(0);
+    expect(await lookupsFetching(ids)).toBe(one);
+    lookups.mockRestore();
   });
 });
