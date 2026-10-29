@@ -26,6 +26,16 @@ vi.mock("../services/collection-row-cache", async importOriginal => {
       read: () => Promise<Record<string, unknown>>
     ) =>
       bypass.on ? read() : actual.cachedCollectionRow(database, slug, read),
+    // The registry rows of Singles and components, cached the same way.
+    cachedRegistryRow: <T extends Record<string, unknown> | null>(
+      database: object,
+      table: string,
+      slug: string,
+      read: () => Promise<T>
+    ) =>
+      bypass.on
+        ? read()
+        : actual.cachedRegistryRow(database, table, slug, read),
   };
 });
 
@@ -51,7 +61,7 @@ import {
 import type { ServiceContainer } from "../../../services";
 import { consoleLogger } from "../../../shared/types";
 import {
-  clearCollectionRowCache,
+  clearRegistryRowCache,
   COLLECTION_ROW_LIFETIME_MS,
 } from "../services/collection-row-cache";
 import {
@@ -185,7 +195,7 @@ describe.each(getConfiguredTestDialects())(
       const { t, articleId } = await bootSite(dialect);
       const reads = readsOf(t, articleId);
       for (const read of [reads.detail, reads.list]) {
-        clearCollectionRowCache();
+        clearRegistryRowCache();
         const cold = await read();
         const warm = await read();
         expect(JSON.stringify(warm)).toBe(JSON.stringify(cold));
@@ -321,7 +331,7 @@ describe.each(getConfiguredTestDialects())(
       vi.useFakeTimers({ toFake: ["performance"] });
       // Rows cached while the site booted were timed on the real clock; the
       // read below is the first on the faked one.
-      clearCollectionRowCache();
+      clearRegistryRowCache();
       const before = await singularOf(registry);
 
       await writeLabelsElsewhere(t, "Report");

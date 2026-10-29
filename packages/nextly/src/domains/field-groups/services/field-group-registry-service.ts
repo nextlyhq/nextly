@@ -21,6 +21,7 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
   calculateSchemaHash,
@@ -123,6 +124,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   DynamicFieldGroupRecord,
   FieldGroupMigrationStatus
 > {
+  // Every read of one looks its registry row up, so it comes from the registry row cache.
+  protected override readonly readsRowsFromCache = true;
+
   protected readonly registryTableName = STORAGE_FORMAT.registryTable;
   protected readonly resourceType = "Component";
   protected readonly tableNamePrefix = STORAGE_FORMAT.tablePrefix;
@@ -251,6 +255,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         record,
         { returning: "*" }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       this.logger.info("Component registered", {
         slug: data.slug,
@@ -316,6 +322,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
 
     return this.deserializeRecord(result);
   }
@@ -372,6 +380,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         this.whereEq("slug", slug),
         { returning: "*" }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (results.length === 0) {
         // Generic "Not found."; slug in logContext.
@@ -542,6 +552,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           ],
         }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (matched === 0) {
         this.logger.info("Component conditional update did not match", {
@@ -625,6 +637,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         await this.resolveRegistryTableName(),
         this.whereEq("slug", slug)
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       this.logger.info("Component deleted", { slug });
     } catch (error) {

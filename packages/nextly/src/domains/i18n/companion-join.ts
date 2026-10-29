@@ -145,29 +145,116 @@ export async function populateCompanionFields(
   if (ids.length === 0) return;
 
   const table = companionTable as CompanionTable;
-  const parentCol = table._parent;
-  const localeCol = table._locale;
 
   const companionRows: Record<string, unknown>[] = await db
     .select()
     .from(companionTable)
     .where(
       and(
-        inArray(parentCol as never, ids),
-        inArray(localeCol as never, localeChain)
+        inArray(table._parent as never, ids),
+        inLocaleChain(table, localeChain)
       )
     );
 
-  const byParent = indexCompanionRowsByParent(companionRows, args.statusValues);
+  fillCompanionFields({ ...args, companionRows });
+}
 
-  for (const row of rows) {
+/**
+ * The companion rows of `localeChain`'s languages: `_locale = <code>` for a chain of one, as a
+ * single-language site's always is, and `_locale IN (…)` for a longer one.
+ */
+export function inLocaleChain(
+  companionTable: unknown,
+  localeChain: string[]
+): SQL {
+  const localeCol = (companionTable as CompanionTable)._locale as never;
+  return localeChain.length === 1
+    ? eq(localeCol, localeChain[0])
+    : inArray(localeCol, localeChain);
+}
+
+/** A Drizzle-select surface with a left join, as a detail read takes its companion rows. */
+interface JoinableDb {
+  select: (projection: Record<string, unknown>) => {
+    from: (table: unknown) => {
+      leftJoin: (
+        table: unknown,
+        on: SQL
+      ) => {
+        where: (
+          where: SQL | undefined
+        ) => Promise<Record<string, Record<string, unknown> | null>[]>;
+      };
+    };
+  };
+}
+
+/**
+ * One entry and its companion rows for `localeChain`, in one statement: the entry left-joined to
+ * its translations in the chain's languages, so a detail read that read them after the entry
+ * makes one round trip instead of two. `where` selects at most one entry; the join gives one row
+ * per language it has a translation in, or one with none.
+ */
+export async function selectEntryWithCompanion(args: {
+  db: unknown;
+  mainTable: unknown;
+  where: SQL | undefined;
+  companionTable: unknown;
+  localeChain: string[];
+  idKey?: string;
+}): Promise<{
+  entry: Record<string, unknown> | undefined;
+  companionRows: Record<string, unknown>[];
+}> {
+  const main = args.mainTable as Record<string, unknown>;
+  const companion = args.companionTable as CompanionTable;
+  const joined = await (args.db as JoinableDb)
+    .select({ entry: args.mainTable, translation: args.companionTable })
+    .from(args.mainTable)
+    .leftJoin(
+      args.companionTable,
+      and(
+        eq(companion._parent as never, main[args.idKey ?? "id"] as never),
+        inLocaleChain(args.companionTable, args.localeChain)
+      ) as SQL
+    )
+    .where(args.where);
+  return {
+    entry: joined[0]?.entry ?? undefined,
+    companionRows: joined.flatMap(row =>
+      row.translation ? [row.translation] : []
+    ),
+  };
+}
+
+/**
+ * Sets each row's localized fields from `companionRows`, the companion rows already read for
+ * them, resolving each field down the fallback chain. Shared by the batched read above and by a
+ * detail read that took its companion rows in the same query as its main row, so both resolve a
+ * row the same way. Mutates `rows` in place.
+ */
+export function fillCompanionFields(args: {
+  rows: Record<string, unknown>[];
+  companionRows: Record<string, unknown>[];
+  localizedFields: LocalizedFieldRef[];
+  localeChain: string[];
+  statusValues?: readonly string[];
+  idKey?: string;
+}): void {
+  const idKey = args.idKey ?? "id";
+  const byParent = indexCompanionRowsByParent(
+    args.companionRows,
+    args.statusValues
+  );
+
+  for (const row of args.rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
-    for (const field of localizedFields) {
+    for (const field of args.localizedFields) {
       const perLocaleValue: Record<string, unknown> = {};
-      for (const code of localeChain) {
+      for (const code of args.localeChain) {
         perLocaleValue[code] = perLocaleRows[code]?.[field.column];
       }
-      row[field.name] = resolveLocalizedValue(perLocaleValue, localeChain);
+      row[field.name] = resolveLocalizedValue(perLocaleValue, args.localeChain);
     }
   }
 }

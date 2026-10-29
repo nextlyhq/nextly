@@ -49,6 +49,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   moveWebhookRecording,
   renameEntity,
@@ -204,6 +205,9 @@ export class SingleRegistryService extends BaseRegistryService<
   DynamicSingleRecord,
   SingleMigrationStatus
 > {
+  // Every read of one looks its registry row up, so it comes from the registry row cache.
+  protected override readonly readsRowsFromCache = true;
+
   protected readonly registryTableName = "dynamic_singles";
   protected readonly resourceType = "Single";
   protected readonly tableNamePrefix = "single_";
@@ -402,6 +406,8 @@ export class SingleRegistryService extends BaseRegistryService<
         record,
         { returning: "*" }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       this.publishRegisteredRecording(data);
 
@@ -456,6 +462,8 @@ export class SingleRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
 
     this.publishRegisteredRecording(data);
 
@@ -652,6 +660,8 @@ export class SingleRegistryService extends BaseRegistryService<
               targetSlug,
               updateData
             );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (results.length === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -839,6 +849,8 @@ export class SingleRegistryService extends BaseRegistryService<
       const count = await this.adapter.transaction(async tx => {
         return deleteEntityRegistryRow(tx, "single", slug, tables);
       });
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (count === 0) {
         // §13.8: generic "Not found." — slug in logContext only.

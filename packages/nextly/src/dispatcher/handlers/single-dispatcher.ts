@@ -36,6 +36,7 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
@@ -1360,6 +1361,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           },
           { and: [{ column: "slug", op: "=", value: slug }] }
         );
+        // Written past the registry service, so the cached registry row is cleared here.
+        clearRegistryRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);

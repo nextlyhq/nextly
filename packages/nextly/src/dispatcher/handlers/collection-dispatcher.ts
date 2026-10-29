@@ -32,7 +32,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { UserContext } from "../../domains/collections/services/collection-types";
-import { clearCollectionRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
@@ -1104,7 +1104,7 @@ const COLLECTIONS_METHODS: Record<
         );
         // Written past the registry services, so the cached rows are cleared
         // here: a read during the save may have cached the row from before it.
-        clearCollectionRowCache();
+        clearRegistryRowCache();
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);

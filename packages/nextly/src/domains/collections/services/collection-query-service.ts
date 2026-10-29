@@ -144,9 +144,11 @@ import {
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
   TRANSLATION_FILTER_STATES,
+  fillCompanionFields,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
+  selectEntryWithCompanion,
   type TranslationStatusFilter,
   type TranslationFilterState,
 } from "../../i18n/companion-join";
@@ -4593,11 +4595,47 @@ export class CollectionQueryService extends BaseService {
       const whereCondition =
         whereParts.length === 1 ? whereParts[0] : and(...whereParts);
 
-      const [entry] = await this.db
-        .select()
-        .from(schema)
-        .where(whereCondition)
-        .limit(1);
+      // A translated read takes the entry's translations in the same query as the entry, once its
+      // companion is there to join to: one round trip where reading them after it took two. They
+      // are resolved onto it as the batched fill resolves them. Until the companion is there, the
+      // entry is read alone and its main-table values stand.
+      const joinedLocaleChain =
+        localeChain &&
+        companion &&
+        (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
+          "ready"
+          ? localeChain
+          : null;
+      let entry: Record<string, unknown> | undefined;
+      if (joinedLocaleChain && companion) {
+        const joined = await selectEntryWithCompanion({
+          db: this.db,
+          mainTable: schema,
+          where: whereCondition,
+          companionTable: companion.table,
+          localeChain: joinedLocaleChain,
+        });
+        entry = joined.entry;
+        if (entry) {
+          fillCompanionFields({
+            rows: [entry],
+            companionRows: joined.companionRows,
+            localizedFields: companion.localizedFields,
+            localeChain: joinedLocaleChain,
+            // i18n M6: per-locale published filter
+            statusValues:
+              companion.hasStatus && statusFilter?.values
+                ? statusFilter.values
+                : undefined,
+          });
+        }
+      } else {
+        [entry] = (await this.db
+          .select()
+          .from(schema)
+          .where(whereCondition)
+          .limit(1)) as Record<string, unknown>[];
+      }
 
       if (!entry) {
         return {
@@ -4616,18 +4654,22 @@ export class CollectionQueryService extends BaseService {
       // i18n M4: resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.
-      await this.overlayLocalized(
-        params.collectionName,
-        "translation-load-failed",
-        () =>
-          this.populateLocalized(
-            params.collectionName,
-            [entry as Record<string, unknown>],
-            localeChain,
-            companion,
-            statusFilter?.values ?? null // i18n M6: per-locale published filter
-          )
-      );
+      // Already done when the translations came with the entry.
+      if (!joinedLocaleChain) {
+        const read = entry;
+        await this.overlayLocalized(
+          params.collectionName,
+          "translation-load-failed",
+          () =>
+            this.populateLocalized(
+              params.collectionName,
+              [read],
+              localeChain,
+              companion,
+              statusFilter?.values ?? null // i18n M6: per-locale published filter
+            )
+        );
+      }
       // `locale=all` → language-keyed values per localized field (admin/export).
       await this.overlayLocalized(
         params.collectionName,
@@ -4635,7 +4677,7 @@ export class CollectionQueryService extends BaseService {
         () =>
           this.populateLocalizedAll(
             params.collectionName,
-            [entry as Record<string, unknown>],
+            [entry],
             params.locale,
             companion,
             statusFilter?.values ?? null // i18n M6: per-locale published filter
@@ -4649,7 +4691,7 @@ export class CollectionQueryService extends BaseService {
           () =>
             this.populateTranslationMeta(
               params.collectionName,
-              [entry as Record<string, unknown>],
+              [entry],
               companion,
               statusFilter?.values ?? null // i18n M6: per-locale published filter
             )

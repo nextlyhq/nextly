@@ -25,7 +25,7 @@ import type {
   DynamicTableLoadResult,
   loadDynamicTables,
 } from "../di/load-dynamic-tables";
-import { clearCollectionRowCache } from "../domains/dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../domains/dynamic-collections/services/collection-row-cache";
 import { declaredSlugsOf } from "../domains/dynamic-collections/services/removed-from-code";
 import { consoleLogger } from "../shared/types";
 
@@ -120,7 +120,7 @@ interface ReloadDeps {
 async function runReload(label: string): Promise<void> {
   // A reload follows a change to the registry made outside the registry
   // services (a migration, a schema apply), so the cached rows go first.
-  clearCollectionRowCache();
+  clearRegistryRowCache();
   try {
     const deps = await resolveDeps(label);
     if (!deps) return;

@@ -1,6 +1,7 @@
 /**
- * Collections' registry rows, as `DynamicCollectionRegistryService.getCollection`
- * reads them, kept for a second.
+ * Registry rows, kept for a second: collections' as
+ * `DynamicCollectionRegistryService.getCollection` reads them, and Singles' and
+ * components' as their registry services' `getRecordBySlug` does.
  *
  * A single read of an entry looks its collection up several times, and every
  * lookup was a round trip. Here the first read of a slug goes to the database
@@ -25,7 +26,8 @@ import { isWithinLifetime, monotonicNow } from "../../../shared/lib/lifetime";
 export const COLLECTION_ROW_LIFETIME_MS = 1000;
 
 interface CachedRow {
-  row: Record<string, unknown>;
+  /** `null` for a slug the registry does not hold: missing is an answer too. */
+  row: Record<string, unknown> | null;
   readAt: number;
   /** The cache's generation when the read began: served only while current. */
   generation: number;
@@ -53,32 +55,45 @@ function cacheState(): CacheState {
   return globalForCache.__nextly_collectionRowCache;
 }
 
-/** Forget every cached row: a collection's registry row has changed. */
-export function clearCollectionRowCache(): void {
+/** Forget every cached row: a collection's, a Single's or a component's registry row changed. */
+export function clearRegistryRowCache(): void {
   cacheState().generation += 1;
 }
 
-/**
- * The row for `slug` on `database`: a copy of the cached one while it is
- * within its lifetime and no clear has happened since its read began,
- * otherwise `read()`'s, which is then kept. A read a clear overtakes may hold
- * the row from before the change: it is kept under the generation it began
- * in, so it is never served.
- */
+/** A collection's registry row, cached as `cachedRegistryRow` caches any. */
 export async function cachedCollectionRow(
   database: object,
   slug: string,
   read: () => Promise<Record<string, unknown>>
 ): Promise<Record<string, unknown>> {
+  return cachedRegistryRow(database, "dynamic_collections", slug, read);
+}
+
+/**
+ * The row for `slug` in the registry table `table` on `database`: a copy of the cached one while it is
+ * within its lifetime and no clear has happened since its read began,
+ * otherwise `read()`'s, which is then kept. A read a clear overtakes may hold
+ * the row from before the change: it is kept under the generation it began
+ * in, so it is never served.
+ */
+export async function cachedRegistryRow<
+  T extends Record<string, unknown> | null,
+>(
+  database: object,
+  table: string,
+  slug: string,
+  read: () => Promise<T>
+): Promise<T> {
+  const key = `${table}\u0000${slug}`;
   const cache = cacheState();
   let rows = cache.byDatabase.get(database);
-  const hit = rows?.get(slug);
+  const hit = rows?.get(key);
   if (
     hit !== undefined &&
     hit.generation === cache.generation &&
     isWithinLifetime(hit.readAt, COLLECTION_ROW_LIFETIME_MS)
   ) {
-    return structuredClone(hit.row);
+    return structuredClone(hit.row) as T;
   }
   const generation = cache.generation;
   // Timed from before the read, so the lifetime never outlasts the moment the
@@ -89,6 +104,6 @@ export async function cachedCollectionRow(
     rows = new Map();
     cache.byDatabase.set(database, rows);
   }
-  rows.set(slug, { row: structuredClone(row), readAt, generation });
+  rows.set(key, { row: structuredClone(row), readAt, generation });
   return row;
 }

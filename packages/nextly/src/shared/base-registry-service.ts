@@ -23,6 +23,10 @@ import type { SqlParam, WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 // of scope for this PR but inherit the throw-based contract automatically
 // for all `getRecordOrThrow` / `updateRecordMigrationStatus` paths.
 import { toDbError } from "../database/errors";
+import {
+  cachedRegistryRow,
+  clearRegistryRowCache,
+} from "../domains/dynamic-collections/services/collection-row-cache";
 import { NextlyError } from "../errors";
 
 import { BaseService } from "./base-service";
@@ -205,23 +209,46 @@ export abstract class BaseRegistryService<
   // ============================================================
 
   /**
+   * Whether `getRecordBySlug` reads through the registry row cache. The Single and component
+   * services do, since every read of a Single or a component looks its row up. A collection's
+   * reads take its row from `getCollection`'s cache instead.
+   */
+  protected readonly readsRowsFromCache: boolean = false;
+
+  /**
    * Get a record by slug, returning null if not found.
+   *
+   * Where the service reads rows from the cache (`readsRowsFromCache`), outside a transaction the
+   * row comes from the registry row cache (`cachedRegistryRow`): a copy,
+   * at most a second old for a change made elsewhere, and current for one made here, since every
+   * registry write in this process clears it. A Single's and a component's every read looks its
+   * row up, a component's once per dynamic-zone row. Inside a transaction it is read on the
+   * transaction, uncached, so the transaction sees its own writes.
    */
   protected async getRecordBySlug(
     slug: string,
     executor?: unknown
   ): Promise<TRecord | null> {
     try {
-      const result = await this.adapter.selectOne<TRecord>(
-        await this.resolveRegistryTableName(),
-        {
-          where: this.whereEq("slug", slug),
-        },
-        // Supplied when the caller is inside a write transaction: without it the
-        // lookup takes a second pooled connection while that transaction still
-        // holds its own, which can stall against a small pool.
-        executor
-      );
+      const table = await this.resolveRegistryTableName();
+      const read = async (): Promise<Record<string, unknown> | null> =>
+        ((await this.adapter.selectOne<TRecord>(
+          table,
+          {
+            where: this.whereEq("slug", slug),
+          },
+          // Supplied when the caller is inside a write transaction: without it the
+          // lookup takes a second pooled connection while that transaction still
+          // holds its own, which can stall against a small pool.
+          executor
+        )) as Record<string, unknown> | undefined) ?? null;
+      const result =
+        this.readsRowsFromCache &&
+        executor === undefined &&
+        !this.adapter.transactionOpenInFlow()
+          ? // Its own key space: `getCollection` caches collection rows of another shape.
+            await cachedRegistryRow(this.adapter, `record:${table}`, slug, read)
+          : await read();
 
       return result ? this.deserializeRecord(result) : null;
     } catch (error) {
@@ -419,6 +446,8 @@ export abstract class BaseRegistryService<
         this.whereEq("slug", slug),
         { returning: "*" }
       );
+      // The cached registry row is now out of date.
+      clearRegistryRowCache();
 
       if (results.length === 0) {
         // §13.8: generic public message; resource type + slug go to logContext.

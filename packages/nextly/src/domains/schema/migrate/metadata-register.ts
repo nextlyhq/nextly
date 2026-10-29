@@ -29,7 +29,7 @@ import { loadedDialect } from "../../../database/dialect-tables";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { simplePluralize } from "../../../shared/lib/pluralization";
 import { consoleLogger } from "../../../shared/types";
-import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 
 import {
   loadSnapshots,
@@ -427,7 +427,7 @@ export async function registerFromMigrations(
       logger
     );
   } finally {
-    clearCollectionRowCache();
+    clearRegistryRowCache();
   }
   const singlesRegistered = await registerEach(
     singles,

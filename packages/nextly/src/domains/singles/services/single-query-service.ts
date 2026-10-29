@@ -114,8 +114,10 @@ import { passwordReachOf } from "../../field-groups/password-reach";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
+  fillCompanionFields,
   populateCompanionFields,
   populateTranslationStatus,
+  selectEntryWithCompanion,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -127,6 +129,7 @@ import {
   buildCompanionSchema,
   splitLocalizedWrite,
   upsertCompanionRow,
+  type CompanionSchema,
 } from "../../i18n/runtime/companion-io";
 import {
   isCompanionReady,
@@ -474,6 +477,15 @@ function missesARequiredChild(
  */
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A Single's translations, read in the same query as its document. */
+interface JoinedTranslations {
+  /** The Single's registered Drizzle table, which its document was read through. */
+  mainTable: unknown;
+  companion: CompanionSchema;
+  localeChain: string[];
+  companionRows: Record<string, unknown>[];
 }
 
 /**
@@ -869,6 +881,8 @@ export class SingleQueryService extends BaseService {
      * where the document holds something reads that absence as permission.
      */
     enforceRelatedFieldAccess: boolean;
+    /** The document's translations, when they were read with it. */
+    translations?: JoinedTranslations;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -891,7 +905,8 @@ export class SingleQueryService extends BaseService {
         doc,
         options.locale,
         options.fallbackLocale,
-        statusFilterValues
+        statusFilterValues,
+        params.translations
       );
     } catch (error) {
       // A companion read failure propagates, and the result builder puts a bare
@@ -1164,10 +1179,35 @@ export class SingleQueryService extends BaseService {
       // reusing the row an access decision loaded before them: a `beforeRead`
       // hook may write, and a response built from the earlier snapshot would
       // report values the read no longer finds.
-      let doc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
+      // A translated Single takes its translations in the same query as its document, once its
+      // translations table is there to join to: one round trip where reading them after it took
+      // two. Read through the Single's own registered table, as the adapter reads its document.
+      const joinable = await this.joinableTranslations(
+        slug,
+        singleMeta,
+        options.locale,
+        options.fallbackLocale
       );
+      let translations: JoinedTranslations | undefined;
+      let doc: SingleDocument | null;
+      if (joinable) {
+        const joined = await selectEntryWithCompanion({
+          db: this.adapter.getDrizzle(),
+          mainTable: joinable.mainTable,
+          where: undefined,
+          companionTable: joinable.companion.table,
+          localeChain: joinable.localeChain,
+        });
+        doc = (joined.entry as SingleDocument | undefined) ?? null;
+        if (doc) {
+          translations = { ...joinable, companionRows: joined.companionRows };
+        }
+      } else {
+        doc = await this.adapter.selectOne<SingleDocument>(
+          singleMeta.tableName,
+          {}
+        );
+      }
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
       // when the Single is versioned so a first-read materialization still
@@ -1216,6 +1256,7 @@ export class SingleQueryService extends BaseService {
         options,
         statusFilterValues: statusFilter ? statusFilter.values : undefined,
         enforceRelatedFieldAccess: true,
+        translations,
       });
 
       // On a trusted draft-view read, surface this Single's pending change in
@@ -1305,6 +1346,55 @@ export class SingleQueryService extends BaseService {
     }
   }
 
+  /** The Single's translations table, as its reads describe it; null when it has none. */
+  private companionOf(
+    slug: string,
+    singleMeta: DynamicSingleRecord
+  ): CompanionSchema | null {
+    return buildCompanionSchema({
+      slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+  }
+
+  /**
+   * What a Single's read needs to take its translations in the same query as its document: the
+   * language chain, the translations table, and the Single's own registered table, which the
+   * adapter reads the document through. Null, and the read stays as it was, when
+   * `populateLocalized` would resolve nothing, when the translations table is not there yet, or
+   * when the adapter holds no table for the Single.
+   */
+  private async joinableTranslations(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    locale: string | undefined,
+    fallbackLocale: string | false | undefined
+  ): Promise<Omit<JoinedTranslations, "companionRows"> | null> {
+    const localeChain = resolveLocaleChain(
+      this.localization,
+      locale,
+      fallbackLocale
+    );
+    if (!localeChain || singleMeta.localized !== true) return null;
+    const companion = this.companionOf(slug, singleMeta);
+    if (!companion) return null;
+    if (
+      (await resolveCompanionSchemaReadiness(this.adapter, companion)) !==
+      "ready"
+    ) {
+      return null;
+    }
+    const mainTable = (
+      this.adapter as unknown as {
+        tableResolver?: { getTable(name: string): unknown } | null;
+      }
+    ).tableResolver?.getTable(singleMeta.tableName);
+    return mainTable ? { mainTable, companion, localeChain } : null;
+  }
+
   /**
    * i18n: overlay a localized single's translatable fields from its companion
    * `single_<slug>_locales` row for the resolved locale chain. No-op when localization is
@@ -1316,8 +1406,24 @@ export class SingleQueryService extends BaseService {
     doc: Record<string, unknown>,
     locale: string | undefined,
     fallbackLocale: string | false | undefined,
-    statusFilterValues: readonly string[] | undefined
+    statusFilterValues: readonly string[] | undefined,
+    /** The document's translations, when they were read with it: resolved, not read again. */
+    translations?: JoinedTranslations
   ): Promise<void> {
+    if (translations) {
+      fillCompanionFields({
+        rows: [doc],
+        companionRows: translations.companionRows,
+        localizedFields: translations.companion.localizedFields,
+        localeChain: translations.localeChain,
+        idKey: "id",
+        statusValues:
+          translations.companion.hasStatus && statusFilterValues
+            ? statusFilterValues
+            : undefined,
+      });
+      return;
+    }
     const localeChain = resolveLocaleChain(
       this.localization,
       locale,
@@ -1328,13 +1434,7 @@ export class SingleQueryService extends BaseService {
     // buildCompanionSchema would otherwise classify its text fields as translatable and query a
     // `single_<slug>_locales` table that doesn't exist. (The read swallows that, but skip it.)
     if (singleMeta.localized !== true) return;
-    const companion = buildCompanionSchema({
-      slug,
-      tableName: singleMeta.tableName,
-      fields: singleMeta.fields as { name: string; type: string }[],
-      dialect: this.adapter.dialect,
-      status: (singleMeta as { status?: boolean }).status === true,
-    });
+    const companion = this.companionOf(slug, singleMeta);
     if (!companion) return;
     await populateCompanionFields({
       db: this.adapter.getDrizzle(),

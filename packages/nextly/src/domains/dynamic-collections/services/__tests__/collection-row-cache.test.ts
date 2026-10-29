@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   cachedCollectionRow,
-  clearCollectionRowCache,
+  clearRegistryRowCache,
   COLLECTION_ROW_LIFETIME_MS,
 } from "../collection-row-cache";
 
@@ -20,7 +20,7 @@ function readerOf(row: { value: Record<string, unknown> }) {
 beforeEach(() => {
   // The lifetime is timed with `performance.now()`; only that clock is faked.
   vi.useFakeTimers({ toFake: ["performance"] });
-  clearCollectionRowCache();
+  clearRegistryRowCache();
 });
 
 afterEach(() => {
@@ -66,7 +66,7 @@ describe("the collection row cache", () => {
 
     await cachedCollectionRow(database, "posts", read);
     stored.value = { slug: "posts", fields: ["title", "body"] };
-    clearCollectionRowCache();
+    clearRegistryRowCache();
 
     await expect(cachedCollectionRow(database, "posts", read)).resolves.toEqual(
       { slug: "posts", fields: ["title", "body"] }
@@ -120,7 +120,7 @@ describe("the collection row cache", () => {
     const pending = cachedCollectionRow(database, "posts", slow);
     // The row changes, and the change clears, while the read is under way.
     stored.value = { slug: "posts", fields: ["title", "body"] };
-    clearCollectionRowCache();
+    clearRegistryRowCache();
     release?.();
     await expect(pending).resolves.toEqual({
       slug: "posts",
