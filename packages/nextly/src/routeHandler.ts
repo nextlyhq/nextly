@@ -976,6 +976,28 @@ const VISITOR_METHODS: ReadonlySet<string> = new Set([
   "updateSingleDocument",
 ]);
 
+/** Whether a route serves a visitor: an entry or document method it admits one at. */
+function servesVisitor(service: string, method: string): boolean {
+  return VISITOR_SERVICES.has(service) && VISITOR_METHODS.has(method);
+}
+
+/** The services whose entry and document routes serve a visitor. */
+const VISITOR_SERVICES: ReadonlySet<string> = new Set([
+  "collections",
+  "singles",
+]);
+
+/**
+ * Whether a request carries no credential at all, read without the container:
+ * a header read and a cookie parse.
+ */
+function carriesNoCredential(req: Request): boolean {
+  return (
+    req.headers.get("authorization") === null &&
+    readAccessTokenCookie(req) === null
+  );
+}
+
 async function resolveAuthorization(
   req: Request,
   service: string,
@@ -1743,6 +1765,14 @@ async function serveServiceRequest(
     }
     // Require specific permission based on service/method/operation
     else {
+      // A request carrying no credential to a route that serves visitors is
+      // judged by the Public role, which is read through the app's services,
+      // so they are initialised before it is judged, as `getDispatcher()`
+      // would only do after. A route that serves no visitor still refuses
+      // such a request before anything boots.
+      if (servesVisitor(service, method) && carriesNoCredential(req)) {
+        await ensureServicesInitialized();
+      }
       const authResult = await resolveAuthorization(
         req,
         service,
