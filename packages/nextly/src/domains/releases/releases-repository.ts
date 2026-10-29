@@ -15,6 +15,7 @@
  */
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
+import { readRevalidateConfig } from "../../revalidation/intent-builders";
 import type {
   CacheRevalidator,
   RevalidateConfig,
@@ -944,13 +945,14 @@ export class ReleasesRepository {
   constructor(
     private readonly db: ReleasesDbApi,
     private readonly revalidator?: CacheRevalidator,
-    // Each member's collection or Single `revalidate` config, so a release's
-    // flush skips what opts out and names its extra tags, as any other write
-    // does. Without it every member is flushed with its derived tags alone.
-    private readonly revalidateConfigFor?: (
-      scopeKind: "collection" | "single",
-      slug: string
-    ) => Promise<RevalidateConfig | undefined>
+    // Every collection's and Single's `revalidate` config, read once per
+    // flush, so a release's flush skips what opts out and names its extra
+    // tags, as any other write does. Without it every member is flushed with
+    // its derived tags alone.
+    private readonly revalidateConfigs?: () => Promise<{
+      collections: ReadonlyArray<{ slug: string; revalidate?: unknown }>;
+      singles: ReadonlyArray<{ slug: string; revalidate?: unknown }>;
+    }>
   ) {
     this.lockServer = rowLockServer(db, db.dialect);
     this.notices = new NoticesService({
@@ -1620,24 +1622,23 @@ export class ReleasesRepository {
   }
 
   /**
-   * The intent a release's members flush, with each scope's `revalidate`
-   * config read once however many of its documents the release holds.
+   * The intent a release's members flush, with every scope's `revalidate`
+   * config read in one query per registry, however many collections and
+   * Singles the release spans.
    */
   private async revalidationIntentFor(
     members: readonly ReleaseMemberRow[]
   ): Promise<RevalidationIntent | null> {
+    if (members.length === 0 || this.revalidateConfigs === undefined) {
+      return releaseRevalidationIntent(members);
+    }
+    const { collections, singles } = await this.revalidateConfigs();
     const configs = new Map<string, RevalidateConfig | undefined>();
-    if (this.revalidateConfigFor) {
-      for (const member of members) {
-        const kind = member.scopeKind === "single" ? "single" : "collection";
-        const key = `${kind}:${member.scopeSlug}`;
-        if (!configs.has(key)) {
-          configs.set(
-            key,
-            await this.revalidateConfigFor(kind, member.scopeSlug)
-          );
-        }
-      }
+    for (const record of collections) {
+      configs.set(`collection:${record.slug}`, readRevalidateConfig(record));
+    }
+    for (const record of singles) {
+      configs.set(`single:${record.slug}`, readRevalidateConfig(record));
     }
     return releaseRevalidationIntent(members, (kind, slug) =>
       configs.get(`${kind}:${slug}`)

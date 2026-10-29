@@ -635,7 +635,10 @@ describe.each(getConfiguredTestDialects())(
         const repo = new ReleasesRepository(
           app.adapter,
           { flush: intents => void flushed.push(...intents) },
-          async () => config
+          async () => ({
+            collections: [{ slug: "posts", revalidate: config }],
+            singles: [],
+          })
         );
         const release = await repo.createRelease({ title: "Configured" });
         await repo.addMember(
@@ -653,6 +656,45 @@ describe.each(getConfiguredTestDialects())(
       expect(withExtra[0]!.tags.sort()).toEqual(
         ["navigation", "nextly:posts", "nextly:posts:id:e1"].sort()
       );
+    });
+
+    it("reads every scope's revalidate config in one load per flush, however many documents it holds", async () => {
+      // One read per registry per flush, not one per member: a release can hold
+      // hundreds of documents across many collections.
+      const app = await boot(dialect);
+      let loads = 0;
+      const repo = new ReleasesRepository(
+        app.adapter,
+        { flush: () => undefined },
+        async () => {
+          loads += 1;
+          return {
+            collections: [{ slug: "posts" }, { slug: "pages" }],
+            singles: [],
+          };
+        }
+      );
+      const release = await repo.createRelease({ title: "Wide" });
+      for (const [slug, id] of [
+        ["posts", "e1"],
+        ["posts", "e2"],
+        ["pages", "p1"],
+      ] as const) {
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            scopeKind: "collection",
+            scopeSlug: slug,
+            entryId: id,
+            locale: null,
+            action: "publish",
+          },
+          ANY_EDITABLE_STATE
+        );
+      }
+      loads = 0;
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      expect(loads).toBe(1);
     });
 
     it("flushes them again when the release is CANCELLED", async () => {

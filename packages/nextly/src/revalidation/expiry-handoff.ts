@@ -6,8 +6,11 @@
  * never undoes the write. The revalidator retries each failed tag once, then
  * hands what still failed to the {@link ExpiryHandoff}, whose job is to expire
  * those tags from outside the request. Until an out-of-request path is
- * installed, the default keeps the tags in this process, so they can be drained
- * by one.
+ * installed, the default keeps the tags in this process, and the next flush in
+ * this process expires them before its own: a later request is the earliest
+ * moment they can go. There is no timer, on purpose. A timer fires outside any
+ * request, where Next.js refuses to expire a tag at all, so it could only ever
+ * fail; the out-of-request path that replaces this default is what can.
  *
  * @module revalidation/expiry-handoff
  */

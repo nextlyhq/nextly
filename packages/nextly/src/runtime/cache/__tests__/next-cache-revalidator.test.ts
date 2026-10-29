@@ -3,12 +3,17 @@
  * (no real Next runtime), no-ops when the module is absent, never throws, and
  * hands off what it could not expire.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withSideEffectWarnings } from "../../../hooks/side-effect-warnings";
+import {
+  setExpiryHandoff,
+  takePendingExpiries,
+} from "../../../revalidation/expiry-handoff";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import {
   CACHE_EXPIRY_DEFERRED,
+  HANDOFF_TIMEOUT_MS,
   DEFERRED_EXPIRY_NOTICE,
   MAX_TAGS_PER_WRITE,
   NextCacheRevalidator,
@@ -26,7 +31,7 @@ function fakeNextCache() {
 }
 
 describe("NextCacheRevalidator", () => {
-  it("busts every tag in every intent via revalidateTag", () => {
+  it("busts every tag in every intent via revalidateTag", async () => {
     const next = fakeNextCache();
     const revalidator = new NextCacheRevalidator(() => next);
     const intents: RevalidationIntent[] = [
@@ -52,7 +57,7 @@ describe("NextCacheRevalidator", () => {
     );
   });
 
-  it("revalidates path targets with their type", () => {
+  it("revalidates path targets with their type", async () => {
     const next = fakeNextCache();
     const revalidator = new NextCacheRevalidator(() => next);
 
@@ -67,13 +72,13 @@ describe("NextCacheRevalidator", () => {
     expect(next.revalidatePath).toHaveBeenCalledWith("/blog/old", undefined);
   });
 
-  it("no-ops when next/cache is unavailable", () => {
+  it("no-ops when next/cache is unavailable", async () => {
     const revalidator = new NextCacheRevalidator(() => null);
     // Must not throw when there is no Next cache to talk to.
     expect(() => revalidator.flush([{ tags: ["nextly:posts"] }])).not.toThrow();
   });
 
-  it("keeps a committed write when next/cache keeps throwing, and hands the tags off", () => {
+  it("keeps a committed write when next/cache keeps throwing, and hands the tags off", async () => {
     const next = fakeNextCache();
     // revalidateTag throws outside a request scope (a CLI/background write).
     next.revalidateTag.mockImplementation(() => {
@@ -85,22 +90,17 @@ describe("NextCacheRevalidator", () => {
       () => handoff
     );
 
-    let outcome: ReturnType<NextCacheRevalidator["flush"]>;
-    expect(
-      () => (outcome = revalidator.flush([{ tags: ["a", "b"] }]))
-    ).not.toThrow();
+    const outcome = await revalidator.flush([{ tags: ["a", "b"] }]);
     // Each tag is tried twice, and one throwing tag does not stop the rest.
     expect(next.revalidateTag).toHaveBeenCalledTimes(4);
-    expect(outcome!).toEqual({ deferredTags: ["a", "b"] });
+    expect(outcome).toEqual({ deferredTags: ["a", "b"] });
     expect(handoff.handOff).toHaveBeenCalledWith(
       ["a", "b"],
       "static generation store missing"
     );
   });
 
-  // `flush` runs after a write has committed, so resolving `next/cache` is
-  // inside the same never-throw boundary as the calls it makes.
-  it("does not throw when next/cache cannot be resolved", () => {
+  it("does not throw when next/cache cannot be resolved", async () => {
     const revalidator = new NextCacheRevalidator(() => {
       throw Object.assign(
         new Error("Cannot find module './incremental-cache'"),
@@ -113,7 +113,7 @@ describe("NextCacheRevalidator", () => {
     expect(() => revalidator.flush([{ tags: ["a"] }])).not.toThrow();
   });
 
-  it("does not throw when next/cache lacks an export it calls", () => {
+  it("does not throw when next/cache lacks an export it calls", async () => {
     const revalidator = new NextCacheRevalidator(() =>
       nextCacheFrom({ revalidateTag: () => undefined })
     );
@@ -134,13 +134,13 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
     "updateTag can only be called from within a Server Action. To invalidate cache tags in Route Handlers or other contexts, use revalidateTag instead."
   );
 
-  it("retries a tag that fails once, and hands nothing off", () => {
+  it("retries a tag that fails once, and hands nothing off", async () => {
     const next = fakeNextCache();
     next.revalidateTag.mockImplementationOnce(() => {
       throw new Error("flaky cache handler");
     });
     const handoff = { handOff: vi.fn() };
-    const outcome = new NextCacheRevalidator(
+    const outcome = await new NextCacheRevalidator(
       () => next,
       () => handoff
     ).flush([{ tags: ["a"] }]);
@@ -150,13 +150,13 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
     expect(handoff.handOff).not.toHaveBeenCalled();
   });
 
-  it("hands off only the tags that failed twice", () => {
+  it("hands off only the tags that failed twice", async () => {
     const next = fakeNextCache();
     next.revalidateTag.mockImplementation(tag => {
       if (tag === "b") throw new Error("cache handler down");
     });
     const handoff = { handOff: vi.fn() };
-    const outcome = new NextCacheRevalidator(
+    const outcome = await new NextCacheRevalidator(
       () => next,
       () => handoff
     ).flush([{ tags: ["a", "b", "c"] }]);
@@ -165,7 +165,7 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
     expect(handoff.handOff).toHaveBeenCalledWith(["b"], "cache handler down");
   });
 
-  it("expires with updateTag in a Server Action, and does not also revalidate", () => {
+  it("expires with updateTag in a Server Action, and does not also revalidate", async () => {
     const next = {
       ...fakeNextCache(),
       updateTag: vi.fn<(tag: string) => void>(),
@@ -181,14 +181,14 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
     expect(next.revalidateTag).not.toHaveBeenCalled();
   });
 
-  it("falls back to revalidateTag with immediate expiry where Next.js refuses updateTag", () => {
+  it("falls back to revalidateTag with immediate expiry where Next.js refuses updateTag", async () => {
     const next = {
       ...fakeNextCache(),
       updateTag: vi.fn<(tag: string) => void>(() => {
         throw OUTSIDE;
       }),
     };
-    const outcome = new NextCacheRevalidator(() => next).flush([
+    const outcome = await new NextCacheRevalidator(() => next).flush([
       { tags: ["nextly:posts"] },
     ]);
 
@@ -198,7 +198,7 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
     expect(outcome).toBeUndefined();
   });
 
-  it("does not fall back on any other updateTag failure: it is retried, then handed off", () => {
+  it("does not fall back on any other updateTag failure: it is retried, then handed off", async () => {
     const next = {
       ...fakeNextCache(),
       updateTag: vi.fn<(tag: string) => void>(() => {
@@ -206,7 +206,7 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
       }),
     };
     const handoff = { handOff: vi.fn() };
-    const outcome = new NextCacheRevalidator(
+    const outcome = await new NextCacheRevalidator(
       () => next,
       () => handoff
     ).flush([{ tags: ["nextly:posts"] }]);
@@ -231,19 +231,17 @@ describe("NextCacheRevalidator, when an expiry fails or the context differs", ()
     };
 
     expect(
-      new NextCacheRevalidator(
+      await new NextCacheRevalidator(
         () => next,
         () => throwing
       ).flush([{ tags: ["a"] }])
     ).toEqual({ deferredTags: ["a"] });
     expect(
-      new NextCacheRevalidator(
+      await new NextCacheRevalidator(
         () => next,
         () => rejecting
       ).flush([{ tags: ["a"] }])
     ).toEqual({ deferredTags: ["a"] });
-    // The rejection is handled, not left unhandled.
-    await new Promise(resolve => setTimeout(resolve, 0));
   });
 });
 
@@ -255,46 +253,47 @@ describe("the tags a write expires", () => {
   const ids = (n: number) =>
     Array.from({ length: n }, (_, i) => `nextly:posts:id:${i}`);
 
-  it("keeps every tag up to the limit", () => {
+  it("keeps every tag up to the limit", async () => {
     expect(tagsToExpire([{ tags: ids(MAX_TAGS_PER_WRITE) }])).toHaveLength(
       MAX_TAGS_PER_WRITE
     );
   });
 
-  it("falls back past it to each collection's and Single's tag, keeping the app's own tags", () => {
-    const tags = tagsToExpire([
-      { tags: ids(MAX_TAGS_PER_WRITE) },
-      {
-        tags: [
-          "nextly:pages:slug:about",
-          "nextly:single:header",
-          "nextly:single:header:en",
-          "navigation",
-        ],
-      },
-    ]);
-    expect(tags.sort()).toEqual([
+  it("past it, keeps every exact tag and adds each collection's and Single's own", async () => {
+    const exact = [
+      ...ids(MAX_TAGS_PER_WRITE),
+      "nextly:pages:slug:about",
+      "nextly:single:header:en",
       "navigation",
-      "nextly:pages",
-      "nextly:posts",
-      "nextly:single:header",
-    ]);
+    ];
+    const tags = tagsToExpire([{ tags: exact }]);
+    // An entry cached under its own id tag alone is still expired.
+    expect(tags).toEqual(expect.arrayContaining(exact));
+    expect(tags).toEqual(
+      expect.arrayContaining([
+        "nextly:posts",
+        "nextly:pages",
+        "nextly:single:header",
+      ])
+    );
+    expect(tags).toHaveLength(exact.length + 3);
   });
 
-  it("counts a tag named by two intents once", () => {
+  it("counts a tag named by two intents once", async () => {
     expect(
       tagsToExpire([{ tags: ["nextly:posts"] }, { tags: ["nextly:posts"] }])
     ).toEqual(["nextly:posts"]);
   });
 
-  it("expires the fallback tags through flush", () => {
+  it("expires every exact tag and the collection's through flush", async () => {
     const next = fakeNextCache();
-    new NextCacheRevalidator(() => next).flush([
+    await new NextCacheRevalidator(() => next).flush([
       { tags: ids(MAX_TAGS_PER_WRITE + 1) },
     ]);
-    expect(next.revalidateTag.mock.calls).toEqual([
-      ["nextly:posts", { expire: 0 }],
-    ]);
+    const expired = next.revalidateTag.mock.calls.map(([tag]) => tag);
+    expect(expired).toHaveLength(MAX_TAGS_PER_WRITE + 2);
+    expect(expired).toContain("nextly:posts:id:128");
+    expect(expired).toContain("nextly:posts");
   });
 });
 
@@ -310,7 +309,7 @@ describe("the notice a deferred expiry leaves on the response", () => {
       if (tag !== "nextly:pages") throw new Error("down");
     });
     const { notices } = await withSideEffectWarnings(async () => {
-      new NextCacheRevalidator(
+      await new NextCacheRevalidator(
         () => next,
         () => ({ handOff: vi.fn() })
       ).flush([
@@ -346,8 +345,116 @@ describe("the notice a deferred expiry leaves on the response", () => {
   it("leaves no notice when every tag expired", async () => {
     const next = fakeNextCache();
     const { notices } = await withSideEffectWarnings(async () => {
-      new NextCacheRevalidator(() => next).flush([{ tags: ["nextly:posts"] }]);
+      await new NextCacheRevalidator(() => next).flush([
+        { tags: ["nextly:posts"] },
+      ]);
     });
     expect(notices).toEqual([]);
+  });
+});
+
+/*
+ * Where Next.js is installed but its cache cannot be loaded, every tag waits for
+ * the out-of-request path rather than being skipped; an expiry an earlier write
+ * handed to the in-process default goes out with the next flush; and a hand-off
+ * that answers later is waited for, so the request does not end first.
+ */
+describe("NextCacheRevalidator, deferring rather than dropping", () => {
+  afterEach(() => {
+    setExpiryHandoff(null);
+    vi.useRealTimers();
+  });
+
+  it("answers anyway when the hand-off does not answer in time", async () => {
+    vi.useFakeTimers();
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    const hung = { handOff: () => new Promise<void>(() => {}) };
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const flushed = new NextCacheRevalidator(
+      () => next,
+      () => hung
+    ).flush([{ tags: ["a"] }]);
+    await vi.advanceTimersByTimeAsync(HANDOFF_TIMEOUT_MS);
+
+    expect(await flushed).toEqual({ deferredTags: ["a"] });
+    expect(
+      error.mock.calls.some(([line]) => String(line).includes("did not answer"))
+    ).toBe(true);
+    error.mockRestore();
+  });
+
+  it("defers every tag when next/cache is there but cannot be loaded", async () => {
+    const handoff = { handOff: vi.fn() };
+    const revalidator = new NextCacheRevalidator(
+      () => {
+        throw new Error("Cannot find module './incremental-cache'");
+      },
+      () => handoff
+    );
+
+    expect(
+      await revalidator.flush([{ tags: ["nextly:posts", "nextly:posts:id:1"] }])
+    ).toEqual({
+      deferredTags: ["nextly:posts", "nextly:posts:id:1"],
+    });
+    expect(handoff.handOff).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing where Next.js is not installed", async () => {
+    const handoff = { handOff: vi.fn() };
+    expect(
+      await new NextCacheRevalidator(
+        () => null,
+        () => handoff
+      ).flush([{ tags: ["nextly:posts"] }])
+    ).toBeUndefined();
+    expect(handoff.handOff).not.toHaveBeenCalled();
+  });
+
+  it("expires what an earlier write handed off, with the next flush", async () => {
+    const failing = fakeNextCache();
+    failing.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    await new NextCacheRevalidator(() => failing).flush([
+      { tags: ["nextly:posts:id:1"] },
+    ]);
+
+    const next = fakeNextCache();
+    expect(
+      await new NextCacheRevalidator(() => next).flush([
+        { tags: ["nextly:pages"] },
+      ])
+    ).toBeUndefined();
+    expect(next.revalidateTag.mock.calls.map(([tag]) => tag).sort()).toEqual([
+      "nextly:pages",
+      "nextly:posts:id:1",
+    ]);
+    expect(takePendingExpiries()).toEqual([]);
+  });
+
+  it("waits for a hand-off that answers later before the flush returns", async () => {
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    let settled = false;
+    const slow = {
+      handOff: () =>
+        new Promise<void>(resolve =>
+          setTimeout(() => {
+            settled = true;
+            resolve();
+          }, 20)
+        ),
+    };
+    await new NextCacheRevalidator(
+      () => next,
+      () => slow
+    ).flush([{ tags: ["a"] }]);
+    expect(settled).toBe(true);
   });
 });

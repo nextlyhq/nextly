@@ -37,9 +37,10 @@ import {
   ReleasesService,
   scopeKeyOf,
 } from "../../domains/releases/services/releases-service";
+import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { NextlyError } from "../../errors";
-import { readRevalidateConfig } from "../../revalidation/intent-builders";
 import type { CacheRevalidator } from "../../revalidation/types";
+import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
   resolveDocumentVisibilityScope,
@@ -81,23 +82,23 @@ export function registerReleaseServices({
           container.has("cacheRevalidator")
             ? container.get<CacheRevalidator>("cacheRevalidator")
             : undefined,
-          // The opt-out and extra tags a release's flush must honour, read
-          // from the registries per call for the reason the targets below are.
-          async (scopeKind, scopeSlug) => {
-            const key =
-              scopeKind === "single"
-                ? "singleRegistryService"
-                : "collectionRegistryService";
-            if (!container.has(key)) return undefined;
-            const registry = container.get<{
-              getCollectionBySlug?: (slug: string) => Promise<unknown>;
-              getSingleBySlug?: (slug: string) => Promise<unknown>;
-            }>(key);
-            return readRevalidateConfig(
-              await (scopeKind === "single"
-                ? registry.getSingleBySlug?.(scopeSlug)
-                : registry.getCollectionBySlug?.(scopeSlug))
-            );
+          // The opt-out and extra tags a release's flush must honour: each
+          // registry's slugs and `revalidate` settings, one query apiece,
+          // resolved per call for the reason the targets below are.
+          async () => {
+            const [collections, singles] = await Promise.all([
+              container.has("collectionRegistryService")
+                ? container
+                    .get<CollectionRegistryService>("collectionRegistryService")
+                    .getAllRevalidateConfigs()
+                : [],
+              container.has("singleRegistryService")
+                ? container
+                    .get<SingleRegistryService>("singleRegistryService")
+                    .getAllRevalidateConfigs()
+                : [],
+            ]);
+            return { collections, singles };
           }
         ),
 

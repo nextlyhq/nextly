@@ -21,6 +21,7 @@
 import { recordAdvisoryNotice } from "../../hooks/side-effect-warnings";
 import {
   expiryHandoff,
+  takePendingExpiries,
   type ExpiryHandoff,
 } from "../../revalidation/expiry-handoff";
 import type {
@@ -81,15 +82,16 @@ function loadNextCache(): NextCacheModule | null {
 let resolveFailureLogged = false;
 
 /**
- * `next/cache` from `loader`, or null when it cannot be had. Resolving is
- * inside the best-effort boundary too: a traced bundle missing one of its
- * modules, or an export it lacks, must not turn the committed write this runs
- * after into an error. Logged once; an unsupported Next.js is refused at
- * start, not here.
+ * `next/cache` from `loader`; null where Next.js is not installed (the CLI,
+ * a script); or why it could not be loaded where it is. Resolving is inside
+ * the best-effort boundary too: a traced bundle missing one of its modules, or
+ * an export it lacks, must not turn the committed write this runs after into
+ * an error, and must not pass for a runtime with nothing to expire either.
+ * Logged once; an unsupported Next.js is refused at start, not here.
  */
 function resolveNextCache(
   loader: () => NextCacheModule | null
-): NextCacheModule | null {
+): NextCacheModule | null | { unresolved: string } {
   try {
     return loader();
   } catch (error) {
@@ -97,17 +99,19 @@ function resolveNextCache(
       resolveFailureLogged = true;
       const reason = error instanceof Error ? error.message : String(error);
       consoleLogger.warn(
-        `[nextly] cache revalidation is off: next/cache could not be resolved (${reason})`
+        `[nextly] cache expiry is deferred: next/cache could not be resolved (${reason})`
       );
     }
-    return null;
+    return {
+      unresolved: `next/cache could not be resolved (${error instanceof Error ? error.message : String(error)})`,
+    };
   }
 }
 
 /**
- * The most tags one write expires one by one: Next.js keeps at most 128 tags on
- * a cached read (`cacheTag`), so a write naming more is better served by the
- * tags every read of its collection or Single carries.
+ * Next.js keeps at most 128 tags on one cached read (`cacheTag`) and drops the
+ * rest, so a read that names more than that may carry only its first 128. The
+ * limit is per read, not per expiry: a write may expire any number of tags.
  */
 export const MAX_TAGS_PER_WRITE = 128;
 
@@ -156,16 +160,20 @@ function withOneRetry(call: () => void): string | null {
 }
 
 /**
- * The tags a write expires. Past {@link MAX_TAGS_PER_WRITE}, each nextly tag
- * gives way to its collection's (`nextly:<collection>`) or Single's
- * (`nextly:single:<slug>`), which every cached read of it carries; a
- * configured tag of the app's own is kept as it is.
+ * The tags a write expires: every one it names, so a read cached under an
+ * entry's own tag alone is expired. Past {@link MAX_TAGS_PER_WRITE}, each
+ * collection's (`nextly:<collection>`) and Single's (`nextly:single:<slug>`)
+ * own tag is added too, for a read whose exact tag fell past Next.js's limit
+ * and was dropped from it.
  */
 export function tagsToExpire(intents: RevalidationIntent[]): string[] {
   const tags = [...new Set(intents.flatMap(intent => intent.tags))];
   if (tags.length <= MAX_TAGS_PER_WRITE) return tags;
-  return [...new Set(tags.map(broadestTag))];
+  return [...new Set([...tags, ...tags.map(broadestTag)])];
 }
+
+/** How long a write waits for the hand-off to take its tags before answering anyway. */
+export const HANDOFF_TIMEOUT_MS = 5_000;
 
 /** The notice code a response carries when a write's cache expiry was handed off. */
 export const CACHE_EXPIRY_DEFERRED = "CACHE_EXPIRY_DEFERRED";
@@ -214,12 +222,23 @@ export class NextCacheRevalidator implements CacheRevalidator {
     private readonly handoff: () => ExpiryHandoff = expiryHandoff
   ) {}
 
-  flush(intents: RevalidationIntent[]): FlushOutcome | void {
-    const next = resolveNextCache(this.loader);
-    // No Next cache in this runtime (the CLI, a script): nothing here to expire.
-    if (!next) return;
+  async flush(intents: RevalidationIntent[]): Promise<FlushOutcome | void> {
+    const resolved = resolveNextCache(this.loader);
+    // No Next.js in this runtime (the CLI, a script): nothing here to expire.
+    if (resolved === null) return;
+    const own = tagsToExpire(intents);
+    // Expiries an earlier write handed to the in-process default go out with
+    // this one, so a later request in the same process drains them.
+    const tags = [...new Set([...takePendingExpiries(), ...own])];
     const failed = new Map<string, string>();
-    for (const tag of tagsToExpire(intents)) {
+    if ("unresolved" in resolved) {
+      // Next.js is here but its cache could not be loaded: every tag waits
+      // for the out-of-request path rather than being skipped.
+      for (const tag of tags) failed.set(tag, resolved.unresolved);
+      return this.defer(failed, own);
+    }
+    const next = resolved;
+    for (const tag of tags) {
       const error = withOneRetry(() => expireTag(next, tag));
       if (error !== null) failed.set(tag, error);
     }
@@ -236,6 +255,18 @@ export class NextCacheRevalidator implements CacheRevalidator {
       }
     }
     if (failed.size === 0) return;
+    return this.defer(failed, own);
+  }
+
+  /**
+   * What could not be expired: logged with its tags, handed off (and awaited,
+   * so a serverless invocation does not end before the hand-off does), and
+   * noted on this write's response for the tags that are its own.
+   */
+  private async defer(
+    failed: Map<string, string>,
+    own: string[]
+  ): Promise<FlushOutcome> {
     // The write is committed: what failed twice goes to the out-of-request
     // path, and the outcome lets the response say it may take a moment.
     const deferredTags = [...failed.keys()];
@@ -243,11 +274,13 @@ export class NextCacheRevalidator implements CacheRevalidator {
     consoleLogger.error(
       `[nextly] cache expiry failed twice and was handed off (${reason}): ${deferredTags.join(", ")}`
     );
-    this.handOff(deferredTags, reason);
+    await this.handOff(deferredTags, reason);
     // The response says so: the change is saved, and its public pages may
     // show the previous content until the hand-off runs. A no-op outside a
     // request, where there is no response to tell.
-    for (const owner of ownersOf(deferredTags)) {
+    const ownSet = new Set(own);
+    const owned = deferredTags.filter(tag => ownSet.has(tag));
+    for (const owner of owned.length > 0 ? ownersOf(owned) : []) {
       recordAdvisoryNotice({
         phase: "cache-expiry",
         collection: owner,
@@ -258,21 +291,33 @@ export class NextCacheRevalidator implements CacheRevalidator {
     return { deferredTags };
   }
 
-  /** Hands tags off without letting the hand-off itself fail the write. */
-  private handOff(tags: string[], reason: string): void {
+  /**
+   * Hands tags off, awaited but bounded by {@link HANDOFF_TIMEOUT_MS}, without
+   * letting the hand-off itself fail the write: a queue that does not answer
+   * must not hold the response.
+   */
+  private async handOff(tags: string[], reason: string): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const pending = this.handoff().handOff(tags, reason);
-      if (pending instanceof Promise) {
-        pending.catch(error =>
-          consoleLogger.error(
-            `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
-          )
+      const timedOut = new Promise<"timed-out">(resolve => {
+        timer = setTimeout(() => resolve("timed-out"), HANDOFF_TIMEOUT_MS);
+        timer.unref?.();
+      });
+      const answer = await Promise.race([
+        Promise.resolve(this.handoff().handOff(tags, reason)),
+        timedOut,
+      ]);
+      if (answer === "timed-out") {
+        consoleLogger.error(
+          `[nextly] the cache expiry hand-off did not answer within ${HANDOFF_TIMEOUT_MS} ms: ${tags.join(", ")}`
         );
       }
     } catch (error) {
       consoleLogger.error(
         `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
       );
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
