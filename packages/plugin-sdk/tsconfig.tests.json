@@ -1,7 +1,9 @@
 // Type-checks the test files that `tsconfig.json` excludes.
 //
-// The package's own tsconfig excludes `**/*.test.ts`, so no test file here was
-// ever type-checked — and vitest does not type-check either, because esbuild
+// The package's own tsconfig excludes `**/*.test.ts`, `**/*.test.tsx` and
+// `**/*.test-d.ts`, so without this no test file here is type-checked — and the
+// `.tsx` render tests need the `jsx` set below, which the shipping config has
+// no use for. Vitest does not type-check either, because esbuild
 // strips annotations rather than checking them. Two independent ways for a test
 // to be wrong and look green, with neither gate covering the other. This
 // package is the ONLY stable import surface plugin authors have, so a test

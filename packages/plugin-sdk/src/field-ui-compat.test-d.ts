@@ -8,9 +8,12 @@
  * loads the built entry itself.
  *
  * Plugins, the Form Builder among them, build their field editors from this
- * kit. A shared picker and settings panel are to replace it, and the parts
- * plugins use today must keep working, unchanged, for at least one release
- * after that ships, so no plugin breaks without notice.
+ * kit. It is `@experimental` (STABILITY.md), and a shared picker and settings
+ * panel are to replace it. Replacing it is not a reason to break it: these
+ * parts are to keep working, unchanged, beside their replacements and through
+ * at least one release in which they are marked deprecated, so no plugin
+ * breaks without notice. This holds them to that from now, before anything
+ * that replaces them lands.
  *
  * The consumer's props are FROZEN below as literal copies of the shapes these
  * parts take today, deliberately not imported from the admin or derived from
@@ -28,7 +31,7 @@
  * to not being `any`.
  *
  * This stays until the release that removes these parts. Changing a frozen
- * shape to make this pass is changing what plugins were promised.
+ * shape to make this pass is changing what plugins are promised.
  */
 import { expectTypeOf } from "vitest";
 
@@ -65,10 +68,11 @@ import type {
 } from "@nextlyhq/plugin-sdk/admin";
 
 // ---------------------------------------------------------------------------
-// The field-UI value exports, by name. The render test names the same set; a
-// name dropped from the entry fails here as well as at the import above.
+// The field-UI value exports, by name. The render test takes its cases from
+// this one list, so the two halves cannot cover different sets; a name dropped
+// from the entry fails here as well as at the import above.
 
-type TodayFieldUiExport =
+export type TodayFieldUiExport =
   | "FieldTypePicker"
   | "FieldDefaultValueInput"
   | "FieldOptionsEditor"
