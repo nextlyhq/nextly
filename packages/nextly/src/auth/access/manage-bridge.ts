@@ -127,8 +127,17 @@ export async function storedAsPlain(
       }))
     );
   }
+  // Each id as its row spells it: MySQL matches ids without regard to case,
+  // so one asked for in another case is still the row's, and is compared,
+  // replaced and stored as the row has it.
+  const spelled = new Map(
+    rows.map(row => [String(row.id).toLowerCase(), String(row.id)])
+  );
+  const asStored = [
+    ...new Set(ids.map(id => spelled.get(id.toLowerCase()) ?? id)),
+  ];
   const retired = rows.filter(row => isRetiredManage(row.action, row.resource));
-  if (retired.length === 0) return ids;
+  if (retired.length === 0) return asStored;
   const resources = [...new Set(retired.map(row => row.resource))];
   const plain = await reader.select<PermissionRow>("permissions", {
     columns: ["id", "action", "resource"],
@@ -150,7 +159,7 @@ export async function storedAsPlain(
     }
     added.push(...four);
   }
-  return [...new Set([...ids.filter(id => !replaced.has(id)), ...added])];
+  return [...new Set([...asStored.filter(id => !replaced.has(id)), ...added])];
 }
 
 /**

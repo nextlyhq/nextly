@@ -7,7 +7,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { plainFourOnLocked, storedAsPlainLocked } from "../manage-bridge";
+import {
+  plainFourOnLocked,
+  storedAsPlain,
+  storedAsPlainLocked,
+} from "../manage-bridge";
 
 type Row = { id: string; action: string; resource: string };
 type Query = {
@@ -33,10 +37,12 @@ function recording() {
     select: (_table: string, query: Query): Promise<never[]> => {
       queries.push(query);
       const byId = query.where.and.find(c => c.column === "id");
+      // Ids matched without regard to case, as MySQL matches them.
+      const asked = ((byId?.value ?? []) as string[]).map(id =>
+        id.toLowerCase()
+      );
       const rows = byId
-        ? [MANAGE, ...FOUR].filter(row =>
-            (byId.value as string[]).includes(row.id)
-          )
+        ? [MANAGE, ...FOUR].filter(row => asked.includes(row.id))
         : FOUR;
       return Promise.resolve(rows as never[]);
     },
@@ -64,5 +70,11 @@ describe("the writers' reads of a retired manage permission", () => {
     ).toEqual(FOUR.map(row => row.id).sort());
     expect(queries.length).toBe(2);
     expect(queries.every(query => query.forUpdate === true)).toBe(true);
+  });
+
+  it("replaces a retired permission asked for in another case than its row spells it", async () => {
+    const { tx } = recording();
+    const stored = await storedAsPlain(tx, [MANAGE.id.toUpperCase()], 999);
+    expect(stored.sort()).toEqual(FOUR.map(row => row.id).sort());
   });
 });
