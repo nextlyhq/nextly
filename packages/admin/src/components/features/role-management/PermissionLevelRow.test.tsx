@@ -30,6 +30,7 @@ const POSTS: LevelRow = {
   slug: "posts",
   kind: "collection",
   label: "Post",
+  plural: "Posts",
   plugin: null,
   declaredRules: [],
   permissions: [
@@ -47,6 +48,7 @@ const HOMEPAGE: LevelRow = {
   slug: "homepage",
   kind: "single",
   label: "Homepage",
+  plural: "Homepage",
   plugin: null,
   declaredRules: [],
   permissions: ["read", "update", "publish", "unpublish"].map(action =>

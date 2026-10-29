@@ -165,6 +165,16 @@ describe("an API key", () => {
     );
   });
 
+  it("is admitted, holding no read grant, when it carries its maker's super-admin authority", async () => {
+    // Such a key reads every collection, one it creates included.
+    const carrying = { ...key(["create-settings"]), keyHoldsSuperAdmin: true };
+    expect(await wouldReadOwnNewCollection(carrying)).toBe(true);
+    // The control: the same key without it holds no read grant.
+    expect(await wouldReadOwnNewCollection(key(["create-settings"]))).toBe(
+      false
+    );
+  });
+
   it("is judged on its stamped scope, never on its owner's roles", async () => {
     // A key is judged on the scope stamped into it when it was minted. Reading
     // its owner's roles would make a read-only key equivalent to the account
