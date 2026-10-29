@@ -378,6 +378,61 @@ describe("a delete rule's filter on a collection with languages", () => {
     expect(refused.statusCode).toBe(403);
     expect(await stillThere(t, LOCALIZED, others)).toBe(true);
   });
+
+  it("answers an entry outside the filter as missing where a plain read hides it through a fallback language", async () => {
+    // The default language falls back to French here, so a plain read judges
+    // the read rule's filter in English and in French. The entry matches it
+    // in English only, so that read hides it, and a delete outside the delete
+    // filter answers it as missing rather than revealing it with a 403.
+    const FALLING_BACK = "writefilter_fallback_posts";
+    current = await createTestNextly({
+      localization: {
+        locales: [{ code: "en", fallbackLocale: "fr" }, "fr"],
+        defaultLocale: "en",
+      },
+      collections: [
+        defineCollection({
+          slug: FALLING_BACK,
+          localized: true,
+          access: {
+            read: () => ({ title: { equals: "shown" } }) as unknown as boolean,
+            delete: ownEntries,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "owner", localized: false }),
+          ],
+        }),
+      ],
+    });
+    const t = current;
+    await userWhoMay(t, AUTHOR, "read", [FALLING_BACK]);
+    await grantTo(t, AUTHOR, "delete", [FALLING_BACK]);
+    const created = await t.nextly.create({
+      collection: FALLING_BACK,
+      data: { title: "shown", owner: OTHER },
+    });
+    const others = String(created.item.id);
+    await t.nextly.update({
+      collection: FALLING_BACK,
+      id: others,
+      locale: "fr",
+      data: { title: "hidden" },
+    } as never);
+
+    // The control: the author's plain read hides the entry.
+    const read = await errorOf(() =>
+      t.nextly.findByID({ collection: FALLING_BACK, id: others, ...asAuthor })
+    );
+    const refused = await errorOf(() =>
+      t.nextly.delete({ collection: FALLING_BACK, id: others, ...asAuthor })
+    );
+
+    expect(read.statusCode).toBe(404);
+    expect(refused.statusCode).toBe(404);
+    expect(refused.code).toBe("NOT_FOUND");
+    expect(await stillThere(t, FALLING_BACK, others)).toBe(true);
+  });
 });
 
 // MySQL's default REPEATABLE READ fixes a transaction's snapshot at its first
