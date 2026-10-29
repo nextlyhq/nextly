@@ -844,7 +844,11 @@ function visitorAnswer(row: Row, action: Action): Verdict {
   // The rule reads the caller's permissions, which are the Public role's,
   // and Public holds the action.
   if (rule === "role-screen-spelling") return "allow";
-  return answerFor(row, rulesLet(rule, action, "visitor", target));
+  const lets = rulesLet(rule, action, "visitor", target);
+  // A visitor is limited by a read rule's filter alone: a write rule's
+  // filter is not applied to a visitor yet, so it refuses.
+  if (lets === "matching" && FILTERED_WRITES.has(action)) return "refuse";
+  return answerFor(row, lets);
 }
 
 /**
