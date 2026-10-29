@@ -264,14 +264,14 @@ describe("buildPluginAdminMeta", () => {
       });
     });
 
-    it("is manage-settings when it names none", () => {
+    it("is update-settings when it names none", () => {
       const meta = buildPluginAdminMeta(
         asPlugins([
           { ...base, contributes: { admin: { settings: settingsPage } } },
         ]),
         undefined
       );
-      expect(meta[0].settings?.permission).toBe("manage-settings");
+      expect(meta[0].settings?.permission).toBe("update-settings");
     });
   });
 
