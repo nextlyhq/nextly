@@ -21,6 +21,7 @@ import {
 } from "@admin/components/icons";
 import { API_KEYS_LIST_PERMISSIONS } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
+import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 
 /**
  * What a destination needs before it is shown.
@@ -93,7 +94,7 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         label: "General",
         icon: Settings,
         href: ROUTES.SETTINGS,
-        gate: { kind: "permission", permission: "manage-settings" },
+        gate: { kind: "permission", permission: READ_SETTINGS },
         exact: true,
       },
       {
@@ -130,7 +131,7 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         label: "Image Sizes",
         icon: Image,
         href: ROUTES.SETTINGS_IMAGE_SIZES,
-        gate: { kind: "permission", permission: "manage-settings" },
+        gate: { kind: "permission", permission: READ_SETTINGS },
       },
     ],
   },
@@ -152,7 +153,7 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         label: "User Fields",
         icon: List,
         href: ROUTES.USERS_FIELDS,
-        gate: { kind: "permission", permission: "manage-settings" },
+        gate: { kind: "permission", permission: READ_SETTINGS },
       },
       {
         id: "roles",
@@ -228,7 +229,7 @@ const WEBHOOK_SLUGS = [
  * Read off the table rather than listed beside it, and consumed by three
  * separate decisions that were each maintained by hand: whether the rail entry
  * appears, whether `/admin/settings` opens at all, and which destination a
- * viewer without `manage-settings` lands on. Background Jobs was added to the
+ * viewer without `read-settings` lands on. Background Jobs was added to the
  * panel and to none of the three, so the destination passed its own gate while
  * the rail was suppressed — and once the rail was fixed, the link led to a page
  * that bounced. A destination added here now satisfies all three by

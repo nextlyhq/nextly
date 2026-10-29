@@ -603,6 +603,14 @@ jobs:
       # bare-Error allowlist's size and per-file counts and proves each guard
       # still reaches the files it exempts, so the allowlist cannot be edited
       # to silence lint without this step going red.
+      #
+      # The visual check's own tests drive Chromium against a stubbed server,
+      # so the browser comes first, provisioned the one way the browser jobs
+      # provision it: the same action, so a cache hit is the same entry.
+      - name: Chromium for the visual check's tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: ./.github/actions/chromium
+
       - name: Script tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm test:scripts
@@ -2160,6 +2168,14 @@ jobs:
       # The playground builds with Cache Components only when asked; this job is
       # what it is turned on for.
       NEXTLY_PLAYGROUND_CACHE_COMPONENTS: "1"
+      # The browser suite's own routes, switched on as `e2e/playwright.config.ts`
+      # switches them, so a harness page that reads the request above a
+      # Suspense boundary fails this build as a content route would.
+      NEXTLY_E2E_BRANDING: "1"
+      NEXTLY_E2E_STYLE_FIXTURE: "1"
+      NEXTLY_E2E_SLOW_WIDGET: "1"
+      NEXTLY_E2E_SHELL_HARNESS: "1"
+      NEXTLY_E2E_CANVAS_HARNESS: "1"
     timeout-minutes: 25
 
     steps:
@@ -2209,6 +2225,16 @@ jobs:
         env:
           DATABASE_URL: file:${{ runner.temp }}/cache-components-empty.db
         run: pnpm --filter playground exec next build
+
+      # `--debug-prerender` prerenders as development does, where the admin
+      # layout boots nextly to check its generated component map: request work
+      # a production build skips, which must sit beneath a Suspense boundary all
+      # the same, or `next dev` fails on the same page.
+      - name: Build with prerender debugging on an empty database
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-debug.db
+        run: pnpm --filter playground exec next build --debug-prerender
 
       - name: Build on seeded content
         if: steps.decide.outputs.inert != 'true'

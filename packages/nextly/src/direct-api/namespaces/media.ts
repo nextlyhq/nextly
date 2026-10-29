@@ -261,6 +261,10 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
             caption: args.data.caption,
             tags: args.data.tags,
             folderId: args.data.folderId,
+            // The same focus point the REST update takes, so server code can
+            // set it as an editor does in the admin.
+            focalX: args.data.focalX,
+            focalY: args.data.focalY,
           },
           writeContext(args),
           writeActor(args)
