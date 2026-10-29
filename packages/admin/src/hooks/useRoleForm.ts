@@ -12,8 +12,10 @@ import { debugError, debugLog } from "@admin/lib/debug";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   levelRows,
+  pluginGroups,
   screenEntitiesFrom,
   type LevelRow,
+  type PluginGroup,
   type ScreenEntity,
 } from "@admin/lib/permissions/level-rows";
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
@@ -151,9 +153,11 @@ export interface UseRoleFormReturn {
   form: UseFormReturn<RoleFormValuesType>;
   role: RoleWithPermissions | null;
   allPermissions: Permission[];
-  /** One row per collection and Single, set by level. */
+  /** One row per collection and Single of the app's own, set by level. */
   levelRows: LevelRow[];
-  /** The permissions no row takes, set one by one in the grid. */
+  /** Each plugin's collections and own permissions, folded under its name. */
+  pluginGroups: PluginGroup[];
+  /** The permissions no row or plugin takes, set one by one in the grid. */
   otherPermissions: Permission[];
   /**
    * Each base role the role is built on, with the permissions it gives, so a
@@ -252,12 +256,13 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
   const [screenEntities, setScreenEntities] = useState<ScreenEntity[]>([]);
   // Every permission whose resource is a collection or Single goes to that
-  // entity's row; the rest stay in the grid. Derived together, so each
-  // permission is shown in exactly one place.
-  const { rows, rest } = useMemo(
-    () => levelRows(screenEntities, allPermissions),
-    [screenEntities, allPermissions]
-  );
+  // entity's row, a plugin's rows and its own permissions to its group, and
+  // the rest stay in the grid. Derived together, so each permission is shown
+  // in exactly one place.
+  const { appRows, groups, rest } = useMemo(() => {
+    const built = levelRows(screenEntities, allPermissions);
+    return pluginGroups(built.rows, built.rest);
+  }, [screenEntities, allPermissions]);
   const [error, setError] = useState<string | null>(null);
   const [ignoreFormChanges, setIgnoreFormChanges] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -673,7 +678,8 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     form,
     role,
     allPermissions,
-    levelRows: rows,
+    levelRows: appRows,
+    pluginGroups: groups,
     otherPermissions: rest,
     baseGrants,
     allRoles,
