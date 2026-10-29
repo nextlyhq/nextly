@@ -98,6 +98,74 @@ describe("useRefusedForm", () => {
     }
   });
 
+  it("refuses a second recovery while the first awaits its Save, and leaves the first's hold alone", async () => {
+    // The Save waits, as it does on a view's before-action handler or a
+    // tracked write, before the editor's own latch is taken.
+    const saving = deferred<DocumentActionOutcome>();
+    const taking = deferred<void>();
+    const editor = gate(() => saving.promise);
+    const { result } = renderHook(() => useRefusedForm(editor));
+    let takeStarted = false;
+    const firstTake = vi.fn(async () => {
+      takeStarted = true;
+      await taking.promise;
+    });
+    const secondTake = vi.fn(async () => undefined);
+
+    let first: Promise<void> | undefined;
+    let second: Promise<unknown> | undefined;
+    act(() => {
+      first = result.current.refusedForm.recover(firstTake);
+      second = result.current.refusedForm
+        .recover(secondTake)
+        .catch((error: unknown) => error);
+    });
+    await act(async () => {
+      saving.resolve({ ok: true });
+      await second;
+    });
+    await vi.waitFor(() => expect(takeStarted).toBe(true));
+
+    // Refused as a save in flight is; the first still holds the form while
+    // it takes, so nothing typed can reach it.
+    expect(await second).toBeInstanceOf(Error);
+    expect(result.current.recovering).toBe(true);
+
+    await act(async () => {
+      taking.resolve();
+      await first;
+    });
+    expect(secondTake).not.toHaveBeenCalled();
+    expect(editor.resetToDocument).toHaveBeenCalledTimes(1);
+    expect(result.current.recovering).toBe(false);
+  });
+
+  it("runs a later recovery once an earlier one's Save was refused", async () => {
+    const refused: DocumentActionOutcome = {
+      ok: false,
+      reason: "failed",
+      message: "The entry couldn't be saved.",
+    };
+    const save = vi
+      .fn<() => Promise<DocumentActionOutcome>>()
+      .mockResolvedValueOnce(refused)
+      .mockResolvedValue({ ok: true });
+    const editor = gate(save);
+    const { result } = renderHook(() => useRefusedForm(editor));
+    const take = vi.fn(async () => undefined);
+
+    await act(async () => {
+      await result.current.refusedForm.recover(take).catch(() => undefined);
+    });
+    await act(async () => {
+      await result.current.refusedForm.recover(take);
+    });
+
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(editor.resetToDocument).toHaveBeenCalledTimes(1);
+    expect(result.current.recovering).toBe(false);
+  });
+
   it("takes nothing, and lets the form go untouched, when the Save didn't store", async () => {
     const refused: DocumentActionOutcome = {
       ok: false,

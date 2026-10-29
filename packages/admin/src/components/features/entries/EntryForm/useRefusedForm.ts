@@ -113,6 +113,11 @@ export function useRefusedForm(gate: {
   // once, and the fields taken are set over whatever was typed since. So the
   // form is held, as a document someone else holds is.
   const [recovering, setRecovering] = useState(false);
+  // Set the moment a recovery enters, before anything is awaited, and let go
+  // with its hold. The editor's latch is free while the recovery's Save waits
+  // on a view's work, so a second recovery is refused here instead, before
+  // it can touch a hold only the recovery that set it lets go.
+  const running = useRef(false);
 
   const refusedForm = useMemo<RefusedForm>(
     () => ({
@@ -121,7 +126,8 @@ export function useRefusedForm(gate: {
         // The same gate the editor's own saves pass.
         const { writesHeld, latch } = gateNow.current;
         if (writesHeld()) throw new Error(HELD);
-        if (latch.current) throw new Error(BUSY);
+        if (latch.current || running.current) throw new Error(BUSY);
+        running.current = true;
         // Held from the action, through the Save, until the form starts
         // afresh: no moment between the two writes when a field is open.
         setRecovering(true);
@@ -143,6 +149,7 @@ export function useRefusedForm(gate: {
           gateNow.current.resetToDocument();
         } finally {
           if (holdsLatch) latch.current = false;
+          running.current = false;
           setRecovering(false);
         }
       },
