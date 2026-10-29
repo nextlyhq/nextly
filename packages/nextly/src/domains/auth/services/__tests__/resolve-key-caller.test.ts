@@ -43,9 +43,9 @@ describe("resolveKeyCaller", () => {
 
   it("carries the maker's soonest role expiry with the authority", async () => {
     vi.mocked(resolveUserRoles).mockResolvedValue({
-      roleIds: ["super-admin"],
+      roleIds: new Set(["super-admin"]),
       validUntil: EXPIRES,
-    } as Awaited<ReturnType<typeof resolveUserRoles>>);
+    });
     vi.mocked(isSuperAdmin).mockResolvedValue(true);
 
     const resolved = await resolveKeyCaller(service, key("full-access"));
@@ -58,9 +58,7 @@ describe("resolveKeyCaller", () => {
     const order: string[] = [];
     vi.mocked(resolveUserRoles).mockImplementation(async () => {
       order.push("expiry");
-      return { roleIds: [], validUntil: EXPIRES } as Awaited<
-        ReturnType<typeof resolveUserRoles>
-      >;
+      return { roleIds: new Set<string>(), validUntil: EXPIRES };
     });
     vi.mocked(isSuperAdmin).mockImplementation(async () => {
       order.push("super-admin");
