@@ -82,8 +82,13 @@ export interface KeyActor {
   readonly userId: string;
   readonly roles: readonly string[];
   readonly permissions: readonly PermissionGrant[];
-  /** Never true: no key carries super-admin authority, whoever made it. */
-  readonly superAdmin: false;
+  /**
+   * Carries its maker's super-admin authority: true only for a full-access key
+   * whose maker is an active super-admin for this request, as authentication
+   * found it. Never from the role names the key carries, and never for a key
+   * whose scope was narrowed.
+   */
+  readonly superAdmin: boolean;
 }
 
 export type Actor =
@@ -142,14 +147,16 @@ export function userActor(fields: {
 }
 
 /**
- * A key's actor. It takes no super-admin flag at all, so no caller can hand a
- * key that authority, whatever role names the key carries from its maker.
+ * A key's actor. Its super-admin authority is what authentication found for
+ * the key, handed in by the one resolver that reads it; the role names the
+ * key carries from its maker never give it.
  */
 export function keyActor(fields: {
   keyId: string;
   userId: string;
   roles: readonly string[];
   permissions: readonly PermissionGrant[];
+  superAdmin: boolean;
 }): KeyActor {
   return Object.freeze({
     kind: "key",
@@ -157,7 +164,7 @@ export function keyActor(fields: {
     userId: fields.userId,
     roles: Object.freeze([...fields.roles]),
     permissions: freezeAll(fields.permissions),
-    superAdmin: false,
+    superAdmin: fields.superAdmin,
   });
 }
 
@@ -211,9 +218,13 @@ export function storedPermissions(actor: Actor): string[] {
   return grantsOf(actor).map(grant => grant.slug);
 }
 
-/** Whether the actor holds super-admin authority. Only a user can. */
+/**
+ * Whether the actor holds super-admin authority: a super-admin person, or a
+ * full-access key whose maker is one. What is kept for a person asks whether
+ * the caller is a person, never this, so no key reaches it.
+ */
 export function isSuperAdmin(actor: Actor): boolean {
-  return actor.kind === "user" && actor.superAdmin;
+  return (actor.kind === "user" || actor.kind === "key") && actor.superAdmin;
 }
 
 /**
