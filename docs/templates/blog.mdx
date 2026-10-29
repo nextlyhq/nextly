@@ -84,18 +84,22 @@ A set of React components for the frontend lives under `src/app/(frontend)/compo
 
 ### Access control
 
-Two rules under `src/access/` gate each CRUD operation:
+Three rules under `src/access/` gate each CRUD operation:
 
 - `anyone` -- public read.
 - `has-permission` -- the caller's role holds the operation's permission on the collection,
   as the Roles screen grants it: `update-posts` to edit a post, `create-tags` to add a tag.
+- `own-posts` -- Posts' update and delete rule: a caller holding `publish-posts` changes
+  every post, and anyone else only the posts whose `author` is them (see
+  [Only their own entries](/docs/permissions#only-their-own-entries)).
 
-Neither checks a role's name, so a role you create and an API key are judged by the
-permissions they hold. Publishing a post needs `publish-posts`.
+None checks a role's name, so a role you create and an API key are judged by the
+permissions they hold. Publishing a post needs `publish-posts`. Only a caller holding it
+sets or changes a post's `author`; a new post with no author becomes its creator's.
 
 The demo-content seed creates three roles (`admin`, `editor`, `author`). An author may
-draft and edit posts but holds neither `delete-posts` nor `publish-posts`, since a rule
-cannot tell an author's own post from anyone else's; an editor publishes.
+draft posts and edit and delete their own, but holds no `publish-posts`; an editor
+publishes, and edits and deletes every post.
 
 ### Demo data
 
