@@ -76,8 +76,11 @@ function slugOf(text) {
 export function publishedRoute(route) {
   const at = route.search(/[?#]/);
   if (at === -1) return route;
+  // A query hashes as it always has, so names already published still
+  // stand; a fragment hashes with its `#`, which no query holds, so `?_=x`
+  // and `#_=x` stay apart even where the slug drops the rest.
   const hash = createHash("sha256")
-    .update(route.slice(at + 1))
+    .update(route.slice(route[at] === "?" ? at + 1 : at))
     .digest("hex")
     .slice(0, 8);
   if (route[at] === "#") return `${route.slice(0, at)}#${hash}`;

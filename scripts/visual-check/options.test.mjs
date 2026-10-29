@@ -111,6 +111,10 @@ describe("what the visual check is asked to do", () => {
     expect(
       captureName(`/admin/plugin#access_token=${secret}`, 390, "light")
     ).toMatch(/^admin-plugin-[0-9a-f]{8}-390-light\.png$/);
+    // The `?` is the fragment's: nothing after the `#` is read as a key.
+    expect(
+      publishedRoute(`/admin/plugin#access_token=${secret}?view=1`)
+    ).toMatch(/^\/admin\/plugin#[0-9a-f]{8}$/);
     expect(
       publishedRoute(`/admin/plugin?tab=api#access_token=${secret}`)
     ).toMatch(/^\/admin\/plugin\?tab=…#[0-9a-f]{8}$/);
@@ -119,6 +123,22 @@ describe("what the visual check is asked to do", () => {
     );
     expect(captureName("/admin/x?tab=api", 390, "dark")).not.toBe(
       captureName("/admin/x?tab=api#more", 390, "dark")
+    );
+    // A key that leaves no slug characters still keeps a query and a fragment
+    // with the same text apart.
+    expect(captureName("/admin/x?_=foo", 390, "light")).not.toBe(
+      captureName("/admin/x#_=foo", 390, "light")
+    );
+  });
+
+  /*
+   * Names already published stay valid: they are files in the screenshot
+   * branch and raw URLs in merged pull requests' "The look". A route with
+   * only a query is named exactly as it was before fragments were hidden.
+   */
+  it("names a route with only a query as it always has", () => {
+    expect(captureName("/admin/x?tab=fields", 390, "dark")).toBe(
+      "admin-x-tab-35aba774-390-dark.png"
     );
   });
 
