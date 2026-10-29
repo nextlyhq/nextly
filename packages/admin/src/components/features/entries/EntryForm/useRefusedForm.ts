@@ -14,6 +14,7 @@
 import { notifyManager } from "@tanstack/react-query";
 import {
   type RefObject,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -96,6 +97,18 @@ function changeHold(scope: string, by: 1 | -1): void {
   for (const listener of holdListeners) listener();
 }
 
+/** One recovery's hold of its document, let go of once. */
+interface Hold {
+  readonly scope: string;
+  released: boolean;
+}
+
+function letGoOf(hold: Hold): void {
+  if (hold.released) return;
+  hold.released = true;
+  changeHold(hold.scope, -1);
+}
+
 function subscribeToHolds(listener: () => void): () => void {
   holdListeners.add(listener);
   return () => {
@@ -172,6 +185,18 @@ export function useRefusedForm(gate: {
     gateNow.current.latch.current = false;
     latchHeldFor.current = null;
   }, [scopeShown]);
+  // The hold of a recovery still in its Save. A Save that never settles once
+  // the editor has gone, a view's open edit waiting on a dialog that went
+  // with it, would otherwise hold its document for the rest of the session;
+  // a take already sent keeps holding until it settles.
+  const holdInSave = useRef<Hold | null>(null);
+  useEffect(
+    () => () => {
+      const hold = holdInSave.current;
+      if (hold) letGoOf(hold);
+    },
+    []
+  );
 
   const refusedForm = useMemo<RefusedForm>(
     () => ({
@@ -182,16 +207,20 @@ export function useRefusedForm(gate: {
         if (writesHeld()) throw new Error(HELD);
         if (latch.current || running.current) throw new Error(BUSY);
         const refused = gateNow.current.scope;
-        let holds = false;
+        let hold: Hold | null = null;
         try {
           // Taken and let go in this one try, so nothing can leave it set.
           running.current = true;
           // Held from the action, through the Save, until the form starts
           // afresh: no moment between the two writes when a field is open.
+          // Made before the count changes, so it is let go of however that
+          // goes.
+          hold = { scope: refused, released: false };
+          holdInSave.current = hold;
           changeHold(refused, 1);
-          holds = true;
           const save = gateNow.current.saveWithoutPublishing.current;
           const saved = save ? await save() : NO_SAVE_WITHOUT_PUBLISHING;
+          holdInSave.current = null;
           if (!saved.ok) throw new RecoverySaveRefused(saved);
           // The Save has let the latch go; taken here, with nothing awaited
           // in between, for the take and the reload.
@@ -213,7 +242,8 @@ export function useRefusedForm(gate: {
             latchHeldFor.current = null;
           }
           running.current = false;
-          if (holds) changeHold(refused, -1);
+          if (holdInSave.current === hold) holdInSave.current = null;
+          if (hold) letGoOf(hold);
         }
       },
     }),
@@ -236,21 +266,30 @@ export function heldWhileRecovering<T extends { readonly readOnly: boolean }>(
 }
 
 /**
+ * A switch to another language refused while a recovery holds the one on
+ * screen. One function, so the locale context it reaches keeps its identity
+ * render after render.
+ */
+function refuseLocaleChange(): void {
+  toast.warning(
+    "The live values are still being taken. Switch languages once they're in."
+  );
+}
+
+/**
  * The editor's switch to another language while a recovery holds the one on
  * screen: refused, as the fields are, so its Save and take stay on the
- * language they are for. One gate at the handler, so every control that
- * switches, a field's own included, is held.
+ * language they are for. One gate at the editor's handler, so every switch
+ * the editor offers, a field's own included, is held; one made outside it,
+ * such as the browser's back button, is met by each store asking whether it
+ * still shows the language it started in.
  */
 export function heldLocaleChange<A extends unknown[]>(
   change: ((...args: A) => void) | undefined,
   recovering: boolean
 ): ((...args: A) => void) | undefined {
   if (!change || !recovering) return change;
-  return () => {
-    toast.warning(
-      "The live values are still being taken. Switch languages once they're in."
-    );
-  };
+  return refuseLocaleChange;
 }
 
 /**

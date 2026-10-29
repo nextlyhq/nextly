@@ -76,10 +76,15 @@ export async function submitDocument(args: {
       const payload = toPayload(validated);
       try {
         const written = await write(payload);
-        if (written.stored === null) form.reset(payload);
-        // What the server stored becomes the form's starting point, keeping
-        // anything typed while the save was in flight.
-        else adoptStoredValues(form, written.stored, submitted);
+        // Only where the editor still shows what was written: after a move
+        // the form holds another document's or language's values, which
+        // these would replace for its next Save to write.
+        if (!stillShown || stillShown()) {
+          if (written.stored === null) form.reset(payload);
+          // What the server stored becomes the form's starting point,
+          // keeping anything typed while the save was in flight.
+          else adoptStoredValues(form, written.stored, submitted);
+        }
         outcome = { ok: true, item: written.item };
       } catch (error) {
         console.error("Form submission error:", error);

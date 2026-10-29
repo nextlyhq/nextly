@@ -182,6 +182,8 @@ export type DocumentActionOutcome =
        * work: no write failed, so nothing but this outcome says why.
        */
       beforeWrite?: true;
+      /** Set where the author has already been told, so nothing says it again. */
+      reported?: true;
     };
 
 /** A confirmation an action asks before it runs. */

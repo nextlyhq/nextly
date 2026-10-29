@@ -336,8 +336,10 @@ function useSingleWriteGate(
     shown.documentId,
     shown.locale ?? null,
   ]);
-  const scopeNow = useRef(scope);
-  scopeNow.current = scope;
+  // A new visit each time the scope changes, so going away and coming back
+  // is a move too: the form started afresh from cached values in between.
+  const scopeNow = useRef({ scope });
+  if (scopeNow.current.scope !== scope) scopeNow.current = { scope };
   // Stored with the Single's own Save, run inside its own write gate, then
   // started afresh from the Single that carries the live values it takes.
   const { refusedForm, recovering } = useRefusedForm({

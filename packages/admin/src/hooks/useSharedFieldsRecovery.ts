@@ -387,14 +387,16 @@ export function useSharedFieldsRecovery(args: {
           // it, it has said why itself; a refusal of its own goes unsaid
           // unless said here.
           if (failure instanceof RecoverySaveRefused) {
-            const { reason, message, beforeWrite } = failure.outcome;
+            const { reason, message, beforeWrite, reported } = failure.outcome;
             // A write that failed says why on the request's own toast, and
             // the form shows its errors; a store that stopped before any
             // write, readying the editor's work, says nothing else, and a
-            // document view has no Save state to show it.
+            // document view has no Save state to show it. One the Save's
+            // gate has already said isn't said twice.
             const saidItself =
-              beforeWrite !== true &&
-              (reason === "failed" || reason === "invalid");
+              reported === true ||
+              (beforeWrite !== true &&
+                (reason === "failed" || reason === "invalid"));
             if (!saidItself) toast.error(message);
             return;
           }

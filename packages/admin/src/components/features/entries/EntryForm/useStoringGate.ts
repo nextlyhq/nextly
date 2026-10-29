@@ -15,8 +15,10 @@
  */
 import { useCallback, useRef, useState } from "react";
 
+import { toast } from "@admin/components/ui";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
+import { MOVED_MESSAGE } from "./submit-outcome";
 import type {
   BeforeDocumentAction,
   DocumentActionOutcome,
@@ -72,10 +74,21 @@ const stillWriting: DocumentActionOutcome = {
 const moved: DocumentActionOutcome = {
   ok: false,
   reason: "refused",
-  message:
-    "You moved to another language or document before this was saved; nothing was stored.",
+  message: MOVED_MESSAGE,
   beforeWrite: true,
 };
+
+/**
+ * A store's refusal said by the gate itself, once: it settled after the
+ * editor moved, so the Save state, which answers for what is on screen now,
+ * doesn't show it.
+ */
+function reportedAfterMove(
+  outcome: Exclude<DocumentActionOutcome, { ok: true }>
+): DocumentActionOutcome {
+  toast.error(outcome.message, { id: "store-after-move" });
+  return { ...outcome, reported: true };
+}
 
 export function useStoringGate(scope: string): StoringGate {
   const beforeActions = useRef(new Set<BeforeDocumentAction>());
@@ -174,16 +187,19 @@ export function useStoringGate(scope: string): StoringGate {
     setScopeShown(scope);
     setLastStore({ kind: "none" });
   }
-  const currentScope = useRef(scope);
-  currentScope.current = scope;
+  // This visit to the document and language: a new one each time the scope
+  // changes, so going away and coming back is a move too, as the form has
+  // started afresh from that language's values in between.
+  const currentVisit = useRef({ scope });
+  if (currentVisit.current.scope !== scope) currentVisit.current = { scope };
   const record = (
-    startedIn: string,
+    startedIn: { scope: string },
     action: string,
     outcome: DocumentActionOutcome
   ) => {
     // A store that settles after the scope changed answers for a document no
     // longer on screen.
-    if (startedIn !== currentScope.current) return;
+    if (startedIn !== currentVisit.current) return;
     if (outcome.ok) {
       setLastStore({ kind: "stored", at: new Date() });
     } else if (outcome.reason !== "busy" && outcome.reason !== "cancelled") {
@@ -198,16 +214,22 @@ export function useStoringGate(scope: string): StoringGate {
   const storing =
     (action: string, perform: () => Promise<DocumentActionOutcome>) =>
     async (): Promise<DocumentActionOutcome> => {
-      const startedIn = currentScope.current;
+      const startedIn = currentVisit.current;
       setReadying(n => n + 1);
       try {
         // Readying awaits the editor's work, and the editor can move to
         // another document or language meanwhile: asked once it is ready.
         const outcome =
           (await readyToStore(action)) ??
-          (currentScope.current === startedIn ? await perform() : moved);
+          (currentVisit.current === startedIn ? await perform() : moved);
         record(startedIn, action, outcome);
-        return outcome;
+        // Refused after a move: nothing on screen shows it, so said here.
+        return currentVisit.current === startedIn ||
+          outcome.ok ||
+          outcome.reason === "busy" ||
+          outcome.reason === "cancelled"
+          ? outcome
+          : reportedAfterMove(outcome);
       } finally {
         setReadying(n => n - 1);
       }

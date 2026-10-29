@@ -6,10 +6,22 @@
  */
 import { defaultScheduler, notifyManager } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DocumentActionOutcome } from "../useDocumentActionBindings";
 import { RecoverySaveRefused, useRefusedForm } from "../useRefusedForm";
+
+// The held documents outlive any one editor, so every test leaves none held:
+// a hold one test left would read as held in the next.
+afterEach(() => {
+  for (const scope of ["A", "B"]) {
+    const { result, unmount } = renderHook(() =>
+      useRefusedForm({ ...gate(), scope })
+    );
+    expect(result.current.recovering).toBe(false);
+    unmount();
+  }
+});
 
 /** The gate an editor hands the recovery, recording what it was asked. */
 function gate(save?: () => Promise<DocumentActionOutcome>) {
@@ -140,6 +152,58 @@ describe("useRefusedForm", () => {
       expect(result.current.recovering).toBe(false);
     }
   );
+
+  it("lets its document go when the editor goes while its Save never settles", () => {
+    // A view's open edit that never commits once the editor has gone.
+    const editor = gate(() => new Promise<DocumentActionOutcome>(() => {}));
+    const { result, unmount } = renderHook(() => useRefusedForm(editor));
+    act(() => {
+      void result.current.refusedForm.recover(async () => undefined);
+    });
+    expect(result.current.recovering).toBe(true);
+
+    unmount();
+
+    // Opened again in this session: nothing holds it.
+    const reopened = renderHook(() => useRefusedForm(gate()));
+    expect(reopened.result.current.recovering).toBe(false);
+    reopened.unmount();
+  });
+
+  it("holds a document two editors show until both of their recoveries let go", async () => {
+    const first = gate(async () => ({ ok: true }));
+    const second = gate(async () => ({ ok: true }));
+    const one = renderHook(() => useRefusedForm(first));
+    const two = renderHook(() => useRefusedForm(second));
+    const firstTake = deferred<void>();
+    const secondTake = deferred<void>();
+    let running: Promise<void>[] = [];
+    act(() => {
+      running = [
+        one.result.current.refusedForm.recover(() => firstTake.promise),
+        two.result.current.refusedForm.recover(() => secondTake.promise),
+      ];
+    });
+    await vi.waitFor(() => expect(first.latch.current).toBe(true));
+    await vi.waitFor(() => expect(second.latch.current).toBe(true));
+
+    await act(async () => {
+      firstTake.resolve();
+      await running[0];
+    });
+    // One let go; the other still holds it, so both editors show it held.
+    expect(one.result.current.recovering).toBe(true);
+    expect(two.result.current.recovering).toBe(true);
+
+    await act(async () => {
+      secondTake.resolve();
+      await running[1];
+    });
+    expect(one.result.current.recovering).toBe(false);
+    expect(two.result.current.recovering).toBe(false);
+    one.unmount();
+    two.unmount();
+  });
 
   it("refuses a second recovery while the first awaits its Save, and leaves the first's hold alone", async () => {
     // The Save waits, as it does on a view's before-action handler or a

@@ -532,8 +532,10 @@ function useEntryWriteGate(gate: {
     gate.entry?.id ?? null,
     gate.locale ?? null,
   ]);
-  const scopeNow = useRef(scope);
-  scopeNow.current = scope;
+  // A new visit each time the scope changes, so going away and coming back
+  // is a move too: the form started afresh from cached values in between.
+  const scopeNow = useRef({ scope });
+  if (scopeNow.current.scope !== scope) scopeNow.current = { scope };
   const { refusedForm, recovering } = useRefusedForm({
     scope,
     writesHeld: gate.writesHeld,

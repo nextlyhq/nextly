@@ -343,6 +343,34 @@ describe("useSharedFieldsRecovery", () => {
     expect(take).not.toHaveBeenCalled();
   });
 
+  it("doesn't say again what the Save's gate has already said", async () => {
+    const { recover } = renderRecovery();
+    const moved =
+      "You moved to another language or document before this was saved; nothing was stored.";
+    const form = formHolding({}, [], () => ({
+      ok: false,
+      reason: "refused",
+      message: moved,
+      beforeWrite: true,
+      reported: true,
+    }));
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(form.recover).toHaveBeenCalled());
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    // Only the refusal itself: the gate said why the Save stopped.
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(take).not.toHaveBeenCalled();
+  });
+
   it("says why when the Save was refused before it ran, and takes nothing", async () => {
     const { recover } = renderRecovery();
     const form = formHolding({}, [], () => ({
