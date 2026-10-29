@@ -425,24 +425,44 @@ export function validateFieldGroupConfig(
  * Convenience wrapper around {@link validateFieldGroupConfig}.
  */
 export function assertValidFieldGroupConfig(config: FieldGroupConfig): void {
-  const result = validateFieldGroupConfig(config);
+  throwIfInvalid(config, validateFieldGroupConfig(config).errors);
+}
 
-  if (!result.valid) {
-    const errorMessages = result.errors
-      .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
-      .join("\n");
+/**
+ * Throws if the configuration of a field group that already exists is
+ * invalid, judging everything but its address: the address is one the field
+ * group already has, and the one address rule judges only a new or changed
+ * one, so a field group created under an address the rule now refuses can
+ * still be updated.
+ */
+export function assertValidExistingFieldGroupConfig(
+  config: FieldGroupConfig
+): void {
+  throwIfInvalid(
+    config,
+    validateFieldGroupConfig(config).errors.filter(err => err.path !== "slug")
+  );
+}
 
-    throw NextlyError.validation({
-      errors: result.errors.map(err => ({
-        path: err.path,
-        code: err.code,
-        message: err.message,
-      })),
-      logContext: {
-        reason: "component-config-invalid",
-        slug: config.slug,
-        details: errorMessages,
-      },
-    });
-  }
+function throwIfInvalid(
+  config: FieldGroupConfig,
+  errors: FieldGroupValidationError[]
+): void {
+  if (errors.length === 0) return;
+  const errorMessages = errors
+    .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
+    .join("\n");
+
+  throw NextlyError.validation({
+    errors: errors.map(err => ({
+      path: err.path,
+      code: err.code,
+      message: err.message,
+    })),
+    logContext: {
+      reason: "component-config-invalid",
+      slug: config.slug,
+      details: errorMessages,
+    },
+  });
 }

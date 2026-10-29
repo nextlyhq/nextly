@@ -59,6 +59,9 @@ import {
   type CreateFieldGroupInput,
 } from "../field-group-metadata-service";
 import { loadDialectTables } from "../../../../database/dialect-tables";
+import { judgeAddress } from "../../../../shared/address-rule";
+import { ADDRESS_CASES } from "../../../../shared/__tests__/helpers/address-cases";
+import { resolveComponentTableName } from "../../../schema/utils/resolve-table-name";
 
 // The postgresql and mysql tables this file reads; the unit setup loads only
 // the run's own dialect, as an app's adapter would.
@@ -200,6 +203,86 @@ describe("a field-group create records its outcome rather than raising it", () =
 
     // Nothing ran and nothing was written. A refusal that has already touched the table would have
     // rebound the existing field group's storage to this request's fields.
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Every field-group create (the Builder, the Direct API, the REST route) reaches this service, so it
+ * judges a new address by the one rule every road shares, before the lock's DDL or any of its own.
+ */
+describe("a field-group create judges its address by the one rule", () => {
+  it.each(ADDRESS_CASES.filter(a => judgeAddress("fieldGroup", a) !== null))(
+    "refuses '%s' with the rule's reason, before any DDL",
+    async address => {
+      const registry = registryDouble();
+      const adapter = adapterDouble(async () => true);
+
+      await expect(
+        serviceOver(registry, adapter).createFieldGroup({
+          ...INPUT,
+          slug: address,
+          tableName: resolveComponentTableName(address),
+        })
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "slug",
+              message: judgeAddress("fieldGroup", address)?.message,
+            },
+          ],
+        },
+      });
+      expect(entityStatements(adapter)).toEqual([]);
+      expect(registry.registerComponent).not.toHaveBeenCalled();
+    }
+  );
+
+  it("accepts a hyphen, and names the table from the snake_case form", async () => {
+    const registry = registryDouble();
+    const adapter = adapterDouble(async () => true);
+
+    await serviceOver(registry, adapter).createFieldGroup({
+      ...INPUT,
+      slug: "team-updates",
+      tableName: resolveComponentTableName("team-updates"),
+    });
+
+    expect(registry.registerComponent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        slug: "team-updates",
+        tableName: "comp_team_updates",
+      })
+    );
+  });
+
+  it("refuses an address with another field group's snake_case form, naming both", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "team-updates", tableName: "comp_team_updates" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        slug: "team_updates",
+        tableName: resolveComponentTableName("team_updates"),
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "SLUG_SAME_SNAKE_CASE",
+            message: expect.stringMatching(
+              /'team_updates'.*'team_updates'.*field group 'team-updates'/
+            ),
+          },
+        ],
+      },
+    });
     expect(entityStatements(adapter)).toEqual([]);
     expect(registry.registerComponent).not.toHaveBeenCalled();
   });

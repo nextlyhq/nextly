@@ -12,7 +12,10 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
-import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
+import {
+  assertValidExistingFieldGroupConfig,
+  assertValidFieldGroupConfig,
+} from "../../field-groups/config/validate-field-group";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type {
   FieldGroupDefinition,
@@ -251,8 +254,9 @@ export function createFieldGroupsNamespace(
         // its own unchanged fields back. The manifest schema is stricter in
         // ways that are legal here — a camelCase field name, an empty nested
         // group mid-scaffold — so validating an update against it would make
-        // some groups creatable and then unupdatable.
-        assertValidFieldGroupConfig({
+        // some groups creatable and then unupdatable. The address is the field
+        // group's own and is not judged again: an existing address keeps working.
+        assertValidExistingFieldGroupConfig({
           slug: args.slug,
           label:
             typeof args.data.label === "string"

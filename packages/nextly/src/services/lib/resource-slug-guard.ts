@@ -2,6 +2,12 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../errors";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
+import {
+  addressRefusalError,
+  findSameSnakeCaseAddress,
+  addressSnakeForm,
+  type UsedAddress,
+} from "../../shared/address-rule";
 
 type ResourceType = "collection" | "single";
 
@@ -13,6 +19,11 @@ interface SlugOwner {
 interface SlugGuardOptions {
   currentResourceType?: ResourceType;
   currentResourceId?: string;
+  /**
+   * The kind the address is for, named in a refusal. Defaults to the kind of
+   * the resource being renamed, and to a collection when neither is given.
+   */
+  addressKind?: ResourceType;
 }
 
 async function findSlugOwner(
@@ -49,6 +60,39 @@ async function findSlugOwner(
   return null;
 }
 
+/**
+ * The collections and Singles whose address has the same snake_case form as
+ * `slug`, other than the resource being renamed. The snake_case form doubles as
+ * the LIKE pattern: each `_` matches one `-` or `_`, so the database narrows
+ * the rows and the rule decides among them.
+ */
+async function findSnakeCaseNeighbours(
+  adapter: DrizzleAdapter,
+  slug: string,
+  options: SlugGuardOptions | undefined
+): Promise<UsedAddress[]> {
+  const neighbours: UsedAddress[] = [];
+  const kinds = [
+    ["dynamic_collections", "collection"],
+    ["dynamic_singles", "single"],
+  ] as const;
+  for (const [table, resourceType] of kinds) {
+    const rows = await adapter.select<{ id: string; slug: string }>(table, {
+      where: {
+        and: [{ column: "slug", op: "LIKE", value: addressSnakeForm(slug) }],
+      },
+      columns: ["id", "slug"],
+    });
+    for (const row of rows) {
+      const isSelf =
+        resourceType === options?.currentResourceType &&
+        row.id === options?.currentResourceId;
+      if (!isSelf) neighbours.push({ kind: resourceType, address: row.slug });
+    }
+  }
+  return neighbours;
+}
+
 export async function assertGlobalResourceSlugAvailable(
   adapter: DrizzleAdapter,
   slug: string,
@@ -83,6 +127,16 @@ export async function assertGlobalResourceSlugAvailable(
   }
 
   if (!owner) {
+    // A new address, for this resource: refused when its snake_case form is
+    // another collection's or Single's, since two addresses that differ only
+    // by `-` and `_` read as one. Asked only here, so an address a resource
+    // already holds keeps working whatever its neighbours are.
+    const twin = findSameSnakeCaseAddress(
+      options?.addressKind ?? options?.currentResourceType ?? "collection",
+      slug,
+      await findSnakeCaseNeighbours(adapter, slug, options)
+    );
+    if (twin) throw addressRefusalError(twin, slug);
     return;
   }
 

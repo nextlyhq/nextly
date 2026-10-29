@@ -64,6 +64,11 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
     // starts from. The return type names the owner case too, so the conflict test can replace this
     // without widening the double's shape from outside it.
     selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+    // Read by the same guard to list the addresses already used, so a new one with the same
+    // snake_case form is refused. Empty is "none are", as for `selectOne`.
+    select: vi.fn(
+      async (_table: string): Promise<Array<{ id: string; slug: string }>> => []
+    ),
     executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       return [];
@@ -99,6 +104,8 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../../helpers/di";
+import { judgeAddress } from "../../../shared/address-rule";
+import { ADDRESS_CASES } from "../../../shared/__tests__/helpers/address-cases";
 import { dispatchSingles } from "../single-dispatcher";
 import { loadDialectTables } from "../../../database/dialect-tables";
 
@@ -297,6 +304,58 @@ describe("createSingle — what the request forwards into the DDL", () => {
     expect(executed, "a rejected create must leave no table behind").toEqual(
       []
     );
+  });
+
+  /**
+   * The Builder's Single create judges a new address by the one rule every road shares: the same
+   * verdict and reason as configuration and the other creates, and for a refusal, no statement.
+   */
+  it.each(ADDRESS_CASES)(
+    "gives the address '%s' the rule's verdict, before any DDL",
+    async address => {
+      const refusal = judgeAddress("single", address);
+      if (refusal === null) {
+        const sql = await ddlFor({ ...base, slug: address });
+        expect(sql).toContain(`"single_${address.replace(/-/g, "_")}"`);
+        return;
+      }
+      executed.length = 0;
+      adapter = makeAdapter("postgresql");
+      wireRegistry();
+      await expect(
+        dispatchSingles("createSingle", {}, { ...base, slug: address })
+      ).rejects.toMatchObject({
+        publicData: { errors: [{ path: "slug", message: refusal.message }] },
+      });
+      expect(executed).toEqual([]);
+    }
+  );
+
+  it("refuses an address with the same snake_case form as a collection's, before any DDL", async () => {
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    adapter.select = vi.fn(async (table: string) =>
+      table === "dynamic_collections"
+        ? [{ id: "col_1", slug: "team-updates" }]
+        : []
+    );
+    wireRegistry();
+
+    await expect(
+      dispatchSingles("createSingle", {}, { ...base, slug: "team_updates" })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "SLUG_SAME_SNAKE_CASE",
+            message: expect.stringMatching(
+              /^Single address 'team_updates'.*collection 'team-updates'/
+            ),
+          },
+        ],
+      },
+    });
+    expect(executed).toEqual([]);
   });
 
   /**

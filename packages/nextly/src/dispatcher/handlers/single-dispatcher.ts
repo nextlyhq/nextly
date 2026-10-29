@@ -69,10 +69,10 @@ import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
 import { withSessionCacheHeaders } from "../../routeHandler";
-import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
+import { assertAddressAllowed } from "../../shared/address-rule";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { consoleLogger } from "../../shared/types";
 import {
@@ -544,23 +544,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         | undefined;
 
       if (!b?.slug) throw new Error("Single slug is required");
-      // Rejected before the DDL below runs: a reserved slug seeds the same
-      // permission rows a system resource's routes check, and checking only at
-      // registration (further down) would create `single_<slug>` and its locale
-      // companion first, leaving orphan tables when registration then refused it.
-      if (isReservedResourceSlug(b.slug)) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "slug",
-              code: "reserved_slug",
-              message:
-                "This name is reserved by Nextly and cannot be used as a slug. Choose a different name.",
-            },
-          ],
-          logContext: { reason: "system-resource-slug", slug: b.slug },
-        });
-      }
+      // Judged by the one address rule every road shares, before the DDL below runs, so a refused
+      // address leaves no `single_<slug>` table behind. A system resource's name is among its
+      // refusals: it seeds the same permission rows that resource's routes check.
+      assertAddressAllowed("single", b.slug);
       if (!b?.label) throw new Error("Single label is required");
       if (!b?.fields || !Array.isArray(b.fields))
         throw new Error("Single fields array is required");
@@ -606,7 +593,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         ? container.get<DrizzleAdapter>("adapter")
         : undefined;
       if (conflictAdapter) {
-        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug);
+        await assertGlobalResourceSlugAvailable(conflictAdapter, b.slug, {
+          addressKind: "single",
+        });
       }
 
       // i18n: a localized single stores translatable values via the app's
