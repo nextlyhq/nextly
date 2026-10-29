@@ -19,14 +19,20 @@ import {
   useUserField,
   useUpdateUserField,
 } from "@admin/hooks/queries/useUserFields";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
+import { settingsChangesAllowed } from "@admin/lib/permissions/settings-changes";
 import { validateUUID } from "@admin/lib/validation";
 
 export default function EditUserFieldPage(): JSX.Element {
   const { route } = useRouter();
+  // A caller who may read settings opens a field to see it; only one who may
+  // update them is offered the change, which the server refuses to the rest.
+  const { hasPermission } = useCurrentUserPermissions();
+  const mayUpdate = settingsChangesAllowed(hasPermission).update;
 
   // Extract and validate field ID from route params
   const rawId =
@@ -197,6 +203,7 @@ export default function EditUserFieldPage(): JSX.Element {
             userField={userField}
             isPending={isPending}
             onSubmit={handleSubmit}
+            readOnly={!mayUpdate}
           />
         </div>
       </PageContainer>

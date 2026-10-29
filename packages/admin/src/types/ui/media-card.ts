@@ -11,40 +11,23 @@ import type { Media } from "../media";
 /**
  * MediaCard component props
  *
- * Individual media item card with preview, metadata, checkbox selection, and actions menu.
- *
- * ## Design Specifications
- *
- * - **Aspect Ratio**: Square (1:1) using `aspect-square`
- * - **Border**: Default `border border-border`, Selected `border-2 border-primary-500`
- * - **Border Radius**: `rounded-lg`, the container step of the `--radius` scale
- * - **Hover State**: `border-primary-300`, `scale-105`, `shadow-md` (NOT applied when selected)
- * - **Selected State**: `border-2 border-primary-500`, `ring-2 ring-primary-500`, no scale
- * - **Focus State**: `ring-2 ring-primary-500 ring-offset-2` (keyboard navigation)
- * - **Transition**: `transition-all duration-150` (design system standard)
- *
- * ## Layout Structure
+ * One tile of the media grid: the image fitted inside a square of neutral
+ * backdrop, from the lightest stored copy `mediaImageSrc` chooses, with the
+ * name and the file's facts underneath.
  *
  * ```
  * ┌─────────────────┐
- * │ [□]         [⋮] │  ← Checkbox (top-left) + Actions menu (top-right)
- * │                 │
- * │   Image         │  ← Image preview (aspect-square, object-cover)
- * │   Preview       │
- * │                 │
- * │─────────────────│
- * │ filename.jpg    │  ← Bottom overlay: Filename
- * │  [IMG]          │  ← Badge (file type)
+ * │ [□]             │  ← Checkbox, when the grid offers selection
+ * │     image,      │  ← Fitted (object-contain), not filled
+ * │     fitted      │
+ * │ [No alt text]   │  ← On an image with no alt text
  * └─────────────────┘
+ *   filename.jpg
+ *   1920×800 · 2 KB
  * ```
  *
- * ## Accessibility
- *
- * - **Touch Targets**: Desktop 20×20px checkbox/32×32px actions, Mobile 44×44px (WCAG 2.5.5)
- * - **Keyboard Navigation**: Tab to focus, Enter to click, Space to toggle checkbox
- * - **ARIA**: aria-label with filename, aria-selected for selection state
- * - **Focus Indicators**: 2px ring with primary-500 color
- * - **Screen Reader**: All interactive elements properly labeled
+ * Enter or Space opens the tile; `isCurrent` marks the one whose details are
+ * open.
  *
  * @example
  * ```tsx
@@ -87,6 +70,14 @@ export type MediaCardProps = {
    * @default false
    */
   isSelected?: boolean;
+
+  /**
+   * Whether this card's details are the ones open beside the grid. Separate
+   * from `isSelected`, which is the bulk selection: a person can read one
+   * item's details while several others are ticked.
+   * @default false
+   */
+  isCurrent?: boolean;
 
   /**
    * Callback when selection state changes (checkbox toggle)
