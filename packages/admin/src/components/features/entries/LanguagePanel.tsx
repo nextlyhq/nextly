@@ -67,6 +67,12 @@ export interface LanguagePanelProps {
    */
   actionsDisabled?: boolean;
   /**
+   * Withholds publishing every language. The same as `actionsDisabled` unless
+   * given: it changes only each language's status, which the publish
+   * permission judges, so a user held from every edit may still be offered it.
+   */
+  publishAllDisabled?: boolean;
+  /**
    * Withholds opening another language. The same as `actionsDisabled` unless
    * given: a user who may only read the document is held from every mutation
    * here and may still read its other languages.
@@ -170,6 +176,7 @@ function StateLegend() {
 function PanelHeader({
   counts,
   actionsDisabled,
+  publishAllDisabled,
   canPublishAll,
   publishPending,
   onPublishAll,
@@ -189,6 +196,7 @@ function PanelHeader({
   activeState: LanguageState;
   metaKnown: boolean;
   actionsDisabled: boolean;
+  publishAllDisabled: boolean;
   canPublishAll: boolean;
   publishPending: boolean;
   onPublishAll: () => void;
@@ -237,7 +245,7 @@ function PanelHeader({
           variant="outline"
           size="sm"
           className="h-7 px-2 text-xs"
-          disabled={actionsDisabled || publishPending}
+          disabled={publishAllDisabled || publishPending}
           onClick={onPublishAll}
         >
           {publishPending ? "Publishing…" : "Publish all"}
@@ -736,12 +744,20 @@ function PublishAllConfirm({
   );
 }
 
+/** The publish hook's options: the lifecycle flag only where the caller knows it. */
+function publishOptions(
+  hasStatus: boolean | undefined
+): Parameters<typeof usePublishAllLanguages>[0] {
+  return hasStatus === undefined ? {} : { hasStatus };
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
   onSelect,
   hasStatus,
   actionsDisabled = false,
+  publishAllDisabled = actionsDisabled,
   navigationDisabled = actionsDisabled,
   className,
 }: LanguagePanelProps): JSX.Element | null {
@@ -752,9 +768,7 @@ export function LanguagePanel({
   const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
     useEntryLocale();
   const copy = useCopyFromLanguageScope();
-  const publish = usePublishAllLanguages(
-    hasStatus === undefined ? {} : { hasStatus }
-  );
+  const publish = usePublishAllLanguages(publishOptions(hasStatus));
 
   if (!hasLanguages(enabled, collectionLocalized, locales.length)) return null;
 
@@ -778,6 +792,7 @@ export function LanguagePanel({
         activeState={activeLanguage.state}
         metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
+        publishAllDisabled={publishAllDisabled}
         canPublishAll={publish.available}
         publishPending={publish.pending}
         onPublishAll={() => setConfirmPublishAll(true)}
@@ -791,7 +806,7 @@ export function LanguagePanel({
 
       <PublishAllConfirm
         open={confirmPublishAll}
-        held={actionsDisabled}
+        held={publishAllDisabled}
         onOpenChange={setConfirmPublishAll}
         languageCount={locales.length}
         pendingCount={pendingCount}

@@ -10,6 +10,7 @@ import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-na
 import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
 import { LOCALE_PARAM } from "../constants/search-params";
 import { protectedApi } from "../lib/api/protectedApi";
+import { holdsPermission } from "../lib/permissions/holds-permission";
 import type {
   AdminCapabilities,
   CapabilitiesResponse,
@@ -52,7 +53,9 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
 > = {
   canViewUsers: ["read-users"],
   canViewRoles: ["read-roles"],
-  canViewMedia: ["read-media", "manage-media"],
+  // A `manage-` permission counts as each plain one through `holdsPermission`,
+  // so the media, settings and email flags name the plain permissions alone.
+  canViewMedia: ["read-media"],
   canViewSettings: settingsPanelSlugs(),
   canViewWebhooks: ["read-webhooks", "update-webhooks", "create-webhooks"],
   // Read alone. Unlike webhooks, assembling and publishing releases do not
@@ -68,10 +71,18 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
   ],
   canManageUsers: ["create-users", "update-users"],
   canManageRoles: ["create-roles", "update-roles"],
-  canManageMedia: ["manage-media"],
-  canManageSettings: ["manage-settings"],
-  canManageEmailProviders: ["manage-email-providers"],
-  canManageEmailTemplates: ["manage-email-templates"],
+  canManageMedia: ["create-media", "update-media", "delete-media"],
+  canManageSettings: ["create-settings", "update-settings", "delete-settings"],
+  canManageEmailProviders: [
+    "create-email-providers",
+    "update-email-providers",
+    "delete-email-providers",
+  ],
+  canManageEmailTemplates: [
+    "create-email-templates",
+    "update-email-templates",
+    "delete-email-templates",
+  ],
 };
 
 /**
@@ -201,7 +212,7 @@ export function buildCapabilities(
   const permSet = new Set(permissions);
 
   const holdsAny = (slugs: readonly string[]): boolean =>
-    slugs.some(slug => permSet.has(slug));
+    slugs.some(slug => holdsPermission(permSet, slug));
 
   return {
     isSuperAdmin: false,
@@ -912,12 +923,14 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   );
 
   /**
-   * Check if the current user has a specific permission by slug.
+   * Check if the current user has a specific permission by slug, a `manage-`
+   * permission counting as the plain ones it stands for (`holdsPermission`).
    * Super-admin always returns true.
    */
+  const held = new Set(permissions);
   const hasPermission = (slug: string): boolean => {
     if (isSuperAdmin) return true;
-    return permissions.includes(slug);
+    return holdsPermission(held, slug);
   };
 
   /**

@@ -21,6 +21,7 @@ import { z } from "zod";
 
 import { LIST_READ_GATES, requireRouteListRead } from "../auth/list-read-gates";
 import { getService } from "../di";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { clampLimit } from "../domains/collections/query/query-parser";
 import type {
   CreateFieldGroupInput,
@@ -94,7 +95,7 @@ const createComponentSchema = z.object({
 /**
  * GET handler for listing components with pagination and filters.
  *
- * Requires read-settings (or manage-settings), matching the dispatcher's
+ * Requires read-settings, matching the dispatcher's
  * components authorization — component definitions are builder-surface
  * metadata, not public content.
  *
@@ -163,7 +164,7 @@ export const GET = withErrorHandler(async (request: Request) => {
 /**
  * POST handler for creating a new UI component.
  *
- * Requires create-settings (or manage-settings), matching the dispatcher's
+ * Requires create-settings, matching the dispatcher's
  * components authorization. Creates a new component with source="ui" and
  * locked=false.
  *
@@ -192,10 +193,7 @@ export const POST = withErrorHandler(async (request: Request) => {
   // not turn a valid caller's first request into a 403/503.
   const metadata = await getFieldGroupMetadataService();
 
-  await requireRouteAnyPermission(request, [
-    { action: "create", resource: "settings" },
-    { action: "manage", resource: "settings" },
-  ]);
+  await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.fieldGroups.create.anyOf]);
 
   const body = await request.json();
 

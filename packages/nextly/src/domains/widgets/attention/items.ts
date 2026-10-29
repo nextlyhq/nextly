@@ -37,7 +37,6 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { PluginDashboardSnapshot } from "../../../plugins/dashboard-declarations";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { intervalWindow } from "../../collections/query/timeseries-interval";
 import { isAdminRelativePath } from "../admin-path";
 import { createBatchScope } from "../batch-scope";
 import { renamedCollection } from "../declaration/card-settings";
@@ -45,12 +44,7 @@ import type { AttentionItem } from "../declaration/dashboard";
 import { isPermissionName } from "../declaration/permission-name";
 import { bindReadServices } from "../declaration/read-services";
 import type { WidgetDeclarationFault } from "../declaration/validate";
-import {
-  isTimeseriesRange,
-  rangeWindow,
-  type TimeseriesRange,
-  validateWidgetQuery,
-} from "../query";
+import { validateWidgetQuery } from "../query";
 import { readableCollectionSlugs } from "../reader-content";
 import { getSource } from "../sources";
 
@@ -317,7 +311,8 @@ async function visibleTo(
  * zero in every interval. So a reader of one of two collections gets the
  * numbers of the one they read and the item is never failed for a permission
  * gap, and nothing is disclosed: the answer is the one an empty collection
- * gives.
+ * gives. Each read is checked first, as any other is (`answersNothing`), so a
+ * malformed one is refused for every reader alike.
  */
 function itemServices(
   entry: RegisteredAttentionItem,
@@ -327,7 +322,7 @@ function itemServices(
   now: Date
 ): ReturnType<typeof bindReadServices> {
   const declared = entry.collections;
-  const bound = bindReadServices({
+  return bindReadServices({
     caller,
     signal,
     now,
@@ -347,48 +342,15 @@ function itemServices(
       }
       return Promise.resolve(query);
     },
+    // A declared collection this reader may not read: each read of it is
+    // checked first, then answered as an empty collection answers it.
+    ...(declared === undefined
+      ? {}
+      : {
+          answersNothing: (slug: string) =>
+            declared.includes(slug) && !readable.has(slug),
+        }),
   });
-  if (declared === undefined) return bound;
-  const unread = (collection: string) => {
-    const slug = renamedCollection(collection, entry.renames);
-    return declared.includes(slug) && !readable.has(slug);
-  };
-  return {
-    count: (collection, options) =>
-      unread(collection)
-        ? Promise.resolve(0)
-        : bound.count(collection, options),
-    find: (collection, options) =>
-      unread(collection)
-        ? Promise.resolve({ items: [] })
-        : bound.find(collection, options),
-    groupBy: (collection, options) =>
-      unread(collection)
-        ? Promise.resolve({ buckets: [] })
-        : bound.groupBy(collection, options),
-    // A range the read would refuse is still refused, by the read itself.
-    timeseries: (collection, options) =>
-      unread(collection) && isTimeseriesRange(options.range)
-        ? Promise.resolve(emptySeries(options.range, now))
-        : bound.timeseries(collection, options),
-  };
-}
-
-/**
- * A series over `range` with nothing counted, as a read of no rows answers
- * it: every interval of the window the read itself takes (`rangeWindow`, then
- * `intervalWindow`), each at zero.
- */
-function emptySeries(range: TimeseriesRange, now: Date) {
-  const window = rangeWindow(range, now);
-  return {
-    points: intervalWindow(
-      window.anchor,
-      window.interval,
-      window.intervals
-    ).map(start => ({ start: start.toISOString(), count: 0 })),
-    interval: window.interval,
-  };
 }
 
 /**

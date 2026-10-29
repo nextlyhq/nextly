@@ -45,6 +45,7 @@ import {
   type AnyWidgetSetting,
   type TextBound,
 } from "./settings";
+import { withSiteOverride } from "./site-rules";
 import { UNSTATED_WIDGET_SIZE } from "./unstated-size";
 
 /** The part of a widget that layout resolution needs, from either channel. */
@@ -477,7 +478,9 @@ export function canonicalWidgets(
       contribution ? mergeCanonical(contribution, registration) : registration
     );
   }
-  return [...byId.values()];
+  // Each as the site's `overrides` change it, whichever channel supplied it:
+  // its sizes are what layouts start and keep its cards at.
+  return [...byId.values()].map(widget => withSiteOverride(widget));
 }
 
 /**
