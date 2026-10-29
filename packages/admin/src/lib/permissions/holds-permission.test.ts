@@ -6,6 +6,9 @@
  * yet converted by `nextly upgrade`, is refused each plain action there. The
  * admin must show that role the same, never a control the server refuses.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { holdsPermission } from "./holds-permission";
@@ -36,5 +39,34 @@ describe("holdsPermission", () => {
     expect(holdsPermission(held, "update-settings")).toBe(true);
     expect(holdsPermission(held, "read-settings")).toBe(false);
     expect(holdsPermission(held, "manage-background-jobs")).toBe(true);
+  });
+
+  it.each(RETIRED)(
+    "holds manage-%s, asked of it, only by holding all four plain permissions, as the server does",
+    resource => {
+      const plain = PLAIN.map(action => `${action}-${resource}`);
+      expect(holdsPermission(new Set(plain), `manage-${resource}`)).toBe(true);
+      expect(
+        holdsPermission(new Set(plain.slice(0, 3)), `manage-${resource}`)
+      ).toBe(false);
+      expect(
+        holdsPermission(new Set([`manage-${resource}`]), `manage-${resource}`)
+      ).toBe(false);
+    }
+  );
+
+  it("reads core's rule from a module whose imports are types alone, so it stays plain code in the client", () => {
+    const source = readFileSync(
+      fileURLToPath(
+        new URL(
+          "../../../../nextly/src/auth/access/retired-manage-permissions.ts",
+          import.meta.url
+        )
+      ),
+      "utf8"
+    );
+    const imports = source.match(/^\s*import\b.*$/gm) ?? [];
+    expect(imports.every(line => /^\s*import type\b/.test(line))).toBe(true);
+    expect(source).not.toMatch(/\brequire\(|\bimport\(/);
   });
 });

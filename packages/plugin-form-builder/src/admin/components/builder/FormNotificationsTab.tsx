@@ -141,10 +141,10 @@ async function fetchCanEditTemplates(): Promise<boolean> {
       isSuperAdmin?: boolean;
     };
     const held = json.permissions ?? [];
+    // The permission itself: the retired `manage-email-templates` opens
+    // nothing on the server, so it shows no link here.
     return (
-      Boolean(json.isSuperAdmin) ||
-      held.includes("update-email-templates") ||
-      held.includes("manage-email-templates")
+      Boolean(json.isSuperAdmin) || held.includes("update-email-templates")
     );
   } catch {
     return false;

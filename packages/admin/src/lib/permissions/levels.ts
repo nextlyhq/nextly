@@ -19,6 +19,7 @@
  *
  * @module lib/permissions/levels
  */
+import { RETIRED_MANAGE_RESOURCES } from "../../../../nextly/src/auth/access/retired-manage-permissions";
 
 /** A level the roles screen offers. */
 export type AccessLevel = "none" | "view" | "edit" | "publish";
@@ -84,13 +85,11 @@ const LEGACY_MANAGE = "manage";
  *
  * The roles screen still reads a stored `manage` row there as Can edit; the
  * server counts it for nothing until `nextly upgrade` has converted the role.
+ * Core's own list, so the two cannot name different resources.
  */
-const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set([
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-]);
+const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set(
+  RETIRED_MANAGE_RESOURCES
+);
 
 /** Whether `manage` on this row is the legacy bridge rather than its own action. */
 function bridgesManage(kind: LevelKind, resource: string | undefined): boolean {
