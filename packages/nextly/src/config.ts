@@ -30,6 +30,7 @@ export type {
 // What a collection's read rule may answer: a filter typed by its fields.
 export type {
   CollectionFilterRule,
+  CollectionFilterRuleInput,
   CollectionRuleAnswer,
   CollectionRuleFilter,
   UntypedRuleFilter,

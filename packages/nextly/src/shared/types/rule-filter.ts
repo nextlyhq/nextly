@@ -15,7 +15,6 @@
  * @module shared/types/rule-filter
  * @experimental
  */
-import type { FieldType } from "../../collections/fields/types/base";
 import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
 import type { FilterOperator } from "../../domains/collections/query/filter-shape";
 
@@ -76,13 +75,12 @@ interface BuiltInFilterKinds {
   upload: EqualityKind<EntryId>;
 }
 
-/** A field a plugin contributed, compared by equality on what it may hold. */
-type PluginKind = EqualityKind<string | number | boolean | Date>;
-
 /**
- * The system fields a collection's filter may name, whatever it declares.
- * `status` is present when the collection has `status: true`; on one without
- * it, a rule filtering on it matches nothing.
+ * The system fields a collection's filter may name, whatever it declares:
+ * the columns `lib/system-columns.ts` publishes under their camel-case names.
+ * `status` and `firstPublishedAt` are present when the collection has
+ * `status: true`; on one without them, a rule filtering on either matches
+ * nothing.
  */
 interface SystemFilterKinds {
   id: EqualityKind<EntryId>;
@@ -92,15 +90,71 @@ interface SystemFilterKinds {
   updatedAt: OrderedKind<DateOperand>;
   createdBy: EqualityKind<string>;
   status: TextKind;
+  firstPublishedAt: OrderedKind<DateOperand>;
 }
+
+/**
+ * Whether `Field` is stored as serialized JSON, as `isJsonFieldType` answers
+ * when the collection is read: a text, select or number holding a list
+ * (`hasMany`), or a relationship or upload holding a list or naming several
+ * collections. Its column holds a document, so it is no filter key: compared
+ * with one value, an operator would compare the document's text. A field the
+ * checker cannot place, its `hasMany` typed `boolean` or its targets
+ * `string | string[]`, is taken as one, as the read refuses it either way.
+ */
+type StoredAsJson<Field> = Field extends {
+  type: "text" | "select" | "number" | "relationship" | "upload";
+}
+  ? Field extends { hasMany?: false | undefined }
+    ? Field extends { type: "relationship" | "upload" }
+      ? Field extends { relationTo: string }
+        ? false
+        : true
+      : false
+    : true
+  : false;
+
+/**
+ * Whether `Field` is declared to own no column on the collection's row, as
+ * `fieldProducesColumn` answers: a virtual field, a many-to-many
+ * relationship, or a component. Only a declaration that says so as written
+ * is known here.
+ */
+type OwnsNoColumn<Field> =
+  DeclaresTrue<Field, "virtual"> extends true
+    ? true
+    : Field extends
+          | { options: { virtual: true } }
+          | { type: "relationship"; options: { relationType: "manyToMany" } }
+          | { type: "component" | "fieldGroup" }
+      ? true
+      : false;
+
+/**
+ * Whether `Field` declares `Key` as `true`. A factory gives the flag as an
+ * optional property of the value written, so `virtual?: true` declares it
+ * and an absent or `boolean` one does not.
+ */
+type DeclaresTrue<Field, Key extends string> = Field extends {
+  [Name in Key]?: infer Value;
+}
+  ? [Exclude<Value, undefined>] extends [true]
+    ? true
+    : false
+  : false;
 
 /** How `Field` is compared, or `never` where it is not a filter key. */
 type KindOf<Field> = Field extends { type: infer Type }
-  ? Type extends keyof BuiltInFilterKinds
-    ? BuiltInFilterKinds[Type]
-    : Type extends FieldType
+  ? StoredAsJson<Field> extends true
+    ? never
+    : OwnsNoColumn<Field> extends true
       ? never
-      : PluginKind
+      : Type extends keyof BuiltInFilterKinds
+        ? BuiltInFilterKinds[Type]
+        : // A field a plugin contributed is no key either: how its type is
+          // stored is registered at runtime, where a JSON-backed one is
+          // refused in a rule's filter, and its declaration does not say.
+          never
   : never;
 
 /** The fields of `Fields` a filter may name. */
@@ -118,16 +172,29 @@ type FilterNames<Fields extends readonly AuthorableFieldConfig[]> =
   FilterableField<Fields>["name"];
 
 /**
- * The names `Fields` declares as written. A field whose name the checker
- * cannot know (`string`) names no field in particular, so it leaves every
- * system field a key.
+ * Whether the checker cannot know a name `Fields` declares: a field built at
+ * runtime, or annotated with its config type. Asked of every declared field,
+ * not only the filterable ones, because a field whose kind cannot be told
+ * apart is left out of those, and the filter would then be typed without it.
+ */
+type NamesUnknown<Fields extends readonly AuthorableFieldConfig[]> =
+  string extends Fields[number]["name"] ? true : false;
+
+/**
+ * The names `Fields` declares as written, of the fields that own a column. A
+ * field owning none leaves the system column of its name in place, so that
+ * system field stays a key. A field whose name the checker cannot know
+ * (`string`) names no field in particular, so it leaves every system field a
+ * key.
  */
 type DeclaredNames<Fields extends readonly AuthorableFieldConfig[]> =
   Fields[number] extends infer Field
     ? Field extends { name: infer Name extends string }
-      ? string extends Name
+      ? OwnsNoColumn<Field> extends true
         ? never
-        : Name
+        : string extends Name
+          ? never
+          : Name
       : never
     : never;
 
@@ -152,10 +219,20 @@ type OperandOf<Operator extends RuleFilterOperator, Value> = Operator extends
       ? string
       : Value;
 
+/**
+ * `Condition` with at least one of its keys given a value: a condition naming
+ * no operator, or one given `undefined`, is refused when the rule runs.
+ */
+type AtLeastOneOf<Condition> = {
+  [Key in keyof Condition]-?: Required<Pick<Condition, Key>> &
+    Partial<Omit<Condition, Key>>;
+}[keyof Condition];
+
 /** A condition on one field: the operators its kind answers to. */
-type KindCondition<Kind extends FilterKind<unknown, RuleFilterOperator>> = {
-  [Operator in Kind["operators"]]?: OperandOf<Operator, Kind["value"]>;
-};
+type KindCondition<Kind extends FilterKind<unknown, RuleFilterOperator>> =
+  AtLeastOneOf<{
+    [Operator in Kind["operators"]]?: OperandOf<Operator, Kind["value"]>;
+  }>;
 
 /** A filter whose keys are the kinds in `Kinds`. */
 type TypedRuleFilter<Kinds> = {
@@ -185,9 +262,9 @@ export interface UntypedRuleFilter {
 /**
  * The filter a read rule on a collection with `Fields` may answer.
  *
- * Typed by the fields where every filterable field's name is a literal, as
- * a field factory or an inline declaration gives it. Where one is not, the
- * names are unknown and the filter is {@link UntypedRuleFilter}.
+ * Typed by the fields where every field's name is a literal, as a field
+ * factory or an inline declaration gives it. Where one is not, the names are
+ * unknown and the filter is {@link UntypedRuleFilter}.
  *
  * @experimental
  */
@@ -195,7 +272,7 @@ export type CollectionRuleFilter<
   Fields extends
     readonly AuthorableFieldConfig[] = readonly AuthorableFieldConfig[],
 > =
-  string extends FilterNames<Fields>
+  NamesUnknown<Fields> extends true
     ? UntypedRuleFilter
     : TypedRuleFilter<FilterKindsOf<Fields>>;
 
@@ -223,32 +300,56 @@ export type CollectionFilterRule<
   ctx: AccessControlContext
 ) => CollectionRuleAnswer<Fields> | Promise<CollectionRuleAnswer<Fields>>;
 
-/** What `Condition` may hold, operator by operator, for a field of `Kind`. */
+/**
+ * Whether `Holder` gives `Key` a value that may be `undefined`. Only a key the
+ * answer always holds is asked: an optional one, as a rule typed with
+ * {@link CollectionRuleFilter} has, is one the filter may leave out.
+ */
+type IsGivenNoValue<Holder, Key extends keyof Holder> =
+  Pick<Holder, Key> extends Required<Pick<Holder, Key>>
+    ? undefined extends Holder[Key]
+      ? true
+      : false
+    : false;
+
+/**
+ * What `Condition` may hold, operator by operator, for a field of `Kind`. A
+ * condition naming no operator, and an operator given `undefined`, are
+ * refused when the rule runs, so each becomes a type no value has.
+ */
 type ExactCondition<Kind, Condition> = Condition extends Date
   ? Condition
   : Condition extends readonly unknown[]
     ? Condition
     : Condition extends object
-      ? {
-          [Operator in keyof Condition]: Kind extends FilterKind<
-            unknown,
-            infer Names
-          >
-            ? Operator extends Names
-              ? Condition[Operator]
-              : `${Operator & string} is not an operator for this field`
-            : never;
-        }
+      ? [keyof Condition] extends [never]
+        ? "a condition names at least one operator"
+        : {
+            [Operator in keyof Condition]: Kind extends FilterKind<
+              unknown,
+              infer Names
+            >
+              ? Operator extends Names
+                ? IsGivenNoValue<Condition, Operator> extends true
+                  ? `${Operator & string} is given no value`
+                  : Condition[Operator]
+                : `${Operator & string} is not an operator for this field`
+              : never;
+          }
       : Condition;
 
 /** What `Filter` may hold, key by key and at every depth, on `Kinds`. */
 type ExactFilter<Kinds, Filter> = {
   [Key in keyof Filter]: Key extends "and" | "or"
-    ? Filter[Key] extends readonly (infer Member)[]
-      ? readonly ExactFilter<Kinds, Member>[]
-      : Filter[Key]
+    ? IsGivenNoValue<Filter, Key> extends true
+      ? `${Key & string} is given no value`
+      : Filter[Key] extends readonly (infer Member)[]
+        ? readonly ExactFilter<Kinds, Member>[]
+        : Filter[Key]
     : Key extends keyof Kinds
-      ? ExactCondition<Kinds[Key], Filter[Key]>
+      ? IsGivenNoValue<Filter, Key> extends true
+        ? `${Key & string} is given no value`
+        : ExactCondition<Kinds[Key], Filter[Key]>
       : `${Key & string} is not a field this filter can name`;
 };
 
@@ -260,13 +361,16 @@ type ExactFilter<Kinds, Filter> = {
  * its return type names, so a misspelt key beside a correct one would pass.
  * This names each key the answer holds and turns a key it may not into a
  * type no value has.
+ *
+ * Exported for the type tests, which assert the refusal it gives; it is not
+ * re-exported from any entry point.
  */
-type ExactAnswer<
+export type ExactAnswer<
   Fields extends readonly AuthorableFieldConfig[],
   Answer,
 > = Answer extends boolean
   ? Answer
-  : string extends FilterNames<Fields>
+  : NamesUnknown<Fields> extends true
     ? Answer
     : ExactFilter<FilterKindsOf<Fields>, Answer>;
 
