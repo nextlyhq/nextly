@@ -104,6 +104,7 @@ import {
   callerAccessGrants,
   type ReadAccessRedactions,
   runFieldHooks,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import {
   assertFieldGroupPathsFilterable,
@@ -1018,6 +1019,15 @@ export class CollectionQueryService extends BaseService {
     private readonly draftPromotionRefused?: DraftPromotionRefused
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * Where this service's field rules read a visitor's Public grants, as its
+   * collection gate reads them. A write by query reads it from here, so the
+   * fields its `where` may name are judged as this service's reads judge them.
+   */
+  get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return this.accessService.fieldRuleVisitor;
   }
 
   /**

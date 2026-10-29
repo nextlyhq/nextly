@@ -39,6 +39,8 @@ import { refusalFromError } from "./refusals";
 import {
   ENTRY_ACTIONS,
   CALLERS,
+  FILTERED_WRITES,
+  isFilterRule,
   RULES,
   TARGETS,
   publicHolds,
@@ -103,11 +105,17 @@ export function probesRead(read: readonly unknown[] | number): string {
   return other ? "=probe-other" : "R";
 }
 /**
- * The filter the filter rule kinds answer with: it matches the probe entry
- * and no other, so a door that applies it returns the probe and withholds the
- * rest of the collection.
+ * The filter the filter rule kinds answer with: it matches the probe entry and
+ * the rows a filtered write acts on, and not `probe-other` or a filtered
+ * write's twin outside it, so a door that applies it returns the probe and
+ * withholds the other, and changes the one entry and refuses the other. On a
+ * field every caller may read, so no check on hidden fields comes into it.
  */
-const PROBE_FILTER = { slug: { equals: "probe" } };
+const PROBE_FILTER = { team: { equals: "probe" } };
+
+/** The `team` of the rows the filter rule kinds match, and of those they do not. */
+const INSIDE = "probe";
+const OUTSIDE = "other";
 
 /** The relationship on `refs` that points at `rule`'s collection. */
 export const relationOf = (rule: Rule) => `to_${rule.replace(/-/g, "_")}`;
@@ -243,7 +251,11 @@ function ruleCollections(setup: TargetSet) {
       slug: collectionOf(rule, setup),
       status: true,
       access: accessFor(rule, COLLECTION_OPERATIONS) as never,
-      fields: [text({ name: "title" }), text({ name: "slug" })],
+      fields: [
+        text({ name: "title" }),
+        text({ name: "slug" }),
+        text({ name: "team" }),
+      ],
     });
     restoreBooleans(config, rule, COLLECTION_OPERATIONS);
     return config;
@@ -327,12 +339,19 @@ export interface Seeded {
   /**
    * A row of its own for each door, caller and action that consumes one: a
    * delete, a publish (from a draft) and an unpublish (from a published row).
+   * Inside the filter the filter rule kinds answer with; where the rule
+   * answers a filtered write with one, also its twin outside it, under
+   * {@link outsideKey}.
    */
   own: Map<string, string>;
 }
 
 export const ownKey = (door: string, caller: Caller, action: Action) =>
   `${door} ${caller} ${action}`;
+
+/** The key of a row's twin outside the filter, beside its {@link ownKey}. */
+export const outsideKey = (door: string, caller: Caller, action: Action) =>
+  `${ownKey(door, caller, action)} outside`;
 
 /**
  * A plugin call as `opts`, for the action a probe route names.
@@ -666,10 +685,15 @@ async function seedCollections(
   setup: TargetSet
 ): Promise<Map<string, Seeded>> {
   const seeded = new Map<string, Seeded>();
-  const create = async (collection: string, status: string, n: string) => {
+  const create = async (
+    collection: string,
+    status: string,
+    n: string,
+    team: string = INSIDE
+  ) => {
     const made = await t.nextly.create({
       collection,
-      data: { title: n, slug: n, status },
+      data: { title: n, slug: n, status, team },
     });
     return String((made.item as { id: string | number }).id);
   };
@@ -691,9 +715,22 @@ async function seedCollections(
       )
     );
     const own = new Map(keys.map((key, i) => [key, ids[i]]));
+    // A filtered write asks a twin outside the filter too, for the filter
+    // rule kinds alone: under any other rule it would answer as its twin does.
+    if (isFilterRule(rule)) {
+      const twins = ["rest", "direct", "service"].flatMap(door =>
+        CALLERS.flatMap(caller =>
+          [...FILTERED_WRITES].map(action => outsideKey(door, caller, action))
+        )
+      );
+      const twinIds = await inBatches(twins, batch, key =>
+        create(slug, "draft", key.replace(/ /g, "-"), OUTSIDE)
+      );
+      twins.forEach((key, i) => own.set(key, twinIds[i]));
+    }
     seeded.set(slug, {
       readId: await create(slug, "published", "probe"),
-      otherId: await create(slug, "published", "probe-other"),
+      otherId: await create(slug, "published", "probe-other", OUTSIDE),
       updateId: await create(slug, "draft", "edited"),
       own,
     });
