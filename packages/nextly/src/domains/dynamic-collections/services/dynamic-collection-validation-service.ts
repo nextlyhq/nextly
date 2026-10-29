@@ -13,6 +13,10 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
+import {
+  BUILDER_RESERVED_COLLECTION_NAMES,
+  BUILDER_SQL_KEYWORDS,
+} from "../../../shared/sql-reserved";
 import { consoleLogger } from "../../../shared/types";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 
@@ -29,76 +33,14 @@ const MAX_REGEX_PATTERN_LENGTH = 200;
  */
 const REGEX_DDL_FORBIDDEN_CHARS = /[;\\\n\r\0]/;
 
-/** SQL keywords that should be blocked as field/collection names. */
-export const SQL_KEYWORDS = [
-  "select",
-  "insert",
-  "update",
-  "delete",
-  "drop",
-  "create",
-  "alter",
-  "table",
-  "from",
-  "where",
-  "join",
-  "union",
-  "order",
-  "group",
-  "having",
-  "limit",
-  "offset",
-  "index",
-  "constraint",
-  "primary",
-  "foreign",
-  "key",
-  "references",
-  "on",
-  "null",
-  "not",
-  "and",
-  "or",
-  "in",
-  "like",
-  "between",
-  "exists",
-  "case",
-  "when",
-  "then",
-  "else",
-  "end",
-  "as",
-  "distinct",
-  "all",
-  "any",
-  "some",
-  "into",
-  "values",
-  "set",
-  "cascade",
-] as const;
-
 /**
- * Reserved names for collections.
- *
- * Separate from `RESERVED_SLUGS`, which the code-first validator uses: a
- * Builder-created collection never passes through that path, so a name has to
- * be refused here as well to be refused at all.
+ * The Schema Builder's SQL keywords and reserved collection names, kept with
+ * the other reserved lists in `shared/sql-reserved` so the one address rule
+ * can read them without importing this service; re-exported under their
+ * earlier names for this module's importers.
  */
-export const RESERVED_COLLECTION_NAMES = [
-  "users",
-  "roles",
-  "permissions",
-  "sessions",
-  "accounts",
-  "dynamic_collections",
-  // Permission identity is action + resource, so a collection named `webhooks`
-  // would share the rows the webhook endpoint routes check: its `read-webhooks`
-  // would expose endpoint configuration and `update-webhooks` the signing
-  // secrets.
-  "webhooks",
-] as const;
+export const SQL_KEYWORDS = BUILDER_SQL_KEYWORDS;
+export const RESERVED_COLLECTION_NAMES = BUILDER_RESERVED_COLLECTION_NAMES;
 
 /** Reserved field names (added automatically). */
 /**
