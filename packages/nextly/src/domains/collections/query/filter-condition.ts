@@ -17,8 +17,15 @@
 import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import { and, or, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
+import {
+  FILTER_NAMES_A_COMPONENT_FIELD,
+  reportRuleFilterMisuse,
+  type RuleFilter,
+} from "../../../auth/access/rule-answer";
+import { NextlyError } from "../../../errors/nextly-error";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import type { CompanionSchema } from "../../../services/collection-file-manager";
 import {
   buildDrizzleCondition,
   buildLocalizedWhereExists,
@@ -30,6 +37,7 @@ import {
   type ComponentFieldFilter,
   type WhereFilter,
 } from "../../../services/collections/query-operators";
+import type { Logger } from "../../../services/shared";
 import {
   resolveTypeColumns,
   type CatalogReadAdapter,
@@ -147,6 +155,108 @@ export async function prepareFilterCondition(
       if (parts.length === 0) return undefined;
       return parts.length === 1 ? parts[0] : and(...parts);
     },
+  };
+}
+
+/**
+ * The condition a read rule's filter adds to a read of `collectionName`. A
+ * filter that cannot be built against the collection as it stands, one naming
+ * a field it no longer has, matches no entry: a read by id then answers as a
+ * missing entry does, a list finds nothing, and a relationship withholds
+ * every row. The rule's own error is logged for whoever maintains the rule,
+ * by its code alone, and never handed to the caller, to whom it would
+ * describe the rule.
+ *
+ * Every read that applies a read rule's filter builds it here, so a filter
+ * matches the same entries whichever read applies it.
+ */
+export async function ruleFilterCondition(
+  params: {
+    collectionName: string;
+    filter: RuleFilter;
+    schema: DynamicSchema;
+    localizedCtx: LocalizedQueryContext | null;
+  },
+  sources: FilterConditionSources,
+  logger: Pick<Logger, "error">
+): Promise<SQLWrapper | undefined> {
+  const { collectionName } = params;
+  const unbuildable = (error: unknown): SQLWrapper => {
+    // Only the builder's own refusal of the filter, a validation error
+    // naming what the collection lacks, is a filter that cannot be built.
+    // Anything else, a lookup the build needs failing as a lost connection
+    // does, fails the read as it would any other.
+    if (!NextlyError.isValidation(error)) throw error;
+    logger.error("A read rule's filter could not be built", {
+      collectionName,
+      code: error.code,
+    });
+    return sql`1 = 0`;
+  };
+  let prepared: PreparedFilterCondition;
+  try {
+    prepared = await prepareFilterCondition(
+      { collectionName, filter: params.filter },
+      sources
+    );
+  } catch (error) {
+    return unbuildable(error);
+  }
+  // A field inside a component cannot be used in a rule's filter yet: it is
+  // refused as a filter that is not well formed, reported once and raised
+  // in development, and matches no entry. Asked before any condition is
+  // built, so no query runs on a component path the component may not have.
+  if (prepared.namesComponentFields) {
+    reportRuleFilterMisuse(
+      collectionName,
+      "read",
+      "collection",
+      FILTER_NAMES_A_COMPONENT_FIELD
+    );
+    return sql`1 = 0`;
+  }
+  try {
+    // A localized field the read shows from a fallback language is judged
+    // on that language's value too, so the read shows nothing the rule
+    // refuses.
+    return prepared.condition(
+      params.schema,
+      params.localizedCtx
+        ? { ...params.localizedCtx, inEveryFallbackLanguage: true }
+        : null
+    );
+  } catch (error) {
+    return unbuildable(error);
+  }
+}
+
+/**
+ * What a filter on a localized field reads: the companion table's rows in the
+ * read's language, the head of `localeChain`. `null` for a collection with no
+ * companion or a read with no language. `statusFilterValues` is the read's
+ * Draft/Published filter, resolved before this is built, so a per-locale
+ * check constrains by the same status (a public read never matches a draft).
+ */
+export function localizedFilterContext(
+  companion: CompanionSchema | null,
+  localeChain: readonly string[] | null,
+  schema: DynamicSchema,
+  statusFilterValues?: readonly string[] | null
+): LocalizedQueryContext | null {
+  if (!companion || !localeChain || localeChain.length === 0) return null;
+  return {
+    companionTableName: companion.companionTableName,
+    localizedFields: companion.localizedFields,
+    mainIdColumn: schema.id,
+    locale: localeChain[0],
+    localeChain,
+    companionTable: companion.table,
+    // Only constrain by status when the collection has per-locale status and the
+    // read resolved to a single status; otherwise leave it unfiltered.
+    statusValues:
+      companion.hasStatus && statusFilterValues
+        ? statusFilterValues
+        : undefined,
   };
 }
 

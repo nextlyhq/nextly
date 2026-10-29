@@ -892,6 +892,58 @@ describe("widgets declared under contributes.dashboard", () => {
   });
 });
 
+describe("the site config's own widgets", () => {
+  const site = {
+    widgets: [
+      {
+        id: "site/revenue",
+        view: { component: "./dashboard/revenue#Revenue" },
+      },
+      { id: "site/cards", view: { component: "@acme/cards/admin#Cards" } },
+      { id: "site/list", view: "list" },
+    ],
+  };
+
+  it("are listed as the site config's, beside the plugins'", () => {
+    expect(componentImportMapEntries([], site)).toEqual([
+      {
+        path: "./dashboard/revenue#Revenue",
+        owner: "the site config",
+        use: "widget",
+        widget: "site/revenue",
+        fromConfig: true,
+      },
+      {
+        path: "@acme/cards/admin#Cards",
+        owner: "the site config",
+        use: "widget",
+        widget: "site/cards",
+      },
+    ]);
+    expect(componentImportMapPaths([], site)).toEqual([
+      "./dashboard/revenue#Revenue",
+      "@acme/cards/admin#Cards",
+    ]);
+  });
+
+  it("are imported from the map's folder, a relative one through where the config file is", () => {
+    // The map sits three folders below the config file, so it imports the config as
+    // `../../../nextly.config`, and the site's `./dashboard/revenue` from beside it.
+    const map = buildComponentImportMap([], "../../../nextly.config", site);
+    expect(map).toContain('import * as _p0 from "../../../dashboard/revenue";');
+    expect(map).toContain('import * as _p1 from "@acme/cards/admin";');
+    // Registered under the path as the site declared it, which the admin looks it up by.
+    expect(map).toContain('"./dashboard/revenue#Revenue": _p0.Revenue,');
+    expect(map).toContain('"@acme/cards/admin#Cards": _p1.Cards,');
+  });
+
+  it("are imported from beside the map when the config file is there too", () => {
+    expect(buildComponentImportMap([], "./nextly.config", site)).toContain(
+      'import * as _p0 from "./dashboard/revenue";'
+    );
+  });
+});
+
 describe("the list of paths the map registers", () => {
   it("is exported by the generated map, the same list it registers", () => {
     const p = plugin({
