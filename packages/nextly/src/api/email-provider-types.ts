@@ -48,7 +48,9 @@ export const GET = withErrorHandler(async (request: Request) => {
   // still be unable to discover the fields a plugin provider requires --
   // leaving the grant unusable for exactly the providers this catalog exists
   // to describe. It exposes definitions, never stored provider records.
-  await requireRouteAnyPermission(request, [...SYSTEM_READ_POLICY.emailProviders.readTypes.anyOf]);
+  await requireRouteAnyPermission(request, [
+    ...SYSTEM_READ_POLICY.emailProviders.readTypes.anyOf,
+  ]);
 
   const types = getEmailProviderRegistry().list().map(toDescriptor);
 

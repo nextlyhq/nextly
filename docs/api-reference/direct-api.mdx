@@ -494,6 +494,8 @@ const settingsLike = await nextly.findSingles({ search: "settings" });
 
 The `nextly.email.*` namespace sends transactional email through whichever provider is configured (database-default first, code-config fallback second).
 
+`email.send`, `sendWithTemplate`, `queue` and `queueWithTemplate` ask no permission, even with `overrideAccess: false`: they act as the site. If a user's action triggers a send, check in your own code whether that user may send it, and to whom, before calling them.
+
 ### email.send
 
 Send a raw HTML email.

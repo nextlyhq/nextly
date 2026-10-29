@@ -208,6 +208,36 @@ service none key-without
   holds(manage-email-providers):false
   holds(manage):false
   holds():false
+service none key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
 service none key-partial
   can(create,posts):false
   can(read,posts):true
@@ -563,6 +593,36 @@ service true key-without
   holds(edit-posts):false
   holds(read-settings):false
   holds(manage-settings):false
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
+service true key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -928,6 +988,36 @@ service false key-without
   holds(manage-email-providers):false
   holds(manage):false
   holds():false
+service false key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
 service false key-partial
   can(create,posts):false
   can(read,posts):false
@@ -1283,6 +1373,36 @@ service returns-true key-without
   holds(edit-posts):false
   holds(read-settings):false
   holds(manage-settings):false
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
+service returns-true key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -1648,6 +1768,36 @@ service returns-false key-without
   holds(manage-email-providers):false
   holds(manage):false
   holds():false
+service returns-false key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
 service returns-false key-partial
   can(create,posts):false
   can(read,posts):false
@@ -2003,6 +2153,36 @@ service returns-null key-without
   holds(edit-posts):false
   holds(read-settings):false
   holds(manage-settings):false
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
+service returns-null key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -2368,6 +2548,36 @@ service returns-undefined key-without
   holds(manage-email-providers):false
   holds(manage):false
   holds():false
+service returns-undefined key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
 service returns-undefined key-partial
   can(create,posts):false
   can(read,posts):false
@@ -2723,6 +2933,36 @@ service returns-truthy key-without
   holds(edit-posts):false
   holds(read-settings):false
   holds(manage-settings):false
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
+service returns-truthy key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -3088,6 +3328,36 @@ service throws key-without
   holds(manage-email-providers):false
   holds(manage):false
   holds():false
+service throws key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
 service throws key-partial
   can(create,posts):false
   can(read,posts):false
@@ -3443,6 +3713,36 @@ service role-name key-without
   holds(edit-posts):false
   holds(read-settings):false
   holds(manage-settings):false
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
+service role-name key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -3808,6 +4108,36 @@ service permission-spelling key-without
   holds(manage-email-providers):false
   holds(manage):false
   holds():false
+service permission-spelling key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
 service permission-spelling key-partial
   can(create,posts):false
   can(read,posts):false
@@ -4163,6 +4493,36 @@ no-service none key-without
   holds(edit-posts):false
   holds(read-settings):false
   holds(manage-settings):false
+  holds(read-media):false
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
+  holds(manage):false
+  holds():false
+no-service none key-plain-settings
+  can(create,posts):false
+  can(read,posts):false
+  can(update,posts):false
+  can(delete,posts):false
+  can(publish,posts):false
+  can(unpublish,posts):false
+  can(export,posts):false
+  can(read,settings):true
+  can(manage,settings):true
+  can(read,media):false
+  can(update,email-providers):false
+  can(manage,email-providers):false
+  can(manage,):false
+  can(,posts):false
+  holds(create-posts):false
+  holds(read-posts):false
+  holds(update-posts):false
+  holds(delete-posts):false
+  holds(publish-posts):false
+  holds(unpublish-posts):false
+  holds(export-posts):false
+  holds(edit-posts):false
+  holds(read-settings):true
+  holds(manage-settings):true
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false

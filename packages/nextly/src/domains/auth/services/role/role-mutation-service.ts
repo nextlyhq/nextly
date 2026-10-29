@@ -11,6 +11,10 @@ import type {
 
 // PR 4 migration: replaced legacy result-shape returns and
 // mapDbErrorToServiceError calls with throw-based NextlyError.
+import {
+  batches,
+  storedAsPlainLocked,
+} from "../../../../auth/access/manage-bridge";
 import { toDbError } from "../../../../database/errors";
 import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -310,6 +314,43 @@ export class RoleMutationService extends BaseService {
   }
 
   /**
+   * Refuses child role ids that name no existing role, before a role is
+   * created or updated to inherit from them.
+   */
+  private async refuseUnknownChildRoles(childRoleIds: string[]): Promise<void> {
+    if (childRoleIds.length > 0) {
+      const existingChildRoles = await (
+        this.db as RBACDatabaseInstance
+      ).query.roles.findMany({
+        where: { id: { in: childRoleIds } },
+        columns: { id: true },
+      });
+
+      const existingChildRoleIds = new Set(
+        existingChildRoles.map(r => String(r.id))
+      );
+
+      const invalidChildRoleIds = childRoleIds.filter(
+        id => !existingChildRoleIds.has(id)
+      );
+
+      if (invalidChildRoleIds.length > 0) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "childRoleIds",
+              code: "INVALID",
+              message:
+                "One or more child role IDs do not reference an existing role.",
+            },
+          ],
+          logContext: { invalidChildRoleIds },
+        });
+      }
+    }
+  }
+
+  /**
    * Create a new role with permissions and child roles.
    *
    * This method wraps all database mutations in a transaction to ensure atomicity.
@@ -476,44 +517,16 @@ export class RoleMutationService extends BaseService {
       }
 
       // Verify all child roles exist before creating the role
-      if (uniqueChildRoleIds.length > 0) {
-        const existingChildRoles = await (
-          this.db as RBACDatabaseInstance
-        ).query.roles.findMany({
-          where: { id: { in: uniqueChildRoleIds } },
-          columns: { id: true },
-        });
+      await this.refuseUnknownChildRoles(uniqueChildRoleIds);
 
-        const existingChildRoleIds = new Set(
-          existingChildRoles.map(r => String(r.id))
-        );
-
-        const invalidChildRoleIds = uniqueChildRoleIds.filter(
-          id => !existingChildRoleIds.has(id)
-        );
-
-        if (invalidChildRoleIds.length > 0) {
-          throw NextlyError.validation({
-            errors: [
-              {
-                path: "childRoleIds",
-                code: "INVALID",
-                message:
-                  "One or more child role IDs do not reference an existing role.",
-              },
-            ],
-            logContext: { invalidChildRoleIds },
-          });
-        }
-      }
-
-      // Every mutation in one transaction. better-sqlite3 rejects an async
-      // callback in Drizzle's own transaction, so `withTransaction` runs it
-      // through the adapter on SQLite and natively elsewhere.
+      // Every mutation in one transaction: the adapter's, which is async on
+      // every dialect, where better-sqlite3 rejects an async callback in
+      // Drizzle's own.
       try {
         const runMutations = async (
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dialect-specific Drizzle typing
-          executor: any
+          executor: any,
+          storedPermissionIds: readonly string[]
         ): Promise<{
           assignedPermIds: string[];
           assignedChildRoleIds: string[];
@@ -528,15 +541,20 @@ export class RoleMutationService extends BaseService {
           );
           await executor.insert(this.tables.roles).values(roleData);
 
-          if (uniqueIds.length > 0) {
-            const rolePermissionData = uniqueIds.map(permissionId => ({
-              id: randomUUID(),
-              roleId: id,
-              permissionId,
-            }));
-            await executor
-              .insert(this.tables.rolePermissions)
-              .values(rolePermissionData);
+          // In runs, each binding no more than one statement may: up to four
+          // values a row with the creation time's default, so a set a retired
+          // permission grew past the adapter's limit still inserts.
+          for (const run of batches(
+            storedPermissionIds,
+            this.adapter.getCapabilities().maxParamsPerQuery / 4
+          )) {
+            await executor.insert(this.tables.rolePermissions).values(
+              run.map(permissionId => ({
+                id: randomUUID(),
+                roleId: id,
+                permissionId,
+              }))
+            );
           }
 
           if (uniqueChildRoleIds.length > 0) {
@@ -550,9 +568,12 @@ export class RoleMutationService extends BaseService {
               .values(roleInheritanceData);
           }
 
-          const rolePermRows = await executor.query.rolePermissions.findMany({
-            where: { roleId: id },
-          });
+          // A plain select: the transaction's query builder carries no
+          // relational query API.
+          const rolePermRows = await executor
+            .select({ permissionId: this.tables.rolePermissions.permissionId })
+            .from(this.tables.rolePermissions)
+            .where(eq(this.tables.rolePermissions.roleId, id));
           const assignedPermIds = (
             rolePermRows as Array<{ permissionId: unknown }>
           ).map(rp => String(rp.permissionId));
@@ -568,10 +589,20 @@ export class RoleMutationService extends BaseService {
           return { assignedPermIds, assignedChildRoleIds };
         };
 
-        // A transaction on every dialect: on SQLite it runs through the
-        // adapter, so the decision above and these writes are not split by
-        // another request's.
-        const result = await this.withTransaction(tx => runMutations(tx));
+        // The adapter's transaction on every dialect, so the decision above
+        // and these writes are not split by another request's. A retired
+        // `manage-` permission is stored as the plain four it stands for,
+        // read under the lock on each permission row it reads, so a row
+        // edited since is stored as it is now.
+        const result = await this.adapter.transaction(async tx =>
+          runMutations(tx.getDrizzle(), [
+            ...(await storedAsPlainLocked(
+              tx,
+              uniqueIds,
+              this.adapter.getCapabilities().maxParamsPerQuery
+            )),
+          ])
+        );
 
         // Awaited, and the ordering is the invariant rather than a preference:
         // a runtime that freezes after responding can abandon an unawaited
@@ -800,36 +831,7 @@ export class RoleMutationService extends BaseService {
         );
 
         // Verify all child roles exist
-        if (uniqueChildRoleIds.length > 0) {
-          const existingChildRoles = await (
-            this.db as RBACDatabaseInstance
-          ).query.roles.findMany({
-            where: { id: { in: uniqueChildRoleIds } },
-            columns: { id: true },
-          });
-
-          const existingChildRoleIds = new Set(
-            existingChildRoles.map(r => String(r.id))
-          );
-
-          const invalidChildRoleIds = uniqueChildRoleIds.filter(
-            id => !existingChildRoleIds.has(id)
-          );
-
-          if (invalidChildRoleIds.length > 0) {
-            throw NextlyError.validation({
-              errors: [
-                {
-                  path: "childRoleIds",
-                  code: "INVALID",
-                  message:
-                    "One or more child role IDs do not reference an existing role.",
-                },
-              ],
-              logContext: { invalidChildRoleIds },
-            });
-          }
-        }
+        await this.refuseUnknownChildRoles(uniqueChildRoleIds);
       }
 
       // Wrap all database mutations in a transaction for atomicity. The
@@ -880,6 +882,16 @@ export class RoleMutationService extends BaseService {
             // grants to the Public role), so neither lands between this
             // removal and the insert below.
             await tx.lockRow("roles", storedRoleId);
+            // A retired `manage-` permission is stored as the plain four it
+            // stands for, so a role saved with one never holds it, read under
+            // the lock on each permission row it reads.
+            const storedPermissionIds = [
+              ...(await storedAsPlainLocked(
+                tx,
+                uniquePermissionIds,
+                this.adapter.getCapabilities().maxParamsPerQuery
+              )),
+            ];
             // Delete all existing role-permission mappings
             await tx.delete(
               "role_permissions",
@@ -889,11 +901,17 @@ export class RoleMutationService extends BaseService {
             // Insert new role-permission mappings. `createdAt` is set here
             // because the schema's default for it is applied by the query
             // builder, which the adapter's insert does not go through.
-            if (uniquePermissionIds.length > 0) {
-              const createdAt = new Date();
+            // In runs, each binding no more than one statement may: four
+            // values a row, so a set a retired permission grew past the
+            // adapter's limit still inserts.
+            const createdAt = new Date();
+            for (const run of batches(
+              storedPermissionIds,
+              this.adapter.getCapabilities().maxParamsPerQuery / 4
+            )) {
               await tx.insertMany(
                 "role_permissions",
-                uniquePermissionIds.map(permissionId => ({
+                run.map(permissionId => ({
                   id: randomUUID(),
                   roleId: storedRoleId,
                   permissionId,

@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -10,6 +10,14 @@ import { z } from "zod";
 import { toast } from "@admin/components/ui";
 import { debugError, debugLog } from "@admin/lib/debug";
 import { navigateTo } from "@admin/lib/navigation";
+import {
+  levelRows,
+  pluginGroups,
+  screenEntitiesFrom,
+  type LevelRow,
+  type PluginGroup,
+  type ScreenEntity,
+} from "@admin/lib/permissions/level-rows";
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
 import { assignableRoles } from "@admin/lib/roles/assignable";
 
@@ -28,7 +36,12 @@ import { invalidateCurrentUserAccess } from "./current-user-access";
  * Loading state for async data fetching
  */
 interface LoadingState {
-  permissions: { loaded: boolean; loading: boolean };
+  /**
+   * `failed` marks a load that ended in an error: the form shows the error
+   * and does not ask again on its own, since nothing about a failed request
+   * changes by asking it again at once.
+   */
+  permissions: { loaded: boolean; loading: boolean; failed?: boolean };
   role: { loaded: boolean; loading: boolean };
   allRoles: { loaded: boolean; loading: boolean };
 }
@@ -140,6 +153,17 @@ export interface UseRoleFormReturn {
   form: UseFormReturn<RoleFormValuesType>;
   role: RoleWithPermissions | null;
   allPermissions: Permission[];
+  /** One row per collection and Single of the app's own, set by level. */
+  levelRows: LevelRow[];
+  /** Each plugin's collections and own permissions, folded under its name. */
+  pluginGroups: PluginGroup[];
+  /** The permissions no row or plugin takes, set one by one in the grid. */
+  otherPermissions: Permission[];
+  /**
+   * Each base role the role is built on, with the permissions it gives, so a
+   * row can name the bases that give it something.
+   */
+  baseGrants: { name: string; ids: string[] }[];
   allRoles: Array<{ id: string; name: string; permissions: string[] }>;
   isLoading: boolean;
   error: string | null;
@@ -158,6 +182,44 @@ export interface UseRoleFormReturn {
   formRef: React.RefObject<HTMLFormElement | null>;
   ignoreFormChanges: boolean;
   setIgnoreFormChanges: (value: boolean) => void;
+}
+
+/** One permission as `GET /permissions` lists it. */
+interface ListedPermission {
+  id: string | number;
+  name: string | null;
+  action: string;
+  resource: string;
+  description: string | null;
+  owner: string | null;
+  danger?: boolean;
+}
+
+/**
+ * The most pages of permissions read: past it, a server still saying there
+ * is more is answered with an error rather than read for ever.
+ */
+const MAX_PERMISSION_PAGES = 50;
+
+/**
+ * Every permission, read page by page in the canonical paginated
+ * `{ items, meta }` shape (spec §5.1) until `meta.hasNext` is false. A row is
+ * built from its entity's permissions, so one left on an unread page would
+ * read as No access; a list that cannot be read whole is an error instead.
+ */
+async function fetchEveryPermission(): Promise<ListedPermission[]> {
+  const items: ListedPermission[] = [];
+  for (let page = 1; page <= MAX_PERMISSION_PAGES; page++) {
+    const response = await protectedApi.get<{
+      items?: ListedPermission[];
+      meta?: { hasNext?: boolean };
+    }>(
+      `/permissions?page=${page}&limit=${PAGINATION.MAX_PAGE_SIZE}&sortBy=resource&sortOrder=asc`
+    );
+    items.push(...(response?.items ?? []));
+    if (response?.meta?.hasNext !== true) return items;
+  }
+  throw new Error("Unable to load every permission");
 }
 
 /**
@@ -192,6 +254,15 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [role, setRole] = useState<RoleWithPermissions | null>(null);
   const [allPermissions, setAllPermissions] = useState<Permission[]>([]);
+  const [screenEntities, setScreenEntities] = useState<ScreenEntity[]>([]);
+  // Every permission whose resource is a collection or Single goes to that
+  // entity's row, a plugin's rows and its own permissions to its group, and
+  // the rest stay in the grid. Derived together, so each permission is shown
+  // in exactly one place.
+  const { appRows, groups, rest } = useMemo(() => {
+    const built = levelRows(screenEntities, allPermissions);
+    return pluginGroups(built.rows, built.rest);
+  }, [screenEntities, allPermissions]);
   const [error, setError] = useState<string | null>(null);
   const [ignoreFormChanges, setIgnoreFormChanges] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
@@ -211,6 +282,20 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const [rolePermissionsMap, setRolePermissionsMap] = useState<
     Record<string, string[]>
   >({});
+
+  // Each base's own grants, by its name. A role made through the API may have
+  // several bases, and a row is credited to the ones that give it something,
+  // never to the first base for every grant.
+  const baseGrants = useMemo(
+    () =>
+      selectedBaseRoleIds.map(id => ({
+        name:
+          allRoles.find(candidate => candidate.id === id)?.name ??
+          "a base role",
+        ids: rolePermissionsMap[id] ?? [],
+      })),
+    [selectedBaseRoleIds, allRoles, rolePermissionsMap]
+  );
 
   // Derived state
   const isEditMode = !!roleId;
@@ -303,7 +388,11 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
 
   // Load permissions from server
   useEffect(() => {
-    if (loadingState.permissions.loaded || loadingState.permissions.loading)
+    if (
+      loadingState.permissions.loaded ||
+      loadingState.permissions.loading ||
+      loadingState.permissions.failed
+    )
       return;
 
     const loadPermissions = async () => {
@@ -313,37 +402,23 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
           permissions: { loaded: false, loading: true },
         }));
 
-        const query = `?page=1&limit=${PAGINATION.MAX_PAGE_SIZE}&sortBy=resource&sortOrder=asc`;
-
-        // Fetch permissions and single slugs in parallel so we can
-        // correctly categorize each permission as collection-types,
-        // single-types, or settings. Both endpoints return the
-        // canonical paginated `{ items, meta }` shape (spec §5.1) —
-        // typed as ListEnvelope below so we read `.items` for the
-        // array.
-        type ListEnvelope<T> = { items: T[]; meta?: unknown };
-        const [response, singlesResponse] = await Promise.all([
-          protectedApi.get<
-            ListEnvelope<{
-              id: string | number;
-              name: string | null;
-              action: string;
-              resource: string;
-              description: string | null;
-              owner: string | null;
-              danger?: boolean;
-            }>
-          >(`/permissions${query}`),
-          protectedApi
-            .get<ListEnvelope<{ slug: string }>>(`/singles?page=1&limit=500`)
-            .catch(() => ({ items: [] as Array<{ slug: string }> })),
+        // Fetch every permission and the roles screen's list of collections
+        // and Singles in parallel: the list gives each permission its row,
+        // and says which resources are Singles; the list is parsed at the
+        // boundary.
+        const [permissionItems, screenResponse] = await Promise.all([
+          fetchEveryPermission(),
+          protectedApi.get<unknown>(`/roles/screen`),
         ]);
 
+        const entities = screenEntitiesFrom(screenResponse);
         const singleSlugs = new Set(
-          (singlesResponse?.items ?? []).map(s => String(s.slug))
+          entities
+            .filter(entity => entity.kind === "single")
+            .map(entity => entity.slug)
         );
 
-        const mapped: Permission[] = (response?.items ?? []).map(p => {
+        const mapped: Permission[] = permissionItems.map(p => {
           const resource = String(p.resource);
           const action = String(p.action);
           const slug = `${resource}.${action}`;
@@ -378,6 +453,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         });
 
         setAllPermissions(mapped);
+        setScreenEntities(entities);
         setLoadingState(prev => ({
           ...prev,
           permissions: { loaded: true, loading: false },
@@ -391,7 +467,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         );
         setLoadingState(prev => ({
           ...prev,
-          permissions: { loaded: false, loading: false },
+          permissions: { loaded: false, loading: false, failed: true },
         }));
       }
     };
@@ -399,7 +475,11 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     void loadPermissions();
     // Dependencies ensure effect only runs once per load cycle
     // The early return guard prevents infinite loops even though we depend on state we modify
-  }, [loadingState.permissions.loaded, loadingState.permissions.loading]);
+  }, [
+    loadingState.permissions.loaded,
+    loadingState.permissions.loading,
+    loadingState.permissions.failed,
+  ]);
 
   // Load role data in edit mode from API
   useEffect(() => {
@@ -598,6 +678,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     form,
     role,
     allPermissions,
+    levelRows: appRows,
+    pluginGroups: groups,
+    otherPermissions: rest,
+    baseGrants,
     allRoles,
     isLoading,
     error,

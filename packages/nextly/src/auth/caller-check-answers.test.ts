@@ -176,6 +176,13 @@ const CALLERS: Record<string, Caller> = {
   "super-admin-inherited": session("admin-inherited"),
   "key-with": key([...POST_GRANTS, ...SYSTEM_GRANTS]),
   "key-without": key([]),
+  // The plain four on settings and nothing else: a retired `manage-settings`
+  // asked of it is held, at every door, as all four.
+  "key-plain-settings": key(
+    ["read", "create", "update", "delete"].map(action =>
+      grant(action, "settings")
+    )
+  ),
   "key-partial": key([
     grant("read", POSTS),
     grant("publish", POSTS),

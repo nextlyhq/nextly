@@ -51,6 +51,14 @@ export function setSiteDashboardRules(rules: SiteDashboardRules): void {
   globalForRules.__nextly_siteDashboardRules = rules;
 }
 
+/**
+ * Back to no rules, where a reload begins: its config is checked against the
+ * widgets as declared, never as the previous boot's overrides left them.
+ */
+export function clearSiteDashboardRules(): void {
+  globalForRules.__nextly_siteDashboardRules = undefined;
+}
+
 /** The rules this boot set, or none. */
 export function siteDashboardRules(): SiteDashboardRules {
   return globalForRules.__nextly_siteDashboardRules ?? NO_RULES;
@@ -79,6 +87,12 @@ interface Overridable {
   description?: string;
   size?: WidgetSizeDeclaration;
   settings?: unknown;
+  /**
+   * The canonical summary's own copy of a widget's Collection setting, which
+   * withholding and the dashboard's token read: started as `settings` is, so
+   * every reading names one collection.
+   */
+  collectionSetting?: unknown;
 }
 
 /**
@@ -112,6 +126,18 @@ export function withSiteOverride<T extends Overridable>(
     ...(override.settings === undefined || widget.settings === undefined
       ? {}
       : { settings: withStartingValues(widget.settings, override.settings) }),
+    ...(override.settings === undefined ||
+    widget.collectionSetting === undefined
+      ? {}
+      : {
+          collectionSetting: startedSetting(
+            widget.collectionSetting,
+            isRecord(widget.collectionSetting)
+              ? widget.collectionSetting.name
+              : undefined,
+            override.settings
+          ),
+        }),
   };
 }
 
@@ -128,22 +154,35 @@ function withStartingValues(
   settings: unknown,
   values: Readonly<Record<string, unknown>>
 ): unknown {
-  const started = (setting: unknown, name: unknown) =>
-    isRecord(setting) && typeof name === "string" && Object.hasOwn(values, name)
-      ? { ...setting, defaultValue: values[name] }
-      : setting;
   if (Array.isArray(settings)) {
     return settings.map(setting =>
-      started(setting, isRecord(setting) ? setting.name : undefined)
+      startedSetting(
+        setting,
+        isRecord(setting) ? setting.name : undefined,
+        values
+      )
     );
   }
   if (isRecord(settings)) {
     return Object.fromEntries(
       Object.entries(settings).map(([name, setting]) => [
         name,
-        started(setting, name),
+        startedSetting(setting, name, values),
       ])
     );
   }
   return settings;
+}
+
+/** One setting, named `name`, with the starting value `values` gives it, if any. */
+function startedSetting(
+  setting: unknown,
+  name: unknown,
+  values: Readonly<Record<string, unknown>>
+): unknown {
+  return isRecord(setting) &&
+    typeof name === "string" &&
+    Object.hasOwn(values, name)
+    ? { ...setting, defaultValue: values[name] }
+    : setting;
 }

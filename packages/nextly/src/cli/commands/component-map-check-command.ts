@@ -53,7 +53,9 @@ export async function runComponentMapCheck(
       loaded.config.plugins ?? [],
       generatedTypesFile(cwd, loaded.config.typescript.outputFile),
       cwd,
-      loaded.configPath
+      loaded.configPath,
+      // The site's own widgets, which the map lists beside the plugins'.
+      loaded.config.admin?.dashboard
     );
   } catch (error) {
     logger.error(

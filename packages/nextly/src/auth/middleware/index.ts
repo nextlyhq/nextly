@@ -1,7 +1,8 @@
 import { container } from "@nextly/di/container";
-import type {
-  ApiKeyRefusalCause,
-  ApiKeyService,
+import {
+  resolveKeyCaller,
+  type ApiKeyRefusalCause,
+  type ApiKeyService,
 } from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
@@ -193,6 +194,25 @@ export interface AuthContext {
   roles: string[];
   authMethod: "session" | "api-key";
   /**
+   * Whether the API key carries super-admin authority: a full-access key whose
+   * maker is an active super-admin for this request. Set only by
+   * authentication, and only for `api-key` requests; a scope built from this
+   * context carries it, and nothing else can give a key that authority.
+   */
+  keyHoldsSuperAdmin?: boolean;
+  /**
+   * The soonest expiry among the key maker's roles (epoch ms), set with
+   * `keyHoldsSuperAdmin`: a scope built from this context loses the authority
+   * there, as a session's token ends there.
+   */
+  keyHoldsSuperAdminUntil?: number;
+  /**
+   * When authentication asked the key maker's standing (`performance.now()`),
+   * set with `keyHoldsSuperAdmin`: a scope built from this context counts
+   * the authority's bound from here.
+   */
+  keyStandingAskedAt?: number;
+  /**
    * The authenticating API key's own id, present only for `api-key` requests.
    * Carried so a write can be attributed to the specific key rather than only
    * to the user that owns it.
@@ -260,6 +280,9 @@ export async function requireApiKeyAuth(req: Request): Promise<
       permissions: string[];
       grants: readonly GrantedPermission[];
       roles: string[];
+      keyHoldsSuperAdmin: boolean;
+      keyHoldsSuperAdminUntil?: number;
+      keyStandingAskedAt?: number;
       apiKeyId: string;
     }
   | ErrorResponse
@@ -309,20 +332,15 @@ export async function requireApiKeyAuth(req: Request): Promise<
     if (overLimit) return overLimit;
   }
 
-  // 5. Resolve effective permissions and roles for this token type
-  const [grants, roles] = await Promise.all([
-    apiKeyService.resolveApiKeyGrants(
-      keyAuth.tokenType,
-      keyAuth.roleId,
-      keyAuth.userId,
-      keyAuth.id
-    ),
-    apiKeyService.resolveApiKeyRoles(
-      keyAuth.tokenType,
-      keyAuth.roleId,
-      keyAuth.userId
-    ),
-  ]);
+  // 5. Resolve effective permissions and roles for this token type, and
+  //    whether the key carries its maker's super-admin authority.
+  const {
+    grants,
+    roles,
+    keyHoldsSuperAdmin,
+    keyHoldsSuperAdminUntil,
+    keyStandingAskedAt,
+  } = await resolveKeyCaller(apiKeyService, keyAuth);
 
   // The key's own id travels with the result so a write can be attributed to
   // the specific key, not just to the user that owns it.
@@ -331,6 +349,11 @@ export async function requireApiKeyAuth(req: Request): Promise<
     permissions: grants.map(grant => grant.slug),
     grants,
     roles,
+    keyHoldsSuperAdmin,
+    ...(keyHoldsSuperAdminUntil === undefined
+      ? {}
+      : { keyHoldsSuperAdminUntil }),
+    ...(keyStandingAskedAt === undefined ? {} : { keyStandingAskedAt }),
     apiKeyId: keyAuth.id,
   };
 }
@@ -430,6 +453,13 @@ export async function requireAuthentication(
     grants: apiKeyResult.grants,
     roles: apiKeyResult.roles,
     authMethod: "api-key",
+    keyHoldsSuperAdmin: apiKeyResult.keyHoldsSuperAdmin,
+    ...(apiKeyResult.keyHoldsSuperAdminUntil === undefined
+      ? {}
+      : { keyHoldsSuperAdminUntil: apiKeyResult.keyHoldsSuperAdminUntil }),
+    ...(apiKeyResult.keyStandingAskedAt === undefined
+      ? {}
+      : { keyStandingAskedAt: apiKeyResult.keyStandingAskedAt }),
     apiKeyId: apiKeyResult.apiKeyId,
   };
 }

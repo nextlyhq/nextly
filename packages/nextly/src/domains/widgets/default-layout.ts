@@ -22,6 +22,7 @@
 import { placedByDefault, sizeFacts, type CanonicalWidget } from "./canonical";
 import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "./core-widgets/ids";
 import type { DefaultLayoutCard } from "./declaration/dashboard";
+import { clampSize } from "./grid-size";
 import type { WidgetPlacement } from "./layout";
 
 /** What startup read from the site config and the plugins, for the default. */
@@ -149,14 +150,20 @@ function placementOf(
   widget: CanonicalWidget,
   card: Pick<DefaultLayoutCard, "id" | "w" | "h" | "settings">
 ): WidgetPlacement {
-  const starting = sizeFacts(widget).size.default;
+  const bounds = sizeFacts(widget).size;
+  // Within the widget's bounds: an entry startup checked already is, and a
+  // replaced built-in's size is held to its alternative's.
+  const size = clampSize(
+    { w: card.w ?? bounds.default.w, h: card.h ?? bounds.default.h },
+    bounds
+  );
   return {
     id: card.id ?? widget.id,
     widgetId: widget.id,
     // The size travels WITH the placement: the first save stores it, so a
     // later change to the widget's default does not resize a saved card.
-    w: card.w ?? starting.w,
-    h: card.h ?? starting.h,
+    w: size.w,
+    h: size.h,
     removed: false,
     ...(card.settings === undefined ? {} : { config: { ...card.settings } }),
   };

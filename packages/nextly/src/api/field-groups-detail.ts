@@ -18,7 +18,10 @@
  */
 
 import { getService } from "../di";
-import { SYSTEM_READ_POLICY, SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -105,7 +108,9 @@ async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext) => {
-    await requireRouteAnyPermission(request, [...SYSTEM_READ_POLICY.settings.read.anyOf]);
+    await requireRouteAnyPermission(request, [
+      ...SYSTEM_READ_POLICY.settings.read.anyOf,
+    ]);
 
     const { slug } = await context.params;
     const registry = await getComponentRegistry();
@@ -128,7 +133,9 @@ export const PATCH = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("update-component");
 
-    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.fieldGroups.update.anyOf]);
+    await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.fieldGroups.update.anyOf,
+    ]);
 
     const { slug } = await context.params;
 
@@ -188,7 +195,9 @@ export const DELETE = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("delete-component");
 
-    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.fieldGroups.delete.anyOf]);
+    await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.fieldGroups.delete.anyOf,
+    ]);
 
     const { slug } = await context.params;
     const registry = await getComponentRegistry();

@@ -215,6 +215,27 @@ describe("a delete rule that answers a filter", () => {
     expect(await stillThere(t, OPEN_POSTS, others)).toBe(true);
   });
 
+  it("refuses a bulk delete by ids every entry, the matching one too, and deletes nothing", async () => {
+    const t = await boot();
+    const { own, others } = await seed(t, OPEN_POSTS);
+
+    const result = await t.nextly.bulkDelete({
+      collection: OPEN_POSTS,
+      ids: [own, others],
+      ...asAuthor,
+    });
+
+    expect(result.successes).toEqual([]);
+    expect(result.failures.map(f => [f.id, f.code]).sort()).toEqual(
+      [
+        [own, "FORBIDDEN"],
+        [others, "FORBIDDEN"],
+      ].sort()
+    );
+    expect(await stillThere(t, OPEN_POSTS, own)).toBe(true);
+    expect(await stillThere(t, OPEN_POSTS, others)).toBe(true);
+  });
+
   it("asks whether the caller may read the entry itself, by the read rule's filter", async () => {
     // The read rule's filter decides per entry: another's entry in the public
     // team is one the author can see, so its refusal is a 403, and another's in

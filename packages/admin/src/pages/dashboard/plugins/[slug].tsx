@@ -34,6 +34,7 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
+import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
 import { pluginSettingsPermission } from "@admin/lib/plugins/plugin-settings-permission";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
@@ -150,21 +151,6 @@ function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
   );
 }
 
-/**
- * What a plugin is called on its page: its sidebar label, else its name. One
- * rule for the heading and the browser tab, so the two cannot name the plugin
- * differently. Overloaded so a found plugin always yields a name.
- */
-function pluginDisplayName(plugin: PluginMetadata): string;
-function pluginDisplayName(
-  plugin: PluginMetadata | undefined
-): string | undefined;
-function pluginDisplayName(
-  plugin: PluginMetadata | undefined
-): string | undefined {
-  return plugin && (plugin.appearance?.label ?? plugin.name);
-}
-
 function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -175,9 +161,6 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   // The tab names the plugin as the heading below does. Called here, above
   // the returns below, because the tab's hook cannot follow them.
   useDocumentTitle(pluginDisplayName(plugin));
-  // The settings page asks the plugin's own permission, which any settings
-  // change does not imply, so its link is offered only to a holder of it.
-  const { hasPermission } = useCurrentUserPermissions();
 
   // Installed metadata is observed; the catalogue is a claim, so the observed
   // one decides. Only when the project has no such plugin is the catalogue
@@ -228,69 +211,7 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
           scrolling inside it. */}
       <div className="grid grid-cols-1 gap-8 @3xl/content:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0">
-          {/* Identity header */}
-          <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex items-start gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-primary/5">
-                {/* Package, not Database: this page presents a plugin as the
-                package you installed rather than as its collections. */}
-                <PluginIcon
-                  plugin={plugin}
-                  fallback="Package"
-                  className="h-6 w-6 text-primary"
-                />
-              </div>
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-xl font-semibold tracking-tight">
-                    {title}
-                  </h1>
-                  {plugin.version && (
-                    <span className="inline-flex items-center rounded-sm bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-muted-foreground">
-                      v{plugin.version}
-                    </span>
-                  )}
-                  <PluginStatusPill enabled={plugin.enabled !== false} />
-                  {plugin.category && (
-                    <Badge
-                      variant="default"
-                      className="text-xs font-normal text-muted-foreground"
-                    >
-                      {categoryLabel(plugin.category)}
-                    </Badge>
-                  )}
-                </div>
-                {plugin.description && (
-                  // Muted foreground so this secondary description meets contrast (a faint primary alpha did not).
-                  <p className="text-sm font-normal text-muted-foreground">
-                    {plugin.description}
-                  </p>
-                )}
-                {plugin.author && (
-                  <p className="text-xs text-muted-foreground">
-                    by {plugin.author}
-                  </p>
-                )}
-              </div>
-            </div>
-            <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
-              {/* The settings UI gets its own page; the detail page stays
-              informational and links to it. */}
-              {plugin.enabled !== false &&
-                plugin.settings?.component &&
-                hasPermission(pluginSettingsPermission(plugin)) && (
-                  <Link
-                    href={buildRoute(ROUTES.PLUGIN_SETTINGS, {
-                      slug: pluginSlug(plugin.name),
-                    })}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
-                  >
-                    <SettingsIcon className="h-3.5 w-3.5" />
-                    Open settings
-                  </Link>
-                )}
-            </div>
-          </div>
+          <PluginIdentityHeader plugin={plugin} title={title} />
 
           {/* What this plugin adds — computed from the plugin's registrations */}
           <Contributions plugin={plugin} />
@@ -312,6 +233,94 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
         </aside>
       </div>
     </div>
+  );
+}
+
+/**
+ * The plugin's name, version, status, category, description and author, with
+ * the link to its settings page beside them.
+ */
+function PluginIdentityHeader({
+  plugin,
+  title,
+}: {
+  plugin: PluginMetadata;
+  title: string;
+}) {
+  return (
+    <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex items-start gap-4">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-primary/5">
+          {/* Package, not Database: this page presents a plugin as the
+          package you installed rather than as its collections. */}
+          <PluginIcon
+            plugin={plugin}
+            fallback="Package"
+            className="h-6 w-6 text-primary"
+          />
+        </div>
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+            {plugin.version && (
+              <span className="inline-flex items-center rounded-sm bg-primary/5 px-2.5 py-0.5 font-mono text-xs text-muted-foreground">
+                v{plugin.version}
+              </span>
+            )}
+            <PluginStatusPill enabled={plugin.enabled !== false} />
+            {plugin.category && (
+              <Badge
+                variant="default"
+                className="text-xs font-normal text-muted-foreground"
+              >
+                {categoryLabel(plugin.category)}
+              </Badge>
+            )}
+          </div>
+          {plugin.description && (
+            // Muted foreground so this secondary description meets contrast (a faint primary alpha did not).
+            <p className="text-sm font-normal text-muted-foreground">
+              {plugin.description}
+            </p>
+          )}
+          {plugin.author && (
+            <p className="text-xs text-muted-foreground">by {plugin.author}</p>
+          )}
+        </div>
+      </div>
+      <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+        <PluginSettingsLink plugin={plugin} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The link to the plugin's settings page, for an enabled plugin with a
+ * settings UI. The settings UI gets its own page; the detail page stays
+ * informational and links to it. That page asks the plugin's own permission,
+ * which any settings change does not imply, so the link is offered only to a
+ * holder of it.
+ */
+function PluginSettingsLink({ plugin }: { plugin: PluginMetadata }) {
+  const { hasPermission } = useCurrentUserPermissions();
+  if (
+    plugin.enabled === false ||
+    !plugin.settings?.component ||
+    !hasPermission(pluginSettingsPermission(plugin))
+  ) {
+    return null;
+  }
+  return (
+    <Link
+      href={buildRoute(ROUTES.PLUGIN_SETTINGS, {
+        slug: pluginSlug(plugin.name),
+      })}
+      className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+    >
+      <SettingsIcon className="h-3.5 w-3.5" />
+      Open settings
+    </Link>
   );
 }
 

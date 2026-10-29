@@ -62,7 +62,9 @@ const reorderSchema = z.object({
  */
 export const PATCH = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.userFields.update.anyOf]);
+    await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.userFields.update.anyOf,
+    ]);
 
     let raw: unknown;
     try {

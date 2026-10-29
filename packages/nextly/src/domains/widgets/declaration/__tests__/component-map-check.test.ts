@@ -19,6 +19,10 @@ vi.mock("../../../../plugins/codegen/write-component-map", () => ({
 
 import { getNextly } from "../../../../init";
 import * as loggerModule from "../../../../observability/logger";
+import {
+  buildImportMapArtifacts,
+  configImportSpecifier,
+} from "../../../../plugins/codegen/component-import-map";
 import { writeComponentMapFiles } from "../../../../plugins/codegen/write-component-map";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import {
@@ -122,6 +126,31 @@ describe("in production", () => {
 describe("in development", () => {
   beforeEach(() => vi.stubEnv("NODE_ENV", "development"));
 
+  it("lists the site's own widgets beside the plugins', handing the writer the dashboard the boot registered", async () => {
+    const dashboard = {
+      widgets: [
+        { id: "site/notes", view: { component: "./dashboard/notes#Notes" } },
+      ],
+    };
+    // As a plugin's setup() hands it to the boot: the config as written has
+    // no dashboard, and the boot registered this one.
+    setAdminComponentPlugins([shop], dashboard);
+    await checkAdminComponents({ config, registeredComponentPaths: [] });
+    expect(writeComponentMapFiles).toHaveBeenCalledWith(
+      [shop],
+      expect.any(String),
+      process.cwd(),
+      undefined,
+      dashboard
+    );
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "admin-component-map-regenerated",
+        added: expect.arrayContaining(["./dashboard/notes#Notes"]),
+      })
+    );
+  });
+
   it("writes the map again and serves the admin", async () => {
     await expect(check([])).resolves.toBe(undefined);
     expect(writeComponentMapFiles).toHaveBeenCalledWith(
@@ -129,6 +158,8 @@ describe("in development", () => {
       resolve(process.cwd(), "src/types/generated/nextly-types.ts"),
       process.cwd(),
       // No config file here, so the map is written without the config's check, as before.
+      undefined,
+      // And no widgets of the site's own.
       undefined
     );
     expect(info).toHaveBeenCalledWith(
@@ -287,7 +318,8 @@ describe("where the map is", () => {
       [shop],
       join(root, "types/generated/nextly-types.ts"),
       root,
-      join(root, "nextly.config.ts")
+      join(root, "nextly.config.ts"),
+      undefined
     );
 
     vi.stubEnv("NEXTLY_GENERATED_FILES_WRITE", "0");
@@ -313,7 +345,9 @@ describe("the config a development rewrite checks against", () => {
   // default names again would check against a different file, or none.
   it("is the one the existing map imports, not one found again by the default names", async () => {
     await mkdir(join(root, "src/types/generated"), { recursive: true });
+    await mkdir(join(root, "config"));
     await writeFile(join(root, "nextly.config.ts"), "");
+    await writeFile(join(root, "config/site.config.mjs"), "");
     await writeFile(
       join(root, "src/types/generated/plugin-admin-imports.generated.ts"),
       'import type * as siteConfig from "../../../config/site.config.mjs";\n'
@@ -327,7 +361,78 @@ describe("the config a development rewrite checks against", () => {
       [shop],
       join(root, "src/types/generated/nextly-types.ts"),
       root,
-      { import: "../../../config/site.config.mjs" }
+      join(root, "config/site.config.mjs"),
+      undefined
+    );
+  });
+
+  /** A map as `generate:types` writes it for `config`, its site widget drawn from beside it. */
+  async function writtenMap(configFile: string): Promise<readonly string[]> {
+    const typesFile = join(root, "src/types/generated/nextly-types.ts");
+    await mkdir(join(root, "src/types/generated"), { recursive: true });
+    for (const each of buildImportMapArtifacts(
+      [shop],
+      typesFile,
+      configImportSpecifier(join(root, "src/types/generated"), configFile),
+      notesDashboard
+    )) {
+      await writeFile(each.path, each.code);
+    }
+    return [...BOTH, "./dashboard/notes#Notes"];
+  }
+  const notesDashboard = {
+    widgets: [
+      { id: "site/notes", view: { component: "./dashboard/notes#Notes" } },
+    ],
+  };
+  /** A check with the notes widget registered by the boot, as its own site dashboard. */
+  const checkNotes = (registeredComponentPaths: readonly string[]) => {
+    setAdminComponentPlugins([shop], notesDashboard);
+    return checkAdminComponents({ config, registeredComponentPaths });
+  };
+
+  it("writes a map again whose config has moved, though it lists every path, so its site component resolves from the new folder", async () => {
+    // The map was written for `config/nextly.config.ts`, and the config now sits at the root.
+    const listed = await writtenMap(join(root, "config/nextly.config.ts"));
+    await writeFile(join(root, "nextly.config.ts"), "");
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    vi.stubEnv("NODE_ENV", "development");
+
+    await checkNotes(listed);
+
+    expect(writeComponentMapFiles).toHaveBeenCalledWith(
+      [shop],
+      join(root, "src/types/generated/nextly-types.ts"),
+      root,
+      join(root, "nextly.config.ts"),
+      notesDashboard
+    );
+  });
+
+  it("leaves a map alone that lists every path and imports the config where it is", async () => {
+    await writeFile(join(root, "nextly.config.ts"), "");
+    const listed = await writtenMap(join(root, "nextly.config.ts"));
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    vi.stubEnv("NODE_ENV", "development");
+
+    await checkNotes(listed);
+
+    expect(writeComponentMapFiles).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("names the config a map is held to when regeneration is off", async () => {
+    const listed = await writtenMap(join(root, "config/nextly.config.ts"));
+    await writeFile(join(root, "nextly.config.ts"), "");
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("NEXTLY_GENERATED_FILES_WRITE", "0");
+
+    await checkNotes(listed);
+
+    expect(writeComponentMapFiles).not.toHaveBeenCalled();
+    expect(staleWarning()).toContain(
+      "- held to another config: imports ../../../config/nextly.config, where the config is ../../../nextly.config"
     );
   });
 });

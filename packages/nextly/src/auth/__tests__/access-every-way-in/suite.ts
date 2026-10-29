@@ -89,7 +89,7 @@ import { ask, targetSlug } from "./doors";
 import { renderRefusals, type Refusal } from "./refusals";
 import {
   doorsAsking,
-  oneAnswer,
+  oneAnswerAt,
   renderAnswers,
   rowKey,
   rows,
@@ -336,8 +336,8 @@ export function describeEveryWayIn(dialect: TestDialect): void {
       });
 
       for (const row of rows()) {
-        const expected = oneAnswer(row);
         for (const door of doorsAsking(row)) {
+          const expected = oneAnswerAt(row, door);
           const cell = cellKey(row, door);
           const name = `${cell} is ${expected}`;
           const named = known.get(cell);

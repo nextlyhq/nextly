@@ -820,6 +820,14 @@ async function callerHeaders(t: TestNextly) {
   );
   headers.set("key-super-admin", await mint(users.root.id, "full-access"));
   headers.set(
+    "key-read-only-super-admin",
+    await mint(users.root.id, "read-only")
+  );
+  headers.set(
+    "key-role-based-super-admin",
+    await mint(users.root.id, "role-based", reviewerRole)
+  );
+  headers.set(
     "key-partial",
     await mint(users.with.id, "role-based", partialRole)
   );
@@ -845,6 +853,19 @@ async function handleFor(
     user: { id: auth.userId },
     ...(auth.authMethod === "api-key" ? { actor: apiKeyScopeFrom(auth) } : {}),
   };
+}
+
+/**
+ * The handle one cell asks with. A key that sends its headers is
+ * authenticated again for each cell, as each request it sends is: the
+ * super-admin authority authentication gives a key's scope lapses soon after,
+ * and the table runs far longer than that. A handed-over scope is kept as
+ * it is, since nothing re-authenticates it.
+ */
+export async function handleForCell(who: CallerHandle): Promise<CallerHandle> {
+  if (!who.actor || !who.headers.authorization) return who;
+  const auth = await authenticated(who.headers);
+  return { ...who, actor: apiKeyScopeFrom(auth) };
 }
 
 /**

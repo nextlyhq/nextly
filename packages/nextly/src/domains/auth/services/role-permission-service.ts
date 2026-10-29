@@ -9,6 +9,13 @@ import type {
   RolePermissionInsertData,
 } from "@nextly/types/rbac-operations";
 
+import {
+  batches,
+  isRetiredManage,
+  plainFourOnLocked,
+  storedAsPlain,
+  storedAsPlainLocked,
+} from "../../../auth/access/manage-bridge";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
@@ -72,6 +79,54 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     perm: { action: string; resource: string; name?: string; slug?: string }
   ): Promise<void> {
+    // A retired `manage-` permission is added as the plain four it stands
+    // for, all four in one transaction under the lock on the role's row, so
+    // the add lands whole and no other writer lands between its parts. Where
+    // one of the four is missing, it is added as itself, as `storedAsPlain`
+    // keeps it.
+    if (isRetiredManage(perm.action, perm.resource)) {
+      let added = false;
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        const four = await plainFourOnLocked(tx, perm.resource);
+        if (four.length === 0) return;
+        const held = await this.heldIn(tx, roleId);
+        await this.insertAssignments(
+          tx,
+          roleId,
+          four.filter(id => !held.has(id))
+        );
+        // The role is left holding the plain four alone: a retired row it
+        // still held, from before, goes with this add, as any writer stores it.
+        const retired = (
+          await tx.select<{ id: unknown }>("permissions", {
+            columns: ["id"],
+            forUpdate: true,
+            where: {
+              and: [
+                { column: "action", op: "=", value: "manage" },
+                { column: "resource", op: "=", value: perm.resource },
+              ],
+            },
+          })
+        )
+          .map(row => String(row.id))
+          .filter(id => held.has(id));
+        if (retired.length > 0) {
+          await tx.delete("role_permissions", {
+            and: [
+              { column: "roleId", op: "=", value: roleId },
+              { column: "permissionId", op: "IN", value: retired },
+            ],
+          });
+        }
+        added = true;
+      });
+      if (added) {
+        await afterRoleGrantsChanged(roleId);
+        return;
+      }
+    }
     // Composed by the shared helpers rather than written out. This method
     // creates the permission row when the pair has none, and it is reached from
     // the REST surface with neither field supplied — so what these fallbacks
@@ -223,28 +278,42 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     perm: { action: string; resource: string }
   ): Promise<void> {
-    const permission = await (
-      this.db as RBACDatabaseInstance
-    ).query.permissions.findFirst({
-      where: { action: perm.action, resource: perm.resource },
-      columns: {
-        id: true,
-      },
-    });
-    if (!permission) return;
+    const retired = isRetiredManage(perm.action, perm.resource);
 
     // Under the lock on the role's row that every other writer of its
     // permissions takes, so a removal never lands between another writer's
-    // read of what the role holds and its write.
+    // read of what the role holds and its write. The permission named is
+    // found here too, by a locking read: one edited into another permission
+    // since is no longer it, and is left on the role.
+    let removed = false;
     await this.adapter.transaction(async tx => {
       await tx.lockRow("roles", roleId);
+      const named = await tx.select<{ id: unknown }>("permissions", {
+        columns: ["id"],
+        forUpdate: true,
+        where: {
+          and: [
+            { column: "action", op: "=", value: perm.action },
+            { column: "resource", op: "=", value: perm.resource },
+          ],
+        },
+      });
+      const ids = [
+        ...named.map(row => String(row.id)),
+        // A retired `manage-` permission is stored as the plain four it
+        // stands for, so taking it off takes them off too.
+        ...(retired ? await plainFourOnLocked(tx, perm.resource) : []),
+      ];
+      if (ids.length === 0) return;
       await tx.delete("role_permissions", {
         and: [
           { column: "roleId", op: "=", value: roleId },
-          { column: "permissionId", op: "=", value: String(permission.id) },
+          { column: "permissionId", op: "IN", value: ids },
         ],
       });
+      removed = true;
     });
+    if (!removed) return;
 
     await afterRoleGrantsChanged(roleId);
   }
@@ -272,7 +341,17 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     permissionIds: string[]
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
-    const desired = new Set(permissionIds);
+    // A retired `manage-` permission is stored as the plain four it stands
+    // for, so a role set with one, a preset's at each boot included, never
+    // holds it again once converted. Read here only to see whether anything
+    // changes; a change is stored as normalized again under the locks below.
+    const unchangedIf = new Set(
+      await storedAsPlain(
+        this.adapter,
+        permissionIds,
+        this.adapter.getCapabilities().maxParamsPerQuery
+      )
+    );
 
     // Read first, outside any transaction: once a preset has settled, every
     // boot of every instance asks this with nothing to change, and the answer
@@ -281,7 +360,9 @@ export class RolePermissionService extends BaseService {
     // counts as held and is removed below. MySQL's table declares no foreign
     // key, so such a row can be there.
     const before = await this.readAssignments(roleId);
-    if (sameMembers(new Set(before.map(row => row.permissionId)), desired)) {
+    if (
+      sameMembers(new Set(before.map(row => row.permissionId)), unchangedIf)
+    ) {
       return named(before);
     }
 
@@ -296,6 +377,7 @@ export class RolePermissionService extends BaseService {
       // are named as the schema declares them, which is how the adapter reads a
       // where clause and returns a row.
       await tx.lockRow("roles", roleId);
+      const desired = await storedAsPlainLocked(tx, permissionIds, maxParams);
       const held = await this.heldIn(tx, roleId);
 
       const extra = [...held].filter(id => !desired.has(id));
@@ -416,6 +498,38 @@ export class RolePermissionService extends BaseService {
     });
     if (added.length > 0) await afterRoleGrantsChanged(roleId);
     return added;
+  }
+
+  /**
+   * Stores what the role holds as the plain permissions a retired `manage-`
+   * one stands for, under the lock on the role's row every writer of its
+   * permissions takes: each retired one held is replaced by the plain four on
+   * its resource. Whether anything changed; a role with none changes nothing,
+   * so a second conversion finds nothing to do.
+   */
+  async convertRetiredManage(roleId: string): Promise<boolean> {
+    const maxParams = this.adapter.getCapabilities().maxParamsPerQuery;
+    let changed = false;
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("roles", roleId);
+      const held = await this.heldIn(tx, roleId);
+      const desired = await storedAsPlainLocked(tx, [...held], maxParams);
+      const removed = [...held].filter(id => !desired.has(id));
+      const added = [...desired].filter(id => !held.has(id));
+      if (removed.length === 0 && added.length === 0) return;
+      for (const ids of batches(removed, maxParams - 1)) {
+        await tx.delete("role_permissions", {
+          and: [
+            { column: "roleId", op: "=", value: roleId },
+            { column: "permissionId", op: "IN", value: ids },
+          ],
+        });
+      }
+      await this.insertAssignments(tx, roleId, added);
+      changed = true;
+    });
+    if (changed) await afterRoleGrantsChanged(roleId);
+    return changed;
   }
 
   /**
@@ -555,16 +669,6 @@ function named(
         ]
       : []
   );
-}
-
-/** `items` in runs of at most `size`, and never less than one per run. */
-function batches<T>(items: readonly T[], size: number): T[][] {
-  const step = Math.max(1, Math.floor(size));
-  const runs: T[][] = [];
-  for (let start = 0; start < items.length; start += step) {
-    runs.push(items.slice(start, start + step));
-  }
-  return runs;
 }
 
 /** Whether two sets hold the same members. */

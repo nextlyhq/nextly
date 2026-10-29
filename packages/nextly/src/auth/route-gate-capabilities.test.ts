@@ -480,9 +480,11 @@ describe("routeGateCapabilities", () => {
       (await answer("publisher-only", NO_LIFECYCLE)).entities[POSTS]
     ).toMatchObject({ publishEveryLanguage: false });
     // A role that may update and not publish is not offered it either way.
-    expect((await answer("editor", everything)).entities[POSTS]).toMatchObject(
-      { update: true, publish: false, publishEveryLanguage: false }
-    );
+    expect((await answer("editor", everything)).entities[POSTS]).toMatchObject({
+      update: true,
+      publish: false,
+      publishEveryLanguage: false,
+    });
     // A Single stays strict: update in every language, then publish.
     expect(publishOnly.entities[HOME]).toMatchObject({
       update: false,

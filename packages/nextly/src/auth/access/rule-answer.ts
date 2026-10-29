@@ -278,24 +278,6 @@ export function allowsSome(decision: Decision, action: string): boolean {
 }
 
 /**
- * A decision as a way in that applies no rule's filter answers it: allowed
- * only when the decision allows every entry. A read the decision allows only
- * for the entries a filter matches is refused there, and recorded as the
- * deviation it is. A write rule's filter is not applied yet anywhere, so it
- * refuses as the decision's answer.
- */
-export async function allowedUnfiltered(
-  decision: Decision,
-  action: string
-): Promise<boolean> {
-  if (decision.allowed) return true;
-  if (decision.reason !== "only-matching-entries" || action !== "read") {
-    return false;
-  }
-  return deviate("filter-not-applied", false, () => true);
-}
-
-/**
  * A collection read rule's filter that names a field inside a component,
  * which a rule's filter may not use yet: only the read that builds it knows
  * which fields are components, so it reports the filter as not well formed

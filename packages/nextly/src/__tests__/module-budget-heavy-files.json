@@ -1,6 +1,5 @@
 {
   "files": [
-    "src/__tests__/boot-refuses-unsupported-framework.test.ts",
     "src/__tests__/cache-components.test.ts",
     "src/__tests__/init-awaits-seeding.test.ts",
     "src/__tests__/init.test.ts",
@@ -21,6 +20,9 @@
     "src/cli/commands/__tests__/migrate-create-site-settings.test.ts",
     "src/cli/commands/__tests__/migrate-field-groups.test.ts",
     "src/cli/commands/__tests__/plugin-lifecycle-runner-teardown.test.ts",
+    "src/cli/commands/__tests__/plugin-rollback-paths.test.ts",
+    "src/cli/commands/__tests__/upgrade.test.ts",
+    "src/cli/commands/upgrade.test.ts",
     "src/cli/utils/config-loader-app-config.test.ts",
     "src/cli/utils/config-loader-consent.test.ts",
     "src/di/__tests__/boot-migrations-gate-settles.test.ts",
@@ -61,7 +63,6 @@
     "src/domains/schema/migrate-create/__tests__/app-stream.test.ts",
     "src/route-handler/__tests__/auth-handler.localization-after-get-nextly.test.ts",
     "src/route-handler/__tests__/dispatcher-singleton.test.ts",
-    "src/route-handler/__tests__/request-boot-awaits-seeding.test.ts",
     "src/route-handler/__tests__/route-parser.email-send.test.ts",
     "src/services/dashboard/__tests__/admin-counts.test.ts",
     "src/services/dashboard/__tests__/list-read-gates-readers.test.ts"

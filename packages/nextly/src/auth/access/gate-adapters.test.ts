@@ -349,6 +349,42 @@ describe("a super-admin named only by id", () => {
   });
 });
 
+describe("a yes-or-no asker under a read rule that answers a filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  beforeEach(() => {
+    callerMay("read");
+  });
+
+  it("answers yes: the caller may read the entries the filter matches", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+  });
+
+  it("is refused without the flag, where the asker neither applies nor only asks", async () => {
+    // The control: the yes above is the flag's.
+    const verdict = await collectionGateVerdict(
+      asked({ read: () => OWN as unknown as boolean }, { user: { id: "u1" } })
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("still refuses a caller without the read permission", async () => {
+    callerMayNot("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+});
+
 describe("a read whose route already authorized it", () => {
   const OWN = { author: { equals: "u1" } };
   const filtering = () => vi.fn(() => OWN as unknown as boolean);
