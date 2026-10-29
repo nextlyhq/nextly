@@ -276,6 +276,8 @@ describe.each(getConfiguredTestDialects())(
         const warned = (await startupWarnings()).join("\n");
         expect(warned.split("planted-manager").length - 1).toBe(1);
         expect(warned).toContain("nextly upgrade");
+        // Said as it is: until converted, the role has no access from it.
+        expect(warned).toContain("no longer gives any access");
         expect(warned).not.toContain("planted-jobs");
       });
 
