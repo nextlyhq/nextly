@@ -31,9 +31,10 @@ export interface UseDocumentLockHolderOptions {
 
 /**
  * The document's holder: `null` when nobody holds it, or while off;
- * `undefined` until the first read answers. A read that fails keeps the last
- * answer, so a colleague is not forgotten over one lost request, and a first
- * read that fails leaves the holder unknown rather than reporting nobody.
+ * `undefined` until the first read answers, and while a read is still out at
+ * the next beat. A read that fails keeps the last answer, so a colleague is
+ * not forgotten over one lost request, and a first read that fails leaves the
+ * holder unknown rather than reporting nobody.
  */
 export function useDocumentLockHolder({
   scopeKind,
@@ -46,40 +47,47 @@ export function useDocumentLockHolder({
   const documentKey = active ? `${scopeKind}:${slug}:${entryId}` : null;
   const [answer, setAnswer] = useState<{
     documentKey: string;
-    holder: DocumentLockHolder | null;
+    /** `undefined` while a read is overdue. */
+    holder: DocumentLockHolder | null | undefined;
   } | null>(null);
 
   useEffect(() => {
     if (!active || !entryId || documentKey === null) return;
     let stopped = false;
-    // Each read is numbered as it is sent, and an answer lands only when no
-    // newer read's answer has: a slow read that returns after a newer one says
-    // what was true before it, and would hand back a write a colleague's
-    // later claim holds.
-    let sent = 0;
-    let landed = 0;
+    // One read at a time: two in flight could reach the server in either
+    // order, and the one that read the lock first could answer last. A beat
+    // that finds the last read still out does not send another; it makes the
+    // holder unknown until that read answers, so a lagging read never leaves
+    // an old "nobody" standing.
+    let reading = false;
     const query = new URLSearchParams({ scopeKind, slug, entryId }).toString();
     const read = async (): Promise<void> => {
-      sent += 1;
-      const number = sent;
+      reading = true;
       try {
         const reply = await protectedApi.get<{
           holder: DocumentLockHolder | null;
         }>(`/document-lock?${query}`);
-        if (stopped || number < landed) return;
-        landed = number;
-        setAnswer({ documentKey, holder: reply.holder });
+        if (!stopped) setAnswer({ documentKey, holder: reply.holder });
       } catch {
         // The last answer stands until a read says otherwise.
+      } finally {
+        reading = false;
       }
     };
     void read();
     const beat = setInterval(() => {
+      if (reading) {
+        setAnswer({ documentKey, holder: undefined });
+        return;
+      }
       void read();
     }, DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
     return () => {
       stopped = true;
       clearInterval(beat);
+      // Turned back on, or on another document, the holder is unknown until
+      // a read of that run answers.
+      setAnswer(null);
     };
   }, [active, documentKey, scopeKind, slug, entryId]);
 
