@@ -151,11 +151,12 @@ describe("populating a relationship under a read rule that answers a filter", ()
     // A `hasMany` field fetched one reference at a time shares one
     // expansion's caches. The filter's condition, and the collection metadata
     // it is built from, is the same for every reference, so fetching three
-    // reads the metadata as often as fetching one.
+    // rows the filter matches reads the metadata as often as fetching one.
+    // Each is matched, so no withheld row's own handling is counted.
     const t = await boot();
     const ids = [
       await made(t, TEAMS, { name: "public" }),
-      await made(t, TEAMS, { name: "private" }),
+      await made(t, TEAMS, { name: "public" }),
       await made(t, TEAMS, { name: "public" }),
     ];
     const service = t.getService("relationshipService");

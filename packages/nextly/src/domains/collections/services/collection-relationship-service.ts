@@ -406,9 +406,12 @@ function trustsTarget(
 }
 
 /**
- * Options for relationship expansion.
+ * Options for relationship expansion. The match-column cache is carried by a
+ * nested hop as the verdict map is, and declared once, on the context it
+ * belongs to.
  */
-export interface RelationshipExpansionOptions {
+export interface RelationshipExpansionOptions
+  extends Pick<RelatedRowReadContext, "targetRuleMatches"> {
   /**
    * Maximum depth to expand relationships (0-5).
    * - 0: No expansion, return IDs only
@@ -509,14 +512,6 @@ export interface RelationshipExpansionOptions {
    * @internal
    */
   targetVerdicts?: Map<string, Promise<FilteredRead>>;
-
-  /**
-   * Target match columns already built during this expansion, carried by a
-   * nested hop for the same reason the verdict map is.
-   *
-   * @internal
-   */
-  targetRuleMatches?: Map<string, Promise<SQL<number> | undefined>>;
 
   /**
    * The caller's authenticated scope, when one applies.
