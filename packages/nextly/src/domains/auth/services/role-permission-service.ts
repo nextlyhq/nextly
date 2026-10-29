@@ -254,24 +254,28 @@ export class RolePermissionService extends BaseService {
     roleId: string,
     perm: { action: string; resource: string }
   ): Promise<void> {
-    const permission = await (
-      this.db as RBACDatabaseInstance
-    ).query.permissions.findFirst({
-      where: { action: perm.action, resource: perm.resource },
-      columns: {
-        id: true,
-      },
-    });
     const retired = isRetiredManage(perm.action, perm.resource);
-    if (!permission && !retired) return;
 
     // Under the lock on the role's row that every other writer of its
     // permissions takes, so a removal never lands between another writer's
-    // read of what the role holds and its write.
+    // read of what the role holds and its write. The permission named is
+    // found here too, by a locking read: one edited into another permission
+    // since is no longer it, and is left on the role.
+    let removed = false;
     await this.adapter.transaction(async tx => {
       await tx.lockRow("roles", roleId);
+      const named = await tx.select<{ id: unknown }>("permissions", {
+        columns: ["id"],
+        forUpdate: true,
+        where: {
+          and: [
+            { column: "action", op: "=", value: perm.action },
+            { column: "resource", op: "=", value: perm.resource },
+          ],
+        },
+      });
       const ids = [
-        ...(permission ? [String(permission.id)] : []),
+        ...named.map(row => String(row.id)),
         // A retired `manage-` permission is stored as the plain four it
         // stands for, so taking it off takes them off too.
         ...(retired ? await plainFourOnLocked(tx, perm.resource) : []),
@@ -283,7 +287,9 @@ export class RolePermissionService extends BaseService {
           { column: "permissionId", op: "IN", value: ids },
         ],
       });
+      removed = true;
     });
+    if (!removed) return;
 
     await afterRoleGrantsChanged(roleId);
   }

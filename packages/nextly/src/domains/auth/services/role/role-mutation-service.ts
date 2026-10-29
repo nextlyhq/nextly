@@ -11,7 +11,10 @@ import type {
 
 // PR 4 migration: replaced legacy result-shape returns and
 // mapDbErrorToServiceError calls with throw-based NextlyError.
-import { storedAsPlainLocked } from "../../../../auth/access/retired-manage-permissions";
+import {
+  batches,
+  storedAsPlainLocked,
+} from "../../../../auth/access/retired-manage-permissions";
 import { toDbError } from "../../../../database/errors";
 import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -538,17 +541,20 @@ export class RoleMutationService extends BaseService {
           );
           await executor.insert(this.tables.roles).values(roleData);
 
-          if (storedPermissionIds.length > 0) {
-            const rolePermissionData = storedPermissionIds.map(
-              permissionId => ({
+          // In runs, each binding no more than one statement may: up to four
+          // values a row with the creation time's default, so a set a retired
+          // permission grew past the adapter's limit still inserts.
+          for (const run of batches(
+            storedPermissionIds,
+            this.adapter.getCapabilities().maxParamsPerQuery / 4
+          )) {
+            await executor.insert(this.tables.rolePermissions).values(
+              run.map(permissionId => ({
                 id: randomUUID(),
                 roleId: id,
                 permissionId,
-              })
+              }))
             );
-            await executor
-              .insert(this.tables.rolePermissions)
-              .values(rolePermissionData);
           }
 
           if (uniqueChildRoleIds.length > 0) {
@@ -895,11 +901,17 @@ export class RoleMutationService extends BaseService {
             // Insert new role-permission mappings. `createdAt` is set here
             // because the schema's default for it is applied by the query
             // builder, which the adapter's insert does not go through.
-            if (storedPermissionIds.length > 0) {
-              const createdAt = new Date();
+            // In runs, each binding no more than one statement may: four
+            // values a row, so a set a retired permission grew past the
+            // adapter's limit still inserts.
+            const createdAt = new Date();
+            for (const run of batches(
+              storedPermissionIds,
+              this.adapter.getCapabilities().maxParamsPerQuery / 4
+            )) {
               await tx.insertMany(
                 "role_permissions",
-                storedPermissionIds.map(permissionId => ({
+                run.map(permissionId => ({
                   id: randomUUID(),
                   roleId: storedRoleId,
                   permissionId,

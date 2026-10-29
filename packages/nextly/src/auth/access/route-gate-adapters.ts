@@ -819,7 +819,13 @@ async function heldPermission(
       grants: caller.grants ?? [],
       roles: caller.roles,
     });
-    const today = storedSlugHolds(caller.permissions, action, resource);
+    // A retired `manage-` permission is held as the route gate holds it: by
+    // all four plain permissions it stood for, each by its stored slug.
+    const today = isRetiredManage(action, resource)
+      ? RETIRED_MANAGE_PLAIN_ACTIONS.every(plain =>
+          storedSlugHolds(caller.permissions, plain, resource)
+        )
+      : storedSlugHolds(caller.permissions, action, resource);
     // Two steps from today's answer to the decision's, each named apart: the
     // grant rather than the stored slug, then the target's rules read.
     const byPermission = decidePermission(actor, action, resource).allowed;
