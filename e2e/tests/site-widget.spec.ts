@@ -60,7 +60,10 @@ test("a widget the site config declares is offered, and draws with its own compo
   await placeSiteNotes(page, layout);
   await gotoAdmin(page, "/");
 
-  const card = page.getByTestId(`widget-cell-${SITE_NOTES}`);
+  // Visible only: a page Cache Components keeps hidden holds a copy of the card.
+  const card = page
+    .getByTestId(`widget-cell-${SITE_NOTES}`)
+    .filter({ visible: true });
   await expect(card.getByTestId("site-notes-card")).toBeVisible({
     timeout: 30_000,
   });
