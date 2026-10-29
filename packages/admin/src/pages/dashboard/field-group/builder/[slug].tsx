@@ -364,6 +364,7 @@ export default function FieldGroupBuilderEditPage({
 
       <BuilderSchemaChangeDialogs
         confirmation={confirmation}
+        kind={FIELD_GROUP_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
       />

@@ -134,7 +134,7 @@ test("refuses a required field while an entry has no English value, with the ste
 
   const dialog = page.getByRole("alertdialog");
   await expect(
-    dialog.getByRole("heading", { name: "Schema Change Needs Another Step" })
+    dialog.getByRole("heading", { name: "Schema change needs another step" })
   ).toBeVisible();
   await expect(dialog.getByText("no longer localized")).toBeVisible();
   await expect(dialog.getByText("Needs one step")).toBeVisible();

@@ -156,7 +156,7 @@ describe("BuilderOverlays", () => {
       { kind: "picker", insertAt: 0 },
       { config: { ...config, picker: { excludedTypes: ["relationship"] } } }
     );
-    expect(screen.queryByText("Relationship")).not.toBeInTheDocument();
+    expect(screen.queryByText("Link to entries")).not.toBeInTheDocument();
   });
 
   it("commits an unscoped create to the top level", async () => {
@@ -248,18 +248,18 @@ describe("BuilderOverlays", () => {
       { config: component }
     );
     expect(screen.getByText("Text")).toBeInTheDocument();
-    expect(screen.queryByText("Field Group")).not.toBeInTheDocument();
+    expect(screen.queryByText("Field group")).not.toBeInTheDocument();
     top.unmount();
 
     renderOverlays(
       { kind: "picker", insertAt: 0, parentFieldId: "field_items" },
       { config: component }
     );
-    expect(screen.getByText("Field Group")).toBeInTheDocument();
+    expect(screen.getByText("Field group")).toBeInTheDocument();
   });
 
   it("still offers a field group at a collection's top level", () => {
     renderOverlays({ kind: "picker", insertAt: 0 });
-    expect(screen.getByText("Field Group")).toBeInTheDocument();
+    expect(screen.getByText("Field group")).toBeInTheDocument();
   });
 });

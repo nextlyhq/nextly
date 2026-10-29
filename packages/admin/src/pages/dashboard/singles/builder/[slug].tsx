@@ -336,6 +336,7 @@ export default function SingleBuilderEditPage({
     >
       <BuilderSchemaChangeDialogs
         confirmation={confirmation}
+        kind={SINGLE_BUILDER_CONFIG.kind}
         entityName={slug}
         onConfirm={confirmApply}
       />

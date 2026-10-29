@@ -18,6 +18,7 @@ import type {
   SchemaRenameResolution,
 } from "@admin/services/schemaApi";
 
+import type { BuilderKind } from "./builder-config";
 import { SafeChangeConfirmDialog } from "./SafeChangeConfirmDialog";
 import { SchemaChangeDialog } from "./SchemaChangeDialog";
 import type { SchemaChangeConfirmation } from "./types";
@@ -25,6 +26,8 @@ import type { SchemaChangeConfirmation } from "./types";
 type Props = {
   /** The pending change and the state describing it. */
   confirmation: SchemaChangeConfirmation;
+  /** The kind being changed; both dialogs name it in their copy. */
+  kind: BuilderKind;
   /** Slug of the entity being changed; both dialogs show it in their copy. */
   entityName: string;
   /**
@@ -54,6 +57,7 @@ export function isSafeChange(preview: SchemaPreviewResponse): boolean {
 
 export function BuilderSchemaChangeDialogs({
   confirmation,
+  kind,
   entityName,
   onConfirm,
 }: Props): JSX.Element | null {
@@ -67,7 +71,8 @@ export function BuilderSchemaChangeDialogs({
         key={previewId}
         open={isOpen}
         onOpenChange={setOpen}
-        collectionName={entityName}
+        kind={kind}
+        entityName={entityName}
         changes={preview.changes}
         onConfirm={() => onConfirm({}, [])}
         isApplying={isApplying}
@@ -80,7 +85,8 @@ export function BuilderSchemaChangeDialogs({
       key={previewId}
       open={isOpen}
       onOpenChange={setOpen}
-      collectionName={entityName}
+      kind={kind}
+      entityName={entityName}
       hasDestructiveChanges={preview.hasDestructiveChanges}
       classification={preview.classification}
       changes={preview.changes}

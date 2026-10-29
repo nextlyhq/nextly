@@ -181,7 +181,9 @@ export function RelationshipEditor({
       <div className="flex items-center gap-2">
         <Icons.Link2 className="h-4 w-4 text-muted-foreground" />
         <Label className="text-xs font-medium">
-          Relationship Configuration
+          {/* "Settings": the options header above already names the type
+              in its plain words, and every Builder label is in sentence case. */}
+          Settings
         </Label>
       </div>
 
@@ -321,7 +323,7 @@ export function RelationshipEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Multiple"
+              label="Allow multiple"
               description="Reference multiple documents"
             />
           </div>
@@ -336,7 +338,7 @@ export function RelationshipEditor({
           <FormLabelWithTooltip
             htmlFor="max-depth"
             className="text-xs font-medium"
-            label="Max Population Depth"
+            label="Max population depth"
             description="How deep to populate nested relationships (0-10)"
           />
           <Input
@@ -359,7 +361,7 @@ export function RelationshipEditor({
       {/* Admin Options */}
       <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
-          Admin Options
+          Admin options
         </Label>
 
         {/* PR E3: Appearance picker shape. "select" = inline picker
@@ -405,7 +407,7 @@ export function RelationshipEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Create"
+              label="Allow create"
               description="Create new documents from this field"
             />
           </div>
@@ -420,7 +422,7 @@ export function RelationshipEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Edit"
+              label="Allow edit"
               description="Edit related documents from this field"
             />
           </div>
@@ -453,7 +455,7 @@ export function RelationshipEditor({
         <div className="flex items-center justify-between">
           <FormLabelWithTooltip
             className="text-xs font-medium"
-            label="Filter Options"
+            label="Filter options"
             description="Limit available documents by a field value"
           />
           {filterOptions && (
@@ -501,7 +503,7 @@ export function RelationshipEditor({
             onClick={() => handleFilterUpdate({ field: "", equals: "" })}
           >
             <Icons.Settings className="h-3 w-3 mr-1" />
-            Add Filter
+            Add filter
           </Button>
         )}
       </div>

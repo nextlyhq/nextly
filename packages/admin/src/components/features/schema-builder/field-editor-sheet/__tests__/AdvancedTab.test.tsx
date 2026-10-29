@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 
+import type { BuilderKind } from "../../builder-config";
 import type { BuilderField } from "../../types";
 import { AdvancedTab } from "../AdvancedTab";
 
@@ -24,6 +25,7 @@ const f: BuilderField = {
 
 function Controlled(props: {
   initial: BuilderField;
+  kind?: BuilderKind;
   readOnly?: boolean;
   onChange?: (next: BuilderField) => void;
 }) {
@@ -31,6 +33,7 @@ function Controlled(props: {
   return (
     <AdvancedTab
       field={field}
+      kind={props.kind ?? "collection"}
       readOnly={props.readOnly}
       onChange={next => {
         setField(next);
@@ -104,7 +107,12 @@ describe("AdvancedTab -- unique disabled when nested (PR E3)", () => {
 
   it("greys out the unique switch and shows tooltip when isInsideRepeatingAncestor is true", () => {
     render(
-      <AdvancedTab field={f} isInsideRepeatingAncestor onChange={vi.fn()} />
+      <AdvancedTab
+        field={f}
+        kind="collection"
+        isInsideRepeatingAncestor
+        onChange={vi.fn()}
+      />
     );
     expect(screen.getByRole("switch", { name: /^unique$/i })).toBeDisabled();
     expect(
@@ -118,6 +126,7 @@ describe("AdvancedTab -- unique disabled when nested (PR E3)", () => {
     render(
       <AdvancedTab
         field={f}
+        kind="collection"
         readOnly
         isInsideRepeatingAncestor
         onChange={vi.fn()}
@@ -140,8 +149,31 @@ describe("AdvancedTab -- unique disabled when nested (PR E3)", () => {
       expect(
         screen.getByText(/localization is set by the fields inside it/i)
       ).toBeInTheDocument();
+      // The help names the kind the person knows; "component" is the code's
+      // name for a field group and is never shown.
+      expect(
+        screen.getByText(/^A field group's localization/)
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/component/i)).not.toBeInTheDocument();
       unmount();
     }
+  });
+
+  it("points the Localized help at the setting of the kind being edited", () => {
+    // A Single and a field group carry the same Internationalization setting
+    // a collection does, so the help names the one the person is editing.
+    const { unmount } = render(<Controlled initial={f} kind="single" />);
+    expect(
+      screen.getByText(/Requires the Single's Internationalization setting/)
+    ).toBeInTheDocument();
+    unmount();
+    render(<Controlled initial={f} kind="field-group" />);
+    expect(
+      screen.getByText(
+        /Requires the field group's Internationalization setting/
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/collection's/)).not.toBeInTheDocument();
   });
 
   it("reads a legacy localized flag on a component reference as OFF", () => {

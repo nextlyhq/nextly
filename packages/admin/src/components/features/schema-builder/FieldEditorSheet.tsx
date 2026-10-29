@@ -8,7 +8,8 @@
 //   w-full + justify-start to match the rest of the admin's tab pattern.
 //   Tab content is delegated to per-tab components so this file stays small.
 // - Footer that swaps based on mode and readOnly:
-//   - Editable: [Cancel] [Apply] (right). Delete moved to header.
+//   - Editable: [Cancel] [Apply], the confirming action last as in every
+//     Builder dialog. Delete moved to header.
 //   - readOnly: single [Close] button (right). Used for code-first locked
 //     collections so devs can inspect the schema without editing.
 //
@@ -27,6 +28,7 @@ import {
   Sheet,
   SheetContent,
   SheetDescription,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
   Tabs,
@@ -38,6 +40,9 @@ import { Trash2 } from "lucide-react";
 import type { JSX } from "react";
 import { useState } from "react";
 
+import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
+
+import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { AdvancedTab } from "./field-editor-sheet/AdvancedTab";
 import { DisplayTab } from "./field-editor-sheet/DisplayTab";
 import { GeneralTab } from "./field-editor-sheet/GeneralTab";
@@ -47,6 +52,8 @@ import type { BuilderField } from "./types";
 type Props = {
   open: boolean;
   mode: "create" | "edit";
+  /** The kind being edited, named in messages that refer to it. */
+  kind: BuilderKind;
   field: BuilderField;
   /**
    * Existing fields in the same parent scope. Used by GeneralTab for
@@ -74,6 +81,7 @@ type TabKey = "general" | "validation" | "admin" | "advanced";
 export function FieldEditorSheet({
   open,
   mode,
+  kind,
   field,
   siblingFields,
   readOnly = false,
@@ -88,6 +96,14 @@ export function FieldEditorSheet({
 
   const isSystem = field.isSystem === true;
   const widthLabel = field.admin?.width ?? "100%";
+  // The header names the type by the label the field picker showed when the
+  // field was added, never by the internal id stored data uses; the lookup is
+  // shared with every other Builder surface that names a type.
+  const typeLabel = useFieldTypeLabel()(draft.type);
+  // The sheet and its delete confirm call the field by its label, the name a
+  // person gave it; its name in the database and API is shown only on the
+  // General tab, where the input says what it is.
+  const fieldTitle = draft.label || "Untitled field";
   // Delete affordance is only meaningful in edit mode for non-system,
   // non-readOnly fields. In create mode the field hasn't been committed
   // yet, so the right discard action is Cancel.
@@ -111,7 +127,7 @@ export function FieldEditorSheet({
                 visually anchored to the entity it deletes. */}
             <div className="flex items-center gap-1 min-w-0">
               <span className="truncate">
-                {mode === "create" ? "New field" : draft.name || "untitled"}
+                {mode === "create" ? "New field" : fieldTitle}
               </span>
               {canDelete && (
                 <Button
@@ -131,7 +147,7 @@ export function FieldEditorSheet({
                 chip "text · 100%"). */}
             <div className="flex flex-col items-end gap-0.5 text-xs text-muted-foreground font-normal shrink-0">
               <span>
-                <span className="opacity-60">Type:</span> {draft.type}
+                <span className="opacity-60">Type:</span> {typeLabel}
               </span>
               <span>
                 <span className="opacity-60">Width:</span> {widthLabel}
@@ -141,8 +157,8 @@ export function FieldEditorSheet({
           {/* a11y: SheetDescription is always required by Radix Dialog. */}
           <SheetDescription className="sr-only">
             {readOnly
-              ? `View settings for the ${draft.name} field. This field is read-only.`
-              : `Edit settings for the ${draft.name} field across General, Validation, Admin, and Advanced tabs.`}
+              ? `View settings for the ${fieldTitle} field. This field is read-only.`
+              : `Edit settings for the ${fieldTitle} field across General, Validation, Display, and Advanced tabs.`}
           </SheetDescription>
         </SheetHeader>
 
@@ -189,6 +205,7 @@ export function FieldEditorSheet({
             <TabsContent value="advanced">
               <AdvancedTab
                 field={draft}
+                kind={kind}
                 readOnly={readOnly}
                 isInsideRepeatingAncestor={isInsideRepeatingAncestor}
                 onChange={setDraft}
@@ -197,27 +214,26 @@ export function FieldEditorSheet({
           </div>
         </Tabs>
 
-        <div className="p-4 border-t border-border flex items-center justify-start gap-2">
+        {/* The shared sheet footer, with Cancel before the confirming action:
+            every Builder dialog and panel puts its buttons in this one order,
+            so the confirming action is always last. `gap-2` spaces the stacked
+            buttons below sm, where the footer is a column. */}
+        <SheetFooter className="p-4 border-t border-border gap-2 sm:gap-0">
           {readOnly ? (
             <Button variant="outline" onClick={onCancel}>
               Close
             </Button>
           ) : (
             <>
-              {/* Primary action first: the Add field / Apply button renders to
-                  the LEFT of Cancel, with the whole footer left-aligned. The
-                  sheet's content is left-aligned too, so the confirming action
-                  sits where the eye already is and where tab order reaches it
-                  before the escape hatch. */}
-              <Button onClick={() => onApply(draft)}>
-                {mode === "create" ? "Add field" : "Apply"}
-              </Button>
               <Button variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
+              <Button onClick={() => onApply(draft)}>
+                {mode === "create" ? "Add field" : "Apply"}
+              </Button>
             </>
           )}
-        </div>
+        </SheetFooter>
       </SheetContent>
       {/* Confirm dialog for the header trash icon. Lives outside <SheetContent>
           so its overlay/portal is independent of the sheet's. */}
@@ -226,16 +242,19 @@ export function FieldEditorSheet({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this field?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes <span className="font-medium">{draft.name}</span>{" "}
-              from the schema. The change applies only after you save the
-              builder; you can still cancel by leaving without saving.
+              {/* Names the kind the field is removed from, as every Builder
+                  message that refers to one does. */}
+              This removes <span className="font-medium">{fieldTitle}</span>{" "}
+              from the {BUILDER_KIND_NOUN[kind]}. The change applies only after
+              you save; you can still cancel by leaving without saving.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            {/* The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here. */}
+            {/* Red because deleting a field deletes its stored values. The
+                variant carries the fill and its contrast notes (button.tsx). */}
             <AlertDialogAction
-              className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+              variant="destructive"
               onClick={() => {
                 setConfirmDeleteOpen(false);
                 onDelete();

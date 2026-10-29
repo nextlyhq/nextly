@@ -176,9 +176,7 @@ export function ComponentFieldEditor({
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-          <Label className="text-xs font-medium">
-            Field Group Configuration
-          </Label>
+          <Label className="text-xs font-medium">Settings</Label>
         </div>
         <div className="flex items-center justify-center p-6">
           <Icons.Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -196,9 +194,7 @@ export function ComponentFieldEditor({
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-          <Label className="text-xs font-medium">
-            Field Group Configuration
-          </Label>
+          <Label className="text-xs font-medium">Settings</Label>
         </div>
         {/* PR H feedback 2.2: subtle EditorAlert replaces the loud
             amber empty state. */}
@@ -226,13 +222,15 @@ export function ComponentFieldEditor({
       {/* Section Header */}
       <div className="flex items-center gap-2">
         <Icons.Puzzle className="h-4 w-4 text-muted-foreground" />
-        <Label className="text-xs font-medium">Field Group Configuration</Label>
+        {/* "Settings": the options header above already names the type in
+            its plain words, and every Builder label is in sentence case. */}
+        <Label className="text-xs font-medium">Settings</Label>
       </div>
 
       {/* Mode Toggle */}
       <div className="space-y-2">
         <Label className="text-xs font-medium text-muted-foreground">
-          Field Mode
+          Field mode
         </Label>
         <div className="grid grid-cols-2 gap-3">
           {/* Full-strength foreground on hover so the border state change is perceivable. */}
@@ -275,7 +273,7 @@ export function ComponentFieldEditor({
               className={`h-6 w-6 shrink-0 ${currentMode === "multi" ? "text-primary" : ""}`}
             />
             <div className="flex flex-col items-start gap-0.5">
-              <span className="text-sm font-semibold">Dynamic Zone</span>
+              <span className="text-sm font-semibold">Dynamic zone</span>
               {/* Helper text stays muted in both states; selection is carried by
                   the card border, fill and title. */}
               <span className="text-xs text-muted-foreground">
@@ -294,7 +292,7 @@ export function ComponentFieldEditor({
       {/* Component Selection */}
       <div className="space-y-2 pt-2  border-t border-border">
         <Label className="text-xs font-medium">
-          {currentMode === "single" ? "Field Group" : "Available Field Groups"}
+          {currentMode === "single" ? "Field group" : "Available field groups"}
         </Label>
 
         {currentMode === "single" ? (
@@ -378,7 +376,7 @@ export function ComponentFieldEditor({
       {/* Repeatable Toggle */}
       <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
-          Instance Options
+          Instance options
         </Label>
 
         <div className="flex items-center justify-between">
@@ -432,13 +430,13 @@ export function ComponentFieldEditor({
       {/* Admin Options */}
       <div className="space-y-3 pt-2  border-t border-border">
         <Label className="text-xs font-medium text-muted-foreground">
-          Admin Options
+          Admin options
         </Label>
 
         {/* Init Collapsed Toggle */}
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
-            <Label className="text-sm font-medium">Collapsed by Default</Label>
+            <Label className="text-sm font-medium">Collapsed by default</Label>
             <p className="text-xs text-muted-foreground">
               Start with instances collapsed
             </p>
@@ -453,7 +451,7 @@ export function ComponentFieldEditor({
         {repeatable && (
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <Label className="text-sm font-medium">Allow Reordering</Label>
+              <Label className="text-sm font-medium">Allow reordering</Label>
               <p className="text-xs text-muted-foreground">
                 Drag to reorder instances
               </p>

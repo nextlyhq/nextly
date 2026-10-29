@@ -8,10 +8,13 @@ import { defaultLocalizedForType } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
 
+import { BUILDER_KIND_NOUN, type BuilderKind } from "../builder-config";
 import type { BuilderField } from "../types";
 
 type Props = {
   field: BuilderField;
+  /** The kind whose setting the Localized help points to. */
+  kind: BuilderKind;
   readOnly?: boolean;
   /**
    * PR E3: when true, the `unique` switch is disabled with an
@@ -28,11 +31,14 @@ type Props = {
 const NESTED_UNIQUE_TOOLTIP =
   "Unique can't be enforced inside a repeater or repeatable field group. The constraint would apply across the whole table, not per row. For per-row uniqueness, use code-first config.";
 
+// Says "field group", the name the person editing it knows: "component" is
+// only the code's name for the same thing.
 const FIELD_GROUP_LOCALIZED_TOOLTIP =
-  "A component's localization is set by the fields inside it, not by this switch — a component reference holds no value of its own to localize. Enable Internationalization on the component's own settings, then toggle Localized on the inner fields that need per-language values.";
+  "A field group's localization is set by the fields inside it, not by this switch — a field group reference holds no value of its own to localize. Enable Internationalization on the field group's own settings, then toggle Localized on the inner fields that need per-language values.";
 
 export function AdvancedTab({
   field,
+  kind,
   readOnly = false,
   isInsideRepeatingAncestor = false,
   onChange,
@@ -69,7 +75,9 @@ export function AdvancedTab({
         help={
           isFieldGroupFieldType(field.type)
             ? FIELD_GROUP_LOCALIZED_TOOLTIP
-            : "Store a different value per language. Text fields localize by default; toggle to override. Requires the collection's Internationalization setting and a migration to create the translations table."
+            : // Names the kind being edited: a Single and a field group have
+              // the same Internationalization setting a collection has.
+              `Store a different value per language. Text fields localize by default; toggle to override. Requires the ${BUILDER_KIND_NOUN[kind]}'s Internationalization setting and a migration to create the translations table.`
         }
         // when the author hasn't set this explicitly, reflect the backend
         // smart default (text-like fields localize by default) so the switch shows

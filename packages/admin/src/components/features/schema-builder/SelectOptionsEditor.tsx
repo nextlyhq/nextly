@@ -57,7 +57,7 @@ export function SelectOptionsEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Allow Multiple"
+              label="Allow multiple"
               description="Users can select more than one option"
             />
           </div>

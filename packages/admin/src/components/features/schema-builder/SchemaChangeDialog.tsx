@@ -18,7 +18,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   Badge,
-  buttonVariants,
   Input,
   Label,
 } from "@nextlyhq/ui";
@@ -26,6 +25,8 @@ import { AlertTriangle } from "lucide-react";
 import type { JSX } from "react";
 import { useMemo, useState } from "react";
 
+import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
+import { reviewDeletesData } from "@admin/lib/builder/review-deletes-data";
 import type {
   SchemaPreviewChange,
   SchemaPreviewLeavingTranslation,
@@ -35,12 +36,16 @@ import type {
   FieldResolution,
 } from "@admin/services/schemaApi";
 
+import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { LeavingTranslationNotice } from "./LeavingTranslationNotice";
 
 interface SchemaChangeDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  collectionName: string;
+  /** The kind being saved, named in the title and the description. */
+  kind: BuilderKind;
+  /** Slug of the entity being saved. */
+  entityName: string;
   hasDestructiveChanges: boolean;
   classification: "safe" | "destructive" | "interactive";
   changes: SchemaPreviewChange;
@@ -61,7 +66,8 @@ interface SchemaChangeDialogProps {
 export function SchemaChangeDialog({
   open,
   onOpenChange,
-  collectionName,
+  kind,
+  entityName,
   hasDestructiveChanges,
   classification,
   changes,
@@ -72,6 +78,9 @@ export function SchemaChangeDialog({
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps): JSX.Element {
+  // Rows name a field's type by its plain name, never its internal id.
+  const typeLabel = useFieldTypeLabel();
+
   // Track user resolutions for interactive fields
   const [resolutions, setResolutions] = useState<
     Record<string, FieldResolution>
@@ -189,8 +198,14 @@ export function SchemaChangeDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-lg">
         <SchemaChangeDialogHeader
-          collectionName={collectionName}
-          title={dialogTitle(refused, classification, hasDestructiveChanges)}
+          kind={kind}
+          entityName={entityName}
+          title={dialogTitle(
+            kind,
+            refused,
+            classification,
+            hasDestructiveChanges
+          )}
           refused={refused}
         />
 
@@ -205,7 +220,9 @@ export function SchemaChangeDialog({
                 <Badge variant="success">added</Badge>
                 <span>
                   <strong>{field.name}</strong>{" "}
-                  <span className="text-muted-foreground">({field.type})</span>
+                  <span className="text-muted-foreground">
+                    ({typeLabel(field.type)})
+                  </span>
                 </span>
               </div>
             ))}
@@ -220,7 +237,7 @@ export function SchemaChangeDialog({
                   <span>
                     <strong>{field.name}</strong>{" "}
                     <span className="text-muted-foreground">
-                      ({field.type})
+                      ({typeLabel(field.type)})
                     </span>
                   </span>
                 </div>
@@ -242,7 +259,7 @@ export function SchemaChangeDialog({
                   <span>
                     <strong>{field.name}</strong>{" "}
                     <span className="text-muted-foreground">
-                      {field.from} &rarr; {field.to}
+                      {typeLabel(field.from)} &rarr; {typeLabel(field.to)}
                     </span>
                   </span>
                 </div>
@@ -270,19 +287,25 @@ export function SchemaChangeDialog({
         {candidatesByDrop.size > 0 && (
           <div className="space-y-3 rounded-md  border border-border bg-primary/5 p-3">
             <Label className="text-sm font-medium">
-              Possible column renames
+              Possible field renames
             </Label>
             {Array.from(candidatesByDrop.entries()).map(([dropKey, group]) => {
               const first = group[0];
               if (!first) return null;
               return (
                 <div key={dropKey} className="space-y-1.5">
+                  {/* A removed field is known here only by its column, so it is
+                      shown as its name in the database and API, labelled as
+                      that. The table it lives in is left out: it is an
+                      internal name and tells an author nothing. */}
                   <div className="text-sm">
-                    Column <strong>{first.from}</strong>{" "}
-                    <span className="text-muted-foreground">
-                      in {first.table}
-                    </span>{" "}
-                    was removed.
+                    A field was removed. Its name in the database and API:{" "}
+                    <code
+                      className="font-mono text-xs"
+                      data-builder-copy="database-name"
+                    >
+                      {first.from}
+                    </code>
                   </div>
                   <div className="flex flex-col gap-1.5 pl-2">
                     {group.map(c => (
@@ -296,15 +319,18 @@ export function SchemaChangeDialog({
                           checked={renameSelections[dropKey] === c.to}
                           onChange={() => updateRename(dropKey, c.to)}
                         />
+                        {/* The outcome stands in for the two column types,
+                            which are the database's names for them. */}
                         <span>
-                          Rename to <strong>{c.to}</strong>{" "}
+                          Rename to{" "}
+                          <code className="font-mono text-xs">{c.to}</code>{" "}
                           <span className="text-muted-foreground">
-                            ({c.fromType} &rarr; {c.toType}
+                            (
                             {!c.typesCompatible
-                              ? "; incompatible types, not recommended"
+                              ? "incompatible types, not recommended"
                               : c.preservesValues
-                                ? "; data preserved"
-                                : "; rows kept, values change"}
+                                ? "data preserved"
+                                : "rows kept, values change"}
                             )
                           </span>
                         </span>
@@ -321,9 +347,9 @@ export function SchemaChangeDialog({
                           key={`${c.to}-why`}
                           className="pl-6 text-xs text-muted-foreground"
                         >
-                          <strong className="font-medium text-foreground">
+                          <code className="font-mono text-foreground">
                             {c.to}:
-                          </strong>{" "}
+                          </code>{" "}
                           {c.valueChangeReason}
                         </p>
                       ))}
@@ -334,10 +360,7 @@ export function SchemaChangeDialog({
                         checked={renameSelections[dropKey] === null}
                         onChange={() => updateRename(dropKey, null)}
                       />
-                      <span>
-                        Drop <strong>{first.from}</strong> and add new column
-                        (data lost)
-                      </span>
+                      <span>Remove it and add a new field (data lost)</span>
                     </label>
                   </div>
                 </div>
@@ -351,11 +374,20 @@ export function SchemaChangeDialog({
           <div className="space-y-3 rounded-md  border border-border border-warning-200 bg-warning-50 p-3 dark:border-warning-800 dark:bg-warning-950">
             {promptedFields.map(field => (
               <div key={field.name} className="space-y-2">
+                {/* The prompt says what needs an answer in plain words; the
+                    field is known here only by its column, so that is shown
+                    as its name in the database and API, labelled as that. */}
                 <Label className="text-sm font-medium">
                   {field.reason === "new_required_no_default"
-                    ? `Field "${field.name}" is required but table has ${field.tableRowCount.toLocaleString()} rows`
-                    : `Field "${field.name}" has ${field.nullCount?.toLocaleString()} NULL values`}
+                    ? `A new required field has no value in ${field.tableRowCount.toLocaleString()} existing entries`
+                    : `A field made required is empty in ${field.nullCount?.toLocaleString()} entries`}
                 </Label>
+                <p className="text-xs text-muted-foreground">
+                  Its name in the database and API:{" "}
+                  <code className="font-mono" data-builder-copy="database-name">
+                    {field.name}
+                  </code>
+                </p>
                 <div className="flex flex-col gap-1.5">
                   <label className="flex items-center gap-2 text-sm">
                     <input
@@ -425,7 +457,10 @@ export function SchemaChangeDialog({
         <SchemaChangeDialogFooter
           nothingSaveable={nothingSaveable}
           refusedCount={refusedColumns.size}
-          emphasisDestructive={hasDestructiveChanges && !refused}
+          // Red only when saving deletes stored values, read from the
+          // preview's rows; the overall flag also covers changes that only
+          // need an answer.
+          emphasisDestructive={reviewDeletesData(changes) && !refused}
           isApplying={isApplying}
           canApply={canApply}
           onClose={() => onOpenChange(false)}
@@ -438,44 +473,51 @@ export function SchemaChangeDialog({
   );
 }
 
+/**
+ * The review's title, in sentence case like every Builder title. The plain
+ * save names the kind it saves, so a Single's review does not read "Save
+ * collection".
+ */
 function dialogTitle(
+  kind: BuilderKind,
   refused: boolean,
   classification: SchemaChangeDialogProps["classification"],
   hasDestructiveChanges: boolean
 ): string {
-  if (refused) return "Schema Change Needs Another Step";
-  if (classification === "interactive") return "Schema Changes Need Input";
-  return hasDestructiveChanges ? "Schema Changes Detected" : "Save Collection";
+  if (refused) return "Schema change needs another step";
+  if (classification === "interactive") return "Schema changes need input";
+  return hasDestructiveChanges
+    ? "Schema changes detected"
+    : `Save ${BUILDER_KIND_NOUN[kind]}`;
 }
 
 function SchemaChangeDialogHeader({
-  collectionName,
+  kind,
+  entityName,
   title,
   refused,
 }: {
-  collectionName: string;
+  kind: BuilderKind;
+  entityName: string;
   title: string;
   refused: boolean;
 }) {
+  const noun = BUILDER_KIND_NOUN[kind];
   return (
     <AlertDialogHeader>
       <AlertDialogTitle>{title}</AlertDialogTitle>
-      {/* A refused change applies nothing, so the description must not promise it will. */}
+      {/* A refused change applies nothing, so the description must not promise
+          it will. Both sentences name the kind being saved. */}
       <AlertDialogDescription>
         {refused
-          ? "This change cannot be saved to "
-          : "The following changes will be applied to "}
-        <strong className="text-foreground">{collectionName}</strong>
+          ? `This change cannot be saved to the ${noun} `
+          : `The following changes will be applied to the ${noun} `}
+        <strong className="text-foreground">{entityName}</strong>
         {refused ? " in one step." : "."}
       </AlertDialogDescription>
     </AlertDialogHeader>
   );
 }
-
-// `AlertDialogAction` is a danger button by default, which suits a delete but not a save or a
-// close. The hover fill is pinned as well: tailwind-merge drops the default's background but
-// keeps its `hover:bg-destructive-600`, which `hover:opacity-90` does not conflict with.
-const PRIMARY_ACTION = `${buttonVariants({ variant: "primary" })} hover:bg-primary`;
 
 /**
  * When nothing in the change could be saved there is no Save to disable, so the footer offers
@@ -501,9 +543,7 @@ function SchemaChangeDialogFooter({
   if (nothingSaveable) {
     return (
       <AlertDialogFooter>
-        <AlertDialogAction className={PRIMARY_ACTION} onClick={onClose}>
-          Close
-        </AlertDialogAction>
+        <AlertDialogAction onClick={onClose}>Close</AlertDialogAction>
       </AlertDialogFooter>
     );
   }
@@ -524,18 +564,15 @@ function SchemaChangeDialogFooter({
           onApply();
         }}
         disabled={isApplying || !canApply}
-        className={
-          // The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here.
-          emphasisDestructive
-            ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
-            : PRIMARY_ACTION
-        }
+        // The variant carries the fill and its contrast notes (button.tsx).
+        variant={emphasisDestructive ? "destructive" : "primary"}
       >
+        {/* Sentence case, as every Builder button is. */}
         {isApplying
           ? "Applying..."
           : emphasisDestructive
-            ? "Apply Changes"
-            : "Save Changes"}
+            ? "Apply changes"
+            : "Save changes"}
       </AlertDialogAction>
     </AlertDialogFooter>
   );

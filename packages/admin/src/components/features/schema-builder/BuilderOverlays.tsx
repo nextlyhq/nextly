@@ -184,6 +184,7 @@ export function BuilderOverlays({
         <FieldEditorSheet
           open
           mode="create"
+          kind={config.kind}
           field={active.draft}
           siblingFields={siblingsForNewField(
             builder.fields,
@@ -210,6 +211,7 @@ export function BuilderOverlays({
         <FieldEditorSheet
           open
           mode="edit"
+          kind={config.kind}
           field={editingField}
           siblingFields={siblingsForEditedField(builder.fields, editingField)}
           readOnly={readOnly}

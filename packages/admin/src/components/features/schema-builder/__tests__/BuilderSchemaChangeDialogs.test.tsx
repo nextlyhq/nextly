@@ -64,6 +64,7 @@ function renderDialogs(
   const result = render(
     <BuilderSchemaChangeDialogs
       confirmation={confirmationOf(p, overrides)}
+      kind="collection"
       entityName="posts"
       onConfirm={onConfirm}
     />
@@ -238,15 +239,15 @@ describe("BuilderSchemaChangeDialogs", () => {
     ).toEqual(REQUIRED_REFUSAL.steps);
     expect(screen.queryByText(/nextly i18n:restore/)).not.toBeInTheDocument();
     expect(
-      screen.getByText("Schema Change Needs Another Step")
+      screen.getByText("Schema change needs another step")
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/This change cannot be saved to/)
+      screen.getByText(/This change cannot be saved to the collection/)
     ).toBeInTheDocument();
     expect(screen.queryByText(/will be applied to/)).not.toBeInTheDocument();
     // The push's own prompt for the refused field's new column is moot, so it is not asked.
     expect(
-      screen.queryByText(/is required but table has/)
+      screen.queryByText(/A new required field has no value/)
     ).not.toBeInTheDocument();
     // Nothing in the change could be saved, so the only way out is Close.
     expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
@@ -290,7 +291,7 @@ describe("BuilderSchemaChangeDialogs", () => {
       })
     );
 
-    const save = screen.getByRole("button", { name: "Save Changes" });
+    const save = screen.getByRole("button", { name: "Save changes" });
     expect(save).toBeDisabled();
     expect(save.className).toMatch(/\bbg-primary\b/);
     expect(save.className).not.toMatch(/bg-destructive/);
@@ -339,7 +340,25 @@ describe("BuilderSchemaChangeDialogs", () => {
 
   it("shows the full dialog for a destructive change", () => {
     renderDialogs(
-      preview({ classification: "destructive", hasDestructiveChanges: true })
+      preview({
+        classification: "destructive",
+        hasDestructiveChanges: true,
+        // What a destructive preview carries: a row the server classes as
+        // deleting values, which is what the dialog's colour follows.
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "body",
+              type: "text",
+              rowCount: 3,
+              classification: "destructive",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
     );
     expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
     expect(

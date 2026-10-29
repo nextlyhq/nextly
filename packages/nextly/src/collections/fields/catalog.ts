@@ -36,7 +36,11 @@ export type FieldTypeCategory =
 export interface FieldTypeCatalogEntry<T extends string = FieldType> {
   /** The type key field instances reference. */
   type: T;
-  /** Human label shown in pickers. */
+  /**
+   * The type's one plain name, in sentence case, shown wherever the type is
+   * named (pickers, outlines, settings, review). Never the internal type id:
+   * that is what stored data uses, not what a person reads.
+   */
   label: string;
   /** Picker grouping. */
   category: FieldTypeCategory;
@@ -65,7 +69,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   },
   {
     type: "richText",
-    label: "Editor",
+    label: "Rich text",
     category: "Basic",
     hint: "Lexical rich-text editor",
     icon: "Edit",
@@ -144,15 +148,15 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   // Media
   {
     type: "upload",
-    label: "Media",
+    label: "Image or file",
     category: "Media",
-    hint: "File or image upload",
+    hint: "An uploaded file or image",
     icon: "Upload",
   },
   // Relational
   {
     type: "relationship",
-    label: "Relationship",
+    label: "Link to entries",
     category: "Relational",
     hint: "Link to records in another collection",
     icon: "Link2",
@@ -160,7 +164,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
   // Structured
   {
     type: "repeater",
-    label: "Repeater",
+    label: "Repeating rows",
     category: "Structured",
     hint: "Repeating group of fields",
     icon: "Layers",
@@ -177,7 +181,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeCatalogEntry[] = [
     // picker shows. Renaming the type would make every existing `fields` JSON row unreadable, so
     // the two are pinned apart by a test rather than left to be kept in step by hand.
     type: STORAGE_FORMAT.fieldType,
-    label: "Field Group",
+    label: "Field group",
     category: "Structured",
     hint: "Embed a reusable field group",
     icon: "Puzzle",

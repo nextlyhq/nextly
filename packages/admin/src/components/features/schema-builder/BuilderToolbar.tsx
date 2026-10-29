@@ -12,7 +12,9 @@ import type { JSX } from "react";
 import { Lock, Settings } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
 
-import type { BuilderConfig } from "./builder-config";
+// Prose names the kind through the shared table, so the toolbar spells each
+// kind as every other builder message does.
+import { BUILDER_KIND_NOUN, type BuilderConfig } from "./builder-config";
 
 type Props = {
   config: BuilderConfig;
@@ -26,25 +28,26 @@ type Props = {
   onSave: () => void;
 };
 
-const KIND_BREADCRUMB: Record<BuilderConfig["kind"], string> = {
-  collection: "Collections",
-  single: "Singles",
-  "field-group": "Field Groups",
-};
+/**
+ * The list a kind's entities are gathered in, as a sentence names it:
+ * "collections", "Singles", "field groups". Derived from the kind's noun so
+ * the crumb and its label spell the kind as every other message does.
+ */
+function kindListName(kind: BuilderConfig["kind"]): string {
+  return `${BUILDER_KIND_NOUN[kind]}s`;
+}
+
+/** The crumb starts a line, so its first letter is capitalised. */
+function kindBreadcrumb(kind: BuilderConfig["kind"]): string {
+  const name = kindListName(kind);
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
 
 /** Where the breadcrumb leads — the builder list this entity was opened from. */
 const KIND_LIST_ROUTE: Record<BuilderConfig["kind"], string> = {
   collection: ROUTES.BUILDER_COLLECTIONS,
   single: ROUTES.BUILDER_SINGLES,
   "field-group": ROUTES.BUILDER_FIELD_GROUPS,
-};
-
-// Singular wording for prose. The kind is a slug, so interpolating it directly
-// into a sentence reads as "This field-group is managed in code".
-const KIND_NOUN: Record<BuilderConfig["kind"], string> = {
-  collection: "collection",
-  single: "single",
-  "field-group": "field group",
 };
 
 export function BuilderToolbar({
@@ -57,7 +60,7 @@ export function BuilderToolbar({
 }: Props): JSX.Element {
   const saveDisabled = unsavedCount === 0 || locked;
   const lockedSaveTitle = locked
-    ? `This ${KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
+    ? `This ${BUILDER_KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
     : undefined;
 
   // The crumb is the page's only exit, and no builder page mounts a
@@ -68,7 +71,7 @@ export function BuilderToolbar({
     if (
       unsavedCount > 0 &&
       !window.confirm(
-        `You have unsaved changes to this ${KIND_NOUN[config.kind]}. Leave and discard them?`
+        `You have unsaved changes to this ${BUILDER_KIND_NOUN[config.kind]}. Leave and discard them?`
       )
     ) {
       e.preventDefault();
@@ -85,11 +88,11 @@ export function BuilderToolbar({
           href={KIND_LIST_ROUTE[config.kind]}
           onClick={handleCrumbClick}
           className="flex items-center gap-0.5 min-w-0 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          aria-label={`Back to ${KIND_BREADCRUMB[config.kind]}`}
+          aria-label={`Back to ${kindListName(config.kind)}`}
         >
           <ChevronLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
           <span className="text-xs truncate">
-            {KIND_BREADCRUMB[config.kind]} /
+            {kindBreadcrumb(config.kind)} /
           </span>
         </Link>
         <div className="min-w-0">
