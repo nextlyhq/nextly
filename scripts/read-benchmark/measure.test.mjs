@@ -77,6 +77,10 @@ describe("the checks a measurement makes before it times anything", () => {
     expect(() => checkStorage("per-language", 10, kept)).toThrow(/excerpt/);
     const moved = articles(asPerLanguage, { locales: { rows: 10, columns: ["_parent", "_locale", "headline", "excerpt", "body", "views"] } });
     expect(() => checkStorage("per-language", 10, moved)).toThrow(/views/);
+    // e4 is held to the same storage: a build without its storage option stores it as main does.
+    expect(() => checkStorage("e4", 10, asPerLanguage)).not.toThrow();
+    expect(() => checkStorage("e4", 10, asMain)).toThrow(/^e4 mode: dc_articles has no translation table$/);
+    expect(() => checkStorage("e4", 10, fewer)).toThrow(/9 translation rows, expected 10/);
   });
 
   it("reads each table's columns and its translation table's, and lets any failure through", async () => {

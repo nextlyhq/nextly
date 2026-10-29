@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MODES, TRANSLATABLE_COLUMNS, articleData, authorData, localesOf, siteFor } from "./fixture.mjs";
+import { MODES, TRANSLATABLE_COLUMNS, articleData, authorData, localesOf, siteFor, storesPerLanguage } from "./fixture.mjs";
 import { seededRandom } from "./stats.mjs";
 
 /** Builders that return what they were given, tagged, so a site's shape can be read without Nextly. */
@@ -25,11 +25,27 @@ describe("the benchmark site, by storage mode", () => {
     expect(site.localization).toEqual({ locales: ["en"], defaultLocale: "en" });
     expect(articles(site).localized).toBe(true);
     expect(card(site).localized).toBe(true);
+    expect(site.perLanguageStorage).toBeUndefined();
   });
 
-  it("gives both modes the same fields, so only the storage differs", () => {
+  it("stores them per language in e4 mode by the site-wide option, with nothing marked translatable", () => {
+    const site = siteFor("e4", config);
+    // The test harness's option, which measure.mjs hands it with the rest of the site.
+    expect(site.perLanguageStorage).toBe(true);
+    expect(site.localization).toBeUndefined();
+    expect(articles(site).localized).toBeUndefined();
+    expect(card(site).localized).toBeUndefined();
+    expect(siteFor("main", config).perLanguageStorage).toBeUndefined();
+  });
+
+  it("holds every mode but main to per-language storage", () => {
+    expect(MODES.filter(storesPerLanguage)).toEqual(["per-language", "e4"]);
+  });
+
+  it("gives every mode the same fields, so only the storage differs", () => {
     const fields = mode => articles(siteFor(mode, config)).fields.map(f => `${f.kind}:${f.name}`);
     expect(fields("per-language")).toEqual(fields("main"));
+    expect(fields("e4")).toEqual(fields("main"));
     expect(fields("main")).toEqual([
       "text:headline", "textarea:excerpt", "richText:body", "number:views", "date:publishedOn", "checkbox:featured", "relationship:author", "fieldGroup:card",
     ]);
@@ -37,7 +53,7 @@ describe("the benchmark site, by storage mode", () => {
 
   it("refuses a mode it does not know", () => {
     expect(() => siteFor("json-map", config)).toThrow(RangeError);
-    expect(MODES).toEqual(["main", "per-language"]);
+    expect(MODES).toEqual(["main", "per-language", "e4"]);
   });
 
   it("names the per-language tables of both the articles and the card", () => {

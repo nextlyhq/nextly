@@ -5,7 +5,7 @@
  * measurement, so no module state or warmed cache carries from one mode into
  * the next.
  *
- *   node measure.mjs --mode main|per-language --dialect sqlite|postgresql|mysql
+ *   node measure.mjs --mode main|per-language|e4 --dialect sqlite|postgresql|mysql
  *     [--docs 1000] [--iterations 3000] [--warmup 300] [--rest-iterations 600] [--seed 1]
  *
  * PostgreSQL and MySQL boot on a database created for the run on the server in
@@ -23,7 +23,7 @@ import { parseArgs } from "node:util";
 
 import { isCliEntry } from "../cli-entry.mjs";
 
-import { TRANSLATABLE_COLUMNS, articleData, authorData, localesOf, siteFor } from "./fixture.mjs";
+import { TRANSLATABLE_COLUMNS, articleData, authorData, localesOf, siteFor, storesPerLanguage } from "./fixture.mjs";
 import { pick, seededRandom, summarize } from "./stats.mjs";
 
 const AUTHORS = 20;
@@ -187,8 +187,9 @@ function mainProblem(translatable, _docs, { columns, locales }) {
 }
 
 /**
- * What is wrong with a `per-language` site's table: no translation table, one
- * row too few or many for the one language, or a column on the wrong side.
+ * What is wrong with the table of a site that stores per language: no
+ * translation table, one row too few or many for the one language, or a
+ * column on the wrong side.
  */
 function perLanguageProblem(translatable, docs, { columns, locales }) {
   if (locales === null) return "has no translation table";
@@ -209,9 +210,12 @@ function misplaced(translatable, onMain, onLocales) {
   return wrong.length > 0 ? `stores ${wrong.join(", ")} on the wrong side` : undefined;
 }
 
-/** Refuses a site whose storage is not the mode's. */
+/**
+ * Refuses a site whose storage is not the mode's. `e4` is held to what
+ * `per-language` stores, so a build that does not store it so is never timed.
+ */
 export function checkStorage(mode, docs, storage) {
-  const problemOf = mode === "per-language" ? perLanguageProblem : mainProblem;
+  const problemOf = storesPerLanguage(mode) ? perLanguageProblem : mainProblem;
   for (const [table, stored] of Object.entries(storage)) {
     const problem = problemOf(TRANSLATABLE_COLUMNS[table], docs, stored);
     if (problem) throw new Error(`${mode} mode: ${table} ${problem}`);

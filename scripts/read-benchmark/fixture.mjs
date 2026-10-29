@@ -5,15 +5,28 @@
  * the author). Every value comes from a seeded random source, so two runs, or
  * two machines, read the same content.
  *
- * Two storage modes are built from one definition:
+ * Three storage modes are built from one definition:
  *   - `main`: a single-language site as Nextly stores one today, every field on
  *     the main table.
  *   - `per-language`: the same site with its translatable fields stored per
- *     language from the start, in the translation table, for its one language.
+ *     language from the start, in the translation table, for its one language:
+ *     a one-language `localization` block and the entities marked translatable.
+ *   - `e4`: the same site with no `localization` block and nothing marked
+ *     translatable, booted with the site-wide storage choice that stores every
+ *     translatable field per language from the start for the site's one
+ *     implicit language: `experimental.perLanguageStorage` in a config, which
+ *     the test harness takes as its `perLanguageStorage` option. A build
+ *     without that option stores this site as `main` does, and the
+ *     measurement's storage check refuses to time it.
  */
 import { pick } from "./stats.mjs";
 
-export const MODES = ["main", "per-language"];
+export const MODES = ["main", "per-language", "e4"];
+
+/** Whether a mode's site keeps its translatable fields in the translation tables: all but `main`. */
+export function storesPerLanguage(mode) {
+  return mode !== "main";
+}
 
 /** The site's one language in `per-language` mode. */
 const LANGUAGE = "en";
@@ -22,9 +35,10 @@ const LANGUAGE = "en";
 const publicRead = { read: () => true };
 
 /**
- * The collections, component and localization for a storage mode, built with
- * `config`: the builders `nextly/config` exports, handed in by the caller so
- * this module loads without a build of Nextly.
+ * The collections, component, localization and storage option for a storage
+ * mode, as the test harness takes them, built with `config`: the builders
+ * `nextly/config` exports, handed in by the caller so this module loads
+ * without a build of Nextly.
  */
 export function siteFor(mode, config) {
   if (!MODES.includes(mode)) throw new RangeError(`unknown mode ${mode}`);
@@ -63,13 +77,16 @@ export function siteFor(mode, config) {
       }),
     ],
     ...(perLanguage ? { localization: { locales: [LANGUAGE], defaultLocale: LANGUAGE } } : {}),
+    // Every translatable field per language, chosen for the whole site at boot: the harness's
+    // option for what a config spells `experimental.perLanguageStorage`.
+    ...(mode === "e4" ? { perLanguageStorage: true } : {}),
   };
 }
 
 /**
  * The translatable columns of each table that has any: the articles' own, and
- * the card component's. A `main` site keeps them on these tables; a
- * `per-language` site moves them to each table's translation table, where
+ * the card component's. A `main` site keeps them on these tables; a site that
+ * stores them per language moves them to each table's translation table, where
  * its shared columns never go.
  */
 export const TRANSLATABLE_COLUMNS = { dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] };
