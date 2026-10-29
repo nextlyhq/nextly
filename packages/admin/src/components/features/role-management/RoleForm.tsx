@@ -39,7 +39,9 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
   const {
     form,
     role,
-    allPermissions,
+    levelRows,
+    otherPermissions,
+    baseGrants,
     allRoles,
     isLoading,
     error,
@@ -147,13 +149,15 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
             <SettingsSection label="Permissions">
               <div className="-mx-6">
                 <p className="px-6 text-sm text-muted-foreground mb-4">
-                  Choose what this role can do. Each tab groups a kind of
-                  resource, and each column is an action it allows.
+                  Choose a level for each collection and Single, or turn on Each
+                  action to choose its actions one by one.
                 </p>
                 <RolePermissionsSection
                   form={form}
-                  allPermissions={allPermissions}
+                  levelRows={levelRows}
+                  otherPermissions={otherPermissions}
                   lockedPermissionIds={lockedPermissionIds}
+                  bases={baseGrants}
                   isLoading={isLoading}
                 />
               </div>

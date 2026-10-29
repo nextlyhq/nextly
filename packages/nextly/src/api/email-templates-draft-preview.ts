@@ -66,7 +66,9 @@ async function getEmailTemplateService(): Promise<EmailTemplateService> {
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailTemplates.preview.anyOf]);
+    await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.emailTemplates.preview.anyOf,
+    ]);
 
     const service = await getEmailTemplateService();
     const body = await readJsonBody(request);

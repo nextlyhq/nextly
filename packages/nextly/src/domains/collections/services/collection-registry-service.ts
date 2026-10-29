@@ -34,6 +34,7 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
+import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
@@ -649,8 +650,12 @@ export class CollectionRegistryService extends BaseRegistryService<
       //
       // What is swept, and what is deliberately kept, is for
       // `deleteEntityRegistryRow` to say.
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+      };
       const count = await this.adapter.transaction(async tx => {
-        return deleteEntityRegistryRow(tx, "collection", slug);
+        return deleteEntityRegistryRow(tx, "collection", slug, tables);
       });
       // Once the transaction has committed, so no read in between keeps the
       // row it is deleting.

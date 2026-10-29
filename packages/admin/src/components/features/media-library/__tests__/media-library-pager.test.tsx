@@ -8,8 +8,14 @@
  * undoes the reset to page one and leaves an empty view with no pager. So the
  * pager is held, every control disabled, until the new result arrives.
  */
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "@admin/__tests__/utils";
 
@@ -58,11 +64,19 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+const pageOfCall = (call: unknown[]) => (call[0] as { page: number }).page;
+
 describe("the media page's pager", () => {
   it("holds its controls while the next page loads", async () => {
-    api.fetchMedia
-      .mockResolvedValueOnce(pageOf(1))
-      .mockReturnValueOnce(new Promise(() => {}));
+    // Answered by page, not by call order: page one again (a refetch of the
+    // settled result) must not take the answer meant for the next page.
+    api.fetchMedia.mockImplementation(({ page }: { page: number }) =>
+      page === 1 ? Promise.resolve(pageOf(1)) : new Promise(() => {})
+    );
 
     renderWithProviders(
       <MediaProvider>
@@ -78,7 +92,9 @@ describe("the media page's pager", () => {
 
     fireEvent.click(next);
 
-    await waitFor(() => expect(api.fetchMedia).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(api.fetchMedia.mock.calls.map(pageOfCall)).toContain(2)
+    );
     // The request starts before the render that holds the pager, so the held
     // state is awaited too; asserting it at once raced that render on a busy
     // machine. The second request never settles, so the old result's live
@@ -90,5 +106,40 @@ describe("the media page's pager", () => {
         ).getByRole("button", { name: /next page/i })
       ).toBeDisabled()
     );
+  });
+
+  it("keeps the page the reader picked once the search box settles", async () => {
+    // Only the timers are faked, so the click is certain to land inside the
+    // search box's settle delay however busy the machine is. That window is
+    // where an unchanged, empty search used to send the reader back to page
+    // one.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    api.fetchMedia.mockImplementation(({ page }: { page: number }) =>
+      Promise.resolve(pageOf(page))
+    );
+
+    renderWithProviders(
+      <MediaProvider>
+        <MediaLibrary />
+      </MediaProvider>
+    );
+    await act(() => vi.advanceTimersByTimeAsync(10));
+    fireEvent.click(
+      within(
+        screen.getByRole("navigation", { name: "Media list pagination" })
+      ).getByRole("button", { name: /next page/i })
+    );
+    await act(() => vi.advanceTimersByTimeAsync(10));
+    // POPULATION CONTROL: the click reached page two before the delay ran out.
+    expect(screen.queryAllByText("photo-2.jpg")).not.toHaveLength(0);
+
+    // Past the delay, in steps so a request it starts gets its answer drawn.
+    for (let i = 0; i < 10; i++) {
+      await act(() => vi.advanceTimersByTimeAsync(100));
+    }
+
+    expect(screen.queryAllByText("photo-2.jpg")).not.toHaveLength(0);
+    expect(screen.queryAllByText("photo-1.jpg")).toHaveLength(0);
+    expect(api.fetchMedia.mock.calls.map(pageOfCall)).toEqual([1, 2]);
   });
 });
