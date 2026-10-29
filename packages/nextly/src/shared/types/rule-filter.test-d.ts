@@ -175,10 +175,34 @@ defineCollection({
 // from. An unrelated error cannot satisfy an assertion, and a case that
 // stopped being refused fails it.
 type Fields = typeof fields;
-const notAField = <Key extends string>(key: Key) =>
-  `${key} is not a field this filter can name` as const;
-const notAnOperator = <Operator extends string>(operator: Operator) =>
-  `${operator} is not an operator for this field` as const;
+type NotAField<Key extends string> =
+  `${Key} is not a field this filter can name`;
+type NotAnOperator<Operator extends string> =
+  `${Operator} is not an operator for this field`;
+/** Whether `A` and `B` are the same type. */
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
+    ? true
+    : false;
+/**
+ * The names of the cases where whether `Value` is taken by `Type` is not the
+ * `true` or `false` beside them.
+ */
+type Disagreements<Cases extends Record<string, [unknown, unknown, boolean]>> =
+  {
+    [Name in keyof Cases]: (
+      [Cases[Name][0]] extends [Cases[Name][1]] ? true : false
+    ) extends Cases[Name][2]
+      ? never
+      : Name;
+  }[keyof Cases];
+type TypedFilter = CollectionRuleFilter<typeof fields>;
+/** The names of the cases whose answer is not given the refusal beside it. */
+type Mismatches<Cases extends Record<string, [unknown, unknown]>> = {
+  [Name in keyof Cases]: Equal<Cases[Name][0], Cases[Name][1]> extends true
+    ? never
+    : Name;
+}[keyof Cases];
 
 // defineCollection checks its read rule with these types.
 expectTypeOf(defineCollection<Fields, { team: string }>)
@@ -192,85 +216,101 @@ expectTypeOf<
   >
 >().toEqualTypeOf<CollectionFilterRuleInput<Fields, { team: string }>>();
 
-// A misspelt field: alone, beside a correct one, and inside `or`.
+// Each refused answer beside the refusal it is given, by name: a misspelt
+// field, alone, beside a correct one and inside `or`; a misspelt operator,
+// alone and beside `equals`; an operator the field's kind does not answer
+// to; a region, which a rule's filter is refused; rich text and a path into
+// a group, which are not keys; and a condition the rule's filter refuses when
+// it runs, naming no operator or giving a field, an operator or a logical
+// branch no value. A case listed by `Mismatches` is one whose refusal
+// changed.
 expectTypeOf<
-  ExactAnswer<Fields, { teem: { equals: string } }>
->().toEqualTypeOf<{ teem: ReturnType<typeof notAField<"teem">> }>();
-expectTypeOf<
-  ExactAnswer<Fields, { team: string; teem: string }>
->().toEqualTypeOf<{
-  team: string;
-  teem: ReturnType<typeof notAField<"teem">>;
-}>();
-expectTypeOf<ExactAnswer<Fields, { or: { teem: string }[] }>>().toEqualTypeOf<{
-  or: readonly { teem: ReturnType<typeof notAField<"teem">> }[];
-}>();
-// And in an async rule, which is held to the same answer once awaited.
-expectTypeOf<() => Promise<{ team: string }>>().toExtend<
-  CollectionFilterRuleInput<Fields, { team: string }>
->();
-expectTypeOf<() => Promise<{ team: string; teem: string }>>().not.toExtend<
-  CollectionFilterRuleInput<Fields, { team: string; teem: string }>
->();
+  Mismatches<{
+    misspeltAlone: [
+      ExactAnswer<Fields, { teem: { equals: string } }>,
+      { teem: NotAField<"teem"> },
+    ];
+    misspeltBeside: [
+      ExactAnswer<Fields, { team: string; teem: string }>,
+      { team: string; teem: NotAField<"teem"> },
+    ];
+    misspeltInOr: [
+      ExactAnswer<Fields, { or: { teem: string }[] }>,
+      { or: readonly { teem: NotAField<"teem"> }[] },
+    ];
+    operatorAlone: [
+      ExactAnswer<Fields, { team: { equal: string } }>,
+      { team: { equal: NotAnOperator<"equal"> } },
+    ];
+    operatorBeside: [
+      ExactAnswer<Fields, { team: { equals: string; equal: string } }>,
+      { team: { equals: string; equal: NotAnOperator<"equal"> } },
+    ];
+    checkboxOrder: [
+      ExactAnswer<Fields, { open: { greater_than: boolean } }>,
+      { open: { greater_than: NotAnOperator<"greater_than"> } },
+    ];
+    numberAsText: [
+      ExactAnswer<Fields, { rank: { contains: string } }>,
+      { rank: { contains: NotAnOperator<"contains"> } },
+    ];
+    region: [
+      ExactAnswer<Fields, { team: { near: string } }>,
+      { team: { near: NotAnOperator<"near"> } },
+    ];
+    richText: [
+      ExactAnswer<Fields, { body: { equals: string } }>,
+      { body: NotAField<"body"> },
+    ];
+    groupPath: [
+      ExactAnswer<Fields, { "seo.title": { equals: string } }>,
+      { "seo.title": NotAField<"seo.title"> },
+    ];
+    noOperator: [
+      ExactAnswer<Fields, { team: {} }>,
+      { team: "a condition names at least one operator" },
+    ];
+    fieldGivenUndefined: [
+      ExactAnswer<Fields, { team: undefined }>,
+      { team: "team is given no value" },
+    ];
+    operandMaybeUndefined: [
+      ExactAnswer<Fields, { team: { equals: string | undefined } }>,
+      { team: { equals: "equals is given no value" } },
+    ];
+    orGivenUndefined: [
+      ExactAnswer<Fields, { or: undefined }>,
+      { or: "or is given no value" },
+    ];
+    andMaybeUndefined: [
+      ExactAnswer<Fields, { and: { team: string }[] | undefined }>,
+      { and: "and is given no value" },
+    ];
+  }>
+>().toEqualTypeOf<never>();
 
-// A misspelt operator, alone and beside `equals`; an operator the field's
-// kind does not answer to; a region, which a rule's filter is refused.
-expectTypeOf<ExactAnswer<Fields, { team: { equal: string } }>>().toEqualTypeOf<{
-  team: { equal: ReturnType<typeof notAnOperator<"equal">> };
-}>();
+// Each value beside whether the type takes it: an async rule, held to the
+// same answer once awaited; a number field compared with a string, beside
+// the number it takes; and a condition naming no operator, beside one naming
+// `equals`, refused by the filter type too, for a rule typed by it.
 expectTypeOf<
-  ExactAnswer<Fields, { team: { equals: string; equal: string } }>
->().toEqualTypeOf<{
-  team: { equals: string; equal: ReturnType<typeof notAnOperator<"equal">> };
-}>();
-expectTypeOf<
-  ExactAnswer<Fields, { open: { greater_than: boolean } }>
->().toEqualTypeOf<{
-  open: { greater_than: ReturnType<typeof notAnOperator<"greater_than">> };
-}>();
-expectTypeOf<
-  ExactAnswer<Fields, { rank: { contains: string } }>
->().toEqualTypeOf<{
-  rank: { contains: ReturnType<typeof notAnOperator<"contains">> };
-}>();
-expectTypeOf<ExactAnswer<Fields, { team: { near: string } }>>().toEqualTypeOf<{
-  team: { near: ReturnType<typeof notAnOperator<"near">> };
-}>();
-
-// A number field compared with a string, beside the number it takes.
-expectTypeOf<{ rank: { equals: number } }>().toExtend<
-  CollectionRuleFilter<Fields>
->();
-expectTypeOf<{ rank: { equals: string } }>().not.toExtend<
-  CollectionRuleFilter<Fields>
->();
-
-// Rich text, and a path into a group, are not keys.
-expectTypeOf<
-  ExactAnswer<Fields, { body: { equals: string } }>
->().toEqualTypeOf<{
-  body: ReturnType<typeof notAField<"body">>;
-}>();
-expectTypeOf<
-  ExactAnswer<Fields, { "seo.title": { equals: string } }>
->().toEqualTypeOf<{ "seo.title": ReturnType<typeof notAField<"seo.title">> }>();
-
-// A condition the rule's filter refuses when it runs: naming no operator, or
-// giving a field or an operator no value. The filter type refuses the first
-// too, for a rule typed by it rather than inferred.
-expectTypeOf<ExactAnswer<Fields, { team: {} }>>().toEqualTypeOf<{
-  team: "a condition names at least one operator";
-}>();
-expectTypeOf<{ team: { equals: string } }>().toExtend<
-  CollectionRuleFilter<Fields>
->();
-expectTypeOf<{ team: {} }>().not.toExtend<CollectionRuleFilter<Fields>>();
-expectTypeOf<ExactAnswer<Fields, { team: undefined }>>().toEqualTypeOf<{
-  team: "team is given no value";
-}>();
-expectTypeOf<
-  ExactAnswer<Fields, { team: { equals: string | undefined } }>
->().toEqualTypeOf<{ team: { equals: "equals is given no value" } }>();
+  Disagreements<{
+    asyncRule: [
+      () => Promise<{ team: string }>,
+      CollectionFilterRuleInput<Fields, { team: string }>,
+      true,
+    ];
+    asyncMisspelt: [
+      () => Promise<{ team: string; teem: string }>,
+      CollectionFilterRuleInput<Fields, { team: string; teem: string }>,
+      false,
+    ];
+    numberOperand: [{ rank: { equals: number } }, TypedFilter, true];
+    stringForNumber: [{ rank: { equals: string } }, TypedFilter, false];
+    withOperator: [{ team: { equals: string } }, TypedFilter, true];
+    noOperator: [{ team: {} }, TypedFilter, false];
+  }>
+>().toEqualTypeOf<never>();
 
 // The config entry point exports the input type defineCollection reads.
 expectTypeOf<ConfigFilterRuleInput<Fields, { team: string }>>().toEqualTypeOf<
@@ -287,14 +327,6 @@ defineCollection({
   fields,
   access: { read: () => typedFilter },
 });
-
-// A logical branch given no value is refused when the rule runs too.
-expectTypeOf<ExactAnswer<Fields, { or: undefined }>>().toEqualTypeOf<{
-  or: "or is given no value";
-}>();
-expectTypeOf<
-  ExactAnswer<Fields, { and: { team: string }[] | undefined }>
->().toEqualTypeOf<{ and: "and is given no value" }>();
 
 // The first-publication date is a system field, compared as a date.
 expectTypeOf<{
@@ -317,9 +349,6 @@ defineCollection({
 // A field no filter may name still takes its column's name: a rich text
 // `title` replaces the system title, so `title` is no key.
 const richTitled = [richText({ name: "title" })];
-expectTypeOf<
-  ExactAnswer<typeof richTitled, { title: string }>
->().toEqualTypeOf<{ title: ReturnType<typeof notAField<"title">> }>();
 
 // ---------------------------------------------------------------------------
 // A field stored as a JSON document, or owning no column, is no key
@@ -352,38 +381,14 @@ defineCollection({
   ],
   access: { read: () => ({ author: "u", score: { not_equals: 5 } }) },
 });
-expectTypeOf<
-  ExactAnswer<Stored, { author: string; score: { not_equals: number } }>
->().toEqualTypeOf<{ author: string; score: { not_equals: number } }>();
-expectTypeOf<
-  ExactAnswer<Stored, { tags: { not_equals: string } }>
->().toEqualTypeOf<{ tags: ReturnType<typeof notAField<"tags">> }>();
-expectTypeOf<ExactAnswer<Stored, { aliases: string }>>().toEqualTypeOf<{
-  aliases: ReturnType<typeof notAField<"aliases">>;
-}>();
-expectTypeOf<
-  ExactAnswer<Stored, { scores: { not_equals: number } }>
->().toEqualTypeOf<{ scores: ReturnType<typeof notAField<"scores">> }>();
-expectTypeOf<ExactAnswer<Stored, { owners: string }>>().toEqualTypeOf<{
-  owners: ReturnType<typeof notAField<"owners">>;
-}>();
-expectTypeOf<ExactAnswer<Stored, { subject: string }>>().toEqualTypeOf<{
-  subject: ReturnType<typeof notAField<"subject">>;
-}>();
 // A field that may hold a list, its `hasMany` known only as `boolean`, is
 // taken as one.
 declare const either: boolean;
 const maybeMany = [number({ name: "maybeMany", hasMany: either })];
-expectTypeOf<
-  ExactAnswer<typeof maybeMany, { maybeMany: number }>
->().toEqualTypeOf<{ maybeMany: ReturnType<typeof notAField<"maybeMany">> }>();
 
 // A field a plugin contributed is no key: its storage is registered at
 // runtime, and its declaration does not say whether it is a JSON document.
 const contributed = [pluginField({ name: "rating", type: "star-rating" })];
-expectTypeOf<
-  ExactAnswer<typeof contributed, { rating: number }>
->().toEqualTypeOf<{ rating: ReturnType<typeof notAField<"rating">> }>();
 
 // A field owning no column leaves the system field of its name in place,
 // compared as that field is, and is no key itself.
@@ -402,9 +407,55 @@ expectTypeOf<{ title: { greater_than: number } }>().not.toExtend<
 expectTypeOf<{ slug: { contains: string } }>().toExtend<
   CollectionRuleFilter<Columnless>
 >();
-expectTypeOf<ExactAnswer<Columnless, { computed: number }>>().toEqualTypeOf<{
-  computed: ReturnType<typeof notAField<"computed">>;
-}>();
+
+// Each field no filter may name, beside the refusal it is given, and the
+// fields holding one value, which pass as written: a list or a reference to
+// several collections, one that may hold a list, a plugin's field, a virtual
+// field, and a rich text `title`, which replaces the system title.
+expectTypeOf<
+  Mismatches<{
+    oneValue: [
+      ExactAnswer<Stored, { author: string; score: { not_equals: number } }>,
+      { author: string; score: { not_equals: number } },
+    ];
+    hasManySelect: [
+      ExactAnswer<Stored, { tags: { not_equals: string } }>,
+      { tags: NotAField<"tags"> },
+    ];
+    hasManyText: [
+      ExactAnswer<Stored, { aliases: string }>,
+      { aliases: NotAField<"aliases"> },
+    ];
+    hasManyNumber: [
+      ExactAnswer<Stored, { scores: { not_equals: number } }>,
+      { scores: NotAField<"scores"> },
+    ];
+    hasManyRelationship: [
+      ExactAnswer<Stored, { owners: string }>,
+      { owners: NotAField<"owners"> },
+    ];
+    severalTargets: [
+      ExactAnswer<Stored, { subject: string }>,
+      { subject: NotAField<"subject"> },
+    ];
+    maybeMany: [
+      ExactAnswer<typeof maybeMany, { maybeMany: number }>,
+      { maybeMany: NotAField<"maybeMany"> },
+    ];
+    pluginField: [
+      ExactAnswer<typeof contributed, { rating: number }>,
+      { rating: NotAField<"rating"> },
+    ];
+    virtualField: [
+      ExactAnswer<Columnless, { computed: number }>,
+      { computed: NotAField<"computed"> },
+    ];
+    richTextTitle: [
+      ExactAnswer<typeof richTitled, { title: string }>,
+      { title: NotAField<"title"> },
+    ];
+  }>
+>().toEqualTypeOf<never>();
 
 // ---------------------------------------------------------------------------
 // A write rule's filter is typed by the collection's fields too
@@ -438,18 +489,26 @@ type WriteAccess = NonNullable<
     { tier: string }
   >["access"]
 >;
-expectTypeOf<NonNullable<WriteAccess["update"]>>().toEqualTypeOf<
-  CollectionFilterRuleInput<Fields, { team: string }>
->();
-expectTypeOf<NonNullable<WriteAccess["delete"]>>().toEqualTypeOf<
-  CollectionFilterRuleInput<Fields, { rank: number }>
->();
-expectTypeOf<NonNullable<WriteAccess["publish"]>>().toEqualTypeOf<
-  CollectionFilterRuleInput<Fields, { open: boolean }>
->();
-expectTypeOf<NonNullable<WriteAccess["unpublish"]>>().toEqualTypeOf<
-  CollectionFilterRuleInput<Fields, { tier: string }>
->();
+expectTypeOf<
+  Mismatches<{
+    update: [
+      NonNullable<WriteAccess["update"]>,
+      CollectionFilterRuleInput<Fields, { team: string }>,
+    ];
+    delete: [
+      NonNullable<WriteAccess["delete"]>,
+      CollectionFilterRuleInput<Fields, { rank: number }>,
+    ];
+    publish: [
+      NonNullable<WriteAccess["publish"]>,
+      CollectionFilterRuleInput<Fields, { open: boolean }>,
+    ];
+    unpublish: [
+      NonNullable<WriteAccess["unpublish"]>,
+      CollectionFilterRuleInput<Fields, { tier: string }>,
+    ];
+  }>
+>().toEqualTypeOf<never>();
 // And a misspelt field in a write rule, as one of them.
 expectTypeOf<() => { teem: string }>().not.toExtend<
   NonNullable<
@@ -461,18 +520,31 @@ expectTypeOf<() => { teem: string }>().not.toExtend<
 
 // The stored rule type holds a typed write rule, as it holds a read rule.
 type TypedRule = CollectionFilterRule<[ReturnType<typeof text<"team">>]>;
-expectTypeOf<TypedRule>().toExtend<
-  Extract<CollectionAccessControl["update"], CollectionFilterRule>
->();
-expectTypeOf<TypedRule>().toExtend<
-  Extract<CollectionAccessControl["delete"], CollectionFilterRule>
->();
-expectTypeOf<TypedRule>().toExtend<
-  Extract<CollectionAccessControl["publish"], CollectionFilterRule>
->();
-expectTypeOf<TypedRule>().toExtend<
-  Extract<CollectionAccessControl["unpublish"], CollectionFilterRule>
->();
+type StoredFilterRule<Rule> = Extract<Rule, CollectionFilterRule>;
+expectTypeOf<
+  Disagreements<{
+    update: [
+      TypedRule,
+      StoredFilterRule<CollectionAccessControl["update"]>,
+      true,
+    ];
+    delete: [
+      TypedRule,
+      StoredFilterRule<CollectionAccessControl["delete"]>,
+      true,
+    ];
+    publish: [
+      TypedRule,
+      StoredFilterRule<CollectionAccessControl["publish"]>,
+      true,
+    ];
+    unpublish: [
+      TypedRule,
+      StoredFilterRule<CollectionAccessControl["unpublish"]>,
+      true,
+    ];
+  }>
+>().toEqualTypeOf<never>();
 
 // ---------------------------------------------------------------------------
 // Only a collection's read and write rules may answer a filter
@@ -480,12 +552,18 @@ expectTypeOf<TypedRule>().toExtend<
 
 // A create rule, a Single's rule and a field's rule answer true or false: a
 // rule answering a filter is not one, where a rule answering a boolean is.
+type AnswersBoolean = () => boolean;
+type AnswersFilter = () => { team: string };
 type CreateRule = NonNullable<CollectionAccessControl["create"]>;
 type SingleRule = NonNullable<SingleAccessControl["read"]>;
 type FieldRule = NonNullable<FieldAccess["read"]>;
-expectTypeOf<() => boolean>().toExtend<CreateRule>();
-expectTypeOf<() => { team: string }>().not.toExtend<CreateRule>();
-expectTypeOf<() => boolean>().toExtend<SingleRule>();
-expectTypeOf<() => { team: string }>().not.toExtend<SingleRule>();
-expectTypeOf<() => boolean>().toExtend<FieldRule>();
-expectTypeOf<() => { team: string }>().not.toExtend<FieldRule>();
+expectTypeOf<
+  Disagreements<{
+    createBoolean: [AnswersBoolean, CreateRule, true];
+    createFilter: [AnswersFilter, CreateRule, false];
+    singleBoolean: [AnswersBoolean, SingleRule, true];
+    singleFilter: [AnswersFilter, SingleRule, false];
+    fieldBoolean: [AnswersBoolean, FieldRule, true];
+    fieldFilter: [AnswersFilter, FieldRule, false];
+  }>
+>().toEqualTypeOf<never>();
