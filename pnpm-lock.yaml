@@ -1687,6 +1687,9 @@ importers:
       '@types/react':
         specifier: 19.3.0
         version: 19.3.0
+      jsdom:
+        specifier: ^27.1.0
+        version: 27.1.0(supports-color@7.2.0)
       nextly:
         specifier: workspace:*
         version: link:../nextly
