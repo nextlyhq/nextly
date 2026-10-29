@@ -49,6 +49,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "@nextly/collections";
 
 import { NextlyError } from "../../../errors";
+import {
+  buildSingleRevalidationIntent,
+  readRevalidateConfig,
+} from "../../../revalidation/intent-builders";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicSingleInsert,
@@ -59,6 +63,7 @@ import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resourc
 import type { Logger } from "../../../shared/types";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
+import { flushContentChange } from "../../flush-content-change";
 import { appLocalization } from "../../i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
@@ -585,6 +590,16 @@ export class SingleMetadataService {
     } catch (error) {
       if (!NextlyError.isNotFound(error)) throw error;
     }
+
+    // Every cached read of this Single now describes content that is gone:
+    // expire them, unless it owned its own freshness. `current` is the record
+    // as it stood before the delete; one already gone has no settings left, so
+    // its derived tag is flushed.
+    await flushContentChange(
+      buildSingleRevalidationIntent(slug, readRevalidateConfig(current)),
+      this.logger,
+      "a Single was deleted"
+    );
   }
 
   /**
