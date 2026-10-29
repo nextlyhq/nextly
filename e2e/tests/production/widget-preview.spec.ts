@@ -37,8 +37,12 @@ test.describe("the widget preview page on a production build", () => {
     page,
   }) => {
     await signIn(page);
-    // The dashboard draws no link to it.
+    // Customise mode, where a development server draws the link beside its
+    // other actions, draws none.
+    await page.getByTestId("dashboard-edit-begin").click();
+    await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
     await expect(page.getByTestId("widget-previews-link")).toHaveCount(0);
+    await page.getByTestId("dashboard-edit-cancel").click();
 
     // The control: an address no route serves, and what the admin draws there.
     await page.goto(UNSERVED);

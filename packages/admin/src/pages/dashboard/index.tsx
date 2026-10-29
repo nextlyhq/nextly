@@ -13,7 +13,6 @@ import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
 
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
-import { WidgetPreviewsLink } from "@admin/components/features/widgets/preview/WidgetPreviewsLink";
 import { WidgetGrid } from "@admin/components/features/widgets/WidgetGrid";
 import { AlertCircle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
@@ -66,9 +65,6 @@ const DashboardPage: React.FC = () => {
           {/* Top Section: Welcome and Actions */}
           <div className="space-y-2">
             <WelcomeHeader />
-            {/* The development preview page's one way in, drawn only where
-                the server says it runs in development. */}
-            <WidgetPreviewsLink />
           </div>
 
           {/* Every card, through ONE grid.
