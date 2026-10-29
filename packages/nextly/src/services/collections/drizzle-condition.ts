@@ -18,6 +18,7 @@ import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import type { SQL } from "drizzle-orm";
 import {
   and,
+  bindIfParam,
   Column,
   eq,
   is,
@@ -53,6 +54,13 @@ export interface LocalizedQueryContext {
   companionTableName: string;
   /** Localized fields with both the camelCase name (matching) and snake_case column (SQL). */
   localizedFields: LocalizedFieldRef[];
+  /**
+   * The companion's runtime Drizzle table, when the caller has it loaded. A
+   * date operand is resolved against THIS table's column, so it binds as the
+   * companion compares rather than as a raw string each dialect reads alone.
+   * Absent → operands bind as given.
+   */
+  table?: unknown;
   /** The main table's `id` column (Drizzle) — the companion `_parent` correlation target. */
   mainIdColumn: unknown;
   /** The locale to filter on (the requested locale — chain head). */
@@ -112,6 +120,30 @@ export function buildLocalizedWhereExists(
 ): SQL | undefined {
   const t = sql.identifier(ctx.companionTableName);
   const col = sql.identifier(column);
+  // The companion column, resolved on its own table: a date value is read as
+  // the instant it names and bound as this column compares — the same reading
+  // the main where builder applies. Bound raw, an ISO string beside an epoch
+  // column compares by type ordering on SQLite (numbers order before text, so
+  // nothing matches) and by each server's coercion on the others: one filter,
+  // three answers.
+  const companionColumn =
+    ctx.table !== undefined ? resolveColumn(ctx.table, column) : undefined;
+  if (companionColumn && COMPARISONS.has(op)) {
+    // The refusal names the field as the caller wrote it, not the
+    // companion's physical column spelling.
+    const apiName =
+      ctx.localizedFields.find(f => f.column === column)?.name ?? column;
+    value = comparisonOperand(companionColumn, apiName, value);
+    // Bind through the column, as the main builder's eq() does: a Date
+    // bound raw reaches the driver as the driver zone's wall clock, while
+    // the companion column stores the UTC wall clock its encoder writes.
+    // Lists bind element-wise, each element through the column.
+    if (Array.isArray(value)) {
+      value = value.map(v => sql`${bindIfParam(v, companionColumn)}`);
+    } else {
+      value = bindIfParam(value, companionColumn);
+    }
+  }
   let valueCondition: SQL | undefined;
   switch (op) {
     case "=":
