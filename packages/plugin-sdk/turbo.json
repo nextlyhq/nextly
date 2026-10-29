@@ -1,0 +1,43 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // The field-UI render test loads this package's OWN built entry, the
+      // module a plugin's bundle imports, so there is nothing for it to load
+      // until the package is built. The root task depends on `^build`, which
+      // builds dependencies and not this package, and `dist/**` is not a root
+      // test input — so without this the suite either finds no `dist` at all
+      // or loads one built before the source change.
+      //
+      // This makes turbo do that build, in order, and cache it. It is the ONLY
+      // thing that builds it: `vitest.global-setup.ts` refuses to start when
+      // the entry is missing rather than producing it, because a build
+      // launched from inside collection rebuilds this package's whole
+      // dependency tree while sibling suites are importing from it.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      // `$TURBO_EXTENDS$` keeps the root inputs in sync rather than restating
+      // them; `dist/**` is appended because the built entry the render test
+      // loads is a real input to it, and a cached pass that ignored it would
+      // survive a change to what the bundler emits.
+      // `vitest.global-setup.ts` is named because it decides whether these
+      // suites run at all, and the root inputs cover `vitest.config.ts` alone
+      // — so without it a cached pass survives an edit to the setup and the
+      // run never happens.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "dist/**",
+        "tsdown.config.ts",
+        "vitest.global-setup.ts"
+      ]
+    },
+    "test:watch": {
+      // The same build edge as `test`. A watch run loads the same entry, and a
+      // task that inherited the root definition alone would start against
+      // whatever `dist` happened to be on disk.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

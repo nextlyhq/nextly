@@ -13,23 +13,16 @@
  * plain literals, nothing derived from the admin's types. Each part is
  * rendered outside any admin provider, as a plugin's own tests render it.
  *
+ * The built entry is there because `turbo.json` makes this package's tests
+ * depend on its own build; `vitest.global-setup.ts` stops a run that bypasses
+ * that edge before it reaches a missing entry.
+ *
  * This stays until the release that removes these parts.
  */
-import { existsSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
+import * as entry from "@nextlyhq/plugin-sdk/admin";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TodayFieldUiExport } from "../field-ui-compat.test-d";
 
@@ -37,8 +30,6 @@ declare global {
   // React reads this to know `act` drives the renders, so it warns otherwise.
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
 }
-
-const PACKAGE = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** The field-UI value exports today, held to the type test's set below. */
 const TODAY_FIELD_UI_EXPORTS = [
@@ -55,25 +46,6 @@ const TODAY_FIELD_UI_EXPORTS = [
   "drawsAnyValidationRule",
   "EDITABLE_VALIDATION_RULES",
 ] as const satisfies readonly TodayFieldUiExport[];
-
-let entry: typeof import("@nextlyhq/plugin-sdk/admin");
-
-beforeAll(async () => {
-  // This package's `test` task builds its dependencies, not the package, so
-  // the entry on disk can predate the source. Testing it then would pass over
-  // code it never ran, so say so instead. CI builds before it tests.
-  const built = join(PACKAGE, "dist", "admin.mjs");
-  const source = join(PACKAGE, "src", "admin.ts");
-  if (
-    !existsSync(built) ||
-    statSync(built).mtimeMs < statSync(source).mtimeMs
-  ) {
-    throw new Error(
-      "dist/admin.mjs is missing or older than src/admin.ts: run `pnpm --filter @nextlyhq/plugin-sdk build` first"
-    );
-  }
-  entry = await import("@nextlyhq/plugin-sdk/admin");
-});
 
 let host: HTMLDivElement;
 let root: Root;
