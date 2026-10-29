@@ -14,13 +14,14 @@
  *
  * @module domains/collections/__tests__/read-rule-filter-limits-population.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, relationship, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { readExpansionCaches } from "../../../services/collections/related-row-read-context";
 import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 
 // Integration files share fixed system-table names, so this file keeps its
@@ -144,5 +145,38 @@ describe("populating a relationship under a read rule that answers a filter", ()
       name: null,
       withheld: true,
     });
+  });
+
+  it("builds a target's filter once for every reference one expansion fetches", async () => {
+    // A `hasMany` field fetched one reference at a time shares one
+    // expansion's caches. The filter's match column, and the collection
+    // metadata it is built from, is the same for every reference, so it is
+    // built once for the three, not once for each.
+    const t = await boot();
+    const ids = [
+      await made(t, TEAMS, { name: "public" }),
+      await made(t, TEAMS, { name: "private" }),
+      await made(t, TEAMS, { name: "public" }),
+    ];
+    const service = t.getService("relationshipService");
+    const builds = vi.spyOn(
+      service as unknown as { ruleMatch: (...args: unknown[]) => unknown },
+      "ruleMatch"
+    );
+    // Fetched at once, as a `hasMany` field fetches its references, so the
+    // build each fetch starts is still pending when the next asks for it.
+    const caches = readExpansionCaches();
+    await Promise.all(
+      ids.map(id =>
+        service.fetchRelatedEntry(TEAMS, id, {
+          trusted: TRUSTS_EVERY_COLLECTION,
+          enforceCollectionAccess: true,
+          withheldByAccess: new Set<string>(),
+          ...caches,
+        })
+      )
+    );
+    expect(builds).toHaveBeenCalledTimes(1);
+    builds.mockRestore();
   });
 });
