@@ -98,26 +98,55 @@ describe("useDocumentLockHolder", () => {
     expect(result.current).toBeNull();
   });
 
-  it("keeps the newest read's answer when an older read returns after it", async () => {
-    let finishFirst: (answer: unknown) => void = () => {};
+  it("sends no read while one is still out, and is unknown while it lags", async () => {
+    get.mockResolvedValueOnce({ holder: null });
+    let finishSecond: (answer: unknown) => void = () => {};
     get.mockReturnValueOnce(
       new Promise(resolve => {
-        finishFirst = resolve;
+        finishSecond = resolve;
       })
     );
-    get.mockResolvedValueOnce({ holder: other });
     const { result } = renderHook(() => useDocumentLockHolder(ref));
+    await waitFor(() => expect(result.current).toBeNull());
 
+    // The second read goes out on the beat and is still out at the next one.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
     });
-    await waitFor(() => expect(result.current).toEqual(other));
-    // The first read, sent before the colleague claimed it, answers last.
     await act(async () => {
-      finishFirst({ holder: null });
+      await vi.advanceTimersByTimeAsync(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
     });
+    // Reads are one at a time, so none can overtake another at the server,
+    // and the last answer is not trusted while the next one lags.
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(result.current).toBeUndefined();
 
+    await act(async () => {
+      finishSecond({ holder: other });
+    });
     expect(result.current).toEqual(other);
+  });
+
+  it("is unknown again when turned back on, until its own read answers", async () => {
+    get.mockResolvedValueOnce({ holder: null });
+    const seen: Array<[boolean, unknown]> = [];
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => {
+        const holder = useDocumentLockHolder({ ...ref, enabled });
+        seen.push([enabled, holder]);
+        return holder;
+      },
+      { initialProps: { enabled: true } }
+    );
+    await waitFor(() => expect(result.current).toBeNull());
+
+    rerender({ enabled: false });
+    seen.length = 0;
+    get.mockReturnValue(new Promise(() => {}));
+    rerender({ enabled: true });
+
+    // Not one render after it is turned back on reads the earlier "nobody".
+    expect(seen.filter(([on]) => on).map(([, h]) => h)).not.toContain(null);
   });
 
   it("is unknown for another document until that document's own read answers", async () => {
