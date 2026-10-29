@@ -27,6 +27,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
 import { recordingDeviations, type Deviation } from "../../access/deviations";
+import { runWithAccessMemo } from "../../access/request-memo";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
@@ -613,7 +614,12 @@ async function entity(_world: World, row: Row, who: CallerHandle) {
     user: who.user,
     ...(who.actor ? { authenticatedScope: who.actor } : {}),
   });
-  return fromBoolean(await canReadEntity(targetSlug(row), caller));
+  // Asked inside a request, as every reader behind it is (a route, the
+  // Direct API, a plugin service): a read rule's filter is kept for the
+  // request there, and outside one the reader refuses it.
+  return fromBoolean(
+    await runWithAccessMemo(() => canReadEntity(targetSlug(row), caller))
+  );
 }
 
 /**

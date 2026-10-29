@@ -4,6 +4,7 @@
  * without importing the components. Regenerated with it. */
 
 export const registeredComponentPaths = [
+  "./src/dashboard/site-notes#SiteNotesCard",
   "@/plugins/block-fixture/editor#blockFixtureEditor",
   "@/plugins/block-fixture/editor#FixtureInspector",
   "@/plugins/widget-kit-fixture/admin#KitCard",

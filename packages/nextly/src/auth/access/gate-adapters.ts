@@ -59,7 +59,7 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { allowsSome, mayAnswerFilter, type RuleFilter } from "./rule-answer";
+import { allowsSome, readFilterIn, type RuleFilter } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
@@ -154,10 +154,8 @@ function readFilterOf(
   action: AccessOperation,
   outcome: RuleOutcome
 ): RuleFilter | undefined {
-  if (action !== "read" || !mayAnswerFilter(target.kind, action)) return;
   if (!outcome.declared || "threw" in outcome) return;
-  const answer = outcomeAnswer(outcome);
-  return answer.kind === "filter" ? answer.filter : undefined;
+  return readFilterIn(target.kind, action, outcomeAnswer(outcome));
 }
 
 /**
@@ -175,6 +173,9 @@ async function onlyMatching(
   if (q.appliesFilter) {
     return { allowed: false, refusal: "only-matching-entries", filter };
   }
+  // A yes or no to "may the caller read the collection" is yes: the caller
+  // may read the entries the filter matches, as the decision says.
+  if (q.asksSomeEntries) return ALLOWED;
   await deviate("filter-not-applied", false, () => decisionAllows);
   return INSUFFICIENT;
 }
@@ -205,6 +206,12 @@ export interface GateQuestion {
    * as it cannot limit what it reads to the entries the filter matches.
    */
   readonly appliesFilter?: boolean;
+  /**
+   * The asker wants only a yes or no to "may the caller read the
+   * collection", and reads no entries on the answer, so a read rule's filter
+   * answers yes: the caller may read the entries it matches.
+   */
+  readonly asksSomeEntries?: boolean;
   /** The access-control service's rules; absent without the service. */
   readonly rules?: RuleSource;
   /**
@@ -482,7 +489,7 @@ async function visitorFilterVerdict(
   outcome: RuleOutcome,
   filter: RuleFilter
 ): Promise<GateVerdict> {
-  if (q.appliesFilter) {
+  if (q.appliesFilter || q.asksSomeEntries) {
     await deviate("visitor-public-default", true, () =>
       decided(actorForVisitor(), q.action, target)
     );
@@ -781,7 +788,7 @@ async function ruleVerdict({
   );
   const filter = readFilterOf(target, q.action, outcome);
   if (filter) {
-    if (!q.appliesFilter) {
+    if (!q.appliesFilter && !q.asksSomeEntries) {
       noticeWhereRuleAllowedBefore(
         outcome,
         allowedUserBefore,
