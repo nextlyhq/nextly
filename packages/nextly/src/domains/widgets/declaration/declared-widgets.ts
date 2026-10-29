@@ -118,7 +118,7 @@ interface DeclaredWidgetShape {
 }
 
 /** One preview case as a declaration states it, checked at startup. */
-export interface DeclaredPreviewCase {
+interface DeclaredPreviewCase {
   readonly name: string;
   readonly data: unknown;
   readonly settings?: Readonly<Record<string, unknown>>;

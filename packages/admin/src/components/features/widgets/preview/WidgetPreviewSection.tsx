@@ -28,7 +28,7 @@ import type { WidgetPreview } from "./types";
 import { WidgetPreviewState } from "./WidgetPreviewState";
 
 /** What the admin says when it holds no declaration to draw a listed widget with. */
-export const NOT_DRAWN_HERE =
+const NOT_DRAWN_HERE =
   "This admin holds no declaration for this widget, so it cannot be drawn here.";
 
 /** One size to draw, named for every end of the bounds it is. */

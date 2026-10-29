@@ -15,7 +15,7 @@ import type { ListResponse } from "@admin/lib/api/response-types";
 import type { WidgetPreview } from "./types";
 
 /** The query key this read owns. */
-export const WIDGET_PREVIEWS_KEY = ["dashboard", "widget-previews"] as const;
+const WIDGET_PREVIEWS_KEY = ["dashboard", "widget-previews"] as const;
 
 /** Every widget the reader may see, with its preview cases. */
 export function useWidgetPreviews(): UseQueryResult<WidgetPreview[]> {
