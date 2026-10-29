@@ -84,6 +84,12 @@ export interface DocumentViewBodyProps {
   /** The document's top-level fields, from which a field-type view's is chosen. */
   fields?: readonly FieldConfig[];
   /**
+   * Whether a refused publish's recovery is taking the live values: the view
+   * is read-only through the lock meanwhile, and marked busy for assistive
+   * technology. The recovery's own toast says so to everyone.
+   */
+  recovering?: boolean;
+  /**
    * A strip about the whole document, such as its scheduled release, drawn
    * first among the view's banners: inside the frame that shares the screen
    * between them and the view, so the view keeps the rest of the height.
@@ -231,6 +237,7 @@ export function DocumentViewBody({
   recovery,
   viewingVersion,
   fields,
+  recovering = false,
   banner,
 }: DocumentViewBodyProps): JSX.Element {
   /*
@@ -297,7 +304,7 @@ export function DocumentViewBody({
         </div>
         {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
-        <div className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1" aria-busy={recovering || undefined}>
           <ViewArea
             editing={editing}
             refusal={refusal}
