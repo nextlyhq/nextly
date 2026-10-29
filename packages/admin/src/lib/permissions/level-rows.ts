@@ -218,12 +218,14 @@ const SCHEMA_CHANGE_ACTIONS = ["create", "update", "delete"] as const;
  * - Settings says that changing collections and Singles needs Can edit on it,
  *   since the schema routes ask create, update and delete on settings
  *   together; a role holding update without the other two is told it can
- *   change settings but not the schema.
+ *   change settings but not the schema. Not on the Public role's rows
+ *   (`visitors`), which offer no Can edit to ask for.
  */
 export function rowNotes(
   row: LevelRow,
   ids: Iterable<string>,
-  ownIds: Iterable<string>
+  ownIds: Iterable<string>,
+  { visitors = false }: { visitors?: boolean } = {}
 ): string[] {
   if (row.kind !== "system") return [];
   const held = new Set(actionsHeld(row, ids));
@@ -239,7 +241,7 @@ export function rowNotes(
             "save the base role, to convert it into the plain permissions."
     );
   }
-  if (row.slug === "settings") {
+  if (row.slug === "settings" && !visitors) {
     notes.push(
       "Changing collections and Singles needs Can edit on Settings " +
         "(create, update and delete)."
