@@ -62,7 +62,7 @@ async function keyReads(
   const actor = keyActorOf(caller);
   // A key carrying its maker's super-admin authority reads every entity a
   // super-admin's session does.
-  if (isSuperAdmin(actor)) return true;
+  if (isSuperAdmin(actor)) return readOf(true);
   // Judged on its own stored slugs, today as before: the grant decides, and
   // a registered rule must answer `true`.
   const slugAllows = caller.permissions.includes(`read-${slug}`);

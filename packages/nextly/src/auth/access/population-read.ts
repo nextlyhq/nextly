@@ -109,7 +109,7 @@ async function keyReads(
   const actor = keyActorOf(scope, user);
   // A key carrying its maker's super-admin authority reads every related row
   // a super-admin's session does.
-  if (isSuperAdmin(actor)) return true;
+  if (isSuperAdmin(actor)) return readOf(true);
   // The key's own stored slug is asked first, today as before.
   const slugAllows = apiKeyScopeAllows(scope, "read", target.slug) !== false;
   if (!rbac) {
