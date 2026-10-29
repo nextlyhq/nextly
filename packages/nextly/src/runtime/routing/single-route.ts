@@ -300,10 +300,11 @@ export interface SingleRoute<TNode> {
  */
 function isMissOrDenied(error: unknown): boolean {
   return (
-    NextlyError.is(error) &&
-    (error.statusCode === 404 ||
-      error.statusCode === 403 ||
-      error.statusCode === 401)
+    (NextlyError.is(error) &&
+      (error.statusCode === 404 || error.statusCode === 403)) ||
+    // The visitor refusal only: another 401, such as an invalid or expired
+    // credential, is the caller's to fix and rethrows.
+    NextlyError.isCode(error, "AUTH_REQUIRED")
   );
 }
 
