@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 
 import { MessagesList } from "../MessagesList";
 
@@ -29,7 +30,9 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
 
 function holding(slugs: string[]) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
-    hasPermission: (slug: string) => slugs.includes(slug),
+    // Asked as the product asks: a `manage-` permission counts as the plain
+    // ones it stands for.
+    hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
     isLoading: false,
     hasAnswer: true,
     error: null,

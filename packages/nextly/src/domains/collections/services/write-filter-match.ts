@@ -60,11 +60,19 @@ export interface PreparedWriteMatch {
    */
   columns(
     schema: DynamicSchema,
-    localizedCtx: {
-      writes: LocalizedQueryContext | null;
-      reads: LocalizedQueryContext | null;
-    }
+    localizedCtx: WriteMatchLanguages
   ): { writes: SQL<number>; reads: SQL<number> };
+}
+
+/**
+ * The language each match column reads a translated field in: the write's
+ * own language for the write filter, and the plain read's languages for
+ * whether the caller may read the entry. `null` for a collection without
+ * languages.
+ */
+export interface WriteMatchLanguages {
+  readonly writes: LocalizedQueryContext | null;
+  readonly reads: LocalizedQueryContext | null;
 }
 
 /**
