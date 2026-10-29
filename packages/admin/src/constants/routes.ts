@@ -13,6 +13,13 @@ export const ROUTES = {
   // Dashboard route (homepage)
   DASHBOARD: "/admin",
 
+  // The widget preview page, for a development server only. Not in the page
+  // registry: the router resolves it only once the running server has said it
+  // is in development (`components/features/widgets/preview/preview-route`),
+  // and everywhere else it is an address like any other the admin does not
+  // serve.
+  WIDGET_PREVIEWS: "/admin/dev/widget-previews",
+
   // Users routes
   USERS: "/admin/users",
   USERS_CREATE: "/admin/users/create",

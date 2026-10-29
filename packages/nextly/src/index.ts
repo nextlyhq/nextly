@@ -665,7 +665,11 @@ export {
   type WidgetAccess,
   // The permission gate `access` takes.
   type WidgetAccessGate,
+  // What `describe` answers, and a count's window.
+  type WidgetCollectionDescription,
+  type WidgetCollectionField,
   type WidgetComponentMap,
+  type WidgetCountWindow,
   type WidgetData,
   type WidgetDataInput,
   type WidgetDisplay,
@@ -680,6 +684,8 @@ export {
   type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
+  // A card's loading shape and add-panel sketch.
+  type WidgetSkeleton,
   type WidgetSummary,
   type WidgetView,
 } from "./domains/widgets/declaration/public";
