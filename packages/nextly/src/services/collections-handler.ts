@@ -335,6 +335,19 @@ export class CollectionsHandler {
   }
 
   /**
+   * Which of these entries a write of the action by this caller would find
+   * inside its rule's filter, judged now and without writing, on the instance
+   * that serves collection writes. See the mutation service.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(
+    params: Parameters<CollectionEntryService["entriesWithinWriteFilter"]>[0]
+  ): ReturnType<CollectionEntryService["entriesWithinWriteFilter"]> {
+    return this.entryService.entriesWithinWriteFilter(params);
+  }
+
+  /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
    *

@@ -246,14 +246,18 @@ export interface ReleasesServiceDeps {
     authority: ReleaseAuthority
   ) => Promise<boolean>;
   /**
-   * Whether this user may perform this lifecycle action on this scope.
+   * Whether this user may perform this lifecycle action on this document.
    *
    * The same question the ordinary write path asks (`publish-<slug>` /
-   * `unpublish-<slug>`), asked here at add time. Injected for the same reason.
+   * `unpublish-<slug>`, and the rule for it), asked here at add time, of the
+   * document itself: a rule that answers a filter admits only the documents
+   * it matches. Injected for the same reason.
    */
   canActOnDocument: (params: {
     userId: string;
+    scopeKind: ReleaseMemberRow["scopeKind"];
     scopeSlug: string;
+    entryId: string;
     action: ReleaseMemberAction;
     /**
      * The scoped API key's own grants, when the caller is one.
@@ -2885,7 +2889,10 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<AddedReleaseMember> {
     await this.authorize(actor, "create");
-    await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
+    // The document's own authority, asked of the document the caller names: a
+    // rule that answers a filter is matched against that entry, and an entry
+    // the caller may not read is refused as one outside the filter is.
+    await this.authorizeDocumentAction(actor, input, input.action);
     requireRunnableMember(input, actor);
     // The target checks, for every caller: REST, the Direct API and the admin
     // alike. A precondition, so before anything is written; for a Single it
@@ -3120,7 +3127,7 @@ export class ReleasesService {
         },
       });
     }
-    await this.authorizeDocumentAction(actor, member.scopeSlug, action);
+    await this.authorizeDocumentAction(actor, member, action);
     const [release] = await this.deps.repository.findReleases({
       ids: [member.releaseId],
     });
@@ -3784,9 +3791,10 @@ export class ReleasesService {
 
   private async authorizeDocumentAction(
     actor: ReleaseActor,
-    scopeSlug: string,
+    document: Pick<ReleaseMemberRow, "scopeKind" | "scopeSlug" | "entryId">,
     action: ReleaseMemberAction
   ): Promise<void> {
+    const { scopeSlug } = document;
     if (actor.overrideAccess === true) return;
     if (actor.userId === null) {
       throw NextlyError.forbidden({
@@ -3796,7 +3804,9 @@ export class ReleasesService {
     if (
       await this.deps.canActOnDocument({
         userId: actor.userId,
+        scopeKind: document.scopeKind,
         scopeSlug,
+        entryId: document.entryId,
         action,
         authenticatedScope: actor.authenticatedScope,
         userRoles: actor.userRoles,

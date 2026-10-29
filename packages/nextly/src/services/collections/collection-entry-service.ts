@@ -731,6 +731,21 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Which of these entries a write of the action by this caller would find
+   * inside its rule's filter, judged as a write to every language is. See the
+   * mutation service.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(
+    params: Parameters<CollectionMutationService["entriesWithinWriteFilter"]>[0]
+  ): ReturnType<CollectionMutationService["entriesWithinWriteFilter"]> {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.entriesWithinWriteFilter(params)
+    );
+  }
+
+  /**
    * Bring a language's pending change up to date with the shared values
    * someone else published since it began. See the mutation service.
    *

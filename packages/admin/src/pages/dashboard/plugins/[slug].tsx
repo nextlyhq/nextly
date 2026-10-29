@@ -34,6 +34,7 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
+import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
 import { pluginSettingsPermission } from "@admin/lib/plugins/plugin-settings-permission";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
@@ -148,21 +149,6 @@ function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
       </div>
     </div>
   );
-}
-
-/**
- * What a plugin is called on its page: its sidebar label, else its name. One
- * rule for the heading and the browser tab, so the two cannot name the plugin
- * differently. Overloaded so a found plugin always yields a name.
- */
-function pluginDisplayName(plugin: PluginMetadata): string;
-function pluginDisplayName(
-  plugin: PluginMetadata | undefined
-): string | undefined;
-function pluginDisplayName(
-  plugin: PluginMetadata | undefined
-): string | undefined {
-  return plugin && (plugin.appearance?.label ?? plugin.name);
 }
 
 function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {

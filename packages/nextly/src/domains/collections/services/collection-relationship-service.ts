@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { getTableColumns, inArray, sql, type SQL } from "drizzle-orm";
+import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -83,6 +83,7 @@ import {
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import {
   localizedFilterContext,
+  matchColumn,
   ruleFilterCondition,
   type DynamicSchema,
 } from "../query/filter-condition";
@@ -1666,7 +1667,7 @@ export class CollectionRelationshipService extends BaseService {
       match === undefined
         ? this.db.select().from(schema)
         : this.db
-            .select({ ...getTableColumns(schema), [RULE_MATCH]: match })
+            .select({ ...getColumns(schema), [RULE_MATCH]: match })
             .from(schema)
     ).where(inArray(schema.id, ids))) as Record<string, unknown>[];
 
@@ -1768,10 +1769,7 @@ export class CollectionRelationshipService extends BaseService {
       },
       this.logger
     );
-    if (condition === undefined) return undefined;
-    return sql<number>`case when ${condition} then 1 else 0 end`.mapWith(
-      Number
-    );
+    return condition === undefined ? undefined : matchColumn(condition);
   }
 
   /**
