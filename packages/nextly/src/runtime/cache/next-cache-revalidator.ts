@@ -22,6 +22,7 @@ import { recordAdvisoryNotice } from "../../hooks/side-effect-warnings";
 import {
   expiryHandoff,
   holdForNextFlush,
+  isPendingExpiryHandoff,
   takePendingExpiries,
   type ExpiryHandoff,
 } from "../../revalidation/expiry-handoff";
@@ -147,15 +148,76 @@ function expireTag(next: NextCacheModule, tag: string): void {
   next.revalidateTag(tag, REVALIDATE_PROFILE);
 }
 
+/**
+ * What Next.js says when a tag is expired with no request to expire it in: a
+ * script, a job, a test. Every expiry there fails the same way, so one says it
+ * for all of them.
+ */
+const NO_REQUEST_STORE = /static generation store missing/;
+
+// Whether a write outside any request was logged already: once is enough to
+// say expiries wait for a request, and every write after it would repeat it.
+let waitingLogged = false;
+
+/** Runs `call` once; its error, or null. */
+function attempt(call: () => void): string | null {
+  try {
+    call();
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /** Runs `call`, once more if it throws; the error of the second try, or null. */
 function withOneRetry(call: () => void): string | null {
-  for (let tries = 0; ; tries++) {
-    try {
-      call();
-      return null;
-    } catch (error) {
-      if (tries === 1)
-        return error instanceof Error ? error.message : String(error);
+  return attempt(call) === null ? null : attempt(call);
+}
+
+/**
+ * Expires each tag, retrying one that fails once; the tags that still failed,
+ * with why. The first is tried on its own: outside a request every expiry
+ * fails the same way, so that answer stands for all of them and no other tag
+ * is tried.
+ */
+function expireTags(
+  next: NextCacheModule,
+  tags: string[]
+): Map<string, string> | { noRequest: string } {
+  const failed = new Map<string, string>();
+  const [first, ...rest] = tags;
+  if (first !== undefined) {
+    const error = attempt(() => expireTag(next, first));
+    if (error !== null && NO_REQUEST_STORE.test(error)) {
+      return { noRequest: error };
+    }
+    const retried =
+      error === null ? null : attempt(() => expireTag(next, first));
+    if (retried !== null) failed.set(first, retried);
+  }
+  for (const tag of rest) {
+    const error = withOneRetry(() => expireTag(next, tag));
+    if (error !== null) failed.set(tag, error);
+  }
+  return failed;
+}
+
+/**
+ * Revalidates the paths a write names. A path carries no tag to hand off: its
+ * failure is logged, and the write's tags beside it still expire the reads.
+ */
+function revalidatePaths(
+  next: NextCacheModule,
+  intents: RevalidationIntent[]
+): void {
+  for (const target of intents.flatMap(intent => intent.paths ?? [])) {
+    const error = withOneRetry(() =>
+      next.revalidatePath(target.path, target.type)
+    );
+    if (error !== null) {
+      consoleLogger.warn(
+        `[nextly] could not revalidate the path ${target.path}: ${error}`
+      );
     }
   }
 }
@@ -234,32 +296,48 @@ export class NextCacheRevalidator implements CacheRevalidator {
     // Expiries an earlier write handed to the in-process default go out with
     // this one, so a later request in the same process drains them.
     const tags = [...new Set([...takePendingExpiries(), ...own])];
-    const failed = new Map<string, string>();
     if ("unresolved" in resolved) {
       // Next.js is here but its cache could not be loaded: every tag waits
       // for the out-of-request path rather than being skipped.
-      for (const tag of tags) failed.set(tag, resolved.unresolved);
-      return this.defer(failed, own);
-    }
-    const next = resolved;
-    for (const tag of tags) {
-      const error = withOneRetry(() => expireTag(next, tag));
-      if (error !== null) failed.set(tag, error);
-    }
-    for (const target of intents.flatMap(intent => intent.paths ?? [])) {
-      // A path carries no tag to hand off: its failure is logged, and the
-      // write's tags beside it still expire the reads.
-      const error = withOneRetry(() =>
-        next.revalidatePath(target.path, target.type)
+      return this.defer(
+        new Map(tags.map(tag => [tag, resolved.unresolved])),
+        own
       );
-      if (error !== null) {
-        consoleLogger.warn(
-          `[nextly] could not revalidate the path ${target.path}: ${error}`
-        );
-      }
     }
+    const failed = expireTags(resolved, tags);
+    if ("noRequest" in failed) {
+      return this.waitForRequest(tags, own, failed.noRequest);
+    }
+    revalidatePaths(resolved, intents);
     if (failed.size === 0) return;
     return this.defer(failed, own);
+  }
+
+  /**
+   * A write outside any request, where Next.js expires nothing: no tag is
+   * tried again, and no path. With the in-process default the tags stay
+   * pending, each once, for the next write that runs inside a request to
+   * expire; retaking and retrying every pending tag on each such write made a
+   * run of N of them O(N²) attempts and log. An installed hand-off expires
+   * from outside a request, so there they are handed to it as any failure is.
+   */
+  private async waitForRequest(
+    tags: string[],
+    own: string[],
+    reason: string
+  ): Promise<FlushOutcome | void> {
+    const handoff = this.handoff();
+    if (!isPendingExpiryHandoff(handoff)) {
+      return this.defer(new Map(tags.map(tag => [tag, reason])), own);
+    }
+    await handoff.handOff(tags, reason);
+    if (!waitingLogged) {
+      waitingLogged = true;
+      consoleLogger.warn(
+        "[nextly] cache expiry waits for a request: a write made outside one (a script, a job) leaves its tags pending until a write inside a request expires them"
+      );
+    }
+    return own.length > 0 ? { deferredTags: own } : undefined;
   }
 
   /**

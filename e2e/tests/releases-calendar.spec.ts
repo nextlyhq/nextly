@@ -423,12 +423,13 @@ test.describe("the Releases calendar", () => {
         await page.getByRole("button", { name: "calendar" }).click();
         await expect(page.getByRole("grid")).toBeVisible();
         const today = page.locator('[aria-current="date"]');
-        await scanCalendar(page);
+        await scanCalendar(page, today);
         await scanDayList(page, today);
 
         await showMonth(page, future);
-        await scanCalendar(page);
-        await scanDayList(page, page.locator(`[data-day="${future}"]`));
+        const futureDay = page.locator(`[data-day="${future}"]`);
+        await scanCalendar(page, futureDay);
+        await scanDayList(page, futureDay);
       }
     });
   }
@@ -444,10 +445,27 @@ async function settle(page: Page): Promise<void> {
   await page.waitForFunction(() => document.getAnimations().length === 0);
 }
 
-/** The month on screen, and each day's date and count, held to AA. */
-async function scanCalendar(page: Page): Promise<void> {
-  // Each day's data has arrived: a day with releases names their count.
-  await expect(page.locator("[data-day]").first()).toBeVisible();
+/**
+ * The month on screen, and each day's date and count, held to AA, once the
+ * month's read has answered and `seeded`, a day this test put releases on,
+ * draws what it holds.
+ *
+ * The day buttons are drawn before the read answers, and at a phone's width
+ * the grid shows no loading placeholder, so a scan started on the buttons
+ * alone could judge a month whose counts have not arrived. Waited for twice:
+ * the grid no longer busy, and the seeded day's own releases on screen, as
+ * chips at a desk's width and as its count at a phone's.
+ */
+async function scanCalendar(page: Page, seeded: Locator): Promise<void> {
+  await expect(page.getByRole("grid")).not.toHaveAttribute("aria-busy", "true");
+  await expect(seeded).toHaveAttribute("aria-label", /\b[1-9]\d* releases?\b/);
+  await expect(
+    page
+      .locator("td", { has: seeded })
+      .locator("li, [data-day] > span:nth-child(2)")
+      .filter({ visible: true })
+      .first()
+  ).toBeVisible();
   await settle(page);
   await expectNoAxeViolations(page);
   // The dates and counts are a character or two, which axe will not fail on

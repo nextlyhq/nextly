@@ -14,10 +14,14 @@
  * @module collections/access-defaults
  */
 
-import type { CollectionAccessControl } from "nextly";
+import type { AccessControlFunction, CollectionAccessControl } from "nextly";
 
-/** A single rule, in either form the collection config accepts. */
-type AccessRule = NonNullable<CollectionAccessControl["read"]>;
+/**
+ * A single rule, in either form every operation accepts. Not the read rule's
+ * type: a read rule may also answer a filter, which create, update and delete
+ * may not.
+ */
+type AccessRule = AccessControlFunction | boolean;
 
 /** The subset of a collection's access declaration these defaults supply. */
 export type AccessOverrides = Pick<

@@ -27,10 +27,10 @@
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
 import type {
-  AccessControlFunction,
   CollectionAccessControl,
   SingleAccessControl,
 } from "../../shared/types/access";
+import type { CollectionFilterRule } from "../../shared/types/rule-filter";
 
 import {
   holdsByManage,
@@ -41,6 +41,7 @@ import {
   type Actor,
   type SystemActor,
 } from "./actor";
+import { MANAGE_BRIDGED_ACTIONS, isRetiredManage } from "./manage-bridge";
 import {
   mayAnswerFilter,
   reportRuleFilterMisuse,
@@ -120,10 +121,12 @@ function refuse(reason: RefusalReason): Decision {
 function ruleFor(
   target: AccessTarget,
   action: AccessAction
-): AccessControlFunction | boolean | undefined {
-  // A Single declares no create or delete rule; asked one, it has none.
+): CollectionFilterRule | boolean | undefined {
+  // A Single declares no create or delete rule; asked one, it has none. A
+  // rule answering only true or false is a filter rule too, so the one type
+  // holds the read rule, which may answer a filter, and every other.
   const access:
-    | Partial<Record<AccessAction, AccessControlFunction | boolean>>
+    | Partial<Record<AccessAction, CollectionFilterRule | boolean>>
     | undefined = target.access;
   return access?.[action];
 }
@@ -345,6 +348,16 @@ export function decidePermission(
   if (actor.kind === "system") return ALLOW;
   if (actor.kind === "principal") return refuse("principal-without-rule");
   if (isSuperAdmin(actor)) return ALLOW;
+  // A retired `manage-` permission, asked by a gate written before it was
+  // retired, is answered by the plain four it stood for, each counted as
+  // below: an unconverted role's `manage-` permission still holds all four.
+  if (isRetiredManage(action, resource)) {
+    return MANAGE_BRIDGED_ACTIONS.every(
+      plain => decidePermission(actor, plain, resource).allowed
+    )
+      ? ALLOW
+      : refuse("no-permission");
+  }
   return holdsPermission(actor, action, resource) ||
     holdsByManage(actor, action, resource)
     ? ALLOW

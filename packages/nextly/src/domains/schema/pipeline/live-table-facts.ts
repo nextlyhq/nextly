@@ -398,6 +398,48 @@ interface LiveIndex {
   droppableByName: boolean;
 }
 
+/** A PostgreSQL collation, with the schema that holds it. */
+export interface PgCollation {
+  schema: string;
+  name: string;
+}
+
+/**
+ * The columns of a PostgreSQL table that carry a collation other than their type's default, by
+ * name. `ALTER COLUMN ... TYPE` sets the new type's default collation unless the statement names
+ * one, so a statement that changes a column's type restates what this reads. Each collation comes
+ * with its schema: one outside the search path does not resolve by its name alone, and a
+ * same-named one elsewhere on it would be taken instead. Read through `to_regclass`, so the table
+ * resolves on the search path as every other read here does.
+ */
+export async function readPgColumnCollations(
+  db: unknown,
+  tableName: string
+): Promise<Map<string, PgCollation>> {
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT a.attname AS column_name, n.nspname AS collation_schema,
+               co.collname AS collation_name
+        FROM pg_attribute a
+        JOIN pg_collation co ON co.oid = a.attcollation
+        JOIN pg_namespace n ON n.oid = co.collnamespace
+        JOIN pg_type t ON t.oid = a.atttypid
+        WHERE a.attrelid = to_regclass(${tableName}) AND a.attnum > 0
+          AND NOT a.attisdropped AND a.attcollation <> t.typcollation`
+  )) as {
+    rows: {
+      column_name: string;
+      collation_schema: string;
+      collation_name: string;
+    }[];
+  };
+  return new Map(
+    result.rows.map(row => [
+      row.column_name,
+      { schema: row.collation_schema, name: row.collation_name },
+    ])
+  );
+}
+
 /** Every index on `tableName`, read once from the catalog of the dialect. */
 async function readIndexes(
   db: unknown,

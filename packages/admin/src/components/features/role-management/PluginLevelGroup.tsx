@@ -60,15 +60,25 @@ export function PluginLevelGroup({
       : `${ownCount} ${ownCount === 1 ? "permission" : "permissions"}`;
 
   // A plugin's own permission is named by its declared name; where two share
-  // one, each is told apart by the resource it acts on.
-  const nameCounts = new Map<string, number>();
+  // one, each is told apart by the resource it acts on, and where they also
+  // share that, by the action too. A permission is its resource and action,
+  // so the three together never repeat.
+  const counts = new Map<string, number>();
+  const count = (key: string) => counts.get(key) ?? 0;
+  const byResource = (permission: Permission) =>
+    `${permission.name}\u0000${permission.resource}`;
   for (const permission of group.permissions) {
-    nameCounts.set(permission.name, (nameCounts.get(permission.name) ?? 0) + 1);
+    counts.set(permission.name, count(permission.name) + 1);
+    counts.set(byResource(permission), count(byResource(permission)) + 1);
   }
-  const ownLabel = (permission: Permission) =>
-    (nameCounts.get(permission.name) ?? 0) > 1
+  const ownLabel = (permission: Permission) => {
+    if (count(byResource(permission)) > 1) {
+      return `${permission.name} (${permission.resource}, ${permission.action})`;
+    }
+    return count(permission.name) > 1
       ? `${permission.name} (${permission.resource})`
       : permission.name;
+  };
 
   const setOwn = (id: string, on: boolean) => {
     onChange(on ? [...value, id] : value.filter(kept => kept !== id));
@@ -99,7 +109,12 @@ export function PluginLevelGroup({
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
           {summary}
         </span>
-        <Badge variant={level === "custom" ? "warning" : "outline"}>
+        {/* Kept whole beside a long name: the pill has a fixed height, so
+            its words wrapping would clip them. */}
+        <Badge
+          variant={level === "custom" ? "warning" : "outline"}
+          className="shrink-0 whitespace-nowrap"
+        >
           {levelWord}
         </Badge>
       </CollapsibleTrigger>

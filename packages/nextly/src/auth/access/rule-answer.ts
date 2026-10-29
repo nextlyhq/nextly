@@ -295,6 +295,26 @@ export const FILTER_NAMES_A_COMPONENT_FIELD: RuleAnswer = Object.freeze({
   ]),
 });
 
+/**
+ * A collection read rule's filter that names a field stored as serialized
+ * JSON: a list (`hasMany`) or a reference to one of several collections. Its
+ * column holds a document, so an operator comparing it with one value
+ * compares the document's text, and `not_equals` would match an entry whose
+ * list holds that value. Reported as not well formed, so the filter matches
+ * no entry rather than the wrong ones.
+ */
+export const FILTER_NAMES_A_STRUCTURED_FIELD: RuleAnswer = Object.freeze({
+  kind: "malformed-filter",
+  problems: Object.freeze([
+    Object.freeze({
+      path: "where",
+      code: "FILTER_STRUCTURED_FIELD_IN_RULE",
+      message:
+        "a field stored as a list or a reference to several collections cannot be used in a rule's filter",
+    }),
+  ]),
+});
+
 /** Forgets what has been reported, so a test can watch the first report. */
 export function clearRuleFilterReports(): void {
   reported.clear();

@@ -42,8 +42,10 @@ import type { Workflow } from "../../domains/workflows/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
+import type { CollectionFilterRuleInput } from "../../shared/types/rule-filter";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 
+import { asDeclaredFields, toTitleCase } from "./declared-config";
 // Import validation conditionally - only in server environments
 // This prevents client-side bundlers from including the validation code
 import { assertValidCollectionConfig } from "./validate-config";
@@ -1040,23 +1042,6 @@ export interface CollectionConfig {
 // Utility Functions
 // ============================================================
 
-/**
- * Converts a slug to title case for display.
- *
- * @param str - The string to convert
- * @returns Title-cased string
- *
- * @example
- * ```typescript
- * toTitleCase('blog-posts') // 'Blog Posts'
- * toTitleCase('order_items') // 'Order Items'
- * toTitleCase('users') // 'Users'
- * ```
- */
-function toTitleCase(str: string): string {
-  return str.replace(/[-_]/g, " ").replace(/\b\w/g, char => char.toUpperCase());
-}
-
 // ============================================================
 // defineCollection Function
 // ============================================================
@@ -1133,36 +1118,35 @@ function toTitleCase(str: string): string {
  * ```
  */
 /**
- * A collection as an author writes it.
+ * A collection as `defineCollection` takes it.
  *
  * Identical to `CollectionConfig` except for the fields array, which also
- * admits a contributed type declared through `pluginField()`. The widening
- * lives here rather than in `FieldConfig` because a union member carrying an
- * index signature widens property access for every internal reader of that
- * union.
- */
-
-/**
- * The authored fields as the rest of the system reads them.
+ * admits a contributed type declared through `pluginField()`, and the access
+ * rules, typed by those fields. The widening lives here rather than in
+ * `FieldConfig` because a union member carrying an index signature widens
+ * property access for every internal reader of that union.
  *
- * A contributed declaration is structurally a field — a name, a type, and the
- * options its own type reads — and every internal consumer dispatches on
- * `type` as a string. The authoring widening exists so a plugin type can be
- * written down; it is dropped at this boundary, after validation, rather than
- * carried into the union every reader shares, where an index-signature member
- * would widen property access for all of them.
+ * `Fields` is the declared fields as written, so a read rule's filter is
+ * typed by their names (see `CollectionRuleFilter`); `ReadAnswer` is what the
+ * read rule answers, inferred so each key of a filter it returns is checked.
+ * Both default to what they were before they were inferred, so a config
+ * annotated with this type reads as it did.
  */
-function asDeclaredFields(fields: AuthorableFieldConfig[]): FieldConfig[] {
-  return fields as FieldConfig[];
-}
-
-export type CollectionConfigInput = Omit<CollectionConfig, "fields"> & {
-  fields: AuthorableFieldConfig[];
+export type CollectionConfigInput<
+  Fields extends readonly AuthorableFieldConfig[] = AuthorableFieldConfig[],
+  ReadAnswer = boolean,
+> = Omit<CollectionConfig, "fields" | "access"> & {
+  fields: Fields;
+  access?: Omit<CollectionAccessControl, "read"> & {
+    read?: CollectionFilterRuleInput<Fields, ReadAnswer>;
+  };
 };
 
-export function defineCollection(
-  config: CollectionConfigInput
-): CollectionConfig {
+export function defineCollection<
+  const Fields extends
+    readonly AuthorableFieldConfig[] = AuthorableFieldConfig[],
+  ReadAnswer = boolean,
+>(config: CollectionConfigInput<Fields, ReadAnswer>): CollectionConfig {
   // ============================================================
   // Comprehensive Validation
   // ============================================================

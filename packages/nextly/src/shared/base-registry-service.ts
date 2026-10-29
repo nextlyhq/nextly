@@ -300,6 +300,14 @@ export abstract class BaseRegistryService<
    * columns are read, and every other field of the result is left at the
    * value its deserializer gives an absent column.
    */
+  /**
+   * Every record with only its slug, whether it is translated, and its fields: what a run that
+   * judges translations columns needs from each entity, without the rest of the row.
+   */
+  async getAllTranslationShapes(): Promise<TRecord[]> {
+    return this.getAllRecordsWithColumns(["localized", "fields"]);
+  }
+
   protected async getAllRecordsWithColumns(
     columns: readonly string[]
   ): Promise<TRecord[]> {

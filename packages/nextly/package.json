@@ -83,6 +83,10 @@
       "types": "./dist/domains/widgets/card-geometry.d.mts",
       "import": "./dist/domains/widgets/card-geometry.mjs"
     },
+    "./field-label": {
+      "types": "./dist/collections/fields/field-label.d.mts",
+      "import": "./dist/collections/fields/field-label.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.mts",
       "import": "./dist/query/index.mjs"

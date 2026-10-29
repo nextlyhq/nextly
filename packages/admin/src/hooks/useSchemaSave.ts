@@ -22,6 +22,7 @@ import { useCallback } from "react";
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
 import { useRestart } from "@admin/context/RestartContext";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type {
   FieldResolution,
   SchemaPreviewResponse,
@@ -51,7 +52,9 @@ export async function mirrorSchemaFile(
   try {
     await write();
   } catch (err) {
-    const message = (err as { message?: string })?.message;
+    // Read through the API's envelope, so a refusal's own reasons reach the user rather than its
+    // generic summary; empty when there is none.
+    const message = apiErrorMessage(err, "");
     toast.warning(
       `${warningLead}, but ui-schema.json could not be updated${message ? `: ${message}` : ""}.`
     );
@@ -76,7 +79,7 @@ async function runPostApply(
   try {
     await step();
   } catch (err) {
-    const message = (err as { message?: string })?.message;
+    const message = apiErrorMessage(err, "");
     toast.warning(
       `${label} schema updated, but a follow-up step did not complete${
         message ? `: ${message}` : ""
@@ -159,8 +162,7 @@ export function useSchemaSave({
         }
         confirmation.request(previewed);
       } catch (err) {
-        const message = (err as { message?: string })?.message;
-        toast.error(message || "Failed to preview schema changes");
+        toast.error(apiErrorMessage(err, "Failed to preview schema changes"));
       }
     })();
   }, [
@@ -209,10 +211,11 @@ export function useSchemaSave({
 
           await runPostApply(() => onApplied(fields), label);
         } catch (err) {
-          const message = (err as { message?: string })?.message;
+          // A refused apply names each field and why; its envelope's own message is only
+          // "Validation failed.", which says neither.
           stopRestart(
             false,
-            message || "An error occurred while applying changes"
+            apiErrorMessage(err, "An error occurred while applying changes")
           );
         } finally {
           confirmation.endApply();
