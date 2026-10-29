@@ -1,0 +1,26 @@
+---
+title: SNAPSHOT_WITHOUT_MIGRATION
+description: "A snapshot file in `meta/` has no migration file beside it."
+---
+
+## Cause
+
+A snapshot file in `meta/` has no migration file beside it.
+
+Each snapshot in `meta/` is written beside the migration it describes. This one's migration file is not there: it was deleted, or never committed.
+
+## Fix
+
+- Restore the `.sql` file from version control.
+- Or delete the orphan snapshot.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ The snapshot `20261020_120000_add_posts.snapshot.json` exists but `20261020_120000_add_posts.sql` does not.
+  Why:  A snapshot is written beside the migration it describes, and this one's migration was deleted or never committed.
+  Next: Restore the .sql file from version control, or delete the orphan snapshot.
+  Docs: https://nextlyhq.com/docs/cli/errors/snapshot-without-migration  (SNAPSHOT_WITHOUT_MIGRATION)
+```

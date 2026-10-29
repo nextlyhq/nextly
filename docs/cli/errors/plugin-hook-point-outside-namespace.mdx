@@ -1,0 +1,23 @@
+---
+title: PLUGIN_HOOK_POINT_OUTSIDE_NAMESPACE
+description: "A plugin declares a hook point whose name does not start with the plugin's prefix."
+---
+
+## Cause
+
+A plugin declares a hook point whose name does not start with the plugin's prefix.
+
+A plugin's hook points, under `contributes.hookPoints`, are named under its admin slug, so no two plugins declare the same one. The message names the prefix the hook point must start with.
+
+## Fix
+
+- Rename the hook point so that it starts with the prefix the message names.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares the hook point "review.score", which must start with "reviews.".
+  Why:  A plugin's hook points are named under its admin slug, so no two plugins declare the same one.
+  Next: Rename the hook point "review.score" so that it starts with "reviews.".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-outside-namespace  (PLUGIN_HOOK_POINT_OUTSIDE_NAMESPACE)
+```

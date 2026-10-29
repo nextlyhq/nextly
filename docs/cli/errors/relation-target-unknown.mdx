@@ -1,0 +1,24 @@
+---
+title: RELATION_TARGET_UNKNOWN
+description: "A relationship field in the configuration or a plugin names a collection that does not exist."
+---
+
+## Cause
+
+A relationship field in the configuration or a plugin names a collection that does not exist.
+
+A relationship or upload field's `relationTo` must name a collection in `nextly.config.ts`, a plugin or the Schema Builder, or one of the core targets `users` and `media`. The message names the field and the slug it relates to.
+
+## Fix
+
+- Set `relationTo` on the field named to an existing collection.
+- Or create the collection it names.
+
+## Example
+
+```text
+✗ Field "product" on "reviews" has relationTo "prodcuts", which is not a collection in the merged schema.
+  Why:  No collection in `nextly.config.ts`, its plugins or the Schema Builder has the slug "prodcuts", and it is not `users` or `media`.
+  Next: Set `relationTo` on "reviews.product" to an existing collection, or create the collection "prodcuts".
+  Docs: https://nextlyhq.com/docs/cli/errors/relation-target-unknown  (RELATION_TARGET_UNKNOWN)
+```

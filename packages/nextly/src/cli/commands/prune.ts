@@ -40,16 +40,15 @@ import {
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { isCompanionTable } from "../../domains/schema/pipeline/managed-tables";
-import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
+import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+  requireDatabaseEnv,
+  connectOrExit,
+} from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
@@ -331,11 +330,7 @@ export async function runPruneCommand(
   // Read, and a malformed one refused, before anything connects.
   const consent = pruneConsent(options, m => logger.warn(m));
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) logger.error(error);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
 
   const configResult = await loadConfig({
     configPath: options.config,
@@ -343,16 +338,13 @@ export async function runPruneCommand(
   });
   const currentSlugs = (configResult.config.collections ?? []).map(c => c.slug);
 
-  let adapter: CLIDatabaseAdapter;
-  try {
-    adapter = await createCliAdapter({
+  const adapter = await connectOrExit(
+    {
       dialect: dbValidation.dialect,
       databaseUrl: dbValidation.databaseUrl,
-    });
-  } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   try {
     // The ORM resolves tables through a SchemaRegistry, and this command creates none of
@@ -447,8 +439,7 @@ export function registerPruneCommand(program: Command): void {
             context
           );
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );

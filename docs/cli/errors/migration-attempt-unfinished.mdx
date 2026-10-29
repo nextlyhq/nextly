@@ -1,0 +1,26 @@
+---
+title: MIGRATION_ATTEMPT_UNFINISHED
+description: "A migration's last attempt may have stopped part-way, so it is neither run again nor recorded as applied."
+---
+
+## Cause
+
+A migration's last attempt may have stopped part-way, so it is neither run again nor recorded as applied.
+
+A migration's last attempt failed or recorded no outcome, and it ran where a failure can leave part of it applied: outside a transaction, or on MySQL, which commits each schema statement as it runs. Running it again could repeat what ran, and recording it applied could skip what did not, so neither is done.
+
+## Fix
+
+- If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied <file>`.
+- If you reverse the statements that ran, run `nextly migrate:resolve --failed-cleanup <file>`, then `nextly migrate`.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ 20261020_120000_add_posts.sql runs outside a transaction, and its last attempt failed part-way.
+  Why:  Running it again would repeat what of it ran and stayed: a statement that changes no schema may have run even where the schema shows nothing of the attempt, so it is not run again.
+  Next: If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 20261020_120000_add_posts.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate:resolve --failed-cleanup 20261020_120000_add_posts.sql` and then `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-attempt-unfinished  (MIGRATION_ATTEMPT_UNFINISHED)
+```

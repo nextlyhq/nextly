@@ -1,0 +1,24 @@
+---
+title: PLUGIN_EXTEND_TARGET_UNKNOWN
+description: "A plugin extends an entity that neither the configuration, a plugin nor the Schema Builder declares."
+---
+
+## Cause
+
+A plugin extends an entity that neither the configuration, a plugin nor the Schema Builder declares.
+
+A plugin's `contributes.extend` adds fields to an existing entity. The target it names is not a collection, single or field group in `nextly.config.ts`, in any plugin, or in the Schema Builder, which usually means a typo.
+
+## Fix
+
+- Correct the target slug in the plugin's `contributes.extend`.
+- Or create the entity it names, in `nextly.config.ts` or the Schema Builder.
+
+## Example
+
+```text
+✗ Plugin "reviews" extends unknown entity "prodcuts".
+  Why:  "prodcuts" is not a code-first or plugin collection, single or field group in the merged schema, and the Schema Builder has none by that slug.
+  Next: Correct the target "prodcuts" in the plugin's `contributes.extend`, or create the entity it names.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-extend-target-unknown  (PLUGIN_EXTEND_TARGET_UNKNOWN)
+```

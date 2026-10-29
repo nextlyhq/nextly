@@ -1,0 +1,23 @@
+---
+title: PLUGIN_EVENT_NAME_RESERVED
+description: "A plugin declares an event under the prefix Nextly reserves."
+---
+
+## Cause
+
+A plugin declares an event under the prefix Nextly reserves.
+
+Event names beginning with `plugin.`, `collection.`, `auth.`, `document.` and the other core prefixes are Nextly's own. A plugin's event under one would be refused every time it is emitted.
+
+## Fix
+
+- Rename the event so that it starts with the plugin's admin slug and a dot.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares the event "collection.review-created", whose prefix core reserves for its own events.
+  Why:  Events under that prefix are Nextly's own, so a plugin's would be taken for one of them.
+  Next: Rename the event so that it starts with the plugin's admin slug and a dot.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-event-name-reserved  (PLUGIN_EVENT_NAME_RESERVED)
+```

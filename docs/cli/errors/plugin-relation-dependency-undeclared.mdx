@@ -1,0 +1,24 @@
+---
+title: PLUGIN_RELATION_DEPENDENCY_UNDECLARED
+description: "A plugin relates to another plugin's entity without declaring that plugin in `dependsOn`."
+---
+
+## Cause
+
+A plugin relates to another plugin's entity without declaring that plugin in `dependsOn`.
+
+A plugin's field relates to an entity another plugin contributes. That works only when the first plugin depends on the second, so the second is sure to be configured and set up first.
+
+## Fix
+
+- Add the plugin that owns the entity to the `dependsOn` of the plugin that relates to it, with the range of its versions it supports.
+- If the plugin is not yours, update it to a release that declares the dependency.
+
+## Example
+
+```text
+✗ Plugin "reviews" relates to "products" owned by plugin "commerce" but does not declare dependsOn["commerce"].
+  Why:  A plugin can relate to another plugin's entity only when it depends on that plugin, so "commerce" is sure to be configured and set up first.
+  Next: Add "commerce" to the `dependsOn` of "reviews", with the range of its versions that it supports.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-relation-dependency-undeclared  (PLUGIN_RELATION_DEPENDENCY_UNDECLARED)
+```

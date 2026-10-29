@@ -1,0 +1,27 @@
+---
+title: SCHEMA_CHANGE_WITHOUT_MIGRATION
+description: "The configuration has schema changes that no migration file holds yet."
+---
+
+## Cause
+
+The configuration has schema changes that no migration file holds yet.
+
+`nextly migrate:check` compares the schema the configuration describes with the newest migration's snapshot. They differ, so a deploy would run without the change: someone edited the configuration and did not create a migration for it.
+
+## Fix
+
+- Run `nextly migrate:create --name="<migration-name>"`.
+- Commit the migration and its snapshot.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ 2 pending schema change(s) detected.
+  Why:  + add_column dc_posts.subtitle (text)
+        + add_table dc_authors
+  Next: Run `nextly migrate:create --name="<migration-name>"` and commit the result.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-change-without-migration  (SCHEMA_CHANGE_WITHOUT_MIGRATION)
+```

@@ -1,5 +1,25 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`a command that ends with an error > adds the context and stack under --verbose, below the same plain message > with --verbose 1`] = `
+"✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
+  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
+  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)
+
+  Context: {"code":"INVALID_INPUT","configPath":"<project>/nextly.config.ts","reason":"load-error","cause":"Build failed with 1 error:\\nnextly.config.ts:3:20: ERROR: Expected \\"}\\" but found \\"fields\\""}
+  Stack:
+    Error: Build failed with 1 error:
+    nextly.config.ts:3:20: ERROR: Expected "}" but found "fields"
+    at <frames>"
+`;
+
+exports[`a command that ends with an error > adds the context and stack under --verbose, below the same plain message > without --verbose 1`] = `
+"✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
+  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
+  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
+`;
+
 exports[`a command that ends with an error > names a configuration's syntax error once, with its file, line and column 1`] = `
 "✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
   Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
@@ -12,6 +32,127 @@ exports[`a command that ends with an error > names a missing configuration file,
   Why:  Nothing is at <project>/missing.config.ts.
   Next: Pass \`-c\` the path of your configuration file, relative to the project folder, or leave \`-c\` out to use the project's \`nextly.config.ts\`.
   Docs: https://nextlyhq.com/docs/cli/errors/config-not-found  (CONFIG_NOT_FOUND)"
+`;
+
+exports[`a rollback refused for want of consent > ends with what it would delete and the consent that allows it, running nothing 1`] = `
+"✗ Deleting data needs consent, and no terminal is attached to ask.
+  Why:  This would delete:
+        - 20261020_120000_add_summary.sql's DOWN, which drops a table or column, or empties a table
+        Nothing was changed.
+  Next: To consent: --accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS=1).
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-required  (DATA_LOSS_CONSENT_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > ADMIN_EMAIL_IN_USE 1`] = `
+"✗ An account already uses that email. Nothing was created.
+  Why:  That account would be given the administrator role and keep its own password, so the password given would be ignored.
+  Next: Choose another email.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-email-in-use  (ADMIN_EMAIL_IN_USE)"
+`;
+
+exports[`each code, as a command ends with it > ADMIN_EMAIL_INVALID 1`] = `
+"✗ No valid email was given for the administrator.
+  Why:  \`ada@\` is not an email address.
+  Next: Give a valid email with \`--email\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-email-invalid  (ADMIN_EMAIL_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > ADMIN_NAME_MISSING 1`] = `
+"✗ No name was given for the administrator.
+  Why:  No name was given with \`--name\` or at the prompt.
+  Next: Give the administrator's name with \`--name\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-name-missing  (ADMIN_NAME_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > ADMIN_PASSWORD_MISSING 1`] = `
+"✗ No password was given for the administrator.
+  Why:  NEXTLY_ADMIN_PASSWORD is not set, and no password was typed at a prompt. The password is never taken from an argument.
+  Next: Set NEXTLY_ADMIN_PASSWORD, or run this in a terminal to be asked.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-password-missing  (ADMIN_PASSWORD_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > ADMIN_PASSWORD_TOO_WEAK 1`] = `
+"✗ That password is too weak, so nothing was created.
+  Why:  Password must be at least 12 characters
+  Next: Choose a password that meets each rule listed, then run \`nextly users:create-admin\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-password-too-weak  (ADMIN_PASSWORD_TOO_WEAK)"
+`;
+
+exports[`each code, as a command ends with it > ADMIN_PASSWORDS_DIFFER 1`] = `
+"✗ The two passwords differ, so nothing was created.
+  Why:  The password is asked for twice, and the two answers must match.
+  Next: Run \`nextly users:create-admin\` again and type the same password both times.
+  Docs: https://nextlyhq.com/docs/cli/errors/admin-passwords-differ  (ADMIN_PASSWORDS_DIFFER)"
+`;
+
+exports[`each code, as a command ends with it > BASELINE_LOCK_RELEASED 1`] = `
+"✗ The migrate lock was released without adopting the database.
+  Why:  Nothing was written.
+  Next: Retry once no other schema operation is running.
+  Docs: https://nextlyhq.com/docs/cli/errors/baseline-lock-released  (BASELINE_LOCK_RELEASED)"
+`;
+
+exports[`each code, as a command ends with it > BLOCK_MANIFEST_STALE 1`] = `
+"✗ The committed block manifest does not match this config.
+  Why:  /home/you/app/src/types/generated/blocks.manifest.json does not match this config.
+  Next: Run \`nextly generate:manifest\` and commit the result.
+  Docs: https://nextlyhq.com/docs/cli/errors/block-manifest-stale  (BLOCK_MANIFEST_STALE)"
+`;
+
+exports[`each code, as a command ends with it > BLOCK_MANIFEST_UNREADABLE 1`] = `
+"✗ The block manifest at /home/you/app/src/types/generated/blocks.manifest.json could not be read.
+  Why:  EACCES: permission denied, open '/home/you/app/src/types/generated/blocks.manifest.json'
+  Next: Check that the file can be read, or remove it and run \`nextly generate:manifest\` to write it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/block-manifest-unreadable  (BLOCK_MANIFEST_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > BLOCK_SCHEMA_DERIVATION_FAILED 1`] = `
+"✗ The block document schema could not be derived, so it was not emitted.
+  Why:  Object.prototype has been extended; zod's registry reads \`id\` off the object given to .meta(), so the emitted schema loses the node's fields and would describe a format that accepts malformed nodes.
+  Next: Find the code that adds properties to \`Object.prototype\`, often a dependency, and remove it; \`--verbose\` shows where the schema was derived.
+  Docs: https://nextlyhq.com/docs/cli/errors/block-schema-derivation-failed  (BLOCK_SCHEMA_DERIVATION_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > BUILD_GENERATION_FAILED 1`] = `
+"✗ File generation failed, so the build stopped.
+  Why:  EACCES: permission denied, mkdir '/home/you/app/src/db/schemas/zod'
+  Next: Check that the output folders in \`nextly.config.ts\` can be written to, then run \`nextly build\` again; \`--verbose\` shows where it failed.
+  Docs: https://nextlyhq.com/docs/cli/errors/build-generation-failed  (BUILD_GENERATION_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > BUILD_MIGRATIONS_NOT_APPLIED 1`] = `
+"✗ Migration issues: 1 pending migration(s).
+  Why:  Pending: 20261029_100000_add_posts
+  Next: Run \`nextly migrate\` to apply pending migrations.
+  Docs: https://nextlyhq.com/docs/cli/errors/build-migrations-not-applied  (BUILD_MIGRATIONS_NOT_APPLIED)"
+`;
+
+exports[`each code, as a command ends with it > BUILD_STRICT_WARNINGS 1`] = `
+"✗ Build failed due to 1 warning (--strict mode).
+  Why:  Collection "posts" field "author": relationship target "people" is not defined in this config.
+  Next: Fix each warning listed, or run \`nextly build\` without \`--strict\` to let warnings pass.
+  Docs: https://nextlyhq.com/docs/cli/errors/build-strict-warnings  (BUILD_STRICT_WARNINGS)"
+`;
+
+exports[`each code, as a command ends with it > BUILDER_MIGRATION_SNAPSHOT_MISSING 1`] = `
+"✗ nextly migrate does not apply a Schema Builder migration file with no snapshot.
+  Why:  1761732000000_update_posts.sql was written by the Schema Builder and has no snapshot beside it (meta/1761732000000_update_posts.snapshot.json), so nothing says what the database should look like once it has run.
+  Next: Replace it with the migration \`nextly migrate:create\` writes for that change: delete 1761732000000_update_posts.sql, run \`nextly migrate:create --name=<name>\`, and commit the .sql file and its snapshot.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-migration-snapshot-missing  (BUILDER_MIGRATION_SNAPSHOT_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 1`] = `
+"✗ A field in \`ui-schema.json\` relates to a collection that does not exist.
+  Why:  articles.author relates to unknown target 'authors'
+  Next: Point each field listed at a collection in \`nextly.config.ts\` or \`ui-schema.json\`, or create the collection it names, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > BUILDER_SLUG_COLLISION 1`] = `
+"✗ An entity is defined in both \`nextly.config.ts\` and \`ui-schema.json\`.
+  Why:  slug 'posts' is defined in both nextly.config.ts and ui-schema.json
+  Next: Remove each slug listed from one of the two files, or rename it in one of them, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-slug-collision  (BUILDER_SLUG_COLLISION)"
 `;
 
 exports[`each code, as a command ends with it > CONFIG_IMPORT_NOT_FOUND 1`] = `
@@ -63,6 +204,50 @@ exports[`each code, as a command ends with it > CONFIG_TOOLING_UNAVAILABLE 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/config-tooling-unavailable  (CONFIG_TOOLING_UNAVAILABLE)"
 `;
 
+exports[`each code, as a command ends with it > CORE_DESTRUCTIVE_CHANGE_DECLINED 1`] = `
+"✗ Core schema reconciliation aborted: destructive operations were not confirmed.
+  Why:  drops column 'nextly_users.legacy_role'
+  Next: Run \`nextly upgrade --reconcile-core\` again and confirm each change once you have checked its data is not needed.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-destructive-change-declined  (CORE_DESTRUCTIVE_CHANGE_DECLINED)"
+`;
+
+exports[`each code, as a command ends with it > CORE_DESTRUCTIVE_CHANGE_REFUSED 1`] = `
+"✗ Core schema reconciliation requires destructive operations.
+  Why:  drops column 'nextly_users.legacy_role'
+        drops table 'nextly_sessions_old'
+        This usually means a Nextly version mismatch.
+  Next: Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).
+  Docs: https://nextlyhq.com/docs/cli/errors/core-destructive-change-refused  (CORE_DESTRUCTIVE_CHANGE_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > CORE_SCHEMA_APPLY_FAILED 1`] = `
+"✗ Core schema apply failed.
+  Why:  column "role" of relation "nextly_users" contains null values
+  Next: Fix the cause the Why line names, then run the command again; \`--verbose\` shows where it failed.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-schema-apply-failed  (CORE_SCHEMA_APPLY_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > CORE_TABLES_NOT_CREATED 1`] = `
+"✗ Core tables not found, and they could not be created.
+  Why:  The schema push that creates them failed: permission denied for schema "public"
+  Next: Run \`nextly migrate\` first to create the database schema.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-tables-not-created  (CORE_TABLES_NOT_CREATED)"
+`;
+
+exports[`each code, as a command ends with it > CORE_TABLES_NOT_RECONCILED 1`] = `
+"✗ Core tables could not be reconciled.
+  Why:  Creating the system tables this version of Nextly adds failed on the existing database; \`--verbose\` shows the statement that failed.
+  Next: Run \`nextly migrate\` to repair the schema before syncing.
+  Docs: https://nextlyhq.com/docs/cli/errors/core-tables-not-reconciled  (CORE_TABLES_NOT_RECONCILED)"
+`;
+
+exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_MALFORMED 1`] = `
+"✗ --accept-data-loss=dc_posts summary is not a list of tables and table.column pairs: "dc_posts summary" is not one.
+  Why:  Each target is a table or a \`table.column\` pair, separated by commas. Nothing was changed.
+  Next: Name tables and columns separated by commas (--accept-data-loss=posts,pages.summary), or give --accept-data-loss alone to consent to every deletion.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-malformed  (DATA_LOSS_CONSENT_MALFORMED)"
+`;
+
 exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_NOT_COVERED 1`] = `
 "✗ The consent given does not cover 1 deletion.
   Why:  - column dc_posts.summary (42 non-empty values)
@@ -80,6 +265,13 @@ exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_REQUIRED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-required  (DATA_LOSS_CONSENT_REQUIRED)"
 `;
 
+exports[`each code, as a command ends with it > DATABASE_CATALOG_UNREADABLE 1`] = `
+"✗ Could not read the database catalog, so core tables were not created.
+  Why:  The catalog says which field-group registry this database uses, and creating the tables without it would leave a database that cannot repair itself.
+  Next: Re-run once the database is reachable; \`--verbose\` shows why the catalog could not be read.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-catalog-unreadable  (DATABASE_CATALOG_UNREADABLE)"
+`;
+
 exports[`each code, as a command ends with it > DATABASE_DIALECT_INVALID 1`] = `
 "✗ \`DB_DIALECT\` is \`mssql\`, which is not a database Nextly supports.
   Why:  Nextly runs on PostgreSQL, MySQL and SQLite.
@@ -92,6 +284,26 @@ exports[`each code, as a command ends with it > DATABASE_DIALECT_UNKNOWN 1`] = `
   Why:  It starts with none of \`postgres://\`, \`mysql://\` or \`file:\`, and \`DB_DIALECT\` is not set.
   Next: Set \`DB_DIALECT\` to \`postgresql\`, \`mysql\` or \`sqlite\` in \`.env\`.
   Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-unknown  (DATABASE_DIALECT_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > DATABASE_NOT_BASELINED 1`] = `
+"✗ Migration \`20261020_120000_000_initial\` cannot be applied: schema drift detected.
+  Why:  This database already has tables, and this migration expects to start from an empty one. That is what a project managed by \`db:sync\` looks like the first time it creates a migration: the schema is real, but nothing has recorded where the history begins.
+        Drift summary (1 differences):
+          + table 'dc_posts' present in DB
+  Next: Recovery — nothing in this history can be applied, so all of it has
+        to go first. \`migrate:baseline\` refuses a project that has ANY
+        migration or snapshot, and every file here was generated against a
+        schema that already exists. Move the directory aside:
+                mv '/home/you/app/migrations' '/home/you/app/migrations.pre-baseline'
+        Or, if this is the only migration, remove just it and its snapshot
+        (the glob covers per-dialect variants, which are one migration):
+                rm '/home/you/app/migrations/20261020_120000_000_initial'*.sql '/home/you/app/migrations/meta/20261020_120000_000_initial.snapshot.json'
+        Record what the database already has, once:
+                pnpm nextly migrate:baseline
+        Then re-create the migration; it will contain only what changed:
+                pnpm nextly migrate:create --name initial
+  Docs: https://nextlyhq.com/docs/cli/errors/database-not-baselined  (DATABASE_NOT_BASELINED)"
 `;
 
 exports[`each code, as a command ends with it > DATABASE_UNREACHABLE 1`] = `
@@ -108,11 +320,218 @@ exports[`each code, as a command ends with it > DATABASE_URL_MISSING 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/database-url-missing  (DATABASE_URL_MISSING)"
 `;
 
+exports[`each code, as a command ends with it > DEMOTE_COLLECTION_NOT_FOUND 1`] = `
+"✗ Collection 'posts' not found in nextly.config.ts collections.
+  Why:  \`--demote\` moves a collection defined in \`nextly.config.ts\` to the Schema Builder, and its \`collections\` array has none with this slug.
+  Next: Check the slug against the \`collections\` array in \`nextly.config.ts\`. A collection built in the Schema Builder is already there and needs no demotion.
+  Docs: https://nextlyhq.com/docs/cli/errors/demote-collection-not-found  (DEMOTE_COLLECTION_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > DROP_OF_FOREIGN_TABLE 1`] = `
+"✗ A migration would drop a table that belongs to a different owner.
+  Why:  In \`@acme/seo/20261020_120000_add_redirects\`, on \`dc_posts\`, which \`app\` holds. It has been refused, and nothing was applied.
+  Next: Change only what this migration's owner holds: a change to another owner's table belongs in that owner's migrations.
+  Docs: https://nextlyhq.com/docs/cli/errors/drop-of-foreign-table  (DROP_OF_FOREIGN_TABLE)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_BACKUP_NOT_CONFIRMED 1`] = `
+"✗ \`nextly migrate:field-groups --apply\` did not run: it needs \`--backup-confirmed\`.
+  Why:  Applying renames field-group tables and rewrites stored rows, so it runs only once you confirm a restorable backup of the database exists.
+  Next: Take a backup of the database, then run \`nextly migrate:field-groups --apply --backup-confirmed\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-backup-not-confirmed  (FIELD_GROUP_BACKUP_NOT_CONFIRMED)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_MIGRATION_IN_FLIGHT 1`] = `
+"✗ The command did not run: a field-group storage migration is in flight on this database.
+  Why:  Mid-run, some field-group tables carry their old names and some their new ones (it is at step 3), a shape neither the old configuration nor the new one describes.
+  Next: Let the running migration finish, or, if it stopped, resume it with \`nextly migrate:field-groups --apply --backup-confirmed\`; then run this command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-migration-in-flight  (FIELD_GROUP_MIGRATION_IN_FLIGHT)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_STORAGE_REFUSED 1`] = `
+"✗ The field-group storage migration refused to proceed.
+  Why:  Registry rows name storage that does not exist.
+  Next: Run the command again with \`--verbose\` to see the tables and rows involved, and check them before running anything that changes the schema.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-storage-refused  (FIELD_GROUP_STORAGE_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > I18N_RESTORE_COLLECTION_REQUIRED 1`] = `
+"✗ --collection <slug> is required.
+  Why:  \`nextly i18n:restore\` brings back the archived translations of one entity, named by its slug.
+  Next: Run \`nextly i18n:restore --collection <slug>\` with the slug of the collection, single or field group to restore.
+  Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-collection-required  (I18N_RESTORE_COLLECTION_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > I18N_RESTORE_ENTITY_AMBIGUOUS 1`] = `
+"✗ "hero" names a collection and a field group.
+  Why:  Looked in your config and ui-schema.json. A field group's slugs are its own, so one slug can name a field group and a collection or single at once.
+  Next: Say which with --kind collection or --kind field-group.
+  Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-entity-ambiguous  (I18N_RESTORE_ENTITY_AMBIGUOUS)"
+`;
+
+exports[`each code, as a command ends with it > I18N_RESTORE_ENTITY_NOT_FOUND 1`] = `
+"✗ No collection, single, or field group named "heroes" was found.
+  Why:  Looked in your config and ui-schema.json.
+  Next: Pass \`--collection\` the slug of a collection, single or field group your config or \`ui-schema.json\` defines. An entity removed since its translations were archived has to be added back first.
+  Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-entity-not-found  (I18N_RESTORE_ENTITY_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > I18N_RESTORE_KIND_INVALID 1`] = `
+"✗ --kind must be collection, single or field-group, not "page".
+  Why:  \`--kind\` says which kind of entity the slug names, when more than one kind has it.
+  Next: Pass \`--kind collection\`, \`--kind single\` or \`--kind field-group\`, or leave \`--kind\` out when the slug names one entity.
+  Docs: https://nextlyhq.com/docs/cli/errors/i18n-restore-kind-invalid  (I18N_RESTORE_KIND_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > INTERRUPTED_BEFORE_START 1`] = `
+"✗ \`nextly migrate\` was interrupted before it started.
+  Why:  It was stopped while it waited for the schema lock, so it released its place and nothing was changed.
+  Next: Run it again when you are ready.
+  Docs: https://nextlyhq.com/docs/cli/errors/interrupted-before-start  (INTERRUPTED_BEFORE_START)"
+`;
+
+exports[`each code, as a command ends with it > LEGACY_BOOKKEEPING_FOUND 1`] = `
+"✗ Legacy bookkeeping tables detected (nextly_migrations).
+  Why:  They hold the history an earlier release recorded, which this release keeps in \`nextly_schema_events\`.
+  Next: Run \`pnpm nextly upgrade\` once to consolidate them into nextly_schema_events before continuing.
+  Docs: https://nextlyhq.com/docs/cli/errors/legacy-bookkeeping-found  (LEGACY_BOOKKEEPING_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > MEDIA_APPLY_OUTSIDE_PROJECT 1`] = `
+"✗ Nothing was changed: --apply was run from outside /home/you/app.
+  Why:  The database settings were read before --cwd named /home/you/app, so they may be another project's.
+  Next: Run the command from /home/you/app to remove files.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-apply-outside-project  (MEDIA_APPLY_OUTSIDE_PROJECT)"
+`;
+
+exports[`each code, as a command ends with it > MEDIA_CONFIG_OUTSIDE_PROJECT 1`] = `
+"✗ Nothing was changed: the config ../other-project/nextly.config.ts is outside /home/you/app.
+  Why:  /home/you/app's database settings would be read, so the config's storage may be another project's.
+  Next: Run the command from that config's project to remove files.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-config-outside-project  (MEDIA_CONFIG_OUTSIDE_PROJECT)"
+`;
+
+exports[`each code, as a command ends with it > MEDIA_STORAGE_UNLISTABLE 1`] = `
+"✗ The media storage (uploadthing) cannot list its files, so it cannot be searched for left-behind thumbnails.
+  Why:  The uploadthing storage adapter offers no listing of the files it holds. Nothing was changed.
+  Next: Remove left-behind thumbnails with the storage provider's own tools, or use a storage plugin that can list its files.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-storage-unlistable  (MEDIA_STORAGE_UNLISTABLE)"
+`;
+
+exports[`each code, as a command ends with it > MEDIA_THUMBNAILS_NOT_REMOVED 1`] = `
+"✗ 1 left-behind thumbnail(s) were not removed.
+  Why:  Could not remove media/2026/10/0b7f0b0e-thumb_x.png: AccessDenied: Access Denied
+  Next: Run \`nextly media orphans --apply\` again to list and remove what is left.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-thumbnails-not-removed  (MEDIA_THUMBNAILS_NOT_REMOVED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_APPLY_FAILED 1`] = `
+"✗ Migration \`20261020_120000_add_posts\` failed.
+  Why:  relation "dc_authors" does not exist
+  Next: Fix the cause the Why line names, then run the command again; \`--verbose\` shows where it failed.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-apply-failed  (MIGRATION_APPLY_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_ATTEMPT_UNFINISHED 1`] = `
+"✗ 20261020_120000_add_posts.sql runs outside a transaction, and its last attempt failed part-way.
+  Why:  Running it again would repeat what of it ran and stayed: a statement that changes no schema may have run even where the schema shows nothing of the attempt, so it is not run again.
+  Next: If you finish its remaining statements by hand, mark it applied with \`nextly migrate:resolve --applied 20261020_120000_add_posts.sql\` rather than running it again; if you reverse the statements that ran, run \`nextly migrate:resolve --failed-cleanup 20261020_120000_add_posts.sql\` and then \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-attempt-unfinished  (MIGRATION_ATTEMPT_UNFINISHED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_CONCURRENT_RUN 1`] = `
+"✗ Another run recorded 20261020_120000_add_posts.sql applied while this one was running it.
+  Why:  This run's statements were rolled back, and the ledger keeps the other run's record.
+  Next: Run \`nextly migrate:status\` to see what the other run recorded; nothing of this run is left to undo.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-concurrent-run  (MIGRATION_CONCURRENT_RUN)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_CREATE_CANCELLED 1`] = `
+"✗ \`nextly migrate:create\` was cancelled, and wrote no migration.
+  Why:  A prompt was closed before it was answered.
+  Next: Run \`nextly migrate:create\` again when you are ready to answer its prompts.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-create-cancelled  (MIGRATION_CREATE_CANCELLED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_DRIFT 1`] = `
+"✗ Migration \`20261020_120000_add_posts\` cannot be applied: schema drift detected.
+  Why:  Your database differs from BOTH the pre-migration baseline and the expected post-migration state. This usually means schema changes were made outside Nextly's tracked paths (manual SQL, a failed prior run, divergent teammate state).
+        Drift summary (2 differences):
+          + column 'dc_posts.subtitle' present in DB
+          - column 'dc_posts.summary' absent from DB
+  Next: Recovery (pick one):
+          [A] Sync the DB to your config, then re-run migrate:
+                pnpm nextly db:sync && pnpm nextly migrate
+          [B] Mark it applied without executing (if you applied it manually):
+                pnpm nextly migrate:resolve --applied 20261020_120000_add_posts
+          [C] Capture the drift in a new migration:
+                pnpm nextly migrate:create --name capture_drift && pnpm nextly migrate
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-drift  (MIGRATION_DRIFT)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_FILE_EDITED 1`] = `
+"✗ The migration file \`20261020_120000_add_posts.sql\` was edited after generation.
+  Why:  Expected SHA-256: 9f2c4e1a7b3d5f60812a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d
+        Actual SHA-256:   3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d
+  Next: Either revert the edit, or delete this file and re-generate via \`nextly migrate:create --name="<migration-name>"\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-file-edited  (MIGRATION_FILE_EDITED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_FOREIGN_KEY_VIOLATION 1`] = `
+"✗ This migration would leave 3 row(s) referencing rows that do not exist (dc_posts → dc_authors).
+  Why:  It was rolled back, and nothing was applied.
+  Next: Remove or repair the rows it leaves without a parent, in the migration or before it runs, then run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-foreign-key-violation  (MIGRATION_FOREIGN_KEY_VIOLATION)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `
+"✗ 20261020_120000_add_posts.sql has no down SQL — it is irreversible.
+  Why:  \`nextly migrate:down\` runs a migration's \`-- DOWN\` section, and this file's is empty.
+  Next: Hand-write a -- DOWN section or use 'nextly migrate:fresh'.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-irreversible  (MIGRATION_IRREVERSIBLE)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_MISSING 1`] = `
 "✗ \`20261020_120000_add_posts.sql\` is recorded as applied, but its file is not in the migrations folder.
   Why:  It ran on this database and no removal of it is recorded, so the folder may be from an older build.
   Next: Restore the file from version control, or deploy the build that has it, then run \`nextly migrate\` again.
   Docs: https://nextlyhq.com/docs/cli/errors/migration-missing  (MIGRATION_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_NAME_REQUIRED 1`] = `
+"✗ \`nextly migrate:create\` needs a name for the migration.
+  Why:  Only a \`--blank\` migration may be created without a name.
+  Next: Name it, as in \`nextly migrate:create add_excerpt\` or \`--name=add_excerpt\`, or pass \`--blank\` for an empty migration.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-name-required  (MIGRATION_NAME_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_PARTIALLY_APPLIED 1`] = `
+"✗ 20261020_120000_add_posts.sql ran outside a transaction, and its statement 3 of 4 failed.
+  Why:  column "summary" of relation "dc_posts" already exists
+        The 2 statement(s) before it stayed applied, and were not undone.
+  Next: If you finish its remaining statements by hand, mark it applied with \`nextly migrate:resolve --applied 20261020_120000_add_posts.sql\` rather than running it again; if you reverse the statements that ran, run \`nextly migrate:resolve --failed-cleanup 20261020_120000_add_posts.sql\` and then \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-partially-applied  (MIGRATION_PARTIALLY_APPLIED)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_SNAPSHOT_INVALID 1`] = `
+"✗ The snapshot file \`20261020_120000_add_posts.snapshot.json\` is invalid.
+  Why:  JSON parse failed: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+  Next: Restore it from version control; if a newer version of Nextly wrote it, upgrade \`nextly\` to that version.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-snapshot-invalid  (MIGRATION_SNAPSHOT_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_SNAPSHOT_MISSING 1`] = `
+"✗ \`20261020_120000_add_posts.sql\` has no paired snapshot file in /home/you/app/migrations/meta.
+  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration; a migration generated before it wrote snapshots has none.
+  Next: Either delete it, or re-create it with \`nextly migrate:create --blank\` and copy the SQL across.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-snapshot-missing  (MIGRATION_SNAPSHOT_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
+"✗ A migration contains SQL whose drops cannot be read, so which owner's tables it drops cannot be checked.
+  Why:  A statement in \`@acme/seo/20261020_120000_add_redirects\` could not be read: unterminated block comment. It has been refused.
+  Next: Rewrite that statement as plain SQL the guard can read; \`--verbose\` shows the statement.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-sql-uncheckable  (MIGRATION_SQL_UNCHECKABLE)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_TAMPERED 1`] = `
@@ -122,11 +541,777 @@ exports[`each code, as a command ends with it > MIGRATION_TAMPERED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-tampered  (MIGRATION_TAMPERED)"
 `;
 
+exports[`each code, as a command ends with it > PACKAGE_INSTALL_FAILED 1`] = `
+"✗ Install failed (pnpm exited 1).
+  Why:  pnpm could not install \`@nextlyhq/plugin-seo\`; its own output above says why.
+  Next: Fix what pnpm reports, then run \`nextly add @nextlyhq/plugin-seo\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/package-install-failed  (PACKAGE_INSTALL_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > PASSWORD_CLEAR_UNCONFIRMED 1`] = `
+"✗ Nothing was changed: --apply also needs --confirm-default-hasher.
+  Why:  --confirm-default-hasher is your statement that no stored password was written by a custom passwordHasher, now or earlier. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.
+  Next: If no custom passwordHasher ever wrote a password, run \`nextly users:clear-plaintext-passwords --apply --confirm-default-hasher\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/password-clear-unconfirmed  (PASSWORD_CLEAR_UNCONFIRMED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ADMIN_SLUG_COLLISION 1`] = `
+"✗ Plugins "@acme/reviews" and "acme-reviews" both resolve to the admin slug "acme-reviews", so they would share one admin address.
+  Why:  A plugin's admin slug is made from its name, and these two names make the same one.
+  Next: Rename one of them.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-admin-slug-collision  (PLUGIN_ADMIN_SLUG_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ADMIN_WIDGET_NOT_JSON 1`] = `
+"✗ Plugin "reviews" contributes an admin widget "stats" that is not JSON (keys: query).
+  Why:  It is serialized into /api/admin-meta/workspace, so it may hold only strings, numbers, booleans, null, arrays and plain objects — no functions, class instances, Dates, Maps or bigints. A bigint in query.where throws while the whole workspace payload is serialized, which fails that request for every admin rather than just this card.
+  Next: Remove \`query\` from the widget in \`contributes.admin.widgets\`, or give it a value of strings, numbers, booleans, null, arrays or plain objects.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-admin-widget-not-json  (PLUGIN_ADMIN_WIDGET_NOT_JSON)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ADMIN_WIDGET_UNDRAWABLE 1`] = `
+"✗ Plugin "reviews" contributes an admin widget "stats" that describes no body: it needs either a usable "component", or an "archetype" other than "custom" together with the "query" core draws it from.
+  Why:  A widget is drawn one of two ways and must describe one of them. The type states this too, but it reaches a TypeScript caller and nothing else -- a plugin authored in JavaScript, or one whose manifest arrives as parsed JSON, reaches this check with nothing enforced.
+  Next: Ship a \`component\` and draw the card yourself, or declare an \`archetype\` other than \`custom\` together with the \`query\` the host draws it from. The cell is keyed on \`id\`, so that must carry real text whichever way you choose.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-admin-widget-undrawable  (PLUGIN_ADMIN_WIDGET_UNDRAWABLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_APPLIED_MIGRATION_CHANGED 1`] = `
+"✗ Plugin "@acme/seo" migration 20261020_120000_add_redirects: a plugin migration that has already been applied no longer matches what was applied.
+  Why:  The database does not match the file that claims to describe it.
+  Next: Restore the migration as it was when it ran.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-applied-migration-changed  (PLUGIN_APPLIED_MIGRATION_CHANGED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_APPLIED_MIGRATION_REMOVED 1`] = `
+"✗ Plugin "@acme/seo" no longer lists its migration "20261020_120000_add_redirects", which the database records as applied.
+  Why:  A plugin's applied migrations are never removed or renamed: the database holds what they did, and the migrations after them were written for that. Nothing was applied.
+  Next: Restore "20261020_120000_add_redirects" under its name. To take it out, roll it back first with \`nextly migrate:down --plugin @acme/seo\` while it is still listed.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-applied-migration-removed  (PLUGIN_APPLIED_MIGRATION_REMOVED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_AUDIT_KIND_DUPLICATE 1`] = `
+"✗ Plugin "reviews" declares the audit kind "reviews.approved" more than once.
+  Why:  An audit kind is declared once, with every metadata key it records.
+  Next: Declare it once with the full list of metadata keys.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-audit-kind-duplicate  (PLUGIN_AUDIT_KIND_DUPLICATE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_AUDIT_KIND_INVALID 1`] = `
+"✗ Plugin "reviews" declares the audit kind "reviews.Approved!".
+  Why:  After "reviews." a kind may use only lowercase letters, digits, ".", "_" and "-", starting with a letter or digit.
+  Next: Rename the audit kind using only those characters.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-audit-kind-invalid  (PLUGIN_AUDIT_KIND_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_AUDIT_KIND_OUTSIDE_NAMESPACE 1`] = `
+"✗ Plugin "reviews" declares the audit kind "review.approved", which must start with "reviews.".
+  Why:  A plugin's audit kinds are named under its admin slug, so no two plugins record the same kind.
+  Next: Rename the audit kind "review.approved" so that it starts with "reviews.".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-audit-kind-outside-namespace  (PLUGIN_AUDIT_KIND_OUTSIDE_NAMESPACE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_AUDIT_KIND_TOO_LONG 1`] = `
+"✗ Plugin "reviews" declares the audit kind "reviews.approved-by-a-moderator-after-a-second-report-was-filed-late", which is longer than the 64 characters the audit trail's kind column holds.
+  Why:  The audit trail stores each entry's kind in a column of that width.
+  Next: Shorten the audit kind to 64 characters or fewer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-audit-kind-too-long  (PLUGIN_AUDIT_KIND_TOO_LONG)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CAPABILITY_ADDED_BY_SETUP 1`] = `
+"✗ A setup transformer added capabilities.db.rawSql to plugin "reports", whose own manifest does not declare it.
+  Why:  That capability grants the live database handle at ctx.db.raw, which reaches every table, and the app's listing covers only a plugin that declares it in its own manifest under the listed name.
+  Next: Declare capabilities.db.rawSql in the manifest of the plugin the app configures, rather than in a setup transformer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-added-by-setup  (PLUGIN_CAPABILITY_ADDED_BY_SETUP)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CAPABILITY_MISSING 1`] = `
+"✗ Plugin "reports" requires the capability "email", which no enabled plugin provides.
+  Why:  "email" is in the \`requires\` of "reports", and no enabled plugin lists it in \`provides\`.
+  Next: Add and enable a plugin that provides "email", or install a release of "reports" that does not require it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-missing  (PLUGIN_CAPABILITY_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CAPABILITY_NOT_CONSENTED 1`] = `
+"✗ Plugin "reports" declares capabilities.db.rawSql, which grants the live database handle at ctx.db.raw, which reaches every table, but the app does not list it.
+  Why:  A capability that reaches this far is granted only to the plugins the app lists for it by name.
+  Next: Review the plugin, then add this line to nextly.config.ts: db: { rawSqlPlugins: ["reports"] }
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-not-consented  (PLUGIN_CAPABILITY_NOT_CONSENTED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CAPABILITY_PROVIDED_TWICE 1`] = `
+"✗ Plugins "mailer" and "smtp" both provide the capability "email".
+  Why:  Each capability has one provider, so a plugin that requires it knows which implementation it gets.
+  Next: Configure only one of "mailer" and "smtp", or disable one of them.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-provided-twice  (PLUGIN_CAPABILITY_PROVIDED_TWICE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CAPABILITY_UNKNOWN 1`] = `
+"✗ Plugin "reports" declares an unknown capability "filesystem".
+  Why:  \`capabilities\` accepts only the capabilities Nextly defines: \`net\`, \`db\`, \`secrets\` and \`auth\`.
+  Next: Remove "filesystem" from the plugin's \`capabilities\`, or correct its spelling.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-unknown  (PLUGIN_CAPABILITY_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CAPABILITY_VERSION_INCOMPATIBLE 1`] = `
+"✗ Plugin "reports" requires "email" ^2.0.0, but "mailer" provides it at 1.0.0.
+  Why:  The provider's version is outside the range in the \`requires\` of "reports".
+  Next: Install a version of "mailer" in ^2.0.0, or a release of "reports" that accepts 1.0.0.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-version-incompatible  (PLUGIN_CAPABILITY_VERSION_INCOMPATIBLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CHALLENGE_ID_DUPLICATE 1`] = `
+"✗ Plugins "accounts" and "mfa" both declare the challenge id "otp".
+  Why:  A challenge is looked up by its id, so each id names one challenge.
+  Next: Rename the challenge "otp" in one of the two plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-challenge-id-duplicate  (PLUGIN_CHALLENGE_ID_DUPLICATE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CHALLENGE_ID_RESERVED 1`] = `
+"✗ Plugin "accounts" declares the challenge id "must-change-password", which core reserves for its forced password change.
+  Why:  A challenge is looked up by its id, so the plugin's would stand in for Nextly's own.
+  Next: Give the challenge "must-change-password" another id.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-challenge-id-reserved  (PLUGIN_CHALLENGE_ID_RESERVED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CLIENT_CONFIG_NOT_JSON 1`] = `
+"✗ Plugin "reviews" declares an admin.clientConfig that is not JSON (keys: onSave).
+  Why:  It is serialized into /api/admin-meta, so it may hold only strings, numbers, booleans, null, arrays and plain objects — no functions, class instances, Dates or Maps.
+  Next: Remove \`onSave\` from \`contributes.admin.clientConfig\`, or give it a value of strings, numbers, booleans, null, arrays or plain objects.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-client-config-not-json  (PLUGIN_CLIENT_CONFIG_NOT_JSON)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_CODE_REPLACED_BY_SETUP 1`] = `
+"✗ A setup transformer changed the code of plugin "reports" (init), which declares capabilities.db.rawSql.
+  Why:  That capability grants the live database handle at ctx.db.raw, which reaches every table, and the app's listing covers the plugin it configured, with that plugin's own code.
+  Next: Leave the definitions of plugins that declare capabilities.db.rawSql as configured in setup transformers.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-code-replaced-by-setup  (PLUGIN_CODE_REPLACED_BY_SETUP)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DEPENDENCY_CYCLE 1`] = `
+"✗ Plugin dependency cycle detected: reviews → commerce.
+  Why:  Each plugin is set up after the plugins it depends on, so in a cycle none of them can be set up first.
+  Next: Remove one \`dependsOn\` or \`optionalDependsOn\` entry from a plugin in the cycle.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-dependency-cycle  (PLUGIN_DEPENDENCY_CYCLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DEPENDENCY_MISSING 1`] = `
+"✗ Plugin "reviews" depends on "commerce", which is not registered.
+  Why:  "commerce" is in the \`dependsOn\` of "reviews", and not in \`plugins\` in \`nextly.config.ts\`.
+  Next: Add "commerce" to \`plugins\` in \`nextly.config.ts\`, or install a release of "reviews" that does not need it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-dependency-missing  (PLUGIN_DEPENDENCY_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DEPENDENCY_NOT_INSTALLED 1`] = `
+"✗ "@acme/sitemap" cannot be installed until its dependency is installed.
+  Why:  Install them in this order:
+        - "@acme/seo": its migration(s) 20261020_120000_add_redirects is not applied — run \`nextly plugins install @acme/seo\`
+        Nothing was changed.
+  Next: Install each dependency listed, in the order shown, then run this install again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-dependency-not-installed  (PLUGIN_DEPENDENCY_NOT_INSTALLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE 1`] = `
+"✗ Plugin "reviews" requires "commerce" ^2.0.0, but "commerce" is 1.0.0.
+  Why:  The configured "commerce" is outside the range the \`dependsOn\` of "reviews" accepts.
+  Next: Install a version of "commerce" in ^2.0.0, or a release of "reviews" that accepts 1.0.0.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-dependency-version-incompatible  (PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DISABLED 1`] = `
+"✗ The plugin "@acme/seo" is disabled in config.
+  Why:  A disabled plugin's hooks do not run, so an install or uninstall of it could record a state its hook never produced. Nothing was changed.
+  Next: Enable it in the config to install or uninstall it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-disabled  (PLUGIN_DISABLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_VIEW_COLLISION 1`] = `
+"✗ Plugin "analytics" contributes a document view that on "posts" at "insights", where "seo" already declares a view on "posts".
+  Why:  One address can draw one screen.
+  Next: Rename one of the two paths.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-view-collision  (PLUGIN_DOCUMENT_VIEW_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_VIEW_FIELD_TYPE_UNOWNED 1`] = `
+"✗ Plugin "seo" contributes a document view that on every document with a "richText" field at "audit", a field type this plugin does not contribute.
+  Why:  A view can be scoped only to one of its own field types.
+  Next: Scope the view to a field type the plugin contributes, or to a collection by its slug.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-view-field-type-unowned  (PLUGIN_DOCUMENT_VIEW_FIELD_TYPE_UNOWNED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOCUMENT_VIEW_INVALID 1`] = `
+"✗ Plugin "seo" contributes a document view that on "posts" has the path "Insights", which is not one address segment of lowercase letters, digits and single dashes.
+  Why:  A document view needs a component to draw, a label of text if it has one, and a path of one address segment, of lowercase letters, digits and single dashes, that the document does not already use.
+  Next: Correct the view the message names in the plugin's \`contributes.admin\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-view-invalid  (PLUGIN_DOCUMENT_VIEW_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOWN_KEEPS_TABLES 1`] = `
+"✗ @acme/seo's DOWN migrations do not drop seo_redirects, which it owns.
+  Why:  A full uninstall drops every table the plugin owns, and its DOWN statements are read for that before any of them runs. Nothing was changed.
+  Next: Fix the plugin's DOWN, or use --keep-data to leave its tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-down-keeps-tables  (PLUGIN_DOWN_KEEPS_TABLES)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_DOWN_LEFT_TABLES 1`] = `
+"✗ @acme/seo's DOWN migrations ran but left seo_redirects in place, so it was not recorded as uninstalled.
+  Why:  Its DOWN statements were read to drop that table before they ran, so one did something its text does not say. Its migrations are recorded as rolled back.
+  Next: Drop that table, then run the uninstall again to record it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-down-left-tables  (PLUGIN_DOWN_LEFT_TABLES)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_EVENT_NAME_RESERVED 1`] = `
+"✗ Plugin "reviews" declares the event "collection.review-created", whose prefix core reserves for its own events.
+  Why:  Events under that prefix are Nextly's own, so a plugin's would be taken for one of them.
+  Next: Rename the event so that it starts with the plugin's admin slug and a dot.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-event-name-reserved  (PLUGIN_EVENT_NAME_RESERVED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_EVENT_OUTSIDE_NAMESPACE 1`] = `
+"✗ Plugin "reviews" declares the event "review.created", which must start with "reviews.".
+  Why:  A plugin's events are named under its admin slug, so no two plugins emit the same event.
+  Next: Rename the event "review.created" so that it starts with "reviews.".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-event-outside-namespace  (PLUGIN_EVENT_OUTSIDE_NAMESPACE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_EXTEND_FIELD_DUPLICATE 1`] = `
+"✗ Plugin "reviews" extends "products" with a duplicate field "rating".
+  Why:  "products" already has a field named "rating", of its own or added by another plugin; names are compared without regard to case.
+  Next: Rename the field "rating" in the plugin's \`contributes.extend\`, or rename the target's own field.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-extend-field-duplicate  (PLUGIN_EXTEND_FIELD_DUPLICATE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_EXTEND_TARGET_UNKNOWN 1`] = `
+"✗ Plugin "reviews" extends unknown entity "prodcuts".
+  Why:  "prodcuts" is not a code-first or plugin collection, single or field group in the merged schema, and the Schema Builder has none by that slug.
+  Next: Correct the target "prodcuts" in the plugin's \`contributes.extend\`, or create the entity it names.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-extend-target-unknown  (PLUGIN_EXTEND_TARGET_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_HAS_DEPENDENTS 1`] = `
+"✗ "@acme/seo" cannot be uninstalled while "@acme/sitemap" depends on it.
+  Why:  Removing it would leave the plugin that depends on it reading tables that are no longer there. Nothing was changed.
+  Next: Uninstall it first, or remove it from the config.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-has-dependents  (PLUGIN_HAS_DEPENDENTS)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_HOOK_CHANGED_SCHEMA 1`] = `
+"✗ @acme/seo's onUninstall changed the database schema.
+  Why:  On SQLite a table it renamed away or replaced cannot be told from the one its DOWN migrations were judged against, so none of them was run, as they could drop a replacement of seo_redirects.
+  Next: Undo the schema changes the hook made, and have it change rows only, then run the uninstall again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-changed-schema  (PLUGIN_HOOK_CHANGED_SCHEMA)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_HOOK_CHANGED_TABLES 1`] = `
+"✗ seo_redirects was dropped, renamed or replaced while @acme/seo's onUninstall ran (its boot included), so none of its DOWN migrations, which were to drop it, was run.
+  Why:  A full uninstall reads each table's identity before and after the plugin's \`onUninstall\`, so its DOWN migrations never drop a table the hook put in place of the one they were judged against.
+  Next: Put the original table back under its name, in place of any table created there, then run the uninstall again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-changed-tables  (PLUGIN_HOOK_CHANGED_TABLES)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_HOOK_POINT_COLLISION 1`] = `
+"✗ Plugins "@acme/reviews" and "acme-reviews" both declare the hook point "acme-reviews.score".
+  Why:  A hook point is looked up by its name, so each name is declared by one plugin.
+  Next: Rename the hook point "acme-reviews.score" in one of the two plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-collision  (PLUGIN_HOOK_POINT_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_HOOK_POINT_KIND_MISMATCH 1`] = `
+"✗ Hook point "reviews.approve" (declared by reviews) is a decision, but it was executed as a filter.
+  Why:  A decision executed as a filter cannot veto, so the call would fail open.
+  Next: Execute "reviews.approve" as a decision, the kind its plugin declares.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-kind-mismatch  (PLUGIN_HOOK_POINT_KIND_MISMATCH)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_HOOK_POINT_OUTSIDE_NAMESPACE 1`] = `
+"✗ Plugin "reviews" declares the hook point "review.score", which must start with "reviews.".
+  Why:  A plugin's hook points are named under its admin slug, so no two plugins declare the same one.
+  Next: Rename the hook point "review.score" so that it starts with "reviews.".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-outside-namespace  (PLUGIN_HOOK_POINT_OUTSIDE_NAMESPACE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_HOOK_POINT_RESERVED 1`] = `
+"✗ Plugin "reviews" declares the hook point "email.review", whose prefix "email." core reserves for its own seams.
+  Why:  Hook points under that prefix are Nextly's own seams, so a plugin's would be taken for one of them.
+  Next: Rename the hook point "email.review" so that it starts with the plugin's admin slug and a dot.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-reserved  (PLUGIN_HOOK_POINT_RESERVED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_INSTALL_TARGET_UNCLEAR 1`] = `
+"✗ \`nextly plugins install\` was not told which plugin to install.
+  Why:  It installs one named plugin, or every configured plugin with \`--all\`, never both.
+  Next: Name one plugin to install, or pass --all to install every configured plugin: "nextly plugins install <name>" or "nextly plugins install --all".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-install-target-unclear  (PLUGIN_INSTALL_TARGET_UNCLEAR)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_LIMIT_RULE_INVALID 1`] = `
+"✗ Plugin "reviews" declares the limit rule "reviews-per-day", which must be of type "window" or "backoff".
+  Why:  A limit rule is checked when the configuration loads, so a rule that cannot be enforced stops the start rather than letting every request past.
+  Next: Correct the limit rule "reviews-per-day" so that it does what the message says it must.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-limit-rule-invalid  (PLUGIN_LIMIT_RULE_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MANIFEST_INVALID 1`] = `
+"✗ Plugin "reports" declares an invalid manifest at "provides".
+  Why:  Invalid input: expected array, received string.
+  Next: Correct \`provides\` in the plugin's definition, or install a release of the plugin whose definition is valid.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-manifest-invalid  (PLUGIN_MANIFEST_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MENU_COLLECTION_UNOWNED 1`] = `
+"✗ Plugin "reviews" has a menu item ("Products") naming collection "products", which it does not contribute.
+  Why:  A plugin's menu items link only to the collections the plugin itself contributes.
+  Next: Name one of: reviews.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-menu-collection-unowned  (PLUGIN_MENU_COLLECTION_UNOWNED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN 1`] = `
+"✗ This migration would add seo_redirects.status as NOT NULL with no default to a table plugin "@acme/seo" created earlier, and the rows already in it would have no value for it.
+  Why:  SQLite refuses such a column, PostgreSQL refuses it once the table has rows, and MySQL fills the rows with 0 or '' without saying so, so it is refused on every dialect when the migration is generated.
+  Next: Give the column a default, or write the addition by hand — add the column nullable, fill the existing rows, then make it NOT NULL — in a module from \`nextly migrate:create --plugin <entry> --blank\`, which records this change for the SQL you write.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-adds-unfillable-column  (PLUGIN_MIGRATION_ADDS_UNFILLABLE_COLUMN)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MIGRATION_BEFORE_APPLIED 1`] = `
+"✗ Plugin "@acme/seo" lists a migration "20261019_090000_add_index" that has not run, ordered before "20261020_120000_add_redirects", which has.
+  Why:  A new migration may only follow the ones already applied: run now, it would run after migrations written to come after it. Nothing was applied.
+  Next: Rename it so its name sorts after "20261020_120000_add_redirects", as the generator's timestamps do. If it was rolled back by hand, roll back the migrations after it first, or once its changes are in place record it with \`nextly migrate:resolve --applied plugin:@acme/seo/20261019_090000_add_index\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-before-applied  (PLUGIN_MIGRATION_BEFORE_APPLIED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MIGRATION_CHANGED 1`] = `
+"✗ Plugin "@acme/seo" migration 20261020_120000_add_redirects: a plugin migration has been changed since it was generated.
+  Why:  An edited module is refused rather than re-hashed, so the SQL that runs is the SQL that was reviewed. Nothing was applied.
+  Next: Regenerate it, or restore the original. A module written or edited by hand is sealed with \`migrationChecksum\` from \`@nextlyhq/plugin-sdk/schema\` — \`checksum: migrationChecksum(content)\` over the module without its checksum — which is the form \`nextly migrate:create --plugin <entry> --blank\` and \`--no-transaction\` write.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-changed  (PLUGIN_MIGRATION_CHANGED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA 1`] = `
+"✗ This migration would drop seo_redirects.target, which an earlier migration of plugin "@acme/seo" created, and lose its rows.
+  Why:  The generator cannot tell a rename from a drop and an add, so it does not drop what the plugin created on its own.
+  Next: If it was renamed, write the rename by hand; if the drop is deliberate, write the drop by hand — in a module from \`nextly migrate:create --plugin <entry> --blank\`, which records this change for the SQL you write.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-drops-created-schema  (PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MIGRATION_NOT_SHIPPED 1`] = `
+"✗ "@acme/seo" has applied migrations its configured version no longer ships (20261020_120000_add_redirects), so they cannot be undone.
+  Why:  A migration's DOWN lives in the version of the plugin that shipped it. Nothing was changed.
+  Next: Configure the version that shipped them and uninstall again, or use --keep-data to leave its tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-not-shipped  (PLUGIN_MIGRATION_NOT_SHIPPED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MIGRATION_SQL_MISSING 1`] = `
+"✗ Plugin "@acme/seo" migration 20261020_120000_add_redirects changes the schema on sqlite but has no sqlite statements, so running it would record a change it never made.
+  Why:  A module written for its author's SQL, such as one from \`nextly migrate:create --plugin <entry> --blank\`, runs only the statements it is given. Nothing was applied.
+  Next: Write the module's sqlite \`up\` and \`down\` in the plugin, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-sql-missing  (PLUGIN_MIGRATION_SQL_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_MIGRATIONS_OUT_OF_ORDER 1`] = `
+"✗ Plugin "@acme/seo" lists its migration "20261019_090000_add_index" after "20261020_120000_add_redirects", but its migrations run in the order of their names, so "20261019_090000_add_index" runs first.
+  Why:  Every reader of a plugin's migrations runs them by name, so a list in another order is refused rather than sorted in silence. Nothing was applied.
+  Next: List the plugin's migrations in the order of their names (the order \`nextly migrate:create --plugin\` writes them in).
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migrations-out-of-order  (PLUGIN_MIGRATIONS_OUT_OF_ORDER)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_NAME_TOO_LONG_FOR_SETTINGS 1`] = `
+"✗ Plugin "reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-" stores settings, and its name is longer than the 191 characters the settings storage holds.
+  Why:  Settings are stored under the plugin's name, in a column of that width.
+  Next: Use a release of the plugin whose name is 191 characters or fewer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-name-too-long-for-settings  (PLUGIN_NAME_TOO_LONG_FOR_SETTINGS)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_NEXTLY_INCOMPATIBLE 1`] = `
+"✗ Plugin "reviews" requires Nextly ^2.0.0, but this is Nextly 1.4.0.
+  Why:  The installed \`nextly\` is outside the plugin's \`nextly\` range, ^2.0.0.
+  Next: Install a release of "reviews" that supports Nextly 1.4.0, or a version of \`nextly\` in ^2.0.0.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-nextly-incompatible  (PLUGIN_NEXTLY_INCOMPATIBLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_NEXTLY_RANGE_INVALID 1`] = `
+"✗ Plugin "reviews" declares an invalid \`nextly\` range "latest".
+  Why:  \`nextly\` must be a semver range, such as \`^1.2.0\`, so it can be checked against the installed version.
+  Next: Correct the \`nextly\` range of "reviews", or install a release of it that declares a valid one.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-nextly-range-invalid  (PLUGIN_NEXTLY_RANGE_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_NOT_FOUND 1`] = `
+"✗ Plugin "@acme/sitemap" not found.
+  Why:  No plugin the configuration lists has that name or admin slug.
+  Next: Run \`nextly plugins list\` to see installed plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-not-found  (PLUGIN_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_NOT_INSTALLED 1`] = `
+"✗ A configured plugin has not been installed on this database: @acme/seo.
+  Why:  In production a configured plugin starts only once \`nextly plugins install\` has run its \`onInstall\` and recorded it.
+  Next: Run "nextly plugins install @acme/seo".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-not-installed  (PLUGIN_NOT_INSTALLED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_OPTIONAL_DEPENDENCY_VERSION_INCOMPATIBLE 1`] = `
+"✗ Plugin "reviews" optionally depends on "commerce" ^2.0.0, but "commerce" is 1.0.0.
+  Why:  An optional dependency need not be configured, but once it is, its version must be in the plugin's \`optionalDependsOn\` range.
+  Next: Install a version of "commerce" in ^2.0.0, or a release of "reviews" that accepts 1.0.0.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-optional-dependency-version-incompatible  (PLUGIN_OPTIONAL_DEPENDENCY_VERSION_INCOMPATIBLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_OUTBOUND_HOST_INVALID 1`] = `
+"✗ Plugin "reports" declares an outbound host that is not a hostname with an optional port: "https://api.example.com".
+  Why:  Each \`capabilities.net.outbound\` entry is a hostname, with an optional port, such as \`api.example.com:443\`; not a URL or an IP address.
+  Next: Replace "https://api.example.com" with the hostname alone, and its port if it needs one.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-outbound-host-invalid  (PLUGIN_OUTBOUND_HOST_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_PERMISSION_CRUD_RESERVED 1`] = `
+"✗ The custom permission "delete-posts", declared by "reports", repeats one Nextly creates.
+  Why:  Nextly creates "delete" on "posts" itself, for the collection or single with that slug.
+  Next: Remove the declaration, since the permission already exists, or name another action for what it guards.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-permission-crud-reserved  (PLUGIN_PERMISSION_CRUD_RESERVED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_PERMISSION_DUPLICATE 1`] = `
+"✗ The custom permission "export-reports" is declared twice, by \`nextly.config.ts\` and "reports".
+  Why:  A permission is one action on one resource, compared without regard to case, and the database holds one row for it.
+  Next: Remove one of the two declarations, or give one of them another action or resource.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-permission-duplicate  (PLUGIN_PERMISSION_DUPLICATE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_PERMISSION_SYSTEM_RESOURCE 1`] = `
+"✗ The custom permission "export-users", declared by "reports", is on a resource Nextly reserves.
+  Why:  "users" is one of Nextly's own resources, whose permissions it seeds itself.
+  Next: Declare the permission on a resource of the plugin's own.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-permission-system-resource  (PLUGIN_PERMISSION_SYSTEM_RESOURCE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_PRINCIPAL_KIND_COLLISION 1`] = `
+"✗ Plugins "accounts" and "portal" both register the kind of signed-in person "customer".
+  Why:  A kind of signed-in person is recognised by its full name, so each name is registered once.
+  Next: Rename the kind "customer" in one of the two plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-principal-kind-collision  (PLUGIN_PRINCIPAL_KIND_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_PRINCIPAL_KIND_INVALID 1`] = `
+"✗ Plugin "accounts" registers a kind of signed-in person that cannot be used.
+  Why:  resolve must be a function.
+  Next: Correct the plugin's \`contributes.principals\` entry as the Why line says.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-principal-kind-invalid  (PLUGIN_PRINCIPAL_KIND_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_RELATION_DEPENDENCY_UNDECLARED 1`] = `
+"✗ Plugin "reviews" relates to "products" owned by plugin "commerce" but does not declare dependsOn["commerce"].
+  Why:  A plugin can relate to another plugin's entity only when it depends on that plugin, so "commerce" is sure to be configured and set up first.
+  Next: Add "commerce" to the \`dependsOn\` of "reviews", with the range of its versions that it supports.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-relation-dependency-undeclared  (PLUGIN_RELATION_DEPENDENCY_UNDECLARED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_RENAME_TARGET_UNKNOWN 1`] = `
+"✗ Plugin "reviews" renames "review", which is not one of its contributed collections/singles/components.
+  Why:  \`.rename()\` renames only the collections, singles and field groups the plugin itself contributes.
+  Next: Remove "review" from the \`.rename()\` map in \`nextly.config.ts\`, or correct it to a slug the plugin contributes.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-rename-target-unknown  (PLUGIN_RENAME_TARGET_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ROUTE_COLLISION 1`] = `
+"✗ Duplicate route GET /feeds/rss contributed by feeds and syndication.
+  Why:  Both patterns match the same requests with as many fixed segments each, so nothing decides which of them answers.
+  Next: Change the path of one of the two routes, or configure only one of the two plugins in \`nextly.config.ts\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-collision  (PLUGIN_ROUTE_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ROUTE_MOUNT_INVALID 1`] = `
+"✗ Plugin "reviews" declares route "/summary" with an unknown mount "global".
+  Why:  A route is registered under the mount it declares and looked up under "plugin" or "root", so it would never match.
+  Next: Set the route's \`mount\` to "plugin" or "root", or leave it out for "plugin".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-mount-invalid  (PLUGIN_ROUTE_MOUNT_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ROUTE_OPTIONS_INVALID 1`] = `
+"✗ Plugin "reviews" route GET /summary declares an option that cannot apply.
+  Why:  rawBody is only meaningful on a method with a body, not GET.
+  Next: Correct the option named in the route's declaration in the plugin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-options-invalid  (PLUGIN_ROUTE_OPTIONS_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ROUTE_PATH_INVALID 1`] = `
+"✗ Plugin "reviews" declares a route path "summary" that does not start with "/".
+  Why:  A route's path is mounted under \`/plugins/<plugin>\`, so it must be absolute within that namespace.
+  Next: Start the route's path with "/", as in "/summary".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-path-invalid  (PLUGIN_ROUTE_PATH_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_ROUTE_ROOT_UNREACHABLE 1`] = `
+"✗ Plugin "reviews" declares a root-mounted route at "/admin-meta/reviews", which cannot answer.
+  Why:  The admin metadata endpoints answer from the verb wrappers, and the GET branch claims the whole subtree, so the fallback this route waits for is never reached.
+  Next: Leave the route under the plugin's namespace (\`mount: "plugin"\`), or move it to a path whose first segment no built-in handler claims.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-root-unreachable  (PLUGIN_ROUTE_ROOT_UNREACHABLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SCHEMA_BEHIND 1`] = `
+"✗ The plugin "@acme/seo" expects schema version 3, and the database has 2.
+  Why:  The applied version is the newest \`schemaVersion\` among the plugin's migrations recorded as applied, and production does not start a plugin ahead of its tables.
+  Next: Run "nextly migrate" or "nextly plugins install @acme/seo".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SCHEMA_VERSION_INVALID 1`] = `
+"✗ Plugin "reports" declares schemaVersion 0.
+  Why:  It must be a positive integer.
+  Next: Set the plugin's \`schemaVersion\` to a positive integer, such as \`1\`, or install a release of the plugin that does.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-version-invalid  (PLUGIN_SCHEMA_VERSION_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SCHEMA_VERSION_NOT_ADVANCED 1`] = `
+"✗ The plugin's schemaVersion must move past 3 before new migrations can be generated (it is 3).
+  Why:  The runner takes a plugin's schema version from its last migration, so a new migration that changes the schema must declare a higher one.
+  Next: Raise \`schemaVersion\` in \`@acme/seo\` above 3, then generate the migration again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-version-not-advanced  (PLUGIN_SCHEMA_VERSION_NOT_ADVANCED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SECRET_PATH_DUPLICATE 1`] = `
+"✗ Plugin "reports" declares the secret path "apiKey" twice.
+  Why:  Each setting is encrypted once, so each path is listed once.
+  Next: Remove the second "apiKey" from \`capabilities.secrets\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-secret-path-duplicate  (PLUGIN_SECRET_PATH_DUPLICATE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SECRET_PATH_EMPTY 1`] = `
+"✗ Plugin "reports" declares an empty secret path.
+  Why:  Each entry in \`capabilities.secrets\` names a setting by its dotted path in \`contributes.settings\`.
+  Next: Remove the empty entry from \`capabilities.secrets\`, or write the path of the setting it is for.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-secret-path-empty  (PLUGIN_SECRET_PATH_EMPTY)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SECRET_PATH_NAMES_GROUP 1`] = `
+"✗ Plugin "reports" declares the secret path "provider", which names a group of settings rather than one value.
+  Why:  A secret is one stored value, so its path ends at a single setting.
+  Next: Name the value inside it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-secret-path-names-group  (PLUGIN_SECRET_PATH_NAMES_GROUP)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SECRET_PATH_NOT_STRING 1`] = `
+"✗ Plugin "reports" declares the secret path "retries", which names a value that cannot be a string.
+  Why:  A secret is stored as a string.
+  Next: Point "retries" at a text setting, or make the setting it names a string.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-secret-path-not-string  (PLUGIN_SECRET_PATH_NOT_STRING)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SECRET_PATH_UNKNOWN 1`] = `
+"✗ Plugin "reports" declares the secret path "apiKey", which its settings schema does not contain.
+  Why:  A secret path the schema does not have would leave the credential it is for stored in plain text.
+  Next: Correct "apiKey" to the path of a setting in \`contributes.settings\`, or add that setting.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-secret-path-unknown  (PLUGIN_SECRET_PATH_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SECRETS_WITHOUT_SETTINGS 1`] = `
+"✗ Plugin "reports" declares secret paths but no settings schema (contributes.settings) for them to name.
+  Why:  A secret path names a setting to encrypt, so without \`contributes.settings\` it names nothing.
+  Next: Add the settings schema under \`contributes.settings\`, or remove \`capabilities.secrets\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-secrets-without-settings  (PLUGIN_SECRETS_WITHOUT_SETTINGS)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SETTINGS_KEY_TOO_LONG 1`] = `
+"✗ Plugin "reports" declares the settings key "deliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydelivery", which is longer than the 191 characters the settings storage holds.
+  Why:  Settings are stored by key, in a column of that width.
+  Next: Shorten "deliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydelivery" to 191 characters or fewer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-settings-key-too-long  (PLUGIN_SETTINGS_KEY_TOO_LONG)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SETTINGS_PERMISSION_UNDECLARED 1`] = `
+"✗ Plugin "reviews" declares settingsPermission "manage-reviews", which is not one of its own permissions (moderate-reviews).
+  Why:  \`settingsPermission\` must name a permission the plugin declares itself, so that a role can be given it.
+  Next: Declare "manage-reviews" among the plugin's own permissions, or set \`settingsPermission\` to one it already declares.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-settings-permission-undeclared  (PLUGIN_SETTINGS_PERMISSION_UNDECLARED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SETTINGS_PERMISSION_WITHOUT_SETTINGS 1`] = `
+"✗ Plugin "reviews" declares settingsPermission "manage-reviews" but no settings schema for it to guard.
+  Why:  \`settingsPermission\` guards the plugin's settings, and the plugin declares no \`contributes.settings\`.
+  Next: Add the settings schema under \`contributes.settings\`, or remove \`settingsPermission\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-settings-permission-without-settings  (PLUGIN_SETTINGS_PERMISSION_WITHOUT_SETTINGS)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_SETUP_FAILED 1`] = `
 "✗ The \`@nextlyhq/plugin-seo\` plugin failed while the configuration was loading.
   Why:  seo: \`collections\` must name at least one collection
   Next: Check the options this plugin is given in \`nextly.config.ts\`, or update the plugin; \`--verbose\` shows where it failed.
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-setup-failed  (PLUGIN_SETUP_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SHIPS_NO_MIGRATIONS 1`] = `
+"✗ A plugin declares tables or table elements but ships no migrations to create them.
+  Why:  They exist in development through push, and a deployed database gets its tables only from migrations. Not migrated: seo_redirects, dc_posts.seo_title.
+  Next: Generate the plugin's migrations before deploying, with \`nextly migrate:create --plugin <entry>\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-ships-no-migrations  (PLUGIN_SHIPS_NO_MIGRATIONS)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SLUG_COLLISION 1`] = `
+"✗ Duplicate collection slug "reviews" contributed by code and reviews.
+  Why:  A slug names one collection, single or field group, and "reviews" is claimed twice; "code" is \`nextly.config.ts\`.
+  Next: Rename the entity in \`nextly.config.ts\`, or rename the plugin's with \`.rename()\`, for example \`plugin.rename({ "reviews": "new-slug" })\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-slug-collision  (PLUGIN_SLUG_COLLISION)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_TABLE_IDENTITY_UNREADABLE 1`] = `
+"✗ The database reports no identity for seo_redirects, so whether @acme/seo's onUninstall leaves it in place could not be checked.
+  Why:  A full uninstall reads each table's identity before and after the plugin's \`onUninstall\`, so its DOWN migrations never drop a table the hook put in place of the one they were judged against. Nothing was changed.
+  Next: Use --keep-data to leave its tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-table-identity-unreadable  (PLUGIN_TABLE_IDENTITY_UNREADABLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_TABLES_NOT_MIGRATED 1`] = `
+"✗ @acme/seo owns 1 table(s), listed above, but this database has no applied migration module to undo them.
+  Why:  They were created by a development push rather than by a migration. Its tables: seo_redirects. Nothing was changed.
+  Next: Drop them with a migration, or remove the plugin from config and reset the development database.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-tables-not-migrated  (PLUGIN_TABLES_NOT_MIGRATED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_UNINSTALL_DECLINED 1`] = `
+"✗ Nothing was changed: the deletion was not confirmed.
+  Why:  A full uninstall drops the plugin's tables, and the prompt that listed them was not answered yes.
+  Next: Run the uninstall again and confirm the deletion, or use --keep-data to leave the tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-declined  (PLUGIN_UNINSTALL_DECLINED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_UNINSTALL_IRREVERSIBLE 1`] = `
+"✗ "@acme/seo" has migrations that cannot be undone (20261020_120000_add_redirects).
+  Why:  A full uninstall undoes every migration or none: stopping at the first that cannot be undone would leave the plugin's schema half undone. Nothing was changed.
+  Next: Use --keep-data to leave its tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-irreversible  (PLUGIN_UNINSTALL_IRREVERSIBLE)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_UNINSTALL_KEEP_DATA_MISMATCH 1`] = `
+"✗ The uninstall of @acme/seo began without --keep-data and did not finish.
+  Why:  Run again, an uninstall carries on from where it stopped, and only the way it began: a full one may have dropped tables already, and one that kept its data has run \`onUninstall\` for tables it leaves. Nothing was changed.
+  Next: Run it again without --keep-data to finish it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-keep-data-mismatch  (PLUGIN_UNINSTALL_KEEP_DATA_MISMATCH)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_UNINSTALL_UNFINISHED 1`] = `
+"✗ The uninstall of the plugin "@acme/seo" began and did not finish.
+  Why:  A plugin removed part way is refused in every environment, so its code never runs over the tables that are left.
+  Next: Run "nextly plugins uninstall @acme/seo" to finish it, or "nextly plugins install @acme/seo" to reinstate it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-unfinished  (PLUGIN_UNINSTALL_UNFINISHED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_UNINSTALLED_BUT_CONFIGURED 1`] = `
+"✗ The plugin "@acme/seo" has been uninstalled but is still listed in your config.
+  Why:  Started again, it would run over tables its uninstall removed, and a development push would create them again, so it is refused in every environment.
+  Next: Run "nextly plugins install @acme/seo" to reinstate it, or remove it from the config.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstalled-but-configured  (PLUGIN_UNINSTALLED_BUT_CONFIGURED)"
+`;
+
+exports[`each code, as a command ends with it > POSTGRES_SCHEMA_INVALID 1`] = `
+"✗ db.postgres.schema is "Tenant-A", which is not a usable schema name.
+  Why:  The name reaches SQL through the connection's \`search_path\`, where an unusable one would connect and then find nothing.
+  Next: Use lower-case letters, digits and underscores, starting with a letter or underscore (max 63 characters), and not beginning with "pg_".
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-invalid  (POSTGRES_SCHEMA_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > POSTGRES_SCHEMA_MISMATCH 1`] = `
+"✗ db.postgres.schema is not set (so "public"), but the database adapter passed to Nextly uses schema "tenant_a".
+  Why:  Both must name the same schema, or tables and migrations end up split between them.
+  Next: To fix it, create the adapter without a schema option, or set db.postgres.schema to "tenant_a".
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-mismatch  (POSTGRES_SCHEMA_MISMATCH)"
+`;
+
+exports[`each code, as a command ends with it > POSTGRES_SCHEMA_UNSUPPORTED 1`] = `
+"✗ db.postgres.schema is "tenant_a", but a PostgreSQL schema other than "public" is not supported yet.
+  Why:  Nextly can only create and migrate its tables in "public".
+  Next: Remove db.postgres.schema (and any schema option on the database adapter), or set it to "public".
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-unsupported  (POSTGRES_SCHEMA_UNSUPPORTED)"
+`;
+
+exports[`each code, as a command ends with it > PRODUCTION_ROLLBACK_UNCONFIRMED 1`] = `
+"✗ Refusing to roll back in production without --yes.
+  Why:  \`NODE_ENV\` is \`production\`. Prefer rolling forward with a corrective migration, or restore from backup.
+  Next: Re-run with --yes to override.
+  Docs: https://nextlyhq.com/docs/cli/errors/production-rollback-unconfirmed  (PRODUCTION_ROLLBACK_UNCONFIRMED)"
+`;
+
+exports[`each code, as a command ends with it > PROJECT_ALREADY_INITIALIZED 1`] = `
+"✗ Nextly is already initialized in this directory.
+  Why:  /home/you/app/nextly.config.ts already exists.
+  Next: Use \`--force\` to overwrite the existing configuration.
+  Docs: https://nextlyhq.com/docs/cli/errors/project-already-initialized  (PROJECT_ALREADY_INITIALIZED)"
+`;
+
+exports[`each code, as a command ends with it > PROMOTE_COLLECTION_NOT_FOUND 1`] = `
+"✗ Collection 'posts' not found in UI source (dynamic_collections).
+  Why:  \`--promote\` moves a collection built in the Schema Builder into code, and no collection with this slug was built there.
+  Next: Check the slug in the admin's Schema Builder. A collection already defined in \`nextly.config.ts\` is in code and needs no promotion.
+  Docs: https://nextlyhq.com/docs/cli/errors/promote-collection-not-found  (PROMOTE_COLLECTION_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > RELATION_TARGET_UNKNOWN 1`] = `
+"✗ Field "product" on "reviews" has relationTo "prodcuts", which is not a collection in the merged schema.
+  Why:  No collection in \`nextly.config.ts\`, its plugins or the Schema Builder has the slug "prodcuts", and it is not \`users\` or \`media\`.
+  Next: Set \`relationTo\` on "reviews.product" to an existing collection, or create the collection "prodcuts".
+  Docs: https://nextlyhq.com/docs/cli/errors/relation-target-unknown  (RELATION_TARGET_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > RESOLVE_FILE_NOT_FOUND 1`] = `
+"✗ Migration file not found: 20261020_120000_add_posts.sql.
+  Why:  \`nextly migrate:resolve\` records a file of the project's migrations folder (\`db.migrationsDir\`), and none has this name.
+  Next: Check the name with \`nextly migrate:status\`, and pass it as listed there, with or without \`.sql\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-file-not-found  (RESOLVE_FILE_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > RESOLVE_LOCK_RELEASED 1`] = `
+"✗ The migrate lock was released without resolving the migration.
+  Why:  Nothing was written.
+  Next: Retry once no other schema operation is running.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-lock-released  (RESOLVE_LOCK_RELEASED)"
+`;
+
+exports[`each code, as a command ends with it > RESOLVE_MODE_REQUIRED 1`] = `
+"✗ \`nextly migrate:resolve\` needs exactly one thing to record.
+  Why:  It was given none of \`--applied\`, \`--rolled-back\` and \`--failed-cleanup\`.
+  Next: Provide exactly one of --applied, --rolled-back, or --failed-cleanup.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-mode-required  (RESOLVE_MODE_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > RESOLVE_NOT_APPLIED 1`] = `
+"✗ Cannot roll back 20261020_120000_add_posts.sql: no prior applied event exists.
+  Why:  \`--rolled-back\` records that an applied migration was undone, and the ledger holds no applied run of this file.
+  Next: Run \`nextly migrate:status\` to see the file's state: a file that never ran needs no rollback recorded.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-not-applied  (RESOLVE_NOT_APPLIED)"
+`;
+
+exports[`each code, as a command ends with it > RESOLVE_NOTHING_TO_CLEAN_UP 1`] = `
+"✗ No failed or unfinished attempt found for 20261020_120000_add_posts.sql.
+  Why:  \`--failed-cleanup\` clears the attempts that failed or recorded no outcome, and this file has none.
+  Next: Run \`nextly migrate:status\` to see the file's state; to run it again, use \`nextly migrate\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-nothing-to-clean-up  (RESOLVE_NOTHING_TO_CLEAN_UP)"
+`;
+
+exports[`each code, as a command ends with it > RESOLVE_PLUGIN_MODULE 1`] = `
+"✗ \`nextly migrate:resolve --applied\` does not mark \`plugin:@acme/blog/001_init\` applied.
+  Why:  plugin:@acme/blog/001_init is a plugin module, which \`nextly migrate\` records applied together with the tables it owns.
+  Next: Run \`nextly migrate:resolve --failed-cleanup plugin:@acme/blog/001_init\` and then \`nextly migrate\`: it records the module applied when the database stands at its result, and runs it when the database stands at its start.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-plugin-module  (RESOLVE_PLUGIN_MODULE)"
+`;
+
+exports[`each code, as a command ends with it > RESOLVE_SCHEMA_MISMATCH 1`] = `
+"✗ Live schema does not match the target snapshot for 20261020_120000_add_posts.sql.
+  Why:  \`--applied\` records a file only once the database stands where the file leaves it, and some table or column differs from its snapshot.
+  Next: Resolve the drift or re-run with --skip-verify.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-schema-mismatch  (RESOLVE_SCHEMA_MISMATCH)"
+`;
+
+exports[`each code, as a command ends with it > RESOLVE_SNAPSHOT_MISSING 1`] = `
+"✗ No paired snapshot for 20261020_120000_add_posts.sql; cannot verify.
+  Why:  \`--applied\` records a file once the live schema matches the snapshot \`migrate:create\` wrote beside it in \`meta/\`, and this file has none.
+  Next: Re-run with --skip-verify to override.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-snapshot-missing  (RESOLVE_SNAPSHOT_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > SCHEMA_CHANGE_WITHOUT_MIGRATION 1`] = `
+"✗ 2 pending schema change(s) detected.
+  Why:  + add_column dc_posts.subtitle (text)
+        + add_table dc_authors
+  Next: Run \`nextly migrate:create --name="<migration-name>"\` and commit the result.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-change-without-migration  (SCHEMA_CHANGE_WITHOUT_MIGRATION)"
 `;
 
 exports[`each code, as a command ends with it > SCHEMA_LOCK_HELD 1`] = `
@@ -136,9 +1321,114 @@ exports[`each code, as a command ends with it > SCHEMA_LOCK_HELD 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/schema-lock-held  (SCHEMA_LOCK_HELD)"
 `;
 
+exports[`each code, as a command ends with it > SCHEMA_LOCK_LOST 1`] = `
+"✗ db:sync finished, but could not keep the schema lock to the end.
+  Why:  Another run took it while the work ran.
+  Next: Check the database before running it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-lock-lost  (SCHEMA_LOCK_LOST)"
+`;
+
+exports[`each code, as a command ends with it > SCHEMA_LOCK_UNAVAILABLE 1`] = `
+"✗ The command did not run: the schema lock could not be taken.
+  Why:  Its row in \`nextly_schema_lock\` could not be established, and running without the lock would leave other runs free to change the schema at the same time.
+  Next: Check that the database user can create and write that table, then run the command again; \`--verbose\` shows the details.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-lock-unavailable  (SCHEMA_LOCK_UNAVAILABLE)"
+`;
+
+exports[`each code, as a command ends with it > SCHEMA_SYNC_IN_PRODUCTION 1`] = `
+"✗ Cannot auto-sync schema in production mode.
+  Why:  \`NODE_ENV\` is \`production\`, and 2 collections would change: posts, pages.
+  Next: Run \`nextly migrate:create --name="<migration-name>"\` to create migrations, then \`nextly migrate\` to apply.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-sync-in-production  (SCHEMA_SYNC_IN_PRODUCTION)"
+`;
+
+exports[`each code, as a command ends with it > SETTINGS_CHANGE_WITHOUT_MIGRATION 1`] = `
+"✗ 1 entity's settings changed with no migration.
+  Why:  ~ posts: labels.singular
+  Next: Run \`nextly migrate:create --name="<migration-name>"\` and commit the result.
+  Docs: https://nextlyhq.com/docs/cli/errors/settings-change-without-migration  (SETTINGS_CHANGE_WITHOUT_MIGRATION)"
+`;
+
+exports[`each code, as a command ends with it > SETUP_ALREADY_COMPLETE 1`] = `
+"✗ Setup is already complete: this install has an administrator. Nothing was created.
+  Why:  Only the first administrator is created here, and this install has one.
+  Next: Sign in as that administrator, and add other accounts from the admin.
+  Docs: https://nextlyhq.com/docs/cli/errors/setup-already-complete  (SETUP_ALREADY_COMPLETE)"
+`;
+
+exports[`each code, as a command ends with it > SETUP_IN_PROGRESS 1`] = `
+"✗ A setup is in progress on this install, so the token was not replaced.
+  Why:  One setup runs at a time, and another setup, from the web or this command, holds this install's setup claim.
+  Next: Run \`nextly setup-token\` again in a moment.
+  Docs: https://nextlyhq.com/docs/cli/errors/setup-in-progress  (SETUP_IN_PROGRESS)"
+`;
+
+exports[`each code, as a command ends with it > SETUP_TOKEN_SET_BY_ENV 1`] = `
+"✗ NEXTLY_SETUP_TOKEN sets this install's token, so there is no generated one to replace.
+  Why:  A token set by NEXTLY_SETUP_TOKEN is read from the environment, not stored in the install's database.
+  Next: Change the variable where it is set.
+  Docs: https://nextlyhq.com/docs/cli/errors/setup-token-set-by-env  (SETUP_TOKEN_SET_BY_ENV)"
+`;
+
+exports[`each code, as a command ends with it > SNAPSHOT_WITHOUT_MIGRATION 1`] = `
+"✗ The snapshot \`20261020_120000_add_posts.snapshot.json\` exists but \`20261020_120000_add_posts.sql\` does not.
+  Why:  A snapshot is written beside the migration it describes, and this one's migration was deleted or never committed.
+  Next: Restore the .sql file from version control, or delete the orphan snapshot.
+  Docs: https://nextlyhq.com/docs/cli/errors/snapshot-without-migration  (SNAPSHOT_WITHOUT_MIGRATION)"
+`;
+
+exports[`each code, as a command ends with it > SQLITE_FOREIGN_KEYS_STILL_ON 1`] = `
+"✗ Foreign-key enforcement could not be switched off for this migration.
+  Why:  Another transaction was open on the connection. Nothing was applied.
+  Next: Re-run it once that transaction has finished.
+  Docs: https://nextlyhq.com/docs/cli/errors/sqlite-foreign-keys-still-on  (SQLITE_FOREIGN_KEYS_STILL_ON)"
+`;
+
+exports[`each code, as a command ends with it > UI_SCHEMA_INVALID 1`] = `
+"✗ \`ui-schema.json\` failed validation.
+  Why:  collections.0.slug: slug must match ^[a-z][a-z0-9_-]*$
+  Next: Fix each entry listed in \`ui-schema.json\`, or make the change again in the Schema Builder, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/ui-schema-invalid  (UI_SCHEMA_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > UI_SCHEMA_NOT_JSON 1`] = `
+"✗ ui-schema.json is not valid JSON.
+  Why:  Unexpected token '}', "{ "collections": [ }" is not valid JSON
+  Next: Fix the JSON at the position named, or restore \`ui-schema.json\` from version control, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/ui-schema-not-json  (UI_SCHEMA_NOT_JSON)"
+`;
+
+exports[`each code, as a command ends with it > UI_SCHEMA_UNREADABLE 1`] = `
+"✗ Failed to read ui-schema file at /home/you/app/ui-schema.json.
+  Why:  EACCES: permission denied, open '/home/you/app/ui-schema.json'
+  Next: Check that the file is readable by the user running the command, or point \`db.uiSchemaFile\` in \`nextly.config.ts\` at the right file.
+  Docs: https://nextlyhq.com/docs/cli/errors/ui-schema-unreadable  (UI_SCHEMA_UNREADABLE)"
+`;
+
 exports[`each code, as a command ends with it > UNEXPECTED_ERROR 1`] = `
 "✗ The command stopped on an error Nextly did not expect.
   Why:  Failed query: no such column: localized
   Next: Run it again with \`--verbose\` to see the details, and report it at https://github.com/nextlyhq/nextly/issues if it keeps happening.
   Docs: https://nextlyhq.com/docs/cli/errors/unexpected-error  (UNEXPECTED_ERROR)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_BACKUP_NOT_CONFIRMED 1`] = `
+"✗ Refusing to upgrade without a confirmed backup.
+  Why:  No terminal is attached to ask whether the database is backed up, and \`--confirm-backed-up\` was not passed. Nothing was changed.
+  Next: Re-run with \`--confirm-backed-up\` (CI/non-TTY) after backing up your database.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-backup-not-confirmed  (UPGRADE_BACKUP_NOT_CONFIRMED)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_CANCELLED 1`] = `
+"✗ Upgrade cancelled by operator.
+  Why:  The upgrade asks for a backup before its first step that changes anything, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run \`nextly upgrade\` again and answer yes.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-cancelled  (UPGRADE_CANCELLED)"
+`;
+
+exports[`each code, as a command ends with it > UPGRADE_EVENTS_TABLE_TAKEN 1`] = `
+"✗ A table named "nextly_schema_events" already exists with an unexpected shape.
+  Why:  \`nextly upgrade\` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
+  Next: Rename it, or re-run with \`--target-table-name <name>\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)"
 `;

@@ -76,13 +76,14 @@ import { findUnexpectedDestructiveStatements } from "../../domains/schema/pipeli
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 import {
   askToDeleteInTerminal,
@@ -367,7 +368,7 @@ export function refusalOf(
   if (p.statements.length === 0) {
     return NextlyError.invalidInput({
       message: `${p.filename} has no down SQL — it is irreversible. Hand-write a -- DOWN section or use 'nextly migrate:fresh'.`,
-      logContext: { filename: p.filename },
+      logContext: { filename: p.filename, reason: "down-sql-missing" },
     });
   }
   try {
@@ -701,6 +702,7 @@ export async function migrateDownCore(
     throw NextlyError.invalidInput({
       message:
         "Refusing to roll back in production without --yes. Prefer rolling forward with a corrective migration, or restore from backup. Re-run with --yes to override.",
+      logContext: { reason: "production-needs-yes" },
     });
   }
 
@@ -924,11 +926,7 @@ export async function runMigrateDown(
   const { logger } = context;
   logger.header("Migrate Down");
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid || !dbValidation.dialect) {
-    for (const err of dbValidation.errors ?? []) logger.error(err);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
   const dialect = dbValidation.dialect;
 
   const configResult = await loadConfig({
@@ -1080,8 +1078,7 @@ export function registerMigrateDownCommand(program: Command): void {
       try {
         await runMigrateDown(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_LIMIT_RULE_INVALID
+description: "A plugin declares a limit rule that cannot be enforced."
+---
+
+## Cause
+
+A plugin declares a limit rule that cannot be enforced.
+
+A plugin's limit rules, under `contributes.limits`, are checked when the configuration loads, so a rule that cannot be enforced stops the start rather than letting every request past. The message names the rule and what it must be.
+
+## Fix
+
+- Correct the limit rule the message names.
+- If the plugin is not yours, update it to a release whose limit rules are valid.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares the limit rule "reviews-per-day", which must be of type "window" or "backoff".
+  Why:  A limit rule is checked when the configuration loads, so a rule that cannot be enforced stops the start rather than letting every request past.
+  Next: Correct the limit rule "reviews-per-day" so that it does what the message says it must.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-limit-rule-invalid  (PLUGIN_LIMIT_RULE_INVALID)
+```

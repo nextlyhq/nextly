@@ -118,7 +118,9 @@ describe("the CLI's error codes", () => {
       for (const section of ["## Cause", "## Fix", "## Example"]) {
         expect(page, `${code}: ${section}`).toContain(section);
       }
-      expect(index, `the index lists ${code}`).toContain(`(./${slug})`);
+      expect(index, `the index lists ${code}`).toContain(
+        `(/docs/cli/errors/${slug})`
+      );
       expect(meta.pages, `the sidebar lists ${slug}`).toContain(slug);
     }
     // And no page for a code that is not there: a stale page reads as a code that still exists.

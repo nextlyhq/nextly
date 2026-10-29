@@ -1,0 +1,23 @@
+---
+title: PLUGIN_NAME_TOO_LONG_FOR_SETTINGS
+description: "A plugin that stores settings has a name longer than the settings storage holds."
+---
+
+## Cause
+
+A plugin that stores settings has a name longer than the settings storage holds.
+
+A plugin's settings are stored under its name, in a column of fixed width, and the message names that width.
+
+## Fix
+
+- Use a release of the plugin whose name fits.
+
+## Example
+
+```text
+✗ Plugin "reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-reports-" stores settings, and its name is longer than the 191 characters the settings storage holds.
+  Why:  Settings are stored under the plugin's name, in a column of that width.
+  Next: Use a release of the plugin whose name is 191 characters or fewer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-name-too-long-for-settings  (PLUGIN_NAME_TOO_LONG_FOR_SETTINGS)
+```

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_ROUTE_OPTIONS_INVALID
+description: "A plugin declares a route option that cannot mean what it says, such as a raw body on a method without one."
+---
+
+## Cause
+
+A plugin declares a route option that cannot mean what it says, such as a raw body on a method without one.
+
+A route's options are checked before it is registered: its method, `rawBody`, `rateLimit`, `csrf`, `public`, `principal` and `limitKey`. An option that cannot apply would look like a decision the route does not carry out. The Why line names the option and what is wrong with it.
+
+## Fix
+
+- Correct the option the Why line names in the route's declaration in the plugin.
+- If the plugin is not yours, update it to a release that declares the route correctly.
+
+## Example
+
+```text
+✗ Plugin "reviews" route GET /summary declares an option that cannot apply.
+  Why:  rawBody is only meaningful on a method with a body, not GET.
+  Next: Correct the option named in the route's declaration in the plugin.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-options-invalid  (PLUGIN_ROUTE_OPTIONS_INVALID)
+```

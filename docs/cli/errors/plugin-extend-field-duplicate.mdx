@@ -1,0 +1,24 @@
+---
+title: PLUGIN_EXTEND_FIELD_DUPLICATE
+description: "A plugin extends an entity with a field whose name the entity already has."
+---
+
+## Cause
+
+A plugin extends an entity with a field whose name the entity already has.
+
+Field names on an entity are compared without regard to case. The field a plugin's `contributes.extend` adds is already on the target, as one of its own fields or one another plugin added.
+
+## Fix
+
+- Rename the field in the plugin's `contributes.extend`.
+- Or rename the target's own field, if it is yours.
+
+## Example
+
+```text
+✗ Plugin "reviews" extends "products" with a duplicate field "rating".
+  Why:  "products" already has a field named "rating", of its own or added by another plugin; names are compared without regard to case.
+  Next: Rename the field "rating" in the plugin's `contributes.extend`, or rename the target's own field.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-extend-field-duplicate  (PLUGIN_EXTEND_FIELD_DUPLICATE)
+```

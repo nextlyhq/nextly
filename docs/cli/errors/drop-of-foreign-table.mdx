@@ -1,0 +1,24 @@
+---
+title: DROP_OF_FOREIGN_TABLE
+description: "A migration would drop, rename or change a table, column or index that belongs to a different owner."
+---
+
+## Cause
+
+A migration would drop, rename or change a table, column or index that belongs to a different owner.
+
+Every table, column and index has one owner: core, the app, or a plugin. Before a migration runs, its statements are read, and one that drops, renames or changes what another owner holds is refused, since that owner's code still reads it. The Why line names the migration and what it would take. Nothing was applied.
+
+## Fix
+
+- Change only what the migration's own owner holds.
+- A change to another owner's table belongs in that owner's migrations.
+
+## Example
+
+```text
+✗ A migration would drop a table that belongs to a different owner.
+  Why:  In `@acme/seo/20261020_120000_add_redirects`, on `dc_posts`, which `app` holds. It has been refused, and nothing was applied.
+  Next: Change only what this migration's owner holds: a change to another owner's table belongs in that owner's migrations.
+  Docs: https://nextlyhq.com/docs/cli/errors/drop-of-foreign-table  (DROP_OF_FOREIGN_TABLE)
+```

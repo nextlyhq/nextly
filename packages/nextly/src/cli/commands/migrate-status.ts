@@ -60,6 +60,11 @@ import type {
   MigrationErrorJson,
   MigrationRecordStatus,
 } from "../../schemas/dynamic-collections/types";
+import {
+  databaseEnvError,
+  databaseUnreachable,
+  exitWithError,
+} from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -222,6 +227,21 @@ interface MigrateStatusResult {
 }
 
 /**
+ * Under `--json`, the one document the command prints when it stops on `error`, as before; the
+ * error shape itself goes to standard error.
+ */
+function printJsonError(
+  options: { json?: boolean },
+  doing: string,
+  error: unknown
+): void {
+  if (!options.json) return;
+  console.log(
+    JSON.stringify({ error: `${doing}: ${describeError(error)}` }, null, 2)
+  );
+}
+
+/**
  * Execute the migrate:status command
  *
  * @param options - Combined global and command options
@@ -245,16 +265,8 @@ export async function runMigrateStatus(
       console.log(
         JSON.stringify({ error: dbValidation.errors.join(", ") }, null, 2)
       );
-      process.exit(1);
     }
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
+    exitWithError(logger, databaseEnvError(dbValidation));
   }
 
   const dialect = dbValidation.dialect!;
@@ -270,13 +282,8 @@ export async function runMigrateStatus(
       debug: options.verbose,
     });
   } catch (error) {
-    const errorMsg = `Failed to load config: ${describeError(error)}`;
-    if (options.json) {
-      console.log(JSON.stringify({ error: errorMsg }, null, 2));
-      process.exit(1);
-    }
-    logger.error(errorMsg);
-    process.exit(1);
+    printJsonError(options, "Failed to load config", error);
+    exitWithError(logger, error);
   }
 
   if (!options.json) {
@@ -299,13 +306,8 @@ export async function runMigrateStatus(
     });
     logger.debug("Database connected");
   } catch (error) {
-    const errorMsg = `Failed to connect to database: ${describeError(error)}`;
-    if (options.json) {
-      console.log(JSON.stringify({ error: errorMsg }, null, 2));
-      process.exit(1);
-    }
-    logger.error(errorMsg);
-    process.exit(1);
+    printJsonError(options, "Failed to connect to database", error);
+    exitWithError(logger, databaseUnreachable(dialect, error));
   }
 
   try {
@@ -1041,10 +1043,8 @@ export function registerMigrateStatusCommand(program: Command): void {
       } catch (error) {
         if (resolvedOptions.json) {
           console.log(JSON.stringify({ error: describeError(error) }, null, 2));
-        } else {
-          context.logger.error(describeError(error));
         }
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

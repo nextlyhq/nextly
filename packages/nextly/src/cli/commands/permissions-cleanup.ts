@@ -2,6 +2,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { Command } from "commander";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import {
+  databaseEnvError,
+  databaseUnreachable,
+  exitWithError,
+} from "../errors";
 import { createContext } from "../program";
 import {
   createCliAdapter,
@@ -34,13 +39,21 @@ export function createPermissionsCleanupCommand(): Command {
 
         context.logger.info("Validating database environment...");
         const dbValidation = validateDatabaseEnv();
+        if (!dbValidation.valid || dbValidation.dialect === undefined) {
+          throw databaseEnvError(dbValidation);
+        }
+        const dialect = dbValidation.dialect;
 
         context.logger.info("Creating database adapter...");
-        adapter = await createCliAdapter({
-          dialect: dbValidation.dialect,
-          databaseUrl: dbValidation.databaseUrl,
-          logger: context.options.verbose ? context.logger : undefined,
-        });
+        try {
+          adapter = await createCliAdapter({
+            dialect,
+            databaseUrl: dbValidation.databaseUrl,
+            logger: context.options.verbose ? context.logger : undefined,
+          });
+        } catch (error) {
+          throw databaseUnreachable(dialect, error);
+        }
 
         context.logger.success("✅ Database connected\n");
 
@@ -82,14 +95,10 @@ export function createPermissionsCleanupCommand(): Command {
         await adapter.disconnect();
         process.exit(0);
       } catch (error) {
-        context.logger.error("Failed to cleanup permissions");
-        context.logger.newline();
-        console.error(error);
-
         if (adapter) {
           await adapter.disconnect();
         }
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 

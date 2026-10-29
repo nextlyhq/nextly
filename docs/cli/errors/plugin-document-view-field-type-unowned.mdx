@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DOCUMENT_VIEW_FIELD_TYPE_UNOWNED
+description: "A plugin scopes a document view to a field type the plugin does not contribute."
+---
+
+## Cause
+
+A plugin scopes a document view to a field type the plugin does not contribute.
+
+A plugin can scope a document view to a field type, and it then appears on every document with a field of that type. That scope is limited to the field types the plugin itself contributes, so a view never appears on documents its author did not design for.
+
+## Fix
+
+- Scope the view to a field type the plugin contributes.
+- Or scope it to a collection by its slug, under `contributes.admin.views`.
+
+## Example
+
+```text
+✗ Plugin "seo" contributes a document view that on every document with a "richText" field at "audit", a field type this plugin does not contribute.
+  Why:  A view can be scoped only to one of its own field types.
+  Next: Scope the view to a field type the plugin contributes, or to a collection by its slug.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-document-view-field-type-unowned  (PLUGIN_DOCUMENT_VIEW_FIELD_TYPE_UNOWNED)
+```

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_SHIPS_NO_MIGRATIONS
+description: "A plugin declares tables or table elements and ships no migrations to create them."
+---
+
+## Cause
+
+A plugin declares tables or table elements and ships no migrations to create them.
+
+In development, a push creates a plugin's tables, and the columns or indexes it adds to other tables, from its declared schema. A deployed database gets them only from migrations, and the plugin ships none. The Why line lists what is not migrated.
+
+## Fix
+
+- As the plugin's author, generate its migrations with `nextly migrate:create --plugin <entry>` and ship them with the plugin.
+- Then run `nextly migrate` again.
+
+## Example
+
+```text
+✗ A plugin declares tables or table elements but ships no migrations to create them.
+  Why:  They exist in development through push, and a deployed database gets its tables only from migrations. Not migrated: seo_redirects, dc_posts.seo_title.
+  Next: Generate the plugin's migrations before deploying, with `nextly migrate:create --plugin <entry>`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-ships-no-migrations  (PLUGIN_SHIPS_NO_MIGRATIONS)
+```

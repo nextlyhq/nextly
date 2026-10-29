@@ -58,7 +58,8 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { configDeclarationError, exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { loadConfigOrExit } from "../utils/command-prerequisites";
+import type { LoadConfigResult } from "../utils/config-loader";
 import {
   formatDuration,
   formatCount,
@@ -198,16 +199,14 @@ export async function runGenerateTypes(
   // Step 1: Load configuration
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    exitWithError(logger, error);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);

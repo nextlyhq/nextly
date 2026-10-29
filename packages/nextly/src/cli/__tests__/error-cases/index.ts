@@ -9,6 +9,7 @@ import { COMMAND_CASES } from "./commands";
 import { CONFIG_CASES } from "./config";
 import { DATABASE_CASES } from "./database";
 import { GENERAL_CASES } from "./general";
+import { MIGRATE_CREATE_CASES } from "./migrate-create";
 import { MIGRATION_CASES } from "./migrations";
 import { PLUGIN_CONFIG_CASES } from "./plugin-config";
 import { PLUGIN_CASES } from "./plugins";
@@ -21,6 +22,7 @@ export const ERROR_CASES = {
   ...CONFIG_CASES,
   ...DATABASE_CASES,
   ...MIGRATION_CASES,
+  ...MIGRATE_CREATE_CASES,
   ...SCHEMA_CASES,
   ...SYNC_CASES,
   ...PLUGIN_CASES,

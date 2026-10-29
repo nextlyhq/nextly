@@ -1,0 +1,23 @@
+---
+title: PLUGIN_AUDIT_KIND_DUPLICATE
+description: "A plugin declares the same audit kind more than once."
+---
+
+## Cause
+
+A plugin declares the same audit kind more than once.
+
+An audit kind is declared once, with every metadata key its entries record.
+
+## Fix
+
+- Declare the kind once, with the full list of metadata keys.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares the audit kind "reviews.approved" more than once.
+  Why:  An audit kind is declared once, with every metadata key it records.
+  Next: Declare it once with the full list of metadata keys.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-audit-kind-duplicate  (PLUGIN_AUDIT_KIND_DUPLICATE)
+```

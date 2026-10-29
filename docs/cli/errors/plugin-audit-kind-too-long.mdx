@@ -1,0 +1,23 @@
+---
+title: PLUGIN_AUDIT_KIND_TOO_LONG
+description: "A plugin declares an audit kind longer than the audit trail can store."
+---
+
+## Cause
+
+A plugin declares an audit kind longer than the audit trail can store.
+
+The audit trail stores each entry's kind in a column of fixed width, and the message names that width.
+
+## Fix
+
+- Shorten the audit kind to the length the message names, or fewer characters.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares the audit kind "reviews.approved-by-a-moderator-after-a-second-report-was-filed-late", which is longer than the 64 characters the audit trail's kind column holds.
+  Why:  The audit trail stores each entry's kind in a column of that width.
+  Next: Shorten the audit kind to 64 characters or fewer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-audit-kind-too-long  (PLUGIN_AUDIT_KIND_TOO_LONG)
+```

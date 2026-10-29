@@ -1,0 +1,26 @@
+---
+title: MIGRATION_SNAPSHOT_MISSING
+description: "A migration file has no snapshot file beside it in `meta/`."
+---
+
+## Cause
+
+A migration file has no snapshot file beside it in `meta/`.
+
+`nextly migrate:create` writes a snapshot beside each migration, in `meta/`, describing the schema once it has run. This file has none: it was added by hand, its snapshot was deleted, or it predates snapshots.
+
+## Fix
+
+- Restore the snapshot from version control if it was deleted.
+- Otherwise delete the file, or re-create it with `nextly migrate:create --blank` and copy the SQL across.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ `20261020_120000_add_posts.sql` has no paired snapshot file in /home/you/app/migrations/meta.
+  Why:  Nothing is at `20261020_120000_add_posts.snapshot.json`, which `migrate:create` writes beside every migration; a migration generated before it wrote snapshots has none.
+  Next: Either delete it, or re-create it with `nextly migrate:create --blank` and copy the SQL across.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-snapshot-missing  (MIGRATION_SNAPSHOT_MISSING)
+```

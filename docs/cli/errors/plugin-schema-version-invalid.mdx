@@ -1,0 +1,24 @@
+---
+title: PLUGIN_SCHEMA_VERSION_INVALID
+description: "A plugin's `schemaVersion` is not a positive integer."
+---
+
+## Cause
+
+A plugin's `schemaVersion` is not a positive integer.
+
+A plugin's `schemaVersion` counts the versions of its database schema, so it must be a positive integer.
+
+## Fix
+
+- Set the plugin's `schemaVersion` to a positive integer, such as `1`.
+- If the plugin is not yours, install a release of it that does.
+
+## Example
+
+```text
+✗ Plugin "reports" declares schemaVersion 0.
+  Why:  It must be a positive integer.
+  Next: Set the plugin's `schemaVersion` to a positive integer, such as `1`, or install a release of the plugin that does.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-version-invalid  (PLUGIN_SCHEMA_VERSION_INVALID)
+```

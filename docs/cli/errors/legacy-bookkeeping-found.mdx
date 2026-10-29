@@ -1,0 +1,24 @@
+---
+title: LEGACY_BOOKKEEPING_FOUND
+description: "The database still has the migration bookkeeping tables of an earlier Nextly release."
+---
+
+## Cause
+
+The database still has the migration bookkeeping tables of an earlier Nextly release.
+
+Earlier releases recorded migrations in `nextly_migrations` and `nextly_migration_journal`. This release keeps that history in `nextly_schema_events`, and runs nothing until the old tables are consolidated into it.
+
+## Fix
+
+- Run `pnpm nextly upgrade` once. It moves the old history into `nextly_schema_events`.
+- Then run the command again.
+
+## Example
+
+```text
+✗ Legacy bookkeeping tables detected (nextly_migrations).
+  Why:  They hold the history an earlier release recorded, which this release keeps in `nextly_schema_events`.
+  Next: Run `pnpm nextly upgrade` once to consolidate them into nextly_schema_events before continuing.
+  Docs: https://nextlyhq.com/docs/cli/errors/legacy-bookkeeping-found  (LEGACY_BOOKKEEPING_FOUND)
+```

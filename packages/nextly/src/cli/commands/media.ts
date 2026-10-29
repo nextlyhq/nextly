@@ -31,6 +31,19 @@ import {
 import type { IStorageAdapter } from "../../storage/types";
 import { createContext } from "../context";
 import {
+  databaseEnvError,
+  databaseUnreachable,
+  exitWithError,
+  reportCliError,
+  type CliError,
+} from "../errors";
+import {
+  mediaApplyOutsideProject,
+  mediaConfigOutsideProject,
+  mediaStorageUnlistable,
+  mediaThumbnailsNotRemoved,
+} from "../errors/areas/commands";
+import {
   createCliAdapter,
   validateDatabaseEnv,
   type CLIDatabaseAdapter,
@@ -124,12 +137,17 @@ export async function mediaOrphans(options: {
   referencedNow: ReferencedNow;
   apply: boolean;
   say: (line: string) => void;
+  /**
+   * Says why the run fails, when it does, as the command's error. Without it the reason is
+   * said through `say` with the rest.
+   */
+  fail?: (error: CliError) => void;
   now?: Date;
 }): Promise<number> {
-  const { storage, say, apply } = options;
+  const { storage, say, apply, fail } = options;
   // Before the media table is read: a storage that cannot list its files
   // cannot be searched, however its records read.
-  if (!storage.list) return sayUnlistable(storage, say);
+  if (!storage.list) return sayUnlistable(storage, say, fail);
   const references = await options.referenced();
   // A thumbnail in use that no path here can match may be any listed file,
   // so where there is one nothing is removed: the matches are listed.
@@ -140,7 +158,7 @@ export async function mediaOrphans(options: {
     exclusive: options.exclusive && unlocated === 0,
     now: options.now,
   });
-  if (!search.listable) return sayUnlistable(storage, say);
+  if (!search.listable) return sayUnlistable(storage, say, fail);
   const hours = ORPHAN_MIN_AGE_MS / 3_600_000;
   if (search.tooRecent > 0) {
     say(
@@ -172,15 +190,20 @@ export async function mediaOrphans(options: {
     search.orphans,
     options.referencedNow
   );
-  sayRemoval(result, say);
+  sayRemoval(result, say, fail);
   return result.failed.length > 0 || result.stopped.length > 0 ? 1 : 0;
 }
 
 /** Says the storage cannot be searched, and answers the exit code, 1. */
 function sayUnlistable(
   storage: IStorageAdapter,
-  say: (line: string) => void
+  say: (line: string) => void,
+  fail: ((error: CliError) => void) | undefined
 ): number {
+  if (fail) {
+    fail(mediaStorageUnlistable(storage.getType()));
+    return 1;
+  }
   say(
     `The media storage (${storage.getType()}) cannot list its files, so it cannot be searched for left-behind thumbnails. Nothing was changed.`
   );
@@ -237,31 +260,49 @@ function whyUnconfirmed(
   return "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config to have later runs remove them.";
 }
 
-/** What --apply did with each listed thumbnail. */
-function sayRemoval(result: OrphanRemoval, say: (line: string) => void): void {
+/**
+ * What --apply did with each listed thumbnail. With `fail`, the files left
+ * behind are named in the run's error, after the count, rather than among
+ * the lines said.
+ */
+function sayRemoval(
+  result: OrphanRemoval,
+  say: (line: string) => void,
+  fail?: (error: CliError) => void
+): void {
   // A listed path can be a signed URL: printed without what can carry its
   // secret, as every path here is.
   for (const path of result.removed) say(`Removed ${storedPathForLog(path)}`);
   for (const path of result.kept) {
     say(`Kept ${storedPathForLog(path)}: a media item refers to it now.`);
   }
-  for (const { path, error } of result.failed) {
+  const notRemoved = result.failed.map(
     // What the storage said can quote a signed URL or a token.
-    say(`Could not remove ${storedPathForLog(path)}: ${errorForLog(error)}`);
-  }
+    ({ path, error }) =>
+      `Could not remove ${storedPathForLog(path)}: ${errorForLog(error)}`
+  );
   if (result.stopped.length > 0) {
-    say(
+    notRemoved.push(
       `Stopped before ${result.stopped.length} file(s): whether a media item refers to them could not be checked just before their removal. They are left as they are; run again to list them.`
     );
   }
+  if (!fail) for (const line of notRemoved) say(line);
   say(
     `${result.removed.length} removed, ${result.kept.length} kept, ${result.failed.length} not removed.`
   );
+  if (fail && notRemoved.length > 0) {
+    fail(
+      mediaThumbnailsNotRemoved(
+        result.failed.length + result.stopped.length,
+        notRemoved
+      )
+    );
+  }
 }
 
 /**
- * Makes the project --cwd names the process's directory, and reports whether
- * the command may go on. From inside the project: a storage factory in the
+ * Makes the project --cwd names the process's directory, and throws the
+ * command's error when it may not go on. From inside the project: a storage factory in the
  * config, such as a local-disk plugin given a relative path, resolves that
  * path when the config loads, against the process's directory.
  *
@@ -272,18 +313,13 @@ function sayRemoval(result: OrphanRemoval, say: (line: string) => void): void {
  * listing warns when that directory has its own `.env`; the project's own
  * `.env` sets what nothing has set yet.
  */
-function enterProject(cwd: string, apply: boolean, logger: Logger): boolean {
+function enterProject(cwd: string, apply: boolean, logger: Logger): void {
   const ranIn = process.cwd();
   if (cwd !== ranIn) {
     // The database settings may come from another project's `.env`, from
     // the shell or from a parent process, none of which a `.env` loaded now
     // replaces: nothing ties them to this project, so nothing is removed.
-    if (apply) {
-      logger.error(
-        `The database settings were read before --cwd named ${cwd}, so they may be another project's. Nothing was changed. Run the command from ${cwd} to remove files.`
-      );
-      return false;
-    }
+    if (apply) throw mediaApplyOutsideProject(cwd);
     const loaded = path.join(ranIn, ".env");
     if (existsSync(loaded)) {
       logger.warn(
@@ -294,53 +330,46 @@ function enterProject(cwd: string, apply: boolean, logger: Logger): boolean {
     if (existsSync(projectEnv)) loadEnvFile({ path: projectEnv });
   }
   process.chdir(cwd);
-  return true;
 }
 
 /**
- * The project's config, loaded from inside it (`enterProject`), or `null`
- * when --apply cannot go on: with a config, given or discovered, that is not
- * the project's own (`configIsInside`), or from another directory.
+ * The project's config, loaded from inside it (`enterProject`). Throws the
+ * command's error when --apply cannot go on: with a config, given or
+ * discovered, that is not the project's own (`assertConfigInside`), or from
+ * another directory.
  */
 async function projectConfig(
   cwd: string,
   configPath: string | undefined,
   apply: boolean,
   logger: Logger
-): Promise<Awaited<ReturnType<typeof loadConfig>>["config"] | null> {
-  if (apply && !configIsInside(cwd, configPath, logger)) return null;
-  if (!enterProject(cwd, apply, logger)) return null;
+): Promise<Awaited<ReturnType<typeof loadConfig>>["config"]> {
+  if (apply) assertConfigInside(cwd, configPath);
+  enterProject(cwd, apply, logger);
   // The loader discovers the config from the project; a path is passed
   // only when one was given.
   const { config, configPath: loaded } = await loadConfig({ configPath, cwd });
   // The file the loader read, as discovery found it too: a project's own
   // config can be a link to another project's.
-  if (apply && !configIsInside(cwd, loaded, logger)) return null;
+  if (apply) assertConfigInside(cwd, loaded);
   return config;
 }
 
 /**
- * Whether the config --apply would read is the project's own: a `--config`
- * outside `cwd` is another project's storage, which this project's database
- * settings would be compared against. Says why when it is not.
+ * Throws unless the config --apply would read is the project's own: a
+ * `--config` outside `cwd` is another project's storage, which this
+ * project's database settings would be compared against.
  */
-function configIsInside(
-  cwd: string,
-  configPath: string | undefined,
-  logger: Logger
-): boolean {
-  if (configPath === undefined) return true;
+function assertConfigInside(cwd: string, configPath: string | undefined): void {
+  if (configPath === undefined) return;
   // Compared as the loader reads them, through any link: a link inside the
   // project to another project's config is that config.
   const relative = path.relative(
     realPathOf(cwd),
     realPathOf(path.resolve(cwd, configPath))
   );
-  if (!relative.startsWith("..") && !path.isAbsolute(relative)) return true;
-  logger.error(
-    `The config ${configPath} is outside ${cwd}, whose database settings would be read, so its storage may be another project's. Nothing was changed. Run the command from that config's project to remove files.`
-  );
-  return false;
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) return;
+  throw mediaConfigOutsideProject(configPath, cwd);
 }
 
 /** `target` with its links followed, or as given when it does not exist. */
@@ -407,16 +436,18 @@ export function createMediaCommand(): Command {
           cmdOptions.apply === true,
           context.logger
         );
-        if (!config) {
-          process.exit(1);
-          return;
-        }
         const db = validateDatabaseEnv();
-        adapter = await createCliAdapter({
-          dialect: db.dialect,
-          databaseUrl: db.databaseUrl,
-          logger: context.options.verbose ? context.logger : undefined,
-        });
+        if (!db.valid || db.dialect === undefined) throw databaseEnvError(db);
+        const dialect = db.dialect;
+        try {
+          adapter = await createCliAdapter({
+            dialect,
+            databaseUrl: db.databaseUrl,
+            logger: context.options.verbose ? context.logger : undefined,
+          });
+        } catch (error) {
+          throw databaseUnreachable(dialect, error);
+        }
         const drizzle = adapter as unknown as DrizzleAdapter;
         installRegistryResolver(drizzle);
         // Local disk is where the app keeps it, `public/uploads` in the
@@ -440,14 +471,18 @@ export function createMediaCommand(): Command {
           referencedNow: referencedNowIn(drizzle),
           apply: cmdOptions.apply === true,
           say: line => console.log(line),
+          // The run's failing code is its exit status, so the reason is printed in the error
+          // shape here and the exit below keeps the code `mediaOrphans` answers.
+          fail: error => {
+            const { verbose, noColor } = context.logger.getOptions();
+            reportCliError(error, { verbose, noColor });
+          },
         });
         await adapter.disconnect();
         process.exit(code);
       } catch (error) {
-        context.logger.error("Failed to search the media storage");
-        console.error(error);
         if (adapter) await adapter.disconnect();
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
   return media;

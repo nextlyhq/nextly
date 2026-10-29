@@ -1,0 +1,23 @@
+---
+title: SQLITE_FOREIGN_KEYS_STILL_ON
+description: "SQLite's foreign-key enforcement could not be switched off for a migration, because another transaction was open on the connection."
+---
+
+## Cause
+
+SQLite's foreign-key enforcement could not be switched off for a migration, because another transaction was open on the connection.
+
+SQLite can switch foreign-key enforcement off only when no transaction is open on its one connection. Another transaction was open, so the migration did not start.
+
+## Fix
+
+- Wait for the other operation on the database to finish, then run the command again.
+
+## Example
+
+```text
+✗ Foreign-key enforcement could not be switched off for this migration.
+  Why:  Another transaction was open on the connection. Nothing was applied.
+  Next: Re-run it once that transaction has finished.
+  Docs: https://nextlyhq.com/docs/cli/errors/sqlite-foreign-keys-still-on  (SQLITE_FOREIGN_KEYS_STILL_ON)
+```

@@ -537,7 +537,13 @@ function assertResumedTheSameWay(
   throw new NextlyError({
     code: "PLUGIN_UNINSTALL_UNFINISHED",
     publicMessage: `The uninstall of ${plugin.name} began ${begun} and did not finish. Run it again ${begun} to finish it. Nothing was changed.`,
-    logContext: { plugin: plugin.name, keepData: record.keepData },
+    // The boot gate refuses an unfinished uninstall under the same code; the reason tells
+    // this one, run again the other way, apart.
+    logContext: {
+      plugin: plugin.name,
+      keepData: record.keepData,
+      reason: "resumed-the-other-way",
+    },
   });
 }
 
@@ -678,6 +684,11 @@ async function consentToDeletions(
       plugin: plugin.name,
       tables: plan.tablesDropped,
       verdict: verdict.kind,
+      // A refusal's reason, as the data-loss consent gives it: needing a consent, or one that
+      // leaves a deletion out, each of which the CLI answers with its own next step.
+      ...(verdict.kind === "refused"
+        ? { reason: `data-loss-${verdict.reason}` }
+        : {}),
     },
   });
 }

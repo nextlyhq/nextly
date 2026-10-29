@@ -1,0 +1,23 @@
+---
+title: PLUGIN_CAPABILITY_ADDED_BY_SETUP
+description: "A `setup` transformer gave a plugin a capability that needs the app's consent."
+---
+
+## Cause
+
+A `setup` transformer gave a plugin a capability that needs the app's consent.
+
+The app's consent to a capability covers only a plugin that declares it in its own manifest, under the name the app lists. A `setup` transformer that adds the capability, or adds or renames a plugin onto a listed name, would inherit a grant made for something else.
+
+## Fix
+
+- Declare the capability in the manifest of the plugin the app configures, rather than in a `setup` transformer.
+
+## Example
+
+```text
+✗ A setup transformer added capabilities.db.rawSql to plugin "reports", whose own manifest does not declare it.
+  Why:  That capability grants the live database handle at ctx.db.raw, which reaches every table, and the app's listing covers only a plugin that declares it in its own manifest under the listed name.
+  Next: Declare capabilities.db.rawSql in the manifest of the plugin the app configures, rather than in a setup transformer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-added-by-setup  (PLUGIN_CAPABILITY_ADDED_BY_SETUP)
+```

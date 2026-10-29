@@ -1,0 +1,23 @@
+---
+title: PLUGIN_MENU_COLLECTION_UNOWNED
+description: "A plugin's menu item names a collection the plugin does not contribute."
+---
+
+## Cause
+
+A plugin's menu item names a collection the plugin does not contribute.
+
+A plugin's admin menu items can link only to the collections the plugin itself contributes. An item naming another would be hidden from everyone, since its permission is never seeded. The message lists the collections the plugin does contribute.
+
+## Fix
+
+- Name one of the plugin's own collections in the menu item, as the Next line lists them.
+
+## Example
+
+```text
+✗ Plugin "reviews" has a menu item ("Products") naming collection "products", which it does not contribute.
+  Why:  A plugin's menu items link only to the collections the plugin itself contributes.
+  Next: Name one of: reviews.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-menu-collection-unowned  (PLUGIN_MENU_COLLECTION_UNOWNED)
+```

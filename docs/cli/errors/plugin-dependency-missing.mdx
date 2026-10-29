@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DEPENDENCY_MISSING
+description: "A plugin depends on another plugin that the configuration does not list."
+---
+
+## Cause
+
+A plugin depends on another plugin that the configuration does not list.
+
+A plugin's `dependsOn` names a plugin that is not in `plugins` in `nextly.config.ts`, so the plugin cannot be set up after it.
+
+## Fix
+
+- Add the plugin named to `plugins` in `nextly.config.ts`.
+- Or install a release of the dependent plugin that does not need it.
+
+## Example
+
+```text
+✗ Plugin "reviews" depends on "commerce", which is not registered.
+  Why:  "commerce" is in the `dependsOn` of "reviews", and not in `plugins` in `nextly.config.ts`.
+  Next: Add "commerce" to `plugins` in `nextly.config.ts`, or install a release of "reviews" that does not need it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-dependency-missing  (PLUGIN_DEPENDENCY_MISSING)
+```

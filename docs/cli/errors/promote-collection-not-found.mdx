@@ -1,0 +1,24 @@
+---
+title: PROMOTE_COLLECTION_NOT_FOUND
+description: "`db:sync --promote` names a collection the Schema Builder has no record of."
+---
+
+## Cause
+
+`db:sync --promote` names a collection the Schema Builder has no record of.
+
+`nextly db:sync --promote <slug>` moves a collection built in the Schema Builder into `nextly.config.ts`. No collection the Schema Builder created has this slug.
+
+## Fix
+
+- Check the slug in the admin's Schema Builder.
+- A collection already defined in `nextly.config.ts` is in code and needs no promotion.
+
+## Example
+
+```text
+✗ Collection 'posts' not found in UI source (dynamic_collections).
+  Why:  `--promote` moves a collection built in the Schema Builder into code, and no collection with this slug was built there.
+  Next: Check the slug in the admin's Schema Builder. A collection already defined in `nextly.config.ts` is in code and needs no promotion.
+  Docs: https://nextlyhq.com/docs/cli/errors/promote-collection-not-found  (PROMOTE_COLLECTION_NOT_FOUND)
+```

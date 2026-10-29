@@ -110,14 +110,19 @@ import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { createContext, type CommandContext } from "../program";
 import {
-  getDialectDisplayName,
-  validateDatabaseEnv,
-  type SupportedDialect,
-} from "../utils/adapter";
+  migrationCreateCancelled,
+  migrationNameRequired,
+} from "../errors/areas/migrate-create";
+import { exitWithError } from "../errors/index";
+import { createContext, type CommandContext } from "../program";
+import { getDialectDisplayName, type SupportedDialect } from "../utils/adapter";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
 import { bundleAndRequire } from "../utils/config-bundler";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 // ============================================================================
@@ -234,43 +239,25 @@ export async function runMigrateCreate(
   // F11 PR 3: dialect comes from DATABASE_URL (no DB connection needed —
   // we just need to know which SQL flavor to emit). validateDatabaseEnv
   // handles the parsing without opening a connection.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables. " +
-        "(migrate:create does not connect to the DB but needs the dialect to emit the right SQL.)"
-    );
-    process.exit(1);
-  }
-  const dialect = dbValidation.dialect!;
+  const dbValidation = requireDatabaseEnv(logger);
+  const dialect = dbValidation.dialect;
 
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
   const name = options.name ?? nameArg;
   if (!options.blank && !name) {
-    logger.error(
-      "--name is required for non-blank migrations. " +
-        "Use --blank to create an empty migration without a name, or pass --name=<slug>."
-    );
-    process.exit(1);
+    exitWithError(logger, migrationNameRequired());
   }
 
   // Load config.
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -339,8 +326,7 @@ export async function runMigrateCreate(
       uiSchemaFile: configResult.config.db.uiSchemaFile,
     });
   } catch (error) {
-    logger.error(`Failed to load UI schema: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   // Materialize plugin extends that target Builder-made entities (P8): append
@@ -482,11 +468,10 @@ export async function runMigrateCreate(
     // migration: Cancelled by user." stack-style message.
     if (error instanceof PromptCancelledError) {
       // The prompt-renames helper already printed clack's `cancel()`
-      // message before throwing. Just exit.
-      process.exit(1);
+      // message before throwing; the error says what it left undone.
+      exitWithError(logger, migrationCreateCancelled());
     }
-    logger.error(`Failed to generate migration: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   if (result === null) {
@@ -1363,8 +1348,7 @@ export function registerMigrateCreateCommand(program: Command): void {
         try {
           await runMigrateCreate(positionalName, resolvedOptions, context);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );

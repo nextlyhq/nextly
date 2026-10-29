@@ -23,9 +23,11 @@ import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/stora
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { NextlyError, describeError } from "../../errors";
+import { NextlyError } from "../../errors";
+import { databaseUnreachable, exitWithError, failWithError } from "../errors";
 import { createContext } from "../program";
-import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
+import { createCliAdapter } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 
 import { maybeForceUnlock } from "./migrate";
 import type {
@@ -67,6 +69,8 @@ async function confirmBackup(
     throw new NextlyError({
       code: "NEXTLY_UPGRADE_IN_PROGRESS",
       publicMessage: "Upgrade cancelled by operator.",
+      // The two refusals share a code; the reason tells the CLI's error apart.
+      logContext: { reason: "cancelled" },
     });
   }
   throw new NextlyError({
@@ -74,6 +78,7 @@ async function confirmBackup(
     publicMessage:
       "Refusing to upgrade without a confirmed backup. Re-run with " +
       "`--confirm-backed-up` (CI/non-TTY) after backing up your database.",
+    logContext: { reason: "backup-not-confirmed" },
   });
 }
 
@@ -254,11 +259,7 @@ export function registerUpgradeCommand(program: Command): void {
       const globalOpts = cmd.optsWithGlobals();
       const context = createContext(globalOpts);
 
-      const dbValidation = validateDatabaseEnv();
-      if (!dbValidation.valid || !dbValidation.dialect) {
-        for (const err of dbValidation.errors ?? []) context.logger.error(err);
-        process.exit(1);
-      }
+      const dbValidation = requireDatabaseEnv(context.logger);
 
       let adapter: { disconnect?: () => Promise<void> } & UpgradeAdapter;
       try {
@@ -268,10 +269,10 @@ export function registerUpgradeCommand(program: Command): void {
           logger: globalOpts.verbose ? context.logger : undefined,
         })) as unknown as { disconnect?: () => Promise<void> } & UpgradeAdapter;
       } catch (error) {
-        context.logger.error(
-          `Failed to connect to database: ${describeError(error)}`
+        exitWithError(
+          context.logger,
+          databaseUnreachable(dbValidation.dialect, error)
         );
-        process.exit(1);
       }
 
       try {
@@ -316,8 +317,8 @@ export function registerUpgradeCommand(program: Command): void {
           );
         }
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exitCode = 1;
+        // Set rather than exited, so the disconnect below still runs.
+        failWithError(context.logger, error);
       } finally {
         await adapter.disconnect?.();
       }

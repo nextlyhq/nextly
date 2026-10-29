@@ -1,0 +1,23 @@
+---
+title: PLUGIN_HOOK_POINT_RESERVED
+description: "A plugin declares a hook point under the prefix Nextly reserves."
+---
+
+## Cause
+
+A plugin declares a hook point under the prefix Nextly reserves.
+
+Hook points under the prefixes of Nextly's own seams, such as `email.` and `admin.`, are Nextly's. A plugin's hook point there would be taken for one of them.
+
+## Fix
+
+- Rename the hook point so that it starts with the plugin's admin slug and a dot.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares the hook point "email.review", whose prefix "email." core reserves for its own seams.
+  Why:  Hook points under that prefix are Nextly's own seams, so a plugin's would be taken for one of them.
+  Next: Rename the hook point "email.review" so that it starts with the plugin's admin slug and a dot.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-reserved  (PLUGIN_HOOK_POINT_RESERVED)
+```

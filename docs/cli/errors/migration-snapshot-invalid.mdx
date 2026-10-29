@@ -1,0 +1,26 @@
+---
+title: MIGRATION_SNAPSHOT_INVALID
+description: "A migration's snapshot file is not valid JSON, or not a snapshot this version of Nextly reads."
+---
+
+## Cause
+
+A migration's snapshot file is not valid JSON, or not a snapshot this version of Nextly reads.
+
+A snapshot in `meta/` could not be read: its JSON is broken, for example by a partial write or a merge, or a different version of Nextly wrote it.
+
+## Fix
+
+- Restore the file from version control.
+- If a newer version of Nextly wrote it, upgrade `nextly` to that version.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ The snapshot file `20261020_120000_add_posts.snapshot.json` is invalid.
+  Why:  JSON parse failed: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+  Next: Restore it from version control; if a newer version of Nextly wrote it, upgrade `nextly` to that version.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-snapshot-invalid  (MIGRATION_SNAPSHOT_INVALID)
+```

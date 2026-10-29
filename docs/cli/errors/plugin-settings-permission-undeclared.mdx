@@ -1,0 +1,24 @@
+---
+title: PLUGIN_SETTINGS_PERMISSION_UNDECLARED
+description: "A plugin's `settingsPermission` is not one of the permissions the plugin declares."
+---
+
+## Cause
+
+A plugin's `settingsPermission` is not one of the permissions the plugin declares.
+
+`settingsPermission` must name a permission the plugin declares itself, so that a role can be given it. The message lists the permissions the plugin owns.
+
+## Fix
+
+- Declare the permission among the plugin's own permissions.
+- Or set `settingsPermission` to one it already declares.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares settingsPermission "manage-reviews", which is not one of its own permissions (moderate-reviews).
+  Why:  `settingsPermission` must name a permission the plugin declares itself, so that a role can be given it.
+  Next: Declare "manage-reviews" among the plugin's own permissions, or set `settingsPermission` to one it already declares.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-settings-permission-undeclared  (PLUGIN_SETTINGS_PERMISSION_UNDECLARED)
+```

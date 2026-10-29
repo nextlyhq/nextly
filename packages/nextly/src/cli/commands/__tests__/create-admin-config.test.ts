@@ -37,7 +37,11 @@ describe("nextly users:create-admin and the config", () => {
       logger: { info: vi.fn(), error: vi.fn() },
       options: { config: "apps/site/nextly.config.ts", cwd: "/srv/site" },
     } as unknown as Parameters<typeof connectToInstall>[0];
-    await expect(connectToInstall(context)).rejects.toThrow("connected");
+    // The stop is the connection failing, read as the command's error for it.
+    await expect(connectToInstall(context)).rejects.toMatchObject({
+      code: "DATABASE_UNREACHABLE",
+      why: "connected",
+    });
     expect(order).toEqual([
       `config ${JSON.stringify({
         configPath: "apps/site/nextly.config.ts",

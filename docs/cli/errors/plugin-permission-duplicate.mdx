@@ -1,0 +1,24 @@
+---
+title: PLUGIN_PERMISSION_DUPLICATE
+description: "The same custom permission is declared twice."
+---
+
+## Cause
+
+The same custom permission is declared twice.
+
+A custom permission is one action on one resource, compared without regard to case, and the database holds one row for it. Two declarations of it, from `nextly.config.ts` or plugins, would leave that row owned by whichever was seeded last.
+
+## Fix
+
+- Remove one of the two declarations.
+- Or give one of them another action or resource.
+
+## Example
+
+```text
+✗ The custom permission "export-reports" is declared twice, by `nextly.config.ts` and "reports".
+  Why:  A permission is one action on one resource, compared without regard to case, and the database holds one row for it.
+  Next: Remove one of the two declarations, or give one of them another action or resource.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-permission-duplicate  (PLUGIN_PERMISSION_DUPLICATE)
+```

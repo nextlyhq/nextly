@@ -1,0 +1,23 @@
+---
+title: PLUGIN_SETTINGS_KEY_TOO_LONG
+description: "A plugin declares a settings key longer than the settings storage holds."
+---
+
+## Cause
+
+A plugin declares a settings key longer than the settings storage holds.
+
+Settings are stored by key, in a column of fixed width, and the message names that width.
+
+## Fix
+
+- Shorten the settings key to the length the message names, or fewer characters.
+
+## Example
+
+```text
+✗ Plugin "reports" declares the settings key "deliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydelivery", which is longer than the 191 characters the settings storage holds.
+  Why:  Settings are stored by key, in a column of that width.
+  Next: Shorten "deliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydeliverydelivery" to 191 characters or fewer.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-settings-key-too-long  (PLUGIN_SETTINGS_KEY_TOO_LONG)
+```

@@ -40,9 +40,10 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import type { MigrationOutcome } from "../../domains/field-groups/migration/run";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
-import { describeError } from "../../errors/index";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
-import { validateDatabaseEnv, withAdapter } from "../utils/adapter";
+import { withAdapter } from "../utils/adapter";
+import { requireDatabaseEnv } from "../utils/command-prerequisites";
 
 export interface MigrateFieldGroupsCommandOptions {
   /** Perform the migration. Without it the command previews and writes nothing. */
@@ -65,15 +66,7 @@ export async function runMigrateFieldGroups(
 
   // Fail before touching the network if the database environment is unusable, matching every other
   // command that needs a connection.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) logger.error(error);
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
+  requireDatabaseEnv(logger);
 
   const dryRun = options.apply !== true;
   const direction = options.down === true ? "down" : "up";
@@ -261,8 +254,7 @@ export function registerMigrateFieldGroupsCommand(program: Command): void {
             context
           );
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );

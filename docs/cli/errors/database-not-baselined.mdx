@@ -1,0 +1,40 @@
+---
+title: DATABASE_NOT_BASELINED
+description: "The database already has tables but no migration history, and the first migration starts from an empty database."
+---
+
+## Cause
+
+The database already has tables but no migration history, and the first migration starts from an empty database.
+
+A project managed by `db:sync` has real tables but no record of where its migration history starts, and its first migration expects an empty database. None of the usual drift recoveries work here, so the Next line gives the one that does.
+
+## Fix
+
+- Move the migrations folder aside, or remove the one migration and its snapshot.
+- Run `nextly migrate:baseline` to record what the database already holds.
+- Re-create the migration with `nextly migrate:create`; it holds only what changed.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ Migration `20261020_120000_000_initial` cannot be applied: schema drift detected.
+  Why:  This database already has tables, and this migration expects to start from an empty one. That is what a project managed by `db:sync` looks like the first time it creates a migration: the schema is real, but nothing has recorded where the history begins.
+        Drift summary (1 differences):
+          + table 'dc_posts' present in DB
+  Next: Recovery — nothing in this history can be applied, so all of it has
+        to go first. `migrate:baseline` refuses a project that has ANY
+        migration or snapshot, and every file here was generated against a
+        schema that already exists. Move the directory aside:
+                mv '/home/you/app/migrations' '/home/you/app/migrations.pre-baseline'
+        Or, if this is the only migration, remove just it and its snapshot
+        (the glob covers per-dialect variants, which are one migration):
+                rm '/home/you/app/migrations/20261020_120000_000_initial'*.sql '/home/you/app/migrations/meta/20261020_120000_000_initial.snapshot.json'
+        Record what the database already has, once:
+                pnpm nextly migrate:baseline
+        Then re-create the migration; it will contain only what changed:
+                pnpm nextly migrate:create --name initial
+  Docs: https://nextlyhq.com/docs/cli/errors/database-not-baselined  (DATABASE_NOT_BASELINED)
+```

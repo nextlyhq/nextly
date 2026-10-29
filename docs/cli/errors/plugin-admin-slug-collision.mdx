@@ -1,0 +1,23 @@
+---
+title: PLUGIN_ADMIN_SLUG_COLLISION
+description: "Two plugins' names resolve to the same admin slug."
+---
+
+## Cause
+
+Two plugins' names resolve to the same admin slug.
+
+A plugin's admin slug is made from its name, lowercased with every other character a dash. Two names that make the same slug would share one admin address.
+
+## Fix
+
+- Configure only one of the two plugins, or use a release of one under another name.
+
+## Example
+
+```text
+✗ Plugins "@acme/reviews" and "acme-reviews" both resolve to the admin slug "acme-reviews", so they would share one admin address.
+  Why:  A plugin's admin slug is made from its name, and these two names make the same one.
+  Next: Rename one of them.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-admin-slug-collision  (PLUGIN_ADMIN_SLUG_COLLISION)
+```

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_UNINSTALL_IRREVERSIBLE
+description: "A full uninstall was asked of a plugin with a migration that has no DOWN to undo it."
+---
+
+## Cause
+
+A full uninstall was asked of a plugin with a migration that has no DOWN to undo it.
+
+A full uninstall runs the DOWN of each of the plugin's migrations, in reverse. One of them has no DOWN, and running the others and stopping there would leave the plugin's schema half undone. Nothing was changed.
+
+## Fix
+
+- Run the uninstall with `--keep-data`, which leaves the plugin's tables in place.
+- Or, as the plugin's author, give the migration a DOWN in a new version of the plugin.
+
+## Example
+
+```text
+✗ "@acme/seo" has migrations that cannot be undone (20261020_120000_add_redirects).
+  Why:  A full uninstall undoes every migration or none: stopping at the first that cannot be undone would leave the plugin's schema half undone. Nothing was changed.
+  Next: Use --keep-data to leave its tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-irreversible  (PLUGIN_UNINSTALL_IRREVERSIBLE)
+```

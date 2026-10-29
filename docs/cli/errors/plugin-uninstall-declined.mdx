@@ -1,0 +1,24 @@
+---
+title: PLUGIN_UNINSTALL_DECLINED
+description: "The uninstall's prompt to delete the plugin's tables was answered no."
+---
+
+## Cause
+
+The uninstall's prompt to delete the plugin's tables was answered no.
+
+A full uninstall drops the plugin's tables. At a terminal it lists what would be deleted and asks first, and the answer was no. Nothing was changed.
+
+## Fix
+
+- Run the uninstall again and confirm the deletion.
+- Or run it with `--keep-data`, which leaves the plugin's tables in place.
+
+## Example
+
+```text
+✗ Nothing was changed: the deletion was not confirmed.
+  Why:  A full uninstall drops the plugin's tables, and the prompt that listed them was not answered yes.
+  Next: Run the uninstall again and confirm the deletion, or use --keep-data to leave the tables in place.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-declined  (PLUGIN_UNINSTALL_DECLINED)
+```

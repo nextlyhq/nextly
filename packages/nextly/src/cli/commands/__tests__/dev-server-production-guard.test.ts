@@ -26,6 +26,10 @@ function createCaptureLogger(): { logger: Logger; lines: string[] } {
   const record = (message: string): void => {
     lines.push(message);
   };
+  // The refusal is printed in the error shape, on standard error.
+  vi.spyOn(console, "error").mockImplementation((message: unknown) => {
+    lines.push(String(message));
+  });
   const logger: Logger = {
     debug: record,
     info: record,
@@ -106,6 +110,7 @@ describe("performAutoSync production guard", () => {
       )
     ).rejects.toThrow("process.exit(1)");
     expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(lines.join("\n")).toContain("(SCHEMA_SYNC_IN_PRODUCTION)");
 
     // Registered command names (plus aliases) form the set of valid
     // suggestions; `nextly <anything else>` fails with "unknown command".

@@ -42,6 +42,7 @@ function makeLogger() {
     keyValue: vi.fn(),
     item: vi.fn(),
     table: vi.fn(),
+    getOptions: () => ({}),
   };
 }
 
@@ -63,6 +64,8 @@ const EMPTY_DESIRED: NextlySchemaSnapshot = { tables: [] };
 describe("runChecks (F11 PR 4)", () => {
   let migrationsDir: string;
   let exitSpy: ReturnType<typeof vi.spyOn>;
+  // The error a failing check ends with, printed on standard error in the error shape.
+  let printed: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     const cwd = await mkdtemp(join(tmpdir(), "nextly-migrate-check-test-"));
@@ -71,10 +74,12 @@ describe("runChecks (F11 PR 4)", () => {
     exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation((() => undefined) as never);
+    printed = vi.spyOn(console, "error").mockImplementation(() => undefined);
   });
 
   afterEach(async () => {
     exitSpy.mockRestore();
+    printed.mockRestore();
     // best-effort cleanup; OS will reap tmpdir anyway
     await rm(migrationsDir, { recursive: true, force: true }).catch(() => {});
   });
@@ -206,8 +211,8 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("CHECKSUM_MISMATCH")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(MIGRATION_FILE_EDITED)")
       );
     });
   });
@@ -229,8 +234,8 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("MISSING_SNAPSHOT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(MIGRATION_SNAPSHOT_MISSING)")
       );
     });
   });
@@ -261,10 +266,10 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("INVALID_SNAPSHOT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(MIGRATION_SNAPSHOT_INVALID)")
       );
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("JSON parse failed")
       );
     });
@@ -298,10 +303,10 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("INVALID_SNAPSHOT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(MIGRATION_SNAPSHOT_INVALID)")
       );
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("expected version: 1, got 2")
       );
     });
@@ -324,8 +329,8 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("MISSING_MIGRATION")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(SNAPSHOT_WITHOUT_MIGRATION)")
       );
     });
   });
@@ -342,10 +347,10 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("SCHEMA_DRIFT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(SCHEMA_CHANGE_WITHOUT_MIGRATION)")
       );
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("add_table dc_posts")
       );
     });
@@ -373,10 +378,10 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("SCHEMA_DRIFT")
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(SCHEMA_CHANGE_WITHOUT_MIGRATION)")
       );
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("Run `nextly migrate:create")
       );
     });
@@ -412,7 +417,7 @@ describe("runChecks (F11 PR 4)", () => {
       });
 
       expect(exitSpy).toHaveBeenCalledWith(1);
-      expect(logger.error).toHaveBeenCalledWith(
+      expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("... and 5 more")
       );
     });

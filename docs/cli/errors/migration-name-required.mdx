@@ -1,0 +1,30 @@
+---
+title: MIGRATION_NAME_REQUIRED
+description: "`nextly migrate:create` was given no name for a migration that is not blank."
+---
+
+## Cause
+
+`nextly migrate:create` was given no name for a migration that is not blank.
+
+A migration's name becomes part of its file name, so `nextly migrate:create` asks for one whenever it writes the changes from your configuration. Only an empty migration for hand-written SQL, made with `--blank`, may go without one.
+
+## Fix
+
+Name the migration, as a positional argument or with `--name`:
+
+```bash
+nextly migrate:create add_excerpt
+nextly migrate:create --name=add_excerpt
+```
+
+Or pass `--blank` to create an empty migration for SQL you write yourself.
+
+## Example
+
+```text
+✗ `nextly migrate:create` needs a name for the migration.
+  Why:  Only a `--blank` migration may be created without a name.
+  Next: Name it, as in `nextly migrate:create add_excerpt` or `--name=add_excerpt`, or pass `--blank` for an empty migration.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-name-required  (MIGRATION_NAME_REQUIRED)
+```

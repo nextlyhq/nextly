@@ -1,0 +1,23 @@
+---
+title: PLUGIN_DEPENDENCY_CYCLE
+description: "Plugins depend on one another in a cycle."
+---
+
+## Cause
+
+Plugins depend on one another in a cycle.
+
+Each plugin is set up after the plugins it depends on, through `dependsOn` and `optionalDependsOn`. When they depend on one another in a cycle, none of them can be set up first. The message lists the plugins in the cycle.
+
+## Fix
+
+- Remove one `dependsOn` or `optionalDependsOn` entry from a plugin in the cycle.
+
+## Example
+
+```text
+✗ Plugin dependency cycle detected: reviews → commerce.
+  Why:  Each plugin is set up after the plugins it depends on, so in a cycle none of them can be set up first.
+  Next: Remove one `dependsOn` or `optionalDependsOn` entry from a plugin in the cycle.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-dependency-cycle  (PLUGIN_DEPENDENCY_CYCLE)
+```

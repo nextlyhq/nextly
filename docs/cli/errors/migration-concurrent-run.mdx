@@ -1,0 +1,26 @@
+---
+title: MIGRATION_CONCURRENT_RUN
+description: "Another run recorded the same migration while this one was running it."
+---
+
+## Cause
+
+Another run recorded the same migration while this one was running it.
+
+Two runs of the same migration overlapped, and the other one recorded it first. A file is recorded applied once, so this run's record was refused.
+
+## Fix
+
+- Run `nextly migrate:status` to see what the other run recorded.
+- Where the Next line says this run's statements may have stayed applied, check what the migration changes before going on.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ Another run recorded 20261020_120000_add_posts.sql applied while this one was running it.
+  Why:  This run's statements were rolled back, and the ledger keeps the other run's record.
+  Next: Run `nextly migrate:status` to see what the other run recorded; nothing of this run is left to undo.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-concurrent-run  (MIGRATION_CONCURRENT_RUN)
+```

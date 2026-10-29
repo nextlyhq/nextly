@@ -1,0 +1,26 @@
+---
+title: MIGRATION_FOREIGN_KEY_VIOLATION
+description: "A migration would leave rows that reference rows that do not exist."
+---
+
+## Cause
+
+A migration would leave rows that reference rows that do not exist.
+
+On SQLite a migration runs with foreign-key enforcement off, so a table can be rebuilt, and the rows it leaves are checked afterwards. Some reference rows that do not exist, so the migration was rolled back, or, outside a transaction, left for you to repair.
+
+## Fix
+
+- Remove or repair the rows the Why line names, in the migration or before it runs.
+- Run the command again. For a file run outside a transaction, follow the Next line to record it once the rows are repaired.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ This migration would leave 3 row(s) referencing rows that do not exist (dc_posts → dc_authors).
+  Why:  It was rolled back, and nothing was applied.
+  Next: Remove or repair the rows it leaves without a parent, in the migration or before it runs, then run it again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-foreign-key-violation  (MIGRATION_FOREIGN_KEY_VIOLATION)
+```

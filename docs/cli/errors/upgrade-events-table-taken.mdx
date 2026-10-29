@@ -1,0 +1,24 @@
+---
+title: UPGRADE_EVENTS_TABLE_TAKEN
+description: "A table of another shape already has the name `nextly upgrade` moves the migration records into."
+---
+
+## Cause
+
+A table of another shape already has the name `nextly upgrade` moves the migration records into.
+
+`nextly upgrade` moves the migration records into `nextly_schema_events`. A table of that name already exists without the columns the upgrade writes, so it stopped before writing anything.
+
+## Fix
+
+- Rename the existing table, then run `nextly upgrade` again.
+- Or run `nextly upgrade --target-table-name <name>` to use another name.
+
+## Example
+
+```text
+✗ A table named "nextly_schema_events" already exists with an unexpected shape.
+  Why:  `nextly upgrade` moves the migration records into "nextly_schema_events", and the table there does not have the columns it writes. Nothing was changed.
+  Next: Rename it, or re-run with `--target-table-name <name>`.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-events-table-taken  (UPGRADE_EVENTS_TABLE_TAKEN)
+```

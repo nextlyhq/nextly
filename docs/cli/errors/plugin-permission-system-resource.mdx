@@ -1,0 +1,23 @@
+---
+title: PLUGIN_PERMISSION_SYSTEM_RESOURCE
+description: "A custom permission is declared on a resource Nextly reserves for its own permissions."
+---
+
+## Cause
+
+A custom permission is declared on a resource Nextly reserves for its own permissions.
+
+Resources such as `users`, `roles` and `media` are Nextly's own, and Nextly seeds their permissions itself. A custom permission cannot be declared on one.
+
+## Fix
+
+- Declare the permission on a resource of the plugin's own, such as one of its collections.
+
+## Example
+
+```text
+✗ The custom permission "export-users", declared by "reports", is on a resource Nextly reserves.
+  Why:  "users" is one of Nextly's own resources, whose permissions it seeds itself.
+  Next: Declare the permission on a resource of the plugin's own.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-permission-system-resource  (PLUGIN_PERMISSION_SYSTEM_RESOURCE)
+```

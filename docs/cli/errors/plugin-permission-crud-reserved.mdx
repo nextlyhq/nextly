@@ -1,0 +1,24 @@
+---
+title: PLUGIN_PERMISSION_CRUD_RESERVED
+description: "A custom permission repeats one Nextly creates itself for a collection or single."
+---
+
+## Cause
+
+A custom permission repeats one Nextly creates itself for a collection or single.
+
+Nextly creates the create, read, update and delete permissions for every collection, and read and update for every single. A custom permission that repeats one would take ownership of that row.
+
+## Fix
+
+- Remove the declaration; the permission already exists.
+- To guard something else, name another action.
+
+## Example
+
+```text
+✗ The custom permission "delete-posts", declared by "reports", repeats one Nextly creates.
+  Why:  Nextly creates "delete" on "posts" itself, for the collection or single with that slug.
+  Next: Remove the declaration, since the permission already exists, or name another action for what it guards.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-permission-crud-reserved  (PLUGIN_PERMISSION_CRUD_RESERVED)
+```

@@ -54,7 +54,6 @@ export function unexpectedError(error: unknown): CliError {
             ? issues.join("\n")
             : messageWithCause(headline, error.cause),
         next: "Run it again with `--verbose` to see the details, and report it at https://github.com/nextlyhq/nextly/issues if it keeps happening.",
-        context: { code: String(error.code), ...error.logContext },
       },
       error
     );

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_PRINCIPAL_KIND_COLLISION
+description: "Two plugins register the same kind of signed-in person."
+---
+
+## Cause
+
+Two plugins register the same kind of signed-in person.
+
+A kind of signed-in person is recognised by its full name, so each name can be registered by one plugin.
+
+## Fix
+
+- Rename the kind in one of the two plugins.
+- Or configure only one of them.
+
+## Example
+
+```text
+✗ Plugins "accounts" and "portal" both register the kind of signed-in person "customer".
+  Why:  A kind of signed-in person is recognised by its full name, so each name is registered once.
+  Next: Rename the kind "customer" in one of the two plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-principal-kind-collision  (PLUGIN_PRINCIPAL_KIND_COLLISION)
+```

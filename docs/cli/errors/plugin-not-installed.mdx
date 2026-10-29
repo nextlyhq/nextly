@@ -1,0 +1,23 @@
+---
+title: PLUGIN_NOT_INSTALLED
+description: "In production, a configured plugin has not been installed on this database."
+---
+
+## Cause
+
+In production, a configured plugin has not been installed on this database.
+
+In production a configured plugin starts only once `nextly plugins install` has run its `onInstall` and recorded it, whatever the migration mode. Development warns instead.
+
+## Fix
+
+- Run the commands the Next line names, or `nextly plugins install --all`.
+
+## Example
+
+```text
+✗ A configured plugin has not been installed on this database: @acme/seo.
+  Why:  In production a configured plugin starts only once `nextly plugins install` has run its `onInstall` and recorded it.
+  Next: Run "nextly plugins install @acme/seo".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-not-installed  (PLUGIN_NOT_INSTALLED)
+```

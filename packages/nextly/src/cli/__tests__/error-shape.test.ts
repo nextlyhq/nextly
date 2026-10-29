@@ -24,9 +24,13 @@ import {
   toCliError,
   type CliErrorCode,
 } from "../errors";
+import type { SchemaEventRow } from "../../domains/schema/events/schema-events-repository";
+import { migrateDownCore } from "../commands/migrate-down";
 import { createProgram } from "../program";
+import { createLogger } from "../utils/logger";
 
 import { ERROR_CASES } from "./error-cases";
+import { uninstallRefused } from "./error-cases/plugins";
 
 /** `process.exit`, stopped: the test's run ends where the command's would. */
 class Exited extends Error {
@@ -125,8 +129,9 @@ function expectTheShape(stderr: string, code: string, slug: string): void {
   expect(shape.docs).toBe(
     `  Docs: https://nextlyhq.com/docs/cli/errors/${slug}  (${code})`
   );
-  // The internal envelope: a bracketed HTTP code, piped segments and the log context.
-  expect(stderr).not.toMatch(/\[[A-Z_]+\]/);
+  // The internal envelope: a bracketed HTTP code, piped segments and the log context. A
+  // one-letter label ("[A] Sync the database …") is a recovery option, not a code.
+  expect(stderr).not.toMatch(/\[[A-Z][A-Z_]+\]/);
   expect(stderr).not.toContain(" | ");
   expect(stderr).not.toContain("context:");
   expect(repeatedSentences(stderr)).toEqual([]);
@@ -178,6 +183,14 @@ describe("a command that ends with an error", () => {
     expect(below).toMatch(/\n {2}Stack:\n(?: {4}\S.*\n)+ {4}at /);
     expect(plain.stderr).not.toContain("Stack:");
     expect(plain.stderr).not.toContain("Context:");
+
+    // The frames name this machine's paths and line numbers; everything else is pinned.
+    const frames = verbose.stderr.replace(
+      /(\n {4}at [^\n]+)+/,
+      "\n    at <frames>"
+    );
+    expect(plain.stderr).toMatchSnapshot("without --verbose");
+    expect(frames).toMatchSnapshot("with --verbose");
   });
 });
 
@@ -192,5 +205,84 @@ describe("each code, as a command ends with it", () => {
     // What happened is one sentence on one line.
     expect(error.what).not.toContain("\n");
     expect(text).toMatchSnapshot();
+  });
+});
+
+describe("a rollback refused for want of consent", () => {
+  /** The ledger's record of one applied migration. */
+  function applied(filename: string): SchemaEventRow {
+    return {
+      id: `${filename}-applied`,
+      eventType: "file_apply",
+      status: "applied",
+      source: "cli-migrate",
+      filename,
+      sha256: null,
+      scopeKind: null,
+      scopeSlug: null,
+      startedAt: new Date(1000),
+      endedAt: new Date(1000),
+      durationMs: null,
+      note: null,
+      statementsExecuted: null,
+      supersededEventIds: null,
+      supersededBy: null,
+    };
+  }
+
+  it("ends with what it would delete and the consent that allows it, running nothing", async () => {
+    const executed: string[] = [];
+    const error = await migrateDownCore({
+      dialect: "postgresql",
+      db: {},
+      nodeEnv: "development",
+      logger: createLogger({ quiet: true }),
+      options: { step: 1, allowDataLoss: false, yes: false, dryRun: false },
+      listFileApplies: async () => [applied("20261020_120000_add_summary.sql")],
+      fileExists: async () => true,
+      readDownSql: async () => ({
+        sql: 'ALTER TABLE "dc_posts" DROP COLUMN "summary";',
+        transaction: true,
+      }),
+      execDown: async (statements: readonly string[]) => {
+        executed.push(...statements);
+        return statements.length;
+      },
+      recordRolledBack: async () => true,
+      recordFailed: async () => {},
+      withLock: async <T>(
+        _db: unknown,
+        _dialect: unknown,
+        fn: () => Promise<T>
+      ): Promise<{ ran: true; value: T }> => ({ ran: true, value: await fn() }),
+    }).then(
+      () => undefined,
+      (thrown: unknown) => thrown
+    );
+
+    expect(executed).toEqual([]);
+    const text = formatCliError(toCliError(error));
+    expectTheShape(
+      text,
+      "DATA_LOSS_CONSENT_REQUIRED",
+      "data-loss-consent-required"
+    );
+    expect(shapeOf(text).next).toContain("--accept-data-loss");
+    expect(text).toMatchSnapshot();
+  });
+});
+
+describe("a plugin uninstall refused for want of consent", () => {
+  // The uninstall judges its drops with the same consent as every command, so it ends with the
+  // same codes, keeping its own way out (`--keep-data`) in the Next line.
+  it.each([
+    [undefined, "DATA_LOSS_CONSENT_REQUIRED"],
+    ["seo_settings", "DATA_LOSS_CONSENT_NOT_COVERED"],
+  ] as const)("with consent %s ends as %s", async (flag, code) => {
+    const error = toCliError(await uninstallRefused(flag));
+    expect(error.code).toBe(code);
+    const text = formatCliError(error);
+    expectTheShape(text, code, cliErrorSlug(code));
+    expect(shapeOf(text).next).toContain("--keep-data");
   });
 });

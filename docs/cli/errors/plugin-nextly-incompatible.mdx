@@ -1,0 +1,24 @@
+---
+title: PLUGIN_NEXTLY_INCOMPATIBLE
+description: "A plugin requires a version of Nextly other than the one installed."
+---
+
+## Cause
+
+A plugin requires a version of Nextly other than the one installed.
+
+The installed version of `nextly` is outside the range in the plugin's `nextly` field.
+
+## Fix
+
+- Install a release of the plugin that supports the installed version of Nextly.
+- Or install a version of `nextly` in the plugin's range.
+
+## Example
+
+```text
+✗ Plugin "reviews" requires Nextly ^2.0.0, but this is Nextly 1.4.0.
+  Why:  The installed `nextly` is outside the plugin's `nextly` range, ^2.0.0.
+  Next: Install a release of "reviews" that supports Nextly 1.4.0, or a version of `nextly` in ^2.0.0.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-nextly-incompatible  (PLUGIN_NEXTLY_INCOMPATIBLE)
+```

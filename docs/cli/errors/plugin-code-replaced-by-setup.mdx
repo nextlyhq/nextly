@@ -1,0 +1,24 @@
+---
+title: PLUGIN_CODE_REPLACED_BY_SETUP
+description: "A `setup` transformer changed the code of a plugin that holds a capability the app consented to."
+---
+
+## Cause
+
+A `setup` transformer changed the code of a plugin that holds a capability the app consented to.
+
+The app's consent to a capability covers the plugin it configured, with that plugin's own code. A `setup` transformer that swaps the plugin's code while keeping its name would inherit a grant made for something else.
+
+## Fix
+
+- Leave the definitions of plugins that declare the capability as configured, in every `setup` transformer.
+- If the transformer is in a plugin you do not maintain, update or remove that plugin.
+
+## Example
+
+```text
+✗ A setup transformer changed the code of plugin "reports" (init), which declares capabilities.db.rawSql.
+  Why:  That capability grants the live database handle at ctx.db.raw, which reaches every table, and the app's listing covers the plugin it configured, with that plugin's own code.
+  Next: Leave the definitions of plugins that declare capabilities.db.rawSql as configured in setup transformers.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-code-replaced-by-setup  (PLUGIN_CODE_REPLACED_BY_SETUP)
+```

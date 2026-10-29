@@ -1,0 +1,24 @@
+---
+title: PLUGIN_HOOK_CHANGED_SCHEMA
+description: "On SQLite, a plugin's `onUninstall` changed the database schema before its DOWN migrations ran."
+---
+
+## Cause
+
+On SQLite, a plugin's `onUninstall` changed the database schema before its DOWN migrations ran.
+
+On SQLite, a table that was renamed away or replaced cannot be told from the one the DOWN migrations were judged against, so any change to the schema while `onUninstall` runs stops the uninstall before its DOWN migrations.
+
+## Fix
+
+- Undo the schema changes the hook made.
+- As the plugin's author, have `onUninstall` change rows only, then run the uninstall again.
+
+## Example
+
+```text
+✗ @acme/seo's onUninstall changed the database schema.
+  Why:  On SQLite a table it renamed away or replaced cannot be told from the one its DOWN migrations were judged against, so none of them was run, as they could drop a replacement of seo_redirects.
+  Next: Undo the schema changes the hook made, and have it change rows only, then run the uninstall again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-changed-schema  (PLUGIN_HOOK_CHANGED_SCHEMA)
+```

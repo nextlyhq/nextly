@@ -1,0 +1,26 @@
+---
+title: CORE_DESTRUCTIVE_CHANGE_REFUSED
+description: "Bringing Nextly's own tables up to date needs a destructive change, which `nextly migrate` makes only with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`."
+---
+
+## Cause
+
+Bringing Nextly's own tables up to date needs a destructive change, which `nextly migrate` makes only with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`.
+
+Before the app's migrations, `nextly migrate` brings Nextly's own tables up to date. A change there that would drop a table or column, or fail on rows already stored, is refused by default: it usually means the installed `nextly` and the database come from different releases.
+
+## Fix
+
+- Check that the installed version of `nextly` is the one the database was last migrated with, and read that release's notes.
+- Once you are sure the change is intended, run `nextly migrate` with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` set.
+
+## Example
+
+```text
+✗ Core schema reconciliation requires destructive operations.
+  Why:  drops column 'nextly_users.legacy_role'
+        drops table 'nextly_sessions_old'
+        This usually means a Nextly version mismatch.
+  Next: Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).
+  Docs: https://nextlyhq.com/docs/cli/errors/core-destructive-change-refused  (CORE_DESTRUCTIVE_CHANGE_REFUSED)
+```

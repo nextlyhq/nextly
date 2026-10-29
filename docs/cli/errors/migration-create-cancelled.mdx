@@ -1,0 +1,23 @@
+---
+title: MIGRATION_CREATE_CANCELLED
+description: "A prompt of `nextly migrate:create` was cancelled, so it wrote no migration."
+---
+
+## Cause
+
+A prompt of `nextly migrate:create` was cancelled, so it wrote no migration.
+
+When a change could be read more than one way, such as a renamed field or a dropped and added one, `nextly migrate:create` asks which you meant. Closing that prompt, for example with Ctrl+C, stops the command before it writes any file.
+
+## Fix
+
+Run `nextly migrate:create` again, and answer each prompt it asks.
+
+## Example
+
+```text
+✗ `nextly migrate:create` was cancelled, and wrote no migration.
+  Why:  A prompt was closed before it was answered.
+  Next: Run `nextly migrate:create` again when you are ready to answer its prompts.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-create-cancelled  (MIGRATION_CREATE_CANCELLED)
+```

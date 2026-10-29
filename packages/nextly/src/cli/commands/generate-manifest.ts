@@ -39,7 +39,7 @@ import { resolve, dirname, join } from "node:path";
 
 import type { Command } from "commander";
 
-import { describeError, NextlyError } from "../../errors/index";
+import { NextlyError } from "../../errors/index";
 import {
   assertManifestPathIsFree,
   BLOCK_MANIFEST_FILENAME,
@@ -47,6 +47,8 @@ import {
 } from "../../plugins/codegen/block-manifest";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import { exitWithError } from "../errors";
+import { blockManifestStale } from "../errors/areas/commands";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig } from "../utils/config-loader";
 
@@ -129,8 +131,11 @@ async function read(path: string): Promise<string | null> {
     return await readFile(path, "utf-8");
   } catch (error) {
     if (isMissingFile(error)) return null;
+    const detail = error instanceof Error ? error.message : String(error);
+    // The reason and the parts apart, so a command's error can say what and why separately.
     throw NextlyError.invalidInput({
-      message: `The block manifest at ${path} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      message: `The block manifest at ${path} could not be read: ${detail}`,
+      logContext: { reason: "block-manifest-unreadable", path, detail },
     });
   }
 }
@@ -187,9 +192,7 @@ export async function runGenerateManifest(
       );
       return;
     }
-    logger.error(describeManifestDrift(state));
-    logger.info("Run `nextly generate:manifest` and commit the result.");
-    process.exit(1);
+    exitWithError(logger, blockManifestStale(describeManifestDrift(state)));
   }
 
   const changed = await applyBlockManifestState(state);
@@ -243,8 +246,7 @@ export function registerGenerateManifestCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

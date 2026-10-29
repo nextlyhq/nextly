@@ -1,0 +1,24 @@
+---
+title: PLUGIN_RENAME_TARGET_UNKNOWN
+description: "A plugin's `.rename()` names an entity the plugin does not contribute."
+---
+
+## Cause
+
+A plugin's `.rename()` names an entity the plugin does not contribute.
+
+`.rename()` renames the entities a plugin contributes, where you configure the plugin. A slug in its map that the plugin does not contribute is a typo or a rename left over from an earlier release of the plugin.
+
+## Fix
+
+- Remove the slug from the `.rename()` map in `nextly.config.ts`.
+- Or correct it to a slug the plugin contributes.
+
+## Example
+
+```text
+✗ Plugin "reviews" renames "review", which is not one of its contributed collections/singles/components.
+  Why:  `.rename()` renames only the collections, singles and field groups the plugin itself contributes.
+  Next: Remove "review" from the `.rename()` map in `nextly.config.ts`, or correct it to a slug the plugin contributes.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-rename-target-unknown  (PLUGIN_RENAME_TARGET_UNKNOWN)
+```

@@ -70,6 +70,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await instance?.destroy();
   instance = undefined;
   if (previousDialect === undefined) delete process.env.DB_DIALECT;
@@ -127,6 +128,10 @@ function command(): { context: CommandContext; said: string[] } {
   const capture = (message: string) => {
     said.push(message);
   };
+  // The error a command ends with is printed on standard error, in the error shape.
+  vi.spyOn(console, "error").mockImplementation(message => {
+    said.push(String(message));
+  });
   return {
     context: {
       logger: {

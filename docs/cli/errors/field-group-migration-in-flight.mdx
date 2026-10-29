@@ -1,0 +1,24 @@
+---
+title: FIELD_GROUP_MIGRATION_IN_FLIGHT
+description: "A field-group storage migration is part-way through on this database, so the command refused to change its schema."
+---
+
+## Cause
+
+A field-group storage migration is part-way through on this database, so the command refused to change its schema.
+
+While the field-group storage migration runs, some field-group tables carry their old names and some their new ones. Changing the schema from that shape would reconcile the configuration against tables that are about to move, so the command refused.
+
+## Fix
+
+- Let the running `nextly migrate:field-groups` finish, then run the command again.
+- If that run stopped part-way, run `nextly migrate:field-groups --apply --backup-confirmed` again to resume it.
+
+## Example
+
+```text
+✗ The command did not run: a field-group storage migration is in flight on this database.
+  Why:  Mid-run, some field-group tables carry their old names and some their new ones (it is at step 3), a shape neither the old configuration nor the new one describes.
+  Next: Let the running migration finish, or, if it stopped, resume it with `nextly migrate:field-groups --apply --backup-confirmed`; then run this command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-migration-in-flight  (FIELD_GROUP_MIGRATION_IN_FLIGHT)
+```

@@ -1,0 +1,24 @@
+---
+title: SETUP_TOKEN_SET_BY_ENV
+description: "`NEXTLY_SETUP_TOKEN` sets this install's setup token, so there is no generated one to replace."
+---
+
+## Cause
+
+`NEXTLY_SETUP_TOKEN` sets this install's setup token, so there is no generated one to replace.
+
+`nextly setup-token` replaces the token an install generated and stored. When `NEXTLY_SETUP_TOKEN` is set, that value is the token and nothing is stored, so there is nothing for the command to replace.
+
+## Fix
+
+- Change `NEXTLY_SETUP_TOKEN` where it is set, such as the host's environment settings, and restart the install.
+- Or remove the variable, and run `nextly setup-token` to have a token generated.
+
+## Example
+
+```text
+✗ NEXTLY_SETUP_TOKEN sets this install's token, so there is no generated one to replace.
+  Why:  A token set by NEXTLY_SETUP_TOKEN is read from the environment, not stored in the install's database.
+  Next: Change the variable where it is set.
+  Docs: https://nextlyhq.com/docs/cli/errors/setup-token-set-by-env  (SETUP_TOKEN_SET_BY_ENV)
+```

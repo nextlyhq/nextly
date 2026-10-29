@@ -1,0 +1,24 @@
+---
+title: RESOLVE_SNAPSHOT_MISSING
+description: "`nextly migrate:resolve --applied` has no snapshot to compare the live schema with."
+---
+
+## Cause
+
+`nextly migrate:resolve --applied` has no snapshot to compare the live schema with.
+
+`nextly migrate:resolve --applied` records a file as applied only once the live schema matches the snapshot `migrate:create` wrote beside it in `meta/`. The file has no snapshot, so there is nothing to compare against.
+
+## Fix
+
+- Restore the snapshot from version control if it was deleted, then run the command again.
+- If the file never had one, such as a hand-written migration, and you know its statements have run, re-run with `--skip-verify`.
+
+## Example
+
+```text
+✗ No paired snapshot for 20261020_120000_add_posts.sql; cannot verify.
+  Why:  `--applied` records a file once the live schema matches the snapshot `migrate:create` wrote beside it in `meta/`, and this file has none.
+  Next: Re-run with --skip-verify to override.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-snapshot-missing  (RESOLVE_SNAPSHOT_MISSING)
+```

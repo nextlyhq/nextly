@@ -1,0 +1,24 @@
+---
+title: PLUGIN_ADMIN_WIDGET_UNDRAWABLE
+description: "A plugin's admin widget describes neither a component nor an archetype the admin can draw."
+---
+
+## Cause
+
+A plugin's admin widget describes neither a component nor an archetype the admin can draw.
+
+The admin draws a widget one of two ways: with the `component` the plugin ships, or from an `archetype` other than `custom` and the `query` it reads. A widget that describes neither, or has no `id` of real text, would draw an empty card.
+
+## Fix
+
+- Give the widget a `component`, or an `archetype` and its `query`.
+- Give it an `id` of real text.
+
+## Example
+
+```text
+✗ Plugin "reviews" contributes an admin widget "stats" that describes no body: it needs either a usable "component", or an "archetype" other than "custom" together with the "query" core draws it from.
+  Why:  A widget is drawn one of two ways and must describe one of them. The type states this too, but it reaches a TypeScript caller and nothing else -- a plugin authored in JavaScript, or one whose manifest arrives as parsed JSON, reaches this check with nothing enforced.
+  Next: Ship a `component` and draw the card yourself, or declare an `archetype` other than `custom` together with the `query` the host draws it from. The cell is keyed on `id`, so that must carry real text whichever way you choose.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-admin-widget-undrawable  (PLUGIN_ADMIN_WIDGET_UNDRAWABLE)
+```

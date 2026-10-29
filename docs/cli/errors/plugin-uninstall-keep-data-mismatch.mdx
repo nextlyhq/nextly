@@ -1,0 +1,23 @@
+---
+title: PLUGIN_UNINSTALL_KEEP_DATA_MISMATCH
+description: "An unfinished uninstall was run again with the other `--keep-data` setting than the one it began with."
+---
+
+## Cause
+
+An unfinished uninstall was run again with the other `--keep-data` setting than the one it began with.
+
+Run again, an unfinished uninstall carries on from where it stopped, but only the way it began. A full uninstall may already have dropped some tables, so it cannot then keep its data; one that kept its data has already run `onUninstall` for an uninstall that leaves the tables. Nothing was changed.
+
+## Fix
+
+- Run `nextly plugins uninstall <name>` again with the `--keep-data` setting the What line names.
+
+## Example
+
+```text
+✗ The uninstall of @acme/seo began without --keep-data and did not finish.
+  Why:  Run again, an uninstall carries on from where it stopped, and only the way it began: a full one may have dropped tables already, and one that kept its data has run `onUninstall` for tables it leaves. Nothing was changed.
+  Next: Run it again without --keep-data to finish it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstall-keep-data-mismatch  (PLUGIN_UNINSTALL_KEEP_DATA_MISMATCH)
+```

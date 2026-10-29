@@ -1,0 +1,24 @@
+---
+title: PLUGIN_MANIFEST_INVALID
+description: "A plugin's definition has a field of the wrong shape."
+---
+
+## Cause
+
+A plugin's definition has a field of the wrong shape.
+
+A plugin's definition is checked when the configuration loads. The message names the field at fault, and the Why line what is wrong with it.
+
+## Fix
+
+- Correct the field the message names in the plugin's definition.
+- If the plugin is not yours, install a release of it whose definition is valid.
+
+## Example
+
+```text
+✗ Plugin "reports" declares an invalid manifest at "provides".
+  Why:  Invalid input: expected array, received string.
+  Next: Correct `provides` in the plugin's definition, or install a release of the plugin whose definition is valid.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-manifest-invalid  (PLUGIN_MANIFEST_INVALID)
+```

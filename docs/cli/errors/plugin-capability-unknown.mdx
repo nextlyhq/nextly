@@ -1,0 +1,24 @@
+---
+title: PLUGIN_CAPABILITY_UNKNOWN
+description: "A plugin declares a capability Nextly does not define."
+---
+
+## Cause
+
+A plugin declares a capability Nextly does not define.
+
+A plugin's `capabilities` accepts only the capabilities Nextly defines: `net`, `db`, `secrets` and `auth`. Any other key is a typo or a capability from a newer release.
+
+## Fix
+
+- Remove the key from the plugin's `capabilities`, or correct its spelling.
+- If the plugin needs a newer Nextly, upgrade `nextly`.
+
+## Example
+
+```text
+✗ Plugin "reports" declares an unknown capability "filesystem".
+  Why:  `capabilities` accepts only the capabilities Nextly defines: `net`, `db`, `secrets` and `auth`.
+  Next: Remove "filesystem" from the plugin's `capabilities`, or correct its spelling.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-unknown  (PLUGIN_CAPABILITY_UNKNOWN)
+```

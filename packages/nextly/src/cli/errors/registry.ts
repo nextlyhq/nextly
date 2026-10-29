@@ -13,6 +13,7 @@ import { COMMAND_CODES } from "./areas/commands";
 import { CONFIG_CODES } from "./areas/config";
 import { DATABASE_CODES } from "./areas/database";
 import { GENERAL_CODES } from "./areas/general";
+import { MIGRATE_CREATE_CODES } from "./areas/migrate-create";
 import { MIGRATION_CODES } from "./areas/migrations";
 import { PLUGIN_CONFIG_CODES } from "./areas/plugin-config";
 import { PLUGIN_CODES } from "./areas/plugins";
@@ -26,6 +27,7 @@ export const CLI_ERROR_AREAS = [
   CONFIG_CODES,
   DATABASE_CODES,
   MIGRATION_CODES,
+  MIGRATE_CREATE_CODES,
   SCHEMA_CODES,
   SYNC_CODES,
   PLUGIN_CODES,
@@ -39,6 +41,7 @@ export const CLI_ERROR_CODES = {
   ...CONFIG_CODES,
   ...DATABASE_CODES,
   ...MIGRATION_CODES,
+  ...MIGRATE_CREATE_CODES,
   ...SCHEMA_CODES,
   ...SYNC_CODES,
   ...PLUGIN_CODES,
@@ -51,7 +54,7 @@ export const CLI_ERROR_CODES = {
 export type CliErrorCode = keyof typeof CLI_ERROR_CODES;
 
 /** Where the CLI's error pages are published; one page per code. */
-export const CLI_ERROR_DOCS_BASE = "https://nextlyhq.com/docs/cli/errors/";
+const CLI_ERROR_DOCS_BASE = "https://nextlyhq.com/docs/cli/errors/";
 
 /** A code's docs page name: `CONFIG_NOT_FOUND` is `config-not-found`. */
 export function cliErrorSlug(code: CliErrorCode): string {

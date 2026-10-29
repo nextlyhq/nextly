@@ -1,0 +1,24 @@
+---
+title: FIELD_GROUP_STORAGE_REFUSED
+description: "The field-group storage on this database is in a shape the field-group migration will not proceed from."
+---
+
+## Cause
+
+The field-group storage on this database is in a shape the field-group migration will not proceed from.
+
+The field-group storage migration checks the database's field-group tables and registry against each other before it changes anything. They disagree in a way no run of it causes, such as a registry row naming a table that does not exist, and the Why line names which.
+
+## Fix
+
+- Run the command again with `--verbose` to see the tables and rows involved.
+- Correct them, or restore the database from a backup, before running anything that changes the schema.
+
+## Example
+
+```text
+✗ The field-group storage migration refused to proceed.
+  Why:  Registry rows name storage that does not exist.
+  Next: Run the command again with `--verbose` to see the tables and rows involved, and check them before running anything that changes the schema.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-storage-refused  (FIELD_GROUP_STORAGE_REFUSED)
+```

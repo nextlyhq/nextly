@@ -60,8 +60,24 @@ import {
   isFirstAdministratorTaken,
   superAdminRoleHeld,
 } from "../../domains/users/services/last-super-admin";
-import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import {
+  databaseEnvError,
+  databaseUnreachable,
+  failWithError,
+  reportCliError,
+  type CliError,
+} from "../errors";
+import {
+  adminEmailInUse,
+  adminEmailInvalid,
+  adminNameMissing,
+  adminPasswordMissing,
+  adminPasswordsDiffer,
+  adminPasswordTooWeak,
+  setupAlreadyComplete,
+  setupInProgress,
+} from "../errors/areas/commands";
 // Types only: the program hands this module its context factory, so this
 // module adds no runtime import of the program that registers it.
 import type { CommandContext, GlobalOptions } from "../program";
@@ -273,46 +289,44 @@ export async function readAdminPassword(
   return again === first ? first : undefined;
 }
 
-/** What the person is told for each outcome, and the exit code it carries. */
-const OUTCOMES: Record<FirstAdminOutcome, { message: string; code: number }> = {
-  created: { message: "Created the first administrator.", code: 0 },
-  "administrator-exists": {
-    message:
-      "Setup is already complete: this install has an administrator. Nothing was created.",
-    code: 1,
-  },
-  "email-in-use": {
-    message:
-      "An account already uses that email. Nothing was created; choose another email.",
-    code: 1,
-  },
-  "setup-in-progress": {
-    message:
-      "Another setup is in progress for this install. Nothing was created; try again once it ends.",
-    code: 1,
-  },
+/** What each refused outcome ends the command with. */
+const REFUSALS: Record<
+  Exclude<FirstAdminOutcome, "created">,
+  () => CliError
+> = {
+  "administrator-exists": () => setupAlreadyComplete(CREATE_ADMIN_COMMAND),
+  "email-in-use": adminEmailInUse,
+  "setup-in-progress": () => setupInProgress(CREATE_ADMIN_COMMAND),
 };
 
-/** The details, or the reason they cannot be had, as the line to print. */
+/** The details, or the reason they cannot be had, as the command's error. */
 async function gatherDetails(
   options: CreateAdminOptions,
   io: CreateAdminIo
-): Promise<FirstAdminDetails | { problem: string }> {
+): Promise<FirstAdminDetails | { problem: CliError }> {
   const email = await valueOf(options.email, "Email", io);
   if (email === null || !EmailSchema.safeParse(email).success) {
-    return { problem: "Give a valid email with --email." };
+    return { problem: adminEmailInvalid(email) };
   }
   const name = await valueOf(options.name, "Name", io);
-  if (name === null)
-    return { problem: "Give the administrator's name with --name." };
+  if (name === null) return { problem: adminNameMissing() };
   const password = await readAdminPassword(io);
-  if (password === undefined) return { problem: "The two passwords differ." };
+  if (password === undefined) return { problem: adminPasswordsDiffer() };
   if (password === null) {
-    return {
-      problem: `Set ${ADMIN_PASSWORD_ENV}, or run this in a terminal to be asked. The password is never taken from an argument.`,
-    };
+    return { problem: adminPasswordMissing(ADMIN_PASSWORD_ENV) };
   }
   return { email, name, password };
+}
+
+/**
+ * Prints `error` in the error shape and answers the failing code, 1. The
+ * command resolves to its exit code rather than exiting, so the shape is
+ * printed here and the code is the caller's to set.
+ */
+function refuse(logger: CommandContext["logger"], error: CliError): number {
+  const { verbose, noColor } = logger.getOptions();
+  reportCliError(error, { verbose, noColor });
+  return 1;
 }
 
 /**
@@ -326,10 +340,7 @@ export async function runCreateAdmin(
 ): Promise<number> {
   const { logger } = context;
   const details = await gatherDetails(options, io);
-  if ("problem" in details) {
-    logger.error(details.problem);
-    return 1;
-  }
+  if ("problem" in details) return refuse(logger, details.problem);
   const connection = await io.connect();
   try {
     // The connect loads the install's config, which publishes the configured
@@ -338,15 +349,14 @@ export async function runCreateAdmin(
     // the default.
     const strength = validatePasswordStrength(details.password);
     if (!strength.ok) {
-      logger.error("That password is too weak:");
-      for (const rule of strength.errors) logger.error(`  - ${rule}`);
-      return 1;
+      return refuse(logger, adminPasswordTooWeak(strength.errors));
     }
     const outcome = await createFirstAdministrator(connection.setup, details);
-    const { message, code } = OUTCOMES[outcome];
-    if (code === 0) logger.success(`${message} Sign in as ${details.email}.`);
-    else logger.error(message);
-    return code;
+    if (outcome !== "created") return refuse(logger, REFUSALS[outcome]());
+    logger.success(
+      `Created the first administrator. Sign in as ${details.email}.`
+    );
+    return 0;
   } finally {
     await connection.close();
   }
@@ -376,22 +386,21 @@ export async function connectToInstall(context: CommandContext): Promise<{
       DEFAULT_MIN_PASSWORD_LENGTH
   );
   const database = validateDatabaseEnv();
-  if (!database.valid) {
-    // The settings it names are the operator's own, so each is reported, and
-    // printed with the error's context where the command reports a failure.
-    throw NextlyError.validation({
-      errors: database.errors.map(message => ({
-        path: "env",
-        code: "INVALID_DATABASE_SETTING",
-        message,
-      })),
-      logContext: { problems: database.errors },
-    });
+  if (!database.valid || database.dialect === undefined) {
+    // The settings are the operator's own, so the error names the first one
+    // to fix, under the code every command reports it with.
+    throw databaseEnvError(database);
   }
-  const cli = await createCliAdapter({
-    dialect: database.dialect,
-    databaseUrl: database.databaseUrl,
-  });
+  const dialectSetting = database.dialect;
+  let cli: Awaited<ReturnType<typeof createCliAdapter>>;
+  try {
+    cli = await createCliAdapter({
+      dialect: dialectSetting,
+      databaseUrl: database.databaseUrl,
+    });
+  } catch (error) {
+    throw databaseUnreachable(dialectSetting, error);
+  }
   const adapter = cli as unknown as DrizzleAdapter;
   const { dialect } = adapter.getCapabilities();
   const registry = new SchemaRegistry(dialect);
@@ -440,8 +449,7 @@ export function registerCreateAdminCommand(
           processIo(context)
         );
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exitCode = 1;
+        failWithError(context.logger, error);
       }
     });
 }

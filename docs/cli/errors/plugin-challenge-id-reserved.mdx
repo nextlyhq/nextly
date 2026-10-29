@@ -1,0 +1,23 @@
+---
+title: PLUGIN_CHALLENGE_ID_RESERVED
+description: "A plugin declares a sign-in challenge under the id Nextly reserves for its forced password change."
+---
+
+## Cause
+
+A plugin declares a sign-in challenge under the id Nextly reserves for its forced password change.
+
+A plugin can add a sign-in challenge under `contributes.auth.challenges`. The id `must-change-password` is Nextly's own forced password change, so a plugin's challenge under it would be offered in that step's place.
+
+## Fix
+
+- Give the challenge another id.
+
+## Example
+
+```text
+✗ Plugin "accounts" declares the challenge id "must-change-password", which core reserves for its forced password change.
+  Why:  A challenge is looked up by its id, so the plugin's would stand in for Nextly's own.
+  Next: Give the challenge "must-change-password" another id.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-challenge-id-reserved  (PLUGIN_CHALLENGE_ID_RESERVED)
+```

@@ -1,0 +1,23 @@
+---
+title: PLUGIN_OUTBOUND_HOST_INVALID
+description: "A plugin declares an outbound host that is not a hostname with an optional port."
+---
+
+## Cause
+
+A plugin declares an outbound host that is not a hostname with an optional port.
+
+Each entry in a plugin's `capabilities.net.outbound` names a host it may call: a hostname with an optional port, such as `api.example.com:443`. A URL or an IP address is not one.
+
+## Fix
+
+- Replace the entry with the hostname alone, and its port if it needs one.
+
+## Example
+
+```text
+✗ Plugin "reports" declares an outbound host that is not a hostname with an optional port: "https://api.example.com".
+  Why:  Each `capabilities.net.outbound` entry is a hostname, with an optional port, such as `api.example.com:443`; not a URL or an IP address.
+  Next: Replace "https://api.example.com" with the hostname alone, and its port if it needs one.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-outbound-host-invalid  (PLUGIN_OUTBOUND_HOST_INVALID)
+```

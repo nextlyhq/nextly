@@ -1,0 +1,24 @@
+---
+title: PLUGIN_APPLIED_MIGRATION_CHANGED
+description: "A plugin migration recorded as applied no longer matches the module that ran on this database."
+---
+
+## Cause
+
+A plugin migration recorded as applied no longer matches the module that ran on this database.
+
+The ledger records the checksum of each plugin migration as it ran. The module the plugin now ships under that name differs, so the database no longer matches the file that claims to describe it, even if the module's own checksum is consistent.
+
+## Fix
+
+- Restore the migration as it was when it ran, for example by installing the plugin version that shipped it.
+- Put any change in a new migration instead.
+
+## Example
+
+```text
+✗ Plugin "@acme/seo" migration 20261020_120000_add_redirects: a plugin migration that has already been applied no longer matches what was applied.
+  Why:  The database does not match the file that claims to describe it.
+  Next: Restore the migration as it was when it ran.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-applied-migration-changed  (PLUGIN_APPLIED_MIGRATION_CHANGED)
+```

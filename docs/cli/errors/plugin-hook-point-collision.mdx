@@ -1,0 +1,24 @@
+---
+title: PLUGIN_HOOK_POINT_COLLISION
+description: "Two plugins declare the same hook point."
+---
+
+## Cause
+
+Two plugins declare the same hook point.
+
+A hook point is looked up by its name, so each name can be declared by one plugin.
+
+## Fix
+
+- Rename the hook point in one of the two plugins.
+- Or configure only one of them.
+
+## Example
+
+```text
+✗ Plugins "@acme/reviews" and "acme-reviews" both declare the hook point "acme-reviews.score".
+  Why:  A hook point is looked up by its name, so each name is declared by one plugin.
+  Next: Rename the hook point "acme-reviews.score" in one of the two plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-collision  (PLUGIN_HOOK_POINT_COLLISION)
+```

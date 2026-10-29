@@ -48,15 +48,18 @@ import {
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 import { describeError, immediateMessage } from "../../errors/index";
+import { databaseUnreachable, dataLossRefusal, exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
 import {
   readDataLossConsent,
   type AcceptDataLossOption,
@@ -137,36 +140,22 @@ export async function runMigrateFresh(
 
   // Step 1: Validate database environment
   logger.debug("Validating database environment...");
-  const dbValidation = validateDatabaseEnv();
+  const dbValidation = requireDatabaseEnv(logger);
 
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
-
-  const dialect = dbValidation.dialect!;
+  const dialect = dbValidation.dialect;
   logger.debug(`Database dialect: ${dialect}`);
 
   // Step 2: Load configuration
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -202,8 +191,7 @@ export async function runMigrateFresh(
       print: line => logger.warn(line),
     });
   } catch (error) {
-    logger.error(describeError(error));
-    process.exit(1);
+    exitWithError(logger, error);
   }
   if (verdict.kind === "declined") {
     logger.newline();
@@ -211,8 +199,7 @@ export async function runMigrateFresh(
     process.exit(0);
   }
   if (verdict.kind === "refused") {
-    logger.error(verdict.message);
-    process.exit(1);
+    exitWithError(logger, dataLossRefusal(verdict));
   }
 
   // Step 4: Connect to database
@@ -228,8 +215,7 @@ export async function runMigrateFresh(
     });
     logger.success("Database connected");
   } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, databaseUnreachable(dialect, error));
   }
 
   try {
@@ -626,8 +612,7 @@ export function registerMigrateFreshCommand(program: Command): void {
       try {
         await runMigrateFresh(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

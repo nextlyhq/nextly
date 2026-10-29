@@ -1,0 +1,24 @@
+---
+title: PLUGIN_SLUG_COLLISION
+description: "A plugin contributes an entity whose slug the configuration or another plugin already uses."
+---
+
+## Cause
+
+A plugin contributes an entity whose slug the configuration or another plugin already uses.
+
+A slug names one collection, single or field group across the whole schema, and a plugin's entities share that space with the configuration's and every other plugin's. In the message, `code` stands for `nextly.config.ts`.
+
+## Fix
+
+- Rename the entity in `nextly.config.ts`.
+- Or rename the plugin's entity where you configure the plugin, with `.rename()`, for example `reviewsPlugin.rename({ reviews: "product-reviews" })`.
+
+## Example
+
+```text
+✗ Duplicate collection slug "reviews" contributed by code and reviews.
+  Why:  A slug names one collection, single or field group, and "reviews" is claimed twice; "code" is `nextly.config.ts`.
+  Next: Rename the entity in `nextly.config.ts`, or rename the plugin's with `.rename()`, for example `plugin.rename({ "reviews": "new-slug" })`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-slug-collision  (PLUGIN_SLUG_COLLISION)
+```

@@ -1,0 +1,23 @@
+---
+title: PLUGIN_AUDIT_KIND_OUTSIDE_NAMESPACE
+description: "A plugin declares an audit kind whose name does not start with the plugin's prefix."
+---
+
+## Cause
+
+A plugin declares an audit kind whose name does not start with the plugin's prefix.
+
+A plugin's audit kinds are named under its admin slug, so no two plugins record entries of the same kind. The message names the prefix the kind must start with.
+
+## Fix
+
+- Rename the audit kind so that it starts with the prefix the message names.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares the audit kind "review.approved", which must start with "reviews.".
+  Why:  A plugin's audit kinds are named under its admin slug, so no two plugins record the same kind.
+  Next: Rename the audit kind "review.approved" so that it starts with "reviews.".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-audit-kind-outside-namespace  (PLUGIN_AUDIT_KIND_OUTSIDE_NAMESPACE)
+```

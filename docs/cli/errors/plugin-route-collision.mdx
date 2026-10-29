@@ -1,0 +1,24 @@
+---
+title: PLUGIN_ROUTE_COLLISION
+description: "Two plugin routes answer the same method and path."
+---
+
+## Cause
+
+Two plugin routes answer the same method and path.
+
+Nextly checks every enabled plugin's `contributes.routes` when the configuration loads. Two routes collide when they share a method, a mount and as many fixed path segments, and their patterns match the same request, so nothing decides which one answers. The message names the route and both plugins.
+
+## Fix
+
+- Change the path of one of the two routes in its plugin.
+- Or configure only one of the two plugins in `plugins` in `nextly.config.ts`.
+
+## Example
+
+```text
+✗ Duplicate route GET /feeds/rss contributed by feeds and syndication.
+  Why:  Both patterns match the same requests with as many fixed segments each, so nothing decides which of them answers.
+  Next: Change the path of one of the two routes, or configure only one of the two plugins in `nextly.config.ts`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-collision  (PLUGIN_ROUTE_COLLISION)
+```

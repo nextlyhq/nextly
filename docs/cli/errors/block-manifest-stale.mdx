@@ -1,0 +1,24 @@
+---
+title: BLOCK_MANIFEST_STALE
+description: "The committed block manifest does not match what the configuration generates."
+---
+
+## Cause
+
+The committed block manifest does not match what the configuration generates.
+
+The block manifest lists the blocks the configured plugins declare, beside the generated types. `nextly generate:manifest --check` compares the committed file with what the config generates, and it is missing, out of date, or present for a config that declares no blocks.
+
+## Fix
+
+- Run `nextly generate:manifest` to write or remove the manifest.
+- Commit the result, then run `nextly generate:manifest --check` again.
+
+## Example
+
+```text
+✗ The committed block manifest does not match this config.
+  Why:  /home/you/app/src/types/generated/blocks.manifest.json does not match this config.
+  Next: Run `nextly generate:manifest` and commit the result.
+  Docs: https://nextlyhq.com/docs/cli/errors/block-manifest-stale  (BLOCK_MANIFEST_STALE)
+```

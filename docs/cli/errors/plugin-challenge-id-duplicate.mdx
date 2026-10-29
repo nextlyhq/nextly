@@ -1,0 +1,23 @@
+---
+title: PLUGIN_CHALLENGE_ID_DUPLICATE
+description: "A sign-in challenge id is declared more than once."
+---
+
+## Cause
+
+A sign-in challenge id is declared more than once.
+
+A pending sign-in names its challenge by id, so each id can name one challenge across every enabled plugin.
+
+## Fix
+
+- Rename the challenge id in one of the plugins, or declare it once.
+
+## Example
+
+```text
+✗ Plugins "accounts" and "mfa" both declare the challenge id "otp".
+  Why:  A challenge is looked up by its id, so each id names one challenge.
+  Next: Rename the challenge "otp" in one of the two plugins.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-challenge-id-duplicate  (PLUGIN_CHALLENGE_ID_DUPLICATE)
+```

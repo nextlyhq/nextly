@@ -1,0 +1,24 @@
+---
+title: PLUGIN_PRINCIPAL_KIND_INVALID
+description: "A plugin registers a kind of signed-in person that cannot be used."
+---
+
+## Cause
+
+A plugin registers a kind of signed-in person that cannot be used.
+
+A plugin can register a kind of signed-in person under `contributes.principals`, such as a customer. The declaration is checked when the configuration loads, and the Why line says what is wrong with it.
+
+## Fix
+
+- Correct the plugin's `contributes.principals` entry as the Why line says.
+- If the plugin is not yours, update it to a release whose declaration is valid.
+
+## Example
+
+```text
+✗ Plugin "accounts" registers a kind of signed-in person that cannot be used.
+  Why:  resolve must be a function.
+  Next: Correct the plugin's `contributes.principals` entry as the Why line says.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-principal-kind-invalid  (PLUGIN_PRINCIPAL_KIND_INVALID)
+```

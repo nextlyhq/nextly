@@ -1,0 +1,24 @@
+---
+title: PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE
+description: "A plugin depends on another plugin at a version other than the one configured."
+---
+
+## Cause
+
+A plugin depends on another plugin at a version other than the one configured.
+
+A plugin's `dependsOn` gives each plugin it needs a range of versions, and the configured version of one is outside it.
+
+## Fix
+
+- Install a version of the dependency in the range the message names.
+- Or install a release of the dependent plugin that accepts the configured version.
+
+## Example
+
+```text
+✗ Plugin "reviews" requires "commerce" ^2.0.0, but "commerce" is 1.0.0.
+  Why:  The configured "commerce" is outside the range the `dependsOn` of "reviews" accepts.
+  Next: Install a version of "commerce" in ^2.0.0, or a release of "reviews" that accepts 1.0.0.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-dependency-version-incompatible  (PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE)
+```

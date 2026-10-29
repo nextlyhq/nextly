@@ -1,0 +1,24 @@
+---
+title: PLUGIN_CAPABILITY_MISSING
+description: "A plugin requires a capability that no enabled plugin provides."
+---
+
+## Cause
+
+A plugin requires a capability that no enabled plugin provides.
+
+A plugin's `requires` names a capability that some enabled plugin must list in `provides`, and none does.
+
+## Fix
+
+- Add and enable a plugin that provides the capability.
+- Or install a release of the plugin that does not require it.
+
+## Example
+
+```text
+✗ Plugin "reports" requires the capability "email", which no enabled plugin provides.
+  Why:  "email" is in the `requires` of "reports", and no enabled plugin lists it in `provides`.
+  Next: Add and enable a plugin that provides "email", or install a release of "reports" that does not require it.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-missing  (PLUGIN_CAPABILITY_MISSING)
+```

@@ -1,0 +1,24 @@
+---
+title: PLUGIN_UNINSTALLED_BUT_CONFIGURED
+description: "A plugin that has been uninstalled is still listed in the configuration."
+---
+
+## Cause
+
+A plugin that has been uninstalled is still listed in the configuration.
+
+The plugin was uninstalled, with or without its data, and is still in `nextly.config.ts`. Started again, its code would run over tables its uninstall removed, and a development push would create them again, so it is refused in every environment.
+
+## Fix
+
+- Reinstate it with `nextly plugins install <name>`.
+- Or remove it from `plugins` in `nextly.config.ts`.
+
+## Example
+
+```text
+✗ The plugin "@acme/seo" has been uninstalled but is still listed in your config.
+  Why:  Started again, it would run over tables its uninstall removed, and a development push would create them again, so it is refused in every environment.
+  Next: Run "nextly plugins install @acme/seo" to reinstate it, or remove it from the config.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-uninstalled-but-configured  (PLUGIN_UNINSTALLED_BUT_CONFIGURED)
+```

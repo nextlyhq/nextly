@@ -1,0 +1,28 @@
+---
+title: MIGRATION_PARTIALLY_APPLIED
+description: "A migration run outside a transaction failed part-way, and the statements before the failing one stayed applied."
+---
+
+## Cause
+
+A migration run outside a transaction failed part-way, and the statements before the failing one stayed applied.
+
+A migration marked `-- nextly:no-transaction` runs its statements one by one, and one failed. The statements before it stayed applied: nothing undoes them.
+
+## Fix
+
+- Fix what the Why line names.
+- If you finish the remaining statements by hand, mark the file applied with `nextly migrate:resolve --applied <file>`.
+- If you reverse the statements that ran, run `nextly migrate:resolve --failed-cleanup <file>`, then `nextly migrate`.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ 20261020_120000_add_posts.sql ran outside a transaction, and its statement 3 of 4 failed.
+  Why:  column "summary" of relation "dc_posts" already exists
+        The 2 statement(s) before it stayed applied, and were not undone.
+  Next: If you finish its remaining statements by hand, mark it applied with `nextly migrate:resolve --applied 20261020_120000_add_posts.sql` rather than running it again; if you reverse the statements that ran, run `nextly migrate:resolve --failed-cleanup 20261020_120000_add_posts.sql` and then `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-partially-applied  (MIGRATION_PARTIALLY_APPLIED)
+```

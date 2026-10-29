@@ -1,0 +1,24 @@
+---
+title: PLUGIN_APPLIED_MIGRATION_REMOVED
+description: "A plugin no longer lists a migration the database records as applied."
+---
+
+## Cause
+
+A plugin no longer lists a migration the database records as applied.
+
+A plugin's applied migrations are never removed or renamed: the database holds what they did, and the migrations after them were written for that. The plugin's list no longer has one the ledger records as applied. Nothing was applied.
+
+## Fix
+
+- Restore the migration under its name.
+- To take it out, roll it back first with `nextly migrate:down --plugin <name>` while it is still listed.
+
+## Example
+
+```text
+✗ Plugin "@acme/seo" no longer lists its migration "20261020_120000_add_redirects", which the database records as applied.
+  Why:  A plugin's applied migrations are never removed or renamed: the database holds what they did, and the migrations after them were written for that. Nothing was applied.
+  Next: Restore "20261020_120000_add_redirects" under its name. To take it out, roll it back first with `nextly migrate:down --plugin @acme/seo` while it is still listed.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-applied-migration-removed  (PLUGIN_APPLIED_MIGRATION_REMOVED)
+```

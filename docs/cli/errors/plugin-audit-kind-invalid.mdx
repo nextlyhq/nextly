@@ -1,0 +1,23 @@
+---
+title: PLUGIN_AUDIT_KIND_INVALID
+description: "A plugin declares an audit kind with characters an audit kind cannot hold."
+---
+
+## Cause
+
+A plugin declares an audit kind with characters an audit kind cannot hold.
+
+After the plugin's prefix, an audit kind may use only lowercase letters, digits, dots, underscores and dashes, starting with a letter or digit.
+
+## Fix
+
+- Rename the audit kind using only those characters.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares the audit kind "reviews.Approved!".
+  Why:  After "reviews." a kind may use only lowercase letters, digits, ".", "_" and "-", starting with a letter or digit.
+  Next: Rename the audit kind using only those characters.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-audit-kind-invalid  (PLUGIN_AUDIT_KIND_INVALID)
+```

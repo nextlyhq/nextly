@@ -1,0 +1,26 @@
+---
+title: MIGRATION_APPLY_FAILED
+description: "The database refused a statement of a migration or of a schema change."
+---
+
+## Cause
+
+The database refused a statement of a migration or of a schema change.
+
+The database refused a statement of a migration, or of a schema change. Inside a transaction nothing of the migration stays applied; the Why line gives the database's own reason.
+
+## Fix
+
+- Fix the statement, or the data it fails on, as the Why line says.
+- Run the command again; `--verbose` shows the statement and where it failed.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ Migration `20261020_120000_add_posts` failed.
+  Why:  relation "dc_authors" does not exist
+  Next: Fix the cause the Why line names, then run the command again; `--verbose` shows where it failed.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-apply-failed  (MIGRATION_APPLY_FAILED)
+```

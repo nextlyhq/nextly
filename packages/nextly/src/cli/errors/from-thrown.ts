@@ -33,7 +33,7 @@ export const CLI_ERROR_MAPPINGS: readonly CliErrorMapping[] = (
 );
 
 /** The codes of the issues a validation error carries in `publicData.errors`. */
-export function issueCodes(error: NextlyError): string[] {
+function issueCodes(error: NextlyError): string[] {
   const data = error.publicData as
     | { errors?: Array<{ code?: unknown }> }
     | undefined;
@@ -52,7 +52,7 @@ const narrows = (mapping: FromError) =>
  * Among the mappings for its code and reason, one whose issue the error carries, or whose `when`
  * holds, wins over the one with neither, which is what is left when no narrower one fits.
  */
-export function mappingFor(error: NextlyError): CliErrorMapping | undefined {
+function mappingFor(error: NextlyError): CliErrorMapping | undefined {
   const reason = error.logContext?.reason;
   const issues = issueCodes(error);
   const candidates = CLI_ERROR_MAPPINGS.filter(
@@ -81,15 +81,9 @@ export function toCliError(error: unknown): CliError {
   if (NextlyError.is(error)) {
     const mapping = mappingFor(error);
     if (mapping !== undefined) {
-      const parts = mapping.describe(error);
-      return new CliError(
-        mapping.to,
-        {
-          ...parts,
-          context: { code: String(error.code), ...error.logContext },
-        },
-        error
-      );
+      // The error it reads stays its cause, so `--verbose` shows that error's own code and
+      // context rather than a copy of them.
+      return new CliError(mapping.to, mapping.describe(error), error);
     }
   }
   return unexpectedError(error);

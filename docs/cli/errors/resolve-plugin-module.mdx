@@ -1,0 +1,24 @@
+---
+title: RESOLVE_PLUGIN_MODULE
+description: "`nextly migrate:resolve --applied` was given a plugin module, which `nextly migrate` records itself."
+---
+
+## Cause
+
+`nextly migrate:resolve --applied` was given a plugin module, which `nextly migrate` records itself.
+
+A plugin's migration modules ship inside the plugin, and `nextly migrate` records a module applied together with the tables it owns, when the database stands at the module's result. `--applied` would record one without that check, so it refuses.
+
+## Fix
+
+- Run `nextly migrate:resolve --failed-cleanup <module>` to clear the module's failed attempt.
+- Then run `nextly migrate`: it records the module applied when the database stands at its result, and runs it when the database stands at its start.
+
+## Example
+
+```text
+✗ `nextly migrate:resolve --applied` does not mark `plugin:@acme/blog/001_init` applied.
+  Why:  plugin:@acme/blog/001_init is a plugin module, which `nextly migrate` records applied together with the tables it owns.
+  Next: Run `nextly migrate:resolve --failed-cleanup plugin:@acme/blog/001_init` and then `nextly migrate`: it records the module applied when the database stands at its result, and runs it when the database stands at its start.
+  Docs: https://nextlyhq.com/docs/cli/errors/resolve-plugin-module  (RESOLVE_PLUGIN_MODULE)
+```

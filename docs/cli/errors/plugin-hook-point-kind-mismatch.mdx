@@ -1,0 +1,23 @@
+---
+title: PLUGIN_HOOK_POINT_KIND_MISMATCH
+description: "A hook point was executed as a kind other than the one its plugin declares."
+---
+
+## Cause
+
+A hook point was executed as a kind other than the one its plugin declares.
+
+A hook point is declared as a filter, an action or a decision, and runs only as that kind. Run as another kind, a decision could not veto, so the call would fail open.
+
+## Fix
+
+- Execute the hook point through the call for the kind its plugin declares, as the Next line names it.
+
+## Example
+
+```text
+✗ Hook point "reviews.approve" (declared by reviews) is a decision, but it was executed as a filter.
+  Why:  A decision executed as a filter cannot veto, so the call would fail open.
+  Next: Execute "reviews.approve" as a decision, the kind its plugin declares.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-hook-point-kind-mismatch  (PLUGIN_HOOK_POINT_KIND_MISMATCH)
+```

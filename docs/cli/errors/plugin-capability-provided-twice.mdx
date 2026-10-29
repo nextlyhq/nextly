@@ -1,0 +1,23 @@
+---
+title: PLUGIN_CAPABILITY_PROVIDED_TWICE
+description: "Two plugins provide the same capability."
+---
+
+## Cause
+
+Two plugins provide the same capability.
+
+A capability a plugin lists in `provides` can have one provider, so a plugin that `requires` it knows which implementation it gets.
+
+## Fix
+
+- Configure only one of the two providers, or disable one with `enabled: false`.
+
+## Example
+
+```text
+✗ Plugins "mailer" and "smtp" both provide the capability "email".
+  Why:  Each capability has one provider, so a plugin that requires it knows which implementation it gets.
+  Next: Configure only one of "mailer" and "smtp", or disable one of them.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-provided-twice  (PLUGIN_CAPABILITY_PROVIDED_TWICE)
+```

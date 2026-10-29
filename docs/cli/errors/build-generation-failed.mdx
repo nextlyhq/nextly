@@ -1,0 +1,25 @@
+---
+title: BUILD_GENERATION_FAILED
+description: "The build could not generate its type or Zod schema files."
+---
+
+## Cause
+
+The build could not generate its type or Zod schema files.
+
+After validating, `nextly build` writes the generated TypeScript types and Zod schemas. Writing them failed, most often because an output folder cannot be created or written to. The Why line holds the error.
+
+## Fix
+
+- Check that the folders the config's `typescript` options name can be written to by the user running the build.
+- Run `nextly build --verbose` to see where it failed, then run `nextly build` again.
+- To skip a step, use `--no-types` or `--no-zod`.
+
+## Example
+
+```text
+✗ File generation failed, so the build stopped.
+  Why:  EACCES: permission denied, mkdir '/home/you/app/src/db/schemas/zod'
+  Next: Check that the output folders in `nextly.config.ts` can be written to, then run `nextly build` again; `--verbose` shows where it failed.
+  Docs: https://nextlyhq.com/docs/cli/errors/build-generation-failed  (BUILD_GENERATION_FAILED)
+```

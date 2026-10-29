@@ -1,0 +1,24 @@
+---
+title: PLUGIN_CAPABILITY_VERSION_INCOMPATIBLE
+description: "A plugin requires a capability at a version other than the one its provider offers."
+---
+
+## Cause
+
+A plugin requires a capability at a version other than the one its provider offers.
+
+A plugin's `requires` gives each capability a range of versions, and the plugin that provides it is at a version outside that range.
+
+## Fix
+
+- Install a version of the providing plugin in the range the message names.
+- Or install a release of the requiring plugin that accepts the provider's version.
+
+## Example
+
+```text
+✗ Plugin "reports" requires "email" ^2.0.0, but "mailer" provides it at 1.0.0.
+  Why:  The provider's version is outside the range in the `requires` of "reports".
+  Next: Install a version of "mailer" in ^2.0.0, or a release of "reports" that accepts 1.0.0.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-version-incompatible  (PLUGIN_CAPABILITY_VERSION_INCOMPATIBLE)
+```

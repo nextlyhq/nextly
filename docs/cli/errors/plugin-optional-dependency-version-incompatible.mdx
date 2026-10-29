@@ -1,0 +1,24 @@
+---
+title: PLUGIN_OPTIONAL_DEPENDENCY_VERSION_INCOMPATIBLE
+description: "A plugin optionally depends on another plugin, and the configured version is outside the range it accepts."
+---
+
+## Cause
+
+A plugin optionally depends on another plugin, and the configured version is outside the range it accepts.
+
+A plugin's `optionalDependsOn` names plugins it can work with but does not need. One of them is configured, and its version is outside the range given for it.
+
+## Fix
+
+- Install a version of the optional dependency in the range the message names.
+- Or install a release of the dependent plugin that accepts the configured version.
+
+## Example
+
+```text
+✗ Plugin "reviews" optionally depends on "commerce" ^2.0.0, but "commerce" is 1.0.0.
+  Why:  An optional dependency need not be configured, but once it is, its version must be in the plugin's `optionalDependsOn` range.
+  Next: Install a version of "commerce" in ^2.0.0, or a release of "reviews" that accepts 1.0.0.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-optional-dependency-version-incompatible  (PLUGIN_OPTIONAL_DEPENDENCY_VERSION_INCOMPATIBLE)
+```

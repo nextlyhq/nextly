@@ -1,0 +1,27 @@
+---
+title: MIGRATION_FILE_EDITED
+description: "A migration file no longer matches the checksum `migrate:create` recorded in its snapshot."
+---
+
+## Cause
+
+A migration file no longer matches the checksum `migrate:create` recorded in its snapshot.
+
+`nextly migrate:create` records the checksum of each migration it writes in the file's snapshot. The file no longer matches it, so it was edited after it was generated, and its snapshot may no longer describe what it does.
+
+## Fix
+
+- Revert the edit, for example from version control.
+- Or delete the file and re-generate it with `nextly migrate:create --name="<migration-name>"`.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ The migration file `20261020_120000_add_posts.sql` was edited after generation.
+  Why:  Expected SHA-256: 9f2c4e1a7b3d5f60812a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d
+        Actual SHA-256:   3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d
+  Next: Either revert the edit, or delete this file and re-generate via `nextly migrate:create --name="<migration-name>"`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-file-edited  (MIGRATION_FILE_EDITED)
+```

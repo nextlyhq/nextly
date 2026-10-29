@@ -1,0 +1,24 @@
+---
+title: PLUGIN_NEXTLY_RANGE_INVALID
+description: "A plugin's `nextly` field is not a valid range of Nextly versions."
+---
+
+## Cause
+
+A plugin's `nextly` field is not a valid range of Nextly versions.
+
+A plugin's `nextly` field states which versions of Nextly it supports, as a semver range such as `^1.2.0`. A value that is not a range cannot be checked against the installed version.
+
+## Fix
+
+- Correct the plugin's `nextly` range.
+- If the plugin is not yours, install a release of it that declares a valid one.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares an invalid `nextly` range "latest".
+  Why:  `nextly` must be a semver range, such as `^1.2.0`, so it can be checked against the installed version.
+  Next: Correct the `nextly` range of "reviews", or install a release of it that declares a valid one.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-nextly-range-invalid  (PLUGIN_NEXTLY_RANGE_INVALID)
+```

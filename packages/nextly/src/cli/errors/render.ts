@@ -17,7 +17,7 @@ import pc from "picocolors";
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import type { CliError } from "./cli-error";
+import { CliError } from "./cli-error";
 import { cliErrorDocsUrl } from "./registry";
 
 export interface FormatOptions {
@@ -47,23 +47,23 @@ function chainOf(error: Error): Error[] {
   return chain;
 }
 
-/** Each distinct context along the chain, as one line of JSON each. */
+/**
+ * Each context along the chain, one line of JSON each. An error from below the CLI is shown with
+ * its own code, which the CLI code replaced on the lines above.
+ */
 function contextLines(error: CliError): string[] {
   const lines: string[] = [];
-  const seen = new Set<string>();
   for (const link of chainOf(error)) {
     if (!NextlyError.is(link)) continue;
-    const context = link.logContext;
-    if (context === undefined || Object.keys(context).length === 0) continue;
-    let json: string;
+    const own = link.logContext ?? {};
+    const context =
+      link instanceof CliError ? own : { code: String(link.code), ...own };
+    if (Object.keys(context).length === 0) continue;
     try {
-      json = JSON.stringify(context);
+      lines.push(`  Context: ${JSON.stringify(context)}`);
     } catch {
-      continue;
+      // A context that cannot be printed is left out rather than hiding the rest.
     }
-    if (seen.has(json)) continue;
-    seen.add(json);
-    lines.push(`  Context: ${json}`);
   }
   return lines;
 }

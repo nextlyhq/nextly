@@ -13,6 +13,7 @@ import {
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
+import { databaseEnvError } from "../errors/areas/database";
 
 import type { Logger } from "./logger";
 
@@ -180,13 +181,21 @@ export async function createCliAdapter(
     dialect = process.env.DB_DIALECT as SupportedDialect | undefined;
   }
 
+  // The same errors the environment check gives, so a command that connects without checking
+  // first still ends with the code for what is missing.
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required");
+    throw databaseEnvError({
+      valid: false,
+      errors: [],
+      problem: "url-missing",
+    });
   }
   if (!dialect) {
-    throw new Error(
-      "Could not detect database dialect. Set DB_DIALECT environment variable."
-    );
+    throw databaseEnvError({
+      valid: false,
+      errors: [],
+      problem: "dialect-undetected",
+    });
   }
 
   logger?.debug(`Creating ${dialect} adapter...`);

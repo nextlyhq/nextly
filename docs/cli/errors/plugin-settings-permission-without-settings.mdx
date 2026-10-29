@@ -1,0 +1,24 @@
+---
+title: PLUGIN_SETTINGS_PERMISSION_WITHOUT_SETTINGS
+description: "A plugin declares `settingsPermission` but no settings schema for it to guard."
+---
+
+## Cause
+
+A plugin declares `settingsPermission` but no settings schema for it to guard.
+
+`settingsPermission` names the permission that guards a plugin's settings, and the plugin declares no settings schema under `contributes.settings` for it to guard.
+
+## Fix
+
+- Add the settings schema under `contributes.settings`.
+- Or remove `settingsPermission`.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares settingsPermission "manage-reviews" but no settings schema for it to guard.
+  Why:  `settingsPermission` guards the plugin's settings, and the plugin declares no `contributes.settings`.
+  Next: Add the settings schema under `contributes.settings`, or remove `settingsPermission`.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-settings-permission-without-settings  (PLUGIN_SETTINGS_PERMISSION_WITHOUT_SETTINGS)
+```

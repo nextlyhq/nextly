@@ -1,0 +1,23 @@
+---
+title: PLUGIN_ROUTE_PATH_INVALID
+description: "A plugin declares a route whose path does not start with `/`."
+---
+
+## Cause
+
+A plugin declares a route whose path does not start with `/`.
+
+A plugin's route paths are mounted under the plugin's own namespace, so each must be absolute within it and start with `/`.
+
+## Fix
+
+- Start the route's `path` with `/`, for example `/summary` rather than `summary`.
+
+## Example
+
+```text
+✗ Plugin "reviews" declares a route path "summary" that does not start with "/".
+  Why:  A route's path is mounted under `/plugins/<plugin>`, so it must be absolute within that namespace.
+  Next: Start the route's path with "/", as in "/summary".
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-route-path-invalid  (PLUGIN_ROUTE_PATH_INVALID)
+```

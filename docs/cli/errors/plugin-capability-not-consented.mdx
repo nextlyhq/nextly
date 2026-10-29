@@ -1,0 +1,24 @@
+---
+title: PLUGIN_CAPABILITY_NOT_CONSENTED
+description: "A plugin declares a capability that needs the app's consent, and `nextly.config.ts` does not give it."
+---
+
+## Cause
+
+A plugin declares a capability that needs the app's consent, and `nextly.config.ts` does not give it.
+
+Some capabilities reach far enough that the app must list each plugin it grants them to, by name. `capabilities.db.rawSql`, the live database handle, is one: the app lists its plugins in `db.rawSqlPlugins` in `nextly.config.ts`. The Next line gives the whole line to write.
+
+## Fix
+
+- Review the plugin.
+- Add the line the Next line gives to `nextly.config.ts`.
+
+## Example
+
+```text
+✗ Plugin "reports" declares capabilities.db.rawSql, which grants the live database handle at ctx.db.raw, which reaches every table, but the app does not list it.
+  Why:  A capability that reaches this far is granted only to the plugins the app lists for it by name.
+  Next: Review the plugin, then add this line to nextly.config.ts: db: { rawSqlPlugins: ["reports"] }
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-capability-not-consented  (PLUGIN_CAPABILITY_NOT_CONSENTED)
+```
