@@ -61,6 +61,11 @@ export interface DatabaseEnvValidation {
   valid: boolean;
   /** Error messages if invalid */
   errors: string[];
+  /**
+   * The first thing to fix, when invalid: what the CLI's error code is chosen by, so the code
+   * never depends on the wording of `errors`.
+   */
+  problem?: "url-missing" | "dialect-undetected" | "dialect-invalid";
   /** Detected dialect */
   dialect?: SupportedDialect;
   /** Database URL */
@@ -90,11 +95,13 @@ export function detectDialectFromUrl(
  */
 export function validateDatabaseEnv(): DatabaseEnvValidation {
   const errors: string[] = [];
+  let problem: DatabaseEnvValidation["problem"];
   const databaseUrl = process.env.DATABASE_URL;
   const dialectEnv = process.env.DB_DIALECT as SupportedDialect | undefined;
 
   if (!databaseUrl) {
     errors.push("DATABASE_URL environment variable is required");
+    problem = "url-missing";
   }
 
   let dialect: SupportedDialect | undefined = dialectEnv;
@@ -106,15 +113,18 @@ export function validateDatabaseEnv(): DatabaseEnvValidation {
     errors.push(
       "Could not detect database dialect. Set DB_DIALECT to one of: postgresql, mysql, sqlite"
     );
+    problem ??= "dialect-undetected";
   } else if (!["postgresql", "mysql", "sqlite"].includes(dialect)) {
     errors.push(
       `Invalid DB_DIALECT: ${dialect}. Must be one of: postgresql, mysql, sqlite`
     );
+    problem ??= "dialect-invalid";
   }
 
   return {
     valid: errors.length === 0,
     errors,
+    problem,
     dialect: errors.length === 0 ? dialect : undefined,
     databaseUrl: errors.length === 0 ? databaseUrl : undefined,
   };

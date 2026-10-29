@@ -1,0 +1,20 @@
+{
+  "CONFIG_IMPORT_NOT_FOUND": "The configuration file imports a file or package that could not be found.",
+  "CONFIG_INVALID": "The configuration declares something Nextly cannot use, such as a field type no installed plugin offers.",
+  "CONFIG_INVALID_EXPORT": "The configuration file's default export is not a configuration object.",
+  "CONFIG_LOAD_FAILED": "The configuration file compiled, but threw an error while it ran.",
+  "CONFIG_NOT_FOUND": "The configuration file named with `-c` or `--config` does not exist.",
+  "CONFIG_SYNTAX_ERROR": "The configuration file is not valid TypeScript, so it could not be compiled.",
+  "CONFIG_TOOLING_UNAVAILABLE": "Reading the configuration needs the optional `esbuild` package, which is not installed.",
+  "DATABASE_DIALECT_INVALID": "`DB_DIALECT` names a database Nextly does not support.",
+  "DATABASE_DIALECT_UNKNOWN": "The database type could not be told from `DATABASE_URL`, and `DB_DIALECT` is not set.",
+  "DATABASE_UNREACHABLE": "The command could not connect to the database `DATABASE_URL` names.",
+  "DATABASE_URL_MISSING": "`DATABASE_URL` is not set, so the command has no database to use.",
+  "DATA_LOSS_CONSENT_NOT_COVERED": "The data-loss consent names what may be deleted, and leaves out something the command would delete.",
+  "DATA_LOSS_CONSENT_REQUIRED": "The command would delete data, no consent covers it, and no terminal is attached to ask.",
+  "MIGRATION_MISSING": "A migration recorded as applied has no file in the migrations folder.",
+  "MIGRATION_TAMPERED": "A migration recorded as applied has a file that no longer matches its recorded checksum.",
+  "PLUGIN_SETUP_FAILED": "A plugin's `setup` function threw while the configuration was loading.",
+  "SCHEMA_LOCK_HELD": "Another run holds the schema lock, so the command did not start and changed nothing.",
+  "UNEXPECTED_ERROR": "The command stopped on an error that no other code describes."
+}

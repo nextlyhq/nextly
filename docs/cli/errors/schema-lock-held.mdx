@@ -1,0 +1,24 @@
+---
+title: SCHEMA_LOCK_HELD
+description: "Another run holds the schema lock, so the command did not start and changed nothing."
+---
+
+## Cause
+
+Another run holds the schema lock, so the command did not start and changed nothing.
+
+Every command that changes the schema takes the database's schema lock first, so two never change it at once: `nextly migrate`, `migrate:down`, `db:sync`, a Schema Builder save and others. The command waited, and the lock was still held. The Why line names the run that holds it and when the lock lapses if that run has stopped.
+
+## Fix
+
+- Wait for the run the Why line names to finish, then run the command again.
+- If that run has stopped, the lock lapses on its own at the time named. To clear it sooner, once you are sure nothing is running, use `nextly migrate --force-unlock`.
+
+## Example
+
+```text
+✗ `nextly migrate` did not start, and changed nothing: the schema lock is still held after waiting 30 s.
+  Why:  `nextly db:sync` holds it (process 4242 on build-01, started 2 min ago at 2026-10-29T10:00:00Z). If that process has stopped, the lock lapses in 30 s, at 2026-10-29T10:02:30Z, with nobody clearing it by hand.
+  Next: Run it again once that finishes.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-lock-held  (SCHEMA_LOCK_HELD)
+```

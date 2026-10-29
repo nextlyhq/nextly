@@ -37,7 +37,6 @@ import {
   buildWorkflowRegistry,
   publishWorkflows,
 } from "../../domains/workflows/registry";
-import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
@@ -48,7 +47,6 @@ import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/
 import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
-import { describeDeclarationFailure } from "../../shared/lib/assert-plugin-field-declarations";
 import {
   generatedTypesFile,
   generatedZodDir,
@@ -58,9 +56,15 @@ import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-opti
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
+import { configDeclarationError, exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
-import { formatDuration, formatCount, logWarnings } from "../utils/logger";
+import {
+  formatDuration,
+  formatCount,
+  logWarnings,
+  type Logger,
+} from "../utils/logger";
 import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
 import { runComponentMapCheck } from "./component-map-check-command";
@@ -202,8 +206,7 @@ export async function runGenerateTypes(
       debug: options.verbose,
     });
   } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   if (configResult.configPath) {
@@ -311,8 +314,7 @@ export async function runGenerateTypes(
     logger.divider();
     logger.success(`Type generation completed in ${formatDuration(duration)}`);
   } catch (error) {
-    logger.error(`Generation failed: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 }
 
@@ -326,7 +328,7 @@ export async function runGenerateTypes(
  */
 export async function publishConfiguredWorkflows(
   configResult: LoadConfigResult,
-  logger: { error(message: string): void }
+  logger: Pick<Logger, "getOptions">
 ): Promise<void> {
   try {
     publishWorkflows(
@@ -342,8 +344,7 @@ export async function publishConfiguredWorkflows(
       )
     );
   } catch (error) {
-    logger.error(describeDeclarationFailure(error));
-    process.exit(1);
+    exitWithError(logger, configDeclarationError(error) ?? error);
   }
 }
 
@@ -726,8 +727,7 @@ export function registerGenerateTypesCommand(program: Command): void {
       try {
         await runGenerateTypes(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

@@ -1,0 +1,38 @@
+---
+title: CLI error codes
+description: Every code a nextly command can end with, the cause it stands for, and a page on how to fix it.
+---
+
+When a `nextly` command fails, it ends with the same four lines: what happened, why, what to run next, and a link to the page for its code.
+
+```text
+✗ <what happened, in one sentence>
+  Why:  <the cause>
+  Next: <the command or action that fixes it>
+  Docs: <the page for this code>  (<CODE>)
+```
+
+Run the command again with `--verbose` to add the internal context and the stack below those lines. The exit code is 1.
+
+Each code stands for one cause and keeps that meaning in later releases, so scripts and CI can match on it.
+
+| Code                                                               | Cause                                                                                                    |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| [`CONFIG_IMPORT_NOT_FOUND`](./config-import-not-found)             | The configuration file imports a file or package that could not be found.                                |
+| [`CONFIG_INVALID`](./config-invalid)                               | The configuration declares something Nextly cannot use, such as a field type no installed plugin offers. |
+| [`CONFIG_INVALID_EXPORT`](./config-invalid-export)                 | The configuration file's default export is not a configuration object.                                   |
+| [`CONFIG_LOAD_FAILED`](./config-load-failed)                       | The configuration file compiled, but threw an error while it ran.                                        |
+| [`CONFIG_NOT_FOUND`](./config-not-found)                           | The configuration file named with `-c` or `--config` does not exist.                                     |
+| [`CONFIG_SYNTAX_ERROR`](./config-syntax-error)                     | The configuration file is not valid TypeScript, so it could not be compiled.                             |
+| [`CONFIG_TOOLING_UNAVAILABLE`](./config-tooling-unavailable)       | Reading the configuration needs the optional `esbuild` package, which is not installed.                  |
+| [`DATABASE_DIALECT_INVALID`](./database-dialect-invalid)           | `DB_DIALECT` names a database Nextly does not support.                                                   |
+| [`DATABASE_DIALECT_UNKNOWN`](./database-dialect-unknown)           | The database type could not be told from `DATABASE_URL`, and `DB_DIALECT` is not set.                    |
+| [`DATABASE_UNREACHABLE`](./database-unreachable)                   | The command could not connect to the database `DATABASE_URL` names.                                      |
+| [`DATABASE_URL_MISSING`](./database-url-missing)                   | `DATABASE_URL` is not set, so the command has no database to use.                                        |
+| [`DATA_LOSS_CONSENT_NOT_COVERED`](./data-loss-consent-not-covered) | The data-loss consent names what may be deleted, and leaves out something the command would delete.      |
+| [`DATA_LOSS_CONSENT_REQUIRED`](./data-loss-consent-required)       | The command would delete data, no consent covers it, and no terminal is attached to ask.                 |
+| [`MIGRATION_MISSING`](./migration-missing)                         | A migration recorded as applied has no file in the migrations folder.                                    |
+| [`MIGRATION_TAMPERED`](./migration-tampered)                       | A migration recorded as applied has a file that no longer matches its recorded checksum.                 |
+| [`PLUGIN_SETUP_FAILED`](./plugin-setup-failed)                     | A plugin's `setup` function threw while the configuration was loading.                                   |
+| [`SCHEMA_LOCK_HELD`](./schema-lock-held)                           | Another run holds the schema lock, so the command did not start and changed nothing.                     |
+| [`UNEXPECTED_ERROR`](./unexpected-error)                           | The command stopped on an error that no other code describes.                                            |

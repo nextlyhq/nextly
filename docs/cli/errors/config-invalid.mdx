@@ -1,0 +1,23 @@
+---
+title: CONFIG_INVALID
+description: "The configuration declares something Nextly cannot use, such as a field type no installed plugin offers."
+---
+
+## Cause
+
+The configuration declares something Nextly cannot use, such as a field type no installed plugin offers.
+
+Before it acts, the command checks each declaration in the configuration. A field's `type` must be a built-in type or one an installed plugin offers, and each option must be one its type accepts. The Why line names each declaration at fault by its path in the configuration.
+
+## Fix
+
+Fix each declaration the Why line lists. For a field type a plugin offers, install the plugin and add it to `plugins` in `nextly.config.ts`. Then run the command again.
+
+## Example
+
+```text
+✗ The configuration declares a field Nextly cannot use.
+  Why:  collections.posts.rating.type: Invalid field type 'stars'. No built-in type, and no installed plugin offers it on this surface.
+  Next: Fix each declaration listed in `nextly.config.ts`, or install the plugin that offers its field type, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-invalid  (CONFIG_INVALID)
+```

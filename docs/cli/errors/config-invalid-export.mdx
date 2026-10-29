@@ -1,0 +1,31 @@
+---
+title: CONFIG_INVALID_EXPORT
+description: "The configuration file's default export is not a configuration object."
+---
+
+## Cause
+
+The configuration file's default export is not a configuration object.
+
+The CLI reads the configuration from the file's default export. A file with no default export, or one that exports a function or a value of another kind, gives it nothing to read.
+
+## Fix
+
+End `nextly.config.ts` with a default export of the configuration:
+
+```ts
+import { defineConfig } from "nextly/config";
+
+export default defineConfig({
+  collections: [],
+});
+```
+
+## Example
+
+```text
+✗ `nextly.config.ts` does not export a configuration.
+  Why:  Its default export is undefined, not the object `defineConfig` returns.
+  Next: End the file with `export default defineConfig({ … })`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-invalid-export  (CONFIG_INVALID_EXPORT)
+```

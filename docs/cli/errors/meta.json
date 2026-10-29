@@ -1,0 +1,24 @@
+{
+  "title": "Error codes",
+  "pages": [
+    "index",
+    "config-import-not-found",
+    "config-invalid",
+    "config-invalid-export",
+    "config-load-failed",
+    "config-not-found",
+    "config-syntax-error",
+    "config-tooling-unavailable",
+    "database-dialect-invalid",
+    "database-dialect-unknown",
+    "database-unreachable",
+    "database-url-missing",
+    "data-loss-consent-not-covered",
+    "data-loss-consent-required",
+    "migration-missing",
+    "migration-tampered",
+    "plugin-setup-failed",
+    "schema-lock-held",
+    "unexpected-error"
+  ]
+}

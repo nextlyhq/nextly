@@ -1,0 +1,24 @@
+---
+title: DATA_LOSS_CONSENT_NOT_COVERED
+description: "The data-loss consent names what may be deleted, and leaves out something the command would delete."
+---
+
+## Cause
+
+The data-loss consent names what may be deleted, and leaves out something the command would delete.
+
+A consent that names targets (`--accept-data-loss=dc_posts.summary`) covers those targets only. The command found a deletion the list leaves out, so it changed nothing, even with a terminal attached: you said what may go, and this is not on it.
+
+## Fix
+
+Add the deletion the Why line lists to the consent, as the Next line shows, or change the migration so it no longer deletes it.
+
+## Example
+
+```text
+✗ The consent given does not cover 1 deletion.
+  Why:  - column dc_posts.summary (42 non-empty values)
+        Nothing was changed.
+  Next: To delete this too: --accept-data-loss=dc_authors,dc_posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_authors,dc_posts.summary).
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-not-covered  (DATA_LOSS_CONSENT_NOT_COVERED)
+```

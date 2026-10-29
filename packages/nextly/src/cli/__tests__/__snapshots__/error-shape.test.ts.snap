@@ -1,0 +1,144 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`a command that ends with an error > names a configuration's syntax error once, with its file, line and column 1`] = `
+"✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
+  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
+  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
+`;
+
+exports[`a command that ends with an error > names a missing configuration file, the flag that named it, and what to do 1`] = `
+"✗ \`-c missing.config.ts\` names a configuration file that does not exist.
+  Why:  Nothing is at <project>/missing.config.ts.
+  Next: Pass \`-c\` the path of your configuration file, relative to the project folder, or leave \`-c\` out to use the project's \`nextly.config.ts\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-not-found  (CONFIG_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > CONFIG_IMPORT_NOT_FOUND 1`] = `
+"✗ \`nextly.config.ts\` imports something that could not be found.
+  Why:  nextly.config.ts:2:22: Could not resolve "./collections/posts"
+  Next: Correct the import's path, or install the package it names, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-import-not-found  (CONFIG_IMPORT_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > CONFIG_INVALID 1`] = `
+"✗ The configuration declares a field Nextly cannot use.
+  Why:  collections.posts.rating.type: Invalid field type 'stars'. No built-in type, and no installed plugin offers it on this surface.
+  Next: Fix each declaration listed in \`nextly.config.ts\`, or install the plugin that offers its field type, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-invalid  (CONFIG_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > CONFIG_INVALID_EXPORT 1`] = `
+"✗ \`nextly.config.ts\` does not export a configuration.
+  Why:  Its default export is undefined, not the object \`defineConfig\` returns.
+  Next: End the file with \`export default defineConfig({ … })\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-invalid-export  (CONFIG_INVALID_EXPORT)"
+`;
+
+exports[`each code, as a command ends with it > CONFIG_LOAD_FAILED 1`] = `
+"✗ \`nextly.config.ts\` threw an error while it was loading.
+  Why:  Cannot read properties of undefined (reading 'slug')
+  Next: Fix the code that throws in \`nextly.config.ts\` or a file it imports; \`--verbose\` shows where it was thrown.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-load-failed  (CONFIG_LOAD_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > CONFIG_NOT_FOUND 1`] = `
+"✗ \`-c config/nextly.config.ts\` names a configuration file that does not exist.
+  Why:  Nothing is at /home/you/app/config/nextly.config.ts.
+  Next: Pass \`-c\` the path of your configuration file, relative to the project folder, or leave \`-c\` out to use the project's \`nextly.config.ts\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-not-found  (CONFIG_NOT_FOUND)"
+`;
+
+exports[`each code, as a command ends with it > CONFIG_SYNTAX_ERROR 1`] = `
+"✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
+  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
+  Next: Fix line 3 of \`nextly.config.ts\`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
+`;
+
+exports[`each code, as a command ends with it > CONFIG_TOOLING_UNAVAILABLE 1`] = `
+"✗ The configuration could not be read: the \`esbuild\` package is not installed.
+  Why:  The CLI and development compile \`nextly.config.ts\` with esbuild, an optional dependency of \`nextly\`.
+  Next: Install it as a development dependency, for example \`pnpm add -D esbuild\`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-tooling-unavailable  (CONFIG_TOOLING_UNAVAILABLE)"
+`;
+
+exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_NOT_COVERED 1`] = `
+"✗ The consent given does not cover 1 deletion.
+  Why:  - column dc_posts.summary (42 non-empty values)
+        Nothing was changed.
+  Next: To delete this too: --accept-data-loss=dc_authors,dc_posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_authors,dc_posts.summary).
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-not-covered  (DATA_LOSS_CONSENT_NOT_COVERED)"
+`;
+
+exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_REQUIRED 1`] = `
+"✗ Deleting data needs consent, and no terminal is attached to ask.
+  Why:  This would delete:
+        - column dc_posts.summary (42 non-empty values)
+        Nothing was changed.
+  Next: To consent: --accept-data-loss=dc_posts.summary (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts.summary).
+  Docs: https://nextlyhq.com/docs/cli/errors/data-loss-consent-required  (DATA_LOSS_CONSENT_REQUIRED)"
+`;
+
+exports[`each code, as a command ends with it > DATABASE_DIALECT_INVALID 1`] = `
+"✗ \`DB_DIALECT\` is \`mssql\`, which is not a database Nextly supports.
+  Why:  Nextly runs on PostgreSQL, MySQL and SQLite.
+  Next: Set \`DB_DIALECT\` to \`postgresql\`, \`mysql\` or \`sqlite\`, or remove it to read the type from \`DATABASE_URL\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-invalid  (DATABASE_DIALECT_INVALID)"
+`;
+
+exports[`each code, as a command ends with it > DATABASE_DIALECT_UNKNOWN 1`] = `
+"✗ The database type could not be told from \`DATABASE_URL\`.
+  Why:  It starts with none of \`postgres://\`, \`mysql://\` or \`file:\`, and \`DB_DIALECT\` is not set.
+  Next: Set \`DB_DIALECT\` to \`postgresql\`, \`mysql\` or \`sqlite\` in \`.env\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-unknown  (DATABASE_DIALECT_UNKNOWN)"
+`;
+
+exports[`each code, as a command ends with it > DATABASE_UNREACHABLE 1`] = `
+"✗ The command could not connect to the PostgreSQL database.
+  Why:  connect ECONNREFUSED 127.0.0.1:5432
+  Next: Check that the database is running and that \`DATABASE_URL\` names its host, port, database, user and password.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-unreachable  (DATABASE_UNREACHABLE)"
+`;
+
+exports[`each code, as a command ends with it > DATABASE_URL_MISSING 1`] = `
+"✗ \`DATABASE_URL\` is not set, so there is no database to use.
+  Why:  The command reads the database from \`DATABASE_URL\`, in the environment or the project's \`.env\` file.
+  Next: Set \`DATABASE_URL\` in \`.env\`, for example \`DATABASE_URL=postgres://user:password@localhost:5432/app\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-url-missing  (DATABASE_URL_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_MISSING 1`] = `
+"✗ \`20261020_120000_add_posts.sql\` is recorded as applied, but its file is not in the migrations folder.
+  Why:  It ran on this database and no removal of it is recorded, so the folder may be from an older build.
+  Next: Restore the file from version control, or deploy the build that has it, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-missing  (MIGRATION_MISSING)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_TAMPERED 1`] = `
+"✗ \`20261020_120000_add_posts.sql\` has changed since it was applied, so \`nextly migrate\` ran nothing.
+  Why:  Its checksum no longer matches the one recorded when it ran on this database.
+  Next: Restore the file as it was when it ran, and put the change in a new migration with \`nextly migrate:create\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-tampered  (MIGRATION_TAMPERED)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SETUP_FAILED 1`] = `
+"✗ The \`@nextlyhq/plugin-seo\` plugin failed while the configuration was loading.
+  Why:  seo: \`collections\` must name at least one collection
+  Next: Check the options this plugin is given in \`nextly.config.ts\`, or update the plugin; \`--verbose\` shows where it failed.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-setup-failed  (PLUGIN_SETUP_FAILED)"
+`;
+
+exports[`each code, as a command ends with it > SCHEMA_LOCK_HELD 1`] = `
+"✗ \`nextly migrate\` did not start, and changed nothing: the schema lock is still held after waiting 30 s.
+  Why:  \`nextly db:sync\` holds it (process 4242 on build-01, started 2 min ago at 2026-10-29T10:00:00Z). If that process has stopped, the lock lapses in 30 s, at 2026-10-29T10:02:30Z, with nobody clearing it by hand.
+  Next: Run it again once that finishes.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-lock-held  (SCHEMA_LOCK_HELD)"
+`;
+
+exports[`each code, as a command ends with it > UNEXPECTED_ERROR 1`] = `
+"✗ The command stopped on an error Nextly did not expect.
+  Why:  Failed query: no such column: localized
+  Next: Run it again with \`--verbose\` to see the details, and report it at https://github.com/nextlyhq/nextly/issues if it keeps happening.
+  Docs: https://nextlyhq.com/docs/cli/errors/unexpected-error  (UNEXPECTED_ERROR)"
+`;

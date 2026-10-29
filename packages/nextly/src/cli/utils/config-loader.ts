@@ -520,7 +520,12 @@ async function loadConfigInternal(
       publicMessage: "Failed to load Nextly configuration.",
       statusCode: 400,
       logMessage: "Config loader error",
-      logContext: { configPath, reason: "config-not-found" },
+      // `requested` is the path as given to `-c`, so the error can name it as the user typed it.
+      logContext: {
+        configPath,
+        requested: options.configPath,
+        reason: "config-not-found",
+      },
     });
   }
 
