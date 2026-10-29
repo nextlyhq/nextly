@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   expiryHandoff,
+  isPendingExpiryHandoff,
   PendingExpiryHandoff,
   setExpiryHandoff,
   takePendingExpiries,
@@ -48,5 +49,39 @@ describe("the default expiry hand-off", () => {
 
     setExpiryHandoff(null);
     expect(expiryHandoff()).toBeInstanceOf(PendingExpiryHandoff);
+  });
+});
+
+/*
+ * A bundled or hot-reloaded copy of this module has its own class, so the
+ * default it installs is not an instance of this copy's. It is recognised by
+ * its brand, so a flush through either copy drains what it holds.
+ */
+describe("the default hand-off across module copies", () => {
+  it("drains a default another copy of the module installed", () => {
+    const fromAnotherCopy = {
+      [Symbol.for("nextly/PendingExpiryHandoff")]: true,
+      held: ["nextly:posts:id:9"],
+      handOff(tags: string[]) {
+        this.held.push(...tags);
+      },
+      take() {
+        const tags = this.held;
+        this.held = [];
+        return tags;
+      },
+    };
+    setExpiryHandoff(fromAnotherCopy);
+
+    expect(isPendingExpiryHandoff(fromAnotherCopy)).toBe(true);
+    expect(fromAnotherCopy instanceof PendingExpiryHandoff).toBe(false);
+    expect(takePendingExpiries()).toEqual(["nextly:posts:id:9"]);
+  });
+
+  it("does not take an installed hand-off that only looks like one", () => {
+    const installed = { handOff: () => undefined, take: () => ["leaked"] };
+    setExpiryHandoff(installed);
+    expect(isPendingExpiryHandoff(installed)).toBe(false);
+    expect(takePendingExpiries()).toEqual([]);
   });
 });

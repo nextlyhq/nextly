@@ -31,7 +31,29 @@ const MAX_PENDING_TAGS = 10_000;
  * The default: keeps handed-off tags, deduplicated, for an out-of-request path
  * to drain with {@link takePendingExpiries}.
  */
+/**
+ * Marks the in-process default, under a key every copy of this module shares.
+ * A bundled or hot-reloaded copy has its own class, so `instanceof` asked by
+ * one copy misses an instance another made, and the tags it holds would never
+ * be drained.
+ */
+const PENDING_BRAND = Symbol.for("nextly/PendingExpiryHandoff");
+
+/** Whether `handoff` is the in-process default, whichever copy of this module made it. */
+export function isPendingExpiryHandoff(
+  handoff: unknown
+): handoff is { take(): string[] } {
+  return (
+    typeof handoff === "object" &&
+    handoff !== null &&
+    (handoff as Record<symbol, unknown>)[PENDING_BRAND] === true &&
+    typeof (handoff as { take?: unknown }).take === "function"
+  );
+}
+
 export class PendingExpiryHandoff implements ExpiryHandoff {
+  readonly [PENDING_BRAND] = true;
+
   private readonly pending = new Set<string>();
 
   // The revalidator logs each hand-off with its tags and reason, whichever
@@ -98,7 +120,7 @@ export function holdForNextFlush(tags: string[]): void {
  */
 export function takePendingExpiries(): string[] {
   const handoff = expiryHandoff();
-  const held = handoff instanceof PendingExpiryHandoff ? handoff.take() : [];
+  const held = isPendingExpiryHandoff(handoff) ? handoff.take() : [];
   const refused = globalForFallback.__nextly_expiry_fallback?.take() ?? [];
   return [...new Set([...held, ...refused])];
 }
