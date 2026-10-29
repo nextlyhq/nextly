@@ -48,3 +48,13 @@ Core's Count, Breakdown, Over time and Recent entries cards are declared with `d
   declared widget; `extendWidget()` still applies to them.
 - A Filter of no conditions adds nothing to a widget's query, rather than an
   empty `where`.
+- **A series over a range** counts, in its last interval, a row MySQL stored
+  rounded across that interval's end within the second it is read in, as a
+  windowed count of the same range does; on MySQL the series' scan bound now
+  keeps that second.
+- **A windowed `count`** checks the call's own `where` as written before
+  narrowing it to the window, so a malformed filter is refused exactly as it
+  is without a window, never wrapped and run.
+- **A declared widget's loading skeleton** lays out its rows from its
+  `skeleton`: a list loads as a list's rows, and a table as a table with its
+  heading and columns on a wide card. Recent entries loads as a table.

@@ -188,7 +188,7 @@ describe("core's declared cards", () => {
       "core/recent-entries": {
         component: "core#RecentEntries",
         offered: "per-collection",
-        sketch: "list",
+        sketch: "table",
       },
     });
     for (const widget of declared) {
@@ -210,7 +210,7 @@ describe("core's declared cards", () => {
       "core/count": "metric",
       "core/breakdown": "bars",
       "core/over-time": "timeseries",
-      "core/recent-entries": "list",
+      "core/recent-entries": "table",
     });
   });
 

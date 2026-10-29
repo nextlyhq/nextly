@@ -131,8 +131,9 @@ export const recentEntriesWidget = defineWidget({
     };
   },
   view: { component: "core#RecentEntries" },
-  // It loads, and its add-panel row is sketched, as a list of rows.
-  skeleton: "list",
+  // It loads, and its add-panel row is sketched, as the table it draws: rows
+  // on a narrow card, a table of its columns on a wide one.
+  skeleton: "table",
   // The component draws its own empty state, with the line saying which
   // entries show here, which the frame's one line could not say.
   isEmpty: () => false,
