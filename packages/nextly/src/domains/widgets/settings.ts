@@ -91,6 +91,16 @@ export interface WidgetSettingBase {
    * controls settle.
    */
   quick?: boolean;
+  /**
+   * The component the settings sheet draws in place of this setting's own
+   * field, as `"<module>#<Export>"`, handed the setting's value, a way to
+   * change it, and the card's other settings. A top-level key the field
+   * configs do not have, like `quick`: read by the sheet, never by
+   * `FieldRenderer`.
+   *
+   * @experimental
+   */
+  editor?: { component: string };
 }
 
 /**

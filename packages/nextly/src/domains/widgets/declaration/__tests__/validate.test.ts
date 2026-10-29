@@ -739,6 +739,34 @@ describe("a widget declaration as startup receives it", () => {
       ]);
     });
 
+    it("with an editor that names no component, and passes one that does", () => {
+      const editorFault = (name: string) =>
+        `setting "${name}" editor must be { component: "<module>#<Export>" }, naming where the admin loads its editor from`;
+      expect(
+        problemsOf(
+          valid({
+            settings: {
+              goal: {
+                type: "number",
+                label: "Goal",
+                editor: { component: "@acme/goal/admin#GoalEditor" },
+              },
+              blank: {
+                type: "number",
+                label: "Blank",
+                editor: { component: " " },
+              },
+              bare: {
+                type: "text",
+                label: "Bare",
+                editor: "@acme/goal/admin#X",
+              },
+            },
+          })
+        )
+      ).toEqual([editorFault("blank"), editorFault("bare")]);
+    });
+
     it("over the limit, still saying so when one is malformed", () => {
       const many = Object.fromEntries(
         Array.from({ length: MAX_WIDGET_SETTINGS }, (_, index) => [

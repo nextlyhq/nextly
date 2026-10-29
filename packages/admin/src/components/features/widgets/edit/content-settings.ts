@@ -8,10 +8,12 @@
  * fields no read rule can refuse, so a field missing from it is one this
  * reader may not filter, sort or group by now, whatever the stored value says.
  */
-import type {
-  AnyWidgetSetting,
-  ContentSetting,
-  PublishedContentSource,
+import {
+  contentFieldFits,
+  type AnyWidgetSetting,
+  type ContentSetting,
+  type PublishedContentSource,
+  unfitContentField,
 } from "nextly/config";
 
 import { whereToCondition } from "./content-filter";
@@ -109,20 +111,15 @@ function canonical(value: unknown): string {
 type SourceField = PublishedContentSource["fields"][number];
 
 /**
- * Whether a source field may be what this dependent setting names: offered at
- * all; for Group by, one the read will group by; and for Fields, one a row can
- * print that is not the collection's title, which every row already leads with.
+ * Whether a source field may be what this dependent setting names: the rule
+ * the server also judges a stored value by (`contentFieldFits`).
  */
 export function fieldFits(
   setting: DependentSetting,
   field: SourceField,
   titleField?: string
 ): boolean {
-  if (setting.type === "groupBy") return field.groupable !== false;
-  if (setting.type === "fields") {
-    return field.presentable !== false && field.name !== titleField;
-  }
-  return true;
+  return contentFieldFits(setting.type, field, titleField);
 }
 
 /** The first field a dependent setting's value names that it may not use here. */
@@ -131,10 +128,7 @@ function unfitField(
   value: unknown,
   source: PublishedContentSource
 ): string | undefined {
-  return fieldsNamedBy(setting, value).find(name => {
-    const field = source.fields.find(candidate => candidate.name === name);
-    return field === undefined || !fieldFits(setting, field, source.titleField);
-  });
+  return unfitContentField(setting.type, fieldsNamedBy(setting, value), source);
 }
 
 /** Whether every field a dependent setting's value names is one it may use here. */

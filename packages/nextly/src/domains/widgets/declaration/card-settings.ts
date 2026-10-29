@@ -5,6 +5,10 @@
  * @module domains/widgets/declaration/card-settings
  */
 
+import {
+  type PublishedContentSource,
+  unfitContentField,
+} from "../published-content-source";
 import { resolveWidgetSettings, type AnyWidgetSetting } from "../settings";
 
 /** A setting as a declaration holds it, read without its compile-time types. */
@@ -49,6 +53,49 @@ export function resolveCardSettings(
     ),
     stored
   );
+}
+
+/**
+ * Whether any Field setting has a value to judge, so a card with none asks
+ * nothing of the reader's collections.
+ */
+export function hasFieldSettingValue(
+  settings: unknown,
+  resolved: Readonly<Record<string, unknown>>
+): boolean {
+  return declaredSettings(settings).some(
+    ([name, setting]) =>
+      setting.type === "field" && typeof resolved[name] === "string"
+  );
+}
+
+/**
+ * The Field settings whose stored field the chosen collection does not offer
+ * this reader: a field removed since, one they may not read, or one in a
+ * collection they may not read, which has no published source of theirs.
+ * `sources` are the collections the reader may read, as their settings sheet
+ * is sent them, and each field is judged by the sheet's own rule
+ * (`unfitContentField`), so a value the sheet would reset is never handed to
+ * `load`.
+ */
+export function staleFieldSettings(
+  settings: unknown,
+  resolved: Readonly<Record<string, unknown>>,
+  sources: readonly PublishedContentSource[]
+): string[] {
+  return declaredSettings(settings).flatMap(([name, setting]) => {
+    const value = resolved[name];
+    if (setting.type !== "field" || typeof value !== "string") return [];
+    const collection =
+      setting.of === undefined ? undefined : resolved[setting.of];
+    const source = sources.find(
+      candidate => candidate.collection === collection
+    );
+    return source === undefined ||
+      unfitContentField("field", [value], source) !== undefined
+      ? [name]
+      : [];
+  });
 }
 
 /**

@@ -574,7 +574,24 @@ function settingsProblems(settings: unknown): string[] {
       isRecord(setting) ? { ...setting, name } : setting
     )
   ).filter(problem => problem !== SETTING_NOT_AN_OBJECT);
-  return [...malformed, ...unlabelled, ...shared];
+  const editors = entries.flatMap(([name, setting]) =>
+    isRecord(setting) ? editorProblem(name, setting.editor) : []
+  );
+  return [...malformed, ...unlabelled, ...shared, ...editors];
+}
+
+/**
+ * Why a setting's own editor is unusable: it names the component the settings
+ * sheet draws in place of the setting's field, where the admin loads it from,
+ * as a view's component does. Absent is a setting drawn by its own field.
+ */
+function editorProblem(name: string, editor: unknown): string[] {
+  if (editor === undefined) return [];
+  return isRecord(editor) && nonBlank.safeParse(editor.component).success
+    ? []
+    : [
+        `setting "${name}" editor must be { component: "<module>#<Export>" }, naming where the admin loads its editor from`,
+      ];
 }
 
 /**

@@ -407,6 +407,45 @@ export function Card(props: WidgetProps<typeof w>) { ${MARK}
   },
 
   {
+    name: "an admin entry registers a setting editor written for another setting's value",
+    ...pair(
+      editor => `${widget(`  settings: {
+    goal: setting.number({
+      label: "Goal",
+      defaultValue: 10,
+      editor: { component: "@acme/goal/admin#GoalEditor" },
+    }),
+  },
+  load: ({ settings }) => Promise.resolve({ goal: settings.goal }),
+  view: { component: "@acme/goal/admin#GoalCard" },
+  isEmpty: () => false,`)}
+import type { WidgetComponentMap, WidgetProps } from "../define-widget";
+import type { SettingEditorProps } from "../../result";
+
+function GoalCard(props: WidgetProps<typeof w>) {
+  return props.data.goal;
+}
+function NumberEditor(props: SettingEditorProps<number>) {
+  return props.value;
+}
+function TextEditor(props: SettingEditorProps<string>) {
+  return props.value;
+}
+void NumberEditor;
+void TextEditor;
+
+export const components = {
+  "@acme/goal/admin#GoalCard": GoalCard,
+  "@acme/goal/admin#GoalEditor": ${editor}, ${MARK}
+} satisfies WidgetComponentMap<typeof w>;
+`,
+      "TextEditor",
+      "NumberEditor"
+    ),
+    code: 2322,
+    message: "is not assignable to type '(props: SettingEditorProps<number>)",
+  },
+  {
     name: "an admin entry registers a component written for another widget",
     ...pair(
       card => `import type { WidgetComponentMap } from "../define-widget";

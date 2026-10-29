@@ -76,9 +76,14 @@ export interface DateInputProps<
 // ============================================================
 
 /**
- * Extracts local date parts and formats them for HTML input types.
+ * Formats a stored value for an HTML input of `format`, read in the zone it
+ * was written in. A date and time is a moment, picked and shown in the
+ * reader's own zone. A day, a month or a time of day names no moment: it is
+ * saved in UTC (`handleChange`), so it is read back in UTC too. Read in local
+ * time, a day saved as UTC midnight showed the day before to everyone west of
+ * UTC, and was saved a day earlier again on the next edit.
  */
-function toLocalInputValue(
+function toInputValue(
   value: string | Date | null | undefined,
   format: "date" | "datetime" | "time" | "month"
 ): string {
@@ -88,11 +93,23 @@ function toLocalInputValue(
     const date = typeof value === "string" ? new Date(value) : value;
     if (Number.isNaN(date.getTime())) return "";
 
-    const Y = date.getFullYear();
-    const M = String(date.getMonth() + 1).padStart(2, "0");
-    const D = String(date.getDate()).padStart(2, "0");
-    const h = String(date.getHours()).padStart(2, "0");
-    const m = String(date.getMinutes()).padStart(2, "0");
+    const local = format === "datetime";
+    const Y = local ? date.getFullYear() : date.getUTCFullYear();
+    const M = String(
+      (local ? date.getMonth() : date.getUTCMonth()) + 1
+    ).padStart(2, "0");
+    const D = String(local ? date.getDate() : date.getUTCDate()).padStart(
+      2,
+      "0"
+    );
+    const h = String(local ? date.getHours() : date.getUTCHours()).padStart(
+      2,
+      "0"
+    );
+    const m = String(local ? date.getMinutes() : date.getUTCMinutes()).padStart(
+      2,
+      "0"
+    );
 
     switch (format) {
       case "datetime":
@@ -111,31 +128,31 @@ function toLocalInputValue(
 }
 
 /**
- * Converts a date value to YYYY-MM-DD format for HTML date input using local time.
+ * Converts a date value to YYYY-MM-DD format for HTML date input, as its UTC day.
  */
 function toDateInputValue(value: string | Date | null | undefined): string {
-  return toLocalInputValue(value, "date");
+  return toInputValue(value, "date");
 }
 
 /**
  * Converts a date value to YYYY-MM-DDTHH:MM format for HTML datetime-local input using local time.
  */
 function toDateTimeInputValue(value: string | Date | null | undefined): string {
-  return toLocalInputValue(value, "datetime");
+  return toInputValue(value, "datetime");
 }
 
 /**
- * Converts a date value to HH:MM format for HTML time input using local time.
+ * Converts a date value to HH:MM format for HTML time input, as its UTC time of day.
  */
 function toTimeInputValue(value: string | Date | null | undefined): string {
-  return toLocalInputValue(value, "time");
+  return toInputValue(value, "time");
 }
 
 /**
- * Converts a date value to YYYY-MM format for HTML month input using local time.
+ * Converts a date value to YYYY-MM format for HTML month input, as its UTC month.
  */
 function toMonthInputValue(value: string | Date | null | undefined): string {
-  return toLocalInputValue(value, "month");
+  return toInputValue(value, "month");
 }
 
 // ============================================================

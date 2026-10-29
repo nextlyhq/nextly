@@ -226,6 +226,47 @@ the card loads in the frame's generic shape.
 
 All of these are experimental.
 
+## A setting's own editor
+
+A setting is drawn in the card's settings sheet by the field its builder names: a number input
+for `setting.number`, a picker for `setting.collection`. Where none of those fits, a setting can
+name a component of your own with `editor` (**experimental**), drawn in the sheet in its place.
+The component is handed `SettingEditorProps` of the setting's value: the value, an `onChange`, the
+card's other settings as the sheet holds them now, and whether the sheet is saving. A change is
+saved with the rest of the settings when the reader saves.
+
+```ts
+import { defineWidget, setting } from "@nextlyhq/plugin-sdk";
+
+export const salesGoal = defineWidget({
+  // ...
+  settings: {
+    goal: setting.number({
+      label: "Goal",
+      defaultValue: 1000,
+      editor: { component: "@acme/nextly-plugin-shop/admin#GoalEditor" },
+    }),
+  },
+});
+```
+
+```tsx
+import type { SettingEditorProps } from "@nextlyhq/plugin-sdk";
+
+export function GoalEditor({
+  label,
+  value,
+  onChange,
+  disabled,
+}: SettingEditorProps<number>) {
+  // ...draw the value, and call onChange with a number
+}
+```
+
+The editor is registered like the widget's own component, from your admin entry, and the
+component map holds it to the setting's value: an editor written for another setting's value
+fails to compile. Startup refuses an `editor` that names no component.
+
 ## Testing a widget
 
 `@nextlyhq/plugin-sdk/testing` runs a widget's `load` for a given person against a test instance,

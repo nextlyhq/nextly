@@ -141,7 +141,7 @@ const declarations: Record<string, unknown> = {
     declaration: {
       id: "acme/needs",
       size: { default: { w: 12, h: 3 } },
-      settings: { collection: { type: "collection" } },
+      settings: { collection: { type: "collection", label: "Collection" } },
       load: needsLoad,
       view: "figure",
     },
@@ -673,9 +673,10 @@ describe("a card's load, judged before it runs", () => {
     expect(answer).toEqual({
       settled: {
         ok: false,
+        // Its label in a sentence, as the admin writes it: lowered, never "No Collection".
         error: "No collection chosen yet",
         code: "needs-setting",
-        setting: "collection",
+        setting: "Collection",
       },
     });
   });
