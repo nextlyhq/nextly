@@ -95,15 +95,6 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
     labelOf,
     lifecycle
   );
-  // The list the rows come from and the rest of them, under the card's Filter and Sort as its
-  // settings name them, the values its rows were read under.
-  const viewAllHref = listViewHref({
-    source: `collection:${slug}`,
-    op: "list",
-    ...(isFilter(settings.filter) ? { where: settings.filter } : {}),
-    ...(typeof settings.sort === "string" ? { sort: settings.sort } : {}),
-    status: "all",
-  });
   return (
     <WidgetTable<Row>
       rows={data.rows}
@@ -120,19 +111,42 @@ export const RecentEntriesCard: React.FC<RecentEntriesCardProps> = ({
           ...(field.align === undefined ? {} : { align: field.align }),
         }))
       )}
-      {...(data.total === undefined
-        ? {}
-        : {
-            total: {
-              count: data.total,
-              ...(data.atLeast === true ? { atLeast: true } : {}),
-            },
-          })}
-      {...(viewAllHref === undefined ? {} : { viewAllHref })}
-      {...(typeof settings.limit === "number" ? { limit: settings.limit } : {})}
+      {...tableExtras(slug, data, settings)}
     />
   );
 };
+
+/**
+ * The table's parts the data and settings supply, each only where it has one:
+ * how many entries there are, the list the rows come from (under the card's
+ * Filter and Sort as its settings name them, the values its rows were read
+ * under), and the reader's "Number of items".
+ */
+function tableExtras(
+  slug: string,
+  data: RecentEntriesWidgetData,
+  settings: RecentEntriesCardProps["settings"]
+): Pick<WidgetTableProps<Row>, "total" | "viewAllHref" | "limit"> {
+  const viewAllHref = listViewHref({
+    source: `collection:${slug}`,
+    op: "list",
+    ...(isFilter(settings.filter) ? { where: settings.filter } : {}),
+    ...(typeof settings.sort === "string" ? { sort: settings.sort } : {}),
+    status: "all",
+  });
+  return {
+    ...(data.total === undefined
+      ? {}
+      : {
+          total: {
+            count: data.total,
+            ...(data.atLeast === true ? { atLeast: true } : {}),
+          },
+        }),
+    ...(viewAllHref === undefined ? {} : { viewAllHref }),
+    ...(typeof settings.limit === "number" ? { limit: settings.limit } : {}),
+  };
+}
 
 /** Whether a setting's value is a Filter: a plain object of conditions. */
 function isFilter(value: unknown): value is Record<string, unknown> {
