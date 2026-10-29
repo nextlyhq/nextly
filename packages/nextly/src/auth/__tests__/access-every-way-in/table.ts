@@ -796,6 +796,23 @@ export function oneAnswer(row: Row): Verdict {
   return answerFor(row, rulesLet(rule, action, caller, target));
 }
 
+/**
+ * The doors that answer yes or no about a collection, not about one entry.
+ * Where the one answer lets the caller act on the entries a filter matches,
+ * theirs is yes: the caller may act on the collection, on those entries.
+ */
+const COLLECTION_DOORS: ReadonlySet<Door> = new Set<Door>([
+  "can",
+  "capabilities",
+  "widget",
+]);
+
+/** The one answer as `door` gives it (see {@link COLLECTION_DOORS}). */
+export function oneAnswerAt(row: Row, door: Door): Verdict {
+  const answer = oneAnswer(row);
+  return answer === "matching" && COLLECTION_DOORS.has(door) ? "allow" : answer;
+}
+
 // ---------------------------------------------------------------------------
 // The answers file
 // ---------------------------------------------------------------------------

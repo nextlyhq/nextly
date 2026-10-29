@@ -239,6 +239,9 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
+      // The render-retry harness route, gated the same way: its render fails on
+      // an id's first load, for the test of an error boundary's retry().
+      NEXTLY_E2E_RETRY_HARNESS: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout

@@ -82,6 +82,7 @@ import type {
 import {
   readExpansionCaches,
   type ReadExpansionCaches,
+  type RelatedRowReadContext,
 } from "../../../services/collections/related-row-read-context";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
@@ -2779,6 +2780,55 @@ export class CollectionQueryService extends BaseService {
       // The language a target collection's read rule is evaluated in when its
       // predicate names a localized field.
       locale: localeChain?.[0],
+      localeChain: localeChain ?? undefined,
+      // Only "read everything" propagates, and only when the caller actually
+      // asked for it. Deriving this from the parent having resolved to no
+      // filter would unfilter every target behind a status-less collection.
+      status: expansionStatusScope({
+        status: params.status,
+        overrideAccess: params.overrideAccess,
+        bounded: narrows(params.trusted),
+      }),
+    };
+  }
+
+  /**
+   * The caller a list's or a detail read's components carry to the rows
+   * their relationships populate. A component's relationship copies whole
+   * rows out of the target collection, which this collection's field rules
+   * say nothing about, so the caller travels down to reach the related row's
+   * own rules, exactly as it does for direct relationships. Built once for
+   * both reads, as {@link buildDetailExpansionOptions} is: an option one of
+   * them dropped would widen that read's components without failing.
+   */
+  private buildComponentReadAccess(
+    params: {
+      fieldAccessUser?: UserContext;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      trusted?: TrustBound;
+      authenticatedScope?: AuthenticatedScope;
+      status?: StatusOption;
+    },
+    localeChain: string[] | null,
+    caches: ReadExpansionCaches
+  ): RelatedRowReadContext {
+    return {
+      enforceFieldAccess: true,
+      fieldAccessUser: params.fieldAccessUser,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      // Narrows that bypass per RELATED collection. Absent means unchanged;
+      // dropping it here would silently restore the full bypass.
+      trusted: assumedBound(params.trusted),
+      authenticatedScope: params.authenticatedScope,
+      // The read's caches, so every component row pointing at a target the
+      // read already judged resolves its policy and verdict once.
+      ...caches,
+      // A relationship inside a component points at a collection whose read
+      // rule may filter on one of its own localized fields.
+      locale: localeChain?.[0],
+      localeChain: localeChain ?? undefined,
       // Only "read everything" propagates, and only when the caller actually
       // asked for it. Deriving this from the parent having resolved to no
       // filter would unfilter every target behind a status-less collection.
@@ -3427,6 +3477,7 @@ export class CollectionQueryService extends BaseService {
             // read rule filters on a localized field can have that filter
             // applied against the right companion rows instead of withholding.
             locale: localeChain?.[0],
+            localeChain: localeChain ?? undefined,
             // Only "read everything" propagates, and only when the caller
             // actually asked for it. Deriving this from the parent having
             // resolved to no filter would unfilter every target behind a
@@ -3468,36 +3519,7 @@ export class CollectionQueryService extends BaseService {
             // untranslated embedded field blank instead of showing default text.
             locale: params.locale,
             fallbackLocale: params.fallbackLocale,
-            // A component's relationship fields copy whole rows out of the
-            // target collection, which this collection's field rules say nothing
-            // about — so the caller travels down to reach the related row's own
-            // rules, exactly as it does for direct relationships.
-            access: {
-              enforceFieldAccess: true,
-              fieldAccessUser: params.fieldAccessUser,
-              user: params.user,
-              overrideAccess: params.overrideAccess,
-              // Narrows that bypass per RELATED collection. Absent means unchanged;
-              // dropping it here would silently restore the full bypass.
-              trusted: assumedBound(params.trusted),
-              authenticatedScope: params.authenticatedScope,
-              // Shared across every component row this listing expands, and
-              // with the listing's own relationships, so rows pointing at the
-              // same target resolve its policy and verdict once.
-              ...caches,
-              // A relationship inside a component points at a collection whose
-              // read rule may filter on one of its own localized fields.
-              locale: localeChain?.[0],
-              // Only "read everything" propagates, and only when the caller
-              // actually asked for it. Deriving this from the parent having
-              // resolved to no filter would unfilter every target behind a
-              // status-less collection.
-              status: expansionStatusScope({
-                status: params.status,
-                overrideAccess: params.overrideAccess,
-                bounded: narrows(params.trusted),
-              }),
-            },
+            access: this.buildComponentReadAccess(params, localeChain, caches),
           });
       }
 
@@ -4735,33 +4757,9 @@ export class CollectionQueryService extends BaseService {
           // fields blank rather than showing default-language text.
           locale: params.locale,
           fallbackLocale: params.fallbackLocale,
-          // Same reasoning as the list path: a related row reached through a
-          // component is judged by its own collection's field rules.
-          access: {
-            enforceFieldAccess: true,
-            fieldAccessUser: params.fieldAccessUser,
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            // Narrows that bypass per RELATED collection. Absent means
-            // unchanged; dropping it restores the full bypass silently.
-            trusted: assumedBound(params.trusted),
-            authenticatedScope: params.authenticatedScope,
-            // The parent's caches, so every component instance relating to a
-            // target the parent already judged asks nothing more.
-            ...caches,
-            // As on the list path: a component's relationship reaches a
-            // collection that may scope reads by a localized field.
-            locale: localeChain?.[0],
-            // Only "read everything" propagates, and only when the caller
-            // actually asked for it. Deriving this from the parent having
-            // resolved to no filter would unfilter every target behind a
-            // status-less collection.
-            status: expansionStatusScope({
-              status: params.status,
-              overrideAccess: params.overrideAccess,
-              bounded: narrows(params.trusted),
-            }),
-          },
+          // As on the list path: a related row reached through a component
+          // is judged by its own collection's field rules.
+          access: this.buildComponentReadAccess(params, localeChain, caches),
         });
       }
 
