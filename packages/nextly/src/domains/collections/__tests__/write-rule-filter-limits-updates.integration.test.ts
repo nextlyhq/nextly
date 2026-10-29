@@ -16,14 +16,14 @@
  *
  * @module domains/collections/__tests__/write-rule-filter-limits-updates.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
 import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
-import { defineCollection, text } from "../../../config";
+import { defineCollection, option, select, text } from "../../../config";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
@@ -32,6 +32,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import { consoleLogger } from "../../../shared/types";
 
 // Integration files share fixed system-table names, so this file keeps its
 // own collection slugs.
@@ -64,6 +65,7 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
   clearRuleFilterReports();
+  vi.restoreAllMocks();
 });
 
 async function boot(dialect: TestDialect = "sqlite"): Promise<TestNextly> {
@@ -671,3 +673,74 @@ describe("a publish or unpublish rule that answers a filter", () => {
     expect(await stored(t, DRAFTED, own)).toEqual(live);
   });
 });
+
+describe.each(dialects)(
+  "an update rule's filter on a field stored as JSON (%s)",
+  dialect => {
+    // A `hasMany` select's column holds a document (`["a"]`), so a filter
+    // comparing it with one value would compare the document's text:
+    // `not_equals: "a"` would admit the entry whose list holds `a`, the one
+    // the rule meant to refuse. Refused as a read rule's is, it matches no
+    // entry. The same rule on a plain select is the control.
+    const TAGGED = "updfilter_json_tagged";
+    const SORTED = "updfilter_json_sorted";
+
+    it("refuses every entry, and the update rule is reported", async () => {
+      const options = [option("a"), option("b")];
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: TAGGED,
+            access: {
+              read: () => true,
+              update: () =>
+                ({ tags: { not_equals: "a" } }) as unknown as boolean,
+            },
+            fields: [
+              text({ name: "title" }),
+              select({ name: "tags", hasMany: true, options }),
+            ],
+          }),
+          defineCollection({
+            slug: SORTED,
+            access: {
+              read: () => true,
+              update: () =>
+                ({ tag: { not_equals: "a" } }) as unknown as boolean,
+            },
+            fields: [text({ name: "title" }), select({ name: "tag", options })],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [TAGGED, SORTED]);
+      await grantTo(t, AUTHOR, "update", [TAGGED, SORTED]);
+      const idOf = async (collection: string, data: Record<string, unknown>) =>
+        String((await t.nextly.create({ collection, data })).item.id);
+      const holdsA = await idOf(TAGGED, { title: "holds-a", tags: ["a"] });
+      const holdsB = await idOf(TAGGED, { title: "holds-b", tags: ["b"] });
+      const isB = await idOf(SORTED, { title: "is-b", tag: "b" });
+      const errors = vi.spyOn(consoleLogger, "error");
+
+      // The control: on a plain select the rule admits the entry it does not
+      // name, so the filter is applied.
+      await update(t, SORTED, isB, { title: "renamed" });
+      expect((await stored(t, SORTED, isB))?.title).toBe("renamed");
+
+      for (const id of [holdsA, holdsB]) {
+        const before = await stored(t, TAGGED, id);
+        const refused = await errorOf(() =>
+          update(t, TAGGED, id, { title: "renamed" })
+        );
+        expect(refused.statusCode).toBe(403);
+        expect(await stored(t, TAGGED, id)).toEqual(before);
+      }
+      expect(
+        errors.mock.calls.some(([message]) =>
+          String(message).includes(`The update rule of "${TAGGED}"`)
+        )
+      ).toBe(true);
+    });
+  }
+);
