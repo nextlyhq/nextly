@@ -232,12 +232,15 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
-      it("takes the plain four off when manage-<resource> is taken off by action", async () => {
+      it("takes the plain four off when manage-<resource> is taken off by action, one held before it too", async () => {
         const ids = await idsBySlug();
+        // `read-media` is held on its own before `manage-media` is added, and
+        // goes with it: the role stores the four it stands for, not where
+        // each came from.
         const role = await services().roles.createRole({
           name: "Taken off",
           slug: "taken-off",
-          permissionIds: [ids.get("read-users")!],
+          permissionIds: [ids.get("read-users")!, ids.get("read-media")!],
         });
         const roleId = String(role.id);
         await services().rolePermissions.addPermissionToRole(roleId, {

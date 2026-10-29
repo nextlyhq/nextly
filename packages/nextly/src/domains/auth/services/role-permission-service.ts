@@ -9,6 +9,12 @@ import type {
   RolePermissionInsertData,
 } from "@nextly/types/rbac-operations";
 
+import {
+  batches,
+  isRetiredManage,
+  plainFourOn,
+  storedAsPlain,
+} from "../../../auth/access/manage-bridge";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
@@ -16,12 +22,6 @@ import { writingPermissions } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
 import { afterRoleGrantsChanged } from "./role-grants-changed";
-import {
-  batches,
-  isRetiredManage,
-  plainFourOn,
-  storedAsPlain,
-} from "./stored-as-plain";
 
 /**
  * The transaction methods this service calls.

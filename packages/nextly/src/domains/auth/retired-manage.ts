@@ -14,9 +14,10 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { MANAGE_BRIDGED_RESOURCES } from "../../auth/access/manage-bridge";
-
-import { batches } from "./services/stored-as-plain";
+import {
+  MANAGE_BRIDGED_RESOURCES,
+  batches,
+} from "../../auth/access/manage-bridge";
 
 /** Where the roles are read: an adapter or a transaction. */
 type Reader = Pick<TransactionContext, "select">;
