@@ -254,7 +254,14 @@ export async function ruleFilterCondition(
     sources,
     logger
   );
-  return prepared.condition(params.schema, params.localizedCtx);
+  // A localized field the read shows from a fallback language is judged on
+  // that language's value too, so the read shows nothing the rule refuses.
+  return prepared.condition(
+    params.schema,
+    params.localizedCtx
+      ? { ...params.localizedCtx, inEveryFallbackLanguage: true }
+      : null
+  );
 }
 
 /**
@@ -288,6 +295,10 @@ export function localizedFilterContext(
     localizedFields: companion.localizedFields,
     mainIdColumn: schema.id,
     locale: localeChain[0],
+    localeChain,
+    // A comparison's value is converted as the companion column stores it, so
+    // a localized date matches as the instant it names on every dialect.
+    companionTable: companion.table,
     // Only constrain by status when the collection has per-locale status and the
     // read resolved to a single status; otherwise leave it unfiltered.
     statusValues:

@@ -51,7 +51,9 @@ import type { ListDensity } from "nextly/config";
 import {
   useCallback,
   useContext,
+  useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -59,6 +61,7 @@ import {
 } from "react";
 
 import { Link } from "@admin/components/ui/link";
+import { isDevelopmentRuntime } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -71,6 +74,9 @@ import {
   CARD_FOOTER_LINK_CLASS,
   CardFooterClaimProvider,
   CardFooterSlotProvider,
+  drawnClaim,
+  type CardFooterClaims,
+  type FooterClaimRank,
 } from "./frame/footer-slot";
 import { frameIds } from "./frame/ids";
 import { ListDensityContext, useListDensity } from "./frame/list-rows";
@@ -167,6 +173,8 @@ export interface WidgetCardProps {
    * code drawing its customise controls can label them after the card.
    */
   cardId?: string;
+  /** The widget's id, named in a development warning about what its body draws in the footer. */
+  widgetId?: string;
   /** The size the answer drawn in the body was fetched at; provided as `AnswerSizeContext`. */
   answerSize?: AnswerSize;
   /**
@@ -200,15 +208,27 @@ function stateName(state: CardState): string {
   return state.kind === "no-access" ? "unavailable" : state.kind;
 }
 
-/** The body's classes: top-aligned, dimmed through a refresh and in customise mode. */
-function bodyClassName(refreshing: boolean, customizing: boolean): string {
+/**
+ * The body's classes: top-aligned, dimmed through a refresh, and an answer dimmed in customise
+ * mode.
+ *
+ * 🔴 Only an ANSWER is dimmed while customising, as out of reach. A state's message (empty, not
+ * available, failed, a setting to choose) is an instruction, and dimmed it fell below the 4.5:1
+ * contrast text needs: "Choose collection in the card's settings." measured 2.65:1 in light and
+ * 3.07:1 in dark at 55% opacity.
+ */
+function bodyClassName(
+  refreshing: boolean,
+  customizing: boolean,
+  answering: boolean
+): string {
   return cn(
     // Top-aligned, not centred: cards in a grid row stretch to the tallest of them, so centring
     // floats a one-line figure in the middle of whatever the tallest card happens to be.
     "flex min-h-0 flex-1 flex-col justify-start overflow-visible p-0",
     FRAME_BODY_GAP.className,
     refreshing && "opacity-60 transition-opacity",
-    customizing && "opacity-55"
+    customizing && answering && "opacity-55"
   );
 }
 
@@ -277,7 +297,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [reported, setReported] = useState<CardState | null>(null);
   // The footer's element, once mounted: where a body draws what it has for the footer.
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
-  const footer = useFooterClaims();
+  const footer = useFooterClaims(props.widgetId);
   const report = useCallback((next: CardState | null) => setReported(next), []);
   const given = props.state ?? READY;
   const state = shownState(given, reported);
@@ -330,7 +350,11 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 aria-busy={flags.busy}
                 // Customise mode: what the card shows stays visible, but nothing in it can be reached.
                 inert={customizing || undefined}
-                className={bodyClassName(flags.refreshing, customizing)}
+                className={bodyClassName(
+                  flags.refreshing,
+                  customizing,
+                  showsBody(state)
+                )}
               >
                 {flags.markedHidden ? (
                   <p
@@ -346,7 +370,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 {drawsBody ? (
                   <CardStateReportProvider value={report}>
                     <CardFooterSlotProvider value={footerSlot}>
-                      <CardFooterClaimProvider value={footer.claim}>
+                      <CardFooterClaimProvider value={footer.claims}>
                         {props.children}
                       </CardFooterClaimProvider>
                     </CardFooterSlotProvider>
@@ -568,16 +592,38 @@ function WidgetCardHeader({
 }
 
 /**
- * Whether a body's link holds the card's footer, and how one claims it while it is drawn: the
- * footer holds one link, so while any is held the widget's own is not drawn.
+ * Whether a body's link holds the card's footer, and the claims it is drawn by: the footer holds
+ * one link, so while any is held the widget's own is not drawn, and of the body's, one is
+ * (`drawnClaim`).
  */
-function useFooterClaims(): { held: boolean; claim: () => () => void } {
-  const [claims, setClaims] = useState(0);
-  const claim = useCallback(() => {
-    setClaims(count => count + 1);
-    return () => setClaims(count => count - 1);
+function useFooterClaims(widgetId: string | undefined): {
+  held: boolean;
+  claims: CardFooterClaims;
+} {
+  const [held, setHeld] = useState<{ id: number; rank: FooterClaimRank }[]>([]);
+  const next = useRef(0);
+  const claim = useCallback((rank: FooterClaimRank) => {
+    next.current += 1;
+    const id = next.current;
+    setHeld(claims => [...claims, { id, rank }]);
+    return {
+      id,
+      release: () => setHeld(claims => claims.filter(c => c.id !== id)),
+    };
   }, []);
-  return { held: claims > 0, claim };
+  const drawn = drawnClaim(held);
+  const explicit = held.filter(c => c.rank === "explicit").length;
+  // A widget's body names one link for its footer; a second is a mistake its author should hear
+  // of, while developing, and the footer still draws one (the last).
+  useEffect(() => {
+    if (explicit > 1 && isDevelopmentRuntime()) {
+      console.warn(
+        `Widget "${widgetId ?? "(unnamed)"}" draws ${explicit} Widget.FooterLink; a card's footer holds one link, so only the last is drawn.`
+      );
+    }
+  }, [explicit, widgetId]);
+  const claims = useMemo(() => ({ claim, drawn }), [claim, drawn]);
+  return { held: held.length > 0, claims };
 }
 
 /** The widget's own footer link, where the frame draws a footer and no body's link holds it. */
