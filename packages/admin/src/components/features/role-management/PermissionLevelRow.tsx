@@ -64,6 +64,7 @@ export function PermissionLevelRow({
 }: PermissionLevelRowProps): JSX.Element {
   const [eachAction, setEachAction] = useState(false);
   const locked = useMemo(() => new Set(lockedIds), [lockedIds]);
+  const owned = useMemo(() => new Set(value), [value]);
   // What the row shows held: the role's own and its base role's.
   const held = useMemo(
     () => new Set([...value, ...lockedIds]),
@@ -170,7 +171,10 @@ export function PermissionLevelRow({
         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
           {inActionOrder(row.permissions).map(permission => {
             const name = actionLabel(permission);
-            const given = locked.has(permission.id);
+            // Given by the base alone: the role has no copy of its own to
+            // take away, so the way to drop it is to change the base.
+            const baseOnly =
+              locked.has(permission.id) && !owned.has(permission.id);
             return (
               <label
                 key={permission.id}
@@ -179,10 +183,10 @@ export function PermissionLevelRow({
                 <span aria-hidden="true">{name}</span>
                 <Switch
                   aria-label={`${row.label}: ${name}`}
-                  // A base role's grant shows held and cannot be turned off
-                  // here: the way to drop it is to change the base.
+                  // A base role's grant shows held. Where the role also holds
+                  // it, turning it off takes away the role's own copy.
                   checked={held.has(permission.id)}
-                  disabled={disabled || given}
+                  disabled={disabled || baseOnly}
                   onCheckedChange={on => setAction(permission.id, on)}
                 />
               </label>

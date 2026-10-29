@@ -92,6 +92,29 @@ function levels(label: string) {
 }
 
 describe("PermissionLevelRow", () => {
+  it("lets the role take away its own copy of an action the base also gives, but not the base's", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        row={POSTS}
+        initial={["posts-read", "posts-create"]}
+        lockedIds={["posts-read", "posts-update"]}
+        baseName="Editor"
+      />
+    );
+
+    await user.click(screen.getByRole("switch", { name: "Post: each action" }));
+    // Held by the role and the base: the role's own copy can go.
+    const read = screen.getByRole("switch", { name: "Post: View" });
+    expect(read).toBeEnabled();
+    await user.click(read);
+    expect(saved).toEqual(["posts-create"]);
+    // POPULATION CONTROL: given by the base alone, so it stays locked.
+    expect(screen.getByRole("switch", { name: "Post: Edit" })).toBeDisabled();
+    // Still shown held: the base still gives it.
+    expect(screen.getByRole("switch", { name: "Post: View" })).toBeChecked();
+  });
+
   it.each([
     ["No access", []],
     ["Can view", ["posts-read"]],

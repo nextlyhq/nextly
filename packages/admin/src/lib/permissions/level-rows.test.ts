@@ -223,11 +223,22 @@ describe("ownWithLevel", () => {
     expect(ownWithLevel([], posts, "view", ["read-posts"])).toEqual([]);
   });
 
-  it("keeps an id the role holds itself that the base gives too", () => {
+  it("drops the role's own copy of a row's id the base gives, as the level then rests on the base", () => {
     const { posts } = rows();
     expect(ownWithLevel(["read-posts"], posts, "view", ["read-posts"])).toEqual(
-      ["read-posts"]
+      []
     );
+  });
+
+  it("keeps the role's own copy of a base-given id outside what the level decides", () => {
+    const { posts } = rows();
+    // An action under the row's switch, and another row's grant.
+    expect(
+      ownWithLevel(["export-posts", "read-settings"], posts, "view", [
+        "export-posts",
+        "read-settings",
+      ])
+    ).toEqual(["export-posts", "read-settings", "read-posts"]);
   });
 
   it("takes away the role's own ids above the level", () => {
