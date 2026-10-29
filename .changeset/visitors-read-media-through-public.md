@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A visitor, a request with no session and no key, reads media through the admin's media routes when the Public role holds `read-media`, as a checked Direct API media read that names nobody now does too. Boot seeding gives the Public role `read-media`. Taken off the Public role, those reads are refused with 401, asking the visitor to sign in, as before. A request whose session or key is not valid is still asked to sign in again, and media writes still need a signed-in caller.
+A visitor, a request with no session and no key, now reads media through the admin's media routes when the Public role holds `read-media`, as a checked Direct API media read that names nobody now does too. Boot seeding gives the Public role `read-media`. Taken off the Public role, those reads are refused with 401, asking the visitor to sign in, as before. A request whose session or key is not valid is still asked to sign in again, and media writes still need a signed-in caller.

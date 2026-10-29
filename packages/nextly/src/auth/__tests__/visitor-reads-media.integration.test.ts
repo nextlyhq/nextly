@@ -154,6 +154,35 @@ describe.each(getConfiguredTestDialects())(
           await setPublic(held);
         }
       });
+
+      it("still refuses a visitor's upload at REST, though the Public role may create media, and stores nothing", async () => {
+        const held = await publicHolds();
+        await setPublic([...held, "create-media"]);
+        const before = (await new Nextly().media.find({})).items.length;
+        try {
+          const form = new FormData();
+          form.append(
+            "file",
+            new File([PDF], "by-a-visitor-at-rest.pdf", {
+              type: "application/pdf",
+            })
+          );
+          const res = await createMediaHandlers({ requireAuth: true }).POST(
+            new Request(`${ORIGIN}/api/media`, {
+              method: "POST",
+              headers: { origin: ORIGIN },
+              body: form,
+            }),
+            { params: Promise.resolve({ path: [] }) }
+          );
+          // Only a read is answered by the Public role; a write still needs a
+          // signed-in caller, whatever Public holds.
+          expect(res.status).toBe(401);
+        } finally {
+          await setPublic(held);
+        }
+        expect((await new Nextly().media.find({})).items.length).toBe(before);
+      });
     });
 
     describe("once read-media is taken off the Public role", () => {

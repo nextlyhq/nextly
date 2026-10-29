@@ -65,6 +65,7 @@ import { actorFromAuthContext, type RequestActor } from "../auth/request-actor";
 import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
+import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -213,7 +214,9 @@ async function gateMediaRoute(
     if (
       READ_ROUTE_TYPES.has(route.type) &&
       isVisitorRefusal(auth) &&
-      (await visitorReadsSystemResource("media"))
+      // The resource the media read policy names, so a visitor's read is
+      // asked of the same grant an authenticated reader's is.
+      (await visitorReadsSystemResource(SYSTEM_READ_POLICY.media.read.resource))
     ) {
       return {};
     }
