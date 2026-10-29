@@ -63,8 +63,19 @@ export interface PreparedWriteMatch {
    */
   columns(
     schema: DynamicSchema,
-    localizedCtx: LocalizedQueryContext | null
+    localizedCtx: WriteMatchLanguages
   ): { writes: SQL<number>; reads: SQL<number> };
+}
+
+/**
+ * The language each match column reads a translated field in: the write's
+ * own language for the write filter, and the plain read's languages for
+ * whether the caller may read the entry. `null` for a collection without
+ * languages.
+ */
+export interface WriteMatchLanguages {
+  readonly writes: LocalizedQueryContext | null;
+  readonly reads: LocalizedQueryContext | null;
 }
 
 /**
@@ -82,11 +93,13 @@ export async function prepareWriteMatch(
   sources: FilterConditionSources
 ): Promise<PreparedWriteMatch> {
   const { collectionName } = params;
-  const prepare = (filter: RuleFilter) =>
-    preparedOrUnbuildable(collectionName, filter, sources);
-  const write = await prepare(params.filter);
+  const prepare = (filter: RuleFilter, action: string) =>
+    preparedOrUnbuildable(collectionName, action, filter, sources);
+  const write = await prepare(params.filter, params.action);
   const read =
-    params.read.kind === "matching" ? await prepare(params.read.filter) : null;
+    params.read.kind === "matching"
+      ? await prepare(params.read.filter, "read")
+      : null;
   const readKind = params.read.kind;
 
   return {
@@ -96,14 +109,14 @@ export async function prepareWriteMatch(
           { collectionName, action: params.action },
           write,
           schema,
-          localizedCtx
+          localizedCtx.writes
         ),
         reads: read
           ? matchColumn(
               { collectionName, action: "read" },
               read,
               schema,
-              localizedCtx
+              localizedCtx.reads
             )
           : readKind === "every"
             ? sql<number>`1`
@@ -120,13 +133,14 @@ export async function prepareWriteMatch(
  */
 async function preparedOrUnbuildable(
   collectionName: string,
+  action: string,
   filter: RuleFilter,
   sources: FilterConditionSources
 ): Promise<PreparedFilterCondition | null> {
   try {
     return await prepareFilterCondition({ collectionName, filter }, sources);
   } catch (error) {
-    reportUnbuildable(collectionName, error);
+    reportUnbuildable(collectionName, action, error);
     return null;
   }
 }
@@ -161,7 +175,7 @@ function matchColumn(
   try {
     condition = prepared.condition(schema, localizedCtx);
   } catch (error) {
-    reportUnbuildable(collectionName, error);
+    reportUnbuildable(collectionName, rule.action, error);
     return sql<number>`0`;
   }
   // A filter that constrains nothing matches every row.
@@ -169,11 +183,22 @@ function matchColumn(
   return sql<number>`case when ${condition} then 1 else 0 end`;
 }
 
-/** Log a rule's filter that cannot be built, by its error's code alone. */
-function reportUnbuildable(collectionName: string, error: unknown): void {
-  consoleLogger.error("A write rule's filter could not be built", {
+/**
+ * Log a rule's filter that cannot be built, by its error's code alone. Only
+ * the builder's own refusal of the filter, a validation error naming what
+ * the collection lacks, is a filter that cannot be built: anything else, a
+ * lookup the build needs failing as a lost connection does, is rethrown and
+ * fails the write as it would any other, as a read fails.
+ */
+function reportUnbuildable(
+  collectionName: string,
+  action: string,
+  error: unknown
+): void {
+  if (!NextlyError.isValidation(error)) throw error;
+  consoleLogger.error(`A ${action} rule's filter could not be built`, {
     collectionName,
-    code: error instanceof NextlyError ? error.code : "UNBUILDABLE",
+    code: error.code,
   });
 }
 
@@ -209,5 +234,32 @@ export function writeLocalizedContext(
     localizedFields: companion.localizedFields,
     mainIdColumn: schema.id,
     locale,
+    // A comparison's value is converted as the companion column stores it,
+    // as a read converts it, so a date matches on every dialect alike.
+    companionTable: companion.table,
+  };
+}
+
+/**
+ * The languages a plain read in the default language judges a translated
+ * field's read filter in: its fallback chain, every language of it, as the
+ * read by id asks it, so the write tells apart only what that read would
+ * show. `null` for a collection without languages.
+ */
+export function readLocalizedContext(
+  companion: CompanionSchema | null,
+  schema: DynamicSchema,
+  localeChain: readonly string[] | null
+): LocalizedQueryContext | null {
+  const head = localeChain?.[0];
+  if (!companion || !head) return null;
+  return {
+    companionTableName: companion.companionTableName,
+    localizedFields: companion.localizedFields,
+    mainIdColumn: schema.id,
+    locale: head,
+    localeChain,
+    companionTable: companion.table,
+    inEveryFallbackLanguage: true,
   };
 }

@@ -202,6 +202,7 @@ import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   isValidLocale,
+  resolveLocaleChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import {
@@ -309,6 +310,7 @@ import {
 import { entryWriteContext } from "./stored-field-read";
 import {
   prepareWriteMatch,
+  readLocalizedContext,
   writeLocalizedContext,
   writeMatchOf,
   type FilteredWriteMatch,
@@ -11387,12 +11389,23 @@ export class CollectionMutationService extends BaseService {
             ),
             localizedColumns: companion.localizedFields.map(f => f.column),
           });
-    const localizedCtx = writeLocalizedContext(
-      readiness === "ready" ? companion : null,
-      schema,
-      options.locale ?? this.localization?.defaultLocale
-    );
-    return { columns: prepared.columns(schema, localizedCtx) };
+    const ready = readiness === "ready" ? companion : null;
+    return {
+      columns: prepared.columns(schema, {
+        writes: writeLocalizedContext(
+          ready,
+          schema,
+          options.locale ?? this.localization?.defaultLocale
+        ),
+        // Whether the caller may read the entry is a plain read's question,
+        // asked in the default language and its fallbacks, as that read is.
+        reads: readLocalizedContext(
+          ready,
+          schema,
+          resolveLocaleChain(this.localization, undefined, undefined)
+        ),
+      }),
+    };
   }
 
   /**
@@ -11429,7 +11442,8 @@ export class CollectionMutationService extends BaseService {
       schema,
       entryId,
       filtered,
-      accessParams
+      accessParams,
+      { underLock: true }
     );
   }
 
@@ -11439,19 +11453,30 @@ export class CollectionMutationService extends BaseService {
    * the write's own transaction under its row lock. `null` where the entry is
    * inside the filter, or gone, which the write answers as it answers any
    * missing entry.
+   *
+   * Under the row lock the match is itself a locking read. A plain read there
+   * would answer from the transaction's snapshot, which on MySQL's REPEATABLE
+   * READ is fixed at its first read and can predate a commit that moved the
+   * entry out of the filter; a locking read sees the row the lock holds.
    */
   private async refusalOutsideWriteFilter<T>(
     db: typeof this.db,
     schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
     entryId: string,
     match: FilteredWriteMatch,
-    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0]
+    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0],
+    options: { underLock?: boolean } = {}
   ): Promise<CollectionServiceResult<T> | null> {
-    const [row] = await db
+    const query = db
       .select({ writes: match.columns.writes, reads: match.columns.reads })
       .from(schema)
       .where(eq(schema.id as never, entryId))
       .limit(1);
+    // SQLite runs one writer at a time, and has no `FOR UPDATE`.
+    const [row] =
+      options.underLock && this.adapter.dialect !== "sqlite"
+        ? await query.for("update")
+        : await query;
     const found = writeMatchOf(row);
     if (!found.exists || found.writes) return null;
     return this.accessService.refusalOutsideFilter<T>(access, found.reads);
@@ -11702,7 +11727,8 @@ export class CollectionMutationService extends BaseService {
             schema,
             params.entryId,
             filtered,
-            accessParams
+            accessParams,
+            { underLock: true }
           );
           if (refusedUnderLock) return;
         }
