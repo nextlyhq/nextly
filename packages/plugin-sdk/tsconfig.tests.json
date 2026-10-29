@@ -25,7 +25,9 @@
     "noEmit": true,
     "types": ["node"],
     // Tests publish nothing, so they need not state every export's type.
-    "isolatedDeclarations": false
+    "isolatedDeclarations": false,
+    // The render tests are `.tsx`; the shipping config has no JSX to compile.
+    "jsx": "react-jsx"
   },
   "include": ["src/**/*"],
   "exclude": ["dist", "node_modules"]
