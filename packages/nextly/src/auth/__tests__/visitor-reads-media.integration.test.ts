@@ -163,7 +163,7 @@ describe.each(getConfiguredTestDialects())(
           const form = new FormData();
           form.append(
             "file",
-            new File([PDF], "by-a-visitor-at-rest.pdf", {
+            new File([new Uint8Array(PDF)], "by-a-visitor-at-rest.pdf", {
               type: "application/pdf",
             })
           );
