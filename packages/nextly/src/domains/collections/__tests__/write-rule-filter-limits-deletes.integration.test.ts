@@ -33,7 +33,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import type { RequestContext } from "../../../services/shared";
 import { consoleLogger } from "../../../shared/types";
+import { forgetCompanionReadiness } from "../../i18n/runtime/companion-readiness";
+import type { CollectionService } from "../services/collection-service";
 
 // Integration files share fixed system-table names, so this file keeps its
 // own collection slugs.
@@ -432,6 +435,62 @@ describe("a delete rule's filter on a collection with languages", () => {
     expect(refused.statusCode).toBe(404);
     expect(refused.code).toBe("NOT_FOUND");
     expect(await stillThere(t, FALLING_BACK, others)).toBe(true);
+  });
+
+  it("deletes inside the plugin's transaction an entry a filter on a translated field matches, before anything resolved its translations", async () => {
+    // A process that has not yet read this collection's translation table,
+    // as after a restart. The plugin's transaction resolves it before it
+    // opens, so the filter reads the translated title and the author's own
+    // entry is deleted while another's is still refused.
+    const TRANSLATED = "writefilter_translated_posts";
+    current = await createTestNextly({
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: TRANSLATED,
+          localized: true,
+          access: {
+            read: () => true,
+            delete: () => ({ title: { equals: "mine" } }) as unknown as boolean,
+          },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const t = current;
+    await userWhoMay(t, AUTHOR, "read", [TRANSLATED]);
+    await grantTo(t, AUTHOR, "delete", [TRANSLATED]);
+    const made = async (title: string) =>
+      String(
+        (await t.nextly.create({ collection: TRANSLATED, data: { title } }))
+          .item.id
+      );
+    const mine = await made("mine");
+    const theirs = await made("theirs");
+    forgetCompanionReadiness(t.adapter);
+    const service = t.getService(
+      "collectionService"
+    ) as unknown as CollectionService;
+    const asAuthorInTransaction: RequestContext = {
+      user: { id: AUTHOR },
+      overrideAccess: false,
+    } as RequestContext;
+    const deleteInTransaction = (id: string) =>
+      service.withTransaction(tx =>
+        service.deleteEntryInTransaction(
+          tx,
+          TRANSLATED,
+          id,
+          asAuthorInTransaction
+        )
+      );
+
+    await deleteInTransaction(mine);
+    const refused = await errorOf(() => deleteInTransaction(theirs));
+
+    expect(await stillThere(t, TRANSLATED, mine)).toBe(false);
+    expect(refused.statusCode).toBe(403);
+    expect(await stillThere(t, TRANSLATED, theirs)).toBe(true);
   });
 });
 
