@@ -963,6 +963,8 @@ export const nextly = {
     readinessOf: args => requireNextly().releases.readinessOf(args),
     memberCounts: args => requireNextly().releases.memberCounts(args),
     addMember: args => requireNextly().releases.addMember(args),
+    addMembers: args => requireNextly().releases.addMembers(args),
+    scheduleDocument: args => requireNextly().releases.scheduleDocument(args),
     removeMember: args => requireNextly().releases.removeMember(args),
     changeMemberAction: args =>
       requireNextly().releases.changeMemberAction(args),

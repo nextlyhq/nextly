@@ -215,12 +215,22 @@ export const addReleaseMember = (
 export const removeReleaseMember = (
   releaseId: string,
   memberId: string
-): Promise<{ message: string }> =>
-  fetcher<{ message: string }>(
+): Promise<ReleaseMemberRemovalResponse> =>
+  fetcher<ReleaseMemberRemovalResponse>(
     `/releases/${releaseId}/members/${memberId}`,
     { method: "DELETE" },
     true
   );
+
+/**
+ * What taking a document out answers. Taking the only document out of a
+ * single-document release that has not run cancels the release and keeps the
+ * document, and `releaseCancelled` says when that is what happened.
+ */
+export type ReleaseMemberRemovalResponse = {
+  message: string;
+  releaseCancelled: boolean;
+};
 
 export const scheduleRelease = (
   id: string,
