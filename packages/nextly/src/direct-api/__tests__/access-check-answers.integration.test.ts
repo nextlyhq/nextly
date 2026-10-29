@@ -28,7 +28,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
-import type { AccessOperation } from "../../shared/types/access";
+import type { AccessOperation } from "../../services/access/types";
 
 /** A rule answering `value`, which the rule type does not allow yet. */
 const answering = (value: unknown) => () => value as boolean;
