@@ -459,6 +459,34 @@ describe("a yes-or-no asker under a read rule that answers a filter", () => {
     );
     expect(verdict.allowed).toBe(false);
   });
+
+  it("answers a visitor yes where the Public role grants the read, naming no refusal", async () => {
+    // A visitor is judged as a signed-in user is: Public's read held, the
+    // filter answers yes to a yes-or-no asker, and no "now refused" notice
+    // is named for an answer that refuses nothing.
+    clearRuleAnswerNotices();
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    publicHolds("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("still refuses a visitor the Public role does not grant the read", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: false, refusal: "unauthenticated" });
+  });
 });
 
 describe("a read whose route already authorized it", () => {
