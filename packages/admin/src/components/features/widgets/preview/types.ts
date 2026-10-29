@@ -1,6 +1,6 @@
 /**
  * The development preview read's answer, as the admin reads it
- * (`GET /api/dashboard/widget-previews`, `{ items, meta }`).
+ * (`GET /api/_dev/widget-previews`, `{ items, meta }`).
  *
  * Restated here rather than imported: the server's module is not a published
  * entry, and the admin states every wire shape it reads in its own types, as

@@ -24,7 +24,7 @@ export function useWidgetPreviews(): UseQueryResult<WidgetPreview[]> {
     queryFn: async () =>
       (
         await protectedApi.get<ListResponse<WidgetPreview>>(
-          "/dashboard/widget-previews"
+          "/_dev/widget-previews"
         )
       ).items,
     // The cases change only when their author edits a declaration, which a

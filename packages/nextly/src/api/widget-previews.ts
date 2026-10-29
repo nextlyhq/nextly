@@ -1,5 +1,5 @@
 /**
- * GET /api/dashboard/widget-previews (development only)
+ * GET /api/_dev/widget-previews (development only)
  *
  * Every widget the reader may see, with what the development preview page
  * draws each from: its title, the sizes its cards may take, its view, its

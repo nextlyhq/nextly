@@ -1,6 +1,6 @@
 /**
  * The development preview read through the real catch-all handler, the real
- * permission decision and real keys: `GET /api/dashboard/widget-previews`.
+ * permission decision and real keys: `GET /api/_dev/widget-previews`.
  *
  * Two properties, each only observable on the request path. In development
  * the read answers each reader with the widgets the dashboard would offer
@@ -201,9 +201,9 @@ function get(segments: string[], key?: string): Promise<Response> {
   );
 }
 
-const PREVIEWS = ["dashboard", "widget-previews"];
+const PREVIEWS = ["_dev", "widget-previews"];
 /** A path under the same prefix that no runtime serves. */
-const UNKNOWN = ["dashboard", "no-such-read"];
+const UNKNOWN = ["_dev", "no-such-read"];
 
 interface PreviewBody {
   items: { id: string; preview: { name: string }[] }[];
@@ -217,7 +217,7 @@ async function previewIds(key: string): Promise<string[]> {
   return body.items.map(item => item.id);
 }
 
-describe("GET /api/dashboard/widget-previews in development", () => {
+describe("GET /api/_dev/widget-previews in development", () => {
   beforeEach(() => {
     vi.stubEnv("NODE_ENV", "development");
   });
@@ -277,7 +277,7 @@ describe("GET /api/dashboard/widget-previews in development", () => {
   });
 });
 
-describe("GET /api/dashboard/widget-previews outside development", () => {
+describe("GET /api/_dev/widget-previews outside development", () => {
   beforeEach(() => {
     vi.stubEnv("NODE_ENV", "production");
   });

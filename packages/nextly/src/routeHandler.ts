@@ -2543,11 +2543,15 @@ async function handleGet(req: Request, params: string[]) {
   return handleServiceRequest(req, params, "GET");
 }
 
-/** Whether the path is exactly `/dashboard/widget-previews`, nothing beneath it. */
+/**
+ * Whether the path is exactly `/_dev/widget-previews`, nothing beneath it.
+ * Under `_dev`, the first segment kept for development-only endpoints, which
+ * a plugin's root route can never claim (`root-mount-reach`).
+ */
 function isWidgetPreviewsPath(params: string[]): boolean {
   return (
     params.length === 2 &&
-    params[0] === "dashboard" &&
+    params[0] === "_dev" &&
     params[1] === "widget-previews"
   );
 }
