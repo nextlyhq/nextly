@@ -156,6 +156,29 @@ export function systemLevelRows(permissions: readonly Permission[]): {
   return { rows, rest };
 }
 
+/**
+ * Every row and group the roles screen shows, from the entities and
+ * permissions it loads, each permission in exactly one place.
+ *
+ * The built-in resources are taken first. A collection or Single created
+ * before its name was reserved for one (`settings`, `media`) keeps that name,
+ * and its permissions are the built-in resource's own permissions, so it is
+ * shown as the built-in row rather than as a collection; any action of its
+ * own that no level holds, such as `publish`, sits under that row's switch.
+ */
+export function roleScreenRows(
+  entities: readonly ScreenEntity[],
+  permissions: readonly Permission[]
+): { appRows: LevelRow[]; groups: PluginGroup[]; rest: Permission[] } {
+  const system = systemLevelRows(permissions);
+  const built = levelRows(
+    entities.filter(entity => !MANAGE_BRIDGE_RESOURCES.has(entity.slug)),
+    system.rest
+  );
+  const sorted = pluginGroups(built.rows, built.rest);
+  return { ...sorted, appRows: [...sorted.appRows, ...system.rows] };
+}
+
 /** The actions `ids` hold on `row`; an id of another row is not counted. */
 function actionsHeld(row: LevelRow, ids: Iterable<string>): string[] {
   const held = new Set(ids);
@@ -178,21 +201,31 @@ const SCHEMA_CHANGE_ACTIONS = ["create", "update", "delete"] as const;
  * - A built-in resource whose role still holds its retired `manage-`
  *   permission reads Can edit, which that permission gives until `nextly
  *   upgrade` converts it into the plain four. Saving the role stores the same
- *   access as plain permissions unless the row is changed.
+ *   access as plain permissions unless the row is changed. Where the role
+ *   holds it only through a base role (`ownIds` lacks it), saving this role
+ *   leaves it on the base role, so the note says where it comes from instead.
  * - Settings says that changing collections and Singles needs Can edit on it,
  *   since the schema routes ask create, update and delete on settings
  *   together; a role holding update without the other two is told it can
  *   change settings but not the schema.
  */
-export function rowNotes(row: LevelRow, ids: Iterable<string>): string[] {
+export function rowNotes(
+  row: LevelRow,
+  ids: Iterable<string>,
+  ownIds: Iterable<string>
+): string[] {
   if (row.kind !== "system") return [];
   const held = new Set(actionsHeld(row, ids));
   const notes: string[] = [];
   if (held.has("manage")) {
     notes.push(
-      `This role still holds the retired manage-${row.slug} permission, ` +
-        "which gives Can edit. Run nextly upgrade to convert it into the " +
-        "plain permissions; saving this role converts it too."
+      new Set(actionsHeld(row, ownIds)).has("manage")
+        ? `This role still holds the retired manage-${row.slug} permission, ` +
+            "which gives Can edit. Run nextly upgrade to convert it into the " +
+            "plain permissions; saving this role converts it too."
+        : `This role inherits the retired manage-${row.slug} permission ` +
+            "from a base role, which gives Can edit. Run nextly upgrade, or " +
+            "save the base role, to convert it into the plain permissions."
     );
   }
   if (row.slug === "settings") {

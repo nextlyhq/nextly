@@ -95,7 +95,7 @@ export function PermissionLevelRow({
       : "";
   // A built-in resource's lines: a retired `manage-` permission still held,
   // and what Settings must hold to change the schema.
-  const notes = rowNotes(row, held);
+  const notes = rowNotes(row, held, owned);
 
   const setLevel = (chosen: string) => {
     const next = levels.find(candidate => candidate === chosen);

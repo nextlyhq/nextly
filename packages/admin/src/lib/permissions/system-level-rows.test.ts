@@ -12,6 +12,7 @@ import type { Permission } from "../../types/ui/form";
 
 import {
   rowLevel,
+  roleScreenRows,
   rowNotes,
   systemLevelRows,
   withLevel,
@@ -122,29 +123,82 @@ describe("rowNotes", () => {
   const NOT_SCHEMA = "Can change settings, but not collections or Singles.";
 
   it("names a retired manage permission still held, with the command that converts it", () => {
-    const notes = rowNotes(row("settings"), ["manage-settings"]);
+    const notes = rowNotes(
+      row("settings"),
+      ["manage-settings"],
+      ["manage-settings"]
+    );
     expect(notes[0]).toContain("manage-settings");
     expect(notes[0]).toContain("nextly upgrade");
+    expect(notes[0]).toContain("saving this role converts it");
+  });
+
+  it("does not promise that saving converts a retired manage permission a base role gives", () => {
+    const notes = rowNotes(row("settings"), ["manage-settings"], []);
+    expect(notes[0]).toContain("from a base role");
+    expect(notes[0]).toContain("nextly upgrade");
+    expect(notes[0]).not.toContain("saving this role converts it");
   });
 
   it("says on Settings what changing collections and Singles needs", () => {
-    expect(rowNotes(row("settings"), [])).toEqual([SCHEMA_HELP]);
-    expect(rowNotes(row("media"), [])).toEqual([]);
+    expect(rowNotes(row("settings"), [], [])).toEqual([SCHEMA_HELP]);
+    expect(rowNotes(row("media"), [], [])).toEqual([]);
   });
 
   it("tells a role that may update settings without the other two that it cannot change the schema", () => {
-    expect(rowNotes(row("settings"), ["update-settings"])).toEqual([
+    expect(rowNotes(row("settings"), ["update-settings"], [])).toEqual([
       SCHEMA_HELP,
       NOT_SCHEMA,
     ]);
     expect(
       rowNotes(
         row("settings"),
-        PLAIN.map(action => `${action}-settings`)
+        PLAIN.map(action => `${action}-settings`),
+        []
       )
     ).toEqual([SCHEMA_HELP]);
-    expect(rowNotes(row("settings"), ["manage-settings"])).not.toContain(
+    expect(rowNotes(row("settings"), ["manage-settings"], [])).not.toContain(
       NOT_SCHEMA
     );
+  });
+});
+
+describe("roleScreenRows", () => {
+  // A collection created before `settings` was reserved keeps the name, and
+  // the permissions on `settings` are the built-in resource's.
+  const entities = [
+    {
+      slug: "settings",
+      kind: "collection" as const,
+      labels: { singular: "Setting", plural: "Settings" },
+      plugin: null,
+      declaredRules: [],
+    },
+    {
+      slug: "posts",
+      kind: "collection" as const,
+      labels: { singular: "Post", plural: "Posts" },
+      plugin: null,
+      declaredRules: [],
+    },
+  ];
+  const screen = roleScreenRows(entities, [
+    ...PERMISSIONS,
+    permission("settings", "publish"),
+    permission("posts", "read"),
+  ]);
+
+  it("shows a collection named for a built-in resource as the built-in row", () => {
+    const settings = screen.appRows.filter(r => r.slug === "settings");
+    expect(settings.map(r => r.kind)).toEqual(["system"]);
+    expect(settings[0]?.permissions.map(p => p.action)).toEqual([
+      ...PLAIN,
+      "manage",
+      "publish",
+    ]);
+    // POPULATION CONTROL: another collection still gets its own row.
+    expect(
+      screen.appRows.filter(r => r.slug === "posts").map(r => r.kind)
+    ).toEqual(["collection"]);
   });
 });

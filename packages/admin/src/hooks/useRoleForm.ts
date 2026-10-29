@@ -11,10 +11,8 @@ import { toast } from "@admin/components/ui";
 import { debugError, debugLog } from "@admin/lib/debug";
 import { navigateTo } from "@admin/lib/navigation";
 import {
-  levelRows,
-  pluginGroups,
+  roleScreenRows,
   screenEntitiesFrom,
-  systemLevelRows,
   type LevelRow,
   type PluginGroup,
   type ScreenEntity,
@@ -261,12 +259,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
   // its row, a plugin's rows and its own permissions to its group, and the
   // rest stay in the grid. Derived together, so each permission is shown in
   // exactly one place.
-  const { appRows, groups, rest } = useMemo(() => {
-    const built = levelRows(screenEntities, allPermissions);
-    const system = systemLevelRows(built.rest);
-    const sorted = pluginGroups(built.rows, system.rest);
-    return { ...sorted, appRows: [...sorted.appRows, ...system.rows] };
-  }, [screenEntities, allPermissions]);
+  const { appRows, groups, rest } = useMemo(
+    () => roleScreenRows(screenEntities, allPermissions),
+    [screenEntities, allPermissions]
+  );
   const [error, setError] = useState<string | null>(null);
   const [ignoreFormChanges, setIgnoreFormChanges] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
