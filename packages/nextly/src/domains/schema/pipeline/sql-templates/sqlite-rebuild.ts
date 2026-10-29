@@ -58,6 +58,7 @@
  *   would not carry (`tableOptionsOf`).
  * - A generated column, which no spec declares (`generatedColumnsOf`).
  * - An `AUTOINCREMENT` key, which Nextly never declares (`autoincrementIn`).
+ * - An `ON CONFLICT` policy, which Nextly never writes (`conflictClausesIn`).
  *
  * The same rebuild changes a column's nullability or default in a migration
  * file, which SQLite cannot do in place; the rebuilt column takes both from
@@ -249,6 +250,7 @@ export function sqliteTableRebuildStatements(
       `"table_options" INTEGER NOT NULL, ` +
       `"generated_columns" INTEGER NOT NULL, ` +
       `"autoincrement" INTEGER NOT NULL, ` +
+      `"conflict_clauses" INTEGER NOT NULL, ` +
       `"comments" INTEGER NOT NULL, ` +
       `CONSTRAINT ${q(needsForeignKeysOff)} CHECK ("foreign_keys" = 0), ` +
       `CONSTRAINT ${q(wouldDropTriggers)} CHECK ("triggers" = 0), ` +
@@ -259,12 +261,13 @@ export function sqliteTableRebuildStatements(
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "table options"))} CHECK ("table_options" = 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "generated columns"))} CHECK ("generated_columns" = 0), ` +
       `CONSTRAINT ${q(untrackedConstraintRefusal(name, "AUTOINCREMENT keys"))} CHECK ("autoincrement" = 0), ` +
+      `CONSTRAINT ${q(untrackedConstraintRefusal(name, "conflict clauses"))} CHECK ("conflict_clauses" = 0), ` +
       `CONSTRAINT ${q(unreadable)} CHECK ("comments" = 0))`,
     `INSERT INTO ${q(guard)} ("foreign_keys", "triggers", ` +
-      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "table_options", "generated_columns", "autoincrement", "comments") ` +
+      `"untracked_foreign_keys", "untracked_checks", "untracked_collations", "untracked_indexes", "table_options", "generated_columns", "autoincrement", "conflict_clauses", "comments") ` +
       `SELECT (SELECT "foreign_keys" FROM pragma_foreign_keys), ` +
       `(SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = ${literal}), ` +
-      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${tableOptionsOf(table)}, ${generatedColumnsOf(table)}, ${autoincrementIn(table)}, ${commentsIn(table)}`,
+      `${untracked.foreignKeys}, ${untracked.checks}, ${collations}, ${indexes}, ${tableOptionsOf(table)}, ${generatedColumnsOf(table)}, ${autoincrementIn(table)}, ${conflictClausesIn(table)}, ${commentsIn(table)}`,
     `DROP TABLE ${q(guard)}`,
     `CREATE TABLE ${q(rebuilt)} (\n${createTableBody(table, q, "  ", "sqlite")}\n)`,
     `INSERT INTO ${q(rebuilt)} (${columns}) SELECT ${columns} FROM ${q(name)}`,
@@ -295,6 +298,7 @@ export function untrackedConstraintRefusal(
     | "table options"
     | "generated columns"
     | "AUTOINCREMENT keys"
+    | "conflict clauses"
 ): string {
   return `rebuilding ${table} would drop ${kind} its schema does not track: write this change as a manual migration (nextly migrate:create --blank) that recreates ${table} with its ${kind}`;
 }
@@ -492,6 +496,21 @@ function generatedColumnsOf(table: TableSpec): string {
 function autoincrementIn(table: TableSpec): string {
   return (
     `COALESCE((SELECT instr(upper(sql), 'AUTOINCREMENT') > 0 ` +
+    `FROM sqlite_master WHERE type = 'table' AND name = ${literalOf(table.name)}), 0)`
+  );
+}
+
+/**
+ * A SQL expression that is 1 when the live table's definition carries an
+ * `ON CONFLICT` policy, on a column's NOT NULL, its key or a UNIQUE
+ * constraint, and 0 otherwise. Nextly never writes one, and the rebuilt table,
+ * declared from the spec, would not have it: a write the policy skipped or
+ * replaced would then fail instead. Matched as a bare substring, case-folded,
+ * which refuses rather than risks a false "none".
+ */
+function conflictClausesIn(table: TableSpec): string {
+  return (
+    `COALESCE((SELECT instr(upper(sql), 'CONFLICT') > 0 ` +
     `FROM sqlite_master WHERE type = 'table' AND name = ${literalOf(table.name)}), 0)`
   );
 }

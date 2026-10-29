@@ -720,8 +720,6 @@ service custom-role update collection user-is-key-maker at lock  404 NOT_FOUND e
 service custom-role update collection user-is-key-maker at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection user-is-key-maker at route  403 FORBIDDEN error  | You can't edit c user is key makers.
 service custom-role update collection user-is-key-maker at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role update providers none at rest  403 FORBIDDEN error  | You can't edit email providers.
-service custom-role update providers none at route  403 FORBIDDEN error  | You can't edit email providers.
 service custom-role update single async-false at direct  404 NOT_FOUND thrown  | Not found.
 service custom-role update single async-false at lock  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update single async-false at rest  404 NOT_FOUND error  | Not found.
@@ -1404,8 +1402,6 @@ service key-full-access update collection throws at lock  404 NOT_FOUND error  m
 service key-full-access update collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection throws at route  403 FORBIDDEN error  | You can't edit c throws.
 service key-full-access update collection throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access update providers none at rest  403 FORBIDDEN error  | You can't edit email providers.
-service key-full-access update providers none at route  403 FORBIDDEN error  | You can't edit email providers.
 service key-full-access update single async-false at direct  404 NOT_FOUND thrown  | Not found.
 service key-full-access update single async-false at lock  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update single async-false at rest  404 NOT_FOUND error  | Not found.
@@ -2265,8 +2261,6 @@ service key-partial update collection throws at lock  404 NOT_FOUND error  missi
 service key-partial update collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection throws at route  403 FORBIDDEN error  | You can't edit c throws.
 service key-partial update collection throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial update providers none at rest  403 FORBIDDEN error  | You can't edit email providers.
-service key-partial update providers none at route  403 FORBIDDEN error  | You can't edit email providers.
 service key-partial update single async-false at direct  404 NOT_FOUND thrown  | Not found.
 service key-partial update single async-false at lock  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update single async-false at rest  404 NOT_FOUND error  | Not found.
@@ -3954,8 +3948,6 @@ service key-role-based update collection throws at lock  404 NOT_FOUND error  mi
 service key-role-based update collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection throws at route  403 FORBIDDEN error  | You can't edit c throws.
 service key-role-based update collection throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based update providers none at rest  403 FORBIDDEN error  | You can't edit email providers.
-service key-role-based update providers none at route  403 FORBIDDEN error  | You can't edit email providers.
 service key-role-based update single async-false at direct  404 NOT_FOUND thrown  | Not found.
 service key-role-based update single async-false at lock  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update single async-false at rest  404 NOT_FOUND error  | Not found.
@@ -6494,8 +6486,6 @@ service user-partial update collection user-is-key-maker at lock  404 NOT_FOUND 
 service user-partial update collection user-is-key-maker at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection user-is-key-maker at route  403 FORBIDDEN error  | You can't edit c user is key makers.
 service user-partial update collection user-is-key-maker at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial update providers none at rest  403 FORBIDDEN error  | You can't edit email providers.
-service user-partial update providers none at route  403 FORBIDDEN error  | You can't edit email providers.
 service user-partial update single async-false at direct  404 NOT_FOUND thrown  | Not found.
 service user-partial update single async-false at lock  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update single async-false at rest  404 NOT_FOUND error  | Not found.
@@ -7178,8 +7168,6 @@ service user-with update collection throws at lock  404 NOT_FOUND error  missing
 service user-with update collection throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection throws at route  403 FORBIDDEN error  | You can't edit c throws.
 service user-with update collection throws at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with update providers none at rest  403 FORBIDDEN error  | You can't edit email providers.
-service user-with update providers none at route  403 FORBIDDEN error  | You can't edit email providers.
 service user-with update single async-false at direct  404 NOT_FOUND thrown  | Not found.
 service user-with update single async-false at lock  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update single async-false at rest  404 NOT_FOUND error  | Not found.
