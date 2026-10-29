@@ -1,8 +1,8 @@
 import type { FullConfig } from "@playwright/test";
 
-import { signIn } from "./tests/support/session";
+import { signIn } from "./tests/support/session.mjs";
 
-export { STORAGE_STATE } from "./tests/support/session";
+export { STORAGE_STATE } from "./tests/support/session.mjs";
 
 /**
  * Signs the seeded dev user in once, before the first test, and stores the

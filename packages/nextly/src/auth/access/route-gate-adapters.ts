@@ -452,7 +452,8 @@ async function entityCapabilities(
       caller,
       slug,
       rules,
-      languageOf(PUBLISH_EVERY_LANGUAGE[kind], "none")
+      languageOf(PUBLISH_EVERY_LANGUAGE[kind], "none"),
+      kind === "single" || !hasLifecycle(slug)
     );
     if (kind === "collection") {
       answered.duplicate = await duplicates(
@@ -491,22 +492,27 @@ async function duplicates(
 
 /**
  * Whether `caller` may publish every language of `resource` at once, on the
- * strict side of how that request is judged: update in every language, then
- * the publish check once for each configured language, with its rules told
- * that one and all of them. The route admits a caller holding the publish
- * grant without update, but a target with no lifecycle asks update of them,
- * and the request asks only the languages it puts live, which depend on the
- * document; asking update and every configured language never allows what
- * the request would refuse.
+ * strict side of how that request is judged: the publish check once for each
+ * configured language, with its rules told that one and all of them. The
+ * request asks only the languages it puts live, which depend on the document,
+ * so asking every configured language never allows what it would refuse.
+ *
+ * On a collection with a lifecycle the request changes only each language's
+ * status, which publish alone judges, so a caller holding publish without
+ * update may make it. A Single, and a collection without a lifecycle, ask
+ * update in every language first (`asksUpdate`).
  */
 async function publishesEveryLanguage(
   caller: GateCaller,
   resource: string,
   rules: RouteRules,
-  everyLanguage: RuleLanguage
+  everyLanguage: RuleLanguage,
+  asksUpdate: boolean
 ): Promise<boolean> {
   return withRuleLanguage(everyLanguage, async () => {
-    if (!(await capability(caller, "update", resource, rules))) return false;
+    if (asksUpdate && !(await capability(caller, "update", resource, rules))) {
+      return false;
+    }
     const refused = await askEachLanguage(everyLanguage.locales, async () =>
       (await capability(caller, "publish", resource, rules))
         ? undefined
