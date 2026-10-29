@@ -242,6 +242,98 @@ describe.each(getConfiguredTestDialects())(
         expect(await holds(roleId)).toEqual(["read-users"]);
       });
 
+      it("stores a permission as its row is when the role is written, not as it was read before", async () => {
+        const ids = await idsBySlug();
+        const role = await services().roles.createRole({
+          name: "Edited between",
+          slug: "edited-between",
+          permissionIds: [ids.get("read-users")!],
+        });
+        const readMedia = ids.get("read-media")!;
+        const { permissions } = getDialectTables();
+        const db = t.adapter.getDrizzle() as unknown as {
+          update: (table: unknown) => {
+            set: (values: unknown) => {
+              where: (condition: unknown) => Promise<unknown>;
+            };
+          };
+        };
+        const actionOf = (action: string) =>
+          db
+            .update(permissions)
+            .set({ action })
+            .where(eq(permissions.id, readMedia));
+        const transaction = t.adapter.transaction.bind(t.adapter);
+        const between = vi
+          .spyOn(t.adapter, "transaction")
+          .mockImplementationOnce(async work => {
+            // Another writer turns `read-media` into `publish-media` after the
+            // role's permissions were first read, before they are written.
+            await actionOf("publish");
+            return transaction(work);
+          });
+        try {
+          await services().rolePermissions.setRolePermissions(String(role.id), [
+            ids.get("manage-media")!,
+          ]);
+        } finally {
+          between.mockRestore();
+          await actionOf("read");
+        }
+        // Media no longer has all four plain permissions, so the retired one
+        // is kept as itself, and the edited row is granted nothing.
+        expect(await holds(String(role.id))).toEqual(["manage-media"]);
+        // Left holding nothing, so no case after this counts the role.
+        await services().rolePermissions.setRolePermissions(
+          String(role.id),
+          []
+        );
+      });
+
+      it("creates a role storing a permission as its row is when the role is written, not as it was read before", async () => {
+        const ids = await idsBySlug();
+        const readMedia = ids.get("read-media")!;
+        const { permissions } = getDialectTables();
+        const db = t.adapter.getDrizzle() as unknown as {
+          update: (table: unknown) => {
+            set: (values: unknown) => {
+              where: (condition: unknown) => Promise<unknown>;
+            };
+          };
+        };
+        const actionOf = (action: string) =>
+          db
+            .update(permissions)
+            .set({ action })
+            .where(eq(permissions.id, readMedia));
+        const transaction = t.adapter.transaction.bind(t.adapter);
+        const between = vi
+          .spyOn(t.adapter, "transaction")
+          .mockImplementationOnce(async work => {
+            // Another writer turns `read-media` into `publish-media` after the
+            // request was checked, before the role is written.
+            await actionOf("publish");
+            return transaction(work);
+          });
+        let roleId = "";
+        try {
+          const role = await services().roles.createRole({
+            name: "Created between",
+            slug: "created-between",
+            permissionIds: [ids.get("manage-media")!],
+          });
+          roleId = String(role.id);
+        } finally {
+          between.mockRestore();
+          await actionOf("read");
+        }
+        // Media no longer has all four plain permissions, so the retired one
+        // is kept as itself, and the edited row is granted nothing.
+        expect(await holds(roleId)).toEqual(["manage-media"]);
+        // Left holding nothing, so no case after this counts the role.
+        await services().rolePermissions.setRolePermissions(roleId, []);
+      });
+
       it("leaves no role holding a retired manage permission after a reboot, presets and the super-admin seeder included", async () => {
         await seedSuperAdmin(t.adapter, {
           email: "root@retired-manage.test",

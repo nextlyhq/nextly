@@ -12,8 +12,9 @@ import type {
 import {
   batches,
   isRetiredManage,
-  plainFourOn,
+  plainFourOnLocked,
   storedAsPlain,
+  storedAsPlainLocked,
 } from "../../../auth/access/retired-manage-permissions";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
@@ -87,7 +88,7 @@ export class RolePermissionService extends BaseService {
       let added = false;
       await this.adapter.transaction(async tx => {
         await tx.lockRow("roles", roleId);
-        const four = await plainFourOn(tx, perm.resource);
+        const four = await plainFourOnLocked(tx, perm.resource);
         if (four.length === 0) return;
         const held = await this.heldIn(tx, roleId);
         await this.insertAssignments(
@@ -273,7 +274,7 @@ export class RolePermissionService extends BaseService {
         ...(permission ? [String(permission.id)] : []),
         // A retired `manage-` permission is stored as the plain four it
         // stands for, so taking it off takes them off too.
-        ...(retired ? await plainFourOn(tx, perm.resource) : []),
+        ...(retired ? await plainFourOnLocked(tx, perm.resource) : []),
       ];
       if (ids.length === 0) return;
       await tx.delete("role_permissions", {
@@ -312,8 +313,9 @@ export class RolePermissionService extends BaseService {
   ): Promise<Array<{ id: string; action: string; resource: string }>> {
     // A retired `manage-` permission is stored as the plain four it stands
     // for, so a role set with one, a preset's at each boot included, never
-    // holds it again once converted.
-    const desired = new Set(
+    // holds it again once converted. Read here only to see whether anything
+    // changes; a change is stored as normalized again under the locks below.
+    const unchangedIf = new Set(
       await storedAsPlain(
         this.adapter,
         permissionIds,
@@ -328,7 +330,9 @@ export class RolePermissionService extends BaseService {
     // counts as held and is removed below. MySQL's table declares no foreign
     // key, so such a row can be there.
     const before = await this.readAssignments(roleId);
-    if (sameMembers(new Set(before.map(row => row.permissionId)), desired)) {
+    if (
+      sameMembers(new Set(before.map(row => row.permissionId)), unchangedIf)
+    ) {
       return named(before);
     }
 
@@ -343,6 +347,7 @@ export class RolePermissionService extends BaseService {
       // are named as the schema declares them, which is how the adapter reads a
       // where clause and returns a row.
       await tx.lockRow("roles", roleId);
+      const desired = await storedAsPlainLocked(tx, permissionIds, maxParams);
       const held = await this.heldIn(tx, roleId);
 
       const extra = [...held].filter(id => !desired.has(id));
@@ -478,7 +483,7 @@ export class RolePermissionService extends BaseService {
     await this.adapter.transaction(async tx => {
       await tx.lockRow("roles", roleId);
       const held = await this.heldIn(tx, roleId);
-      const desired = new Set(await storedAsPlain(tx, [...held], maxParams));
+      const desired = await storedAsPlainLocked(tx, [...held], maxParams);
       const removed = [...held].filter(id => !desired.has(id));
       const added = [...desired].filter(id => !held.has(id));
       if (removed.length === 0 && added.length === 0) return;

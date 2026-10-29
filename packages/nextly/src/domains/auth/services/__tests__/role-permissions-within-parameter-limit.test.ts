@@ -125,8 +125,9 @@ describe("replacing a role's permissions in bulk", () => {
     for (const rows of inserts) {
       expect(rows * 4).toBeLessThanOrEqual(MAX_PARAMS);
     }
-    // The ids are looked up before they are added, one parameter each.
-    expect(lookups.flat()).toHaveLength(50);
+    // The ids are read under the transaction's locks to be stored as they
+    // are, then looked up before they are added: one parameter each, twice.
+    expect(lookups.flat()).toHaveLength(100);
     for (const run of lookups) {
       expect(run.length).toBeLessThanOrEqual(MAX_PARAMS);
     }
