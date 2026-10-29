@@ -70,9 +70,28 @@ export function customSummary(permissions: readonly Permission[]): string {
     return label === undefined ? [] : [label.toLowerCase()];
   });
   if (words.length === 0) return "";
-  const listed =
-    words.length === 1
-      ? words[0]
-      : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
-  return listed.charAt(0).toUpperCase() + listed.slice(1);
+  const sentence = listed(words);
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+}
+
+/** Words joined as a sentence lists them: "a", "a and b", "a, b and c". */
+export function listed(words: readonly string[]): string {
+  if (words.length <= 1) return words[0] ?? "";
+  return `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/**
+ * The line under a row whose collection or Single declares an access rule in
+ * code, naming what the rule limits: the level the screen sets is the most a
+ * role can be given, since the rule may still refuse or narrow it.
+ */
+export function narrowedInCode(
+  kind: "collection" | "single",
+  declaredRules: readonly string[]
+): string {
+  const actions = listed(
+    declaredRules.map(rule => ACTION_LABELS.get(rule)?.toLowerCase() ?? rule)
+  );
+  const owner = kind === "single" ? "This Single's" : "This collection's";
+  return `${owner} code also limits who can ${actions} it. The level here is the most a role can be given.`;
 }

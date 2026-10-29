@@ -15,6 +15,8 @@ import {
   customSummary,
   inActionOrder,
   LEVEL_LABELS,
+  listed,
+  narrowedInCode,
 } from "@admin/lib/permissions/level-labels";
 import {
   offeredLevels,
@@ -35,8 +37,11 @@ export interface PermissionLevelRowProps {
   onChange: (next: string[]) => void;
   /** Ids a base role gives, which this role cannot take away. */
   lockedIds?: readonly string[];
-  /** The base role's name, shown where it gives this row anything. */
-  baseName?: string;
+  /**
+   * The base roles the role is built on, each with the permissions it gives:
+   * a row names the ones that give it something.
+   */
+  bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
 }
 
@@ -47,8 +52,11 @@ export interface PermissionLevelRowProps {
  * The row reads its level over the role's own permissions and its base
  * role's together. Setting a level changes only the row's standard actions
  * among the role's own (`ownWithLevel`), so an action under the switch,
- * another row's grant and a base role's grant all stay as they are. A row whose actions match no level reads Custom, with no
- * level selected, and keeps them exactly until a level or a switch is changed.
+ * another row's grant and a base role's grant all stay as they are. A row
+ * whose actions match no level reads Custom, with no level selected, and
+ * keeps them exactly until a level or a switch is changed. A row whose code
+ * declares an access rule is marked, since the level is then only the most a
+ * role can be given.
  *
  * Desktop shows every level of the row's kind side by side, with those a base
  * role puts out of reach disabled; a phone shows a select of the levels on
@@ -59,7 +67,7 @@ export function PermissionLevelRow({
   value,
   onChange,
   lockedIds = [],
-  baseName,
+  bases = [],
   disabled = false,
 }: PermissionLevelRowProps): JSX.Element {
   const [eachAction, setEachAction] = useState(false);
@@ -74,9 +82,15 @@ export function PermissionLevelRow({
   const level = rowLevel(row, held);
   const levels = levelsFor(row.kind);
   const offered = offeredLevels(row, lockedIds);
-  const fromBase =
-    baseName !== undefined &&
-    row.permissions.some(permission => locked.has(permission.id));
+  // The bases that give this row something, each named for its own grants.
+  const rowIds = new Set(row.permissions.map(permission => permission.id));
+  const givers = bases
+    .filter(base => base.ids.some(id => rowIds.has(id)))
+    .map(base => base.name);
+  const fromBase = givers.length > 0;
+  // Every control is named by the label and the slug: two collections may
+  // share a label, and only the slug tells a screen reader which is which.
+  const name = `${row.label} (${row.slug})`;
   const summary =
     level === "custom"
       ? customSummary(row.permissions.filter(p => held.has(p.id)))
@@ -106,7 +120,10 @@ export function PermissionLevelRow({
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-foreground">{row.label}</span>
             {level === "custom" && <Badge variant="warning">Custom</Badge>}
-            {fromBase && <Badge variant="outline">from {baseName}</Badge>}
+            {fromBase && <Badge variant="outline">from {listed(givers)}</Badge>}
+            {row.declaredRules.length > 0 && (
+              <Badge variant="outline">Narrowed in code</Badge>
+            )}
           </div>
           <span className="font-mono text-xs break-all text-muted-foreground">
             {row.slug}
@@ -117,11 +134,16 @@ export function PermissionLevelRow({
               </>
             )}
           </span>
+          {row.declaredRules.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {narrowedInCode(row.kind, row.declaredRules)}
+            </span>
+          )}
         </div>
 
         <div className="flex flex-col gap-3 md:shrink-0 md:flex-row md:items-center md:gap-6">
           <RadioGroupPrimitive.Root
-            aria-label={`${row.label} level`}
+            aria-label={`${name} level`}
             orientation="horizontal"
             // Custom selects none: no level is what the row holds.
             value={level === "custom" ? "" : level}
@@ -147,7 +169,7 @@ export function PermissionLevelRow({
           </RadioGroupPrimitive.Root>
 
           <LevelSelect
-            label={row.label}
+            label={name}
             level={level}
             summary={summary}
             offered={offered}
@@ -159,7 +181,7 @@ export function PermissionLevelRow({
           <label className="flex items-center justify-between gap-3 text-sm whitespace-nowrap text-foreground md:justify-start">
             <span aria-hidden="true">Each action</span>
             <Switch
-              aria-label={`${row.label}: each action`}
+              aria-label={`${name}: each action`}
               checked={eachAction}
               onCheckedChange={setEachAction}
             />
@@ -170,7 +192,7 @@ export function PermissionLevelRow({
       {eachAction && (
         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
           {inActionOrder(row.permissions).map(permission => {
-            const name = actionLabel(permission);
+            const action = actionLabel(permission);
             // Given by the base alone: the role has no copy of its own to
             // take away, so the way to drop it is to change the base.
             const baseOnly =
@@ -180,9 +202,9 @@ export function PermissionLevelRow({
                 key={permission.id}
                 className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm text-foreground"
               >
-                <span aria-hidden="true">{name}</span>
+                <span aria-hidden="true">{action}</span>
                 <Switch
-                  aria-label={`${row.label}: ${name}`}
+                  aria-label={`${name}: ${action}`}
                   // A base role's grant shows held. Where the role also holds
                   // it, turning it off takes away the role's own copy.
                   checked={held.has(permission.id)}

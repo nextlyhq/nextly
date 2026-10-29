@@ -32,6 +32,7 @@ vi.mock("@admin/hooks/useRoleForm", async () => {
         allPermissions: [],
         levelRows: [],
         otherPermissions: [],
+        baseGrants: [],
         allRoles: [],
         isLoading: false,
         error: null,

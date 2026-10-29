@@ -11,7 +11,8 @@ export interface PermissionLevelRowsProps {
   value: readonly string[];
   onChange: (next: string[]) => void;
   lockedIds?: readonly string[];
-  baseName?: string;
+  /** The base roles and the permissions each gives; see {@link PermissionLevelRow}. */
+  bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
 }
 
@@ -33,7 +34,7 @@ export function PermissionLevelRows({
   value,
   onChange,
   lockedIds,
-  baseName,
+  bases,
   disabled = false,
 }: PermissionLevelRowsProps): JSX.Element {
   const [find, setFind] = useState("");
@@ -78,7 +79,7 @@ export function PermissionLevelRows({
                 value={value}
                 onChange={onChange}
                 lockedIds={lockedIds}
-                baseName={baseName}
+                bases={bases}
                 disabled={disabled}
               />
             ))}

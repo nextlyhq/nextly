@@ -21,8 +21,8 @@ interface RolePermissionsSectionProps {
   /** The permissions no row takes, shown in the grid below the rows. */
   otherPermissions: Permission[];
   lockedPermissionIds: string[];
-  /** The base role's name, where the role has one. */
-  baseName?: string;
+  /** The base roles and the permissions each gives. */
+  bases: { name: string; ids: string[] }[];
   isLoading: boolean;
 }
 
@@ -35,7 +35,7 @@ export function RolePermissionsSection({
   levelRows,
   otherPermissions,
   lockedPermissionIds,
-  baseName,
+  bases,
   isLoading,
 }: RolePermissionsSectionProps): JSX.Element {
   return (
@@ -51,7 +51,7 @@ export function RolePermissionsSection({
                 value={field.value || []}
                 onChange={field.onChange}
                 lockedIds={lockedPermissionIds}
-                baseName={baseName}
+                bases={bases}
                 disabled={isLoading}
               />
               <div className="flex flex-col gap-4">

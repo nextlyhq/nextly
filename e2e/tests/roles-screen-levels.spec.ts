@@ -79,7 +79,7 @@ async function editAndSave(
 ): Promise<void> {
   await gotoAdmin(page, `/security/roles/edit/${roleId}`);
   await expect(
-    page.getByRole("radiogroup", { name: "Post level" })
+    page.getByRole("radiogroup", { name: "Post (posts) level" })
   ).toBeVisible();
   await change();
   await page.getByRole("button", { name: "Update Role" }).click();
@@ -110,7 +110,7 @@ for (const [level, actions] of POST_LEVELS) {
 
     await editAndSave(page, roleId, () =>
       page
-        .getByRole("radiogroup", { name: "Post level" })
+        .getByRole("radiogroup", { name: "Post (posts) level" })
         .getByRole("radio", { name: level })
         .click()
     );
@@ -125,7 +125,7 @@ test("saves a Single's Can edit as view and edit alone", async ({ page }) => {
 
   await editAndSave(page, roleId, () =>
     page
-      .getByRole("radiogroup", { name: "Homepage level" })
+      .getByRole("radiogroup", { name: "Homepage (homepage) level" })
       .getByRole("radio", { name: "Can edit" })
       .click()
   );
@@ -144,7 +144,7 @@ test("keeps a Custom row exactly as it was when another row is saved", async ({
       page.getByText("View and create", { exact: true })
     ).toBeVisible();
     await page
-      .getByRole("radiogroup", { name: "Tag level" })
+      .getByRole("radiogroup", { name: "Tag (tags) level" })
       .getByRole("radio", { name: "Can view" })
       .click();
   });
@@ -158,11 +158,37 @@ test("sets a level from the select on a phone", async ({ page }) => {
   const roleId = await roleHolding(["read-tags"]);
 
   await gotoAdmin(page, `/security/roles/edit/${roleId}`);
-  await page.getByRole("combobox", { name: "Post level" }).click();
+  await page.getByRole("combobox", { name: "Post (posts) level" }).click();
   await page.getByRole("option", { name: "Can view" }).click();
   await page.getByRole("button", { name: "Update Role" }).click();
   await page.waitForURL("**/admin/security/roles");
 
   expect(await storedActions(roleId, "posts")).toEqual(["read"]);
   expect(await storedActions(roleId, "tags")).toEqual(["read"]);
+});
+
+test("marks a collection whose code narrows it, naming what the code limits", async ({
+  page,
+}) => {
+  // The playground's translator notes declare an update rule in code.
+  const roleId = await roleHolding(["read-tags"]);
+
+  await gotoAdmin(page, `/security/roles/edit/${roleId}`);
+  const row = page
+    .locator('[data-slot="permission-level-row"]')
+    .filter({ hasText: "translator-notes" });
+
+  await expect(row.getByText("Narrowed in code")).toBeVisible();
+  await expect(
+    row.getByText(
+      "This collection's code also limits who can edit it. The level here is the most a role can be given."
+    )
+  ).toBeVisible();
+  // POPULATION CONTROL: a collection whose code declares no rule is not marked.
+  await expect(
+    page
+      .locator('[data-slot="permission-level-row"]')
+      .filter({ hasText: "tags" })
+      .getByText("Narrowed in code")
+  ).toHaveCount(0);
 });

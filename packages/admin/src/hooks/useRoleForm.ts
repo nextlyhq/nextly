@@ -34,7 +34,12 @@ import { invalidateCurrentUserAccess } from "./current-user-access";
  * Loading state for async data fetching
  */
 interface LoadingState {
-  permissions: { loaded: boolean; loading: boolean };
+  /**
+   * `failed` marks a load that ended in an error: the form shows the error
+   * and does not ask again on its own, since nothing about a failed request
+   * changes by asking it again at once.
+   */
+  permissions: { loaded: boolean; loading: boolean; failed?: boolean };
   role: { loaded: boolean; loading: boolean };
   allRoles: { loaded: boolean; loading: boolean };
 }
@@ -150,6 +155,11 @@ export interface UseRoleFormReturn {
   levelRows: LevelRow[];
   /** The permissions no row takes, set one by one in the grid. */
   otherPermissions: Permission[];
+  /**
+   * Each base role the role is built on, with the permissions it gives, so a
+   * row can name the bases that give it something.
+   */
+  baseGrants: { name: string; ids: string[] }[];
   allRoles: Array<{ id: string; name: string; permissions: string[] }>;
   isLoading: boolean;
   error: string | null;
@@ -229,6 +239,20 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
   const [rolePermissionsMap, setRolePermissionsMap] = useState<
     Record<string, string[]>
   >({});
+
+  // Each base's own grants, by its name. A role made through the API may have
+  // several bases, and a row is credited to the ones that give it something,
+  // never to the first base for every grant.
+  const baseGrants = useMemo(
+    () =>
+      selectedBaseRoleIds.map(id => ({
+        name:
+          allRoles.find(candidate => candidate.id === id)?.name ??
+          "a base role",
+        ids: rolePermissionsMap[id] ?? [],
+      })),
+    [selectedBaseRoleIds, allRoles, rolePermissionsMap]
+  );
 
   // Derived state
   const isEditMode = !!roleId;
@@ -321,7 +345,11 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
 
   // Load permissions from server
   useEffect(() => {
-    if (loadingState.permissions.loaded || loadingState.permissions.loading)
+    if (
+      loadingState.permissions.loaded ||
+      loadingState.permissions.loading ||
+      loadingState.permissions.failed
+    )
       return;
 
     const loadPermissions = async () => {
@@ -410,7 +438,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         );
         setLoadingState(prev => ({
           ...prev,
-          permissions: { loaded: false, loading: false },
+          permissions: { loaded: false, loading: false, failed: true },
         }));
       }
     };
@@ -418,7 +446,11 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     void loadPermissions();
     // Dependencies ensure effect only runs once per load cycle
     // The early return guard prevents infinite loops even though we depend on state we modify
-  }, [loadingState.permissions.loaded, loadingState.permissions.loading]);
+  }, [
+    loadingState.permissions.loaded,
+    loadingState.permissions.loading,
+    loadingState.permissions.failed,
+  ]);
 
   // Load role data in edit mode from API
   useEffect(() => {
@@ -619,6 +651,7 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     allPermissions,
     levelRows: rows,
     otherPermissions: rest,
+    baseGrants,
     allRoles,
     isLoading,
     error,
