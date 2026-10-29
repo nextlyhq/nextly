@@ -11,6 +11,9 @@
  * Through the Direct API and through a delete inside the caller's own
  * transaction, the way a plugin service deletes.
  *
+ * On every database the run is configured for: SQLite always, PostgreSQL and
+ * MySQL where their test URLs are set.
+ *
  * @module domains/collections/__tests__/write-rule-filter-limits-deletes.integration.test
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +33,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
   getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -70,8 +74,9 @@ afterEach(async () => {
   clearRuleFilterReports();
 });
 
-async function boot(): Promise<TestNextly> {
+async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
+    dialect,
     fieldGroups: [
       defineFieldGroup({ slug: SEO, fields: [text({ name: "metaTitle" })] }),
     ],
@@ -169,9 +174,17 @@ async function stillThere(
   return found.items.length === 1;
 }
 
-describe("a delete rule that answers a filter", () => {
+// Every dialect configured for the run: the cases whose SQL differs between
+// databases (the filter's match, the read rule's own match, the bulk path, the
+// transaction's lock) run on each; the cases that only decide between answers
+// already matched run once, on SQLite, as they run the same code everywhere.
+const dialects = getConfiguredTestDialects();
+
+describe.each(dialects)("a delete rule that answers a filter (%s)", dialect => {
+  const onSqliteOnly = it.skipIf(dialect !== "sqlite");
+
   it("deletes an entry the filter matches", async () => {
-    const t = await boot();
+    const t = await boot(dialect);
     const { own } = await seed(t, POSTS);
 
     await t.nextly.delete({ collection: POSTS, id: own, ...asAuthor });
@@ -179,44 +192,50 @@ describe("a delete rule that answers a filter", () => {
     expect(await stillThere(t, POSTS, own)).toBe(false);
   });
 
-  it("answers an entry outside the filter the caller may not read as missing, and leaves it", async () => {
-    const t = await boot();
-    const { others } = await seed(t, POSTS);
+  onSqliteOnly(
+    "answers an entry outside the filter the caller may not read as missing, and leaves it",
+    async () => {
+      const t = await boot(dialect);
+      const { others } = await seed(t, POSTS);
 
-    const refused = await errorOf(() =>
-      t.nextly.delete({ collection: POSTS, id: others, ...asAuthor })
-    );
-    const missing = await errorOf(() =>
-      t.nextly.delete({
-        collection: POSTS,
-        id: "00000000-0000-4000-8000-000000000000",
-        ...asAuthor,
-      })
-    );
+      const refused = await errorOf(() =>
+        t.nextly.delete({ collection: POSTS, id: others, ...asAuthor })
+      );
+      const missing = await errorOf(() =>
+        t.nextly.delete({
+          collection: POSTS,
+          id: "00000000-0000-4000-8000-000000000000",
+          ...asAuthor,
+        })
+      );
 
-    expect(refused.statusCode).toBe(404);
-    expect(refused.code).toBe("NOT_FOUND");
-    // The entry outside the filter reads exactly as one that does not exist.
-    expect(refused.publicMessage).toBe(missing.publicMessage);
-    expect(refused.publicData).toEqual(missing.publicData);
-    expect(await stillThere(t, POSTS, others)).toBe(true);
-  });
+      expect(refused.statusCode).toBe(404);
+      expect(refused.code).toBe("NOT_FOUND");
+      // The entry outside the filter reads exactly as one that does not exist.
+      expect(refused.publicMessage).toBe(missing.publicMessage);
+      expect(refused.publicData).toEqual(missing.publicData);
+      expect(await stillThere(t, POSTS, others)).toBe(true);
+    }
+  );
 
-  it("refuses an entry outside the filter the caller may read with a 403, and leaves it", async () => {
-    const t = await boot();
-    const { others } = await seed(t, OPEN_POSTS);
+  onSqliteOnly(
+    "refuses an entry outside the filter the caller may read with a 403, and leaves it",
+    async () => {
+      const t = await boot(dialect);
+      const { others } = await seed(t, OPEN_POSTS);
 
-    const refused = await errorOf(() =>
-      t.nextly.delete({ collection: OPEN_POSTS, id: others, ...asAuthor })
-    );
+      const refused = await errorOf(() =>
+        t.nextly.delete({ collection: OPEN_POSTS, id: others, ...asAuthor })
+      );
 
-    expect(refused.statusCode).toBe(403);
-    expect(refused.code).toBe("FORBIDDEN");
-    expect(await stillThere(t, OPEN_POSTS, others)).toBe(true);
-  });
+      expect(refused.statusCode).toBe(403);
+      expect(refused.code).toBe("FORBIDDEN");
+      expect(await stillThere(t, OPEN_POSTS, others)).toBe(true);
+    }
+  );
 
   it("refuses a bulk delete by ids every entry, the matching one too, and deletes nothing", async () => {
-    const t = await boot();
+    const t = await boot(dialect);
     const { own, others } = await seed(t, OPEN_POSTS);
 
     const result = await t.nextly.bulkDelete({
@@ -240,7 +259,7 @@ describe("a delete rule that answers a filter", () => {
     // The read rule's filter decides per entry: another's entry in the public
     // team is one the author can see, so its refusal is a 403, and another's in
     // a team the read filter withholds is answered as missing.
-    const t = await boot();
+    const t = await boot(dialect);
     const seen = await t.nextly.create({
       collection: TEAM_POSTS,
       data: { title: "theirs, public", owner: OTHER, team: "public" },
@@ -271,56 +290,62 @@ describe("a delete rule that answers a filter", () => {
     expect(await stillThere(t, TEAM_POSTS, String(unseen.item.id))).toBe(true);
   });
 
-  it("matches nothing with a filter it cannot build, answering the entry as missing", async () => {
-    // A filter naming a field the collection no longer has is the rule's
-    // fault, not the caller's: it deletes nothing, and is answered as the
-    // entry's absence rather than as an error naming the field.
-    const t = await boot();
-    const { own } = await seed(t, GONE_POSTS);
+  onSqliteOnly(
+    "matches nothing with a filter it cannot build, answering the entry as missing",
+    async () => {
+      // A filter naming a field the collection no longer has is the rule's
+      // fault, not the caller's: it deletes nothing, and is answered as the
+      // entry's absence rather than as an error naming the field.
+      const t = await boot(dialect);
+      const { own } = await seed(t, GONE_POSTS);
 
-    const refused = await errorOf(() =>
-      t.nextly.delete({ collection: GONE_POSTS, id: own, ...asAuthor })
-    );
+      const refused = await errorOf(() =>
+        t.nextly.delete({ collection: GONE_POSTS, id: own, ...asAuthor })
+      );
 
-    expect(refused.statusCode).toBe(404);
-    expect(refused.code).toBe("NOT_FOUND");
-    expect(refused.publicMessage).not.toContain("retiredOwner");
-    expect(await stillThere(t, GONE_POSTS, own)).toBe(true);
-  });
+      expect(refused.statusCode).toBe(404);
+      expect(refused.code).toBe("NOT_FOUND");
+      expect(refused.publicMessage).not.toContain("retiredOwner");
+      expect(await stillThere(t, GONE_POSTS, own)).toBe(true);
+    }
+  );
 
-  it("refuses a filter on a field inside a field group, reporting it, and deletes nothing", async () => {
-    const t = await boot();
-    const report = vi
-      .spyOn(consoleLogger, "error")
-      .mockImplementation(() => {});
-    const made = await t.nextly.create({
-      collection: GROUPED_POSTS,
-      data: { title: "mine", owner: AUTHOR, seo: { metaTitle: "mine" } },
-    });
-    const id = String(made.item.id);
+  onSqliteOnly(
+    "refuses a filter on a field inside a field group, reporting it, and deletes nothing",
+    async () => {
+      const t = await boot(dialect);
+      const report = vi
+        .spyOn(consoleLogger, "error")
+        .mockImplementation(() => {});
+      const made = await t.nextly.create({
+        collection: GROUPED_POSTS,
+        data: { title: "mine", owner: AUTHOR, seo: { metaTitle: "mine" } },
+      });
+      const id = String(made.item.id);
 
-    const refused = await errorOf(() =>
-      t.nextly.delete({ collection: GROUPED_POSTS, id, ...asAuthor })
-    );
+      const refused = await errorOf(() =>
+        t.nextly.delete({ collection: GROUPED_POSTS, id, ...asAuthor })
+      );
 
-    // Matches nothing, though the entry's own value would match: such a
-    // filter is refused, not built. The caller may read the entry, so it is
-    // told in words.
-    expect(refused.statusCode).toBe(403);
-    expect(await stillThere(t, GROUPED_POSTS, id)).toBe(true);
-    const reports = report.mock.calls.map(call => String(call[0]));
-    expect(
-      reports.filter(
-        line =>
-          line.includes(`delete rule of "${GROUPED_POSTS}"`) &&
-          line.includes("FILTER_COMPONENT_IN_RULE")
-      )
-    ).toHaveLength(1);
-    report.mockRestore();
-  });
+      // Matches nothing, though the entry's own value would match: such a
+      // filter is refused, not built. The caller may read the entry, so it is
+      // told in words.
+      expect(refused.statusCode).toBe(403);
+      expect(await stillThere(t, GROUPED_POSTS, id)).toBe(true);
+      const reports = report.mock.calls.map(call => String(call[0]));
+      expect(
+        reports.filter(
+          line =>
+            line.includes(`delete rule of "${GROUPED_POSTS}"`) &&
+            line.includes("FILTER_COMPONENT_IN_RULE")
+        )
+      ).toHaveLength(1);
+      report.mockRestore();
+    }
+  );
 
   it("limits a delete inside the caller's transaction to the matching entries", async () => {
-    const t = await boot();
+    const t = await boot(dialect);
     const { own, others } = await seed(t, OPEN_POSTS);
     const entries = t
       .getService("collectionsHandler")
@@ -362,99 +387,105 @@ describe("a delete rule that answers a filter", () => {
   });
 });
 
-describe("a delete rule's filter on a collection with languages", () => {
-  const LOCALIZED = "writefilter_localized_posts";
+describe.each(dialects)(
+  "a delete rule's filter on a collection with languages (%s)",
+  dialect => {
+    const LOCALIZED = "writefilter_localized_posts";
 
-  it("asks whether the caller may read the entry as a plain read, not in every language", async () => {
-    // A delete acts on every language, so its own rule is told all of them.
-    // Whether the caller may read the entry is a plain read's question, in
-    // the default language and its fallbacks: this read rule lets the caller
-    // read in one language, and an every-language read would refuse it.
-    current = await createTestNextly({
-      localization: { locales: ["en", "de"], defaultLocale: "en" },
-      collections: [
-        defineCollection({
-          slug: LOCALIZED,
-          localized: true,
-          access: {
-            read: ({ locales }: { locales: string[] }) => locales.length <= 1,
-            delete: ownEntries,
-          },
-          fields: [
-            text({ name: "title" }),
-            text({ name: "owner", localized: false }),
-          ],
-        }),
-      ],
+    it("asks whether the caller may read the entry as a plain read, not in every language", async () => {
+      // A delete acts on every language, so its own rule is told all of them.
+      // Whether the caller may read the entry is a plain read's question, in
+      // the default language and its fallbacks: this read rule lets the caller
+      // read in one language, and an every-language read would refuse it.
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: LOCALIZED,
+            localized: true,
+            access: {
+              read: ({ locales }: { locales: string[] }) => locales.length <= 1,
+              delete: ownEntries,
+            },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "owner", localized: false }),
+            ],
+          }),
+        ],
+      });
+      await userWhoMay(current, AUTHOR, "read", [LOCALIZED]);
+      await grantTo(current, AUTHOR, "delete", [LOCALIZED]);
+      const { others } = await seed(current, LOCALIZED);
+      const t = current;
+
+      const refused = await errorOf(() =>
+        t.nextly.delete({ collection: LOCALIZED, id: others, ...asAuthor })
+      );
+
+      expect(refused.statusCode).toBe(403);
+      expect(await stillThere(t, LOCALIZED, others)).toBe(true);
     });
-    await userWhoMay(current, AUTHOR, "read", [LOCALIZED]);
-    await grantTo(current, AUTHOR, "delete", [LOCALIZED]);
-    const { others } = await seed(current, LOCALIZED);
-    const t = current;
 
-    const refused = await errorOf(() =>
-      t.nextly.delete({ collection: LOCALIZED, id: others, ...asAuthor })
-    );
+    it("answers an entry outside the filter as missing where a plain read hides it through a fallback language", async () => {
+      // The default language falls back to French here, so a plain read judges
+      // the read rule's filter in English and in French. The entry matches it
+      // in English only, so that read hides it, and a delete outside the delete
+      // filter answers it as missing rather than revealing it with a 403.
+      const FALLING_BACK = "writefilter_fallback_posts";
+      current = await createTestNextly({
+        dialect,
+        localization: {
+          locales: [{ code: "en", fallbackLocale: "fr" }, "fr"],
+          defaultLocale: "en",
+        },
+        collections: [
+          defineCollection({
+            slug: FALLING_BACK,
+            localized: true,
+            access: {
+              read: () =>
+                ({ title: { equals: "shown" } }) as unknown as boolean,
+              delete: ownEntries,
+            },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "owner", localized: false }),
+            ],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [FALLING_BACK]);
+      await grantTo(t, AUTHOR, "delete", [FALLING_BACK]);
+      const created = await t.nextly.create({
+        collection: FALLING_BACK,
+        data: { title: "shown", owner: OTHER },
+      });
+      const others = String(created.item.id);
+      await t.nextly.update({
+        collection: FALLING_BACK,
+        id: others,
+        locale: "fr",
+        data: { title: "hidden" },
+      } as never);
 
-    expect(refused.statusCode).toBe(403);
-    expect(await stillThere(t, LOCALIZED, others)).toBe(true);
-  });
+      // The control: the author's plain read hides the entry.
+      const read = await errorOf(() =>
+        t.nextly.findByID({ collection: FALLING_BACK, id: others, ...asAuthor })
+      );
+      const refused = await errorOf(() =>
+        t.nextly.delete({ collection: FALLING_BACK, id: others, ...asAuthor })
+      );
 
-  it("answers an entry outside the filter as missing where a plain read hides it through a fallback language", async () => {
-    // The default language falls back to French here, so a plain read judges
-    // the read rule's filter in English and in French. The entry matches it
-    // in English only, so that read hides it, and a delete outside the delete
-    // filter answers it as missing rather than revealing it with a 403.
-    const FALLING_BACK = "writefilter_fallback_posts";
-    current = await createTestNextly({
-      localization: {
-        locales: [{ code: "en", fallbackLocale: "fr" }, "fr"],
-        defaultLocale: "en",
-      },
-      collections: [
-        defineCollection({
-          slug: FALLING_BACK,
-          localized: true,
-          access: {
-            read: () => ({ title: { equals: "shown" } }) as unknown as boolean,
-            delete: ownEntries,
-          },
-          fields: [
-            text({ name: "title" }),
-            text({ name: "owner", localized: false }),
-          ],
-        }),
-      ],
+      expect(read.statusCode).toBe(404);
+      expect(refused.statusCode).toBe(404);
+      expect(refused.code).toBe("NOT_FOUND");
+      expect(await stillThere(t, FALLING_BACK, others)).toBe(true);
     });
-    const t = current;
-    await userWhoMay(t, AUTHOR, "read", [FALLING_BACK]);
-    await grantTo(t, AUTHOR, "delete", [FALLING_BACK]);
-    const created = await t.nextly.create({
-      collection: FALLING_BACK,
-      data: { title: "shown", owner: OTHER },
-    });
-    const others = String(created.item.id);
-    await t.nextly.update({
-      collection: FALLING_BACK,
-      id: others,
-      locale: "fr",
-      data: { title: "hidden" },
-    } as never);
-
-    // The control: the author's plain read hides the entry.
-    const read = await errorOf(() =>
-      t.nextly.findByID({ collection: FALLING_BACK, id: others, ...asAuthor })
-    );
-    const refused = await errorOf(() =>
-      t.nextly.delete({ collection: FALLING_BACK, id: others, ...asAuthor })
-    );
-
-    expect(read.statusCode).toBe(404);
-    expect(refused.statusCode).toBe(404);
-    expect(refused.code).toBe("NOT_FOUND");
-    expect(await stillThere(t, FALLING_BACK, others)).toBe(true);
-  });
-});
+  }
+);
 
 // The databases that lock a row a transaction reads. MySQL's default
 // REPEATABLE READ fixes a transaction's snapshot at its first read, so there a
