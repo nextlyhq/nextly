@@ -51,6 +51,7 @@ function testReaders(): RestCallerReaders & {
             userId: "owner",
             tokenType: "full-access" as const,
             roleId: null,
+            standingAskedAt: 0,
           }
         : null
     ),

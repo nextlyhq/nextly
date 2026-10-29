@@ -207,6 +207,12 @@ export interface AuthContext {
    */
   keyHoldsSuperAdminUntil?: number;
   /**
+   * When authentication asked the key maker's standing (`performance.now()`),
+   * set with `keyHoldsSuperAdmin`: a scope built from this context counts
+   * the authority's bound from here.
+   */
+  keyStandingAskedAt?: number;
+  /**
    * The authenticating API key's own id, present only for `api-key` requests.
    * Carried so a write can be attributed to the specific key rather than only
    * to the user that owns it.
@@ -276,6 +282,7 @@ export async function requireApiKeyAuth(req: Request): Promise<
       roles: string[];
       keyHoldsSuperAdmin: boolean;
       keyHoldsSuperAdminUntil?: number;
+      keyStandingAskedAt?: number;
       apiKeyId: string;
     }
   | ErrorResponse
@@ -327,8 +334,13 @@ export async function requireApiKeyAuth(req: Request): Promise<
 
   // 5. Resolve effective permissions and roles for this token type, and
   //    whether the key carries its maker's super-admin authority.
-  const { grants, roles, keyHoldsSuperAdmin, keyHoldsSuperAdminUntil } =
-    await resolveKeyCaller(apiKeyService, keyAuth);
+  const {
+    grants,
+    roles,
+    keyHoldsSuperAdmin,
+    keyHoldsSuperAdminUntil,
+    keyStandingAskedAt,
+  } = await resolveKeyCaller(apiKeyService, keyAuth);
 
   // The key's own id travels with the result so a write can be attributed to
   // the specific key, not just to the user that owns it.
@@ -341,6 +353,7 @@ export async function requireApiKeyAuth(req: Request): Promise<
     ...(keyHoldsSuperAdminUntil === undefined
       ? {}
       : { keyHoldsSuperAdminUntil }),
+    ...(keyStandingAskedAt === undefined ? {} : { keyStandingAskedAt }),
     apiKeyId: keyAuth.id,
   };
 }
@@ -444,6 +457,9 @@ export async function requireAuthentication(
     ...(apiKeyResult.keyHoldsSuperAdminUntil === undefined
       ? {}
       : { keyHoldsSuperAdminUntil: apiKeyResult.keyHoldsSuperAdminUntil }),
+    ...(apiKeyResult.keyStandingAskedAt === undefined
+      ? {}
+      : { keyStandingAskedAt: apiKeyResult.keyStandingAskedAt }),
     apiKeyId: apiKeyResult.apiKeyId,
   };
 }

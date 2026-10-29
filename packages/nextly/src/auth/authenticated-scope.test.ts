@@ -241,6 +241,26 @@ describe("a key's super-admin authority over time", () => {
     });
   });
 
+  it("counts its bound from when the standing that admitted the key was asked, not from when the scope is made", () => {
+    // The grants and roles are resolved between the standing check and the
+    // scope, and that can take a while: the bound must not restart there.
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const standingAskedAt = performance.now();
+    vi.advanceTimersByTime(3_000);
+    const scope = apiKeyScopeFrom({
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+      keyStandingAskedAt: standingAskedAt,
+    });
+
+    vi.advanceTimersByTime(
+      SESSION_CUTOFF_SECONDS * 1000 - SESSION_STANDING_TTL_MS - 3_000 + 1
+    );
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
+  });
+
   it("lapses at its maker's next role expiry where that comes before the bound", () => {
     vi.useFakeTimers({ toFake: ["performance", "Date"] });
     const grants = [{ slug: "read-posts", action: "read", resource: "posts" }];

@@ -192,6 +192,12 @@ export function apiKeyScopeFrom(caller: {
    * authority, or absent where none expires. The authority ends there.
    */
   keyHoldsSuperAdminUntil?: number;
+  /**
+   * When authentication asked the maker's standing (`performance.now()`).
+   * The authority's bound counts from here; absent, from when the scope is
+   * made.
+   */
+  keyStandingAskedAt?: number;
 }): AuthenticatedScope {
   const scope = caller.grants
     ? apiKeyScope(caller.grants, caller.roles)
@@ -205,18 +211,22 @@ export function apiKeyScopeFrom(caller: {
         ...(caller.roles ? { roles: [...caller.roles] } : {}),
       });
   if (caller.keyHoldsSuperAdmin === true) {
-    // The role's expiry is wall-clock time, turned into how long is left of it
-    // now, so the deadline itself stays on the monotonic clock.
-    const lifetime =
+    // Counted from when the standing that admitted the key was asked, not
+    // from now: resolving the grants and roles in between can take a while.
+    // The role's expiry is wall-clock time, turned into how long is left of
+    // it now, so the deadline itself stays on the monotonic clock.
+    const now = performance.now();
+    const fromStanding =
+      (caller.keyStandingAskedAt ?? now) + SUPER_ADMIN_SCOPE_LIFETIME_MS;
+    const lapsesAt =
       caller.keyHoldsSuperAdminUntil === undefined
-        ? SUPER_ADMIN_SCOPE_LIFETIME_MS
+        ? fromStanding
         : Math.min(
-            SUPER_ADMIN_SCOPE_LIFETIME_MS,
-            caller.keyHoldsSuperAdminUntil - Date.now()
+            fromStanding,
+            now + (caller.keyHoldsSuperAdminUntil - Date.now())
           );
-    // A role already expired leaves nothing to carry.
-    if (lifetime > 0)
-      SUPER_ADMIN_SCOPES.set(scope, performance.now() + lifetime);
+    // A bound already passed leaves nothing to carry.
+    if (lapsesAt > now) SUPER_ADMIN_SCOPES.set(scope, lapsesAt);
   }
   return scope;
 }

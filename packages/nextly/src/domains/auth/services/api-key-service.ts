@@ -475,6 +475,8 @@ export interface ResolvedKeyCaller {
   keyHoldsSuperAdmin: boolean;
   /** The soonest expiry among the maker's roles, where the authority ends. */
   keyHoldsSuperAdminUntil?: number;
+  /** When authentication asked the maker's standing, passed on as it came. */
+  keyStandingAskedAt?: number;
 }
 
 /**
@@ -490,6 +492,8 @@ export async function resolveKeyCaller(
     userId: string;
     tokenType: ApiKeyTokenType;
     roleId: string | null;
+    /** When authentication asked the maker's standing, where it says. */
+    standingAskedAt?: number;
   }
 ): Promise<ResolvedKeyCaller> {
   const [grants, roles, superAdmin] = await Promise.all([
@@ -504,6 +508,9 @@ export async function resolveKeyCaller(
     ...(superAdmin.until === undefined
       ? {}
       : { keyHoldsSuperAdminUntil: superAdmin.until }),
+    ...(key.standingAskedAt === undefined
+      ? {}
+      : { keyStandingAskedAt: key.standingAskedAt }),
   };
 }
 
@@ -1229,6 +1236,12 @@ export class ApiKeyService extends BaseService {
     userId: string;
     tokenType: ApiKeyTokenType;
     roleId: string | null;
+    /**
+     * When the maker's standing was asked (`performance.now()`), taken just
+     * before the ask: the bound on any authority a scope made from this key
+     * carries counts from here, not from when the scope is made.
+     */
+    standingAskedAt: number;
   } | null> {
     const keyHash = hashApiKey(rawKey);
 
@@ -1281,6 +1294,7 @@ export class ApiKeyService extends BaseService {
     // through the account-standing cache sessions use, so a deactivation is
     // refused at once on the instance that made it and within the cache's
     // lifetime elsewhere. A failed read throws rather than admitting the key.
+    const standingAskedAt = performance.now();
     if (!(await accountIsActive(row.userId))) {
       return refused("creator-inactive");
     }
@@ -1292,6 +1306,7 @@ export class ApiKeyService extends BaseService {
       userId: row.userId,
       tokenType: row.tokenType as ApiKeyTokenType,
       roleId: row.roleId ?? null,
+      standingAskedAt,
     };
   }
 
