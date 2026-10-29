@@ -50,8 +50,18 @@ export function PermissionLevelRows({
   const matches = (row: LevelRow) =>
     row.label.toLowerCase().includes(wanted) ||
     row.slug.toLowerCase().includes(wanted);
-  const nameOf = (group: PluginGroup) =>
+  const labelOf = (group: PluginGroup) =>
     pluginNames?.get(group.plugin) ?? group.plugin;
+  // Two plugins may share a label; each is then named by its package too, so
+  // an administrator can tell which one they are granting.
+  const labelCounts = new Map<string, number>();
+  for (const group of groups) {
+    labelCounts.set(labelOf(group), (labelCounts.get(labelOf(group)) ?? 0) + 1);
+  }
+  const nameOf = (group: PluginGroup) =>
+    (labelCounts.get(labelOf(group)) ?? 0) > 1
+      ? `${labelOf(group)} (${group.plugin})`
+      : labelOf(group);
   const shown = wanted ? rows.filter(matches) : rows;
   // A plugin is found by its name or by any of its collections.
   const shownGroups = wanted
