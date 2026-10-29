@@ -153,12 +153,6 @@ function* refusals(
   address: unknown
 ): Generator<AddressRefusal> {
   const label = LABELS[kind];
-  const refuse = (
-    code: AddressRefusalCode,
-    message: string,
-    mayAlreadyExist = false
-  ): AddressRefusal => ({ code, message, mayAlreadyExist });
-
   if (address === undefined || address === null || address === "") {
     yield refuse("SLUG_REQUIRED", `${label} address is required`);
     return;
@@ -179,7 +173,24 @@ function* refusals(
       `${label} address '${address}' is ${address.length} characters; the longest allowed is ${MAX_SLUG_LENGTH}`
     );
   }
+  yield* reservedRefusals(kind, address);
+  yield* tableNameRefusals(kind, address);
+}
 
+function refuse(
+  code: AddressRefusalCode,
+  message: string,
+  mayAlreadyExist = false
+): AddressRefusal {
+  return { code, message, mayAlreadyExist };
+}
+
+/** Refusals of an address Nextly or SQL keeps for itself. */
+function* reservedRefusals(
+  kind: AddressKind,
+  address: string
+): Generator<AddressRefusal> {
+  const label = LABELS[kind];
   const lower = address.toLowerCase();
   // A collection or Single seeds `read-<address>` and the rest under its
   // address, so one named after a system resource would share the rows that
@@ -215,6 +226,18 @@ function* refusals(
       !CONFIG_SQL_KEYWORDS.has(lower)
     );
   }
+}
+
+/**
+ * Refusals of an address whose tables would be named ambiguously or too long.
+ * Configuration made neither check before the rule, so both may meet an
+ * entity that already exists.
+ */
+function* tableNameRefusals(
+  kind: AddressKind,
+  address: string
+): Generator<AddressRefusal> {
+  const label = LABELS[kind];
   // A repeated or trailing separator is written differently by each road's
   // table naming (`posts-` is `dc_posts_` from one and `dc_posts` from
   // another), so only an address without one names the same table everywhere.
@@ -228,17 +251,16 @@ function* refusals(
   // PostgreSQL silently truncates a name past 63 bytes and MySQL refuses one
   // past 64, so the tighter limit holds for every name the address leads to.
   // Judged only within the product's own bound, which configuration applied.
-  if (address.length <= MAX_SLUG_LENGTH) {
-    const over = namesTheAddressNeeds(kind, address).find(
-      n => identifierBytes(n) > MAX_INDEX_NAME_LENGTH
+  if (address.length > MAX_SLUG_LENGTH) return;
+  const over = namesTheAddressNeeds(kind, address).find(
+    n => identifierBytes(n) > MAX_INDEX_NAME_LENGTH
+  );
+  if (over !== undefined) {
+    yield refuse(
+      "SLUG_TOO_LONG",
+      `${label} address '${address}' is too long for its tables: '${over}' would be ${identifierBytes(over)} characters, past the ${MAX_INDEX_NAME_LENGTH} a database name may have`,
+      true
     );
-    if (over !== undefined) {
-      yield refuse(
-        "SLUG_TOO_LONG",
-        `${label} address '${address}' is too long for its tables: '${over}' would be ${identifierBytes(over)} characters, past the ${MAX_INDEX_NAME_LENGTH} a database name may have`,
-        true
-      );
-    }
   }
 }
 
