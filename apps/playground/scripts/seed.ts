@@ -81,7 +81,12 @@ async function loadSeedData(): Promise<SeedData> {
   return JSON.parse(raw) as SeedData;
 }
 
-async function ensureSuperAdmin(
+/**
+ * The dev user `admin.devAutoLogin` signs in, and the permissions it holds,
+ * when there is none yet. Exported for `seed-dev-admin.ts`, which seeds this
+ * alone for a server that needs an account and no demo content.
+ */
+export async function ensureSuperAdmin(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Nextly instance from getNextly() has dynamic shape
   nextly: any
 ): Promise<{ created: number }> {

@@ -431,6 +431,22 @@ describe.each(getConfiguredTestDialects())(
         }
       });
 
+      it("takes off a retired row the role still held when manage-<resource> is added again by action", async () => {
+        const roleId = await plantedRole("added-again", [
+          "manage-media",
+          "read-users",
+        ]);
+        await services().rolePermissions.addPermissionToRole(roleId, {
+          action: "manage",
+          resource: "media",
+        });
+        expect((await holds(roleId)).sort()).toEqual(
+          [...plainOn("media"), "read-users"].sort()
+        );
+        // Left holding nothing, so no case after this counts the role.
+        await services().rolePermissions.setRolePermissions(roleId, []);
+      });
+
       it("leaves no role holding a retired manage permission after a reboot, presets and the super-admin seeder included", async () => {
         await seedSuperAdmin(t.adapter, {
           email: "root@retired-manage.test",

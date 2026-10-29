@@ -96,6 +96,30 @@ export class RolePermissionService extends BaseService {
           roleId,
           four.filter(id => !held.has(id))
         );
+        // The role is left holding the plain four alone: a retired row it
+        // still held, from before, goes with this add, as any writer stores it.
+        const retired = (
+          await tx.select<{ id: unknown }>("permissions", {
+            columns: ["id"],
+            forUpdate: true,
+            where: {
+              and: [
+                { column: "action", op: "=", value: "manage" },
+                { column: "resource", op: "=", value: perm.resource },
+              ],
+            },
+          })
+        )
+          .map(row => String(row.id))
+          .filter(id => held.has(id));
+        if (retired.length > 0) {
+          await tx.delete("role_permissions", {
+            and: [
+              { column: "roleId", op: "=", value: roleId },
+              { column: "permissionId", op: "IN", value: retired },
+            ],
+          });
+        }
         added = true;
       });
       if (added) {

@@ -50,6 +50,7 @@ import {
 } from "../../domains/collections/services/collection-id";
 import {
   adminComponentPlugins,
+  adminSiteDashboard,
   setAdminComponentPlugins,
 } from "../../domains/widgets/declaration/component-map-store";
 import { setInitializedPlugins } from "../../plugins/initialized-plugins";
@@ -1843,10 +1844,16 @@ describe("reloadNextlyConfig", () => {
         setAdminComponentPlugins([]);
       });
 
-      it("are republished when the reload lands", async () => {
+      it("are republished when the reload lands, with the site dashboard the loader carries", async () => {
         const plugins = [...withPluginTable.plugins, added];
+        // As the loader hands it over after every plugin's setup().
+        const dashboard = {
+          widgets: [
+            { id: "site/notes", view: { component: "./dashboard/notes" } },
+          ],
+        };
         loadConfigSpy.mockResolvedValue({
-          config: { ...withPluginTable, plugins },
+          config: { ...withPluginTable, plugins, admin: { dashboard } },
         });
         unchangedPosts();
 
@@ -1854,6 +1861,7 @@ describe("reloadNextlyConfig", () => {
         await reloadNextlyConfig({ resolver: buildResolver() });
 
         expect(adminComponentPlugins()).toEqual(plugins);
+        expect(adminSiteDashboard()).toEqual(dashboard);
       });
 
       it("are left as they were when the reload does not land", async () => {

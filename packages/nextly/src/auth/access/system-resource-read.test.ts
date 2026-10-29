@@ -52,6 +52,7 @@ const actors: Record<string, Actor> = {
     keyId: "k1",
     userId: "u1",
     roles: ["editor"],
+    superAdmin: false,
     permissions: [read("users")],
   }),
   // Made by a super-admin, so it carries that role's name, but holds no grant.
@@ -59,6 +60,7 @@ const actors: Record<string, Actor> = {
     keyId: "k2",
     userId: "u3",
     roles: ["super-admin"],
+    superAdmin: false,
     permissions: [],
   }),
 };
