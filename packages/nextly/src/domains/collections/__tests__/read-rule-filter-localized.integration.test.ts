@@ -273,6 +273,9 @@ describe("a read rule's filter on a field the read may show from a fallback lang
   it("withholds such an entry where a component populates it", async () => {
     const t = await boot();
     const { withEnglishSecret, withoutSecret } = await seed(t);
+    // A component is a level of its own, so its relationship populates one
+    // level below the shelf: at depth 1 the note stays an id for every caller.
+    const throughComponent = { depth: 2 } as const;
     const shelved = async (note: string) => {
       const shelf = await t.nextly.create({
         collection: SHELVES,
@@ -281,7 +284,7 @@ describe("a read rule's filter on a field the read may show from a fallback lang
       const read = (await t.nextly.findByID({
         collection: SHELVES,
         id: idOf(shelf),
-        depth: 1,
+        ...throughComponent,
         ...frenchFallingBack,
         ...asVisitor,
       })) as { card?: { note?: unknown } };
@@ -295,7 +298,7 @@ describe("a read rule's filter on a field the read may show from a fallback lang
     const trusted = (await t.nextly.findByID({
       collection: SHELVES,
       id: idOf(trustedShelf),
-      depth: 1,
+      ...throughComponent,
       ...frenchFallingBack,
     })) as { card?: { note?: unknown } };
     expect(populatedId(trusted.card?.note)).toEqual({
