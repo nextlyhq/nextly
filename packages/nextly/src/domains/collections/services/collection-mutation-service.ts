@@ -37,7 +37,11 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { holdsGrant } from "../../../auth/access/gate-adapters";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
-import { askEachLanguage } from "../../../auth/access/rule-language";
+import {
+  askEachLanguage,
+  withRuleLanguage,
+  writeLanguagesFor,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
@@ -204,6 +208,7 @@ import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   isValidLocale,
+  resolveLocaleChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import {
@@ -3308,6 +3313,8 @@ export class CollectionMutationService extends BaseService {
       /** The entry as stored, which the rules compare the promotion with. */
       live: Record<string, unknown>;
       user: UserContext;
+      /** The scope an API key arrived with, judged on its own grants. */
+      authenticatedScope?: AuthenticatedScope;
       grants: () => Promise<CallerGrants>;
     }
   ): Promise<ValidationIssue[]> {
@@ -3336,6 +3343,7 @@ export class CollectionMutationService extends BaseService {
         collectionName: args.collectionName,
         storedId: args.entryId,
         user: args.user,
+        authenticatedScope: args.authenticatedScope,
         overrideAccess: false,
         grants: args.grants,
         componentSchemas: shared.splitComponentSchemas,
@@ -3344,6 +3352,100 @@ export class CollectionMutationService extends BaseService {
       });
       return [];
     });
+  }
+
+  /**
+   * Whether the field rules refuse `user` the promotion of this entry's
+   * working draft, judged as its publish judges them: the snapshot against the
+   * entry as stored, in the language the draft is kept for, through
+   * {@link promotionAccessIssues}.
+   *
+   * A read asks it before showing a pending change to a caller who may publish
+   * the entry and not update it, so the change is shown only where that caller
+   * could put it live: a value a field rule keeps them from writing is not
+   * theirs to see before it is published. `true` where the entry or its
+   * promotion cannot be judged.
+   */
+  async workingDraftPromotionRefused(params: {
+    collectionName: string;
+    entryId: string;
+    /** The working draft the read would show, as stored. */
+    snapshot: unknown;
+    /** The slot it is kept under, as the read keyed it. */
+    draftLocale: string | null;
+    /** The language read, whose translations the stored entry is judged with. */
+    locale: string | undefined;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    // Judged in the status write's language, whatever the read that asks it
+    // involves: a field rule told every language could refuse a promotion
+    // the write allows, or allow one it refuses.
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale),
+      () => this.judgeWorkingDraftPromotion(params)
+    );
+  }
+
+  /** {@link workingDraftPromotionRefused}, in the language it is asked in. */
+  private async judgeWorkingDraftPromotion(
+    params: Parameters<
+      CollectionMutationService["workingDraftPromotionRefused"]
+    >[0]
+  ): Promise<boolean> {
+    // No rule a promotion asks could refuse it.
+    if (!this.promotionRulesCanAsk(params.collectionName)) return false;
+    const collection = await this.releaseCollection(params.collectionName);
+    if (collection === null) return true;
+    const base = await this.releaseWriteContext(
+      collection,
+      params.collectionName,
+      "published"
+    );
+    if (base.promoteRestoreCtx === null) return true;
+    // The status write of the language read, not the release's write of every
+    // language: its draft, and the stored values it is compared with.
+    const localizedUpdate = await this.splitLocalizedWriteData(
+      params.collectionName,
+      base.finalData,
+      params.locale,
+      false
+    );
+    const shared: ReleaseWriteContext = {
+      ...base,
+      locale: params.locale,
+      draftLocaleKey: params.draftLocale,
+      localizedUpdate,
+    };
+    const row = await this.storedEntry(params.collectionName, params.entryId);
+    if (row === undefined) return true;
+    const entryId = String(row.id);
+    const live = (
+      await this.storedDocumentsOf({
+        collectionName: params.collectionName,
+        rows: new Map([[entryId, row]]),
+        tableName: collectionTableName(collection, params.collectionName),
+        fields: shared.fields,
+        manyToManyFields: shared.manyToManyFields,
+        locale: localizedUpdate?.writeLocale,
+        reads: await this.goingLiveReadsOf(params.collectionName, [entryId]),
+      })
+    ).get(entryId);
+    if (live === undefined) return true;
+    const refused = await this.promotionAccessIssues(shared, {
+      collectionName: params.collectionName,
+      entryId,
+      snapshot: params.snapshot,
+      restoreCtx: base.promoteRestoreCtx,
+      live,
+      user: params.user,
+      authenticatedScope: params.authenticatedScope,
+      grants: await resolvedCallerGrants(
+        params.user,
+        params.authenticatedScope
+      ),
+    });
+    return refused.length > 0;
   }
 
   /** The violations of the document a promoted working draft would write. */
@@ -11487,13 +11589,23 @@ export class CollectionMutationService extends BaseService {
             localizedColumns: companion.localizedFields.map(f => f.column),
           });
     const ready = readiness === "ready" ? (companion ?? null) : null;
-    const contextIn = (locale: string | undefined) =>
-      localizedFilterContext(ready, locale ? [locale] : null, schema);
-    const defaultLocale = this.localization?.defaultLocale;
+    const writeLocale = options.locale ?? this.localization?.defaultLocale;
+    // Whether the caller may read the entry is a plain read's question, asked
+    // in the default language and its fallbacks, every language of the chain,
+    // as the read by id asks it.
+    const reads = localizedFilterContext(
+      ready,
+      resolveLocaleChain(this.localization, undefined, undefined),
+      schema
+    );
     return {
       columns: prepared.columns(schema, {
-        writes: contextIn(options.locale ?? defaultLocale),
-        reads: contextIn(defaultLocale),
+        writes: localizedFilterContext(
+          ready,
+          writeLocale ? [writeLocale] : null,
+          schema
+        ),
+        reads: reads && { ...reads, inEveryFallbackLanguage: true },
       }),
     };
   }
@@ -11526,7 +11638,8 @@ export class CollectionMutationService extends BaseService {
       prepared.schema,
       entryId,
       prepared.match,
-      accessParams
+      accessParams,
+      { underLock: true }
     );
   }
 
@@ -11571,7 +11684,8 @@ export class CollectionMutationService extends BaseService {
       prepared.schema,
       String(params.entryId),
       prepared.match,
-      params
+      params,
+      { underLock: true }
     );
     if (!judged.refusal && access.filter) {
       filteredWrites.push({
@@ -11716,7 +11830,8 @@ export class CollectionMutationService extends BaseService {
         schema,
         entryId,
         check.match,
-        check.params
+        check.params,
+        { underLock: true }
       );
       if (judged.refusal) return judged.refusal;
       // The row as it is locked decides how a later refusal is answered.
@@ -11758,13 +11873,23 @@ export class CollectionMutationService extends BaseService {
     db: typeof this.db,
     schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
     entryId: string,
-    match: FilteredWriteMatch
+    match: FilteredWriteMatch,
+    /** Asked under the row lock: then the select is itself a locking read. */
+    options: { underLock?: boolean } = {}
   ): Promise<ReturnType<typeof writeMatchOf>> {
-    const [row] = await db
+    const query = db
       .select({ writes: match.columns.writes, reads: match.columns.reads })
       .from(schema)
       .where(eq(schema.id as never, entryId))
       .limit(1);
+    // A plain read under the lock answers from the transaction's snapshot,
+    // which on MySQL's REPEATABLE READ can predate a commit that moved the
+    // entry out of the filter. SQLite runs one writer at a time, and has no
+    // `FOR UPDATE`.
+    const [row] =
+      options.underLock && this.adapter.dialect !== "sqlite"
+        ? await query.for("update")
+        : await query;
     return writeMatchOf(row);
   }
 
@@ -11814,16 +11939,29 @@ export class CollectionMutationService extends BaseService {
    * the write's own transaction under its row lock. `null` where the entry is
    * inside the filter, or gone, which the write answers as it answers any
    * missing entry.
+   *
+   * Under the row lock the match is itself a locking read. A plain read there
+   * would answer from the transaction's snapshot, which on MySQL's REPEATABLE
+   * READ is fixed at its first read and can predate a commit that moved the
+   * entry out of the filter; a locking read sees the row the lock holds.
    */
   private async refusalOutsideWriteFilter<T>(
     db: typeof this.db,
     schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
     entryId: string,
     match: FilteredWriteMatch,
-    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0]
+    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0],
+    options: { underLock?: boolean } = {}
   ): Promise<CollectionServiceResult<T> | null> {
     return (
-      await this.judgedAgainstWriteFilter<T>(db, schema, entryId, match, access)
+      await this.judgedAgainstWriteFilter<T>(
+        db,
+        schema,
+        entryId,
+        match,
+        access,
+        options
+      )
     ).refusal;
   }
 
@@ -11838,9 +11976,16 @@ export class CollectionMutationService extends BaseService {
     schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
     entryId: string,
     match: FilteredWriteMatch,
-    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0]
+    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0],
+    options: { underLock?: boolean } = {}
   ): Promise<{ refusal: CollectionServiceResult<T> | null; reads: boolean }> {
-    const found = await this.storedWriteMatch(db, schema, entryId, match);
+    const found = await this.storedWriteMatch(
+      db,
+      schema,
+      entryId,
+      match,
+      options
+    );
     if (!found.exists || found.writes) {
       return { refusal: null, reads: found.reads };
     }
@@ -12098,7 +12243,8 @@ export class CollectionMutationService extends BaseService {
             schema,
             params.entryId,
             filtered,
-            accessParams
+            accessParams,
+            { underLock: true }
           );
           if (refusedUnderLock) return;
         }

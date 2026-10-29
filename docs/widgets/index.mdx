@@ -101,6 +101,53 @@ created — and only to a reader who may read that collection or single.
   not.
 </Callout>
 
+## Size-aware loads
+
+A widget declared with `defineWidget` can compute its own data in a `load` function. `load`
+runs on the server for each card, as the person viewing it. It is handed the card's `size`: its
+`w` and `h` in grid units, kept within the widget's size bounds, and its `tier`, which is
+`"small"`, `"medium"` or `"large"`. The tier depends on how wide the card is drawn on that
+reader's screen. Use the size to read only what the card can show:
+
+```ts
+import { defineWidget, rowsThatFit } from "@nextlyhq/plugin-sdk";
+
+export const recentOrders = defineWidget({
+  id: "acme/recent-orders",
+  title: "Recent orders",
+  description: "The newest orders, and how many there are on a large card.",
+  size: { default: { w: 6, h: 4 }, max: { w: 12, h: 8 } },
+  view: "list",
+  load: async ({ size, services }) => {
+    // As many rows as this card's body draws: never more than ten.
+    const limit = rowsThatFit(size, { density: "default" });
+    const { items } = await services.find("orders", {
+      sort: "-createdAt",
+      limit,
+    });
+    if (size.tier !== "large") return { items };
+    // Only a large card shows the total, so only a large card counts the orders.
+    return { items, total: await services.count("orders") };
+  },
+});
+```
+
+`rowsThatFit(size, { density })` counts the list rows that fit in a card of that height. It
+uses the same formula as core's own list cards, so a load reads exactly the rows the card
+draws. `density` is `"default"` or `"compact"`, the values a list card's Density setting takes.
+Compact rows are shorter, so the same card holds more of them.
+
+The size is part of the question a load answers. When a reader resizes a card, or a card
+crosses into another tier, that card's `load` runs again on its own. The other cards keep their
+answers. A widget's `shows` function gets the same `size`.
+
+<Callout type="info">
+  A card is not always asked with a tier. For example, when the server decides
+  which cards of a default dashboard a reader sees, no screen is involved. Then
+  `load` and `shows` are handed the card's stored size, or the widget's default
+  size for a card not yet saved, with the tier `"medium"`.
+</Callout>
+
 ## Related
 
 - [Plugin admin UI](/docs/plugins/admin-ui) — contributing admin surfaces

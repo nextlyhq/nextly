@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReadAccessCaller } from "../../../auth/entity-read-access";
 import { setContributedWidgets } from "../canonical";
 import { clearWidgets, registerWidget } from "../registry";
+import { setSiteDashboardRules } from "../site-rules";
 import { clearSources, registerSource } from "../sources";
 import { widgetAudience } from "../visibility";
 
@@ -84,7 +85,15 @@ afterEach(() => {
   clearWidgets();
   clearSources();
   setContributedWidgets([]);
+  setSiteDashboardRules(NO_SITE_RULES);
 });
+
+const NO_SITE_RULES = {
+  hidden: new Set<string>(),
+  replaced: new Map<string, string>(),
+  alternatives: new Set<string>(),
+  overrides: new Map(),
+};
 
 const ids = (widgets: readonly { id: string }[]) =>
   widgets.map(widget => widget.id);
@@ -145,6 +154,33 @@ describe("visibleWidgets", () => {
     reader([], ["posts"]);
 
     expect(ids(await visibleWidgets(CALLER))).toEqual(["app/notes"]);
+  });
+});
+
+describe("what the site config keeps off the dashboard", () => {
+  it("is visible to nobody: a hidden widget, a built-in an alternative replaces, and an alternative no replace names", async () => {
+    for (const id of [
+      "core/team",
+      "core/recently-edited",
+      "acme/recent-orders",
+      "acme/other-alternative",
+      "acme/kept",
+    ]) {
+      register(id);
+    }
+    setSiteDashboardRules({
+      ...NO_SITE_RULES,
+      hidden: new Set(["core/team"]),
+      replaced: new Map([["core/recently-edited", "acme/recent-orders"]]),
+      alternatives: new Set(["acme/recent-orders", "acme/other-alternative"]),
+    });
+
+    // The alternative put in a built-in's place, and the untouched widget,
+    // are the controls: a filter that keeps nothing would pass the rest.
+    expect(ids(await visibleWidgets(CALLER))).toEqual([
+      "acme/recent-orders",
+      "acme/kept",
+    ]);
   });
 });
 

@@ -30,7 +30,7 @@ export function WidgetFooterLink({
   label: string;
 }): JSX.Element {
   return (
-    <CardFooterContent>
+    <CardFooterContent rank="explicit">
       <Link href={href} className={CARD_FOOTER_LINK_CLASS}>
         {label}
       </Link>

@@ -29,6 +29,7 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -377,4 +378,140 @@ describe("a delete rule's filter on a collection with languages", () => {
     expect(refused.statusCode).toBe(403);
     expect(await stillThere(t, LOCALIZED, others)).toBe(true);
   });
+
+  it("answers an entry outside the filter as missing where a plain read hides it through a fallback language", async () => {
+    // The default language falls back to French here, so a plain read judges
+    // the read rule's filter in English and in French. The entry matches it
+    // in English only, so that read hides it, and a delete outside the delete
+    // filter answers it as missing rather than revealing it with a 403.
+    const FALLING_BACK = "writefilter_fallback_posts";
+    current = await createTestNextly({
+      localization: {
+        locales: [{ code: "en", fallbackLocale: "fr" }, "fr"],
+        defaultLocale: "en",
+      },
+      collections: [
+        defineCollection({
+          slug: FALLING_BACK,
+          localized: true,
+          access: {
+            read: () => ({ title: { equals: "shown" } }) as unknown as boolean,
+            delete: ownEntries,
+          },
+          fields: [
+            text({ name: "title" }),
+            text({ name: "owner", localized: false }),
+          ],
+        }),
+      ],
+    });
+    const t = current;
+    await userWhoMay(t, AUTHOR, "read", [FALLING_BACK]);
+    await grantTo(t, AUTHOR, "delete", [FALLING_BACK]);
+    const created = await t.nextly.create({
+      collection: FALLING_BACK,
+      data: { title: "shown", owner: OTHER },
+    });
+    const others = String(created.item.id);
+    await t.nextly.update({
+      collection: FALLING_BACK,
+      id: others,
+      locale: "fr",
+      data: { title: "hidden" },
+    } as never);
+
+    // The control: the author's plain read hides the entry.
+    const read = await errorOf(() =>
+      t.nextly.findByID({ collection: FALLING_BACK, id: others, ...asAuthor })
+    );
+    const refused = await errorOf(() =>
+      t.nextly.delete({ collection: FALLING_BACK, id: others, ...asAuthor })
+    );
+
+    expect(read.statusCode).toBe(404);
+    expect(refused.statusCode).toBe(404);
+    expect(refused.code).toBe("NOT_FOUND");
+    expect(await stillThere(t, FALLING_BACK, others)).toBe(true);
+  });
 });
+
+// The databases that lock a row a transaction reads. MySQL's default
+// REPEATABLE READ fixes a transaction's snapshot at its first read, so there a
+// row seen early can differ from the row a later lock holds; PostgreSQL's
+// READ COMMITTED reads afresh, and the case pins its locking read alike.
+const lockingDialects = getConfiguredTestDialects().filter(
+  dialect => dialect !== "sqlite"
+);
+
+describe.skipIf(lockingDialects.length === 0).each(lockingDialects)(
+  "a delete rule's filter inside the caller's transaction (%s)",
+  dialect => {
+    it("refuses an entry another writer moved out of the filter after the transaction first read it", async () => {
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: OPEN_POSTS,
+            access: { read: () => true, delete: ownEntries },
+            fields: [text({ name: "title" }), text({ name: "owner" })],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [OPEN_POSTS]);
+      await grantTo(t, AUTHOR, "delete", [OPEN_POSTS]);
+      const { own } = await seed(t, OPEN_POSTS);
+      const entries = t
+        .getService("collectionsHandler")
+        .getEntryService() as CollectionEntryService;
+      type Deleted = Awaited<
+        ReturnType<CollectionEntryService["deleteEntryInTransaction"]>
+      >;
+
+      // Another writer gives the entry away and commits. Chained here, before
+      // the transaction opens, it runs outside the transaction's flow, on a
+      // connection of its own, as a concurrent request would.
+      let release: () => void = () => undefined;
+      const released = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const givenAway = released.then(() =>
+        t.nextly.update({
+          collection: OPEN_POSTS,
+          id: own,
+          data: { owner: OTHER },
+        })
+      );
+
+      const refusal = await t.adapter
+        .transaction<Deleted>(async tx => {
+          // The transaction's first read, which fixes its snapshot while the
+          // entry is still the author's.
+          await tx.selectOne(`dc_${OPEN_POSTS}`, {
+            where: { and: [{ column: "id", op: "=", value: own }] },
+          });
+          // The other writer commits before the delete takes its lock.
+          release();
+          await givenAway;
+          return entries.deleteEntryInTransaction(tx, {
+            collectionName: OPEN_POSTS,
+            entryId: own,
+            user: { id: AUTHOR },
+          });
+        })
+        .then(
+          (result): { result?: Deleted; error?: unknown } => ({ result }),
+          (error: unknown): { result?: Deleted; error?: unknown } => ({
+            error,
+          })
+        );
+
+      const status =
+        refusal.result?.statusCode ??
+        (NextlyError.is(refusal.error) ? refusal.error.statusCode : undefined);
+      expect(refusal.result?.success ?? false).toBe(false);
+      expect(status).toBe(403);
+      expect(await stillThere(t, OPEN_POSTS, own)).toBe(true);
+    });
+  }
+);
