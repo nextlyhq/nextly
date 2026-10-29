@@ -1088,6 +1088,35 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         ]);
       });
 
+      it("records a project that was never translated, so translation can be turned on after it", async () => {
+        const translated: MinimalConfigEntity = {
+          ...NOTES_GROWN,
+          localized: true,
+          fields: [
+            { name: "title", type: "text" },
+            { name: "summary", type: "text", localized: true },
+          ],
+        };
+        const dir = await projectAfter(dialect, [
+          { collections: [NOTES_GROWN], after: forgetTranslatedFieldRecord },
+        ]);
+
+        // Turning translation on is a sign of translation, and the older snapshot doesn't say
+        // `summary` was shared.
+        await expect(
+          generate(dialect, dir, [translated], "two", 20)
+        ).rejects.toThrow(/--record-snapshot/);
+        expect(
+          await generate(dialect, dir, [NOTES_GROWN], "record", 30, {
+            recordSnapshot: true,
+          })
+        ).not.toBeNull();
+        expect(await filesOfRun(dialect, dir, [translated])).toEqual([
+          expect.stringMatching(/_next\.sql$/),
+          expect.stringMatching(/_enable_localization_notes\.sql$/),
+        ]);
+      });
+
       it("records nothing when the snapshot records the translated fields and the companion files don't", async () => {
         const dir = await projectAfter(dialect, [
           { collections: [TRANSLATED], after: d => forgetCompanionIntents(d) },

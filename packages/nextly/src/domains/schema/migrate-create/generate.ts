@@ -326,16 +326,16 @@ export async function generateMigration(
     ...args.singles,
     ...args.components,
   ].some(e => e.localized === true);
+  const snapshotSays = recordsTranslatedFields(previous?.data ?? null);
   const companionHistory: TranslationRecords = {
     ...fileHistory,
-    snapshotRecords:
-      recordsTranslatedFields(previous?.data ?? null) ||
-      (!fileHistory.anyFile && !translatedNow),
+    snapshotRecords: snapshotSays || (!fileHistory.anyFile && !translatedNow),
   };
   // Nothing to record, whatever else the config holds: the snapshot already says which tables
   // are translated. Decided before any planner, whose refusals and warnings are about a change
-  // this run does not make.
-  if (args.recordSnapshot === true && companionHistory.snapshotRecords) {
+  // this run does not make. A never-translated project's older snapshot doesn't say so itself,
+  // and turning translation on there is refused until it does, so it records.
+  if (args.recordSnapshot === true && snapshotSays) {
     return null;
   }
   const entities = [
