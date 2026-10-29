@@ -26,8 +26,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runUpgrade, type UpgradeAdapter } from "../../../cli/commands/upgrade";
 import { getDialectTables } from "../../../database/index";
+import { getService } from "../../../di";
 import { seedSuperAdmin } from "../../../database/seeders/super-admin";
-import { warnIfCoreSchemaIsBehind } from "../../../init/first-run";
 import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import {
   createTestNextly,
@@ -124,18 +124,15 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
-    /** What a start says about the core schema and stored access data. */
+    /** What a start's seeding warns, as a boot runs it. */
     async function startupWarnings(): Promise<string[]> {
-      const warned: string[] = [];
-      await warnIfCoreSchemaIsBehind(
-        t.adapter as unknown as Parameters<typeof warnIfCoreSchemaIsBehind>[0],
-        {
-          info: () => undefined,
-          warn: (msg: string) => warned.push(msg),
-        } as unknown as Parameters<typeof warnIfCoreSchemaIsBehind>[1],
-        30_000
-      );
-      return warned;
+      const warn = vi.spyOn(getService("logger"), "warn");
+      try {
+        await seedPermissionsAndRolePresets();
+        return warn.mock.calls.map(call => String(call[0]));
+      } finally {
+        warn.mockRestore();
+      }
     }
 
     beforeAll(async () => {
@@ -487,6 +484,33 @@ describe.each(getConfiguredTestDialects())(
           "manage-background-jobs",
         ]);
         jobsId = await plantedRole("planted-jobs", ["manage-background-jobs"]);
+      });
+
+      it("names no built-in role the same start's seeding converts", async () => {
+        // A preset is brought back to its set at each boot, and its writer
+        // stores a retired permission as the plain four: by the time the
+        // start names anyone, the preset holds none.
+        const { data } = await services().roles.listRoles({ limit: 1000 });
+        const editor = data.find(role => role.slug === "editor")!;
+        const ids = await idsBySlug();
+        const { rolePermissions } = getDialectTables();
+        await (
+          t.adapter.getDrizzle() as unknown as {
+            insert: (table: unknown) => {
+              values: (rows: unknown) => Promise<unknown>;
+            };
+          }
+        )
+          .insert(rolePermissions)
+          .values({
+            id: randomUUID(),
+            roleId: String(editor.id),
+            permissionId: ids.get("manage-media"),
+          });
+        const warned = (await startupWarnings()).join("\n");
+        expect(warned).toContain("planted-manager");
+        expect(warned).not.toContain(`${editor.name}:`);
+        expect(await holds(String(editor.id))).not.toContain("manage-media");
       });
 
       it("is named once at each start, with the command that converts it", async () => {

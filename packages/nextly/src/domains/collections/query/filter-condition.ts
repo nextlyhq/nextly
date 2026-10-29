@@ -171,35 +171,43 @@ export async function prepareFilterCondition(
 }
 
 /**
- * The condition a read rule's filter adds to a read of `collectionName`. A
- * filter that cannot be built against the collection as it stands, one naming
- * a field it no longer has, matches no entry: a read by id then answers as a
- * missing entry does, a list finds nothing, and a relationship withholds
- * every row. The rule's own error is logged for whoever maintains the rule,
- * by its code alone, and never handed to the caller, to whom it would
- * describe the rule.
+ * A rule's filter over `collectionName`, its facts loaded, ready to be built
+ * as SQL with no I/O: a read builds it on the pool, a write inside its own
+ * transaction under the row lock it holds. A filter that cannot be built
+ * against the collection as it stands, one naming a field it no longer has,
+ * matches no entry: a read by id then answers as a missing entry does, a list
+ * finds nothing, a relationship withholds every row, and a write changes
+ * nothing. The rule's own error is logged for whoever maintains the rule, by
+ * its code alone, and never handed to the caller, to whom it would describe
+ * the rule.
  *
- * Every read that applies a read rule's filter builds it here, so a filter
- * matches the same entries whichever read applies it.
+ * Every read and write that applies a rule's filter prepares it here, so a
+ * filter matches the same entries whichever applies it.
  */
-export async function ruleFilterCondition(
+export async function prepareRuleFilter(
   params: {
     collectionName: string;
     filter: RuleFilter;
-    schema: DynamicSchema;
-    localizedCtx: LocalizedQueryContext | null;
+    /** The rule's action, named when its filter is reported. */
+    action?: string;
   },
   sources: FilterConditionSources,
   logger: Pick<Logger, "error">
-): Promise<SQLWrapper | undefined> {
-  const { collectionName } = params;
+): Promise<{
+  /** The filter as SQL over `schema`; never throws. */
+  condition(
+    schema: DynamicSchema,
+    localizedCtx: LocalizedQueryContext | null
+  ): SQLWrapper | undefined;
+}> {
+  const { collectionName, action = "read" } = params;
   const unbuildable = (error: unknown): SQLWrapper => {
     // Only the builder's own refusal of the filter, a validation error
     // naming what the collection lacks, is a filter that cannot be built.
     // Anything else, a lookup the build needs failing as a lost connection
     // does, fails the read as it would any other.
     if (!NextlyError.isValidation(error)) throw error;
-    logger.error("A read rule's filter could not be built", {
+    logger.error(`A ${action} rule's filter could not be built`, {
       collectionName,
       code: error.code,
     });
@@ -212,7 +220,8 @@ export async function ruleFilterCondition(
       sources
     );
   } catch (error) {
-    return unbuildable(error);
+    const none = unbuildable(error);
+    return { condition: () => none };
   }
   // A field inside a component cannot be used in a rule's filter yet: it is
   // refused as a filter that is not well formed, reported once and raised
@@ -221,37 +230,75 @@ export async function ruleFilterCondition(
   if (prepared.namesComponentFields) {
     reportRuleFilterMisuse(
       collectionName,
-      "read",
+      action,
       "collection",
       FILTER_NAMES_A_COMPONENT_FIELD
     );
-    return sql`1 = 0`;
+    return { condition: () => sql`1 = 0` };
   }
   // A field stored as serialized JSON, a list or a reference to several
-  // collections, is refused the same way: compared with one value, its
-  // column's text would match entries the rule meant to refuse.
+  // collections, is refused the same way, by reads and writes alike:
+  // compared with one value, its column's text would match entries the rule
+  // meant to refuse.
   if (prepared.namesStructuredFields) {
     reportRuleFilterMisuse(
       collectionName,
-      "read",
+      action,
       "collection",
       FILTER_NAMES_A_STRUCTURED_FIELD
     );
-    return sql`1 = 0`;
+    return { condition: () => sql`1 = 0` };
   }
-  try {
-    // A localized field the read shows from a fallback language is judged
-    // on that language's value too, so the read shows nothing the rule
-    // refuses.
-    return prepared.condition(
-      params.schema,
-      params.localizedCtx
-        ? { ...params.localizedCtx, inEveryFallbackLanguage: true }
-        : null
-    );
-  } catch (error) {
-    return unbuildable(error);
-  }
+  return {
+    condition(schema, localizedCtx) {
+      try {
+        return prepared.condition(schema, localizedCtx);
+      } catch (error) {
+        return unbuildable(error);
+      }
+    },
+  };
+}
+
+/**
+ * The condition a read rule's filter adds to a read of `collectionName`,
+ * prepared and built in one step: see {@link prepareRuleFilter}.
+ */
+export async function ruleFilterCondition(
+  params: {
+    collectionName: string;
+    filter: RuleFilter;
+    schema: DynamicSchema;
+    localizedCtx: LocalizedQueryContext | null;
+  },
+  sources: FilterConditionSources,
+  logger: Pick<Logger, "error">
+): Promise<SQLWrapper | undefined> {
+  const prepared = await prepareRuleFilter(
+    { collectionName: params.collectionName, filter: params.filter },
+    sources,
+    logger
+  );
+  // A localized field the read shows from a fallback language is judged on
+  // that language's value too, so the read shows nothing the rule refuses.
+  return prepared.condition(
+    params.schema,
+    params.localizedCtx
+      ? { ...params.localizedCtx, inEveryFallbackLanguage: true }
+      : null
+  );
+}
+
+/**
+ * Whether a row matches `condition`, as a column of the row: `1` where it
+ * does, `0` where it does not, read as a number on every dialect. A filter
+ * that constrains nothing (`undefined`) matches every row. Selecting the
+ * match beside the row, rather than filtering the row out, is what tells an
+ * entry the filter withholds from one that does not exist, in one query.
+ */
+export function matchColumn(condition: SQLWrapper | undefined): SQL<number> {
+  if (!condition) return sql<number>`1`.mapWith(Number);
+  return sql<number>`case when ${condition} then 1 else 0 end`.mapWith(Number);
 }
 
 /**
@@ -274,6 +321,8 @@ export function localizedFilterContext(
     mainIdColumn: schema.id,
     locale: localeChain[0],
     localeChain,
+    // A comparison's value is converted as the companion column stores it, so
+    // a localized date matches as the instant it names on every dialect.
     companionTable: companion.table,
     // Only constrain by status when the collection has per-locale status and the
     // read resolved to a single status; otherwise leave it unfiltered.
