@@ -1,5 +1,5 @@
 /**
- * The permission a plugin's settings take: core's `manage-settings`, unless
+ * The permission a plugin's settings take: core's `update-settings`, unless
  * the plugin names one of its own in `contributes.settingsPermission`.
  *
  * One module for the boot's check and the request's gate, so the permission
@@ -86,12 +86,18 @@ export function assertSettingsPermissionsOwned(
   }
 }
 
-/** Core's permission for a plugin's settings, kept unless the plugin names its own. */
-const CORE_SETTINGS_PERMISSION = "manage-settings";
+/**
+ * Core's permission for a plugin's settings, kept unless the plugin names its
+ * own: a settings change, `update-settings`, as the system write policy names
+ * it (`SYSTEM_WRITE_POLICY.settings.update`). A role still holding
+ * `manage-settings` holds it, since that counts as the plain four on
+ * settings.
+ */
+export const CORE_SETTINGS_PERMISSION = "update-settings";
 
 /**
  * The permission a change to this plugin's settings needs, as a slug: the
- * plugin's own `settingsPermission`, or core's `manage-settings`.
+ * plugin's own `settingsPermission`, or core's `update-settings`.
  *
  * The one answer the request gate enforces and the admin metadata publishes
  * for the settings page to ask for, so the page never offers an editor the
@@ -105,7 +111,7 @@ export function settingsPermissionOf(
 
 /**
  * The permission a write to this plugin's settings needs, split as the gate
- * checks it. Core's `manage-settings` for a plugin that names none, or that
+ * checks it. Core's `update-settings` for a plugin that names none, or that
  * is not one of these.
  */
 export function settingsWritePermission(

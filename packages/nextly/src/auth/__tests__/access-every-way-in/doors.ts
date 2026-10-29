@@ -27,6 +27,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
 import { recordingDeviations, type Deviation } from "../../access/deviations";
+import { runWithAccessMemo } from "../../access/request-memo";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
@@ -47,11 +48,13 @@ import { rowKey, type Answer, type Door, type Row } from "./table";
 import {
   MEDIA_MARKER,
   ORIGIN,
-  PROBE_WHERE,
+  PROBES_WHERE,
   USER_MARKER,
   collectionOf,
+  handleForCell,
   ownKey,
   personRoute,
+  probesRead,
   pubSingleOf,
   relationOf,
   singleOf,
@@ -266,8 +269,8 @@ async function rest(world: World, row: Row, who: CallerHandle) {
 }
 
 /**
- * A REST list or count of the entries `PROBE_WHERE` matches: allowed when the
- * probe row is among what was returned, refused when it was left out.
+ * A REST list or count of the entries `PROBES_WHERE` matches, answered by
+ * which of the two probe rows came back (`probesRead`).
  */
 async function restRead(
   slug: string,
@@ -280,7 +283,7 @@ async function restRead(
     action === "count" ? [...path, "count"] : path,
     headers,
     undefined,
-    "?where[slug][equals]=probe"
+    "?where[slug][in]=probe,probe-other"
   );
   if (res.status !== 200) {
     await noteResponse(res);
@@ -291,12 +294,12 @@ async function restRead(
     total?: unknown;
   };
   if (action === "list") {
-    return body.items?.some(item => item.slug === "probe") ? "A" : "R";
+    return probesRead(body.items?.map(item => item.slug) ?? []);
   }
   // `total` is the count route's answer; any other shape is recorded as is.
   const total = body.total;
   if (typeof total !== "number") return `=${JSON.stringify(body)}`;
-  return total > 0 ? "A" : "R";
+  return probesRead(total);
 }
 
 /** The caller as a checked Direct API call names a person, a key or nobody. */
@@ -344,13 +347,17 @@ const DIRECT_CALLS: Record<
     n.update({ collection, id, data: { status: "published" }, ...as }),
   unpublish: (n, collection, id, as) =>
     n.update({ collection, id, data: { status: "draft" }, ...as }),
-  // A list and a count answer whether the probe row was among what they read.
+  // A list and a count answer which probe rows were among what they read.
   list: async (n, collection, _id, as) =>
-    (await n.find({ collection, where: PROBE_WHERE, ...as })).items.some(
-      item => (item as { slug?: unknown }).slug === "probe"
+    probesRead(
+      (await n.find({ collection, where: PROBES_WHERE, ...as })).items.map(
+        item => (item as { slug?: unknown }).slug
+      )
     ),
   count: async (n, collection, _id, as) =>
-    (await n.count({ collection, where: PROBE_WHERE, ...as })).total > 0,
+    probesRead(
+      (await n.count({ collection, where: PROBES_WHERE, ...as })).total
+    ),
 };
 
 /**
@@ -396,7 +403,9 @@ async function direct(world: World, row: Row, who: CallerHandle) {
     if (BY_ID.has(row.action)) await noteDirectMissing(call, nextly, slug, as);
     throw error;
   }
-  return found === false ? "R" : "A";
+  // A list or a count answers in its own words; any other call that
+  // returned allowed.
+  return typeof found === "string" ? found : "A";
 }
 
 /** The same call made for an entry that does not exist, noted against it. */
@@ -573,13 +582,13 @@ async function noteServiceMissing(
  * What the service probe hands back: its call's result, or the refusal it
  * threw, read by `refusalFromError` as every door reads one.
  */
-type ProbeReply =
-  | { ok: true; found?: boolean }
-  | { ok: false; refusal: Refusal };
+type ProbeReply = { ok: true; read?: string } | { ok: false; refusal: Refusal };
 
 /** The probe's reply as an answer, noting the refusal it reports. */
 function fromProbeReply(body: ProbeReply): Answer {
-  if (body.ok) return body.found === false ? "R" : "A";
+  // A list or a count says which probe rows it read; any other call that
+  // returned allowed.
+  if (body.ok) return body.read ?? "A";
   noteRefusal(body.refusal);
   // A thrown value that carried no status is a failure, not a refusal.
   return body.refusal.status === 0 ? "E" : String(body.refusal.status);
@@ -605,7 +614,12 @@ async function entity(_world: World, row: Row, who: CallerHandle) {
     user: who.user,
     ...(who.actor ? { authenticatedScope: who.actor } : {}),
   });
-  return fromBoolean(await canReadEntity(targetSlug(row), caller));
+  // Asked inside a request, as every reader behind it is (a route, the
+  // Direct API, a plugin service): a read rule's filter is kept for the
+  // request there, and outside one the reader refuses it.
+  return fromBoolean(
+    await runWithAccessMemo(() => canReadEntity(targetSlug(row), caller))
+  );
 }
 
 /**
@@ -959,8 +973,9 @@ async function answer(
   deviations: Deviation[];
   refusal?: Refusal;
 }> {
-  const who = world.callers.get(row.caller);
-  if (!who) throw new Error(`no caller ${row.caller}`);
+  const seeded = world.callers.get(row.caller);
+  if (!seeded) throw new Error(`no caller ${row.caller}`);
+  const who = await handleForCell(seeded);
   const adapter =
     row.setup === "no-service" && door === "direct"
       ? directWithoutService

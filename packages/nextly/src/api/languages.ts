@@ -15,6 +15,7 @@ import { z } from "zod";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import { MAX_ACTIVE_LANGUAGES } from "../domains/i18n/language-changes";
 import type { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
 import { getCachedNextly } from "../init";
 
@@ -56,21 +57,21 @@ const changeSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("reorder"),
-    codes: z.array(code).min(1).max(200),
+    // As many as a site may have active, since a reorder names every one of them.
+    codes: z.array(code).min(1).max(MAX_ACTIVE_LANGUAGES),
   }),
   z.object({ kind: z.literal("remove"), code }),
   // Confirmed explicitly: the admin has seen what the change touches (`?defaultPreview=`).
   z.object({ kind: z.literal("setDefault"), code, confirmed: z.literal(true) }),
 ]);
 
-/** Refuses a caller holding neither `action` nor `manage` on settings, as the rest of Settings does. */
+/** Refuses a caller without `action` on settings, as the rest of Settings does; `manage-settings` counts as it. */
 async function requireSettings(
   req: Request,
   action: "read" | "update"
 ): Promise<void> {
   const authResult = await requireAnyPermission(req, [
     { action, resource: "settings" },
-    { action: "manage", resource: "settings" },
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 }

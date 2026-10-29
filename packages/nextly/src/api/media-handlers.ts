@@ -54,6 +54,7 @@
 
 import { z } from "zod";
 
+import { LIST_READ_GATES, requireListRead } from "../auth/list-read-gates";
 import {
   createJsonErrorResponse,
   isErrorResponse,
@@ -196,7 +197,11 @@ async function gateMediaRoute(
   // The permission check reads from the DI container, so make sure Nextly is
   // initialised on this worker before it runs.
   await ensureInitialized();
-  const auth = await requirePermission(request, action, "media");
+  // The list's gate is the one the dashboard's media count reads.
+  const auth =
+    route.type === "list-media"
+      ? await requireListRead(request, LIST_READ_GATES.media)
+      : await requirePermission(request, action, "media");
   if (isErrorResponse(auth)) {
     return createJsonErrorResponse(auth, request);
   }

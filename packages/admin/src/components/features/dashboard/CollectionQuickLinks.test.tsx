@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen, within } from "@admin/__tests__/utils";
 import {
   NAV_COLLECTIONS_PARAMS,
@@ -60,14 +61,16 @@ function given({
       ? { ok: true as const, result: { op: "list" as const, items: counts } }
       : undefined;
   render(
-    <CollectionQuickLinks
-      widgetId="core/content"
-      placementId="core/content"
-      settings={{}}
-      slot={slot}
-      isFetching={slot === undefined}
-      {...(onRetry ? { onRetry } : {})}
-    />
+    inFrame(
+      <CollectionQuickLinks
+        widgetId="core/content"
+        placementId="core/content"
+        settings={{}}
+        slot={slot}
+        isFetching={slot === undefined}
+        {...(onRetry ? { onRetry } : {})}
+      />
+    )
   );
 }
 
@@ -178,10 +181,10 @@ describe("the Collections card's tiles", () => {
       })),
     });
     expect(screen.getAllByRole("link")).toHaveLength(7);
-    expect(screen.queryByText(/more exist/i)).toBeNull();
+    expect(screen.queryByTestId("list-card-footer")).toBeNull();
   });
 
-  it("says more exist past the most it draws, from the one row more", () => {
+  it("draws the most it draws, and no footer, since there is no list to open", () => {
     const names = Array.from({ length: 50 }, (_, i) => `c${i}`);
     given({
       list: names.map(name => ({ name, label: name })),
@@ -192,8 +195,10 @@ describe("the Collections card's tiles", () => {
         count: 1,
       })),
     });
+    // The content source has no list view to open, and a footer holds a link, never a bare
+    // count: the card draws the most it draws and says nothing more.
     expect(screen.getAllByRole("link")).toHaveLength(49);
-    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("list-card-footer")).toBeNull();
   });
 
   it("draws a counted collection the list lacks, after the listed ones", () => {
@@ -225,8 +230,10 @@ describe("the Collections card's tiles", () => {
         count: 1,
       })),
     });
+    // The content source has no list view to open, and a footer holds a link, never a bare
+    // count: the card draws the most it draws and says nothing more.
     expect(screen.getAllByRole("link")).toHaveLength(49);
-    expect(screen.getByText(/more exist/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("list-card-footer")).toBeNull();
   });
 
   it("draws each Single after the collections, linking to it, a Single sharing a collection's slug included", () => {

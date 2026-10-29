@@ -18,11 +18,20 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import { intervalWindow } from "../../collections/query/timeseries-interval";
 import { answerAsAsked } from "../answer-as-asked";
 import { executeWidgetQuery } from "../execute";
-import type { WidgetQuery } from "../query";
+import { publishableContentSources } from "../publish";
+import {
+  isRangeInterval,
+  isTimeseriesRange,
+  rangeWindow,
+  type WidgetQuery,
+} from "../query";
+import type { WidgetResult } from "../result";
+import { naturalGroupBy } from "../settings";
 
-import { renamedCollection } from "./card-query";
+import { renamedCollection } from "./card-settings";
 import type { WidgetReadServices } from "./define-widget";
 import { sentAsJson, type TransportableValue } from "./transportable";
 
@@ -50,6 +59,16 @@ export interface ReadServiceBinding {
   now: Date;
   /** The owner's collections the site renamed: declared slug to the site's. */
   collections?: Readonly<Record<string, string>>;
+  /**
+   * 🔴 A collection, by the site's slug, that this binding answers "nothing
+   * there" for. A read of it is checked exactly as any other, so a malformed
+   * one is refused for every reader alike, and is then answered as an empty
+   * collection answers, without running. A plugin's attention item uses it for
+   * a declared collection its reader may not read: their count of the others
+   * stands, the item is not failed for a permission gap, and nothing about
+   * that collection is disclosed.
+   */
+  answersNothing?: (slug: string) => boolean;
 }
 
 /** A call's own options, of which only the ones a read may carry are kept. */
@@ -58,17 +77,24 @@ interface ReadOptions {
   sort?: unknown;
   limit?: unknown;
   select?: unknown;
+  field?: unknown;
+  range?: unknown;
+  dateField?: unknown;
+  status?: unknown;
   signal?: unknown;
 }
 
+/** The options a call names that its query carries as they are. */
+type CarriedOption = "where" | "sort" | "limit" | "select" | "range";
+
 /**
- * The options a read carries into its query: `where`, `sort`, `limit` and
- * `select`, when the call states them, and nothing else. Read from an object
- * the call handed over, so anything else on it is never looked at.
+ * The options a read carries into its query, when the call states them, and
+ * nothing else. Read from an object the call handed over, so anything else on
+ * it is never looked at.
  */
 function readOptionsOf(
   options: unknown,
-  keys: readonly ("where" | "sort" | "limit" | "select")[]
+  keys: readonly CarriedOption[]
 ): Record<string, unknown> {
   if (typeof options !== "object" || options === null) return {};
   const given = options as ReadOptions;
@@ -79,13 +105,56 @@ function readOptionsOf(
   return kept;
 }
 
+/** One option the call names, read once, or `undefined` when it names none. */
+function optionOf(options: unknown, key: keyof ReadOptions): unknown {
+  return typeof options === "object" && options !== null
+    ? (options as ReadOptions)[key]
+    : undefined;
+}
+
+/**
+ * The entries a read counts, as its query names them.
+ *
+ * 🔴 `"published"` and no status at all are one question, so they are sent as
+ * one: the query names no status, and core reads a person's query with none as
+ * the published entries (`resolveStatusFilter`), exactly as a status of
+ * `"published"` would, and as every row of a collection with no lifecycle,
+ * which an explicit `"published"` would be refused for. So a read that says
+ * `"published"` asks what the same read saying nothing asks, on every
+ * collection. `"all"` is the query's own `all`: drafts too.
+ *
+ * Anything else is refused before the read is checked: it is no statement
+ * about any collection, so the refusal says nothing about one either.
+ */
+function statusOf(options: unknown): { status?: "all" } {
+  const status = optionOf(options, "status");
+  if (status === undefined || status === "published") return {};
+  if (status === "all") return { status: "all" };
+  throw NextlyError.invalidInput({
+    message:
+      'A widget\'s data read names a status other than "published" or "all".',
+  });
+}
+
 /** The call's own signal, when it passed one, beside the card's. */
 function signalOf(options: unknown, card: AbortSignal): AbortSignal {
-  const own =
-    typeof options === "object" && options !== null
-      ? (options as ReadOptions).signal
-      : undefined;
+  const own = optionOf(options, "signal");
   return own instanceof AbortSignal ? AbortSignal.any([card, own]) : card;
+}
+
+/**
+ * The field a collection's entries divide by when a read names none: core's
+ * one rule for it (`naturalGroupBy`), read from the collection as a card's
+ * settings see it, the rule a card's Group by setting falls back to. So a
+ * read and a card left to the collection group by the same field.
+ *
+ * `undefined` for a collection with no such field, or none at this slug: the
+ * query then names no field and is refused by the check every read passes,
+ * after the person's own check, as any read of that collection would be.
+ */
+function defaultGroupField(slug: string): string | undefined {
+  const [published] = publishableContentSources([slug]);
+  return published === undefined ? undefined : naturalGroupBy(published);
 }
 
 /**
@@ -101,17 +170,77 @@ function cardGaveUp(): NextlyError {
   });
 }
 
+/**
+ * The fault a read whose answer is not the one it asked for gets: of another
+ * kind, which `answerAsAsked` refuses before this is reached, so this says so
+ * to the compiler; or a series counted in an interval no range is drawn in.
+ */
+function answeredOtherwise(asked: string): NextlyError {
+  return NextlyError.internal({
+    logContext: { reason: "widget-read-answered-another-op", asked },
+  });
+}
+
+/** A read the binding's check passed: its query, its signal and the site's slug it reads. */
+type CheckedRead = WidgetQuery & { signal: AbortSignal; slug: string };
+
+/**
+ * What an empty collection answers a checked read of each kind: no entries, no
+ * rows, no groups, and a series at zero in every interval of its range, built
+ * through the window the read itself takes (`rangeWindow`, then
+ * `intervalWindow`), as a read of no rows answers it.
+ */
+function nothingThere(query: WidgetQuery, now: Date): WidgetResult {
+  switch (query.op) {
+    case "count":
+      return { op: "count", total: 0 };
+    case "list":
+      return { op: "list", items: [] };
+    case "groupBy":
+      return { op: "groupBy", buckets: [] };
+    case "timeseries": {
+      if (!isTimeseriesRange(query.range)) {
+        throw answeredOtherwise("timeseries");
+      }
+      const window = rangeWindow(query.range, now);
+      return {
+        op: "timeseries",
+        points: intervalWindow(
+          window.anchor,
+          window.interval,
+          window.intervals
+        ).map(start => ({ start: start.toISOString(), count: 0 })),
+        interval: window.interval,
+      };
+    }
+    default:
+      throw answeredOtherwise(query.op);
+  }
+}
+
 /** The read services for one card, bound to `binding`. */
 export function bindReadServices(
   binding: ReadServiceBinding
 ): WidgetReadServices {
-  const { caller, prepare, signal: card, now, collections } = binding;
+  const {
+    caller,
+    prepare,
+    signal: card,
+    now,
+    collections,
+    answersNothing,
+  } = binding;
 
+  /**
+   * The one path every read takes: the card is still waiting, the call names
+   * a collection, and the query, shaped for the site's slug, is checked as a
+   * card's own is before anything runs.
+   */
   async function read(
     collection: unknown,
-    shape: Record<string, unknown>,
+    shape: (slug: string) => Record<string, unknown>,
     options: unknown
-  ): Promise<WidgetQuery & { signal: AbortSignal }> {
+  ): Promise<CheckedRead> {
     const signal = signalOf(options, card);
     if (signal.aborted) throw cardGaveUp();
     if (typeof collection !== "string" || collection.trim() === "") {
@@ -119,48 +248,121 @@ export function bindReadServices(
         message: "A widget's data read names no collection.",
       });
     }
+    const slug = renamedCollection(collection, collections);
     const query = await prepare({
-      ...shape,
-      source: `collection:${renamedCollection(collection, collections)}`,
+      ...shape(slug),
+      source: `collection:${slug}`,
     });
     // Checked again after the check, which awaited: a card that gave up
     // meanwhile has no one to answer.
     if (signal.aborted) throw cardGaveUp();
-    return { ...query, signal };
+    return { ...query, signal, slug };
+  }
+
+  /**
+   * Runs a checked query as the person bound, its answer judged against what
+   * was asked, as a source's answer is, so a read that answered anything else
+   * is a fault, never a quiet empty answer.
+   */
+  async function run({
+    signal,
+    slug,
+    ...query
+  }: CheckedRead): Promise<WidgetResult> {
+    // After the check, never instead of it: see `answersNothing`.
+    if (answersNothing?.(slug) === true) {
+      return answerAsAsked(query, nothingThere(query, now));
+    }
+    return answerAsAsked(
+      query,
+      await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
+    );
   }
 
   return {
     async count(collection, options) {
-      const { signal, ...query } = await read(
-        collection,
-        { op: "count", ...readOptionsOf(options, ["where"]) },
-        options
-      );
-      // Judged against what was asked, as a source's answer is, so a count
-      // that answered anything else is a fault, never a quiet zero.
-      const answer = answerAsAsked(
-        query,
-        await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
+      const answer = await run(
+        await read(
+          collection,
+          () => ({
+            op: "count",
+            ...readOptionsOf(options, ["where"]),
+            ...statusOf(options),
+          }),
+          options
+        )
       );
       return answer.op === "count" ? answer.total : 0;
     },
     async find(collection, options) {
-      const { signal, ...query } = await read(
-        collection,
-        {
-          op: "list",
-          ...readOptionsOf(options, ["where", "sort", "limit", "select"]),
-        },
-        options
-      );
-      const answer = answerAsAsked(
-        query,
-        await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
+      const answer = await run(
+        await read(
+          collection,
+          () => ({
+            op: "list",
+            ...readOptionsOf(options, ["where", "sort", "limit", "select"]),
+            ...statusOf(options),
+          }),
+          options
+        )
       );
       // As the browser would receive them, so the function may answer them
       // as they are and the card's transport check passes.
       const sent = sentAsJson(answer.op === "list" ? answer.items : []);
       return { items: Array.isArray(sent) ? sent.filter(isRow) : [] };
+    },
+    async groupBy(collection, options) {
+      const answer = await run(
+        await read(
+          collection,
+          slug => {
+            // The call's own field, or the collection's own grouping.
+            const named = optionOf(options, "field");
+            const field = named === undefined ? defaultGroupField(slug) : named;
+            return {
+              op: "groupBy",
+              ...(field === undefined ? {} : { groupBy: field }),
+              ...readOptionsOf(options, ["where", "limit"]),
+              ...statusOf(options),
+            };
+          },
+          options
+        )
+      );
+      if (answer.op !== "groupBy") throw answeredOtherwise("groupBy");
+      // Each bucket as the `bars` view draws it: its value and its count.
+      return {
+        buckets: answer.buckets.map(({ value, count }) => ({ value, count })),
+      };
+    },
+    async timeseries(collection, options) {
+      const answer = await run(
+        await read(
+          collection,
+          () => {
+            const dateField = optionOf(options, "dateField");
+            return {
+              op: "timeseries",
+              // Placed by when each entry was made, unless the call says.
+              dateField: dateField === undefined ? "createdAt" : dateField,
+              ...readOptionsOf(options, ["range", "where"]),
+              ...statusOf(options),
+            };
+          },
+          options
+        )
+      );
+      // A series over a range is counted in the interval its range sets, so
+      // any other is a fault, said rather than passed on as a range's.
+      if (answer.op !== "timeseries" || !isRangeInterval(answer.interval)) {
+        throw answeredOtherwise("timeseries");
+      }
+      // The interval the points were counted in, as the run reports it: the
+      // one its range set (`rangeWindow`), never worked out a second time.
+      return {
+        points: answer.points.map(({ start, count }) => ({ start, count })),
+        interval: answer.interval,
+      };
     },
   };
 }

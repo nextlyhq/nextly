@@ -282,11 +282,19 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install
         id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # These three read different surfaces and answer independently, so each runs even after
       # an earlier one has found something. On the default success() condition the first
@@ -416,8 +424,10 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to the JOB, which is the part that matters. Six jobs across four
       # workflows cache `.turbo`, they run concurrently on the same commit, and
@@ -473,6 +483,46 @@ jobs:
       - name: Install dependencies
         id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
+
+      # Vitest's dependency records (what each test file loaded on its last run)
+      # and the commit they describe, which a pull request's unit selection reads.
+      # Only a push to `main` saves them, so a pull request starts from records
+      # its own code never wrote; it takes the newest by prefix, which may be
+      # older or newer than its base, and `scripts/ci-unit-lane.mjs` runs any
+      # package whose files differ between the two in full. Restored after the
+      # install, which owns `node_modules`. Restored on every event, the queue's
+      # included, so a queue run does whatever a pull request's does; only a
+      # selecting run reads them. Saved on `push`, which in this workflow is
+      # `main` alone (`on.push.branches`).
+      - name: Restore unit test records
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/*/node_modules/.vite/vitest
+            packages/*/node_modules/.vite/test-changed-full-run
+          key: unit-records-v1-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            unit-records-v1-${{ runner.os }}-${{ github.job }}-
+
+      # How this run tests its units, set as NEXTLY_UNIT_TESTS for the steps
+      # below: `select`, `shadow` or `full` (`scripts/merge-path.mjs`). The full
+      # Test step runs whenever it is not exactly `select`, so this step failing
+      # or never running costs nothing but the narrowing. It fails, after
+      # setting `full`, when the switch is on while `main` has no merge queue.
+      - name: Decide how this run tests its units
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEXTLY_PR_TEST_SELECTION: ${{ vars.NEXTLY_PR_TEST_SELECTION }}
+        run: |
+          echo "NEXTLY_UNIT_TESTS_SINCE=$(date +%s%3N)" >> "$GITHUB_ENV"
+          node scripts/merge-path.mjs select
 
       # Enforce that drizzle-kit stays exact-pinned in
       # `packages/nextly/package.json` `dependencies` (no caret/tilde,
@@ -553,6 +603,14 @@ jobs:
       # bare-Error allowlist's size and per-file counts and proves each guard
       # still reaches the files it exempts, so the allowlist cannot be edited
       # to silence lint without this step going red.
+      #
+      # The visual check's own tests drive Chromium against a stubbed server,
+      # so the browser comes first, provisioned the one way the browser jobs
+      # provision it: the same action, so a cache hit is the same entry.
+      - name: Chromium for the visual check's tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: ./.github/actions/chromium
+
       - name: Script tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm test:scripts
@@ -707,6 +765,14 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # The playground's committed component map agrees with what its config declares. The map
+      # is written in development and by `generate:types`, and checked here, never at boot: one
+      # that fell behind would ship a dashboard card drawing its error state. Each component's
+      # pairing with its widget's props is the map's own type, judged by Typecheck above.
+      - name: Component map agrees with the config
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        run: pnpm --filter playground exec nextly generate:types --check
+
       # Unit tests. WHAT runs is not written here: `lane:test` in the root
       # manifest holds it, and `check:test-lanes` asks turbo what that script
       # selects rather than reading this file. A workflow is a poor place to
@@ -738,11 +804,32 @@ jobs:
       # jsdom component suites past their budgets the first time the full set
       # ran. At 50% the step completes in 15m39s with 35 tasks. Capping WORKERS
       # instead would not have helped, since cores-1 on a 4-vCPU runner is 3.
+      #
+      # In shadow mode the selection a narrowed run would make is planned first,
+      # from the restored records and before this run rewrites them, then
+      # compared with what the full run failed. Evidence only: neither step can
+      # fail the job.
+      - name: Plan the unit selection (shadow)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'shadow' }}
+        continue-on-error: true
+        run: node scripts/ci-unit-lane.mjs plan lane:test --out="$RUNNER_TEMP/unit-selection.json"
+
       - name: Test
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS != 'select' }}
         run: pnpm lane:test
         env:
           TURBO_CACHE_DIR: .turbo
+
+      - name: Test the selected units
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'select' }}
+        run: node scripts/ci-unit-lane.mjs run lane:test
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Report what the selection would have missed (shadow)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'shadow' }}
+        continue-on-error: true
+        run: node scripts/ci-unit-lane.mjs misses "$RUNNER_TEMP/unit-selection.json" "$NEXTLY_UNIT_TESTS_SINCE"
 
       # The playground is an APP, so `turbo test`'s filter list above — which
       # names publishable packages only — never reaches it, and its
@@ -811,6 +898,24 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+      # Only a passing push to `main` publishes records, the same trust split as
+      # the remote cache's writes: a pull request's code never writes what a
+      # later pull request's selection reads. A package is stamped with this
+      # commit only when this run rewrote its records; one turbo replayed keeps
+      # the stamp of the run that wrote them.
+      - name: Stamp unit test records
+        if: success() && github.event_name == 'push'
+        run: node scripts/ci-unit-lane.mjs stamp lane:test "$NEXTLY_UNIT_TESTS_SINCE"
+
+      - name: Save unit test records
+        if: success() && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/*/node_modules/.vite/vitest
+            packages/*/node_modules/.vite/test-changed-full-run
+          key: unit-records-v1-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
   # `nextly`'s unit suite, on a runner of its own.
   #
   # It is 907 files and 11562 tests, and inside the `ci` job's Test step it was
@@ -852,6 +957,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # A pull request's unit selection compares the merge commit with its
+          # first parent, main as tested.
+          fetch-depth: 2
           # Nothing in this job pushes; keep the token out of git config.
           persist-credentials: false
 
@@ -862,7 +970,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to the JOB like every other `.turbo` cache in these workflows:
       # this one builds only nextly's dependency subgraph, and an entry keyed on
@@ -876,14 +986,61 @@ jobs:
             turbo-v2-${{ runner.os }}-${{ github.job }}-
 
       - name: Install dependencies
+        id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
+
+      # The unit selection's records and how this run tests its units, as in
+      # the `ci` job above, which says why.
+      - name: Restore unit test records
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/*/node_modules/.vite/vitest
+            packages/*/node_modules/.vite/test-changed-full-run
+          key: unit-records-v1-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            unit-records-v1-${{ runner.os }}-${{ github.job }}-
+
+      - name: Decide how this run tests its units
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEXTLY_PR_TEST_SELECTION: ${{ vars.NEXTLY_PR_TEST_SELECTION }}
+        run: |
+          echo "NEXTLY_UNIT_TESTS_SINCE=$(date +%s%3N)" >> "$GITHUB_ENV"
+          node scripts/merge-path.mjs select
+
+      - name: Plan the unit selection (shadow)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'shadow' }}
+        continue-on-error: true
+        run: node scripts/ci-unit-lane.mjs plan lane:test:nextly --out="$RUNNER_TEMP/unit-selection.json"
 
       # `test` dependsOn `^build`, so turbo builds what nextly needs and nothing
       # else. No separate Build step: this job has one question to answer.
+      # `!cancelled()`, so the full suite still runs after the step above fails
+      # on a switch with no merge queue behind it.
       - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS != 'select' }}
         run: pnpm lane:test:nextly
         env:
           TURBO_CACHE_DIR: .turbo
+
+      - name: Test the selected units
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'select' }}
+        run: node scripts/ci-unit-lane.mjs run lane:test:nextly
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Report what the selection would have missed (shadow)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'shadow' }}
+        continue-on-error: true
+        run: node scripts/ci-unit-lane.mjs misses "$RUNNER_TEMP/unit-selection.json" "$NEXTLY_UNIT_TESTS_SINCE"
 
       # Only a job that finished its work publishes what it learned.
       - name: Save Turbo cache
@@ -892,6 +1049,19 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+      - name: Stamp unit test records
+        if: success() && github.event_name == 'push'
+        run: node scripts/ci-unit-lane.mjs stamp lane:test:nextly "$NEXTLY_UNIT_TESTS_SINCE"
+
+      - name: Save unit test records
+        if: success() && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/*/node_modules/.vite/vitest
+            packages/*/node_modules/.vite/test-changed-full-run
+          key: unit-records-v1-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
   # `@nextlyhq/admin`'s unit suite, on a runner of its own, for the reason the
   # job above gives: it was 598s of the shared step's 1804s, a third of the
@@ -922,6 +1092,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # A pull request's unit selection compares the merge commit with its
+          # first parent, main as tested.
+          fetch-depth: 2
           # Nothing in this job pushes; keep the token out of git config.
           persist-credentials: false
 
@@ -932,7 +1105,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -943,16 +1118,63 @@ jobs:
             turbo-v2-${{ runner.os }}-${{ github.job }}-
 
       - name: Install dependencies
+        id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
+
+      # The unit selection's records and how this run tests its units, as in
+      # the `ci` job above, which says why.
+      - name: Restore unit test records
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/*/node_modules/.vite/vitest
+            packages/*/node_modules/.vite/test-changed-full-run
+          key: unit-records-v1-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            unit-records-v1-${{ runner.os }}-${{ github.job }}-
+
+      - name: Decide how this run tests its units
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEXTLY_PR_TEST_SELECTION: ${{ vars.NEXTLY_PR_TEST_SELECTION }}
+        run: |
+          echo "NEXTLY_UNIT_TESTS_SINCE=$(date +%s%3N)" >> "$GITHUB_ENV"
+          node scripts/merge-path.mjs select
+
+      - name: Plan the unit selection (shadow)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'shadow' }}
+        continue-on-error: true
+        run: node scripts/ci-unit-lane.mjs plan lane:test:admin --out="$RUNNER_TEMP/unit-selection.json"
 
       # These suites render React under jsdom, which is why the package carries
       # a 10s budget rather than vitest's 5s default. Alone on the runner they
       # get `cores-1` workers to themselves instead of competing with twenty
       # other packages, which is the contention that made that budget tight.
+      # `!cancelled()`, so the full suite still runs after the step above fails
+      # on a switch with no merge queue behind it.
       - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS != 'select' }}
         run: pnpm lane:test:admin
         env:
           TURBO_CACHE_DIR: .turbo
+
+      - name: Test the selected units
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'select' }}
+        run: node scripts/ci-unit-lane.mjs run lane:test:admin
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      - name: Report what the selection would have missed (shadow)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && env.NEXTLY_UNIT_TESTS == 'shadow' }}
+        continue-on-error: true
+        run: node scripts/ci-unit-lane.mjs misses "$RUNNER_TEMP/unit-selection.json" "$NEXTLY_UNIT_TESTS_SINCE"
 
       # Only a job that finished its work publishes what it learned.
       - name: Save Turbo cache
@@ -961,6 +1183,19 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+      - name: Stamp unit test records
+        if: success() && github.event_name == 'push'
+        run: node scripts/ci-unit-lane.mjs stamp lane:test:admin "$NEXTLY_UNIT_TESTS_SINCE"
+
+      - name: Save unit test records
+        if: success() && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/*/node_modules/.vite/vitest
+            packages/*/node_modules/.vite/test-changed-full-run
+          key: unit-records-v1-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
   # The gates `.husky/pre-push` runs, on Windows, so a change that breaks them
   # there shows on its pull request rather than on a teammate's machine. The
@@ -1012,7 +1247,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1025,6 +1262,12 @@ jobs:
       - name: Install dependencies
         id: install
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # The hook's own limits on concurrent package tasks and test workers, so
       # a suite that only times out under unbounded contention does not fail
@@ -1040,17 +1283,48 @@ jobs:
           echo "TURBO_CONCURRENCY=$concurrency" >> "$GITHUB_ENV"
           echo "VITEST_WORKERS=$workers" >> "$GITHUB_ENV"
 
+      # This step's failure lets the lints after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after sizing failed
+        if: ${{ !cancelled() && steps.limits.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Design lint
+        id: design-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:design
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Design lint failed
+        if: ${{ !cancelled() && steps.design-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Workspace lint
+        id: workspace-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Workspace lint failed
+        if: ${{ !cancelled() && steps.workspace-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Scripts lint
+        id: scripts-lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:scripts
+
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Scripts lint failed
+        if: ${{ !cancelled() && steps.scripts-lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
       - name: Build
         id: build
@@ -1062,14 +1336,30 @@ jobs:
       # These read what the build wrote, so after a failed build they would
       # report its missing output rather than failures of their own.
       - name: Lint
+        id: lint
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm lint
 
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Lint failed
+        if: ${{ !cancelled() && steps.lint.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
+
       - name: Typecheck
+        id: typecheck
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm turbo check-types --continue
         env:
           TURBO_CACHE_DIR: .turbo
+
+      # This gate's failure lets the gates after it run, which would change the
+      # machine before the job's last step looks at it: look now.
+      - name: Runner state after Typecheck failed
+        if: ${{ !cancelled() && steps.typecheck.outcome == 'failure' }}
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
       # Every workspace's suite but the two the jobs below run. Together the
       # three run what the hook runs when a push changes the workspace or task
@@ -1088,6 +1378,13 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
   # `nextly`'s unit suite on Windows, on a runner of its own: 957 files, and
   # 18.7 minutes beside the admin's on one runner. `test` depends on `^build`,
@@ -1121,7 +1418,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1133,6 +1432,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # The hook's own limits, as in the job above.
       - name: Size the gates as the hook does
@@ -1157,6 +1462,13 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
   # `@nextlyhq/admin`'s unit suite on Windows, on a runner of its own: 436
   # files, and 13.6 minutes beside nextly's on one runner.
@@ -1189,7 +1501,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1201,6 +1515,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # The hook's own limits, as in the first of these jobs.
       - name: Size the gates as the hook does
@@ -1225,6 +1545,13 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+      # When this job fails, the machine's state at that moment (see the
+      # action): never a reason to fail again, so it cannot mask the first.
+      - name: Runner state after a failure
+        if: failure()
+        continue-on-error: true
+        uses: ./.github/actions/windows-runner-state
 
   # What `@nextlyhq/admin` would publish, read as a production application gets
   # it. The package ships prebuilt, and its build settles what a production
@@ -1269,7 +1596,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Restore Turbo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -1282,16 +1611,38 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
+
       # A release builds with `NODE_ENV` unset, and the admin's build reads it,
       # so it is unset here whatever the runner carries.
+      # The plugin SDK too, which the admin builds before: its declarations are
+      # read by the bundle-boundary check below.
       - name: Build the admin as a release does
-        run: env -u NODE_ENV pnpm turbo build --filter=@nextlyhq/admin...
+        run: env -u NODE_ENV pnpm turbo build --filter=@nextlyhq/plugin-sdk...
         env:
           TURBO_CACHE_DIR: .turbo
+
+      # The R-3 gate: the shipped bundle holds the two budgets the merged
+      # spec states, failing with each measured size and the budget it
+      # exceeded. It measures THIS release-mode build — the same bytes the
+      # pack check below reads — so the numbers a PR shows are the numbers a
+      # merge would ship.
+      - name: Check the shipped bundle against the spec's budgets
+        run: pnpm --filter @nextlyhq/admin check:budgets
 
       # Packs the package as `pnpm publish` would, and reads the packed files.
       - name: Check what the packed admin gives a production application
         run: pnpm --filter @nextlyhq/admin check:published-build
+
+      # Before the step below rebuilds the admin in development mode: the chart
+      # engine stays out of what an entry loads before it renders, and out of the
+      # admin's and the plugin SDK's published types.
+      - name: Check each heavy dependency loads only where a view asks for it
+        run: node scripts/check-bundle-boundaries.mjs
 
       # `tsdown` alone, without the stylesheet step: the check is asked only for
       # the two kinds a development-mode build must be refused for.
@@ -1388,6 +1739,45 @@ jobs:
           SUPERSEDED: ${{ needs.changes.outputs.superseded }}
         run: node scripts/ci-gate.mjs
 
+  # While pull requests narrow their unit tests, every commit on `main` must have
+  # come through the merge queue, whose run tested everything. A queue merge
+  # lands the very commit the queue tested, so a first-parent commit with no
+  # `merge_group` run came in directly, and a direct-merge path exists: this job
+  # goes red saying to switch selection off (`scripts/merge-path.mjs`).
+  #
+  # Detection, not a gate, and deliberately not in `gate`'s `needs`: it runs
+  # after the merge, so it can stop nothing, and `main`'s own run still tests
+  # everything the merge brought. It does not depend on `changes`, because a
+  # superseded or documentation-only push brings commits too. It fails, rather
+  # than passing, when it cannot read which commits a push brought.
+  selection-tripwire:
+    name: Every merge came through the queue
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.NEXTLY_PR_TEST_SELECTION == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Each commit this push brought ran in the merge queue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEXTLY_PR_TEST_SELECTION: ${{ vars.NEXTLY_PR_TEST_SELECTION }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: node scripts/merge-path.mjs tripwire "$BEFORE" "$AFTER"
+
   # The admin, in a real browser, against a real server and a real database.
   # Covers the class of failure the unit and integration suites structurally
   # cannot: jsdom has no layout engine, so a column that grew to 1024px or a
@@ -1452,7 +1842,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to the JOB, which is the part that matters. Six jobs across four
       # workflows cache `.turbo`, they run concurrently on the same commit, and
@@ -1486,6 +1878,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # Cache, Chromium, and apt only if Chromium cannot start without it; the
       # action says why each step is as it is.
@@ -1596,7 +1994,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Scoped to this job for the reason the job above documents at length: six
       # jobs cache `.turbo` on one commit and build different filter sets, so a
@@ -1611,6 +2011,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # Cache, Chromium, and apt only if Chromium cannot start without it; the
       # action says why each step is as it is.
@@ -1660,6 +2066,11 @@ jobs:
     name: Dev reload applies a saved schema edit
     needs: [ci]
     runs-on: ubuntu-latest
+    # Whether its test ran: the Decide step below skips it for a commit that
+    # cannot affect it, and the job still succeeds. The job that reports main's
+    # advisory jobs reads this, so a success that tested nothing clears nothing.
+    outputs:
+      tested: ${{ steps.decide.outputs.inert != 'true' }}
     # The remote cache's credentials, unlocked only on `main` and in the
     # merge queue (see `env:` at the top of this file).
     environment:
@@ -1702,7 +2113,104 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      # Only where pnpm was set up: an out-of-scope change skips both.
+      - name: Restore pnpm store
+        if: steps.decide.outputs.inert != 'true'
+        uses: ./.github/actions/pnpm-store
+
+      - name: Install dependencies
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: steps.decide.outputs.inert != 'true' && github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
+
+      - name: Build packages
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm turbo build --filter='./packages/*'
+
+      - name: Run the dev-reload check
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm --filter @nextlyhq/e2e test:e2e:dev-reload
+
+  # The playground under Cache Components and Partial Prefetching, which its
+  # next.config turns on when NEXTLY_PLAYGROUND_CACHE_COMPONENTS is set. nextly's route helpers must prerender a static shell
+  # and read the request only beneath the Suspense boundary they provide, so
+  # this builds on an empty database and on seeded content (a build that reads
+  # the request, the clock or the database above a boundary fails), then serves
+  # the seeded build and requests each kind of content route, failing on a 5xx
+  # or on Next.js reporting uncached data or the clock read too early.
+  #
+  # Advisory, and reported on main by `main-red`, as `dev-reload` is.
+  cache-components:
+    name: Playground builds and serves under Cache Components
+    needs: [ci]
+    runs-on: ubuntu-latest
+    # Whether its check ran; see `dev-reload`.
+    outputs:
+      tested: ${{ steps.decide.outputs.inert != 'true' }}
+    environment:
+      name: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'turbo-cache' || 'turbo-cache-read' }}
+      deployment: false
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY != '' && secrets.TURBO_TOKEN || '' }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
+      DB_DIALECT: sqlite
+      # A literal test secret, for the reason `e2e/production-server.ts` gives:
+      # production refuses to boot without one.
+      NEXTLY_SECRET: cache-components-check-secret-not-a-real-deployment-key
+      NEXT_PUBLIC_APP_URL: http://localhost:3300
+      NEXTLY_GENERATED_FILES_WRITE: "0"
+      # The playground builds with Cache Components only when asked; this job is
+      # what it is turned on for.
+      NEXTLY_PLAYGROUND_CACHE_COMPONENTS: "1"
+      # The browser suite's own routes, switched on as `e2e/playwright.config.ts`
+      # switches them, so a harness page that reads the request above a
+      # Suspense boundary fails this build as a content route would.
+      NEXTLY_E2E_BRANDING: "1"
+      NEXTLY_E2E_STYLE_FIXTURE: "1"
+      NEXTLY_E2E_SLOW_WIDGET: "1"
+      NEXTLY_E2E_SHELL_HARNESS: "1"
+      NEXTLY_E2E_CANVAS_HARNESS: "1"
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide
+        id: decide
+        env:
+          SCOPE_TITLE: Cache Components scope
+          # An inclusion list: what renders the playground's content routes.
+          INERT_PATHS: '^(?!(packages/nextly/src/runtime/.*|packages/nextly/src/domains/(collections/services/collection-query-service|singles/services/single-query-service)\.ts|packages/nextly/src/domains/releases/.*|packages/blocks-react/src/.*|apps/playground/.*|pnpm-lock\.yaml|\.github/workflows/ci\.yml)$)'
+        run: node scripts/change-scope.mjs
+
+      - name: Setup pnpm
+        if: steps.decide.outputs.inert != 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js with the pnpm cache
+        if: steps.decide.outputs.inert != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        if: steps.decide.outputs.inert != 'true'
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         if: steps.decide.outputs.inert != 'true'
@@ -1712,9 +2220,65 @@ jobs:
         if: steps.decide.outputs.inert != 'true'
         run: pnpm turbo build --filter='./packages/*'
 
-      - name: Run the dev-reload check
+      - name: Build on an empty database
         if: steps.decide.outputs.inert != 'true'
-        run: pnpm --filter @nextlyhq/e2e test:e2e:dev-reload
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-empty.db
+        run: pnpm --filter playground exec next build
+
+      # `--debug-prerender` prerenders as development does, where the admin
+      # layout boots nextly to check its generated component map: request work
+      # a production build skips, which must sit beneath a Suspense boundary all
+      # the same, or `next dev` fails on the same page.
+      - name: Build with prerender debugging on an empty database
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-debug.db
+        run: pnpm --filter playground exec next build --debug-prerender
+
+      - name: Build on seeded content
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-seeded.db
+        run: |
+          pnpm --filter playground exec tsx scripts/seed.ts
+          pnpm --filter playground exec nextly plugins install --all
+          pnpm --filter playground exec next build
+
+      # The two content routes the seed fills must answer 200. The others may
+      # answer a not-found page, so they need only not fail.
+      - name: Serve the seeded build
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DATABASE_URL: file:${{ runner.temp }}/cache-components-seeded.db
+          LOG: ${{ runner.temp }}/cache-components-server.log
+        run: |
+          # Through the app's own `next`, which execs the server, so `$!` is the
+          # server itself and the trap stops it rather than a wrapper.
+          (cd apps/playground && exec ./node_modules/.bin/next start -p 3300) > "$LOG" 2>&1 &
+          server=$!
+          trap 'kill "$server"' EXIT
+          for _ in $(seq 1 120); do
+            curl -sf -o /dev/null http://localhost:3300/api/health && break
+            sleep 1
+          done
+          failed=0
+          for path in / /blocks/kitchen-sink /landing /blocks /a-page-that-does-not-exist; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:3300$path")
+            echo "$path $status"
+            case "$path:$status" in
+              /:200 | /blocks/kitchen-sink:200) ;;
+              /:* | /blocks/kitchen-sink:*) failed=1 ;;
+              *:5*) failed=1 ;;
+            esac
+          done
+          if grep -nE 'uncached or runtime data|unstable value' "$LOG"; then
+            failed=1
+          fi
+          if [ "$failed" -ne 0 ]; then
+            cat "$LOG"
+            exit 1
+          fi
 
   # Cross-platform smoke test for the scaffolder. Catches Windows path
   # separator bugs and macOS-specific issues that only surface in fresh
@@ -1754,10 +2318,18 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       - name: Build CLI + nextly core
         run: pnpm build --filter create-nextly-app --filter nextly
@@ -1862,10 +2434,18 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       # No step builds @nextlyhq/ui's workspace dependencies, deliberately.
       # There is nothing to build: all three of them — admin-css,
@@ -2117,10 +2697,18 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Save pnpm store
+        if: github.event_name == 'push'
+        uses: ./.github/actions/pnpm-store
+        with:
+          save: "true"
 
       - name: Entry guard suite (the guard's answers)
         run: >
@@ -2135,3 +2723,59 @@ jobs:
         run: >
           pnpm exec vitest run --dir scripts --reporter=verbose
           scripts/cli-entry.cli.test.mjs
+
+  # Keeps one issue open while a job above that does not block a merge is red
+  # on `main` (the browser tests, dev reload and the smokes), and closes it on
+  # the first run in which they all pass. They are not in `CI gate`, so a red
+  # one on `main` would otherwise show only inside a run whose gate passed.
+  # `always()` so it reads the jobs whatever they concluded; on a pull request
+  # it never runs. A run in which they were skipped (superseded) or cancelled
+  # tested nothing and leaves the issue as it is (`scripts/main-red-issue.mjs`).
+  # A run dispatched on `main` counts as a push does: under a run of merges
+  # every push run is superseded, and main-catch-up.yml's dispatched run is
+  # the one that tests main.
+  # One at a time across main's runs: each commit's run has a concurrency
+  # group of its own, and two reporters reading and writing the issue
+  # interleaved could write an older verdict over a newer one. `queue: max`
+  # keeps every waiting reporter (up to 100): by default a newly queued one
+  # cancels the one already waiting, and that run's verdict is lost.
+  main-red:
+    name: Report main's advisory jobs
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    concurrency:
+      group: main-red-issue
+      cancel-in-progress: false
+      queue: max
+    needs:
+      - e2e
+      - e2e-production
+      - dev-reload
+      - cache-components
+      - scaffold-smoke
+      - dev-script-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts
+            .nvmrc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Open, update or close the issue
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/main-red-issue.mjs

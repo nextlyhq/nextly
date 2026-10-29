@@ -443,6 +443,9 @@ export function DataTableView<Row extends object>({
               return (
                 <Card
                   key={id}
+                  // Names the row, so a page can find the card again by the
+                  // row's id: to return focus to it, for one.
+                  data-row-id={id}
                   variant={clickable ? "interactive" : "default"}
                   className={cn(clickable && "cursor-pointer")}
                   role={clickable ? "button" : undefined}
@@ -609,6 +612,8 @@ export function DataTableView<Row extends object>({
                     return (
                       <TableRow
                         key={id}
+                        // The same name the card view gives this row.
+                        data-row-id={id}
                         data-state={
                           selectedSet.has(id) ? "selected" : undefined
                         }

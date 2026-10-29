@@ -48,6 +48,7 @@ import {
 } from "../../../shared/base-registry-service";
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
+import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import {
   moveWebhookRecording,
   renameEntity,
@@ -317,6 +318,19 @@ export class SingleRegistryService extends BaseRegistryService<
   > {
     const records = await this.getAllRecordsWithColumns(["label"]);
     return records.map(({ slug, label }) => ({ slug, label }));
+  }
+
+  /**
+   * Every Single's slug and `revalidate` setting, read without the rest of its record: what a
+   * change that busts every Single's cached reads at once needs.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllRevalidateConfigs(): Promise<
+    Array<Pick<DynamicSingleRecord, "slug" | "revalidate">>
+  > {
+    const records = await this.getAllRecordsWithColumns(["revalidate"]);
+    return records.map(({ slug, revalidate }) => ({ slug, revalidate }));
   }
 
   async getAllSingles(
@@ -817,8 +831,12 @@ export class SingleRegistryService extends BaseRegistryService<
       //
       // What is swept, and what is deliberately kept, is for
       // `deleteEntityRegistryRow` to say.
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+      };
       const count = await this.adapter.transaction(async tx => {
-        return deleteEntityRegistryRow(tx, "single", slug);
+        return deleteEntityRegistryRow(tx, "single", slug, tables);
       });
 
       if (count === 0) {

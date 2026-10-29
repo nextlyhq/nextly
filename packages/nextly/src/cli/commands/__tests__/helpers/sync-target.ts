@@ -49,7 +49,7 @@ function serverUrl(dialect: "postgresql" | "mysql"): URL {
  * whole database against the configuration it is given, so tables another test
  * left in a shared one read as removals that need a person to confirm.
  */
-async function throwawayDatabase(
+export async function throwawayDatabase(
   dialect: "postgresql" | "mysql"
 ): Promise<{ url: string; drop: () => Promise<void> }> {
   const base = serverUrl(dialect);

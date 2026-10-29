@@ -7,9 +7,11 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetSlot } from "nextly/widget-result";
 import { describe, expect, it } from "vitest";
 
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import { render, screen } from "@admin/__tests__/utils";
 
-import { CardTierContext } from "../widgets/frame/tier";
+import { cardBodyHeightPx } from "../widgets/frame/measures";
+import { CardHeightContext, CardTierContext } from "../widgets/frame/tier";
 
 import { NeedsAttention } from "./NeedsAttention";
 
@@ -37,16 +39,74 @@ const WAITING: WidgetSlot = {
 function drawAt(tier: SizeTier, slot: WidgetSlot | undefined) {
   render(
     <CardTierContext.Provider value={tier}>
-      <NeedsAttention
-        widgetId="core/needs-attention"
-        placementId="core/needs-attention"
-        settings={{}}
-        slot={slot}
-        isFetching={false}
-      />
+      {inFrame(
+        <NeedsAttention
+          widgetId="core/needs-attention"
+          placementId="core/needs-attention"
+          settings={{}}
+          slot={slot}
+          isFetching={false}
+        />
+      )}
     </CardTierContext.Provider>
   );
 }
+
+/** All three kinds waiting, the unpublished changes spread over two collections. */
+const THREE_KINDS: WidgetSlot = {
+  ok: true,
+  result: {
+    op: "groupBy",
+    buckets: [
+      { value: "unpublished", count: 3 },
+      { value: "unpublished:collection:posts", count: 2 },
+      { value: "unpublished:collection:pages", count: 1 },
+      { value: "scheduled", count: 2 },
+      { value: "overdue", count: 1 },
+    ],
+    field: {
+      name: "item",
+      type: "string",
+      choices: [
+        { value: "unpublished:collection:posts", label: "Posts" },
+        { value: "unpublished:collection:pages", label: "Pages" },
+      ],
+    },
+  },
+};
+
+describe("the Needs attention card at its default height", () => {
+  it("keeps every kind, and draws no more rows than its body holds", () => {
+    // 🔴 A card never scrolls: three kinds and both of a kind's parts drawn in a four-row card
+    // would run past its foot, and the grid cell would cut the last of them off.
+    render(
+      <CardHeightContext.Provider value={4}>
+        <CardTierContext.Provider value="large">
+          {inFrame(
+            <NeedsAttention
+              widgetId="core/needs-attention"
+              placementId="core/needs-attention"
+              settings={{}}
+              slot={THREE_KINDS}
+              isFetching={false}
+            />
+          )}
+        </CardTierContext.Provider>
+      </CardHeightContext.Provider>
+    );
+    for (const kind of ["unpublished", "scheduled", "overdue"]) {
+      expect(screen.getByTestId(`needs-attention-${kind}`)).toBeInTheDocument();
+    }
+    const rows = screen.getAllByTestId("entity-row");
+    const height = rows.reduce(
+      (sum, row) => sum + (row.classList.contains("h-13") ? 52 : 36),
+      0
+    );
+    expect(height).toBeLessThanOrEqual(cardBodyHeightPx(4));
+    // The room left after the kinds holds one part, so one of the two is drawn.
+    expect(rows).toHaveLength(4);
+  });
+});
 
 describe("the Needs attention card", () => {
   it("says all clear when nothing is waiting", () => {

@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/builder",
-  "version": "0.0.2-alpha.71",
+  "version": "0.0.2-alpha.72",
   "description": "The visual page-builder editor for Nextly: shell, canvas and op store.",
   "license": "MIT",
   "repository": {
@@ -71,8 +71,8 @@
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/ui": "workspace:^",
     "lucide-react": ">=0.400.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@nextlyhq/module-specifiers": "workspace:*",

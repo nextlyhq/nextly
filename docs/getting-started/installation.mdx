@@ -87,7 +87,7 @@ Enter your name, an email and a password. The first account gets the Super Admin
 
 ### Default storage is local disk
 
-Out of the box, Nextly uses your project's `./public/uploads/` directory as the media store -- no env vars, no cloud account, no credentials. Files you upload through the admin's media library land there and are served at `/uploads/...`. Under `next start`, files uploaded after the server started also need a route at `src/app/uploads/[...path]/route.ts`; see [How local uploads are served](/docs/guides/media-storage#how-local-uploads-are-served). When you're ready to move to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
+Out of the box, Nextly uses your project's `./public/uploads/` directory as the media store -- no env vars, no cloud account, no credentials. Files you upload through the admin's media library land there and are served at `/uploads/...` by your app, including under `next start`, where a route in `src/app/uploads/` serves the files uploaded since the server started. When you're ready to move to S3, Vercel Blob, or Uploadthing, see [Media & Storage](/docs/guides/media-storage).
 
 ## Option B: Add to an Existing Next.js Project
 
@@ -386,7 +386,7 @@ export async function register(): Promise<void> {
 }
 ```
 
-Next.js skips `register()` during `next build`, so this opens no database connection at build time. On Next.js 14 the hook runs only when `next.config` sets `instrumentationHook: true` in its `experimental` object (add it beside any keys already there), and if the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
+Next.js skips `register()` during `next build`, so this opens no database connection at build time. If the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
 
 ### 5. Set Up Environment Variables
 
@@ -467,13 +467,17 @@ Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to c
 
 ## Requirements
 
+These are the versions Nextly supports.
+
 | Requirement | Version |
 | --- | --- |
 | Node.js | `^22.12.0 \|\| >=24.0.0` (not Node 20 or 23) |
-| Next.js | 16.4.1+ (App Router required) |
-| React | 19+ |
+| Next.js | `^16.4.1`: 16.4.1 or any later 16.x release, with the App Router |
+| React and React DOM | `^19.3.0`: 19.3.0 or any later 19.x release |
 | TypeScript | 5+ |
 | Database | PostgreSQL (recommended for production), MySQL, or SQLite (local demo only) |
+
+Earlier Next.js and React releases are not supported. A new major version of Next.js or React is supported only once a Nextly release says so: until then, stay on the majors listed here.
 
 ### Yarn Plug'n'Play
 

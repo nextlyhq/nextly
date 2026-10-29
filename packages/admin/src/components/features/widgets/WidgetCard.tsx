@@ -9,36 +9,34 @@
  * dashboard and what makes the loading, error and accessibility work below
  * apply to every widget without each author reimplementing it.
  *
- * Two decisions that are easy to get backwards:
+ * The frame draws every state from one `CardState` (`frame/card-state`). The
+ * renderer hands it the state a batch answer comes to, and a body whose own
+ * data says more reports it with `FrameState`; either way the body is drawn
+ * only while the card is ready or refreshing, and every other state is drawn
+ * here, the same on every card.
  *
- * Loading marks the body `aria-busy`; it does not swap in a spinner. A spinner
- * discards the numbers the reader was already looking at on every window-focus
- * refetch — and this grid refetches on focus by convention — so the card would
- * flicker between a value and a spinner for data that usually comes back
- * unchanged. `aria-busy` says the same thing to a screen reader without
- * destroying the visible state.
+ * The HEADER NEVER CHANGES SHAPE. It is one fixed height in every state, size
+ * tier and mode: the subject as the title, the widget's own name beneath it
+ * when the two differ, then at most one quick control and the card's menu. A
+ * row of cards lines up because no state, tier or mode adds or removes a row
+ * from it; customise mode draws its controls over it rather than beside it.
+ *
+ * Refreshing marks the body `aria-busy`; it does not swap in a spinner. A
+ * spinner discards the numbers the reader was already looking at on every
+ * window-focus refetch — and this grid refetches on focus by convention — so
+ * the card would flicker between a value and a spinner for data that usually
+ * comes back unchanged.
  *
  * An error replaces the body and KEEPS the title. An anonymous error box on a
  * dashboard of ten cards does not tell the user which widget broke, which is
- * the only thing they need in order to do anything about it.
+ * the only thing they need in order to do anything about it. It is ordinary
+ * content, NOT a live region: the grid announces for the whole batch through
+ * its one polite region, and a card that announced its own error would speak
+ * over it.
  *
- * And it is ordinary content, NOT a live region. `role="alert"` is assertive by
- * definition, so a card that used it became its own interrupting announcer:
- * five widgets failing at once produced five announcements that spoke over each
- * other and over the grid's single polite one. The grid owns announcing for the
- * whole batch, following `EntryForm/DocumentStatusLive`, and the card's job is
- * to be findable afterwards -- which the region landmark and its title already
- * do.
- *
- * The card is FLAT AND BORDERED, with no internal rules. It sits on a dashboard
- * beside the Users and Roles stat cards, and a plugin's widget that reads as a
- * different component is a plugin that looks bolted on. Those neighbours are a
- * single padded surface: one outer border, the figure large, its label small and
- * muted, an icon in the top-right corner. So the header divider is off, the
- * footer is a quiet line inside the card rather than a tinted strip under a
- * rule, the padding is one step at every level, and the icon moves to the right
- * where the neighbours put theirs. Two borders and a filled band across the
- * bottom made a card twice the visual weight of the ones next to it.
+ * The card says nothing about when its data arrived. Every card's time was the
+ * batch's, the same on all of them, so the line under each said one fact many
+ * times; the page says it once, and only when it is stale.
  *
  * Colour comes from the `--nx-*` token scale through its semantic Tailwind
  * classes (`bg-card`, `text-muted-foreground`, `text-destructive`), which are
@@ -48,69 +46,94 @@
  */
 
 import { Card, CardContent, CardFooter, CardHeader } from "@nextlyhq/ui";
-import { useId, useRef, type ReactNode, type JSX } from "react";
+import type { SizeTier } from "@nextlyhq/ui/format";
+import type { ListDensity } from "nextly/config";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type JSX,
+} from "react";
 
 import { Link } from "@admin/components/ui/link";
-import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
-import { useRelativeTime } from "@admin/hooks/useRelativeTime";
+import { isDevelopmentRuntime } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
+import {
+  CardStateReportProvider,
+  showsBody,
+  type CardState,
+  type SkeletonHint,
+} from "./frame/card-state";
+import {
+  CARD_FOOTER_LINK_CLASS,
+  CardFooterClaimProvider,
+  CardFooterSlotProvider,
+  drawnClaim,
+  type CardFooterClaims,
+  type FooterClaimRank,
+} from "./frame/footer-slot";
 import { frameIds } from "./frame/ids";
+import { ListDensityContext, useListDensity } from "./frame/list-rows";
+import type { RowsSize } from "./frame/list-rows";
+import {
+  FRAME_BODY_GAP,
+  FRAME_FOOTER_GAP,
+  FRAME_HEADER,
+  FRAME_PADDING,
+  cardBodyHeightPx,
+} from "./frame/measures";
 import {
   CardEmpty,
+  EMPTY_STACKED_WITH_ACTION_PX,
   CardError,
   CardSkeleton,
   CardUnavailable,
-  EMPTY_DEFAULT,
-  type CardEmptyContent,
   type SkeletonShape,
 } from "./frame/states";
 import {
-  AnswerTierContext,
+  AnswerSizeContext,
+  CardHeightContext,
+  type AnswerSize,
   CardTierContext,
   rowsDrawn,
   rowsLayout,
   useCardTier,
   useMeasuredTier,
+  type RowsLayout,
 } from "./frame/tier";
 
-/**
- * What the body shows, besides its content.
- *
- * - `ready`: the content (`children`); `isLoading` alongside it is a REFRESH, which keeps the
- *   last value on screen and marks it busy.
- * - `loading`: data has never arrived, so a skeleton shaped like the body stands in.
- * - `empty`: nothing to show; the card says what will appear and offers at most one action.
- * - `unavailable`: the source is forbidden, gone, or kept off the dashboard, all said the same
- *   way.
- *
- * An error is not listed here: `error` set to a message is the error state, whatever this says,
- * because a card that failed must not go on showing a value.
- */
-export type CardState = "ready" | "loading" | "empty" | "unavailable";
-
 export interface WidgetCardProps {
-  /** Always rendered, in every state, once. */
+  /** The card's subject, always rendered, in every state, once. */
   title: string;
-  /** One optional line under the title. */
-  description?: string;
-  /** Optional, and functional rather than decorative — an icon per card is noise. */
-  icon?: ReactNode;
+  /**
+   * The widget's own name, drawn quieter beneath the title when the title names the card's
+   * subject instead ("Posts", beneath it "Count"). Absent when the two are the same.
+   */
+  subtitle?: string | undefined;
   /**
    * Drawn before the title: the drag handle in customise mode. The frame draws nothing there by
    * default.
    */
   leading?: ReactNode;
-  /** Drawn at the right of the header: the width label and the card menu in customise mode. */
+  /** Drawn at the right of the header: the card's menu, or the room customise mode draws over. */
   headerAction?: ReactNode;
-  /** The card's one quick setting, drawn just before `headerAction`, outside customise mode. */
+  /** The card's one quick control, just before `headerAction`. */
   quick?: ReactNode;
   /**
-   * Customise mode: the body and footer become inert and dim, so their links and controls are
-   * out of reach, while the title stays where it is -- the title appears once in every mode.
+   * Customise mode: the body, footer and quick control become inert and dim, so their links and
+   * controls are out of reach, while the title stays where it is.
    */
   customizing?: boolean;
-  /** See `CardState`. Defaults to `ready`. */
+  /**
+   * What the card shows, `ready` when unstated. A body that reports a state of its own takes
+   * this one's place.
+   */
   state?: CardState;
   /** The shape the loading skeleton takes. */
   skeleton?: SkeletonShape;
@@ -120,6 +143,8 @@ export interface WidgetCardProps {
    * jump; absent, a skeleton draws its default rows.
    */
   skeletonItems?: unknown;
+  /** The density a list card draws its rows at, and its skeleton counts them at. */
+  listDensity?: ListDensity;
   /**
    * How many columns a list or table card selects. Its loading skeleton then lays its rows out
    * as the card will at its tier (`rowsLayout`): a table, or rows with or without a detail line.
@@ -127,399 +152,536 @@ export interface WidgetCardProps {
   skeletonFields?: number;
   /** A stats card's cell labels, which its loading skeleton draws under each held value. */
   skeletonCells?: readonly string[];
-  /** What an empty card says. Required for `state="empty"` to say anything specific. */
-  empty?: CardEmptyContent;
-  /** Retry for this card only, offered in the error state. */
-  onRetry?: () => void;
-  /** Marks the body busy. Does not replace it. */
-  isLoading?: boolean;
-  /** Replaces the body. The title stays. */
-  error?: string | null;
-  /** When this widget's data landed, for the footer's freshness line. */
-  updatedAt?: Date | null;
   /**
-   * The card asked for data, so a freshness line will come once its answer has a time. Until it
-   * does, the footer holds the line's place: a card can settle before its time is known (its
-   * request in a batch that landed before the others), and the line arriving then would grow it.
+   * The widget takes its card off the dashboard while its answer is empty, rather than saying
+   * so; customise mode still shows it, marked, so it can be moved or removed.
    */
-  awaitsFreshness?: boolean;
-  /** At most ONE. A footer is not a row of buttons. */
+  hidesWhenEmpty?: boolean;
+  /**
+   * The widget's own `shows` said no for this person: the card is taken off the dashboard as one
+   * hidden while empty is, and customise mode shows it marked, so it can be removed.
+   */
+  notShown?: boolean;
+  /**
+   * At most ONE. A footer is not a row of buttons. Shown beside a drawn body and under an empty
+   * one, where "View all" still leads somewhere; never while the card is loading, failed or not
+   * available, where its destination is the thing that did not answer.
+   */
   link?: { label: string; href: string };
   /**
    * The card's id. Names the title (`frameIds`) and marks the root with `data-card-id`, so the
    * code drawing its customise controls can label them after the card.
    */
   cardId?: string;
-  /** Marked on the root as `data-width` for styling and tests. */
-  width?: string;
-  /** The tier the answer drawn in the body was fetched at; provided as `AnswerTierContext`. */
-  answerTier?: "small" | "medium" | "large";
+  /** The widget's id, named in a development warning about what its body draws in the footer. */
+  widgetId?: string;
+  /** The size the answer drawn in the body was fetched at; provided as `AnswerSizeContext`. */
+  answerSize?: AnswerSize;
+  /**
+   * The card's height in grid rows, which its list rows are counted from; provided as
+   * `CardHeightContext`. Absent for a card drawn with none, counted from its tier.
+   */
+  h?: number;
   /**
    * The size tier, when the caller knows it better than the card's own measurement. Otherwise
    * the card measures the width it is drawn at (`frame/tier`). Marked on the root as
    * `data-tier`, and handed to every figure inside the card.
    */
   tier?: "small" | "medium" | "large";
-  /** The archetype's rendering, or the plugin's component. */
+  /** The archetype's rendering, or the widget's component. */
   children: ReactNode;
   className?: string;
 }
 
+const READY: CardState = { kind: "ready" };
+
 /**
- * What the card's state and error come to: what `data-state` says, whether content is on show,
- * and whether the card has an answer its freshness is true of.
+ * The state the card shows: the one it was handed, or, while that one draws the body, the state
+ * the body reported in its place.
  */
-function frameRules(state: CardState, error: string | null) {
-  const failed = error !== null;
-  const showsContent = !failed && state === "ready";
-  return {
-    // An error wins over whatever `state` claims.
-    shown: failed ? "error" : state,
-    showsContent,
-    // An answer, content or "nothing yet", so the batch's freshness is true of it.
-    settled: showsContent || (!failed && state === "empty"),
-  };
+function shownState(given: CardState, reported: CardState | null): CardState {
+  return showsBody(given) && reported !== null ? reported : given;
+}
+
+/** What `data-state` says for a state: the names the dashboard's tests and styles read. */
+function stateName(state: CardState): string {
+  return state.kind === "no-access" ? "unavailable" : state.kind;
 }
 
 /**
- * What a card that is not showing content withholds, decided once.
+ * The body's classes: top-aligned, dimmed through a refresh, and an answer dimmed in customise
+ * mode.
  *
- * It offers no "view all": an error's destination is the thing that just failed to answer, and
- * an empty or unavailable card's has nothing more to show. It claims no freshness: the timestamp
- * is when the BATCH landed, which is true of the request and not of this card -- "Updated just
- * now" printed under "This card couldn't load" tells the reader the opposite of what happened.
- * It offers the quick setting only once the card has an answer, content or "nothing yet" -- an
- * empty card is answering, and changing its range may well fill it -- and never while it is
- * loading, failed or unavailable, where it would change a question the card is not answering,
- * nor in customise mode, where the card's menu stands in that place. Here rather than at each
- * caller, so an archetype added later inherits all of it rather than having to remember it.
+ * 🔴 Only an ANSWER is dimmed while customising, as out of reach. A state's message (empty, not
+ * available, failed, a setting to choose) is an instruction, and dimmed it fell below the 4.5:1
+ * contrast text needs: "Choose collection in the card's settings." measured 2.65:1 in light and
+ * 3.07:1 in dark at 55% opacity.
  */
-function frameExtras(
-  rules: ReturnType<typeof frameRules>,
-  props: WidgetCardProps,
+function bodyClassName(
+  refreshing: boolean,
+  customizing: boolean,
+  answering: boolean
+): string {
+  return cn(
+    // Top-aligned, not centred: cards in a grid row stretch to the tallest of them, so centring
+    // floats a one-line figure in the middle of whatever the tallest card happens to be.
+    "flex min-h-0 flex-1 flex-col justify-start overflow-visible p-0",
+    FRAME_BODY_GAP.className,
+    refreshing && "opacity-60 transition-opacity",
+    customizing && answering && "opacity-55"
+  );
+}
+
+/**
+ * Whether the card is off the dashboard and why: its widget's own `shows` said no for this person,
+ * or it hides when empty and is. Taken out at rest, and shown marked with that reason while
+ * customising, so it can still be moved or removed.
+ */
+function hiddenFlags(
+  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown">,
+  state: CardState,
   customizing: boolean
 ) {
+  const notShown = props.notShown === true;
+  const hidden =
+    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
   return {
-    quick: rules.settled && !customizing ? props.quick : undefined,
-    freshness: rules.settled ? (props.updatedAt ?? null) : null,
-    link: rules.showsContent ? props.link : undefined,
-  };
-}
-
-/** Everything the frame derives from its props, so the markup below only reads it. */
-function frameView(props: WidgetCardProps) {
-  const state = props.state ?? "ready";
-  const error = props.error ?? null;
-  const customizing = props.customizing === true;
-  const rules = frameRules(state, error);
-  return {
-    ...frameExtras(rules, props, customizing),
-    state,
-    error,
-    customizing,
-    shown: rules.shown,
-    // Explicitly `false` rather than absent when idle: a reader that saw `aria-busy="true"`
-    // needs the attribute to change back, and an omitted attribute is a weaker signal than one
-    // that says "no longer busy".
-    busy: props.isLoading === true || state === "loading",
-    // A refetch over content dims it; a first load or an error has nothing to dim.
-    refreshing: props.isLoading === true && rules.showsContent,
+    hiddenEmpty: hidden && !customizing,
+    markedHidden: hidden && customizing,
+    hiddenBecause: notShown
+      ? "Not shown for you right now"
+      : "Hidden while empty",
   };
 }
 
 /**
- * The body's classes.
- *
- * Top-aligned, not centred. Cards in a grid row stretch to the tallest of them, so centring
- * floats a one-line figure in the middle of whatever the tallest card in that row happens to be.
+ * What the frame derives from the state it shows, decided once so the markup below only reads it:
+ * whether the grid should take the card out, whether customise mode marks it as hidden, whether
+ * its quick control is out of reach, how its body is marked, and whether its footer link shows.
  */
-function bodyClassName(refreshing: boolean, customizing: boolean): string {
-  return cn(
-    "flex flex-1 flex-col justify-start px-5 pb-5 pt-2",
-    refreshing && "opacity-60 transition-opacity",
-    customizing && "opacity-55"
-  );
+function frameFlags(
+  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown" | "link">,
+  state: CardState,
+  modes: {
+    customizing: boolean;
+    /** A new answer is on the way, whatever the body reported from the last one. */
+    refreshing: boolean;
+  }
+) {
+  const { customizing } = modes;
+  const refreshing = modes.refreshing || state.kind === "refreshing";
+  const hidden = hiddenFlags(props, state, customizing);
+  return {
+    ...hidden,
+    // A quick control changes the question; before the first answer there is no question on
+    // show to change, and in customise mode the card's menu stands there.
+    quickInert: state.kind === "loading" || customizing,
+    busy: state.kind === "loading" || refreshing,
+    refreshing,
+    // Beside a drawn body and under an empty one; never while loading, failed or not available.
+    footer:
+      props.link !== undefined && (showsBody(state) || state.kind === "empty"),
+  };
 }
 
 export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const { title, cardId } = props;
   const generatedId = useId();
   const titleId = cardId ? frameIds(cardId).titleId : generatedId;
-  const view = frameView(props);
+  // The region is named by its title and, where there is one, the widget's own name beneath it, so
+  // two cards about one subject ("Posts", "Count" and "Posts", "Recent entries") are told apart.
+  const subtitleId = `${titleId}-subtitle`;
+  const labelledBy = props.subtitle ? `${titleId} ${subtitleId}` : titleId;
+  const customizing = props.customizing === true;
+  // What the body reported, while it is drawn. Withdrawn by the body itself when it unmounts.
+  const [reported, setReported] = useState<CardState | null>(null);
+  // The footer's element, once mounted: where a body draws what it has for the footer.
+  const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
+  const footer = useFooterClaims(props.widgetId);
+  const report = useCallback((next: CardState | null) => setReported(next), []);
+  const given = props.state ?? READY;
+  const state = shownState(given, reported);
+  const drawsBody = showsBody(given);
+  // A refetch marks the card busy even while its body reports a state from the last answer.
+  const flags = frameFlags(props, state, {
+    customizing,
+    refreshing: given.kind === "refreshing",
+  });
   // The width the card is drawn at decides how its figures are written; see `frame/tier`.
   const rootRef = useRef<HTMLDivElement>(null);
   const tier = useMeasuredTier(rootRef, props.tier);
 
   return (
     <CardTierContext.Provider value={tier}>
-      <AnswerTierContext.Provider value={props.answerTier}>
-        <Card
-          ref={rootRef}
-          // `region` + the title as its name is what lets a screen-reader user jump
-          // between widgets and know which one they landed on. Without the name a
-          // region is worse than no landmark at all.
-          role="region"
-          aria-labelledby={titleId}
-          data-card-id={cardId}
-          data-width={props.width}
-          data-tier={tier}
-          data-state={view.shown}
-          className={cn("flex h-full flex-col", props.className)}
-        >
-          <WidgetCardHeader
-            titleId={titleId}
-            title={title}
-            description={props.description}
-            icon={props.icon}
-            leading={props.leading}
-            quick={view.quick}
-            headerAction={props.headerAction}
-          />
-
-          <CardContent
-            data-testid="widget-card-body"
-            aria-busy={view.busy}
-            // Customise mode: what the card shows stays visible, but nothing in it can be reached.
-            inert={view.customizing || undefined}
-            className={bodyClassName(view.refreshing, view.customizing)}
-          >
-            <WidgetCardBody
-              state={view.state}
-              error={view.error}
-              title={title}
-              onRetry={props.onRetry}
-              skeleton={props.skeleton}
-              skeletonItems={props.skeletonItems}
-              skeletonFields={props.skeletonFields}
-              skeletonCells={props.skeletonCells}
-              empty={props.empty}
+      <ListDensityContext.Provider value={props.listDensity ?? "default"}>
+        <AnswerSizeContext.Provider value={props.answerSize}>
+          <CardHeightContext.Provider value={props.h}>
+            <Card
+              ref={rootRef}
+              // `region` + the title as its name is what lets a screen-reader user jump
+              // between widgets and know which one they landed on.
+              role="region"
+              aria-labelledby={labelledBy}
+              data-card-id={cardId}
+              data-tier={tier}
+              data-state={stateName(state)}
+              // Read by the grid cell, which takes a card whose widget hides when empty out of the
+              // grid while it is; never in customise mode, where the card must stay reachable.
+              data-hidden-empty={flags.hiddenEmpty ? "" : undefined}
+              className={cn(
+                "flex h-full flex-col",
+                FRAME_PADDING.className,
+                props.className
+              )}
             >
-              {props.children}
-            </WidgetCardBody>
-          </CardContent>
+              <WidgetCardHeader
+                titleId={titleId}
+                subtitleId={subtitleId}
+                title={title}
+                subtitle={props.subtitle}
+                leading={props.leading}
+                quick={props.quick}
+                quickInert={flags.quickInert}
+                headerAction={props.headerAction}
+              />
 
-          <WidgetCardFooter
-            freshness={view.freshness}
-            link={view.link}
-            inert={view.customizing}
-            // A loading card holds its freshness line's place: the line arrives with the
-            // answer, and a footer that appeared then would push everything below the card down.
-            holdFreshness={
-              view.shown === "loading" ||
-              (props.awaitsFreshness === true &&
-                view.freshness === null &&
-                (view.shown === "ready" || view.shown === "empty"))
-            }
-          />
-        </Card>
-      </AnswerTierContext.Provider>
+              <CardContent
+                data-testid="widget-card-body"
+                aria-busy={flags.busy}
+                // Customise mode: what the card shows stays visible, but nothing in it can be reached.
+                inert={customizing || undefined}
+                className={bodyClassName(
+                  flags.refreshing,
+                  customizing,
+                  showsBody(state)
+                )}
+              >
+                {flags.markedHidden ? (
+                  <p
+                    className="mb-2 text-xs font-medium text-muted-foreground"
+                    data-testid="hidden-while-empty"
+                  >
+                    {flags.hiddenBecause}
+                  </p>
+                ) : null}
+                <StateBody state={state} title={title} props={props} />
+                {/* The body stays mounted while it reports a state, so the data it reads keeps
+                  arriving; what it renders then is its report, which draws nothing. */}
+                {drawsBody ? (
+                  <CardStateReportProvider value={report}>
+                    <CardFooterSlotProvider value={footerSlot}>
+                      <CardFooterClaimProvider value={footer.claims}>
+                        {props.children}
+                      </CardFooterClaimProvider>
+                    </CardFooterSlotProvider>
+                  </CardStateReportProvider>
+                ) : null}
+              </CardContent>
+
+              <WidgetCardFooter
+                link={ownFooterLink(flags.footer, footer.held, props.link)}
+                inert={customizing}
+                slotRef={setFooterSlot}
+              />
+            </Card>
+          </CardHeightContext.Provider>
+        </AnswerSizeContext.Provider>
+      </ListDensityContext.Provider>
     </CardTierContext.Provider>
   );
 }
 
 /**
- * What the body draws for the card's state: the error, the skeleton, the unavailable notice,
- * the empty notice, or the content.
- *
- * An error is checked first, whatever `state` says, because a card that failed must not go on
- * showing a value.
+ * What the body area draws for a state that is not the body: the skeleton, the error, the
+ * no-access notice or the empty notice. Nothing for ready and refreshing, where the body is
+ * drawn instead.
  */
-function WidgetCardBody({
+function StateBody({
   state,
-  error,
   title,
-  onRetry,
-  skeleton,
-  skeletonItems,
-  skeletonFields,
-  skeletonCells,
-  empty,
-  children,
+  props,
 }: {
   state: CardState;
-  error: string | null;
   title: string;
-  onRetry?: () => void;
-  skeleton?: SkeletonShape;
-  skeletonItems?: unknown;
-  skeletonFields?: number;
-  skeletonCells?: readonly string[];
-  empty?: CardEmptyContent;
-  children: ReactNode;
+  props: Pick<
+    WidgetCardProps,
+    "skeleton" | "skeletonItems" | "skeletonFields" | "skeletonCells"
+  >;
 }) {
-  // The rows this card will draw, by the rule the list and table bodies draw by. Medium until the
-  // card has measured itself, as those bodies are.
-  const tier = useCardTier() ?? "medium";
-  const rows =
-    skeletonItems === undefined ? undefined : rowsDrawn(tier, skeletonItems);
-  if (error !== null) {
-    return <CardError message={error} title={title} onRetry={onRetry} />;
-  }
-  switch (state) {
+  switch (state.kind) {
     case "loading":
+      return <LoadingBody hint={state.skeleton} props={props} />;
+    case "error":
       return (
-        <CardSkeleton
-          shape={skeleton}
-          rows={rows}
-          layout={
-            skeletonFields === undefined
-              ? undefined
-              : rowsLayout(tier, skeletonFields)
-          }
-          cells={skeletonCells}
-        />
+        <CentredState>
+          <CardError
+            message={state.message}
+            title={title}
+            onRetry={state.retry}
+          />
+        </CentredState>
       );
-    case "unavailable":
-      return <CardUnavailable />;
+    case "no-access":
+      return (
+        <CentredState>
+          <CardUnavailable />
+        </CentredState>
+      );
     case "empty":
-      return <CardEmpty {...(empty ?? EMPTY_DEFAULT)} />;
+      return (
+        <CentredState>
+          <EmptyBody empty={state.empty} />
+        </CentredState>
+      );
     default:
-      return <>{children}</>;
+      return null;
   }
 }
 
 /**
- * The card's header, drawn as one row.
+ * The empty state, laid in one row where the card's body is too short to stack its title over its
+ * action (a two-row card's body is 46 px; stacked, they take 64). A card drawn with no height is
+ * stacked, as it was.
+ */
+function EmptyBody({
+  empty,
+}: {
+  empty: Extract<CardState, { kind: "empty" }>["empty"];
+}) {
+  const h = useContext(CardHeightContext);
+  const inline =
+    empty.action !== undefined &&
+    h !== undefined &&
+    cardBodyHeightPx(h) < EMPTY_STACKED_WITH_ACTION_PX;
+  return <CardEmpty {...empty} inline={inline} />;
+}
+
+/**
+ * A state that says something instead of showing data (empty, error, no access), centred in the
+ * body both ways. A card keeps its rows whatever it shows, so a short message at the top-left of
+ * a tall card left the rest of it blank and looking unfinished. The loading skeleton is not
+ * centred: it holds the place of the content it stands in for, which starts at the top.
+ */
+function CentredState({ children }: { children: ReactNode }) {
+  return (
+    <div
+      data-testid="card-state-centred"
+      className="flex flex-1 flex-col items-center justify-center text-center"
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The loading skeleton: shaped as the body reported, or else as the card's own declaration says,
+ * holding the place of the rows the card will draw at its tier, by the rule the list and table
+ * bodies draw by. Medium until the card has measured itself, as those bodies are.
+ */
+function LoadingBody({
+  hint,
+  props,
+}: {
+  hint: SkeletonHint | undefined;
+  props: Pick<
+    WidgetCardProps,
+    "skeleton" | "skeletonItems" | "skeletonFields" | "skeletonCells"
+  >;
+}) {
+  const tier = useCardTier() ?? "medium";
+  // The card's height and density, as the rows that will arrive are counted at.
+  const h = useContext(CardHeightContext);
+  const density = useListDensity();
+  return (
+    <CardSkeleton
+      shape={hint?.shape ?? props.skeleton}
+      rows={hint?.rows ?? heldRows({ tier, h }, props.skeletonItems, density)}
+      layout={hint?.layout ?? heldLayout(tier, props.skeletonFields)}
+      cells={props.skeletonCells}
+    />
+  );
+}
+
+/** The rows a list or table card's skeleton holds at `size` and `density`, from its items setting. */
+function heldRows(
+  size: RowsSize,
+  items: unknown,
+  density: ListDensity
+): number | undefined {
+  return items === undefined ? undefined : rowsDrawn(size, items, density);
+}
+
+/** How a list or table card's skeleton lays its rows out at `tier`, from its column count. */
+function heldLayout(
+  tier: SizeTier,
+  fields: number | undefined
+): RowsLayout | undefined {
+  return fields === undefined ? undefined : rowsLayout(tier, fields);
+}
+
+/**
+ * The card's header, one fixed height in every state, tier and mode.
  *
- * Its own component so `WidgetCard` above stays a description of the card's
- * STATES rather than of its markup -- which is the part an archetype author
- * reads.
- *
- * The icon sits on the RIGHT, where the Users and Roles stat cards beside this
- * one put theirs. It is optional and functional rather than decorative: an icon
- * on every card is noise.
+ * The title is one line, shortened with an ellipsis, its full text on hover and to assistive
+ * technology (the heading's text is never cut, only its drawing). The subtitle beneath it is the
+ * widget's own name. The quick control and the menu sit at the right end, always in that order,
+ * so the menu is in the same place on every card.
  */
 function WidgetCardHeader({
   titleId,
+  subtitleId,
   title,
-  description,
-  icon,
+  subtitle,
   leading,
   quick,
+  quickInert,
   headerAction,
 }: {
   titleId: string;
+  subtitleId: string;
   title: string;
-  description?: string;
-  icon?: ReactNode;
+  subtitle?: string | undefined;
   leading?: ReactNode;
   quick?: ReactNode;
+  quickInert: boolean;
   headerAction?: ReactNode;
 }) {
   return (
     <CardHeader
-      // No rule under the header. The stat cards beside this one are a single
-      // padded surface, and a divider is the difference between a card and a
-      // panel.
+      // No rule under the header: a divider is the difference between a card and a panel.
       noBorder
-      className="flex-row items-start gap-2 space-y-0 px-5 pb-0 pt-5"
+      data-testid="widget-card-header"
+      className={cn(
+        FRAME_HEADER.className,
+        "shrink-0 flex-row items-center gap-2 space-y-0 p-0"
+      )}
     >
       {leading && <span className="-ml-2 shrink-0">{leading}</span>}
       <div className="min-w-0 flex-1">
         {/* One heading level for every card, under the page's h1, in the one title style of
-            the card type ramp (14 px, semibold). Wrapped, not truncated: a clipped title is a
-            card nobody can name. */}
+            the card type ramp (14 px, semibold). */}
         <h2
           id={titleId}
-          className="break-words text-sm font-semibold leading-snug tracking-tight text-foreground"
+          title={title}
+          className="truncate text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
           {title}
         </h2>
-        {description && (
-          <p className="text-xs text-muted-foreground">{description}</p>
+        {subtitle && (
+          <p
+            id={subtitleId}
+            className="truncate text-xs leading-4 text-muted-foreground"
+            data-testid="widget-card-subtitle"
+          >
+            {subtitle}
+          </p>
         )}
       </div>
-      {icon && (
+      {quick && (
         <span
-          className="shrink-0 pt-0.5 text-muted-foreground"
-          aria-hidden="true"
+          className="shrink-0"
+          inert={quickInert || undefined}
+          aria-disabled={quickInert || undefined}
         >
-          {icon}
+          {quick}
         </span>
       )}
-      {quick && <span className="shrink-0">{quick}</span>}
       {headerAction && <span className="shrink-0">{headerAction}</span>}
     </CardHeader>
   );
 }
 
 /**
- * The freshness line and the single footer link, or nothing at all.
- *
- * Both are already resolved by the time they arrive: an error state withholds
- * each of them, and that decision belongs with the card's other state rules
- * rather than being taken again here.
+ * Whether a body's link holds the card's footer, and the claims it is drawn by: the footer holds
+ * one link, so while any is held the widget's own is not drawn, and of the body's, one is
+ * (`drawnClaim`).
+ */
+function useFooterClaims(widgetId: string | undefined): {
+  held: boolean;
+  claims: CardFooterClaims;
+} {
+  const [held, setHeld] = useState<{ id: number; rank: FooterClaimRank }[]>([]);
+  const next = useRef(0);
+  const claim = useCallback((rank: FooterClaimRank) => {
+    next.current += 1;
+    const id = next.current;
+    setHeld(claims => [...claims, { id, rank }]);
+    return {
+      id,
+      release: () => setHeld(claims => claims.filter(c => c.id !== id)),
+    };
+  }, []);
+  const drawn = drawnClaim(held);
+  const explicit = held.filter(c => c.rank === "explicit").length;
+  // A widget's body names one link for its footer; a second is a mistake its author should hear
+  // of, while developing, and the footer still draws one (the last).
+  useEffect(() => {
+    if (explicit > 1 && isDevelopmentRuntime()) {
+      console.warn(
+        `Widget "${widgetId ?? "(unnamed)"}" draws ${explicit} Widget.FooterLink; a card's footer holds one link, so only the last is drawn.`
+      );
+    }
+  }, [explicit, widgetId]);
+  const claims = useMemo(() => ({ claim, drawn }), [claim, drawn]);
+  return { held: held.length > 0, claims };
+}
+
+/** The widget's own footer link, where the frame draws a footer and no body's link holds it. */
+function ownFooterLink(
+  drawn: boolean,
+  held: boolean,
+  link: { label: string; href: string } | undefined
+): { label: string; href: string } | undefined {
+  return drawn && !held ? link : undefined;
+}
+
+/** The single footer link, on the right. */
+/**
+ * The card's footer: one link's line, drawn whether or not it holds anything, so every card's body
+ * is one height and every card ends on one line. It holds the widget's own link, beside a drawn
+ * body and under an empty one, and whatever the body hands it (`CardFooterContent`): a list's
+ * "View all (N)".
  */
 function WidgetCardFooter({
-  freshness,
   link,
-  inert = false,
-  holdFreshness = false,
+  inert,
+  slotRef,
 }: {
-  freshness: Date | null;
-  link?: { label: string; href: string };
-  /** Customise mode: the footer's link is out of reach, like the body's. */
-  inert?: boolean;
-  /** Draw the freshness line's place, unseen, until there is a freshness to show. */
-  holdFreshness?: boolean;
+  link: { label: string; href: string } | undefined;
+  /** Customise mode: the footer's links are out of reach, like the body's. */
+  inert: boolean;
+  /** Receives the element a body's footer content is drawn into. */
+  slotRef: (element: HTMLElement | null) => void;
 }) {
-  // Before the early return, so the hook runs on every render of this
-  // component whichever branch it takes.
-  const relative = useRelativeTime(freshness);
-
-  if (freshness === null && link === undefined && !holdFreshness) return null;
-
   return (
     <CardFooter
       data-testid="widget-card-footer"
       inert={inert || undefined}
-      // No top rule and no tint. `CardFooter` defaults to both, which draws a
-      // filled strip across the bottom and reads as a separate element attached
-      // to the card rather than as part of it.
-      className="flex items-center justify-between gap-2 border-0 bg-transparent px-5 pb-4 pt-0"
-    >
-      {freshness !== null ? (
-        // A `<time>` carrying the machine-readable instant, with the exact one
-        // on hover. The relative label is the scannable form and is deliberately
-        // imprecise; a reader who needs to know whether "5m ago" means before or
-        // after something else they were watching has nowhere else to find out,
-        // and `dateTime` is what lets anything reading the page recover the
-        // instant the prose rounded off.
-        <time
-          dateTime={freshness.toISOString()}
-          title={formatDateWithAdminTimezone(
-            freshness,
-            { dateStyle: "medium", timeStyle: "medium" },
-            ""
-          )}
-          data-testid="widget-card-freshness"
-          className="text-xs text-muted-foreground"
-        >
-          Updated {relative}
-        </time>
-      ) : holdFreshness ? (
-        // The freshness line's own type, unseen and unheard: as tall as the
-        // line that will replace it, so its arrival moves nothing.
-        <span
-          aria-hidden="true"
-          data-testid="widget-card-freshness-held"
-          className="invisible text-xs"
-        >
-          Updated just now
-        </span>
-      ) : (
-        // Holds the footer's left column so a link-only footer still sits
-        // right, without a second layout branch.
-        <span />
+      // No top rule and no tint: `CardFooter` defaults to both, which reads as a separate element
+      // attached to the card rather than as part of it. Its own height, a gap and a line, so an
+      // empty footer keeps the room a full one takes.
+      className={cn(
+        // A gap and a link's line, 28 px, as `cardBodyHeightPx` counts it.
+        "flex h-7 shrink-0 items-center justify-end gap-3 border-0 bg-transparent p-0",
+        // Clicks pass through the footer's own room to what is drawn under it: in a short card
+        // the body's empty state, with its one action, runs into this room, and an empty footer
+        // laid over it took the click. Only what the footer holds, its link and anything a body
+        // draws into it, takes clicks.
+        "pointer-events-none",
+        FRAME_FOOTER_GAP.className,
+        // Out of reach in customise mode, and dimmed with the body so it does not look usable.
+        inert && "opacity-55"
       )}
+    >
+      <div
+        ref={slotRef}
+        data-testid="widget-card-footer-slot"
+        className="pointer-events-auto contents"
+      />
       {link !== undefined && (
-        // Foreground, with the brand on the underline: a brand primary is any colour its owner
-        // picked, and small text in it can fall under AA contrast (a mid-tone indigo is about
-        // 4.47:1 on white). The underline keeps it reading as a link, and solid on hover and
-        // focus.
         <Link
           href={link.href}
-          className="text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary"
+          className={cn(CARD_FOOTER_LINK_CLASS, "pointer-events-auto")}
         >
           {link.label}
         </Link>

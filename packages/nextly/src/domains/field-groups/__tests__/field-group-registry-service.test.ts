@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, beforeAll } from "vitest";
 
 // The sync asks the reconcile service to clear a diverged mark on a code-managed group. Mocked so
 // the ASK is observable: the repair itself is proved in its own suite, and running it here would
@@ -24,6 +24,13 @@ import {
   createSilentLogger,
   createMockAdapter,
 } from "./field-group-test-helpers";
+import { loadDialectTables } from "../../../database/dialect-tables";
+
+// The postgresql tables this file reads; the unit setup loads only
+// the run's own dialect, as an app's adapter would.
+beforeAll(async () => {
+  await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
+});
 
 type RegistryTestCtx = {
   service: FieldGroupRegistryService;

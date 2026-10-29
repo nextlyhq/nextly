@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/admin",
-  "version": "0.0.2-alpha.71",
+  "version": "0.0.2-alpha.72",
   "description": "Nextly - Admin dashboard and management interface",
   "license": "MIT",
   "type": "module",
@@ -36,6 +36,7 @@
     "check-types": "node ../../scripts/tsc.mjs --noEmit",
     "check:published-build": "node scripts/check-published-build.mjs",
     "report:bundle": "node scripts/bundle-report.mjs",
+    "check:budgets": "node scripts/check-bundle-budgets.mjs",
     "test": "node scripts/ensure-dist.mjs && vitest run",
     "test:watch": "node scripts/ensure-dist.mjs && vitest",
     "test:ui": "node scripts/ensure-dist.mjs && vitest --ui",
@@ -48,10 +49,10 @@
   },
   "peerDependencies": {
     "@nextlyhq/ui": "workspace:^",
-    "next": "^15.5.28 || ^16.4.1",
-    "nextly": "0.0.2-alpha.71",
-    "react": "^18.0.0 || ^19.0.0",
-    "react-dom": "^18.0.0 || ^19.0.0"
+    "next": "^16.4.1",
+    "nextly": "0.0.2-alpha.72",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@nextlyhq/admin-css": "workspace:*",
@@ -147,6 +148,7 @@
     "pluralize": "^8.0.0",
     "react-dropzone": "^14.3.8",
     "react-hook-form": "^7.66.0",
+    "recharts": "3.10.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
     "tailwind-variants": "^3.1.1",

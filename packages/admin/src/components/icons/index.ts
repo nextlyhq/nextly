@@ -78,6 +78,7 @@ export {
   FileJson, // APIPlayground: empty state icon
   FileQuestion,
   FileSpreadsheet,
+  Feather, // Rail: the Content item
   FileText,
   FileVideo, // UploadPreview: video file icon
   Filter, // Table filters
@@ -126,6 +127,7 @@ export {
   Mail, // useFields: email
   Map, // Collection Settings: icon picker
   MapPin, // Collection Builder: point field
+  Maximize2, // Media library: expand an item's details to full screen
   Menu,
   MessageCircle, // Collection Settings: icon picker
   MessageSquare, // Collection Settings: icon picker

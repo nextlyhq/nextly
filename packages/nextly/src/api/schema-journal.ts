@@ -28,6 +28,7 @@
 
 import { isSuperAdmin } from "../auth/access/actor";
 import { actorForKey, userIsSuperAdmin } from "../auth/access/resolve-actor";
+import { keyCallerHoldsSuperAdmin } from "../auth/authenticated-scope";
 import {
   isErrorResponse,
   requireAuthentication,
@@ -68,7 +69,8 @@ function holdsSuperAdmin(auth: AuthContext): Promise<boolean> {
       userId: auth.userId,
       grants: auth.grants ?? [],
       roles: auth.roles,
-      superAdmin: auth.keyHoldsSuperAdmin === true,
+      // Bounded as the key's scope is: the raw flag would outlast the bound.
+      superAdmin: keyCallerHoldsSuperAdmin(auth),
     });
     return Promise.resolve(isSuperAdmin(key));
   }

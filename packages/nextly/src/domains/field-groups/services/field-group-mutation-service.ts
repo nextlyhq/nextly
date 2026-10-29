@@ -36,7 +36,14 @@ import {
   normalizeRelationshipFields,
 } from "../../../shared/lib/field-transform";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
-import { hashPasswordFieldValues } from "../../../shared/lib/password-fields";
+import {
+  carryStoredPasswords,
+  type FieldGroupReach,
+  hashPasswordFieldValues,
+  NO_FIELD_GROUPS,
+  reachesPasswordField,
+  storedPasswordValues,
+} from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -269,49 +276,11 @@ function parsedColumn(value: unknown): unknown {
 }
 
 /**
- * Every password value `containers` hold, at any depth: the stored hashes an
- * update's restore may put back.
+ * Where the password walk follows the field groups an instance holds inline:
+ * the resolver of their fields, or none where its containers hold none.
  */
-function storedPasswordValues(
-  containers: Record<string, unknown>,
-  fields: readonly FieldConfig[]
-): Set<string> {
-  const found = new Set<string>();
-  collectPasswords(containers, fields, found);
-  return found;
-}
-
-/** {@link storedPasswordValues} for one value: a record or a list of them. */
-function collectPasswords(
-  value: unknown,
-  level: readonly FieldConfig[],
-  found: Set<string>
-): void {
-  for (const row of Array.isArray(value) ? value : [value]) {
-    if (row === null || typeof row !== "object") continue;
-    for (const field of level) {
-      collectFieldPasswords(row as Record<string, unknown>, field, found);
-    }
-  }
-}
-
-/** The password values one field of `record` holds, at any depth. */
-function collectFieldPasswords(
-  record: Record<string, unknown>,
-  field: FieldConfig,
-  found: Set<string>
-): void {
-  const { name, type, fields } = field as {
-    name?: unknown;
-    type?: unknown;
-    fields?: unknown;
-  };
-  if (typeof name !== "string") return;
-  const held = record[name];
-  if (type === "password" && typeof held === "string") found.add(held);
-  else if (Array.isArray(fields)) {
-    collectPasswords(held, fields as FieldConfig[], found);
-  }
+function reachOf(nested: ComponentFieldResolver | undefined): FieldGroupReach {
+  return nested ? { fieldsOf: nested } : NO_FIELD_GROUPS;
 }
 
 /**
@@ -1220,7 +1189,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
 
         // i18n: split translatable values out per instance (companion-owned). The
@@ -1357,7 +1328,9 @@ export class FieldGroupMutationService extends BaseService {
           componentFields,
           instanceId && existingMap.has(instanceId) ? "update" : "create",
           req,
-          componentMeta.slug
+          componentMeta.slug,
+          // The stored row an existing instance is, for its stored passwords.
+          instanceId && existingMap.has(instanceId) ? instanceId : undefined
         );
         // Validation only: judge every instance, store none.
         if (validateOnly) continue;
@@ -2008,7 +1981,30 @@ export class FieldGroupMutationService extends BaseService {
     if (issues.length > 0) {
       throw NextlyError.validation({ errors: issues });
     }
-    await hashPasswordFieldValues(instance, componentFields, restoredHashes);
+    // After validation, which judges what the writer sent: each password an
+    // update left out of a container keeps its stored hash, whoever writes.
+    const keep = new Set(restoredHashes);
+    if (mode === "update" && slug !== undefined && storedId !== undefined) {
+      const reach = reachOf(nested);
+      if (reachesPasswordField(componentFields, reach)) {
+        const carried = carryStoredPasswords(
+          instance,
+          await this.storedContainerValues(slug, storedId, componentFields),
+          componentFields,
+          reach
+        );
+        for (const hash of carried) keep.add(hash);
+      }
+    }
+    // Through the field groups held inline in this one's containers too: their
+    // passwords are stored in those containers, which no save of their own
+    // reaches.
+    await hashPasswordFieldValues(
+      instance,
+      componentFields,
+      reachOf(nested),
+      keep
+    );
   }
 
   /**
@@ -2117,8 +2113,12 @@ export class FieldGroupMutationService extends BaseService {
     }
     await keepContainersAtStored(instance, stored, judge);
     // The stored hashes the write may put back, so the hashing pass leaves
-    // them as they are.
-    return storedPasswordValues(stored, componentFields);
+    // them as they are: at every depth, as the hashing pass reaches them.
+    return storedPasswordValues(
+      stored,
+      componentFields,
+      reachOf(await this.nestedComponentsOf(componentFields as FieldConfig[]))
+    );
   }
 
   /**
@@ -2174,6 +2174,20 @@ export class FieldGroupMutationService extends BaseService {
       status: false,
     });
     if (!schema) return undefined;
+    // Before its migration the companion is not there, and a translated
+    // container is still on the instance's own row. Off a transaction the
+    // verdict is resolved here, so a cold cache cannot skip the read; inside
+    // one only the cached verdict is read, which the write resolved before
+    // opening it.
+    const readiness =
+      scope.executor === undefined
+        ? await resolveCompanionReadiness(this.adapter, {
+            companionTableName: schema.companionTableName,
+            mainTableName: meta.tableName,
+            localizedColumns: schema.localizedFields.map(f => f.column),
+          })
+        : cachedCompanionReadiness(this.adapter, schema.companionTableName);
+    if (readiness !== "ready") return undefined;
     const rows = await scope.select(schema.companionTableName, {
       where: this.whereAnd({
         [COMPANION_PARENT_COLUMN]: instanceId,
@@ -2339,7 +2353,9 @@ export class FieldGroupMutationService extends BaseService {
       componentFields,
       existingEntry ? "update" : "create",
       args.req,
-      meta.slug
+      meta.slug,
+      // The stored row an existing block is, for its stored passwords.
+      existingEntry ? instanceId : undefined
     );
     return { meta, componentFields, instanceId, existingEntry };
   }

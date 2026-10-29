@@ -13,6 +13,7 @@
  * @packageDocumentation
  */
 
+import { apiKeyScopeFrom } from "../../auth/authenticated-scope";
 import type { AuthContext } from "../../auth/middleware";
 import {
   apiKeyPermissionsFor,
@@ -20,6 +21,7 @@ import {
 } from "../../domains/auth/api-key-policy";
 import {
   apiKeyViewer,
+  resolveKeyCaller,
   type ApiKeyMeta,
 } from "../../domains/auth/services/api-key-service";
 import {
@@ -95,18 +97,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
         limit: args.limit ?? 10,
       });
 
-      // The query selects `slug` at runtime but the RoleQueryService return
-      // type doesn't declare it (type gap in the service layer); widen the
-      // runtime shape to the full Role record the mapper expects.
-      const data = result.data as Array<{
-        id: string;
-        name: string;
-        slug: string;
-        description: string | null;
-        level: number;
-        isSystem: boolean;
-      }>;
-      const items = data.map(r => mapRole(r));
+      const items = result.data.map(r => mapRole(r));
       const total = result.meta?.total ?? items.length;
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
@@ -426,18 +417,10 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
         const auth = await ctx.apiKeyService.authenticateApiKey(args.rawKey);
         if (!auth) return { valid: false };
 
-        const [permissions, roles, meta] = await Promise.all([
-          ctx.apiKeyService.resolveApiKeyPermissions(
-            auth.tokenType,
-            auth.roleId,
-            auth.userId,
-            auth.id
-          ),
-          ctx.apiKeyService.resolveApiKeyRoles(
-            auth.tokenType,
-            auth.roleId,
-            auth.userId
-          ),
+        // Resolved as REST authentication resolves a key, so the actor below
+        // is the scope a request on this key is judged by.
+        const [resolved, meta] = await Promise.all([
+          resolveKeyCaller(ctx.apiKeyService, auth),
           ctx.apiKeyService.getApiKeyById(auth.id, auth.userId, {
             allUsers: true,
           }),
@@ -447,9 +430,10 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
           valid: true,
           userId: auth.userId,
           tokenType: auth.tokenType,
-          permissions,
-          roles,
+          permissions: resolved.grants.map(grant => grant.slug),
+          roles: resolved.roles,
           expiresAt: meta?.expiresAt ?? null,
+          actor: apiKeyScopeFrom(resolved),
         };
       } catch {
         return { valid: false };

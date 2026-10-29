@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-page-builder",
-  "version": "0.0.2-alpha.71",
+  "version": "0.0.2-alpha.72",
   "description": "Visual page builder plugin for Nextly (blocks, drag-and-drop, server-first rendering)",
   "license": "MIT",
   "type": "module",
@@ -58,10 +58,10 @@
     "@nextlyhq/ui": "workspace:^",
     "@tanstack/react-query": ">=5.0.0",
     "lucide-react": ">=0.400.0",
-    "next": "^15.5.28 || ^16.4.1",
+    "next": "^16.4.1",
     "nextly": "workspace:*",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "react-hook-form": ">=7.0.0"
   },
   "devDependencies": {

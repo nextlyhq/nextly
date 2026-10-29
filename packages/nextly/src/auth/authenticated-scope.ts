@@ -18,8 +18,13 @@ import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import { permissionSlug } from "../schemas/_zod/rbac";
 
 import type { AccessTarget } from "./access/decide";
+import { onceForRequest } from "./access/request-memo";
 import { codeAccessAllows } from "./code-access";
 import type { RequestActorType } from "./request-actor";
+import {
+  SESSION_CUTOFF_SECONDS,
+  SESSION_STANDING_TTL_MS,
+} from "./session/session-standing";
 
 /**
  * One permission the caller holds, as the row it was resolved from.
@@ -86,23 +91,45 @@ export interface AuthenticatedScope {
 
 /**
  * The scopes authentication made for a full-access key whose maker is an
- * active super-admin: the only scopes that carry super-admin authority.
+ * active super-admin, the only scopes that carry super-admin authority, each
+ * with the moment that authority lapses.
  *
  * Kept here rather than as a field of the scope, because a scope is public
  * and can be built by hand: a field would be forged as easily as written. A
  * scope built by hand, a narrowed copy and a spread copy are each a different
  * object, so none of them carries the authority, as a narrower scope must not.
+ *
+ * The authority is the maker's standing when the key was authenticated, so a
+ * scope kept past its request (a plugin storing it, a Direct API `actor`
+ * reused later) holds it no longer than a session would go on holding a
+ * standing that changed: within {@link SESSION_CUTOFF_SECONDS} of the change,
+ * and never past the soonest expiry among the maker's roles, where a
+ * session's access token ends too. The standing that admitted the key may be
+ * up to {@link SESSION_STANDING_TTL_MS} old when the scope is made, so the
+ * scope holds the authority for what is left of the cutoff after that. After that it is judged on its grants alone, and the key's next
+ * authentication asks again. Timed on a monotonic clock, so setting the wall
+ * clock back cannot stretch it once it is made.
  */
-const SUPER_ADMIN_SCOPES = new WeakSet<AuthenticatedScope>();
+const SUPER_ADMIN_SCOPES = new WeakMap<AuthenticatedScope, number>();
+
+const SUPER_ADMIN_SCOPE_LIFETIME_MS =
+  SESSION_CUTOFF_SECONDS * 1000 - SESSION_STANDING_TTL_MS;
 
 /**
  * Whether `scope` carries super-admin authority: authentication made it for a
- * full-access key whose maker was an active super-admin for the request.
+ * full-access key whose maker was an active super-admin, and the bound that
+ * authority holds for has not passed.
  */
 export function scopeHoldsSuperAdmin(
   scope: AuthenticatedScope | undefined
 ): boolean {
-  return scope !== undefined && SUPER_ADMIN_SCOPES.has(scope);
+  if (scope === undefined) return false;
+  const lapsesAt = SUPER_ADMIN_SCOPES.get(scope);
+  if (lapsesAt === undefined) return false;
+  // Asked once per request, so every door one operation passes gives the
+  // same answer, even one asked after the bound passed mid-operation. A scope
+  // kept for a later request is asked again there, and has lapsed by then.
+  return onceForRequest(scope, () => performance.now() < lapsesAt);
 }
 
 /** Freeze a scope and the arrays inside it, so no gate can be desynced. */
@@ -160,6 +187,17 @@ export function apiKeyScopeFrom(caller: {
    * carries none.
    */
   keyHoldsSuperAdmin?: boolean;
+  /**
+   * The soonest expiry among the maker's roles (epoch ms), read with the
+   * authority, or absent where none expires. The authority ends there.
+   */
+  keyHoldsSuperAdminUntil?: number;
+  /**
+   * When authentication asked the maker's standing (`performance.now()`).
+   * The authority's bound counts from here; absent, from when the scope is
+   * made.
+   */
+  keyStandingAskedAt?: number;
 }): AuthenticatedScope {
   const scope = caller.grants
     ? apiKeyScope(caller.grants, caller.roles)
@@ -172,8 +210,40 @@ export function apiKeyScopeFrom(caller: {
         permissions: [...(caller.permissions ?? [])],
         ...(caller.roles ? { roles: [...caller.roles] } : {}),
       });
-  if (caller.keyHoldsSuperAdmin === true) SUPER_ADMIN_SCOPES.add(scope);
+  if (caller.keyHoldsSuperAdmin === true) {
+    // Counted from when the standing that admitted the key was asked, not
+    // from now: resolving the grants and roles in between can take a while.
+    // The role's expiry is wall-clock time, turned into how long is left of
+    // it now, so the deadline itself stays on the monotonic clock.
+    const now = performance.now();
+    const fromStanding =
+      (caller.keyStandingAskedAt ?? now) + SUPER_ADMIN_SCOPE_LIFETIME_MS;
+    const lapsesAt =
+      caller.keyHoldsSuperAdminUntil === undefined
+        ? fromStanding
+        : Math.min(
+            fromStanding,
+            now + (caller.keyHoldsSuperAdminUntil - Date.now())
+          );
+    // A bound already passed leaves nothing to carry.
+    if (lapsesAt > now) SUPER_ADMIN_SCOPES.set(scope, lapsesAt);
+  }
   return scope;
+}
+
+/**
+ * Whether an authenticated key caller carries its maker's super-admin
+ * authority now: the answer a scope made from it would give, bounds
+ * included. A door that has the caller rather than a scope asks this, so it
+ * cannot admit a key after the scope's bound has passed.
+ */
+export function keyCallerHoldsSuperAdmin(
+  caller: Parameters<typeof apiKeyScopeFrom>[0]
+): boolean {
+  return (
+    caller.keyHoldsSuperAdmin === true &&
+    scopeHoldsSuperAdmin(apiKeyScopeFrom(caller))
+  );
 }
 
 /**
@@ -310,7 +380,10 @@ export function slugGrants(
  * back to its normal RBAC resolution (the owner's / session's database grants).
  * Returns a boolean for an API key: the stamped scope is authoritative, in both
  * directions — a key without the grant is denied however privileged its owner,
- * and a key with it is allowed however unprivileged.
+ * and a key with it is allowed however unprivileged. The one exception is a
+ * scope carrying its maker's super-admin authority, which is allowed whatever
+ * its grants say, as every other way in allows it: its grant list may lag a
+ * permission added since it was read.
  */
 export function apiKeyScopeAllows(
   scope: AuthenticatedScope | undefined,
@@ -318,6 +391,7 @@ export function apiKeyScopeAllows(
   resource: string
 ): boolean | null {
   if (scope?.actorType !== "apiKey") return null;
+  if (scopeHoldsSuperAdmin(scope)) return true;
   return scope.permissions.includes(permissionSlug(operation, resource));
 }
 

@@ -14,7 +14,6 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { WidgetRenderer } from "../WidgetRenderer";
 
-import { fenceOff } from "./CustomizingFence";
 import { useSettingsPreview, type ShownAnswer } from "./useSettingsPreview";
 
 export function SettingsPreview(props: {
@@ -33,7 +32,8 @@ export function SettingsPreview(props: {
       className="flex flex-col gap-2"
     >
       <p className="text-xs font-medium text-muted-foreground">Preview</p>
-      <div ref={fenceOff} data-testid="settings-preview">
+      {/* A card shown, not used: its content is out of reach. */}
+      <div inert data-testid="settings-preview">
         <WidgetRenderer
           definition={preview.definition}
           placement={preview.placement}
@@ -41,11 +41,11 @@ export function SettingsPreview(props: {
           {...(preview.slotFor === undefined
             ? {}
             : { slotFor: preview.slotFor })}
-          updatedAt={preview.updatedAt}
+          subtitle={preview.subtitle}
           isFetching={preview.isFetching}
-          {...(preview.answerTier === undefined
+          {...(preview.answerSize === undefined
             ? {}
-            : { answerTier: preview.answerTier })}
+            : { answerSize: preview.answerSize })}
         />
       </div>
     </section>

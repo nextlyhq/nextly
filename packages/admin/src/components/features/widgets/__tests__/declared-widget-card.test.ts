@@ -18,6 +18,8 @@ import { resolveWidgetOutcome } from "../outcome";
 import { resolveDashboardWidgets } from "../resolve-widgets";
 import { questionOf } from "../widget-as-asked";
 
+import { gridBounds } from "./grid-bounds";
+
 const allow = () => true;
 
 function registered(fields: Record<string, unknown>): DashboardWidget {
@@ -28,7 +30,7 @@ function registered(fields: Record<string, unknown>): DashboardWidget {
         id: "acme/orders",
         title: "Open orders",
         archetype: "list",
-        defaultSize: "full",
+        size: { default: { w: 12, h: 4 } },
         ...fields,
       } as unknown as RegisteredWidgetMeta,
     ],
@@ -46,7 +48,7 @@ const declared: DashboardWidget = {
   id: "acme/orders",
   title: "Open orders",
   archetype: "list",
-  size: "full",
+  size: gridBounds(12, 4),
   serverData: true,
   declaredEmpty: { title: "No open orders", action: createOrder },
 };
@@ -93,6 +95,20 @@ describe("what the admin carries from a declaration core answers", () => {
     expect(widget.declaredEmpty).toEqual({ title: "No open orders" });
   });
 
+  it("carries an action that opens the card's settings as one, with no link to make", () => {
+    const widget = registered({
+      serverData: true,
+      empty: {
+        message: "Nothing written yet.",
+        action: { label: "Write a note", opens: "settings" },
+      },
+    });
+    expect(widget.declaredEmpty).toEqual({
+      title: "Nothing written yet.",
+      action: { label: "Write a note", opensSettings: true },
+    });
+  });
+
   it("carries neither for a widget that declares neither", () => {
     // The control: a resolver that set both on every widget would satisfy the
     // two cases above.
@@ -135,7 +151,14 @@ describe("a card core answers, as the frame draws it", () => {
   it("draws the empty state over a widget's own component", () => {
     const custom: DashboardWidget = { ...declared, archetype: "custom" };
     expect(resolveWidgetOutcome(custom, markedEmpty([])).state).toBe("empty");
-    expect(resolveWidgetOutcome(custom, list([])).state).toBe("self-drawn");
+    // Otherwise its own data reaches its component, which the frame draws
+    // inside itself (`answered`).
+    expect(
+      resolveWidgetOutcome(custom, {
+        ok: true,
+        result: { op: "data", data: [] },
+      }).state
+    ).toBe("answered");
   });
 
   it("puts the declared words in place of a display's own when the answer has nothing", () => {

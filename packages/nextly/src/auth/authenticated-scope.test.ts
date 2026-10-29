@@ -3,7 +3,7 @@
  * everyone else; `readAuthenticatedScope` reads the scope the request caller
  * was authenticated with.
  */
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 
 import {
   asCaller,
@@ -11,6 +11,8 @@ import {
   sessionCaller,
 } from "../dispatcher/__tests__/request-caller";
 import { readAuthenticatedScope } from "../dispatcher/helpers/authenticated-actor";
+
+import { runWithAccessMemo } from "./access/request-memo";
 
 import {
   apiKeyScope,
@@ -20,6 +22,10 @@ import {
   scopeGrants,
   scopeHoldsSuperAdmin,
 } from "./authenticated-scope";
+import {
+  SESSION_CUTOFF_SECONDS,
+  SESSION_STANDING_TTL_MS,
+} from "./session/session-standing";
 
 describe("apiKeyScopeAllows", () => {
   it("allows when the API key holds the `{operation}-{resource}` grant", () => {
@@ -189,5 +195,118 @@ describe("a key's super-admin authority on its scope", () => {
     expect(scopeHoldsSuperAdmin(apiKeyScope(grants))).toBe(false);
     expect(scopeHoldsSuperAdmin(apiKeyScopeFrom({ grants }))).toBe(false);
     expect(scopeHoldsSuperAdmin(undefined)).toBe(false);
+  });
+});
+
+describe("a key's super-admin authority over time", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stands as first answered for the rest of a request, and is asked afresh in a later one", () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const scope = apiKeyScopeFrom({
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+    });
+
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(true);
+      vi.advanceTimersByTime(SESSION_CUTOFF_SECONDS * 1000 + 1);
+      // Every door this request asks gives the answer its first door got.
+      expect(scopeHoldsSuperAdmin(scope)).toBe(true);
+    });
+    // A later request asks again, once the bound has passed.
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
+  });
+
+  it("ends within the cutoff of a deactivation the standing it was made on had not yet seen", () => {
+    // The standing that admitted the key may have been read up to one
+    // standing lifetime before the scope was made, and the maker deactivated
+    // just after that read. The scope must not carry the authority past the
+    // cutoff counted from then.
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const scope = apiKeyScopeFrom({
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+    });
+
+    vi.advanceTimersByTime(
+      SESSION_CUTOFF_SECONDS * 1000 - SESSION_STANDING_TTL_MS + 1
+    );
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
+  });
+
+  it("counts its bound from when the standing that admitted the key was asked, not from when the scope is made", () => {
+    // The grants and roles are resolved between the standing check and the
+    // scope, and that can take a while: the bound must not restart there.
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const standingAskedAt = performance.now();
+    vi.advanceTimersByTime(3_000);
+    const scope = apiKeyScopeFrom({
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+      keyStandingAskedAt: standingAskedAt,
+    });
+
+    vi.advanceTimersByTime(
+      SESSION_CUTOFF_SECONDS * 1000 - SESSION_STANDING_TTL_MS - 3_000 + 1
+    );
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
+  });
+
+  it("lapses at its maker's next role expiry where that comes before the bound", () => {
+    vi.useFakeTimers({ toFake: ["performance", "Date"] });
+    const grants = [{ slug: "read-posts", action: "read", resource: "posts" }];
+    const lapsing = apiKeyScopeFrom({
+      grants,
+      keyHoldsSuperAdmin: true,
+      keyHoldsSuperAdminUntil: Date.now() + 2_000,
+    });
+    // POPULATION CONTROL: the same scope with no expiry holds past it.
+    const lasting = apiKeyScopeFrom({ grants, keyHoldsSuperAdmin: true });
+
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(lapsing)).toBe(true);
+      expect(scopeHoldsSuperAdmin(lasting)).toBe(true);
+    });
+    vi.advanceTimersByTime(2_001);
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(lapsing)).toBe(false);
+      expect(scopeHoldsSuperAdmin(lasting)).toBe(true);
+    });
+  });
+
+  it("is carried by no scope made after its maker's role expired", () => {
+    vi.useFakeTimers({ toFake: ["performance", "Date"] });
+    const scope = apiKeyScopeFrom({
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+      keyHoldsSuperAdminUntil: Date.now() - 1,
+    });
+
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
+  });
+});
+
+describe("a key's own grants, for a scope carrying super-admin authority", () => {
+  it("allows what the grants leave out, as every other way in does", () => {
+    // The key's grant list may lag a permission seeded since it was read.
+    const carrying = apiKeyScopeFrom({ grants: [], keyHoldsSuperAdmin: true });
+    // POPULATION CONTROL: the same grants without the authority are refused.
+    const plain = apiKeyScopeFrom({ grants: [] });
+
+    expect(apiKeyScopeAllows(carrying, "publish", "content-releases")).toBe(
+      true
+    );
+    expect(apiKeyScopeAllows(plain, "publish", "content-releases")).toBe(false);
   });
 });

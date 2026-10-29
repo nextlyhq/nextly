@@ -1,26 +1,30 @@
 /**
- * Whether the app's generated component map holds every component the admin
- * needs, checked where the admin's server layout renders, before any admin
- * page is served.
+ * The app's generated component map, kept up to date while the app runs in
+ * development, where the admin's server layout renders.
  *
  * The app commits two generated files: the map, which the admin page imports
  * to register each plugin component, and its strings-only path list, which
- * the layout hands to this check. The check compares that list with what the
- * boot's resolved plugins declare.
+ * the layout hands to this check. In development the check compares that list
+ * with what the boot's resolved plugins declare:
  *
- * - **In development** a map that is out of date is written again, and the
- *   render goes on: Next sees the files change and reloads the admin with the
- *   new map, so a plugin added during `next dev` needs no command. Only a map
- *   that cannot be written stops the admin.
+ * - A map that names a site component relative to a config that has moved is
+ *   out of date too, though its paths agree: the same spelling now resolves
+ *   from another folder.
+ * - A map that is out of date is written again, and the render goes on: Next
+ *   sees the files change and reloads the admin with the new map, so a plugin
+ *   added during `next dev` needs no command.
  * - **`NEXTLY_GENERATED_FILES_WRITE=0`** turns that rewrite off: the running
- *   app never rewrites generated files (a read-only checkout, a container, CI,
- *   a test run). Development then refuses as production does, naming the
- *   switch.
- * - **In production** the admin is refused while a dashboard widget's
- *   component is missing, naming each one and the fix. Only the admin: the
- *   check runs in its layout, so the public site keeps serving. Any other
- *   missing component (a page, a view, a field-type editor) is logged, since
- *   those draw empty today and refusing them is the plugin platform's call.
+ *   app never rewrites generated files (a read-only checkout, a container, a
+ *   test run). The check then warns, naming each component and the switch.
+ * - A map that cannot be written is warned about the same way.
+ *
+ * Nothing refuses the admin. A widget whose component the map lacks draws its
+ * own card's error state, and every other card and page draws as usual; that
+ * the committed map agrees with the declarations is checked in CI, by
+ * `nextly generate:types --check`, never at boot.
+ *
+ * **In production** the check does nothing at all: it reads, boots and writes
+ * nothing, so a request to the admin costs no file read and no comparison.
  *
  * Server code only: it writes files and boots Nextly. Not marked with the
  * `server-only` package, which throws in plain Node and so would break every
@@ -31,18 +35,23 @@
  * @module domains/widgets/declaration/component-map-check
  */
 
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
-import { NextlyError } from "../../../errors/nextly-error";
 import { getNextly } from "../../../init";
 import { getNextlyLogger } from "../../../observability/logger";
 import {
+  type ComponentMapAgreement,
+  checkComponentMapFiles,
+} from "../../../plugins/codegen/check-component-map";
+import {
   COMPONENT_IMPORT_MAP_FILENAME,
-  COMPONENT_PATHS_FILENAME,
   componentUses,
   type ComponentMapEntry,
   configImportOf,
+  configImportSpecifier,
+  describeComponentUse,
 } from "../../../plugins/codegen/component-import-map";
 import { writeComponentMapFiles } from "../../../plugins/codegen/write-component-map";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
@@ -50,7 +59,10 @@ import { findConfigFile } from "../../../shared/lib/config-file";
 import { generatedTypesFile } from "../../../shared/lib/generated-output-paths";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 
-import { adminComponentPlugins } from "./component-map-store";
+import {
+  adminComponentPlugins,
+  adminSiteDashboard,
+} from "./component-map-store";
 
 /** What the admin's server layout hands the check. */
 export interface AdminComponentCheckInput {
@@ -61,52 +73,114 @@ export interface AdminComponentCheckInput {
 }
 
 /**
- * Checks the app's component map, as the module comment describes: rewrites
- * it in development, refuses the admin in production over a missing widget
- * component, and steps aside, saying so, when there is nothing to check
- * against yet.
+ * Keeps the app's component map up to date in development, as the module
+ * comment describes, and returns at once anywhere else. Never throws over the
+ * map: a missing component is its card's error, not the admin's.
  */
 export async function checkAdminComponents(
   input: AdminComponentCheckInput
 ): Promise<void> {
-  // `next build` evaluates server components without serving anyone; the
-  // check is about what a request would get, so it waits for one.
-  if (process.env.NEXT_PHASE === "phase-production-build") return;
+  // First, before any boot or read: production serves the map it was built
+  // with, and only development can do anything about one that is out of date.
+  if (process.env.NODE_ENV !== "development") return;
   const plugins = await bootPlugins(input);
   if (plugins === undefined) return;
 
   const registered = new Set(input.registeredComponentPaths);
+  // The site's own widgets draw through the map as the plugins' do, as the
+  // boot registered them: after every plugin's setup(), which may add one the
+  // config as written does not hold.
+  const siteDashboard = adminSiteDashboard();
   // Every use, not one per path: two widgets drawn with one missing component
-  // are both named and counted.
-  const uses = componentUses(plugins);
+  // are both named.
+  const uses = componentUses(plugins, siteDashboard);
   const missing = uses.filter(each => !registered.has(each.path));
   /*
    * 🔴 Compared in both directions. A plugin removed from the config leaves
    * its paths in the map with nothing missing, and the map still imports
    * them: once its package is uninstalled too, the admin fails to resolve
-   * that import before this check can run again to repair it. Only
-   * development rewrites, so only development acts on these; elsewhere an
-   * import of an installed package nothing draws is harmless.
+   * that import before this check can run again to repair it.
    */
   const declared = new Set(uses.map(each => each.path));
   const obsolete = [...registered].filter(path => !declared.has(path));
+  const place = mapFolder(input.config);
+  const otherConfig =
+    missing.length === 0 && obsolete.length === 0
+      ? await configDisagreement(plugins, siteDashboard, uses, place)
+      : undefined;
+  if (missing.length === 0 && obsolete.length === 0 && !otherConfig) return;
 
-  const development = process.env.NODE_ENV === "development";
-  if (development && !generatedFilesWriteOff()) {
-    if (missing.length === 0 && obsolete.length === 0) return;
-    await rewriteInDevelopment(
-      plugins,
-      mapFolder(input.config),
-      missing,
-      obsolete
-    );
+  const stale = { missing, obsolete, otherConfig };
+  if (generatedFilesWriteOff()) {
+    warnStale(stale, place, "write-off");
     return;
   }
-  if (missing.length === 0) return;
-  refuseOverWidgets(
-    missing,
-    mapFolder(input.config),
-    development ? "write-off" : registered.size === 0 ? "no-map" : "stale"
+  await rewriteInDevelopment(plugins, siteDashboard, place, stale);
+}
+
+/**
+ * Where a map that lists the right paths still imports a config-relative component from the
+ * wrong folder: the config it is held to has moved, so the same spelling now resolves from
+ * another place. Asked of `generate:types --check`'s own comparison, never a second one.
+ *
+ * Only a site component written relative to the config moves with it, so only then are the
+ * map's files read; any other map is judged by its paths alone, at no cost per request. A map
+ * that cannot be read is answered as out of date, and the rewrite then names the failure.
+ */
+async function configDisagreement(
+  plugins: readonly PluginDefinition[],
+  siteDashboard: unknown,
+  uses: readonly ComponentMapEntry[],
+  place: MapFolder
+): Promise<ComponentMapAgreement["otherConfig"]> {
+  if (!uses.some(each => each.fromConfig)) return undefined;
+  const config = await heldConfig(place);
+  try {
+    const found = await checkComponentMapFiles(
+      plugins,
+      place.typesOutputPath,
+      process.cwd(),
+      config,
+      siteDashboard
+    );
+    return found.otherConfig;
+  } catch {
+    return { written: undefined, expected: undefined };
+  }
+}
+
+/**
+ * The config file the map is held to in development, absolute, or none: the one the existing
+ * map imports, while that file is still there, since `generate:types` may have been given a
+ * `--config` path this process cannot know; otherwise the one found as the loader finds it.
+ * The rewrite and the check above both read it, so a rewritten map agrees with the check.
+ */
+async function heldConfig(place: MapFolder): Promise<string | undefined> {
+  const mapDir = dirname(place.typesOutputPath);
+  const kept = configImportOf(
+    await readFile(join(mapDir, COMPONENT_IMPORT_MAP_FILENAME), "utf-8").catch(
+      () => ""
+    )
+  );
+  return (
+    (kept === undefined ? undefined : configFileOf(kept, mapDir)) ??
+    findConfigFile(process.cwd())
+  );
+}
+
+/**
+ * The file a map's config import names, as `configImportSpecifier` wrote it from that file, or
+ * none when no such file is there. The extension the specifier dropped, or wrote as its output's,
+ * is tried back, and the file is taken only where it gives the same specifier again.
+ */
+function configFileOf(specifier: string, mapDir: string): string | undefined {
+  const named = resolve(mapDir, specifier);
+  const candidates = named.endsWith(".mjs")
+    ? [named.replace(/\.mjs$/, ".mts"), named]
+    : [`${named}.ts`, `${named}.js`];
+  return candidates.find(
+    file =>
+      existsSync(file) && configImportSpecifier(mapDir, file) === specifier
   );
 }
 
@@ -174,32 +248,28 @@ function mapFolder(config: AdminComponentCheckInput["config"]): MapFolder {
   };
 }
 
-/**
- * In development, write the map again from the config. A write that fails
- * stops the admin only when a widget is affected, as in production; a map
- * that only kept a removed plugin's imports is warned about.
- */
+/** How a map is out of date: what it lacks, what it still imports, and the config it is held to. */
+interface Stale {
+  readonly missing: readonly ComponentMapEntry[];
+  readonly obsolete: readonly string[];
+  readonly otherConfig: ComponentMapAgreement["otherConfig"];
+}
+
+/** Write the map again from the config, and warn instead where it cannot be written. */
 async function rewriteInDevelopment(
   plugins: readonly PluginDefinition[],
+  siteDashboard: unknown,
   place: MapFolder,
-  missing: readonly ComponentMapEntry[],
-  obsolete: readonly string[]
+  stale: Stale
 ): Promise<void> {
+  const { missing, obsolete } = stale;
   try {
-    // The config the map already checks against, kept as it was written: `generate:types` may
-    // have been given a `--config` path this process cannot know. Only a map that names none
-    // takes the config file found as the loader finds it.
-    const kept = configImportOf(
-      await readFile(
-        join(dirname(place.typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME),
-        "utf-8"
-      ).catch(() => "")
-    );
     await writeComponentMapFiles(
       [...plugins],
       place.typesOutputPath,
       process.cwd(),
-      kept === undefined ? findConfigFile(process.cwd()) : { import: kept }
+      await heldConfig(place),
+      siteDashboard
     );
     getNextlyLogger().info({
       kind: "admin-component-map-regenerated",
@@ -208,176 +278,71 @@ async function rewriteInDevelopment(
       removed: obsolete,
     });
   } catch (error) {
-    const widgets = missing.filter(each => each.use === "widget");
-    if (widgets.length > 0) {
-      throw refusal(unwritableMessage(widgets, place), error);
-    }
-    if (missing.length > 0) warnMissing(missing, place);
-    if (obsolete.length > 0) warnObsolete(obsolete, place);
+    // Only a refused write is the folder's: any other failure (a full disk, a generator that
+    // threw) is named by its own message, or the warning would prescribe the wrong fix.
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    const refused = code === "EACCES" || code === "EPERM" || code === "EROFS";
+    warnStale(
+      stale,
+      place,
+      refused ? "unwritable" : "failed",
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }
 
-/**
- * Logs, once per process for each set, imports the map keeps for components
- * nothing declares any more, when they could not be removed.
- */
-function warnObsolete(obsolete: readonly string[], place: MapFolder): void {
-  const key = `obsolete\n${obsolete.join("\n")}`;
-  if (WARNED.has(key)) return;
-  WARNED.add(key);
-  getNextlyLogger().warn({
-    kind: "admin-component-map-obsolete",
-    message:
-      `The component map in ${place.folder}/ still imports ${obsolete.length} component(s) no plugin declares, and could not be written again:\n` +
-      obsolete.map(path => `- ${path}`).join("\n") +
-      "\nUninstalling their package breaks the admin's build until `npx nextly generate:types` runs.",
-  });
-}
+/** Why a map that is out of date was left as it is, which picks the warning's cause. */
+type LeftStale = "write-off" | "unwritable" | "failed";
 
-/** Why a map that is not rewritten is refused, which picks its wording. */
-type RefusalKind = "no-map" | "stale" | "write-off";
-
-/**
- * Refuse over a missing widget, and log every other gap: production, and
- * development with automatic regeneration turned off.
- */
-function refuseOverWidgets(
-  missing: readonly ComponentMapEntry[],
-  place: MapFolder,
-  kind: RefusalKind
-): void {
-  const widgets = missing.filter(each => each.use === "widget");
-  const others = missing.filter(each => each.use !== "widget");
-  if (others.length > 0) warnMissing(others, place);
-  if (widgets.length === 0) return;
-  throw refusal(REFUSAL_MESSAGES[kind](widgets, place));
-}
+const CAUSES: Record<LeftStale, (place: MapFolder, detail: string) => string> =
+  {
+    "write-off": () =>
+      "automatic regeneration is off (NEXTLY_GENERATED_FILES_WRITE=0). Run `npx nextly generate:types`, or unset NEXTLY_GENERATED_FILES_WRITE to let `next dev` update the map.",
+    unwritable: place =>
+      `\`${place.folder}/\` is not writable. Make the folder writable, or run \`npx nextly generate:types\`.`,
+    failed: (_place, detail) =>
+      `writing it failed: ${detail}. Run \`npx nextly generate:types\` to see the failure in full.`,
+  };
 
 const WARNED = new Set<string>();
 
 /**
- * Forgets which incomplete maps have been warned about, so the next check
+ * Forgets which out-of-date maps have been warned about, so the next check
  * warns again. For tests, which run many checks in one process.
  */
 export function resetComponentMapWarnings(): void {
   WARNED.clear();
 }
 
-/** Logs, once per process for each set, components that will draw empty. */
-function warnMissing(
-  missing: readonly ComponentMapEntry[],
-  place: MapFolder
+/**
+ * Logs, once per process for each set, a map left out of date: what each
+ * missing component means for what it draws, and the imports kept for
+ * components nothing declares any more.
+ */
+function warnStale(
+  stale: Stale,
+  place: MapFolder,
+  cause: LeftStale,
+  /** The write's own error, for a write that failed. */
+  detail = ""
 ): void {
-  const key = missing.map(each => each.path).join("\n");
+  const lines = [
+    ...stale.missing.map(each => `- missing: ${describeComponentUse(each)}`),
+    ...stale.obsolete.map(path => `- no longer declared: ${path}`),
+    ...(stale.otherConfig === undefined
+      ? []
+      : [
+          `- held to another config: imports ${stale.otherConfig.written ?? "none"}, where the config is ${stale.otherConfig.expected ?? "not found"}`,
+        ]),
+  ];
+  const key = `${cause}\n${lines.join("\n")}`;
   if (WARNED.has(key)) return;
   WARNED.add(key);
   getNextlyLogger().warn({
-    kind: "admin-component-map-incomplete",
-    message:
-      `${missing.length} admin component(s) are missing from the component map in ${place.folder}/ and will draw empty:\n` +
-      missing
-        .map(each => `- ${each.owner}, ${each.use}: ${each.path}`)
-        .join("\n") +
-      "\nRun `npx nextly generate:types`, or start `next dev` once, then commit both generated files.",
-  });
-}
-
-const fileNames = (place: MapFolder) =>
-  `\`${place.folder}/${COMPONENT_IMPORT_MAP_FILENAME}\` and \`${place.folder}/${COMPONENT_PATHS_FILENAME}\``;
-
-const listed = (widgets: readonly ComponentMapEntry[]) =>
-  widgets
-    .map(
-      each =>
-        `- ${each.owner}, widget "${each.widget ?? "?"}": \`${each.path}\``
-    )
-    .join("\n");
-
-const counted = (widgets: readonly ComponentMapEntry[]) =>
-  widgets.length === 1
-    ? "1 dashboard widget draws with a component"
-    : `${widgets.length} dashboard widgets draw with components`;
-
-const PRODUCTION_FIX =
-  "Run `npx nextly generate:types`, or start `next dev` once. Then commit both files and redeploy.";
-
-function noMapMessage(
-  widgets: readonly ComponentMapEntry[],
-  place: MapFolder
-): string {
-  return (
-    `The admin cannot be served: ${counted(widgets)} that this build does not include, because the app has no component map.\n\n` +
-    `${listed(widgets)}\n\n` +
-    `Nextly includes widget components through two generated files: ${fileNames(place)}. ${PRODUCTION_FIX}`
-  );
-}
-
-function staleMessage(
-  widgets: readonly ComponentMapEntry[],
-  place: MapFolder
-): string {
-  return (
-    `The admin cannot be served: ${counted(widgets)} that this build's component map does not include.\n\n` +
-    `${listed(widgets)}\n\n` +
-    `The map (${fileNames(place)}) was generated before ${widgets.length === 1 ? "this widget was" : "these widgets were"} added or changed. ${PRODUCTION_FIX}`
-  );
-}
-
-function writeOffMessage(
-  widgets: readonly ComponentMapEntry[],
-  place: MapFolder
-): string {
-  return (
-    `The admin cannot be served: ${counted(widgets)} that the component map (${fileNames(place)}) does not include, and automatic regeneration is off (NEXTLY_GENERATED_FILES_WRITE=0).\n\n` +
-    `${listed(widgets)}\n\n` +
-    "Run `npx nextly generate:types`, or unset NEXTLY_GENERATED_FILES_WRITE to let `next dev` update the map."
-  );
-}
-
-const REFUSAL_MESSAGES: Record<
-  RefusalKind,
-  (widgets: readonly ComponentMapEntry[], place: MapFolder) => string
-> = {
-  "no-map": noMapMessage,
-  stale: staleMessage,
-  "write-off": writeOffMessage,
-};
-
-function unwritableMessage(
-  widgets: readonly ComponentMapEntry[],
-  place: MapFolder
-): string {
-  return (
-    `The admin cannot be served: Nextly could not update the component map, because \`${place.folder}/\` is not writable. ${counted(widgets)} the map does not include:\n\n` +
-    `${listed(widgets)}\n\n` +
-    "Make the folder writable, or run `npx nextly generate:types`."
-  );
-}
-
-/** What the browser is told: what happened, and where the detail is. */
-export const ADMIN_COMPONENT_MAP_PUBLIC_MESSAGE =
-  "The admin is not available: a dashboard widget's component is missing from the app's component map. The server log names the widget and the fix.";
-
-/**
- * The refusal: a stable code, a public message that points to the log, and
- * the detail logged as the error is raised.
- *
- * Logged here, not left to whoever catches it: the error surfaces as a server
- * component's error, which Next prints by its message (the public one) and
- * hides from the browser in production, so the detail would otherwise reach
- * no one.
- */
-function refusal(logMessage: string, cause?: unknown): NextlyError {
-  const code = "NEXTLY_ADMIN_COMPONENT_MAP_STALE";
-  getNextlyLogger().error({
     kind: "admin-component-map-stale",
-    code,
-    message: logMessage,
-  });
-  return new NextlyError({
-    code,
-    publicMessage: ADMIN_COMPONENT_MAP_PUBLIC_MESSAGE,
-    logMessage,
-    ...(cause instanceof Error ? { cause } : {}),
+    message:
+      `The admin's component map in ${place.folder}/ is out of date and was not written again: ${CAUSES[cause](place, detail)}\n` +
+      lines.join("\n") +
+      "\nA widget whose component is missing draws its card's error state; any other missing component draws empty. Uninstalling a package the map still imports breaks the admin's build.",
   });
 }

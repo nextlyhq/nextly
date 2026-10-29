@@ -8,8 +8,8 @@
  * - when setup could not be checked, saying so with Retry, and never a step shown as waiting on
  *   that basis;
  * - the steps, with "x of y done" (a skipped step counts as done), each waiting step linking to
- *   where it is done, Skip on the steps a site can do without, and the first five Singles with
- *   a control for the rest;
+ *   where it is done, and Skip on the steps a site can do without. Only whole steps are drawn,
+ *   as many as the card holds, then "Show N more", which grows the card in place (`fold`);
  * - "You're all set" once every step is done or skipped, with the steps a click away.
  *
  * The frame draws the card's title, its one heading, and its Remove control, which records the
@@ -32,16 +32,14 @@ import { useSeedStatus } from "@admin/hooks/queries/useSeedStatus";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { cn } from "@admin/lib/utils";
 
-import { CardSkeleton } from "../widgets/frame/states";
+import { FrameState } from "../widgets/frame/card-state";
 
+import { stepsToDoFirst, useStepFold } from "./get-started/fold";
 import { isSkippable, stepPresentation } from "./get-started/step-presentation";
 import {
   useGetStartedWrite,
   type GetStartedWrite,
 } from "./get-started/useGetStartedWrite";
-
-/** The Singles listed before the rest are folded behind a control. */
-const SINGLES_SHOWN = 5;
 
 /** The sidebar's own Singles request, so the card shares its answer for their labels. */
 const SINGLES_PARAMS = {
@@ -67,28 +65,23 @@ const STATUS_TEXT: Record<GetStartedStep["status"], string> = {
   unknown: "could not be checked",
 };
 
-function SetupNotChecked({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div
-      className="grid justify-items-start gap-2"
-      data-testid="get-started-unknown"
-    >
-      <p className="text-sm font-semibold text-foreground">
-        We couldn&apos;t check your setup.
-      </p>
-      <p className="text-sm text-muted-foreground">
-        Some of what this card checks could not be read just now.
-      </p>
-      <Button variant="outline" size="sm" onClick={onRetry}>
-        Retry
-      </Button>
-    </div>
-  );
-}
-
 /** The sample-content offer, inline in the first-entry step while it is open. */
-function SampleContentOffer() {
+/**
+ * The sample-content offer inside the first-entry step.
+ *
+ * Every action records that the reader acted on the card first (`markActed`),
+ * as the step links do: loading sample content can finish the last step, and a
+ * reader who finished it from here is told "You're all set" rather than seeing
+ * the card go. A failed load says so, with its message and a Retry, rather than
+ * taking the controls away.
+ */
+function SampleContentOffer({
+  markActed,
+}: {
+  markActed: (then?: () => void) => void;
+}) {
   const { status, startSeed, skip } = useSeedStatus();
+  const acting = (action: () => void) => () => markActed(action);
   if (status.kind === "seeding") {
     return (
       <span className="text-xs text-muted-foreground">
@@ -96,13 +89,25 @@ function SampleContentOffer() {
       </span>
     );
   }
+  if (status.kind === "error") {
+    return (
+      <span className="flex flex-wrap items-center gap-2">
+        <span role="alert" className="text-xs text-destructive">
+          Sample content couldn&apos;t be loaded: {status.message}
+        </span>
+        <Button variant="outline" size="sm" onClick={acting(startSeed)}>
+          Retry
+        </Button>
+      </span>
+    );
+  }
   if (status.kind !== "idle") return null;
   return (
     <span className="flex flex-wrap items-center gap-2">
-      <Button variant="outline" size="sm" onClick={startSeed}>
+      <Button variant="outline" size="sm" onClick={acting(startSeed)}>
         Load sample content
       </Button>
-      <Button variant="ghost" size="sm" onClick={skip}>
+      <Button variant="ghost" size="sm" onClick={acting(skip)}>
         No thanks
       </Button>
     </span>
@@ -169,14 +174,16 @@ function StepActions({
       {open && (
         <Link
           href={href}
-          onClick={write.markActed}
+          onClick={() => write.markActed()}
           className="text-xs font-medium text-foreground underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:decoration-primary"
         >
           {step.kind === "single" ? "Open" : "Start"}
           <span className="sr-only">: {label}</span>
         </Link>
       )}
-      {open && step.kind === "entry" && <SampleContentOffer />}
+      {open && step.kind === "entry" && (
+        <SampleContentOffer markActed={write.markActed} />
+      )}
       {open && isSkippable(step) && (
         <Button
           variant="ghost"
@@ -214,7 +221,10 @@ function StepRow({
 }) {
   const { label, href } = stepPresentation(step, singleLabels);
   return (
-    <li className="flex flex-wrap items-center justify-between gap-2 py-2.5">
+    <li
+      data-step-row
+      className="flex flex-wrap items-center justify-between gap-2 py-2.5"
+    >
       <StepMark step={step} label={label} />
       <StepActions step={step} label={label} href={href} write={write} />
     </li>
@@ -229,21 +239,11 @@ function StepList({
   write: GetStartedWrite;
 }) {
   const singleLabels = useSingleLabels();
-  const [allSingles, setAllSingles] = useState(false);
-  const restId = useId();
-  const singles = answer.steps.filter(step => step.kind === "single");
-  const shownSingles = allSingles ? singles : singles.slice(0, SINGLES_SHOWN);
-  const folded = singles.length - SINGLES_SHOWN;
-  const row = (step: GetStartedStep) => (
-    <StepRow
-      key={step.key}
-      step={step}
-      singleLabels={singleLabels}
-      write={write}
-    />
-  );
+  const steps = stepsToDoFirst(answer.steps);
+  const fold = useStepFold(steps.length);
+  const listId = useId();
   return (
-    <div className="grid gap-3">
+    <div ref={fold.listRef} className="grid gap-3">
       <div>
         {/* The bar is the picture; the line under it is the answer, announced once. */}
         <div
@@ -264,31 +264,34 @@ function StepList({
           {answer.done} of {answer.total} done
         </p>
       </div>
-      <ul className="grid divide-y divide-border">
-        {answer.steps
-          .filter(step => step.kind === "collection" || step.kind === "entry")
-          .map(row)}
+      {/* The steps to do first, then those finished (`stepsToDoFirst`). Only whole steps are
+          drawn, as many as the card holds (`useStepFold`); the rest are one click away, and that
+          click grows the card. */}
+      <ul id={listId} className="grid divide-y divide-border">
+        {steps.slice(0, fold.shown).map(step => (
+          <StepRow
+            key={step.key}
+            step={step}
+            singleLabels={singleLabels}
+            write={write}
+          />
+        ))}
       </ul>
-      {singles.length > 0 && (
-        <ul id={restId} className="grid divide-y divide-border">
-          {shownSingles.map(row)}
-        </ul>
-      )}
-      {folded > 0 && (
+      {fold.hasControl && (
         <Button
+          ref={fold.controlRef}
           variant="ghost"
           size="sm"
           className="justify-self-start"
-          aria-expanded={allSingles}
-          aria-controls={restId}
-          onClick={() => setAllSingles(open => !open)}
+          aria-expanded={fold.expanded}
+          aria-controls={listId}
+          onClick={fold.toggle}
         >
-          {allSingles ? "Show fewer Singles" : `Show ${folded} more`}
+          {fold.expanded
+            ? "Show less"
+            : `Show ${steps.length - fold.shown} more`}
         </Button>
       )}
-      <ul className="grid divide-y divide-border">
-        {answer.steps.filter(step => step.kind === "invite").map(row)}
-      </ul>
     </div>
   );
 }
@@ -321,10 +324,25 @@ export const GetStartedCard: React.FC<WidgetComponentProps> = ({
   const write = useGetStartedWrite(placementId, answer, acted);
   const [showSteps, setShowSteps] = useState(false);
 
-  if (isPending) return <CardSkeleton shape="rows" rows={4} />;
-  // Not known is its own answer: never drawn as steps waiting, nor as finished.
+  if (isPending) {
+    return (
+      <FrameState
+        state={{ kind: "loading", skeleton: { shape: "rows", rows: 4 } }}
+      />
+    );
+  }
+  // Not known is its own answer: never drawn as steps waiting, nor as finished,
+  // but as the frame's error, with Retry.
   if (isUnavailable || answer === undefined || answer.unknown) {
-    return <SetupNotChecked onRetry={retry} />;
+    return (
+      <FrameState
+        state={{
+          kind: "error",
+          message: "Some of what this card checks could not be read just now.",
+          retry,
+        }}
+      />
+    );
   }
   if (answer.done === answer.total && !showSteps) {
     return <AllSet onShowSteps={() => setShowSteps(true)} />;

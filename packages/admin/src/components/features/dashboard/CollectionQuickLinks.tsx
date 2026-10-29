@@ -7,7 +7,11 @@ import type { WidgetComponentProps, WidgetSlot } from "nextly/widget-result";
 import type React from "react";
 import { useMemo } from "react";
 
-import { MoreExist } from "@admin/components/features/widgets/archetypes/more-exist";
+import {
+  ListFooter,
+  listFooter,
+} from "@admin/components/features/widgets/frame/list-card";
+import { listViewHref } from "@admin/components/features/widgets/frame/list-view-href";
 import * as Icons from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
@@ -20,8 +24,8 @@ import { cn } from "@admin/lib/utils";
 import type { CollectionCount } from "@admin/types/dashboard/stats";
 import type { ApiCollection } from "@admin/types/entities";
 
+import { FrameState, readSlot } from "../widgets/frame/card-state";
 import { CardFigure } from "../widgets/frame/figure";
-import { CardSkeleton, CardSlotFailure } from "../widgets/frame/states";
 
 import { ContentSingleTile } from "./ContentSingleTile";
 import { keptOffDashboard } from "./kept-off-dashboard";
@@ -341,7 +345,9 @@ function useContentTiles(slot: WidgetSlot | undefined) {
     groups,
     singles,
     // The one row more the card asked for is what says more exist than it draws.
-    moreExist: (rows?.length ?? 0) > TILES_DRAWN,
+    // The list's one footer, from the extra tile the card asked for: a floor, since the content
+    // source counts no total.
+    footer: listFooter(rows?.length ?? 0, TILES_DRAWN, undefined),
     collectionsByName,
     singlesBySlug,
     collectionsLoading,
@@ -394,16 +400,23 @@ export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
   const content = useContentTiles(slot);
   const { tiles, groups, singles } = content;
 
-  // The card's frame draws its title, so this is only its body: the tiles, grouped, or the
-  // frame's own skeleton and error while they are not there. The skeleton only while neither the
-  // list nor the counts are known, since either one says which tiles there are.
-  if (slot && !slot.ok) {
-    return <CardSlotFailure slot={slot} title="Content" onRetry={onRetry} />;
+  // The card's frame draws its title and every state, so this is only its body: the tiles,
+  // grouped. A failed answer, or no tiles yet, is reported for the frame to draw; loading only
+  // while neither the list nor the counts are known, since either one says which tiles there are.
+  if (slot !== undefined && !slot.ok) {
+    const read = readSlot(slot, { isFetching, skeleton: {}, onRetry });
+    if ("state" in read) return <FrameState state={read.state} />;
   }
   if (tiles === undefined) {
-    return isFetching || content.collectionsLoading ? (
-      <CardSkeleton shape="rows" rows={4} />
-    ) : null;
+    return (
+      <FrameState
+        state={
+          isFetching || content.collectionsLoading
+            ? { kind: "loading", skeleton: { shape: "rows", rows: 4 } }
+            : { kind: "no-access" }
+        }
+      />
+    );
   }
   // One group needs no heading of its own: the card's title already names it.
   const headed = groups.length + (singles.length > 0 ? 1 : 0) > 1;
@@ -439,7 +452,7 @@ export const CollectionQuickLinks: React.FC<WidgetComponentProps> = ({
           ))}
         </ContentGroup>
       )}
-      {content.moreExist && <MoreExist query={query} />}
+      <ListFooter footer={content.footer} href={listViewHref(query)} />
     </div>
   );
 };

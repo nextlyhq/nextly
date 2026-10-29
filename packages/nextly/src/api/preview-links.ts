@@ -53,6 +53,7 @@ import {
   buildAuditLogWriter,
   type AuditLogWriter,
 } from "../domains/audit/audit-log-writer";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import {
   explainPreviewRedirect,
   explainSinglePreviewRedirect,
@@ -88,7 +89,7 @@ import {
   respondList,
   respondMutation,
 } from "./response-shapes";
-import { requireRoutePermission } from "./route-auth";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -1180,7 +1181,10 @@ export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
     return revokeDocumentPreviewLinks(req, parseDocument(body));
   }
 
-  const auth = await requireRoutePermission(req, "manage", "settings");
+  // Ending every preview link is a settings change.
+  const auth = await requireRouteAnyPermission(req, [
+    ...SYSTEM_WRITE_POLICY.settings.update.anyOf,
+  ]);
   const generation = await (await settingsService()).revokeAllPreviewTokens();
   // The generation has ended every link: the revocation has happened, so it is
   // recorded before anything that could still fail. The rows are marked after.

@@ -121,10 +121,7 @@ describe.each(getConfiguredTestDialects())("a Breakdown card (%s)", dialect => {
     // What the query endpoint does before resolving any query: publish the
     // collection sources from the live registry, which boot does not do.
     await refreshCollectionSources();
-    sources = publishableContentSources([
-      { generated: true, collection: ITEMS },
-      { generated: true, collection: POSTS },
-    ]);
+    sources = publishableContentSources([ITEMS, POSTS]);
     ctx = {
       sourceOf: collection =>
         sources.find(source => source.collection === collection),

@@ -4,7 +4,7 @@
  *
  * `callerHoldsPermission` and `readableEntities` are the seams a caller is put
  * on either side of; everything between them -- the canonical merge, the
- * generated cards, the gate -- is real, because the property under test is
+ * content sources, the gate -- is real, because the property under test is
  * what the two surfaces built on this decision are told, not how a verdict is
  * reached.
  */
@@ -12,8 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReadAccessCaller } from "../../../auth/entity-read-access";
 import { setContributedWidgets } from "../canonical";
-import { generatedWidgets, setGeneratedWidgets } from "../collection-widgets";
 import { clearWidgets, registerWidget } from "../registry";
+import { setSiteDashboardRules } from "../site-rules";
 import { clearSources, registerSource } from "../sources";
 import { widgetAudience } from "../visibility";
 
@@ -54,7 +54,7 @@ function register(id: string, patch: Record<string, unknown> = {}): void {
     id,
     title: id,
     archetype: "text",
-    defaultSize: "md",
+    size: { default: { w: 4, h: 3 } },
     content: `notes for ${id}`,
     ...patch,
   };
@@ -85,7 +85,15 @@ afterEach(() => {
   clearWidgets();
   clearSources();
   setContributedWidgets([]);
+  setSiteDashboardRules(NO_SITE_RULES);
 });
+
+const NO_SITE_RULES = {
+  hidden: new Set<string>(),
+  replaced: new Map<string, string>(),
+  alternatives: new Set<string>(),
+  overrides: new Map(),
+};
 
 const ids = (widgets: readonly { id: string }[]) =>
   widgets.map(widget => widget.id);
@@ -135,42 +143,86 @@ describe("visibleWidgets", () => {
     expect(ids(await visibleWidgets(CALLER))).toEqual([]);
   });
 
-  it("gates a generated card on its collection, not on a declared permission", async () => {
-    // A generated card's id, title and query all name a COLLECTION, so the
-    // question is whether this reader may read that collection -- asked of
-    // `readableEntities`, the same answer the query endpoint gives, rather
-    // than of the flat permission list, which cannot see a code-defined
-    // `access.read`.
+  it("makes no card from a collection the install has", async () => {
+    // 🔴 A card about one collection is a core widget set to it, never a
+    // widget of its own: a sourced collection the reader may read adds no
+    // id. The registered card is the control, so an empty answer is not what
+    // satisfies this.
+    register("app/notes");
     registerSource(source("posts"));
     registerSource(source("secret"));
     reader([], ["posts"]);
 
-    const visible = await visibleWidgets(CALLER);
-
-    expect(ids(visible)).toContain("collection/posts-count");
-    expect(ids(visible)).not.toContain("collection/secret-count");
-    expect(visible.every(widget => widget.generated === true)).toBe(true);
-    // Never asked the permission question about a generated card: it declares
-    // no permission, and a decision nobody declared is not one to take.
-    expect(callerHoldsPermission).not.toHaveBeenCalled();
+    expect(ids(await visibleWidgets(CALLER))).toEqual(["app/notes"]);
   });
+});
 
-  it("publishes a health card, whose collection is named by its cells", async () => {
-    // 🔴 A stats card has no `query` of its own, so a collection read from
-    // that field alone answered `undefined` for every health card -- and a
-    // card whose subject cannot be identified is withheld. Every health card
-    // was generated, registered, and then silently never published.
-    registerSource(source("posts", { lifecycleStatus: true }));
-    reader([], ["posts"]);
+describe("what the site config keeps off the dashboard", () => {
+  it("is visible to nobody: a hidden widget, a built-in an alternative replaces, and an alternative no replace names", async () => {
+    for (const id of [
+      "core/team",
+      "core/recently-edited",
+      "acme/recent-orders",
+      "acme/other-alternative",
+      "acme/kept",
+    ]) {
+      register(id);
+    }
+    setSiteDashboardRules({
+      ...NO_SITE_RULES,
+      hidden: new Set(["core/team"]),
+      replaced: new Map([["core/recently-edited", "acme/recent-orders"]]),
+      alternatives: new Set(["acme/recent-orders", "acme/other-alternative"]),
+    });
 
-    expect(ids(await visibleWidgets(CALLER))).toContain(
-      "collection/posts-stats"
-    );
+    // The alternative put in a built-in's place, and the untouched widget,
+    // are the controls: a filter that keeps nothing would pass the rest.
+    expect(ids(await visibleWidgets(CALLER))).toEqual([
+      "acme/recent-orders",
+      "acme/kept",
+    ]);
   });
 });
 
 describe("widgetAudience", () => {
-  it("splits the visible set by the channel each half ships through", async () => {
+  it("holds the readable collections from the reader's verdict on each sourced collection", async () => {
+    registerSource(source("posts"));
+    registerSource(source("pages"));
+    reader([], ["posts", "orphan"]);
+    const audience = await widgetAudience(CALLER);
+    // 🔴 Asked of the collections themselves: only those with a source, and
+    // only those the reader may read.
+    expect([...audience.readableCollections]).toEqual(["posts"]);
+    expect(readableEntities).toHaveBeenCalledWith(
+      expect.arrayContaining(["posts", "pages"]),
+      CALLER
+    );
+  });
+
+  it("moves its token when only a Collection setting changes", async () => {
+    // 🔴 The workspace payload ships the setting, so a payload held from
+    // before must read as stale when the setting is renamed, though every id
+    // and gate stays as it was.
+    const pinned = (name: string) =>
+      register("acme/pinned", {
+        archetype: "metric",
+        content: undefined,
+        query: { source: "collection:posts", op: "count" },
+        settings: [{ name, type: "collection", label: "Collection" }],
+      });
+    registerSource(source("posts"));
+    reader([], ["posts"]);
+    pinned("collection");
+    const before = (await widgetAudience(CALLER)).token;
+    expect((await widgetAudience(CALLER)).token).toBe(before);
+    clearWidgets();
+    pinned("source");
+    expect((await widgetAudience(CALLER)).token).not.toBe(before);
+  });
+
+  it("declares every visible widget, from either channel, and nothing beside them", async () => {
+    // The workspace payload matches both channels' declarations against
+    // `declared`; a sourced collection adds nothing for it to ship.
     setContributedWidgets([{ id: "acme/welcome" }]);
     register("app/notes");
     registerSource(source("posts"));
@@ -179,82 +231,8 @@ describe("widgetAudience", () => {
     const audience = await widgetAudience(CALLER);
 
     expect([...audience.declared]).toEqual(["acme/welcome", "app/notes"]);
-    // The generated half is the DEFINITION, not an id: the admin holds no copy
-    // to match against, so this is the only route by which the card arrives.
-    expect(ids(audience.generated)).toEqual(
-      expect.arrayContaining(["collection/posts-count"])
-    );
-    expect(audience.generated[0]).toMatchObject({
-      archetype: expect.any(String),
-      title: expect.any(String),
-    });
-  });
-
-  it("keeps a generated id a plugin also declared on the DECLARED side only", async () => {
-    // 🔴 The canonical merge lets a contribution keep an id core would have
-    // generated. The admin reads the generated half as the registration
-    // channel, and a registration merges over a colliding contribution -- so
-    // core's derived copy shipping beside the plugin's card under the same id
-    // would replace that plugin's card with core's guess in the grid, while
-    // the layout endpoint placed the plugin's.
-    setContributedWidgets([{ id: "collection/posts-count" }]);
-    registerSource(source("posts"));
-    reader([], ["posts"]);
-
-    const audience = await widgetAudience(CALLER);
-
-    expect(audience.declared.has("collection/posts-count")).toBe(true);
-    expect(ids(audience.generated)).not.toContain("collection/posts-count");
-    // The control: the collection's OTHER generated card still ships, so the
-    // exclusion above is by id rather than by the whole collection.
-    expect(ids(audience.generated)).toContain("collection/posts-recent");
-  });
-
-  it("withholds a generated card a reader may not see from the generated half", async () => {
-    registerSource(source("posts"));
-    registerSource(source("secret"));
-    reader([], ["posts"]);
-
-    const audience = await widgetAudience(CALLER);
-
-    expect(ids(audience.generated)).toContain("collection/posts-count");
-    expect(ids(audience.generated)).not.toContain("collection/secret-count");
-  });
-
-  it("ships the generated definitions it AUTHORIZED, even when the set is replaced mid-decision", async () => {
-    // 🔴 The generated set is a global a concurrent request's refresh
-    // replaces, and the decision awaits permission reads in between. Re-read
-    // afterwards, the payload shipped whatever definition held each id by
-    // then -- one the entity read was never asked about. Here the
-    // replacement keeps the id and reads a collection this reader may not.
-    registerSource(source("posts"));
-    reader([], ["posts"]);
-    readableEntities.mockImplementation(async (slugs: string[]) => {
-      setGeneratedWidgets(
-        generatedWidgets().map(widget =>
-          // Narrowed to the count it is, so the copy with another source is
-          // still a query a source can answer.
-          widget.id === "collection/posts-count" && widget.query?.op === "count"
-            ? {
-                ...widget,
-                title: "Secret",
-                query: { ...widget.query, source: "collection:secret" },
-              }
-            : widget
-        )
-      );
-      return new Set(slugs.filter(slug => slug === "posts"));
-    });
-
-    const audience = await widgetAudience(CALLER);
-
-    const card = audience.generated.find(
-      widget => widget.id === "collection/posts-count"
-    );
-    // The control that the card was offered at all, so the property below is
-    // not satisfied by an empty half.
-    expect(card).toBeDefined();
-    expect(card?.query?.source).toBe("collection:posts");
+    expect(ids(audience.visible)).toEqual(["acme/welcome", "app/notes"]);
+    expect(audience).not.toHaveProperty("generated");
   });
 
   it("answers for the gates INSIDE a visible declaration, from either channel", async () => {

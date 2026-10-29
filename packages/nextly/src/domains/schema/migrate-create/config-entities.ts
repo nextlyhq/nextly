@@ -14,6 +14,7 @@
  *
  * @module domains/schema/migrate-create/config-entities
  */
+import { settingsOf } from "./entity-settings";
 import type { MinimalConfigEntity, MinimalConfigField } from "./generate";
 
 /** The shape of a config entry before it is reduced. */
@@ -38,7 +39,9 @@ interface RawConfigEntity {
  *
  * The entity-level attributes are the ones that change a table: `status` adds
  * the lifecycle column, `localized` moves columns to the companion table and
- * `indexes` declares compound indexes.
+ * `indexes` declares compound indexes. The rest of the declaration travels as
+ * its `settings`, taken from the entry whole, so a setting that changes no
+ * column still reaches the snapshot (`entity-settings.ts`).
  */
 export function toMinimalEntities(
   entities: unknown[],
@@ -63,6 +66,57 @@ export function toMinimalEntities(
       // was validated and then discarded since it was introduced, so an app
       // that declared one has been running without it.
       ...(e.indexes !== undefined ? { indexes: e.indexes } : {}),
+      settings: { source: "code", settings: settingsOf(raw) },
     };
   });
+}
+
+/**
+ * Builder entities with their settings: each entity of `merged` that the
+ * code-first config did not supply takes its record from the manifest entry of
+ * the same slug, as the Builder declared it.
+ *
+ * Applied after the merge rather than inside it because the merge drops a
+ * Builder entity a code-first one shadows, and only the survivors are
+ * recorded. One that already carries settings is code-first and is left as it
+ * is.
+ */
+function withBuilderSettings(
+  merged: readonly MinimalConfigEntity[],
+  manifestEntries: readonly { slug: string }[]
+): MinimalConfigEntity[] {
+  const bySlug = new Map(manifestEntries.map(entry => [entry.slug, entry]));
+  return merged.map(entity => {
+    if (entity.settings !== undefined) return entity;
+    const declared = bySlug.get(entity.slug);
+    if (declared === undefined) return entity;
+    return {
+      ...entity,
+      settings: { source: "builder", settings: settingsOf(declared) },
+    };
+  });
+}
+
+/** `withBuilderSettings` for each kind of a merge, from the manifest it merged. */
+export function withBuilderSettingsAll(
+  merged: {
+    collections: readonly MinimalConfigEntity[];
+    singles: readonly MinimalConfigEntity[];
+    components: readonly MinimalConfigEntity[];
+  },
+  manifest: {
+    collections: readonly { slug: string }[];
+    singles: readonly { slug: string }[];
+    components: readonly { slug: string }[];
+  }
+): {
+  collections: MinimalConfigEntity[];
+  singles: MinimalConfigEntity[];
+  components: MinimalConfigEntity[];
+} {
+  return {
+    collections: withBuilderSettings(merged.collections, manifest.collections),
+    singles: withBuilderSettings(merged.singles, manifest.singles),
+    components: withBuilderSettings(merged.components, manifest.components),
+  };
 }

@@ -1,10 +1,14 @@
 /**
- * `nextly upgrade` — one-shot bookkeeping consolidation (spec §4.10).
+ * `nextly upgrade` — bring an existing database up to date (spec §4.10).
  *
- * Backfills legacy `nextly_migrations` + `nextly_migration_journal` rows into
- * the new `nextly_schema_events` table and drops the legacy tables. The
- * orchestration (`runUpgrade`) is a plain async function taking an
- * adapter-like dependency so it is testable without the CLI shell.
+ * The upgrade is a list of steps (`upgrade-steps/index.ts`), each idempotent:
+ * moving the migration records into `nextly_schema_events`, then hashing the
+ * passwords stored before this release. Each step in turn says how much it
+ * would change and, when that is above 0, runs and reports its count; the
+ * backup is confirmed before the first step with work, and the upgrade says
+ * there is nothing to do only when no step had anything. The orchestration (`runUpgrade`) is a
+ * plain async function taking an adapter-like dependency so it is testable
+ * without the CLI shell.
  *
  * @module cli/commands/upgrade
  * @since v0.0.3-alpha (Plan B)
@@ -12,22 +16,11 @@
 
 import { createInterface } from "node:readline";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
-import { sql } from "drizzle-orm";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
-import {
-  mapJournalRow,
-  mapMigrationsRow,
-  synthesizedCoreApplyEvent,
-  type BackfillEvent,
-} from "../../domains/schema/events/backfill";
-import {
-  assertNoLegacyBookkeeping,
-  detectLegacyBookkeeping,
-} from "../../domains/schema/events/legacy-detection";
-import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { NextlyError, describeError } from "../../errors";
@@ -35,21 +28,15 @@ import { createContext } from "../program";
 import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 
 import { maybeForceUnlock } from "./migrate";
+import type {
+  RunUpgradeOptions,
+  UpgradeAdapter,
+  UpgradeStep,
+  UpgradeStepContext,
+} from "./upgrade-step";
+import { UPGRADE_STEPS } from "./upgrade-steps";
 
-type Dialect = "postgresql" | "mysql" | "sqlite";
-
-const EVENTS_TABLE = "nextly_schema_events";
-
-/** Minimal adapter slice `runUpgrade` needs. The real DrizzleAdapter satisfies it. */
-export interface UpgradeAdapter {
-  tableExists: (tableName: string) => Promise<boolean>;
-  getDrizzle: () => unknown;
-  dropTable: (
-    tableName: string,
-    options?: { ifExists?: boolean }
-  ) => Promise<void>;
-  getCapabilities: () => { dialect: Dialect };
-}
+export type { RunUpgradeOptions, UpgradeAdapter } from "./upgrade-step";
 
 interface UpgradeLogger {
   info?: (msg: string) => void;
@@ -63,87 +50,10 @@ export interface RunUpgradeDeps {
   isTTY?: boolean;
   /** Interactive backup confirmation (TTY only). Returns true to proceed. */
   promptConfirm?: () => Promise<boolean>;
-}
-
-export interface RunUpgradeOptions {
-  confirmBackedUp?: boolean;
-  force?: boolean;
-  /** Advanced: override the events table name on a foreign-table collision. */
-  targetTableName?: string;
-}
-
-// --- raw exec/query helpers (dialect-branched; only the methods used) -------
-
-function execRaw(
-  db: unknown,
-  dialect: Dialect,
-  statement: string
-): Promise<void> {
-  if (dialect === "sqlite") {
-    (db as { run: (q: unknown) => unknown }).run(sql.raw(statement));
-    return Promise.resolve();
-  }
-  return (db as { execute: (q: unknown) => Promise<unknown> })
-    .execute(sql.raw(statement))
-    .then(() => undefined);
-}
-
-async function queryRaw(
-  db: unknown,
-  dialect: Dialect,
-  statement: string
-): Promise<Array<Record<string, unknown>>> {
-  if (dialect === "sqlite") {
-    return (db as { all: (q: unknown) => Array<Record<string, unknown>> }).all(
-      sql.raw(statement)
-    );
-  }
-  const res = await (
-    db as { execute: (q: unknown) => Promise<unknown> }
-  ).execute(sql.raw(statement));
-  // pg returns { rows }, mysql2 returns [rows, fields].
-  if (Array.isArray(res)) {
-    return (Array.isArray(res[0]) ? res[0] : res) as Array<
-      Record<string, unknown>
-    >;
-  }
-  return (res as { rows?: Array<Record<string, unknown>> }).rows ?? [];
-}
-
-/** True iff the existing events table has the expected key columns. */
-async function hasExpectedShape(
-  db: unknown,
-  dialect: Dialect,
-  table: string
-): Promise<boolean> {
-  try {
-    await queryRaw(
-      db,
-      dialect,
-      `SELECT event_type, status, source FROM ${table} LIMIT 0`
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function toDate(value: unknown): Date | null {
-  if (value === null || value === undefined) return null;
-  if (value instanceof Date) return value;
-  if (typeof value === "number" || typeof value === "string") {
-    return new Date(value);
-  }
-  return null;
-}
-
-/** Drop undefined keys so the repository inserts NULL/defaults cleanly. */
-function toInsertValues(event: BackfillEvent): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(event)) {
-    if (value !== undefined) out[key] = value;
-  }
-  return out;
+  /** The steps to run, in order: every upgrade step unless a test narrows it. */
+  steps?: readonly UpgradeStep[];
+  /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
+  lockWaitMs?: number;
 }
 
 async function confirmBackup(
@@ -168,8 +78,8 @@ async function confirmBackup(
 }
 
 /**
- * Run the one-shot upgrade. Idempotent: a second run on an already-upgraded DB
- * is a no-op. See spec §4.10 for the full flow.
+ * Run the upgrade's steps. Idempotent: a second run on an upgraded database
+ * finds every step with nothing to do, and says so.
  */
 export async function runUpgrade(
   options: RunUpgradeOptions,
@@ -178,111 +88,53 @@ export async function runUpgrade(
   const { adapter } = deps;
   const dialect = adapter.getCapabilities().dialect;
   const db = adapter.getDrizzle();
-  const log = (msg: string) => deps.logger?.info?.(msg);
-  const eventsTable = options.targetTableName ?? EVENTS_TABLE;
+  const context: UpgradeStepContext = {
+    adapter,
+    db,
+    dialect,
+    options,
+    log: msg => deps.logger?.info?.(msg),
+    warn: msg => deps.logger?.warn?.(msg),
+  };
+  const steps = deps.steps ?? UPGRADE_STEPS;
 
-  await withMigrateLock(db, dialect, async () => {
-    // 3. Introspect.
-    const legacy = await detectLegacyBookkeeping(adapter);
-    const eventsExists = await adapter.tableExists(eventsTable);
-    const eventsShapeOk = eventsExists
-      ? await hasExpectedShape(db, dialect, eventsTable)
-      : false;
-
-    // 4. Idempotency (before collision): clean DB with an events table = done.
-    if (!legacy.hasLegacy && eventsExists && eventsShapeOk) {
-      log("Already upgraded. Nothing to do.");
-      return;
-    }
-
-    // 5. Collision: a foreign table is squatting the name.
-    if (eventsExists && !eventsShapeOk) {
-      throw new NextlyError({
-        code: "NEXTLY_UPGRADE_TABLE_NAME_COLLISION",
-        publicMessage:
-          `A table named "${eventsTable}" already exists with an unexpected ` +
-          "shape. Rename it, or re-run with `--target-table-name <name>`.",
-      });
-    }
-
-    // 6. Backup confirmation.
-    await confirmBackup(options, deps);
-
-    // 7. Create the events table if absent.
-    if (!eventsExists) {
-      for (const statement of getSchemaEventsDdl(dialect)) {
-        await execRaw(db, dialect, statement);
-      }
-      log(`Created ${eventsTable}`);
-    }
-
-    // 8. Backfill.
-    const repo = new SchemaEventsRepository(db, dialect);
-    let migratedCount = 0;
-    let journaledCount = 0;
-
-    if (legacy.tables.includes("nextly_migrations")) {
-      const rows = await queryRaw(
-        db,
-        dialect,
-        "SELECT filename, sha256, status, applied_at, applied_by, duration_ms, error_json FROM nextly_migrations"
-      );
-      for (const r of rows) {
-        const event = mapMigrationsRow({
-          filename: String(r.filename),
-          sha256: String(r.sha256),
-          status: String(r.status),
-          appliedAt: toDate(r.applied_at),
-          appliedBy: (r.applied_by as string | null) ?? null,
-          durationMs: (r.duration_ms as number | null) ?? null,
-          errorJson: r.error_json ?? null,
-        });
-        await repo.insertEvent(toInsertValues(event));
-        migratedCount++;
-      }
-      log(`Backfilled ${migratedCount} rows from nextly_migrations`);
-    }
-
-    if (legacy.tables.includes("nextly_migration_journal")) {
-      const rows = await queryRaw(
-        db,
-        dialect,
-        "SELECT source, status, started_at, ended_at, duration_ms, scope_kind, scope_slug FROM nextly_migration_journal"
-      );
-      for (const r of rows) {
-        const event = mapJournalRow({
-          source: String(r.source),
-          status: String(r.status),
-          startedAt: toDate(r.started_at),
-          endedAt: toDate(r.ended_at),
-          durationMs: (r.duration_ms as number | null) ?? null,
-          scopeKind: (r.scope_kind as string | null) ?? null,
-          scopeSlug: (r.scope_slug as string | null) ?? null,
-        });
-        if (!event) {
-          deps.logger?.warn?.(
-            `Skipping non-finalized journal row (status=${String(r.status)}).`
-          );
+  await withMigrateLock(
+    adapter as unknown as DrizzleAdapter,
+    dialect,
+    async () => {
+      // Each step is brought up to date before the next is asked, so a step
+      // reads what the steps before it have repaired. The backup is confirmed
+      // once, before the first step that has work.
+      const idle: string[] = [];
+      let confirmed = false;
+      for (const step of steps) {
+        const pending = await step.pending(context);
+        if (pending === 0) {
+          idle.push(step.title);
           continue;
         }
-        await repo.insertEvent(toInsertValues(event));
-        journaledCount++;
+        if (!confirmed) {
+          await confirmBackup(options, deps);
+          confirmed = true;
+        }
+        for (const title of idle.splice(0)) {
+          context.log(`${title}: nothing to do`);
+        }
+        const changed = await step.run(context);
+        context.log(`${step.title}: ${String(changed)}`);
       }
-      log(`Backfilled ${journaledCount} rows from nextly_migration_journal`);
-    }
+      if (!confirmed) {
+        context.log("Already upgraded. Nothing to do.");
+        return;
+      }
+      for (const title of idle) context.log(`${title}: nothing to do`);
 
-    // Synthesize a core_apply audit row for the pre-existing core schema.
-    await repo.insertEvent(toInsertValues(synthesizedCoreApplyEvent()));
-    log("Synthesized 1 audit row for pre-existing core schema");
-
-    // 9. Drop legacy tables.
-    for (const table of legacy.tables) {
-      await adapter.dropTable(table, { ifExists: true });
-      log(`Dropped ${table}`);
-    }
-
-    log("Done. You can now run `pnpm run dev` or `pnpm nextly migrate`.");
-  });
+      context.log(
+        "Done. You can now run `pnpm run dev` or `pnpm nextly migrate`."
+      );
+    },
+    { command: "nextly upgrade", mode: "wait", waitMs: deps.lockWaitMs }
+  );
 }
 
 export interface RunReconcileCoreDeps {
@@ -313,27 +165,32 @@ export async function runReconcileCore(
 
   await assertNoLegacyBookkeeping(adapter);
 
-  await withMigrateLock(db, dialect, async () => {
-    await reconcile({
-      db,
-      dialect,
-      // Same reason as `nextly migrate`: the desired core shape must name the
-      // registry this database actually holds, or the reconcile creates the
-      // other one empty.
-      fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+  await withMigrateLock(
+    adapter as unknown as DrizzleAdapter,
+    dialect,
+    async () => {
+      await reconcile({
+        db,
         dialect,
-        getDrizzle: <T>() => db as T,
-      }),
-      mode: "dev-loose",
-      // `confirmDestructive` is an interactive prompt, NOT `allowDestructive`.
-      // The retired-table cleanup is gated on the latter and therefore never
-      // runs from here, which is deliberate: dropping `accounts`/`sessions` is
-      // the documented `nextly migrate` + NEXTLY_ALLOW_CORE_DESTRUCTIVE flow,
-      // and an upgrade that only confirmed a backup has not asked for it.
-      confirmDestructive: deps.confirmDestructive,
-      logger: deps.logger,
-    });
-  });
+        // Same reason as `nextly migrate`: the desired core shape must name the
+        // registry this database actually holds, or the reconcile creates the
+        // other one empty.
+        fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+          dialect,
+          getDrizzle: <T>() => db as T,
+        }),
+        mode: "dev-loose",
+        // `confirmDestructive` is an interactive prompt, NOT `allowDestructive`.
+        // The retired-table cleanup is gated on the latter and therefore never
+        // runs from here, which is deliberate: dropping `accounts`/`sessions` is
+        // the documented `nextly migrate` + NEXTLY_ALLOW_CORE_DESTRUCTIVE flow,
+        // and an upgrade that only confirmed a backup has not asked for it.
+        confirmDestructive: deps.confirmDestructive,
+        logger: deps.logger,
+      });
+    },
+    { command: "nextly upgrade --reconcile-core", mode: "wait" }
+  );
   deps.logger?.info?.("Core schema reconciliation complete.");
 }
 
@@ -368,7 +225,7 @@ export function registerUpgradeCommand(program: Command): void {
   program
     .command("upgrade")
     .description(
-      "Consolidate legacy bookkeeping tables into nextly_schema_events"
+      "Bring an existing database up to date: move the migration records into nextly_schema_events, hash passwords stored before this release, and remove passwords kept in version history"
     )
     .option(
       "--confirm-backed-up",

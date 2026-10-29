@@ -109,7 +109,6 @@ const scale = parseThemeScale(css);
  */
 const ALLOWED_DECORATIVE = new Set<string>([
   "text-primary/20", // hover-reveal ghost buttons and sparkline decoration
-  "text-primary/40", // loading spinner; meaning carried by motion + adjacent text
   "text-muted/10", // chart ring-track backing
   "border-warning-200/50", // soft border on a light tint badge (fill+text identify it)
   "border-success-900/50", // dark tonal badge border (fill+text identify it)
@@ -117,10 +116,6 @@ const ALLOWED_DECORATIVE = new Set<string>([
   // card that is already identified by its fill and text, not a focus indicator
   // (all focus rings are full-strength) nor a sole state cue.
   "ring-primary/20",
-  "ring-primary/40",
-  "ring-border/10",
-  "ring-border/50", // neutral activity-badge outline (~1.7:1 once the token's own alpha compounds); same decorative role as the colored ring siblings
-  "ring-foreground/40",
   // Colour-picker handle, over a surface whose colour the USER chose. No
   // semantic token can guarantee contrast against an arbitrary background, and
   // this is the outer half of the standard two-tone handle: a light border
@@ -130,9 +125,7 @@ const ALLOWED_DECORATIVE = new Set<string>([
   "ring-black/60",
   "ring-muted/5",
   "ring-success-500/20",
-  "ring-success-500/40",
   "ring-destructive-500/20",
-  "ring-destructive-500/40",
   // Faint hairline / dashed decorative borders, like border-subtle.
   "border-primary/[0.08]",
   "border-primary/[0.18]",

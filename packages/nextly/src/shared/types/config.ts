@@ -44,6 +44,7 @@ import type {
   ResolvedWebhookRetentionConfig,
   WebhookRetentionConfig,
 } from "../../domains/webhooks/retention-config";
+import type { AdminDashboardConfig } from "../../domains/widgets/declaration/dashboard";
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
@@ -182,10 +183,12 @@ export interface DatabaseConfig {
   runMigrationsOnBoot?: boolean;
 
   /**
-   * Seconds a held migrate lock stays valid before another process may take it
-   * over (TTL). Tune up for unusually long migrations.
+   * The schema lock's lease, in seconds: how long the lock outlives a migration
+   * command that stopped without releasing it (killed, or its machine lost).
+   * A running holder renews the lock, so a migration of any length keeps it;
+   * this only bounds how long the next run waits on one that died.
    *
-   * @default 900
+   * @default 120
    */
   migrateLockTtlSeconds?: number;
 
@@ -669,6 +672,16 @@ export interface AdminConfig {
   branding?: AdminBrandingConfig;
 
   /**
+   * How this site shapes its dashboard: its own widgets, widgets hidden for
+   * everyone, a widget's title, description, widths and starting settings,
+   * the default dashboard, plugin suggestions, and a plugin's alternative in a
+   * built-in's place. Checked at startup against every widget the install has.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  dashboard?: AdminDashboardConfig;
+
+  /**
    * Per-plugin overrides for sidebar placement and appearance.
    *
    * Keys are plugin slugs (derived from plugin name, e.g., "form-builder").
@@ -1074,7 +1087,9 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
   migrationsDir: "./src/db/migrations",
   uiSchemaFile: "./ui-schema.json",
   runMigrationsOnBoot: false,
-  migrateLockTtlSeconds: 900,
+  // The schema lock's lease. A holder renews it, so it no longer has to outlast the longest
+  // migration; it bounds only how long a run that died keeps the lock.
+  migrateLockTtlSeconds: 120,
   rawSqlPlugins: [],
 };
 

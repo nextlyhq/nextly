@@ -38,30 +38,20 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { appLocalization } from "../../domains/i18n/configured-locales";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsAsFirstPushed,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { movedOnto } from "../../domains/schema/pipeline/apply";
-import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
-import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import {
-  BrowserPromptDispatcher,
-  type BrowserRenameResolution,
-} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
-import {
-  noopMigrationJournal,
-  noopPreRenameExecutor,
-} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
-import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
-import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
 import {
   resolveSingleTableName,
   singleTableFamiliesCollide,
@@ -79,7 +69,6 @@ import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
 import { withSessionCacheHeaders } from "../../routeHandler";
-import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -89,18 +78,24 @@ import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
+  routeAdmittedUpdate,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import {
+  builderSchemaPush,
+  leavingSettingsStep,
+  pushAndReconcileCompanion,
+  refuseRefusedLeavingSettings,
+} from "../helpers/builder-schema-push";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
-  getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
   getSingleMetadataServiceFromDI,
@@ -786,11 +781,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // caller attributes to the key itself rather than the user that owns
           // it. Mirrors the collection update handler.
           actor: readAuthenticatedActor(),
-          // Route auth already ran the RBAC gate; `routeAuthorized` skips only
-          // that re-check while field-level write access + response redaction
-          // still run for this user (overrideAccess stays false).
+          // Where route auth admitted the caller on update, `routeAuthorized`
+          // skips only that re-check while field-level write access + response
+          // redaction still run for this user (overrideAccess stays false). A
+          // caller admitted on publish or unpublish alone is judged here.
           overrideAccess: false,
-          routeAuthorized: !!user,
+          routeAuthorized: !!user && routeAdmittedUpdate(),
           // The route authorized only `update` against an API key's scope; the
           // service-side publish/unpublish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -816,11 +812,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // caller attributes to the key rather than the user that owns it.
         actor: readAuthenticatedActor(),
         overrideAccess: false,
-        // Route auth already ran the RBAC gate for `update`; attesting it skips
-        // only that re-check. The publish gate always runs.
-        routeAuthorized: !!user,
-        // The route authorized this POST as `update` against an API key's
-        // scope; the service judges the key's own `publish-{slug}` grant.
+        // The route admitted this POST on the `publish-{slug}` grant alone,
+        // so it attests no gate: a Single with nothing to publish is still
+        // asked update by the service.
+        routeAuthorized: false,
+        // The service judges an API key's own `publish-{slug}` grant and the
+        // rule, in each language the publish puts live.
         authenticatedScope: readAuthenticatedScope(),
       });
       const published = unwrapServiceResult<{
@@ -1052,25 +1049,31 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.
-      const { record: updated, migrationStatus } =
-        await svc.metadata.updateSingleSchema({
-          slug,
-          existing,
-          updateData,
-          fields: schemaFields,
-          isLocalized,
-          wasLocalized,
-          // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
-          // the record inside its exclusion and needs to tell an explicit `localized: false` from
-          // this handler having filled in the value it read.
-          localizedRequested: b.localized !== undefined,
-          hasStatus,
-          wasStatus,
-          // Whether the request SET the toggle, which is not the same as changing it: saving it at
-          // its current value still reaches the companion, and that is what repairs a localized
-          // single whose companion `_status` was never provisioned.
-          statusRequested: b.status !== undefined,
-        });
+      const {
+        record: updated,
+        migrationStatus,
+        refusedSettings,
+      } = await svc.metadata.updateSingleSchema({
+        slug,
+        existing,
+        updateData,
+        fields: schemaFields,
+        isLocalized,
+        wasLocalized,
+        // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
+        // the record inside its exclusion and needs to tell an explicit `localized: false` from
+        // this handler having filled in the value it read.
+        localizedRequested: b.localized !== undefined,
+        hasStatus,
+        wasStatus,
+        // Whether the request SET the toggle, which is not the same as changing it: saving it at
+        // its current value still reaches the companion, and that is what repairs a localized
+        // single whose companion `_status` was never provisioned.
+        statusRequested: b.status !== undefined,
+      });
+
+      // Leaving settings the database refused: the admin is told which setting on which field.
+      refuseRefusedLeavingSettings(slug, refusedSettings);
 
       // Migration status drives the toast copy so admins see "applied"
       // vs "pending" immediately.
@@ -1109,7 +1112,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       desired.singles[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredSingle["fields"],
+        // As the apply's first push creates them (`fieldsAsFirstPushed`).
+        fields: fieldsAsFirstPushed({
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          entity: single,
+          requestedLocalized: readRequestLocalized(body),
+        }) as DesiredSingle["fields"],
         // Carry the Draft/Published flag so previewDesiredSchema injects
         // the `status` column into the desired snapshot.
         status: single.status === true,
@@ -1246,11 +1255,22 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
           : undefined;
 
+      // A Required or Unique field leaving translation is pushed without its setting first, and
+      // the setting is pushed once the companion reconcile has copied its values in, before its
+      // companion column is dropped.
+      const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        renamed: companionRename,
+      });
+
       const desired = await buildFullDesiredSchema();
       desired.singles[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredSingle["fields"],
+        fields: (settingsDeferred ?? fields) as DesiredSingle["fields"],
         // Mirror previewSingleSchemaChanges so apply diffs against the
         // same desired schema.
         status: single.status === true,
@@ -1262,77 +1282,60 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         builderOwned: true,
       };
 
-      const promptDispatcher = new BrowserPromptDispatcher(
-        renameResolutions ?? [],
-        eventResolutions ?? [],
-        legacyBundle
-      );
-
-      const migrationJournal =
-        getMigrationJournalFromDI() ?? noopMigrationJournal;
-      const pipeline = new PushSchemaPipeline({
-        executor: new DrizzleStatementExecutor(dialect, db),
-        renameDetector: new RegexRenameDetector(),
-        classifier: new RealClassifier(),
-        promptDispatcher,
-        preRenameExecutor: noopPreRenameExecutor,
-        preCleanupExecutor: new RealPreCleanupExecutor(),
-        migrationJournal,
-        notifier: getProductionNotifier(),
-      });
-
-      const result = await pipeline.apply({
-        desired,
-        db,
+      const push = builderSchemaPush({
         dialect,
-        source: "ui",
-        promptChannel: "browser",
+        db,
         databaseName,
-        uiTargetSlug: slug,
-        // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
-        // kind is invisible to every history query filtered by its own.
-        uiTargetKind: "single" as const,
-        // A field becoming translated keeps its value as this language's; the apply moves it after
-        // its prompts and refusals, before it drops the main column.
-        defaultLocale: appLocalization()?.defaultLocale ?? "en",
+        slug,
+        kind: "single",
+        resolutions: [
+          renameResolutions ?? [],
+          eventResolutions ?? [],
+          legacyBundle,
+        ],
       });
-
-      if (!result.success) {
-        throw new Error(
-          result.error?.message ?? "Failed to apply schema changes"
-        );
-      }
-
-      // i18n: the push pipeline excludes companion tables, so reconcile the single's companion
-      // out-of-band — create single_<slug>_locales on the first translatable field, then ADD/DROP
-      // columns as the field set changes (mirrors collections). Uses the request's `isLocalized`.
-      try {
-        await reconcileSingleCompanion({
-          slug,
-          tableName,
-          oldFields: single.fields as unknown as FieldDefinition[],
-          newFields: fields as unknown as FieldDefinition[],
-          localized: isLocalized,
-          // Detect an enable/disable transition against the persisted state so this apply
-          // seeds/restores existing rows rather than only creating an empty companion.
-          wasLocalized: (single as { localized?: boolean }).localized === true,
-          status: single.status === true,
-          // Read from the same persisted record as `wasLocalized`, so both describe the state
-          // before this apply.
-          wasStatus: single.status === true,
-          adapter,
-          // Added to the companion, with their values, by the apply before its drop.
-          joinedBefore: movedOnto(result, tableName),
-          // A translated field the admin renamed: the dialog's answer naming the companion.
-          renamed: companionRename ?? undefined,
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw NextlyError.internal({
-          cause: err instanceof Error ? err : undefined,
-          logContext: { op: "singleCompanionReconcile", slug, detail: msg },
-        });
-      }
+      // The push excludes companion tables, so single_<slug>_locales is brought in step right
+      // after it: created on the first translatable field, then ADD/DROPped as the field set
+      // changes (mirrors collections).
+      await pushAndReconcileCompanion(push, desired, "single", {
+        slug,
+        tableName,
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        localized: isLocalized,
+        wasLocalized: (single as { localized?: boolean }).localized === true,
+        // Both read from the same persisted record as `wasLocalized`, so all three describe the
+        // state before this apply.
+        status: single.status === true,
+        wasStatus: single.status === true,
+        adapter,
+        renamed: companionRename ?? undefined,
+        // The settings the first push left off, once the shared columns hold the default
+        // language's values. A new desired schema rather than an edit of the first: the pipeline
+        // keeps the last one it applied, by reference, to skip a push that changes nothing.
+        settleLeaving: settingsDeferred
+          ? leavingSettingsStep({
+              adapter,
+              entity: slug,
+              tableName,
+              builtBy: "collection",
+              oldFields: single.fields as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              renamed: companionRename,
+              push: () =>
+                push({
+                  ...desired,
+                  singles: {
+                    ...desired.singles,
+                    [slug]: {
+                      ...desired.singles[slug],
+                      fields: fields as DesiredSingle["fields"],
+                    },
+                  },
+                }),
+            })
+          : undefined,
+      });
 
       const newSchemaVersion = currentVersion + 1;
 

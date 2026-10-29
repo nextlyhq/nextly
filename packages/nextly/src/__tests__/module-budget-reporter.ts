@@ -5,16 +5,23 @@
  * A file that loads the service registry or a dialect's schema bundle loads
  * most of the package, more than a thousand modules, and every such file adds
  * that load to every run of the suite. The budget caps how many files are that
- * heavy and how many modules the 90th-percentile file loads, so an import that
- * puts the registry back under a widely used module fails CI instead of
- * slowing every run unnoticed.
+ * heavy and how many modules the heaviest tenth of files load on average, so
+ * an import that puts the registry back under a widely used module fails CI
+ * instead of slowing every run unnoticed.
+ *
+ * A mean over the heaviest tenth, not a percentile: the files' counts have a
+ * gap between the files that reach the registry and those that do not, and a
+ * percentile landing at the gap jumps across it when one file is added or
+ * removed anywhere in the suite, or when another machine runs one file more,
+ * failing an unrelated change in either direction. One file entering or
+ * leaving the tenth moves the mean by a few modules.
  *
  * The counts come from this run: Vitest records the modules each file loaded
  * (`experimental.recordDependencies`) and writes the records before reporters
  * hear that the run ended, so this reads exactly what the files just loaded.
  * Only a run of the whole suite is judged. A selection such as the pre-push's
  * `--changed` runs the files a change touches, often the heaviest ones, and its
- * percentile says nothing about the suite; nor does a run told to select
+ * numbers say nothing about the suite; nor does a run told to select
  * projects, such as the shuffled-order job's `--project nextly`.
  *
  * A record lists the package's own modules: Vitest leaves out every path under
@@ -59,15 +66,27 @@ export const HEAVY_MODULES = 1_000;
 export const JUDGED_PROJECT = "nextly (isolated)";
 
 /**
- * The judged project's pins, each a margin above what it measured when they
- * were set (66 heavy files and 1,035 modules at the 90th percentile, over 577
- * files), and the heavy files of that measurement. A run that measures below a
- * pin by more than its margin fails, naming the pin to set; the list is
- * refreshed with them. The pins are edited by hand so that a change to one is
- * a line a reviewer reads; only the list has a command.
+ * The judged project's pins, each a margin above what it measured when it was
+ * set (62 heavy files, and a mean of 1,191 modules over the heaviest tenth,
+ * over 597 files; CI's runs measured 61 and 1,190), and the heavy files of
+ * that measurement. The heavy files' pin was raised when three tests that
+ * load the service registry by design joined them (the boot refusal of an
+ * unsupported framework and two migrate commands' tests): 65 measured, so 67
+ * holds whether CI measures one fewer, as it has before. The tail mean's pin
+ * was raised when the dashboard's pins joined the service registry (their
+ * route and service) beside the logger's credential shapes: 1,228 measured,
+ * the heavy files' chains unchanged, so 1,262 holds whether CI measures one
+ * fewer. It came down to 1,257 when the suite measured 1,223 (the CLI's
+ * upgrade and plugin-rollback tests now heavy, the boot refusal and the
+ * seeding wait no longer), so it holds whether CI measures one fewer. Each
+ * pin is the higher measurement plus its margin, at
+ * most the lower measurement plus it, so it holds on both. A run that
+ * measures below a pin by more than its margin fails, naming the pin to set;
+ * the list is refreshed with them. The pins are edited by hand so that a
+ * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 69, p90Modules: 1_070 };
-const MARGIN = { heavyFiles: 3, p90Modules: 35 };
+export const BUDGET = { heavyFiles: 67, tailMeanModules: 1_257 };
+const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
   import.meta.url
@@ -89,18 +108,28 @@ const NAMED = 10;
 export interface Measured {
   files: number;
   heavyFiles: number;
-  p90Modules: number;
+  tailMeanModules: number;
+}
+
+/**
+ * The mean module count of the heaviest tenth of `sorted` (ascending), at
+ * least one file, rounded to a whole module; 0 for no files.
+ */
+function tailMean(sorted: readonly number[]): number {
+  const tail = sorted.slice(
+    sorted.length - Math.max(1, Math.ceil(sorted.length / 10))
+  );
+  if (tail.length === 0) return 0;
+  return Math.round(tail.reduce((sum, count) => sum + count, 0) / tail.length);
 }
 
 /** A set of test files' numbers from each one's module count. */
 export function measure(counts: readonly number[]): Measured {
   const sorted = [...counts].sort((a, b) => a - b);
-  const at = (q: number) =>
-    sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
   return {
     files: sorted.length,
     heavyFiles: sorted.filter(n => n > HEAVY_MODULES).length,
-    p90Modules: at(0.9),
+    tailMeanModules: tailMean(sorted),
   };
 }
 
@@ -109,7 +138,7 @@ export function judge(measured: Measured, budget = BUDGET) {
   const over: string[] = [];
   const lower: string[] = [];
   const pins = { ...budget };
-  for (const key of ["heavyFiles", "p90Modules"] as const) {
+  for (const key of ["heavyFiles", "tailMeanModules"] as const) {
     if (measured[key] > budget[key]) over.push(key);
     else if (measured[key] + MARGIN[key] < budget[key]) {
       lower.push(key);
@@ -157,7 +186,7 @@ function describeMeasured(measured: Measured, budget?: typeof BUDGET): string {
     budget ? ` (at most ${budget[key]})` : "";
   return (
     `${measured.heavyFiles} heavy files${cap("heavyFiles")}, ` +
-    `${measured.p90Modules} modules at the 90th percentile${cap("p90Modules")}, ` +
+    `${measured.tailMeanModules} modules on average in the heaviest tenth${cap("tailMeanModules")}, ` +
     `over ${measured.files} test files`
   );
 }
@@ -190,6 +219,23 @@ export interface GraphModule {
 }
 
 /**
+ * The module among `modules` whose record key is `key`. Found by the key, the
+ * spelling every other lookup here uses, rather than by building its id: Vite's
+ * ids use `/` on every platform, so an id joined with the platform's separator
+ * names no module on Windows.
+ */
+export function moduleWithKey(
+  modules: Iterable<GraphModule>,
+  root: string,
+  key: string
+): GraphModule | undefined {
+  for (const module of modules) {
+    if (module.id && recordKey(root, module.id) === key) return module;
+  }
+  return undefined;
+}
+
+/**
  * The modules from `start` to the nearest one `isTarget` accepts, breadth
  * first, so the chain printed is the shortest; empty when none is reached.
  */
@@ -218,6 +264,119 @@ export function shortestPath(
     }
   }
   return [];
+}
+
+/**
+ * The dialect whose table definitions the module `key` (its path in the
+ * package) holds: a feature's dialect file, or a dialect's bundle or its
+ * relations. Undefined for any other module.
+ */
+export function tableFileDialect(key: string): string | undefined {
+  const match =
+    /^src\/schemas\/[^/]+\/(postgres|mysql|sqlite)(?:\.relations)?\.ts$/.exec(
+      key
+    );
+  if (!match) return undefined;
+  return match[1] === "postgres" ? "postgresql" : match[1];
+}
+
+/**
+ * The published entry that re-exports PostgreSQL's tables by name, and so
+ * loads them for whoever imports it. A public contract, not a path product
+ * code takes to a table.
+ */
+const PUBLIC_TABLE_ENTRIES = ["src/index.ts"];
+
+/**
+ * Whether the module `key` is product code held to the dialect boundary: it
+ * reads a dialect's tables through the loaded dialect. The schema files, the
+ * loader that imports one dialect's on purpose, the published entry above,
+ * tests and their helpers are not.
+ */
+export function boundByDialectBoundary(key: string): boolean {
+  return (
+    key.startsWith("src/") &&
+    !key.startsWith("src/schemas/") &&
+    key !== "src/database/dialect-tables.ts" &&
+    !PUBLIC_TABLE_ENTRIES.includes(key) &&
+    !/(^|\/)__tests__\/|\.(test|spec|test-d)\.tsx?$/.test(key)
+  );
+}
+
+/** A product module's import that reaches another dialect's tables. */
+export interface Crossing {
+  /** The product module importing. */
+  from: GraphModule;
+  /** From its import to the other dialect's table file, through `schemas/`. */
+  path: GraphModule[];
+}
+
+/**
+ * Every import, in `modules`, by product code held to the dialect boundary
+ * that reaches a table file of a dialect other than `dialect`: directly, or
+ * through modules under `src/schemas/` such as a barrel re-exporting every
+ * dialect. A dialect is reached through the loader only by the files that
+ * load it on purpose, so on a run on one dialect the others' files are
+ * reached through no product import at all.
+ */
+export function dialectBoundaryCrossings(
+  modules: Iterable<GraphModule>,
+  name: (module: GraphModule) => string,
+  dialect: string
+): Crossing[] {
+  const other = (m: GraphModule) => {
+    const of = tableFileDialect(name(m));
+    return of !== undefined && of !== dialect;
+  };
+  const crossings: Crossing[] = [];
+  for (const from of modules) {
+    if (!boundByDialectBoundary(name(from))) continue;
+    for (const imported of from.importedModules) {
+      const key = name(imported);
+      if (other(imported)) {
+        crossings.push({ from, path: [imported] });
+      } else if (key.startsWith("src/schemas/")) {
+        const within = schemasOnly(imported, name);
+        const path = shortestPath(within, m => other(m));
+        if (path.length > 0) crossings.push({ from, path: path.map(unwrap) });
+      }
+    }
+  }
+  return crossings;
+}
+
+/** A view of `start` whose imports stay under `src/schemas/`. */
+interface Restricted extends GraphModule {
+  original: GraphModule;
+}
+
+function schemasOnly(
+  start: GraphModule,
+  name: (module: GraphModule) => string
+): Restricted {
+  const views = new Map<GraphModule, Restricted>();
+  const view = (module: GraphModule): Restricted => {
+    const known = views.get(module);
+    if (known) return known;
+    const made: Restricted = {
+      id: module.id,
+      original: module,
+      get importedModules() {
+        return new Set(
+          [...module.importedModules]
+            .filter(next => name(next).startsWith("src/schemas/"))
+            .map(view)
+        );
+      },
+    };
+    views.set(module, made);
+    return made;
+  };
+  return view(start);
+}
+
+function unwrap(module: GraphModule): GraphModule {
+  return (module as Restricted).original ?? module;
 }
 
 /** The shortest import chain from a test file to a module that pulls, if any. */
@@ -376,6 +535,7 @@ export default class ModuleBudgetReporter implements Reporter {
         `module budget: wrote this run's ${heavy.length} heavy files to the pinned list`
       );
     }
+    this.judgeDialectBoundary(counted);
     if (over.length > 0) {
       fail(exceededMessage(root, over, measured, change, heavy));
     } else if (lower.length > 0) {
@@ -386,12 +546,104 @@ export default class ModuleBudgetReporter implements Reporter {
       fail(
         `module budget: ${JUDGED_PROJECT} is lighter than its pins (${lower.join(", ")}), ` +
           "and the pins only go down. In src/__tests__/module-budget-reporter.ts set\n" +
-          `  export const BUDGET = { heavyFiles: ${pins.heavyFiles}, p90Modules: ${pins.p90Modules} };\n` +
+          `  export const BUDGET = { heavyFiles: ${pins.heavyFiles}, tailMeanModules: ${pins.tailMeanModules} };\n` +
           "and refresh the pinned heavy files from a whole run:\n" +
           `  ${WRITE_HEAVY}=1 pnpm --filter nextly exec vitest run`
       );
     }
   }
+  /**
+   * Holds the run to the dialect boundary, over every module the run's Vite
+   * graphs hold. Two claims, each failing the run with the chains it found:
+   * no product import reaches another dialect's table file (the run's dialect
+   * is `DB_DIALECT`, which the unit setup defaults to SQLite), and the boot
+   * path, from `di/register`, does not reach the public schemas entry, which
+   * loads PostgreSQL's tables. A run whose graphs never loaded the boot module
+   * fails too, rather than passing the second claim unchecked.
+   */
+  private judgeDialectBoundary(counted: Counted[]): void {
+    const root = this.vitest.config.root;
+    const name = (m: GraphModule) => (m.id ? recordKey(root, m.id) : "?");
+    const dialect = process.env.DB_DIALECT ?? "sqlite";
+    const graphs = new Set(
+      counted.flatMap(({ module }) =>
+        Object.values(module.project.vite.environments).map(
+          environment => environment.moduleGraph
+        )
+      )
+    );
+    const crossings = new Map<string, Crossing>();
+    let boot: GraphModule | undefined;
+    for (const graph of graphs) {
+      for (const crossing of dialectBoundaryCrossings(
+        graph.idToModuleMap.values(),
+        name,
+        dialect
+      )) {
+        const line = [crossing.from, ...crossing.path].map(name).join(" → ");
+        crossings.set(line, crossing);
+      }
+      boot ??= moduleWithKey(
+        graph.idToModuleMap.values(),
+        root,
+        "src/di/register.ts"
+      );
+    }
+    const problems: string[] = [];
+    for (const [line, crossing] of [...crossings].slice(0, NAMED)) {
+      const reached = chainFromTest(counted, crossing.from, name);
+      problems.push(
+        `  ${line}${reached ? `\n    reached from ${reached}` : ""}`
+      );
+    }
+    if (crossings.size > 0) {
+      problems.unshift(
+        `a product import reaches another dialect's tables on this ${dialect} run (${crossings.size}):`
+      );
+    }
+    if (!boot) {
+      problems.push(
+        "the boot module src/di/register.ts was not loaded by this run, so whether boot reaches the public schemas entry was not checked"
+      );
+    } else {
+      const toPublic = shortestPath(
+        boot,
+        m => name(m) === "src/schemas/index.ts"
+      );
+      if (toPublic.length > 0) {
+        problems.push(
+          `the boot path reaches the public schemas entry, which loads PostgreSQL's tables:\n  ${toPublic.map(name).join(" → ")}`
+        );
+      }
+    }
+    if (problems.length === 0) {
+      console.log(
+        `module budget, dialect boundary: no product import reaches another dialect's tables on this ${dialect} run, and boot does not reach the public schemas entry`
+      );
+      return;
+    }
+    fail(
+      `module budget, dialect boundary FAILED: ${problems.join("\n")}\n` +
+        "Read a dialect's tables through the loaded dialect (loadedDialect or getDialectTables from database/); a type-only import of a dialect file loads nothing."
+    );
+  }
+}
+
+/** The shortest chain from a test file that ran to `target`, if any. */
+function chainFromTest(
+  counted: Counted[],
+  target: GraphModule,
+  name: (m: GraphModule) => string
+): string | undefined {
+  for (const { module } of counted) {
+    for (const environment of Object.values(module.project.vite.environments)) {
+      const start = environment.moduleGraph.getModuleById(module.moduleId);
+      if (!start) continue;
+      const path = shortestPath(start, m => m === target);
+      if (path.length > 0) return path.map(name).join(" → ");
+    }
+  }
+  return undefined;
 }
 
 /** A test file that ran, and how many modules its record lists. */

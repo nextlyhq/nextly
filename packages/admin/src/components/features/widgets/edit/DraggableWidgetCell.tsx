@@ -34,6 +34,7 @@
 import { useDraggable } from "@dnd-kit/core";
 import {
   useCallback,
+  type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
   type JSX,
@@ -68,6 +69,8 @@ export interface DraggableWidgetCellProps {
   /** The card just placed (moved, resized, added or put back): ringed so the reader sees it. */
   highlighted?: boolean;
   className?: string;
+  /** The cell's own style: the rows it spans, which no class can carry (`cardRowStyle`). */
+  style?: CSSProperties;
   "data-testid"?: string;
   children: ReactNode;
 }
@@ -79,6 +82,7 @@ export function DraggableWidgetCell({
   drag,
   highlighted = false,
   className,
+  style,
   "data-testid": testId,
   children,
 }: DraggableWidgetCellProps): JSX.Element {
@@ -103,6 +107,7 @@ export function DraggableWidgetCell({
       {...{ [CELL_PLACEMENT_ATTRIBUTE]: id }}
       data-highlighted={highlighted || undefined}
       data-held={drag?.held || undefined}
+      style={style}
       className={cn(
         className,
         // Ringed in the primary colour, offset from the card so it reads in both schemes. It
@@ -125,7 +130,7 @@ export function DraggableWidgetCell({
           // `cursor-grab`, not `cursor-move`: this reorders within a list, it
           // does not move the card to an arbitrary point.
           // 🔴 LEFT, not right. The right end of a card's header holds its
-          // width and its menu, and a handle there at a higher `z-index`
+          // size label and its menu, and a handle there at a higher `z-index`
           // swallowed pointer input meant for them.
           // `touch-none` on the handle alone: a finger on it drags, a finger anywhere else on
           // the page still scrolls it.

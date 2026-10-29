@@ -31,6 +31,7 @@
 
 import type { WidgetPlacement } from "./layout";
 import {
+  drivesQuery,
   namedCollection,
   resolveWidgetSettings,
   type AnyWidgetSetting,
@@ -41,13 +42,28 @@ import {
  * one (`settings.ts` refuses a second).
  */
 export function collectionWidgets(
-  widgets: readonly { id: string; collectionSetting?: AnyWidgetSetting }[]
+  widgets: readonly {
+    id: string;
+    collectionSetting?: AnyWidgetSetting;
+    knobQueries?: readonly unknown[];
+  }[]
 ): ReadonlyMap<string, AnyWidgetSetting> {
   const found = new Map<string, AnyWidgetSetting>();
   for (const widget of widgets) {
-    if (widget.collectionSetting !== undefined) {
-      found.set(widget.id, widget.collectionSetting);
+    const setting = widget.collectionSetting;
+    if (setting === undefined) continue;
+    // 🔴 Only a setting a knob drives on the widget's effective query names
+    // the collection its card reads. A registration that overrides a
+    // contribution's query can leave its Collection setting reaching nothing:
+    // judged by the setting alone, the card would be withheld, and its write
+    // refused, for a collection it never reads.
+    if (
+      widget.knobQueries !== undefined &&
+      !widget.knobQueries.some(query => drivesQuery(setting, query))
+    ) {
+      continue;
     }
+    found.set(widget.id, setting);
   }
   return found;
 }
@@ -82,11 +98,54 @@ export function unreadableCollectionCard(
  * between withheld and shown with no widget id, gate or readable collection
  * changing, and a snapshot taken before must be refused. Hashing the whole
  * declaration needs no list of the properties that matter to stay current.
+ *
+ * EVERY declared Collection setting, including one no query of its widget
+ * drives (a registration that replaced the query with one the setting does
+ * not reach). Such a setting decides no withholding, but the workspace payload
+ * and the settings sheet still show it, so a change to it must still refuse a
+ * snapshot taken before; filtered as `collectionWidgets` is, it changed nothing
+ * the token held.
  */
 export function collectionSettingsToken(
   widgets: readonly { id: string; collectionSetting?: AnyWidgetSetting }[]
 ): string[] {
-  return [...collectionWidgets(widgets)].map(
-    ([id, setting]) => `${id}=${JSON.stringify(setting)}`
+  return widgets.flatMap(({ id, collectionSetting }) =>
+    collectionSetting === undefined
+      ? []
+      : [`${id}=${JSON.stringify(collectionSetting)}`]
   );
+}
+
+/**
+ * A widget declaration as this reader is told it: its Collection setting's
+ * declared default withheld when that default names a collection the reader
+ * may not read. The same declaration when there is nothing to withhold.
+ *
+ * 🔴 The workspace payload ships declarations to every reader who may see the
+ * widget, and a default is a collection slug: shipped as declared, it tells a
+ * reader of a collection they may not read, whether or not they hold a card.
+ * Withholding the cards that rely on it (`unreadableCollectionCard`) does not
+ * reach the declaration.
+ *
+ * Only the default goes, not the declaration: the widget stays offered for
+ * the collections the reader may read, and a card added without choosing one
+ * is set to none, drawn as not available. The verdict is the layout's: the
+ * same slug rule (`namedCollection`) and the same readable collections.
+ */
+export function collectionDefaultForReader<
+  W extends { settings?: readonly AnyWidgetSetting[] },
+>(widget: W, readable: ReadonlySet<string>): W {
+  const settings = widget.settings;
+  if (settings === undefined) return widget;
+  let withheld = false;
+  const told = settings.map(setting => {
+    if (setting.type !== "collection") return setting;
+    const named = namedCollection(setting.defaultValue);
+    if (named === undefined || readable.has(named)) return setting;
+    withheld = true;
+    return Object.fromEntries(
+      Object.entries(setting).filter(([key]) => key !== "defaultValue")
+    ) as AnyWidgetSetting;
+  });
+  return withheld ? { ...widget, settings: told } : widget;
 }

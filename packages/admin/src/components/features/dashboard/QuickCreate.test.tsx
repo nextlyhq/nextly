@@ -4,8 +4,12 @@
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
-import { useCollections } from "@admin/hooks/queries/useCollections";
+import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import { fireEvent, render, screen } from "@admin/__tests__/utils";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  useCollections,
+} from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 
 import { CardTierContext } from "../widgets/frame/tier";
@@ -15,7 +19,11 @@ import { QuickCreate } from "./QuickCreate";
 // Mocked through the same specifiers the component imports: a mock registered
 // against a module nobody loads leaves the real hook in place, which is a green
 // that tested nothing.
-vi.mock("@admin/hooks/queries/useCollections", () => ({
+vi.mock("@admin/hooks/queries/useCollections", async importOriginal => ({
+  // The real query parameters, so the card is seen asking with the navigation's own.
+  ...(await importOriginal<
+    typeof import("@admin/hooks/queries/useCollections")
+  >()),
   useCollections: vi.fn(),
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
@@ -91,6 +99,17 @@ beforeEach(() => {
 });
 
 describe("the quick-create card", () => {
+  it("asks for the collections with the navigation's own query, so a dashboard load asks once", () => {
+    // 🔴 The very parameters the sidebar asks with: any other spelling is a second cache entry,
+    // and a second request for the same list on every dashboard load.
+    mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
+    mockPermissions.mockReturnValue(granting(["create-posts"]));
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    expect(mockCollections).toHaveBeenCalledWith(NAV_COLLECTIONS_PARAMS);
+  });
+
   it("offers a shortcut only where the reader may CREATE", () => {
     // 🔴 Two gates compose here and each removes a different set. The server's
     // list has already dropped collections this reader cannot see at all; this
@@ -102,7 +121,7 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting(["create-posts"]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
     // The control: `pages` IS in the list the server returned, so its absence
@@ -119,13 +138,13 @@ describe("the quick-create card", () => {
       granting(["create-posts", "create-pages"], { allows: ["create-pages"] })
     );
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByTestId("quick-create-pages")).toBeInTheDocument();
     expect(screen.queryByTestId("quick-create-posts")).toBeNull();
   });
 
-  it("says nothing while the server's answer about collections is missing", () => {
+  it("makes no claim while the server's answer about collections is missing, and says it could not be read", () => {
     // The permission list has arrived and holds the slug; the answer that
     // decides the shortcut has not, so "nothing to create" would be a guess.
     mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
@@ -133,10 +152,11 @@ describe("the quick-create card", () => {
       granting(["create-posts"], { allows: [], content: { hasAnswer: false } })
     );
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
   });
 
   it("offers no shortcut for a collection kept off the dashboard, even one the reader may create in", () => {
@@ -152,7 +172,7 @@ describe("the quick-create card", () => {
       granting(["create-posts", "create-nx_pb_class_usage"])
     );
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
     expect(screen.queryByTestId("quick-create-nx_pb_class_usage")).toBeNull();
@@ -174,7 +194,7 @@ describe("the quick-create card", () => {
       granting(["create-posts", "create-form-submissions"])
     );
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
     expect(screen.queryByTestId("quick-create-form-submissions")).toBeNull();
@@ -195,7 +215,7 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting(["create-posts"]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByText("New Article")).toBeInTheDocument();
   });
@@ -212,13 +232,13 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting(["create-pages", "create-notes"]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByText("New Page")).toBeInTheDocument();
     expect(screen.getByText("New notes")).toBeInTheDocument();
   });
 
-  it("says nothing at all while the list is still loading", () => {
+  it("makes no claim while the list is still loading, holding its place instead", () => {
     // 🔴 A card that drew its empty state first and filled in afterwards tells
     // the reader they may create nothing, which is a claim rather than a
     // delay — and it is wrong for most readers for the whole of every page
@@ -226,10 +246,11 @@ describe("the quick-create card", () => {
     mockCollections.mockReturnValue(listing([], { isLoading: true }));
     mockPermissions.mockReturnValue(granting([]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+    expect(screen.getByTestId("card-skeleton")).toBeInTheDocument();
   });
 
   it("says so when the reader may create nothing", () => {
@@ -239,12 +260,14 @@ describe("the quick-create card", () => {
     mockCollections.mockReturnValue(listing([collection({ name: "posts" })]));
     mockPermissions.mockReturnValue(granting([]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.getByTestId("quick-create-empty")).toBeInTheDocument();
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Nothing here for you to create."
+    );
   });
 
-  it("says nothing while the answer about collections is still in flight", () => {
+  it("makes no claim while the answer about collections is still in flight", () => {
     // 🔴 The two requests resolve independently. `canAccessCollection`
     // answers no until the server's answer about collections lands, so a
     // collection list that arrives first filters every row out — and the card
@@ -255,10 +278,11 @@ describe("the quick-create card", () => {
       granting([], { content: { isLoading: true, hasAnswer: false } })
     );
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+    expect(screen.getByTestId("card-skeleton")).toBeInTheDocument();
   });
 
   it("offers what the answer about collections allows, though the permission list failed", () => {
@@ -269,12 +293,31 @@ describe("the quick-create card", () => {
       granting([], { error: new Error("boom"), allows: ["create-posts"] })
     );
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
     expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
   });
 
-  it("says nothing when either request FAILED", () => {
+  it("offers Retry when a read failed, asking both reads again", () => {
+    const refetch = vi.fn();
+    const retry = vi.fn();
+    mockCollections.mockReturnValue({
+      ...listing([collection({ name: "posts" })], { error: new Error("boom") }),
+      refetch,
+    } as unknown as ReturnType<typeof useCollections>);
+    mockPermissions.mockReturnValue({
+      ...granting(["create-posts"]),
+      retry,
+    } as unknown as ReturnType<typeof useCurrentUserPermissions>);
+
+    render(inFrame(<QuickCreate />, "Create"));
+
+    fireEvent.click(screen.getByRole("button", { name: /^Retry/ }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes no claim when either request FAILED, and says it could not be read", () => {
     // A failure is not an answer. Drawing the empty state from one turns a
     // transport error into a claim about this reader's permissions, and it
     // never clears.
@@ -283,10 +326,11 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting(["create-posts"]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
     expect(screen.queryByTestId("quick-create")).toBeNull();
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
   });
 
   it("does not claim an empty set when the page was TRUNCATED", () => {
@@ -299,9 +343,13 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting([]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.queryByTestId("quick-create-empty")).toBeNull();
+    expect(screen.queryByText("Nothing here for you to create.")).toBeNull();
+    // The frame's own neutral empty state, which claims nothing about permissions.
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Nothing to show yet"
+    );
   });
 
   it("STILL says so on a complete page with nothing creatable", () => {
@@ -313,9 +361,11 @@ describe("the quick-create card", () => {
     );
     mockPermissions.mockReturnValue(granting([]));
 
-    render(<QuickCreate />);
+    render(inFrame(<QuickCreate />, "Create"));
 
-    expect(screen.getByTestId("quick-create-empty")).toBeInTheDocument();
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "Nothing here for you to create."
+    );
   });
 
   it("counts the surplus rather than drawing it", () => {

@@ -64,15 +64,27 @@ type ContributedWidget = NonNullable<
   PluginAdminContributions["widgets"]
 >[number];
 
-// Tier 2: a plugin ships a component and draws its own card. Every existing
-// `{ id, component, size }` declaration must keep compiling untouched — this is
-// the back-compatibility assertion, and the union exists to widen rather than
-// to constrain.
+// Tier 2: a plugin ships a component and draws its own card, sized in grid
+// units like any registered widget.
+expectTypeOf<{
+  id: string;
+  component: ComponentPath;
+  size: { default: { w: 6; h: 4 }; max: { w: 12; h: 6 } };
+}>().toMatchTypeOf<ContributedWidget>();
+
+// 🔴 A named width is not a size. `half` and `full` were the contribution's own
+// size words, and the type taking either would be a second vocabulary for a
+// plugin author to reach for.
 expectTypeOf<{
   id: string;
   component: ComponentPath;
   size: "half";
-}>().toMatchTypeOf<ContributedWidget>();
+}>().not.toMatchTypeOf<ContributedWidget>();
+expectTypeOf<{
+  id: string;
+  component: ComponentPath;
+  size: { default: "lg" };
+}>().not.toMatchTypeOf<ContributedWidget>();
 
 // Tier 1: the host draws the card from an archetype and a query, and the
 // plugin ships NO component. This is the assertion the change exists for: it
@@ -82,7 +94,7 @@ expectTypeOf<{
   id: string;
   title: string;
   archetype: "metric";
-  defaultSize: "sm";
+  size: { default: { w: 3; h: 2 } };
   query: { source: "collection:posts"; op: "count" };
 }>().toMatchTypeOf<ContributedWidget>();
 

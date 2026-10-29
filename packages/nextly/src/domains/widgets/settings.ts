@@ -43,6 +43,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { textLength } from "../../shared/text-length";
 
+import { quote } from "./declaration/quote";
 import type { PublishedContentSource } from "./published-content-source";
 import {
   isTimeseriesRange,
@@ -137,7 +138,14 @@ export type WidgetSetting =
       type: "textarea";
       defaultValue?: string;
       maxLength?: number;
-    });
+    })
+  /**
+   * A date, drawn as the field system's own date picker, held as the ISO 8601
+   * string that picker writes.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  | (WidgetSettingBase & { type: "date"; defaultValue?: string });
 
 /**
  * A setting over the site's content: the collection a card reads, and the
@@ -183,6 +191,25 @@ export type ContentSetting =
       defaultValue?: Record<string, unknown>;
     })
   | (WidgetSettingBase & { type: "sort"; of: string; defaultValue?: string })
+  /**
+   * One field of the collection the setting it names chooses, for a card's own
+   * `load` to read: offered from the fields that collection offers the reader.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  | (WidgetSettingBase & { type: "field"; of: string; defaultValue?: string })
+  | (WidgetSettingBase & {
+      type: "fields";
+      of: string;
+      /**
+       * The fields each row shows after its title, in order, from the
+       * collection the setting works over. Unset, a titled list shows its
+       * status and when it was updated.
+       *
+       * @experimental
+       */
+      defaultValue?: string[];
+    })
   | (WidgetSettingBase & {
       type: "groupBy";
       of: string;
@@ -213,6 +240,8 @@ export type AnyWidgetSetting = WidgetSetting | ContentSetting;
 const DEPENDENT_TYPES: ReadonlySet<AnyWidgetSetting["type"]> = new Set([
   "filter",
   "sort",
+  "field",
+  "fields",
   "groupBy",
 ]);
 
@@ -237,6 +266,7 @@ const FIELD_DRAWN: Record<WidgetSetting["type"], true> = {
   checkbox: true,
   select: true,
   textarea: true,
+  date: true,
 };
 
 /** Whether a setting is one a registered widget's query cannot apply yet. */
@@ -294,6 +324,7 @@ const USABLE_AS: Record<
     Number.isFinite(value) &&
     withinBounds(value, limits),
   checkbox: value => typeof value === "boolean",
+  date: value => isIsoDate(value),
   select: (value, limits) =>
     typeof value === "string" &&
     limits.options !== undefined &&
@@ -302,7 +333,16 @@ const USABLE_AS: Record<
   // names nothing, so it is no more usable than an absent one.
   collection: value => isName(value),
   sort: value => isName(value),
+  field: value => isName(value),
   groupBy: value => isName(value),
+  // The fields a list's rows show: one or more names, each once, and no more
+  // than a row has places for.
+  fields: value =>
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= MAX_CHOSEN_FIELDS &&
+    value.every(isName) &&
+    new Set(value).size === value.length,
   // The list view's conditions: a plain object of them.
   filter: value =>
     typeof value === "object" && value !== null && !Array.isArray(value),
@@ -346,6 +386,27 @@ function isName(value: unknown): value is string {
 }
 
 /** Whether a finite number sits inside the range its setting declares. */
+const ISO_DATE =
+  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+
+/**
+ * Whether a value is a date as the date picker writes one: an ISO 8601 date,
+ * with or without its time, that names a real day. `Date.parse` alone would
+ * take "March 3" and a bare year, which no picker writes, and rolls February
+ * 30 over into March, so the day is read back and compared with what was
+ * written.
+ */
+function isIsoDate(value: unknown): value is string {
+  if (typeof value !== "string" || !ISO_DATE.test(value)) return false;
+  const day = value.slice(0, 10);
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  return (
+    !Number.isNaN(midnight) &&
+    new Date(midnight).toISOString().startsWith(day) &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
 function withinBounds(value: number, limits: SettingLimits): boolean {
   // An absent bound is not a bound. Written as two independent tests rather
   // than one range check so a setting may declare either end alone, which is
@@ -409,29 +470,6 @@ function isSelectOptions(
  * opens the settings panel.
  */
 export const MAX_WIDGET_SETTINGS = 24;
-
-/**
- * A value named in a diagnostic, without the formatter itself throwing.
- *
- * 🔴 `JSON.stringify` is not total. A BigInt throws `TypeError`, and so does a
- * circular object — so a declaration carrying `defaultValue: 1n` produced a
- * native `TypeError` from inside the message-building, BEFORE the refusal it
- * was describing could be raised as a `NextlyError`. The author saw the wrong
- * error, naming neither the widget nor the setting.
- *
- * `String()` is the fallback rather than a fixed placeholder, because it
- * survives everything `JSON.stringify` does not and still names the value: a
- * BigInt reads `1`, a symbol reads `Symbol(x)`.
- */
-function describeValue(value: unknown): string {
-  try {
-    // `undefined` and a function both stringify to `undefined` rather than to
-    // text, so the fallback covers them too.
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
 
 /*
  * `invalidInput` rather than `validation`, matching the widget definition's own
@@ -507,7 +545,7 @@ function contentSettingRefusal({ name, type }: ContentSetting): string {
 }
 
 /**
- * Every problem with a set of settings, of any of the eight types, in the
+ * Every problem with a set of settings, of any type, in the
  * order they were declared; empty when there is none.
  *
  * The declaration's channel reads all of them, naming every fault at once; the
@@ -577,13 +615,62 @@ function dependencyProblems(
       )
       .map(setting => setting.name)
   );
-  return dependents
-    .filter(isDependent)
-    .filter(setting => !collections.has(setting.of))
-    .map(
-      setting =>
-        `setting "${setting.name}" depends on ${describeValue(setting.of)}, which is not a Collection setting of this widget`
-    );
+  const titled = new Set(
+    all
+      .filter(
+        (setting): setting is { name: string } =>
+          typeof setting === "object" &&
+          setting !== null &&
+          (setting as { type?: unknown }).type === "collection" &&
+          (setting as { rows?: unknown }).rows === "titled" &&
+          typeof (setting as { name?: unknown }).name === "string"
+      )
+      .map(setting => setting.name)
+  );
+  return dependents.filter(isDependent).flatMap(setting => {
+    if (!collections.has(setting.of)) {
+      return [
+        `setting "${setting.name}" depends on ${quote(setting.of)}, which is not a Collection setting of this widget`,
+      ];
+    }
+    // A Fields setting keeps the list's title first and replaces the rest,
+    // which only a titled list has: on any other, its first field is not a
+    // title, and keeping it would ask a field the reader never chose.
+    if (setting.type === "fields" && !titled.has(setting.of)) {
+      return [
+        `setting "${setting.name}" is a Fields setting over ${quote(setting.of)}, which must be a Collection setting with rows "titled"`,
+      ];
+    }
+    return [];
+  });
+}
+
+/**
+ * Why a widget's Fields setting cannot work on what it asks, or `undefined`:
+ * only a list returns rows for its fields to fill. On a grouped or timeseries
+ * query a chosen field would be refused by the query's own check, and on a
+ * count it would be ignored, so a control that breaks the card or changes
+ * nothing is never offered.
+ */
+export function fieldsSettingQueryProblem(widget: {
+  settings?: unknown;
+  query?: unknown;
+}): string | undefined {
+  if (!Array.isArray(widget.settings)) return undefined;
+  const fields = (widget.settings as unknown[]).find(
+    (setting): setting is { name: unknown } =>
+      typeof setting === "object" &&
+      setting !== null &&
+      (setting as { type?: unknown }).type === "fields"
+  );
+  if (fields === undefined) return undefined;
+  const op =
+    typeof widget.query === "object" && widget.query !== null
+      ? (widget.query as { op?: unknown }).op
+      : undefined;
+  return op === "list"
+    ? undefined
+    : `setting ${quote(fields.name)} is a Fields setting, which only a list query's rows can show; this widget asks ${quote(op)}`;
 }
 
 /**
@@ -633,7 +720,7 @@ function settingProblem(
   seen.add(name);
 
   if (!isSettingType(type)) {
-    return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
+    return `setting "${name}" has type ${quote(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
   const flags = flagsProblem(
     type,
@@ -654,7 +741,7 @@ function flagsProblem(
   defaultFrom: unknown
 ): string | undefined {
   if (quick !== undefined && typeof quick !== "boolean") {
-    return `has quick ${describeValue(quick)}; expected true or false`;
+    return `has quick ${quote(quick)}; expected true or false`;
   }
   // Refused rather than ignored: a misspelt value, or the flag on a setting
   // it means nothing to, would otherwise leave a card grouped by nothing with
@@ -663,7 +750,7 @@ function flagsProblem(
     defaultFrom !== undefined &&
     (type !== "groupBy" || defaultFrom !== "collection")
   ) {
-    return `has defaultFrom ${describeValue(defaultFrom)}; only a Group by setting takes it, as "collection"`;
+    return `has defaultFrom ${quote(defaultFrom)}; only a Group by setting takes it, as "collection"`;
   }
   return rowsProblem(type, rows);
 }
@@ -681,7 +768,7 @@ function rowsProblem(
     return "declares rows, which only a Collection setting takes";
   return rows === "titled"
     ? undefined
-    : `has rows ${describeValue(rows)}; expected "titled"`;
+    : `has rows ${quote(rows)}; expected "titled"`;
 }
 
 /**
@@ -816,7 +903,7 @@ function defaultMismatch(
   name: string
 ): string {
   if (type === "select") {
-    return `setting "${name}" defaults to ${describeValue(defaultValue)}, which is not one of its options`;
+    return `setting "${name}" defaults to ${quote(defaultValue)}, which is not one of its options`;
   }
   if (type === "textarea" && typeof defaultValue === "string") {
     return `setting "${name}" defaults to text longer than its maxLength of ${limits.maxLength} characters`;
@@ -824,7 +911,7 @@ function defaultMismatch(
   const bounded = limits.min !== undefined || limits.max !== undefined;
   return bounded && typeof defaultValue === "number"
     ? `setting "${name}" defaults to ${defaultValue}, outside the range it declares`
-    : `setting "${name}" is typed "${type}" but defaults to ${describeValue(defaultValue)}`;
+    : `setting "${name}" is typed "${type}" but defaults to ${quote(defaultValue)}`;
 }
 
 /**
@@ -844,6 +931,18 @@ export function validateWidgetSettings(
 ): asserts settings is AnyWidgetSetting[] | undefined {
   const problem = widgetSettingsProblem(settings, queryBuiltByCore, source);
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
+}
+
+/**
+ * Why `value` cannot be a starting value of `setting`, or `undefined`. Judged
+ * as a declared default is, since a card falls back to it the same way: the
+ * site config's starting values replace the declaration's.
+ */
+export function startingValueProblem(
+  setting: AnyWidgetSetting,
+  value: unknown
+): string | undefined {
+  return defaultProblem(setting.type, limitsOf(setting), value, setting.name);
 }
 
 /** Whether a stored value is usable as this setting's type. */
@@ -945,6 +1044,8 @@ export interface KnobField {
   offered?: boolean;
   /** False when the field cannot be grouped by. */
   groupable?: boolean;
+  /** False when a row cannot print the field's value. */
+  presentable?: boolean;
 }
 
 /**
@@ -1128,6 +1229,38 @@ interface KnobQuery {
   groupBy?: string;
 }
 
+/**
+ * Whether `setting` sets how many rows a card asks for: a number setting named
+ * `limit`. The limit knob drives it, and a widget whose query has a range may
+ * not declare it (`rangedLimitSettingProblem`), both by this one test.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export function isLimitSetting(setting: unknown): boolean {
+  return (
+    typeof setting === "object" &&
+    setting !== null &&
+    (setting as { type?: unknown }).type === "number" &&
+    (setting as { name?: unknown }).name === "limit"
+  );
+}
+
+/**
+ * A query as settings may leave it: as declared with each knob applied, or,
+ * for a titled list set to a collection it cannot title, the same with no
+ * source and no fields, which asks nothing.
+ *
+ * @experimental While the content widgets are being built.
+ */
+export type AppliedQuery<T> =
+  | T
+  | (T extends unknown
+      ? Omit<T, "source" | "select"> & {
+          source?: undefined;
+          select?: undefined;
+        }
+      : never);
+
 /** How one kind of setting becomes part of a card's query. */
 interface QueryKnob {
   /** Whether this knob drives `setting` on `source`, or on no source. */
@@ -1172,7 +1305,8 @@ function readingCollection<T extends KnobQuery>(
     return { ...query, source: `collection:${slug}`, select };
   }
   // Nor the source the widget was declared with: a card set to a collection
-  // it cannot title reads nothing, never another collection's rows.
+  // it cannot title reads nothing, never another collection's rows. Typed as
+  // `T` for the knobs that follow; `applyWidgetSettings` says it may be this.
   if (query.source === undefined && query.select === undefined) return query;
   const sourceless: T = { ...query };
   delete sourceless.source;
@@ -1233,6 +1367,29 @@ function isRelativeSpan(value: unknown): value is RelativeSpan {
 /** The ops a window bounds: a count, and a timeseries. */
 const WINDOWED_OPS: ReadonlySet<string> = new Set(["count", "timeseries"]);
 
+/**
+ * The most fields a list's rows may be set to show after their title: as many
+ * as a row's meta line holds, so every field chosen shows at every size, the
+ * stacked row as well as the table. The settings sheet stops at it and says so.
+ *
+ * @experimental
+ */
+export const MAX_CHOSEN_FIELDS = 3;
+
+/**
+ * `query` asking `chosen` after its title. A titled list keeps the title it
+ * was given first and replaces the rest; any other list asks exactly the
+ * fields chosen. The title is never asked twice.
+ */
+function withChosenFields<T extends KnobQuery>(query: T, chosen: string[]): T {
+  const title = query.select?.[0];
+  if (title === undefined) return { ...query, select: [...chosen] };
+  return {
+    ...query,
+    select: [title, ...chosen.filter(name => name !== title)],
+  };
+}
+
 /** The field a sort names, without its direction. */
 function sortField(sort: string): string {
   return sort.startsWith("-") ? sort.slice(1) : sort;
@@ -1278,7 +1435,7 @@ export function namedCollection(value: unknown): string | undefined {
  */
 const QUERY_KNOBS: readonly QueryKnob[] = [
   {
-    drives: setting => setting.type === "number" && setting.name === "limit",
+    drives: isLimitSetting,
     apply: (query, value) => ({ ...query, limit: value as number }),
   },
   {
@@ -1342,6 +1499,34 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
       setting.type === "sort" && readsACollection(source),
     fits: (value, fields) => allOffered([sortField(value as string)], fields),
     apply: (query, value) => ({ ...query, sort: value as string }),
+  },
+  {
+    // The fields a list's rows show after their title. Each must be one the
+    // reader is offered, the same rule a sort or a filter is held to, so a
+    // field a read rule keeps from this reader is never asked for, whatever
+    // the stored setting names; a value that does not fit leaves the list's
+    // own fields.
+    drives: (setting, source) =>
+      setting.type === "fields" && readsACollection(source),
+    // And each one a row can print: a structured or multi-value field would
+    // be asked for and drawn as an empty place.
+    fits: (value, fields) => {
+      if (!Array.isArray(value)) return false;
+      const names = value.filter(
+        (name): name is string => typeof name === "string"
+      );
+      return (
+        allOffered(names, fields) &&
+        names.every(name =>
+          fields.some(
+            field => field.name === name && field.presentable !== false
+          )
+        )
+      );
+    },
+    // Only a list asks rows; any other op is left as it was asked.
+    apply: (query, value) =>
+      query.op === "list" ? withChosenFields(query, value as string[]) : query,
   },
   {
     drives: (setting, source) =>
@@ -1505,7 +1690,7 @@ export function applyWidgetSettings<T extends KnobQuery>(
   settings: readonly AnyWidgetSetting[] | undefined,
   stored: Record<string, unknown> | undefined,
   ctx: KnobContext = {}
-): T {
+): AppliedQuery<T> {
   if (!settings || settings.length === 0) return query;
   // Judged on the DECLARED source, read once before any knob may replace it.
   const source = ctx.source ?? knobSourceOf(query);
@@ -1516,7 +1701,15 @@ export function applyWidgetSettings<T extends KnobQuery>(
   });
   let next = query;
 
-  for (const setting of settings) {
+  // Every Collection setting first, whatever order the widget declared them
+  // in, as dependency resolution reads them: a titled Collection setting sets
+  // the list's whole `select`, and applied after Fields it would replace the
+  // fields the reader chose with its own.
+  const ordered = [
+    ...settings.filter(setting => setting.type === "collection"),
+    ...settings.filter(setting => setting.type !== "collection"),
+  ];
+  for (const setting of ordered) {
     const knob = knobFor(setting, source);
     if (knob === undefined) continue;
     const value = effective[setting.name];

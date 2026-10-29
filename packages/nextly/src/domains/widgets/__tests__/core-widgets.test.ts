@@ -3,7 +3,7 @@
  * them.
  *
  * Deliberately NOT a restatement of the list. Asserting that a card carries the
- * literal written three lines away in `core-widgets.ts` is a test that can only
+ * literal written three lines away in `core-widgets/` is a test that can only
  * ever agree with itself, and it would go on agreeing while the thing the
  * literal REFERS to was renamed underneath it. What is checked here is each
  * declaration against the module that consumes it.
@@ -14,11 +14,15 @@ import { registerRecentEditsWidgetSource } from "../../../services/dashboard/rec
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
 import {
+  chromeFieldProblem,
   requiredPermissionSlugs,
   validateWidgetDefinition,
 } from "../definition";
-import { MAX_WIDGET_LIMIT } from "../query-limits";
+import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
+import { DENSITY_OPTIONS } from "../declaration/setting-builders";
+import { LIST_DENSITIES, MAX_WIDGET_LIMIT } from "../query-limits";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
 import { clearSystemResolvers } from "../system-sources";
@@ -54,6 +58,17 @@ describe("core widget definitions", () => {
       // An assertion function: it THROWS with a named reason and returns
       // nothing, so the absence of a throw is the whole result.
       expect(() => validateWidgetDefinition(widget)).not.toThrow();
+    }
+  );
+
+  it.each(CORE_WIDGETS.map(widget => [widget.id, widget] as const))(
+    "%s is never sized below two rows",
+    (_id, widget) => {
+      // One row cannot hold the frame's padding, header and gap, so a card
+      // declared at one row draws a header with no body under it.
+      expect(sizeDeclarationProblems(widget.size)).toEqual([]);
+      const { min } = sizeBounds(widget.size);
+      expect(min.h).toBeGreaterThanOrEqual(2);
     }
   );
 
@@ -123,13 +138,15 @@ describe("core widget definitions", () => {
     expect(card?.lifecycle ?? "always").toBe("always");
     expect(card).not.toHaveProperty("visibleWhen");
     expect(card?.dismissible).toBe(true);
-    expect([card?.minSize, card?.defaultSize, card?.maxSize]).toEqual([
-      "full",
-      "full",
-      "full",
-    ]);
-    const orders = CORE_WIDGETS.map(w => w.defaultOrder ?? Infinity);
-    expect(card?.defaultOrder).toBe(Math.min(...orders));
+    // Full width only, and compact: its steps fold to the rows it has, so it may be as short
+    // as three rows without a step cut off.
+    expect(card && sizeBounds(card.size)).toEqual({
+      default: { w: 12, h: 4 },
+      min: { w: 12, h: 3 },
+      max: { w: 12, h: 12 },
+    });
+    // First on core's default: it addresses a reader who has just arrived.
+    expect(CORE_DEFAULT_LAYOUT[0]).toEqual({ widget: "core/get-started" });
   });
 
   it("no longer declares the two cards Get started replaced", () => {
@@ -200,26 +217,38 @@ describe("core widget definitions", () => {
     expect(team.query).toEqual({ source: TEAM_SOURCE_ID, op: "list" });
   });
 
-  /*
-   * 🔴 Asserted in THIS direction only, and the other one is false. Naming a
-   * component does not imply declining the grid's frame: `core/quick-create`
-   * names one and draws no heading, section or card of its own, so it wants
-   * `WidgetCard` around it and correctly omits `chrome`. The first version of
-   * this test asserted the converse and failed on that card -- which was the
-   * test being wrong, not the card.
-   *
-   * What does hold is that only a card supplying its own body may decline the
-   * frame. An archetype-drawn card with `chrome: "none"` would render its rows
-   * bare, with nothing naming what they are.
-   */
-  it("declines the grid's frame only where the card brings a body", () => {
+  // Every card is drawn in the dashboard's one frame, which draws its header
+  // and every state, so no core widget may decline it -- by the same rule the
+  // registry refuses a plugin's that tries.
+  it("declines the grid's frame nowhere", () => {
     for (const widget of CORE_WIDGETS) {
-      if (widget.chrome !== "none") continue;
-      expect(
-        widget.component,
-        `${widget.id} declines chrome, so it must draw its own`
-      ).toBeDefined();
+      expect(chromeFieldProblem(widget), widget.id).toBeUndefined();
     }
+  });
+});
+
+describe("the list cards' Density", () => {
+  it.each([
+    "core/recent-entries",
+    "core/recently-edited",
+    "core/recent-activity",
+    "core/upcoming-releases",
+  ])("%s offers the shared choice, one option for every density", id => {
+    // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
+    const widget = CORE_WIDGETS.find(w => w.id === id);
+    const density = widget?.settings?.find(
+      setting => setting.name === "density"
+    );
+    expect(density).toMatchObject({
+      type: "select",
+      defaultValue: "default",
+      options: [...DENSITY_OPTIONS],
+    });
+    expect(
+      (density as { options?: { value: string }[] } | undefined)?.options?.map(
+        option => option.value
+      )
+    ).toEqual([...LIST_DENSITIES]);
   });
 });
 
@@ -262,39 +291,66 @@ describe("the team card's description", () => {
 });
 
 describe("the default dashboard", () => {
-  // The agreed cards, in order, each at its agreed width and within its allowed widths.
+  // The agreed cards, in order, each at its agreed size and within its agreed
+  // bounds, in grid units: [id, default, min, max].
   const AGREED = [
-    [
-      "core/needs-attention",
-      "twoThirds",
-      ["third", "half", "twoThirds", "full"],
-    ],
-    ["core/quick-create", "third", ["third", "half", "twoThirds", "full"]],
-    ["core/recently-edited", "half", ["third", "half", "twoThirds", "full"]],
-    ["core/recent-activity", "half", ["third", "half", "twoThirds", "full"]],
-    ["core/content", "full", ["half", "twoThirds", "full"]],
-    ["core/upcoming-releases", "third", ["third", "half", "twoThirds"]],
-    ["core/team", "third", ["quarter", "third", "half"]],
+    // Needs attention four rows tall at the least, so each of its three kinds has a row;
+    // Create as tall, beside it.
+    ["core/needs-attention", [8, 4], [4, 4], [12, 6]],
+    ["core/quick-create", [4, 4], [4, 2], [12, 4]],
+    // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
+    // default, but four beside Team, whose row it shares.
+    ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
+    ["core/recent-activity", [6, 5], [4, 4], [12, 8]],
+    ["core/content", [12, 4], [6, 3], [12, 6]],
+    ["core/upcoming-releases", [4, 4], [4, 4], [8, 8]],
+    ["core/team", [4, 4], [3, 2], [6, 4]],
   ] as const;
 
-  it("orders the agreed cards as agreed", () => {
-    const ordered = CORE_WIDGETS.filter(w => AGREED.some(([id]) => id === w.id))
-      .slice()
-      .sort((a, b) => (a.defaultOrder ?? 0) - (b.defaultOrder ?? 0))
-      .map(w => w.id);
-    expect(ordered).toEqual(AGREED.map(([id]) => id));
+  const unit = ([w, h]: readonly [number, number]) => ({ w, h });
+
+  it("is core's own defaultLayout: the onboarding card, then the agreed cards as agreed", () => {
+    // Each at its widget's starting size: no entry states a size or settings of its own.
+    expect(CORE_DEFAULT_LAYOUT).toEqual([
+      { widget: "core/get-started" },
+      ...AGREED.map(([id]) => ({ widget: id })),
+    ]);
   });
 
-  it("gives each its agreed width, and only its agreed widths", () => {
-    // Stated in the arrangement's own words, which win over the size range
-    // (`widthFacts` reads one or the other, never both).
-    for (const [id, defaultWidth, allowedWidths] of AGREED) {
-      const declared = card(id);
-      expect([id, declared.defaultWidth, declared.allowedWidths]).toEqual([
+  it("states no defaultOrder on any of core's widgets: the order is the defaultLayout's", () => {
+    for (const widget of CORE_WIDGETS) {
+      expect([widget.id, widget.defaultOrder]).toEqual([widget.id, undefined]);
+    }
+  });
+
+  it("gives each its agreed size, within its agreed bounds", () => {
+    // Read through `sizeBounds`, as every reader of a size reads it, so an end
+    // left to its default is checked as the grid will draw it.
+    for (const [id, dflt, min, max] of AGREED) {
+      expect([id, sizeBounds(card(id).size)]).toEqual([
         id,
-        defaultWidth,
-        allowedWidths,
+        { default: unit(dflt), min: unit(min), max: unit(max) },
       ]);
+    }
+  });
+
+  it("tiles: the cards that share a row of the default dashboard share a height", () => {
+    // 🔴 Laid out as the grid lays them, in order and twelve columns to a row,
+    // a card beside a taller one leaves a gap below it. The agreed sizes are
+    // chosen so no row of the default dashboard has one.
+    const rows: number[][] = [[]];
+    let used = 0;
+    for (const [id] of AGREED) {
+      const { w, h } = card(id).size.default;
+      if (used + w > 12) {
+        rows.push([]);
+        used = 0;
+      }
+      rows[rows.length - 1].push(h);
+      used += w;
+    }
+    for (const heights of rows) {
+      expect(new Set(heights).size).toBe(1);
     }
   });
 });

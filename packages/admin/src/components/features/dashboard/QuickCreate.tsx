@@ -46,10 +46,15 @@ import { useMemo } from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useCollections } from "@admin/hooks/queries/useCollections";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  useCollections,
+} from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 
+import { FrameState } from "../widgets/frame/card-state";
+import { EMPTY_DEFAULT } from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
 
 import { keptOffDashboard } from "./kept-off-dashboard";
@@ -64,30 +69,29 @@ const SHORTCUTS_DRAWN: Readonly<Record<SizeTier, number>> = Object.freeze({
   large: 6,
 });
 
-/**
- * How many collections are asked for.
- *
- * The card needs the first few CREATABLE ones, and the server cannot filter on
- * that, so it reads a page and narrows it here. A page rather than every
- * collection because this is a shortcut card on a dashboard, not a directory —
- * and the empty state refuses to speak when the page was truncated, so the
- * bound costs a missing shortcut rather than a false claim.
- */
-const COLLECTION_PAGE_SIZE = 100;
-
 export function QuickCreate(): JSX.Element | null {
-  // 🔴 The SERVER's list, not the whole registry. This is the same query the
-  // sidebar reads, and it is already filtered to what this reader may see — so
-  // a collection they are not allowed to know exists is absent before any
-  // permission check here runs, rather than being drawn and then hidden.
+  // 🔴 The SERVER's list, not the whole registry: the very query the sidebar
+  // reads (`NAV_COLLECTIONS_PARAMS`), so one dashboard load asks for it once and
+  // the card finds it already there. It is filtered to what this reader may
+  // see — so a collection they are not allowed to know exists is absent before
+  // any permission check here runs, rather than being drawn and then hidden.
+  //
+  // The card needs the first few CREATABLE collections, and the server cannot
+  // filter on that, so it reads the navigation's page and narrows it here: a
+  // shortcut card, not a directory, and the empty state below refuses to speak
+  // when the page was truncated, so the bound costs a missing shortcut rather
+  // than a false claim.
   const {
     data,
     isLoading: collectionsLoading,
     error: collectionsError,
-  } = useCollections({
-    pagination: { page: 0, pageSize: COLLECTION_PAGE_SIZE },
-  });
-  const { canAccessCollection, content } = useCurrentUserPermissions();
+    refetch: refetchCollections,
+  } = useCollections(NAV_COLLECTIONS_PARAMS);
+  const {
+    canAccessCollection,
+    content,
+    retry: retryPermissions,
+  } = useCurrentUserPermissions();
   const tier = useCardTier();
 
   const creatable = useMemo(() => {
@@ -113,26 +117,44 @@ export function QuickCreate(): JSX.Element | null {
   // request fails. Absence is the honest answer until both have arrived,
   // because a claim about what someone may do cannot be made from an answer
   // that has not come back.
-  if (collectionsLoading || content.isLoading) return null;
-  if (collectionsError || !content.hasAnswer) return null;
+  if (collectionsLoading || content.isLoading) {
+    return (
+      <FrameState state={{ kind: "loading", skeleton: { shape: "actions" } }} />
+    );
+  }
+  if (collectionsError || !content.hasAnswer) {
+    return (
+      <FrameState
+        state={{
+          kind: "error",
+          message: "What you can create could not be read just now.",
+          // Asks both again: the card needs the collections and the answer about them.
+          retry: () => {
+            void refetchCollections();
+            retryPermissions();
+          },
+        }}
+      />
+    );
+  }
 
   // 🔴 A truncated list cannot support the empty claim either. The page holds
-  // the first `COLLECTION_PAGE_SIZE` collections, so an install with more than
+  // the navigation's first page of collections, so an install with more than
   // that may have every creatable one beyond the boundary — and "you may create
-  // nothing" would then be false rather than merely incomplete. Saying nothing
-  // is wrong in a way the reader can recover from; saying the wrong thing is
-  // not.
+  // nothing" would then be false rather than merely incomplete. The frame's own
+  // neutral empty state says no more than is known; saying the wrong thing
+  // could not be recovered from.
   const truncated = data?.meta?.hasNext === true;
-  if (creatable.length === 0 && truncated) return null;
-
   if (creatable.length === 0) {
     return (
-      <p
-        data-testid="quick-create-empty"
-        className="text-sm text-muted-foreground"
-      >
-        Nothing here for you to create.
-      </p>
+      <FrameState
+        state={{
+          kind: "empty",
+          empty: truncated
+            ? EMPTY_DEFAULT
+            : { title: "Nothing here for you to create." },
+        }}
+      />
     );
   }
 

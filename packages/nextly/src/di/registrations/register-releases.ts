@@ -48,6 +48,10 @@ import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
 import {
+  languageChangeContentCache,
+  registryRevalidateConfigs,
+} from "./language-change-content-cache";
+import {
   releaseDocumentChecks,
   singleRowExists,
 } from "./release-document-checks";
@@ -79,7 +83,14 @@ export function registerReleaseServices({
           adapter,
           container.has("cacheRevalidator")
             ? container.get<CacheRevalidator>("cacheRevalidator")
-            : undefined
+            : undefined,
+          // The opt-out and extra tags a release's flush must honour, read as a
+          // language change reads them; none where the registered revalidator
+          // flushes nothing (no Next runtime, the CLI), so those read no registry.
+          async () =>
+            languageChangeContentCache().revalidator()
+              ? registryRevalidateConfigs()
+              : { collections: [], singles: [] }
         ),
 
         // The system resource, whose three authorities are seeded by
@@ -309,20 +320,14 @@ export function registerReleaseServices({
           // alone is one the drain will refuse forever, leaving the release
           // scheduled with content that never appears.
           //
-          // An ordinary lifecycle write needs the base `update` grant as well as
-          // the lifecycle verb, so both are asked. Checking only `publish` would
-          // admit a caller who may publish but may not write the document.
-          const authorMay =
-            (await rbac.checkAccess({
-              userId,
-              operation: "update",
-              resource: scopeSlug,
-            })) &&
-            (await rbac.checkAccess({
-              userId,
-              operation: action,
-              resource: scopeSlug,
-            }));
+          // The run writes the status alone, a publish or an unpublish judged
+          // by that action's own grant and rule, not update's: the release
+          // admits exactly the author the run's write would.
+          const authorMay = await rbac.checkAccess({
+            userId,
+            operation: action,
+            resource: scopeSlug,
+          });
           if (!authorMay) return false;
 
           // And a scoped API key must hold the grants ITSELF, or a narrow key
@@ -337,15 +342,7 @@ export function registerReleaseServices({
             asUser,
             rbac
           );
-          if (keyMayAct === null) return true;
-          const keyMayUpdate = await apiKeyWriteAllowed(
-            authenticatedScope,
-            "update",
-            scopeSlug,
-            asUser,
-            rbac
-          );
-          return keyMayAct && keyMayUpdate === true;
+          return keyMayAct ?? true;
         },
       })
   );

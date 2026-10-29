@@ -1,6 +1,6 @@
 {
   "name": "playground",
-  "version": "0.1.2-alpha.15",
+  "version": "0.1.2-alpha.16",
   "description": "Nextly contributor playground (internal — not for end users)",
   "private": true,
   "scripts": {
@@ -12,6 +12,7 @@
     "check-types": "next typegen && node ../../scripts/tsc.mjs --noEmit --incremental false",
     "env:copy": "cp .env.example .env",
     "db:seed": "tsx --env-file=.env scripts/seed.ts",
+    "db:seed:dev-user": "tsx scripts/seed-dev-admin.ts",
     "plugins:install": "nextly plugins install --all",
     "dev:reset": "tsx --env-file=.env scripts/reset.ts",
     "test": "vitest run",

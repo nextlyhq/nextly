@@ -16,7 +16,9 @@
 //   7. Generate per-statement SQL via sql-templates/.
 //   8. Write paired migrations/<ts>_<slug>.sql + migrations/meta/<ts>_<slug>.snapshot.json.
 //
-// Returns null when no operations remain (after rename collapsing).
+// Returns null when no operations remain (after rename collapsing) and no
+// entity's settings changed: a settings change alone is written as a
+// migration with no table statements, beside its snapshot.
 // CLI exits with code 2 in that case ("no changes detected" — distinct
 // from exit 1 for actual errors so CI scripts can tell apart).
 
@@ -31,7 +33,11 @@ import {
   companionHistoryKey,
   readCompanionHistory,
 } from "../../i18n/migration/companion-history";
-import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { uniqueTranslatedColumns } from "../../i18n/migration/companion-unique-indexes";
+import {
+  companionSpecShell,
+  deriveCompanionSpec,
+} from "../../i18n/migration/derive-companion-spec";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
@@ -48,6 +54,10 @@ import {
   type FieldLeavesMigrationPlan,
   planFieldLeavesTranslationMigration,
 } from "../../i18n/migration/plan-field-leaves-migration";
+import {
+  planTranslatedUniqueMigration,
+  type TranslatedUniquePlan,
+} from "../../i18n/migration/plan-translated-unique-migration";
 import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
 import type {
   CompanionMigrationSpec,
@@ -62,6 +72,7 @@ import {
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
   ColumnSpec,
+  IndexSpec,
   NextlySchemaSnapshot,
   Operation,
   RenameColumnOp,
@@ -82,6 +93,13 @@ import {
 } from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import { buildInverseOperations } from "./down-generator";
+import {
+  describeSettingsChange,
+  settingsChangesFor,
+  settingsRecordOf,
+  type EntitySettingsChange,
+  type RecordedEntitySettings,
+} from "./entity-settings";
 import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
@@ -150,6 +168,14 @@ export interface MinimalConfigEntity {
    * and relocated to the migration-owned companion `_locales` table (i18n Option B).
    */
   localized?: boolean;
+  /**
+   * The entity's declaration, as the snapshot records its settings: from the
+   * code-first config (`toMinimalEntities`) or the Builder's manifest. Every
+   * entity `migrate:create` hands in carries it, so each snapshot records every
+   * entity's settings; one without it contributes no record, and a run in
+   * which none carries one writes a snapshot that says nothing about settings.
+   */
+  settings?: RecordedEntitySettings;
 }
 
 export interface GenerateArgs {
@@ -164,9 +190,17 @@ export interface GenerateArgs {
   components: MinimalConfigEntity[];
   /**
    * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
-   * Each is appended to the generated SQL when an operation touches its table.
+   * Each is appended to the generated SQL when an operation touches its table
+   * or the entity's settings changed: the row is how a Builder entity's
+   * settings reach a deployed registry.
    */
   metadataUpserts?: { tableName: string; sql: string }[];
+  /**
+   * The same upserts built from the PREVIOUS snapshot's record of each Builder
+   * entity, so a migration that writes a row for its settings alone can write
+   * it back on the way down.
+   */
+  previousMetadataUpserts?: { tableName: string; sql: string }[];
   /**
    * Default locale for localized collections (from `config.localization.defaultLocale`).
    * Used as the `_locale` value when seeding existing rows into the companion table on
@@ -209,6 +243,11 @@ export interface GenerateResult {
   operationCount: number;
   /** Number of rename candidates the operator confirmed. */
   renamesAccepted: number;
+  /**
+   * Each entity whose settings changed since the previous snapshot, whether or
+   * not this migration changes its table. Empty when only tables changed.
+   */
+  settingsChanges: EntitySettingsChange[];
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
@@ -315,11 +354,39 @@ export async function generateMigration(
     companionHistory.present
   );
 
+  // 3d. Translated fields that become or stop being unique within each language. Their companion
+  //     indexes are dropped before the main file and created after every other file.
+  const uniquePlans = planTranslatedUniqueMigrations(
+    [
+      ...args.collections.map(e => tagged(e, "collection")),
+      ...args.singles.map(e => tagged(e, "single")),
+      ...args.components.map(e => tagged(e, "fieldGroup")),
+    ],
+    previousSnapshot,
+    args.dialect,
+    args.defaultLocale ?? "en"
+  );
+
   const hasCompanions =
     companionPlans.length > 0 ||
     fieldLeavesPlans.length > 0 ||
-    fieldJoinsPlans.length > 0;
-  if (operations.length === 0 && !hasCompanions) {
+    fieldJoinsPlans.length > 0 ||
+    uniquePlans.length > 0;
+
+  // 3e. Settings: what the declarations say beyond their columns. A change to
+  //     one alone changes no table, so without this the run returned "no
+  //     changes" and the setting never reached a deployed database. Compared
+  //     with the previous snapshot's record; a previous snapshot that predates
+  //     the record says nothing about settings, so each entity is named as
+  //     recorded for the first time (`settingsChanges`).
+  const settingsRecord = settingsRecordOf(args);
+  const changedSettings = settingsChangesFor(
+    args,
+    previous === null ? null : previous.data.entities
+  );
+  const hasSettingsChanges = changedSettings.length > 0;
+
+  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
   }
 
@@ -353,9 +420,15 @@ export async function generateMigration(
       previousSnapshot
     );
   }
-  if (operations.length === 0 && !hasCompanions) {
+  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
   }
+
+  // 6a. A Required or Unique field leaving translation gets its main column without the setting:
+  //     created with it, every row would hold NULL or one placeholder before the `shared` file
+  //     copies the default language's values in. That file applies the settings after the copy.
+  const heldSettings = fieldLeavesPlans.map(({ held }) => held);
+  operations = withSettingsHeldBack(operations, heldSettings);
 
   // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
   // table operations that cannot carry them (see `withCyclicForeignKeysSplit`),
@@ -377,7 +450,8 @@ export async function generateMigration(
   const sqlStatements = generateStatements(
     operations,
     args.dialect,
-    desiredSnapshot.tables
+    // A table rebuilt here is rebuilt to the shape this file leaves it in: the settings held back.
+    tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
   );
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
@@ -398,13 +472,17 @@ export async function generateMigration(
     previousSnapshot.tables
   );
 
-  // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
+  // 7b. Append UI metadata-row upserts for any UI-built table this migration
+  //     touches (§4.12.7), and for any whose entity's settings changed: the row
+  //     is where a Builder entity's settings live, so it travels with them.
   const touched = new Set(operations.map(operationTableName));
-  if (args.metadataUpserts && args.metadataUpserts.length > 0) {
-    for (const m of args.metadataUpserts) {
-      if (touched.has(m.tableName)) sqlStatements.push(m.sql);
-    }
-  }
+  const rows = registryRowsFor(
+    touched,
+    tablesOfSettingsChanges(changedSettings, args),
+    args
+  );
+  sqlStatements.push(...rows.up);
+  downSqlStatements.push(...rows.down);
 
   /*
    * 8. Compose file content + write both files.
@@ -461,6 +539,8 @@ export async function generateMigration(
     singles: singleSlugs,
     components: componentSlugs,
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
+    settingsChanges: changedSettings.map(describeSettingsChange),
+    changesNoTable: operations.length === 0,
     now,
   });
 
@@ -474,7 +554,8 @@ export async function generateMigration(
     baseName,
     stream.written,
     sqlContent,
-    stream.contributions
+    stream.contributions,
+    settingsRecord
   );
 
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
@@ -491,7 +572,14 @@ export async function generateMigration(
   //    - A field leaving translation: its ARCHIVE file runs before the main file, so an archive that
   //      refuses the values stops the run before the main table changes; its SHARED file runs after
   //      it, once the main table has the column to copy into.
+  //    - A translated field's per-language unique index that goes: first of all, before any
+  //      file drops or renames a column it keys on.
   const beforeMain = [
+    ...uniquePlans.flatMap(({ spec, plan, entity }) =>
+      plan.drops === null
+        ? []
+        : [{ spec, kind: "unique" as const, entity, ...plan.drops }]
+    ),
     ...disablePlans.map(({ plan, entity }) => ({
       spec: plan.spec,
       kind: "disable" as const,
@@ -541,13 +629,78 @@ export async function generateMigration(
       now: new Date(now.getTime() + forwardPlans.length + i + 1),
     });
   });
+  //    - A translated field's per-language unique index that is new: last, once every column it
+  //      keys on exists.
+  const createsAfter = forwardPlans.length + fieldLeavesPlans.length;
+  uniquePlans
+    .flatMap(({ spec, plan, entity }) =>
+      plan.creates === null
+        ? []
+        : [
+            {
+              // Its header names the fields it indexes, for `nextly migrate`'s pre-check.
+              spec: { ...spec, unique: plan.creates.unique },
+              entity,
+              upSql: plan.creates.upSql,
+              downSql: plan.creates.downSql,
+            },
+          ]
+    )
+    .forEach(({ spec, ...file }, i) => {
+      writeCompanionMigrationFile(args.migrationsDir, spec, {
+        ...file,
+        kind: "unique",
+        now: new Date(now.getTime() + createsAfter + i + 1),
+      });
+    });
 
   return {
     sqlPath,
     snapshotPath,
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
+    settingsChanges: changedSettings,
   };
+}
+
+/**
+ * The Builder registry-row upserts a migration carries: UP writes the row of
+ * each table it touches and of each entity whose settings changed. A row that
+ * travels only because its settings changed goes back with the rollback, so
+ * DOWN writes it as the previous snapshot recorded it; a row the previous
+ * snapshot has no record of has nothing to go back to.
+ */
+function registryRowsFor(
+  touched: ReadonlySet<string>,
+  settingsTables: ReadonlySet<string>,
+  args: Pick<GenerateArgs, "metadataUpserts" | "previousMetadataUpserts">
+): { up: string[]; down: string[] } {
+  return {
+    up: (args.metadataUpserts ?? [])
+      .filter(m => touched.has(m.tableName) || settingsTables.has(m.tableName))
+      .map(m => m.sql),
+    down: (args.previousMetadataUpserts ?? [])
+      .filter(m => settingsTables.has(m.tableName) && !touched.has(m.tableName))
+      .map(m => m.sql),
+  };
+}
+
+/** The tables of the entities whose settings changed, by kind and slug. */
+function tablesOfSettingsChanges(
+  changes: readonly EntitySettingsChange[],
+  entities: Pick<GenerateArgs, "collections" | "singles" | "components">
+): Set<string> {
+  const lists = {
+    collection: entities.collections,
+    single: entities.singles,
+    fieldGroup: entities.components,
+  };
+  const tables = new Set<string>();
+  for (const change of changes) {
+    const entity = lists[change.kind].find(e => e.slug === change.slug);
+    if (entity) tables.add(entity.tableName);
+  }
+  return tables;
 }
 
 /**
@@ -616,6 +769,57 @@ interface CompanionPlanEntry {
  *   - previous main table HELD the columns → enabling now  → create + seed + drop.
  *   - previous main table lacked them      → already localized → none (companion exists).
  */
+/**
+ * Each translated entity's `unique` files (`planTranslatedUniqueMigration`): its per-language
+ * unique indexes as the previous snapshot recorded them, brought to the ones its config now asks
+ * for. An entity that is not translated now has no companion left to index.
+ */
+function planTranslatedUniqueMigrations(
+  entities: TaggedConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): {
+  entity: I18nTransitionKind;
+  spec: CompanionMigrationSpec;
+  plan: TranslatedUniquePlan;
+}[] {
+  return entities.flatMap(({ entity: c, kind }) => {
+    if (c.localized !== true) return [];
+    const derive = {
+      builtBy: "codeFirst" as const,
+      slug: c.slug,
+      kind,
+      dbName: c.tableName,
+      fields: c.fields,
+      dialect,
+      defaultLocale,
+      collectionLocalized: true,
+      status: c.status === true,
+    };
+    // With no field translated now, the companion is still addressed when the previous snapshot
+    // recorded per-language unique indexes on it: the last such field to leave translation takes
+    // its index with it, ahead of the file that drops its column.
+    const shell = companionSpecShell(derive);
+    const previous = previousSnapshot.tables.find(
+      t => t.name === shell.mainTable
+    );
+    const spec =
+      deriveCompanionSpec(derive) ??
+      (previous?.localized === true &&
+      (previous.uniqueLocalizedColumns ?? []).length > 0
+        ? shell
+        : null);
+    if (!spec) return [];
+    const plan = planTranslatedUniqueMigration({
+      spec,
+      fields: c.fields,
+      previous,
+    });
+    return plan === null ? [] : [{ entity: kind, spec, plan }];
+  });
+}
+
 /** Pair an entity with the kind of list it came from, which its companion's marker is keyed by. */
 function tagged(
   entity: MinimalConfigEntity,
@@ -736,6 +940,8 @@ function planCompanionMigrations(
 interface FieldLeavesEntry {
   plan: FieldLeavesMigrationPlan;
   entity: I18nTransitionKind;
+  /** The settings the main migration leaves off, which the `shared` file applies. */
+  held: HeldSettings;
 }
 
 /**
@@ -772,37 +978,185 @@ function planFieldsLeavingTranslation(
       companionHistoryKey(kind, c.slug)
     );
     warnOfUnknownShapes(c.slug, leaving, previousColumns, warn);
-    assertFieldsMayLeaveTranslation(
-      c,
-      leaving,
-      previousColumns,
-      dialect,
-      desiredSnapshot.tables.find(t => t.name === c.tableName)
+    const desiredMain = desiredSnapshot.tables.find(
+      t => t.name === c.tableName
+    );
+    assertFieldsMayLeaveTranslation(c, leaving, previousColumns, dialect);
+    const held = heldSettingsOf(
+      c.tableName,
+      leaving.map(l => l.column.name),
+      desiredMain
     );
 
     entries.push({
       entity: kind,
-      plan: planFieldLeavesTranslationMigration({
-        dialect,
-        collection: c.slug,
-        kind,
-        mainTable: c.tableName,
-        companionTable: `${c.tableName}_locales`,
-        defaultLocale,
-        parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
-        columns: leaving.map(l => l.column),
-        // A rollback recreates default-language rows with the main row's publishing state, when
-        // both have one: Draft/Published on before this change, so the companion has `_status`,
-        // and still on after it, so the main table still has `status` when the rollback runs.
-        status:
-          c.status === true &&
-          previousSnapshot.tables
-            .find(t => t.name === c.tableName)
-            ?.columns.some(col => col.name === "status") === true,
-      }),
+      held,
+      plan: planFieldLeavesTranslationMigration(
+        {
+          dialect,
+          collection: c.slug,
+          kind,
+          mainTable: c.tableName,
+          companionTable: `${c.tableName}_locales`,
+          defaultLocale,
+          parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
+          columns: leaving.map(l => l.column),
+          // A rollback recreates default-language rows with the main row's publishing state, when
+          // both have one: Draft/Published on before this change, so the companion has `_status`,
+          // and still on after it, so the main table still has `status` when the rollback runs.
+          status:
+            c.status === true &&
+            previousSnapshot.tables
+              .find(t => t.name === c.tableName)
+              ?.columns.some(col => col.name === "status") === true,
+        },
+        desiredMain
+          ? settingsAfterCopy(
+              held,
+              desiredMain,
+              dialect,
+              desiredSnapshot.tables
+            )
+          : undefined
+      ),
     });
   }
   return entries;
+}
+
+/**
+ * The main-table settings fields leaving translation take on after their values are copied, as
+ * the desired main table has them: the columns it makes required, and its unique indexes over a
+ * leaving column.
+ */
+interface HeldSettings {
+  tableName: string;
+  required: ReadonlySet<string>;
+  uniqueIndexes: readonly IndexSpec[];
+}
+
+function heldSettingsOf(
+  tableName: string,
+  columns: readonly string[],
+  desiredMain: TableSpec | undefined
+): HeldSettings {
+  const leaving = new Set(columns);
+  return {
+    tableName,
+    required: new Set(
+      (desiredMain?.columns ?? [])
+        .filter(column => leaving.has(column.name) && !column.nullable)
+        .map(column => column.name)
+    ),
+    uniqueIndexes: (desiredMain?.indexes ?? []).filter(
+      index => index.unique && index.columns.some(name => leaving.has(name))
+    ),
+  };
+}
+
+/** The main migration's operations with each held setting left off. */
+function withSettingsHeldBack(
+  operations: Operation[],
+  held: readonly HeldSettings[]
+): Operation[] {
+  const byTable = new Map(held.map(h => [h.tableName, h]));
+  return operations.flatMap((op): Operation[] => {
+    const h = byTable.get(operationTableName(op));
+    if (op.type === "add_column" && h?.required.has(op.column.name)) {
+      return [{ ...op, column: { ...op.column, nullable: true } }];
+    }
+    if (
+      op.type === "add_index" &&
+      h?.uniqueIndexes.some(index => index.name === op.index.name)
+    ) {
+      return [];
+    }
+    return [op];
+  });
+}
+
+/** The desired tables as the main migration leaves them: each held setting left off. */
+function tablesWithSettingsHeldBack(
+  tables: readonly TableSpec[],
+  held: readonly HeldSettings[]
+): TableSpec[] {
+  const byTable = new Map(held.map(h => [h.tableName, h]));
+  return tables.map(table => {
+    const h = byTable.get(table.name);
+    if (!h) return table;
+    const heldIndexes = new Set(h.uniqueIndexes.map(index => index.name));
+    return {
+      ...table,
+      columns: table.columns.map(column =>
+        h.required.has(column.name) ? { ...column, nullable: true } : column
+      ),
+      ...(table.indexes
+        ? { indexes: table.indexes.filter(i => !heldIndexes.has(i.name)) }
+        : {}),
+    };
+  });
+}
+
+/**
+ * The `shared` file's statements for the held settings: UP applies them after the copy, rendered
+ * as the main migration renders a column change (a rebuild to the desired table on SQLite, which
+ * recreates its indexes too; `SET NOT NULL` on PostgreSQL; the column restated on MySQL, which has
+ * no statement for nullability alone), and DOWN drops the unique indexes first, since SQLite drops
+ * no column an index covers and the main migration's DOWN drops the column.
+ */
+function settingsAfterCopy(
+  held: HeldSettings,
+  desiredMain: TableSpec,
+  dialect: SupportedDialect,
+  desiredTables: readonly TableSpec[]
+): { up: string[]; down: string[] } {
+  const tableName = held.tableName;
+  const down = generateStatements(
+    held.uniqueIndexes.map(index => ({
+      type: "drop_index" as const,
+      tableName,
+      index,
+    })),
+    dialect,
+    [...desiredTables]
+  );
+  if (dialect === "sqlite" && held.required.size > 0) {
+    return { up: sqliteTableRebuildStatements(desiredMain), down };
+  }
+  const required = desiredMain.columns
+    .filter(column => held.required.has(column.name))
+    .map(
+      (column): Operation =>
+        dialect === "mysql"
+          ? {
+              type: "change_column_type",
+              tableName,
+              columnName: column.name,
+              fromType: column.type,
+              toType: column.type,
+              nullable: false,
+              ...(column.default !== undefined
+                ? { columnDefault: column.default }
+                : {}),
+              fromNullable: true,
+            }
+          : {
+              type: "change_column_nullable",
+              tableName,
+              columnName: column.name,
+              fromNullable: true,
+              toNullable: false,
+            }
+    );
+  const unique = held.uniqueIndexes.map(
+    (index): Operation => ({ type: "add_index", tableName, index })
+  );
+  return {
+    up: generateStatements([...required, ...unique], dialect, [
+      ...desiredTables,
+    ]),
+    down,
+  };
 }
 
 /** A field leaving translation, with the companion column it leaves. */
@@ -1075,26 +1429,6 @@ function warnOfUnknownShapes(
 }
 
 /**
- * The leaving fields a unique index on the main table covers, read from the table as this
- * migration makes it: an index declared in the config, the one every `slug` column carries, or
- * one a schema hook adds. The main file creates them while the new columns are still empty, so a
- * value they would refuse is found only when the shared file copies it in.
- */
-function uniqueIndexedFields(
-  leaving: readonly LeavingField[],
-  desiredTable: TableSpec | undefined
-): Set<string> {
-  const unique = new Set(
-    (desiredTable?.indexes ?? [])
-      .filter(index => index.unique)
-      .flatMap(index => index.columns)
-  );
-  return new Set(
-    leaving.filter(l => unique.has(l.column.name)).map(l => l.field.name)
-  );
-}
-
-/**
  * Refuses the run when a leaving field cannot leave translation in one migration
  * (`refusalsForFieldsLeavingTranslation`), naming the steps that work, before any file is written.
  */
@@ -1102,15 +1436,12 @@ function assertFieldsMayLeaveTranslation(
   c: MinimalConfigEntity,
   leaving: readonly LeavingField[],
   previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
-  dialect: SupportedDialect,
-  /** The entity's main table as this migration makes it, with every index it will carry. */
-  desiredTable: TableSpec | undefined
+  dialect: SupportedDialect
 ): void {
   const refusals = refusalsForFieldsLeavingTranslation({
     leaving: new Set(leaving.map(l => l.field.name)),
     newFields: c.fields,
     ...(previousColumns ? { previousColumns } : {}),
-    uniqueIndexed: uniqueIndexedFields(leaving, desiredTable),
     dialect,
     builtBy: "codeFirst",
     surface: "code",
@@ -1200,10 +1531,21 @@ function withLocalizedMarker(
     collectionLocalized: true,
     status: entity.status === true,
   });
+  // Each column is recorded with what it stores, so the migration that later removes or renames
+  // one can still key the index its DOWN recreates the way this one keyed it.
+  const unique = uniqueTranslatedColumns({
+    fields: entity.fields,
+    entityLocalized: true,
+    dialect,
+    builtBy: "codeFirst",
+  }).map(c =>
+    c.kind === undefined ? c.column : { column: c.column, kind: c.kind }
+  );
   return {
     ...table,
     localized: true,
     ...(spec ? { localizedColumns: spec.columns.map(c => c.name) } : {}),
+    ...(unique.length > 0 ? { uniqueLocalizedColumns: unique } : {}),
   };
 }
 
@@ -1449,6 +1791,78 @@ function applyRenameDecisions(
   // last, which makes this function silently depend on that contract.
   if (renames.length === 0) return remaining;
 
+  // An index the renamed column already carries is carried BY the rename: every dialect renames the
+  // column inside the index. The diff, seeing the collapsed add's index under the same name with a
+  // new column, plans to create it again — which MySQL refuses as a duplicate key and PostgreSQL
+  // skips with IF NOT EXISTS — and, for a name Nextly manages, to drop the old one first, which would
+  // leave the table with no index at all once the create is gone. When the new index is exactly the
+  // previous one with the column renamed, both are dropped from the plan and the rename keeps it.
+  const carried = indexesCarriedByRenames(
+    effectiveAccepts.map(d => d.candidate),
+    previousSnapshot
+  );
+  const keptByRename = new Set(
+    remaining.flatMap(op =>
+      op.type === "add_index" &&
+      carried.get(`${op.tableName}::${op.index.name}`) === indexShape(op.index)
+        ? [`${op.tableName}::${op.index.name}`]
+        : []
+    )
+  );
+  // Placed first and filtered after: the kept index's create is what the renames are placed ahead
+  // of, so taking it out first would push them past a check that names the new column.
+  const placed = placeRenames(remaining, renames);
+  return keptByRename.size === 0
+    ? placed
+    : placed.filter(
+        op =>
+          !(
+            (op.type === "add_index" || op.type === "drop_index") &&
+            keptByRename.has(`${op.tableName}::${op.index.name}`)
+          )
+      );
+}
+
+/**
+ * The indexes on renamed columns, keyed by table and name, each with its shape as it reads once
+ * the renames have run (`indexShape`).
+ */
+function indexesCarriedByRenames(
+  renamed: readonly RenameCandidate[],
+  previousSnapshot: NextlySchemaSnapshot | undefined
+): Map<string, string> {
+  const carried = new Map<string, string>();
+  for (const table of previousSnapshot?.tables ?? []) {
+    const onTable = renamed.filter(c => c.tableName === table.name);
+    if (onTable.length === 0) continue;
+    const newName = (column: string): string =>
+      onTable.find(c => c.fromColumn === column)?.toColumn ?? column;
+    for (const index of table.indexes ?? []) {
+      if (!index.columns.some(column => newName(column) !== column)) continue;
+      carried.set(
+        `${table.name}::${index.name}`,
+        indexShape({ ...index, columns: index.columns.map(newName) })
+      );
+    }
+  }
+  return carried;
+}
+
+/** What an index is, beyond its name: the same text for two indexes that index alike. */
+function indexShape(index: IndexSpec): string {
+  return JSON.stringify([
+    index.columns,
+    index.unique,
+    index.where ?? null,
+    index.expression ?? null,
+  ]);
+}
+
+/** The operations with the renames placed ahead of the index tail. */
+function placeRenames(
+  remaining: Operation[],
+  renames: Operation[]
+): Operation[] {
   // The renames land ahead of the index tail, not at the very end. Collapsing a
   // (drop_column, add_column) pair removes the statement that would have
   // created the new column, so an index declared on it can only be created

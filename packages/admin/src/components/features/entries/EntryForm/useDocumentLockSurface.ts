@@ -19,9 +19,11 @@ import {
   useDocumentLock,
   type UseDocumentLockOptions,
 } from "@admin/hooks/queries/useDocumentLock";
+import { useDocumentLockHolder } from "@admin/hooks/queries/useDocumentLockHolder";
 
 import {
   documentLockAffordances,
+  readerAffordances,
   type DocumentLockAffordances,
 } from "./document-lock-affordances";
 
@@ -38,10 +40,31 @@ export interface DocumentLockSurface extends DocumentLockAffordances {
   readonly requestAccess: () => void;
 }
 
-export function useDocumentLockSurface(
-  options: UseDocumentLockOptions
-): DocumentLockSurface {
-  const { state, takeOver, requestAccess } = useDocumentLock(options);
+export interface DocumentLockSurfaceOptions extends UseDocumentLockOptions {
+  /**
+   * Whether the user may only read the document. Then no claim is made — the
+   * server refuses one without the permission to change the document — and
+   * the surface is read-only, with the reader's notice in the lock's place.
+   * Who holds the document is still read, so the status writes a reader who
+   * may publish makes wait while a colleague is editing.
+   */
+  readOnlyForReader?: boolean;
+}
+
+export function useDocumentLockSurface({
+  readOnlyForReader = false,
+  ...options
+}: DocumentLockSurfaceOptions): DocumentLockSurface {
+  const enabled = options.enabled ?? true;
+  const { state, takeOver, requestAccess } = useDocumentLock({
+    ...options,
+    enabled: enabled && !readOnlyForReader,
+  });
+  // A reader claims nothing and is told who holds the document instead.
+  const holder = useDocumentLockHolder({
+    ...options,
+    enabled: enabled && readOnlyForReader,
+  });
 
   // 🔴 The colleague outlives a failed refresh. Every beat re-asks, so a
   // transient rejection arrives as `unavailable` long after a holder was
@@ -65,7 +88,9 @@ export function useDocumentLockSurface(
   }
 
   return {
-    ...documentLockAffordances(state, lastKnownHolder.current),
+    ...(readOnlyForReader
+      ? readerAffordances(holder)
+      : documentLockAffordances(state, lastKnownHolder.current)),
     takeOver,
     requestAccess,
   };

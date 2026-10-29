@@ -17,6 +17,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useWidgetBatch, type BatchCard } from "../useWidgetBatch";
+import { gridBounds } from "./grid-bounds";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -39,7 +40,7 @@ const orders: DashboardWidget = {
   id: "acme/orders",
   title: "Open orders",
   archetype: "custom",
-  size: "full",
+  size: gridBounds(12),
   serverData: true,
 };
 
@@ -138,6 +139,96 @@ describe("what a card core answers sends", () => {
     );
     expect(sent(before)).toEqual([{ widget: "acme/orders", card: "c-1" }]);
   });
+
+  it("asks with the size it is drawn at, which its load is handed", async () => {
+    vi.mocked(protectedApi.post).mockImplementation(async () => ({
+      results: [
+        { ok: true, result: { op: "data", data: null } },
+        { ok: true, result: { op: "data", data: null } },
+      ],
+    }));
+    const { result } = renderHook(
+      () =>
+        useWidgetBatch([
+          { placementId: "c-1", widget: orders, tier: "large", w: 12, h: 4 },
+          {
+            placementId: "c-new",
+            widget: orders,
+            config: { items: 9 },
+            editing: true,
+            tier: "small",
+            w: 4,
+            h: 3,
+          },
+        ]),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.slots["c-new"]).toBeDefined());
+    expect(sent()).toEqual([
+      {
+        widget: "acme/orders",
+        card: "c-1",
+        size: { w: 12, h: 4, tier: "large" },
+      },
+      {
+        widget: "acme/orders",
+        settings: { items: 9 },
+        size: { w: 4, h: 3, tier: "small" },
+      },
+    ]);
+  });
+
+  it("asks again, alone, when it is resized or crosses a tier", async () => {
+    vi.mocked(protectedApi.post).mockImplementation(async () => ({
+      results: [{ ok: true, result: { op: "data", data: null } }],
+    }));
+    const other: BatchCard = {
+      placementId: "c-2",
+      widget: { ...orders, id: "acme/other" },
+      tier: "medium",
+      w: 6,
+      h: 3,
+    };
+    const { result, rerender } = renderHook(
+      ({ h, tier }: { h: number; tier: "medium" | "large" }) =>
+        useWidgetBatch([
+          { placementId: "c-1", widget: orders, tier, w: 12, h },
+          other,
+        ]),
+      {
+        wrapper,
+        initialProps: { h: 3, tier: "medium" as "medium" | "large" },
+      }
+    );
+    await waitFor(() => expect(result.current.slots["c-2"]).toBeDefined());
+    const before = vi.mocked(protectedApi.post).mock.calls.length;
+
+    // Taller: the load is asked again for that card, and for no other.
+    rerender({ h: 5, tier: "medium" });
+    await waitFor(() =>
+      expect(vi.mocked(protectedApi.post).mock.calls.length).toBe(before + 1)
+    );
+    expect(sent(before)).toEqual([
+      {
+        widget: "acme/orders",
+        card: "c-1",
+        size: { w: 12, h: 5, tier: "medium" },
+      },
+    ]);
+
+    // The same height at another tier is another question too.
+    rerender({ h: 5, tier: "large" });
+    await waitFor(() =>
+      expect(vi.mocked(protectedApi.post).mock.calls.length).toBe(before + 2)
+    );
+    expect(sent(before + 1)).toEqual([
+      {
+        widget: "acme/orders",
+        card: "c-1",
+        size: { w: 12, h: 5, tier: "large" },
+      },
+    ]);
+  });
 });
 
 describe("what a card's answer is filed under", () => {
@@ -152,6 +243,32 @@ describe("what a card's answer is filed under", () => {
       appliedKey(stored)
     );
     expect(sentEntry(stored)).toEqual({ widget: "acme/orders", card: "c-1" });
+  });
+
+  it("is its ask at the size it was drawn at, so two sizes of one card are two answers", () => {
+    const small = {
+      ...stored,
+      cardSize: { w: 4, h: 3, tier: "small" as const },
+    };
+    const taller = { ...small, cardSize: { ...small.cardSize, h: 4 } };
+    const wider = { ...small, cardSize: { ...small.cardSize, w: 6 } };
+    const larger = {
+      ...small,
+      cardSize: { ...small.cardSize, tier: "large" as const },
+    };
+    const keys = [stored, small, taller, wider, larger].map(appliedKey);
+    expect(new Set(keys).size).toBe(keys.length);
+    // The same size, built afresh, is the same question.
+    expect(
+      appliedKey({ ...stored, cardSize: { tier: "small", h: 3, w: 4 } })
+    ).toBe(appliedKey(small));
+    // Sent beside the card, never inside the card's own ask.
+    expect(sentEntry(small)).toEqual({
+      widget: "acme/orders",
+      card: "c-1",
+      size: { w: 4, h: 3, tier: "small" },
+    });
+    expect(small.card).toEqual({ widget: "acme/orders", card: "c-1" });
   });
 
   it("never reads a preview as the stored card, even with the same settings", () => {

@@ -19,8 +19,10 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { aboutSubject } from "../../auth/access/deviations";
+import { actorForScope } from "../../auth/access/resolve-actor";
 import {
   routeGateCapabilities,
+  sentParams,
   type GateCaller,
 } from "../../auth/access/route-gate-adapters";
 import {
@@ -35,6 +37,7 @@ import {
 import { requestLanguage } from "../../auth/middleware";
 import { container } from "../../di/container";
 import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
+import type { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { NextlyError } from "../../errors/nextly-error";
 import { permissionSlug } from "../../schemas/_zod/rbac";
 import type { ServiceContainer } from "../../services";
@@ -108,6 +111,25 @@ function capabilitiesCaller(userId: string): GateCaller {
   const actor = currentRequestCaller()?.actor;
   const keyId = actor?.type === "apiKey" ? actor.id : undefined;
   return { userId, key: scope, ...(keyId === undefined ? {} : { keyId }) };
+}
+
+/**
+ * The collections with a Draft/Published lifecycle, for the cells whose
+ * request publishes as well where one exists. Unreadable, every collection is
+ * taken to have one: such a cell then asks the publish check too, and answers
+ * no where it cannot tell, never yes.
+ */
+async function collectionsWithLifecycle(): Promise<(slug: string) => boolean> {
+  const everyCollection = () => true;
+  if (!container.has("collectionRegistryService")) return everyCollection;
+  try {
+    const slugs = await container
+      .get<CollectionRegistryService>("collectionRegistryService")
+      .getSlugsWithStatus();
+    return slug => slugs.has(slug);
+  } catch {
+    return everyCollection;
+  }
 }
 
 /**
@@ -262,11 +284,30 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   getCurrentUserPermissions: {
     execute: async (_svc, p) => {
       const userId = requireParam(p, "userId", "UserId");
-      const [permissionPairs, superAdmin, roleSlugs] = await Promise.all([
-        listEffectivePermissions(userId),
-        isSuperAdmin(userId),
-        listRoleSlugsForUser(userId),
-      ]);
+      // An API key is answered with what the key itself holds, which is no
+      // more than its maker's and often less, never with its maker's own.
+      const scope = currentCallerScope();
+      if (scope?.actorType === "apiKey") {
+        const caller = capabilitiesCaller(userId);
+        const actor = actorForScope(scope, { id: userId });
+        return respondData({
+          permissions: [...scope.permissions],
+          isSuperAdmin: actor.superAdmin,
+          roles: [...actor.roles],
+          validUntil: await capabilitiesValidUntil(caller),
+        });
+      }
+      // The soonest end of the role assignments comes from the same
+      // request-scoped read of the user's roles the permissions do, so the
+      // list and its end describe one moment.
+      const [permissionPairs, superAdmin, roleSlugs, roles] = await Promise.all(
+        [
+          listEffectivePermissions(userId),
+          isSuperAdmin(userId),
+          listRoleSlugsForUser(userId),
+          resolveUserRoles(userId),
+        ]
+      );
       // Convert "resource:action" → "action-resource" slug format
       // (e.g. "users:read" → "read-users").
       const permissions = permissionPairs.map(pair => {
@@ -277,6 +318,9 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         permissions,
         isSuperAdmin: superAdmin,
         roles: roleSlugs,
+        // When this list stops holding, in epoch ms, or null: the soonest
+        // end of a role assignment it was read under.
+        validUntil: roles.validUntil ?? null,
       });
     },
   },
@@ -291,10 +335,13 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
     execute: async (_svc, p) => {
       const userId = requireParam(p, "userId", "UserId");
       const caller = capabilitiesCaller(userId);
-      const [{ kinds, degraded }, validUntil] = await Promise.all([
-        registeredContentSnapshot(),
-        capabilitiesValidUntil(caller),
-      ]);
+      const [{ kinds, degraded }, validUntil, hasLifecycle] = await Promise.all(
+        [
+          registeredContentSnapshot(),
+          capabilitiesValidUntil(caller),
+          collectionsWithLifecycle(),
+        ]
+      );
       // The answer states what the caller may do with EVERY entity, so a
       // registry that could not be enumerated leaves a floor rather than the
       // whole list. Handing that over as the answer would have the admin hide
@@ -312,8 +359,9 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
       // Only `locale` is read from the query: the other language controls
       // belong to operations that carry an entry, and reading them would let
       // a caller widen the framing through a parameter this route does not
-      // offer.
-      const asked = { locale: p.locale ?? "" };
+      // offer. A cell whose request sends more, or no language, is framed by
+      // what that request sends (`sentParams`), never by the query.
+      const locale = p.locale ?? "";
       const capabilities = await routeGateCapabilities(
         caller,
         // Only the entities the caller may read are named: the answer is
@@ -321,7 +369,12 @@ const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
         // each one every collection and Single the install has.
         await readableEntityKinds(kinds),
         getRBACService(),
-        operation => requestLanguage({ method: operation, params: asked })
+        (operation, sent) =>
+          requestLanguage({
+            method: operation,
+            params: sentParams(sent, locale),
+          }),
+        hasLifecycle
       );
       return respondData(
         {

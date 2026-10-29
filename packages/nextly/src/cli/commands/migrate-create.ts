@@ -62,7 +62,14 @@ import {
   hasAppStreamTables,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
+import {
+  toMinimalEntities,
+  withBuilderSettingsAll,
+} from "../../domains/schema/migrate-create/config-entities";
+import {
+  describeSettingsChange,
+  type EntitySettingsRecord,
+} from "../../domains/schema/migrate-create/entity-settings";
 import {
   formatBlankFile,
   formatTimestamp,
@@ -99,7 +106,8 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../plugins/plugin-slug";
 import { topoSortPlugins } from "../../plugins/topo-sort";
-import { CORE_TABLE_NAMES } from "../../schemas/index";
+import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
+import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { createContext, type CommandContext } from "../program";
@@ -354,7 +362,12 @@ export async function runMigrateCreate(
       `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
     );
   }
-  const { collections, singles, components } = merged;
+  // Each Builder entity carries its manifest entry as its settings, as each
+  // code-first one carries its config entry, so the snapshot records both.
+  const { collections, singles, components } = withBuilderSettingsAll(
+    merged,
+    manifest
+  );
 
   // Checked on the config's and the manifest's own entries rather than the
   // merged ones: the merge has already dropped shadowed Builder entities by
@@ -399,33 +412,11 @@ export async function runMigrateCreate(
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
   // survived the merge (code-first wins → shadowed UI slugs are skipped).
-  const dropped = new Set(merged.droppedUiSlugs);
-  const tn = (
-    slug: string,
-    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-  ) => `${prefix}${slug.replace(/-/g, "_")}`;
-  const metadataUpserts: { tableName: string; sql: string }[] = [];
-  for (const c of manifest.collections) {
-    if (dropped.has(c.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(c.slug, "dc_"),
-      sql: buildCollectionMetadataUpsert(c, dialect),
-    });
-  }
-  for (const s of manifest.singles) {
-    if (dropped.has(s.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(s.slug, "single_"),
-      sql: buildSingleMetadataUpsert(s, dialect),
-    });
-  }
-  for (const cp of manifest.components) {
-    if (dropped.has(cp.slug)) continue;
-    metadataUpserts.push({
-      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
-      sql: buildComponentMetadataUpsert(cp, dialect),
-    });
-  }
+  const metadataUpserts = builderMetadataUpserts(
+    manifest,
+    new Set(merged.droppedUiSlugs),
+    dialect
+  );
 
   // The APP stream's extension schema, compiled the way boot compiles it:
   // tables the app declares through `db.schema.extend`, and elements it
@@ -443,6 +434,14 @@ export async function runMigrateCreate(
   });
 
   const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
+  // The rows as the previous snapshot recorded each Builder entity, for a
+  // migration that writes a row for its settings alone to write back on the
+  // way down. A snapshot with no settings record has none to offer.
+  const previousMetadataUpserts = builderMetadataUpserts(
+    builderEntriesOf(latest?.data.entities),
+    new Set(),
+    dialect
+  );
   if (
     nothingToGenerate({
       entityCount: collections.length + singles.length + components.length,
@@ -473,6 +472,7 @@ export async function runMigrateCreate(
       singles,
       components,
       metadataUpserts,
+      previousMetadataUpserts,
       nonInteractive,
       autoAcceptRenames: options.acceptRenames === true,
     });
@@ -504,6 +504,9 @@ export async function runMigrateCreate(
   logger.success(`Created migration → ${result.sqlPath}`);
   logger.success(`Snapshot → ${result.snapshotPath}`);
   logger.keyValue("Operations", result.operationCount);
+  for (const change of result.settingsChanges) {
+    logger.item(`Settings: ${describeSettingsChange(change)}`, 1);
+  }
   if (result.renamesAccepted > 0) {
     logger.keyValue("Renames accepted", result.renamesAccepted);
   }
@@ -515,6 +518,69 @@ export async function runMigrateCreate(
   logger.item("Review the generated .sql file", 1);
   logger.item("Commit it to git alongside your nextly.config.ts changes", 1);
   logger.item("Run `nextly migrate` to apply it", 1);
+}
+
+/**
+ * The registry-row upserts for UI-built entities (spec §4.12.7), keyed by data
+ * table, skipping the slugs a code-first entity shadows.
+ */
+function builderMetadataUpserts(
+  entries: {
+    collections: readonly UiSchemaEntity[];
+    singles: readonly UiSchemaEntity[];
+    components: readonly UiSchemaEntity[];
+  },
+  dropped: ReadonlySet<string>,
+  dialect: SupportedDialect
+): { tableName: string; sql: string }[] {
+  const tn = (
+    slug: string,
+    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
+  ) => `${prefix}${slug.replace(/-/g, "_")}`;
+  const upserts: { tableName: string; sql: string }[] = [];
+  for (const c of entries.collections) {
+    if (dropped.has(c.slug)) continue;
+    upserts.push({
+      tableName: tn(c.slug, "dc_"),
+      sql: buildCollectionMetadataUpsert(c, dialect),
+    });
+  }
+  for (const s of entries.singles) {
+    if (dropped.has(s.slug)) continue;
+    upserts.push({
+      tableName: tn(s.slug, "single_"),
+      sql: buildSingleMetadataUpsert(s, dialect),
+    });
+  }
+  for (const cp of entries.components) {
+    if (dropped.has(cp.slug)) continue;
+    upserts.push({
+      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
+      sql: buildComponentMetadataUpsert(cp, dialect),
+    });
+  }
+  return upserts;
+}
+
+/**
+ * The Builder entities a snapshot's settings record holds, as the manifest
+ * entries they were recorded from: the record is the manifest entry with only
+ * functions left out, and a manifest holds none.
+ */
+function builderEntriesOf(record: EntitySettingsRecord | undefined): {
+  collections: UiSchemaEntity[];
+  singles: UiSchemaEntity[];
+  components: UiSchemaEntity[];
+} {
+  const of = (byslug: EntitySettingsRecord["collections"] | undefined) =>
+    Object.values(byslug ?? {})
+      .filter(entry => entry.source === "builder")
+      .map(entry => entry.settings as unknown as UiSchemaEntity);
+  return {
+    collections: of(record?.collections),
+    singles: of(record?.singles),
+    components: of(record?.fieldGroups),
+  };
 }
 
 // ============================================================================

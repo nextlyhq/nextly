@@ -10,11 +10,14 @@ import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-gra
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import { BaseService } from "../../../shared/base-service";
 import {
+  type FieldGroupReach,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import {
+  type LocalizedFieldRef,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
 } from "../../i18n/companion-join";
@@ -34,6 +37,7 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { passwordReachOf } from "../password-reach";
 import {
   isFieldGroupFieldType,
   withResolvedFieldGroupReferences,
@@ -234,6 +238,37 @@ export class FieldGroupQueryService extends BaseService {
   }
 
   /**
+   * Where the password strip follows the field groups an instance holds
+   * inline, by the field list it is read with: one resolution per list, so a
+   * read of many instances of one field group resolves it once. A registry
+   * read returns a list of its own, so this never outlives the read.
+   */
+  private readonly passwordReaches = new WeakMap<
+    readonly FieldConfig[],
+    Promise<FieldGroupReach>
+  >();
+
+  private passwordReach(
+    componentFields: FieldConfig[],
+    executor?: unknown
+  ): Promise<FieldGroupReach> {
+    let reach = this.passwordReaches.get(componentFields);
+    if (!reach) {
+      reach = passwordReachOf(
+        componentFields,
+        {
+          getComponentFields: async (slug, on) =>
+            (await this.registryService.getComponentBySlug(slug, on))?.fields ??
+            null,
+        },
+        executor
+      );
+      this.passwordReaches.set(componentFields, reach);
+    }
+    return reach;
+  }
+
+  /**
    * i18n: overlay a localized component's translatable fields onto its deserialized
    * instance data from the companion `comp_<slug>_locales` table for the requested locale
    * (with fallback). No-op when localization is off, the component isn't localized, no
@@ -300,6 +335,13 @@ export class FieldGroupQueryService extends BaseService {
         dataArray,
         true
       );
+      await this.stripOverlaidPasswords(
+        meta,
+        companion.localizedFields,
+        dataArray,
+        true,
+        executor
+      );
       return;
     }
 
@@ -345,6 +387,41 @@ export class FieldGroupQueryService extends BaseService {
       dataArray,
       false
     );
+    await this.stripOverlaidPasswords(
+      meta,
+      companion.localizedFields,
+      dataArray,
+      false,
+      executor
+    );
+  }
+
+  /**
+   * Withhold the passwords a companion overlay put back: a translated
+   * password, or one in a translated container, is stored on the companion
+   * row, so the strip the instance row had before the overlay never saw it.
+   * A read of every translation holds each translated field as a map by
+   * language, and the walk goes into each language's value in turn.
+   */
+  private async stripOverlaidPasswords(
+    meta: DynamicFieldGroupRecord,
+    localizedFields: readonly LocalizedFieldRef[],
+    dataArray: Record<string, unknown>[],
+    everyLanguage: boolean,
+    executor?: unknown
+  ): Promise<void> {
+    const fields = meta.fields;
+    const reach = await this.passwordReach(fields, executor);
+    if (!reachesPasswordField(fields, reach)) return;
+    const translated = new Set(localizedFields.map(field => field.name));
+    const walk: FieldGroupReach = everyLanguage
+      ? {
+          ...reach,
+          keyedByLanguage: field =>
+            field.name !== undefined && translated.has(field.name),
+        }
+      : reach;
+    for (const data of dataArray) stripPasswordFieldValues(data, fields, walk);
   }
 
   /**
@@ -679,7 +756,12 @@ export class FieldGroupQueryService extends BaseService {
 
     if (rows.length === 0) return null;
 
-    let data = this.deserializeComponentRow(rows[0], componentFields, false);
+    let data = this.deserializeComponentRow(
+      rows[0],
+      componentFields,
+      false,
+      await this.passwordReach(componentFields, executor)
+    );
     // i18n: overlay translatable fields from the companion for the requested locale.
     await this.overlayLocalizedComponent(
       meta,
@@ -727,8 +809,9 @@ export class FieldGroupQueryService extends BaseService {
       strict
     );
 
+    const reach = await this.passwordReach(componentFields, executor);
     let dataArray = rows.map(row =>
-      this.deserializeComponentRow(row, componentFields, false)
+      this.deserializeComponentRow(row, componentFields, false, reach)
     );
 
     // i18n: overlay translatable fields per instance from the companion.
@@ -805,7 +888,12 @@ export class FieldGroupQueryService extends BaseService {
 
     const results: Record<string, unknown>[] = [];
     for (const { row, fields, slug } of allRows) {
-      let data = this.deserializeComponentRow(row, fields, true);
+      let data = this.deserializeComponentRow(
+        row,
+        fields,
+        true,
+        await this.passwordReach(fields, executor)
+      );
       // i18n: overlay translatable fields from the row's component companion. getComponent
       // is registry-cached, so the per-row meta lookup is cheap; dynamic-zone instances
       // may span several component types, each with its own companion.
@@ -831,6 +919,32 @@ export class FieldGroupQueryService extends BaseService {
     return results;
   }
 
+  /**
+   * One field group's stored instances for many parents, with its definition
+   * and where the password strip follows the field groups it holds inline.
+   */
+  private async batchRead(
+    componentSlug: string,
+    parentIds: string[],
+    parentTable: string,
+    fieldName: string
+  ) {
+    const meta = await this.registryService.getComponent(componentSlug);
+    const componentFields = meta.fields;
+    const rows = await this.batchGetInstances(
+      meta.tableName,
+      parentIds,
+      parentTable,
+      fieldName
+    );
+    return {
+      meta,
+      componentFields,
+      rows,
+      reach: await this.passwordReach(componentFields),
+    };
+  }
+
   private async batchPopulateSingleField(
     parentIds: string[],
     parentTable: string,
@@ -842,10 +956,8 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: string | false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, unknown>> {
-    const meta = await this.registryService.getComponent(componentSlug);
-    const componentFields = meta.fields;
-    const rows = await this.batchGetInstances(
-      meta.tableName,
+    const { meta, componentFields, rows, reach } = await this.batchRead(
+      componentSlug,
       parentIds,
       parentTable,
       fieldName
@@ -860,7 +972,12 @@ export class FieldGroupQueryService extends BaseService {
       if (!collected.some(c => c.parentId === parentId)) {
         collected.push({
           parentId,
-          data: this.deserializeComponentRow(row, componentFields, false),
+          data: this.deserializeComponentRow(
+            row,
+            componentFields,
+            false,
+            reach
+          ),
         });
       }
     }
@@ -899,11 +1016,8 @@ export class FieldGroupQueryService extends BaseService {
     fallbackLocale?: string | false,
     access: ComponentReadAccess = { trusted: TRUSTS_EVERY_COLLECTION }
   ): Promise<Map<string, unknown>> {
-    const meta = await this.registryService.getComponent(componentSlug);
-    const componentFields = meta.fields;
-
-    const rows = await this.batchGetInstances(
-      meta.tableName,
+    const { rows, reach, meta, componentFields } = await this.batchRead(
+      componentSlug,
       parentIds,
       parentTable,
       fieldName
@@ -914,7 +1028,7 @@ export class FieldGroupQueryService extends BaseService {
     const entries: { parentId: string; data: Record<string, unknown> }[] =
       rows.map(row => ({
         parentId: row[STORAGE_FORMAT.columns.parentId],
-        data: this.deserializeComponentRow(row, componentFields, false),
+        data: this.deserializeComponentRow(row, componentFields, false, reach),
       }));
     await this.overlayLocalizedComponent(
       meta,
@@ -998,7 +1112,12 @@ export class FieldGroupQueryService extends BaseService {
 
       const expandedItems: Record<string, unknown>[] = [];
       for (const { row, fields, slug } of items) {
-        let data = this.deserializeComponentRow(row, fields, true);
+        let data = this.deserializeComponentRow(
+          row,
+          fields,
+          true,
+          await this.passwordReach(fields)
+        );
         // i18n: overlay the instance's translatable fields from its component companion
         // before relationship expansion (registry-cached meta lookup).
         const itemMeta = await this.registryService.getComponent(slug);
@@ -1131,7 +1250,9 @@ export class FieldGroupQueryService extends BaseService {
   private deserializeComponentRow(
     row: ComponentRow,
     componentFields: FieldConfig[],
-    includeComponentType: boolean
+    includeComponentType: boolean,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): Record<string, unknown> {
     const result: Record<string, unknown> = {};
 
@@ -1181,8 +1302,9 @@ export class FieldGroupQueryService extends BaseService {
     }
 
     // Password fields are write-only; strip stored hashes (including any
-    // nested in group/repeater containers) before the instance is returned.
-    stripPasswordFieldValues(result, componentFields);
+    // nested in group/repeater containers, and in the field groups they hold
+    // inline) before the instance is returned.
+    stripPasswordFieldValues(result, componentFields, reach);
 
     return result;
   }
@@ -1260,8 +1382,13 @@ export class FieldGroupQueryService extends BaseService {
           // The read's verdicts, so every component instance relating to one
           // target shares one question rather than asking it afresh.
           targetVerdicts: access.targetVerdicts,
+          // And the match columns built from those verdicts' filters.
+          targetRuleMatches: access.targetRuleMatches,
           withheldByAccess: access.withheldByAccess,
           locale: access.locale,
+          // Every language the read falls back through, so a target's
+          // localized rule filter is judged as a direct read judges it.
+          localeChain: access.localeChain,
           status: access.status,
         }
       );
