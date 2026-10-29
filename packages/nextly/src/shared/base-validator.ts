@@ -119,7 +119,7 @@ export const VALID_FIELD_TYPES_SET: Set<string> = new Set(VALID_FIELD_TYPES);
 export { RESERVED_SLUGS, SQL_RESERVED_KEYWORDS };
 
 /** Default Set of SQL keywords (lowercased) for O(1) lookup. */
-export const DEFAULT_SQL_KEYWORDS_SET: Set<string> = new Set<string>(
+const DEFAULT_SQL_KEYWORDS_SET: Set<string> = new Set<string>(
   SQL_RESERVED_KEYWORDS
 );
 

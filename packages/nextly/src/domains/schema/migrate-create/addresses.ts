@@ -13,8 +13,8 @@
  * @module domains/schema/migrate-create/addresses
  */
 
-import { NextlyError } from "../../../errors/nextly-error";
 import {
+  addressRefusalsError,
   type AddressedEntity,
   type AddressKind,
   type JudgedAddress,
@@ -48,14 +48,12 @@ export function judgeMigrationAddresses(
 }
 
 /** One line per judged address, naming the address and the reason. */
-export function describeJudgedAddresses(
-  judged: readonly JudgedAddress[]
-): string[] {
+function describeJudgedAddresses(judged: readonly JudgedAddress[]): string[] {
   return judged.map(({ refusal }) => `${refusal.code}: ${refusal.message}`);
 }
 
 /** The table names the latest snapshot records, or `null` with no snapshot. */
-export function snapshotTableNames(
+function snapshotTableNames(
   latest: {
     data: { snapshot: { tables: ReadonlyArray<{ name: string }> } };
   } | null
@@ -81,15 +79,32 @@ export function assertMigrationAddresses(
   );
   if (refused.length === 0) return;
   for (const line of describeJudgedAddresses(refused)) logger.error(line);
-  throw NextlyError.validation({
-    errors: refused.map(({ refusal }) => ({
-      path: "slug",
-      code: refusal.code,
-      message: refusal.message,
-    })),
-    logContext: {
-      reason: "address-rule",
-      refused: refused.map(({ entity }) => `${entity.kind}:${entity.address}`),
-    },
-  });
+  throw addressRefusalsError(refused);
+}
+
+/**
+ * `migrate:check`'s check: warns once for each existing address the rule
+ * refuses (it keeps working) and logs each new one it refuses, naming the
+ * address and the reason. Answers whether the check may pass; with no
+ * entities to judge, it may.
+ */
+export function reportMigrationAddresses(
+  merged:
+    | { collections: Tabled; singles: Tabled; components: Tabled }
+    | undefined,
+  latest: Parameters<typeof snapshotTableNames>[0],
+  logger: { warn(message: string): void; error(message: string): void }
+): boolean {
+  if (merged === undefined) return true;
+  const { refused, existing } = judgeMigrationAddresses(
+    merged,
+    snapshotTableNames(latest)
+  );
+  for (const line of describeJudgedAddresses(existing)) {
+    logger.warn(
+      `${line}. It already exists, so it keeps working; only a new or changed address is refused.`
+    );
+  }
+  for (const line of describeJudgedAddresses(refused)) logger.error(line);
+  return refused.length === 0;
 }

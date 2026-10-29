@@ -61,11 +61,7 @@ import {
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
-import {
-  describeJudgedAddresses,
-  judgeMigrationAddresses,
-  snapshotTableNames,
-} from "../../domains/schema/migrate-create/addresses";
+import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -314,6 +310,28 @@ export async function runMigrateCheck(
 }
 
 /**
+ * Reports the pending changes the files do not yet hold, capped at 10 so CI
+ * logs stay readable on large drifts. Answers whether there are none.
+ */
+function reportDrift(
+  ops: ReturnType<typeof diffSnapshots>,
+  logger: CommandContext["logger"]
+): boolean {
+  if (ops.length === 0) return true;
+  logger.error(`SCHEMA_DRIFT: ${ops.length} pending change(s) detected.`);
+  for (const op of ops.slice(0, 10)) {
+    logger.error(`  + ${describeOp(op)}`);
+  }
+  if (ops.length > 10) {
+    logger.error(`  ... and ${ops.length - 10} more`);
+  }
+  logger.error(
+    'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
+  );
+  return false;
+}
+
+/**
  * F11 PR 4: pure-input check pipeline. Extracted so unit tests can call
  * it with a tmp `migrationsDir` + a hand-built desired snapshot, without
  * spinning up the loadConfig + validateDatabaseEnv plumbing.
@@ -483,38 +501,15 @@ export async function runChecks(args: {
   // shows. A new one the rule refuses fails the check; one an entity already
   // has (its table is in the latest snapshot) keeps working, and is reported
   // once as a warning naming the address and the reason.
-  if (args.entities) {
-    const addresses = judgeMigrationAddresses(
-      args.entities,
-      snapshotTableNames(latest)
-    );
-    for (const line of describeJudgedAddresses(addresses.existing)) {
-      logger.warn(
-        `${line}. It already exists, so it keeps working; only a new or changed address is refused.`
-      );
-    }
-    if (addresses.refused.length > 0) {
-      for (const line of describeJudgedAddresses(addresses.refused)) {
-        logger.error(line);
-      }
-      process.exit(1);
-      return;
-    }
+  if (
+    args.entities &&
+    !reportMigrationAddresses(args.entities, latest, logger)
+  ) {
+    process.exit(1);
+    return;
   }
 
-  const ops = diffSnapshots(previousSnapshot, desiredSnapshot);
-  if (ops.length > 0) {
-    logger.error(`SCHEMA_DRIFT: ${ops.length} pending change(s) detected.`);
-    // Cap the listed ops at 10 to keep CI logs readable on large drifts.
-    for (const op of ops.slice(0, 10)) {
-      logger.error(`  + ${describeOp(op)}`);
-    }
-    if (ops.length > 10) {
-      logger.error(`  ... and ${ops.length - 10} more`);
-    }
-    logger.error(
-      'Run `nextly migrate:create --name="<migration-name>"` and commit the result.'
-    );
+  if (!reportDrift(diffSnapshots(previousSnapshot, desiredSnapshot), logger)) {
     process.exit(1);
     return;
   }

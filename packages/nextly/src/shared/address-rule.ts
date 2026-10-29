@@ -365,6 +365,23 @@ export function addressRefusalError(
   });
 }
 
+/** Several roads' refusals as one validation error, one entry per address. */
+export function addressRefusalsError(
+  refused: readonly JudgedAddress[]
+): NextlyError {
+  return NextlyError.validation({
+    errors: refused.map(({ refusal }) => ({
+      path: "slug",
+      code: refusal.code,
+      message: refusal.message,
+    })),
+    logContext: {
+      reason: "address-rule",
+      refused: refused.map(({ entity }) => `${entity.kind}:${entity.address}`),
+    },
+  });
+}
+
 /** Throws the rule's refusal of a new or changed address, if it has one. */
 export function assertAddressAllowed(
   kind: AddressKind,
@@ -470,18 +487,7 @@ export async function assertConfiguredAddresses(
   ...args: Parameters<typeof refusedConfiguredAddresses>
 ): Promise<void> {
   const refused = await refusedConfiguredAddresses(...args);
-  if (refused.length === 0) return;
-  throw NextlyError.validation({
-    errors: refused.map(({ refusal }) => ({
-      path: "slug",
-      code: refusal.code,
-      message: refusal.message,
-    })),
-    logContext: {
-      reason: "address-rule",
-      refused: refused.map(({ entity }) => `${entity.kind}:${entity.address}`),
-    },
-  });
+  if (refused.length > 0) throw addressRefusalsError(refused);
 }
 
 /**
