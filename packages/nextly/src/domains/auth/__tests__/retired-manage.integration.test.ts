@@ -346,6 +346,58 @@ describe.each(getConfiguredTestDialects())(
         await services().rolePermissions.setRolePermissions(roleId, []);
       });
 
+      it("updates a role in inserts within the adapter's limit, after a retired permission grew the set", async () => {
+        const ids = await idsBySlug();
+        const role = await services().roles.createRole({
+          name: "Grown on update",
+          slug: "grown-on-update",
+          permissionIds: [ids.get("read-users")!],
+        });
+        const capabilities = t.adapter.getCapabilities();
+        // A small limit, so the four plain permissions push the set past it:
+        // four values a row allow five rows a statement.
+        const limit = vi
+          .spyOn(t.adapter, "getCapabilities")
+          .mockReturnValue({ ...capabilities, maxParamsPerQuery: 20 });
+        const runs: number[] = [];
+        const transaction = t.adapter.transaction.bind(t.adapter);
+        const recorded = vi
+          .spyOn(t.adapter, "transaction")
+          .mockImplementation(work =>
+            transaction(tx => {
+              const insertMany = tx.insertMany.bind(tx);
+              tx.insertMany = (table, rows, ...rest) => {
+                if (table === "role_permissions") runs.push(rows.length);
+                return insertMany(table, rows, ...rest);
+              };
+              return work(tx);
+            })
+          );
+        try {
+          await services().roles.updateRole(String(role.id), {
+            permissionIds: [
+              ids.get("manage-media")!,
+              ids.get("read-users")!,
+              ids.get("read-roles")!,
+              ids.get("read-settings")!,
+            ],
+          });
+        } finally {
+          recorded.mockRestore();
+          limit.mockRestore();
+        }
+        expect(runs.reduce((sum, rows) => sum + rows, 0)).toBe(7);
+        for (const rows of runs) expect(rows * 4).toBeLessThanOrEqual(20);
+        expect((await holds(String(role.id))).sort()).toEqual(
+          [
+            ...plainOn("media"),
+            "read-users",
+            "read-roles",
+            "read-settings",
+          ].sort()
+        );
+      });
+
       it("leaves no role holding a retired manage permission after a reboot, presets and the super-admin seeder included", async () => {
         await seedSuperAdmin(t.adapter, {
           email: "root@retired-manage.test",

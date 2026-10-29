@@ -78,13 +78,18 @@ function wholeFour(rows: readonly PermissionRow[], resource: string): string[] {
 /**
  * The ids of the plain four a retired `manage-` permission on `resource` is
  * stored as, or none where one of them is missing and it is kept as it is.
+ * Read inside a writer's transaction as a locking read: the rows are locked
+ * for the rest of it and read as they are committed now, not as the
+ * transaction's snapshot saw them, so one edited into another permission
+ * since is not taken for what it was.
  */
-async function plainFourOn(
-  reader: PermissionReader,
+export async function plainFourOnLocked(
+  tx: PermissionReader,
   resource: string
 ): Promise<string[]> {
-  const rows = await reader.select<PermissionRow>("permissions", {
+  const rows = await tx.select<PermissionRow>("permissions", {
     columns: ["id", "action", "resource"],
+    forUpdate: true,
     where: {
       and: [
         { column: "action", op: "IN", value: [...MANAGE_BRIDGED_ACTIONS] },
@@ -93,20 +98,6 @@ async function plainFourOn(
     },
   });
   return wholeFour(rows, resource);
-}
-
-/**
- * `plainFourOn` inside a writer's transaction, with the rows it chose locked
- * and read again, so one edited into another permission since is not taken
- * for what it was.
- */
-export async function plainFourOnLocked(
-  tx: Pick<TransactionContext, "select" | "lockRow">,
-  resource: string
-): Promise<string[]> {
-  const chosen = await plainFourOn(tx, resource);
-  for (const id of chosen) await tx.lockRow("permissions", id);
-  return chosen.length === 0 ? chosen : plainFourOn(tx, resource);
 }
 
 /**
@@ -119,8 +110,11 @@ export async function plainFourOnLocked(
 export async function storedAsPlain(
   reader: PermissionReader,
   permissionIds: readonly string[],
-  maxParams: number
+  maxParams: number,
+  lock = false
 ): Promise<string[]> {
+  // A locking read locks what it reads and reads it as committed now.
+  const locking = lock ? { forUpdate: true } : {};
   const ids = [...new Set(permissionIds.map(String))];
   if (ids.length === 0) return ids;
   const rows: PermissionRow[] = [];
@@ -128,6 +122,7 @@ export async function storedAsPlain(
     rows.push(
       ...(await reader.select<PermissionRow>("permissions", {
         columns: ["id", "action", "resource"],
+        ...locking,
         where: { and: [{ column: "id", op: "IN", value: batch }] },
       }))
     );
@@ -137,6 +132,7 @@ export async function storedAsPlain(
   const resources = [...new Set(retired.map(row => row.resource))];
   const plain = await reader.select<PermissionRow>("permissions", {
     columns: ["id", "action", "resource"],
+    ...locking,
     where: {
       and: [
         { column: "action", op: "IN", value: [...MANAGE_BRIDGED_ACTIONS] },
@@ -158,23 +154,18 @@ export async function storedAsPlain(
 }
 
 /**
- * `storedAsPlain` inside a writer's transaction, with every permission row it
- * reads locked first: the ids asked for, then the plain ones it chose, read
- * again once those are locked too. A row edited into another permission since
- * an earlier read is stored as it is now, never as it was.
+ * `storedAsPlain` inside a writer's transaction, as locking reads: every
+ * permission row it reads, the ids asked for and the plain ones it chooses,
+ * is locked for the rest of the transaction and read as it is committed now,
+ * not as the transaction's snapshot saw it. A row edited into another
+ * permission since an earlier read is stored as it is now, never as it was.
  */
 export async function storedAsPlainLocked(
-  tx: Pick<TransactionContext, "select" | "lockRow">,
+  tx: PermissionReader,
   permissionIds: readonly string[],
   maxParams: number
 ): Promise<Set<string>> {
-  const asked = [...new Set(permissionIds.map(String))];
-  for (const id of asked) await tx.lockRow("permissions", id);
-  const first = await storedAsPlain(tx, asked, maxParams);
-  const chosen = first.filter(id => !asked.includes(id));
-  if (chosen.length === 0) return new Set(first);
-  for (const id of chosen) await tx.lockRow("permissions", id);
-  return new Set(await storedAsPlain(tx, asked, maxParams));
+  return new Set(await storedAsPlain(tx, permissionIds, maxParams, true));
 }
 
 /** `items` in runs of at most `size`, and never less than one per run. */
