@@ -26,6 +26,8 @@ export interface PermissionLevelRowsProps {
 const SECTIONS = [
   { kind: "collection", title: "Collections" },
   { kind: "single", title: "Singles" },
+  // The built-in resources: media, settings and the Email hub.
+  { kind: "system", title: "Media, settings and email" },
 ] as const;
 
 /**
