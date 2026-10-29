@@ -64,11 +64,13 @@ import {
   siteDashboardContext,
   siteDashboardFaults,
   siteDashboardKeysNotApplied,
+  siteDashboardRulesOf,
   siteDashboardSnapshot,
   siteDefaultLayoutPlan,
 } from "../../domains/widgets/declaration/site-dashboard";
 import { setDefaultLayoutPlan } from "../../domains/widgets/default-layout";
 import { clearWidgets } from "../../domains/widgets/registry";
+import { setSiteDashboardRules } from "../../domains/widgets/site-rules";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import {
@@ -186,6 +188,11 @@ export function resetWidgetRegistries(
   // `defaultLayout` or core's, and the plugins' suggestions after it.
   setDefaultLayoutPlan(
     siteDefaultLayoutPlan(site, pluginSuggestions(dashboards))
+  );
+  // What the site keeps off the dashboard, replaces and overrides, from the
+  // same checked copies: read wherever a widget is offered, drawn or described.
+  setSiteDashboardRules(
+    siteDashboardRulesOf(site, pluginAlternatives(dashboards))
   );
   warnSiteDashboardKeysNotApplied(site, logger);
 

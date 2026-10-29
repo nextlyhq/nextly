@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMAIL_HUB_PERMISSIONS } from "@admin/constants/email-hub";
 import { MAIN_MENU_ITEMS } from "@admin/components/layout/sidebar/sidebar-types";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 
 import { EmailHubLayout } from "../EmailHubLayout";
 
@@ -23,7 +24,9 @@ vi.mock("@admin/lib/navigation", () => ({
 
 function holding(slugs: string[], hasAnswer = true) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
-    hasPermission: (slug: string) => slugs.includes(slug),
+    // Asked as the product asks: a `manage-` permission counts as the plain
+    // ones it stands for.
+    hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
     isLoading: !hasAnswer,
     hasAnswer,
     error: null,
@@ -94,12 +97,7 @@ describe("the hub's rail entry", () => {
     expect(entry?.href).toBe("/admin/email");
     expect(entry?.requiredPermission).toEqual([...EMAIL_HUB_PERMISSIONS]);
     expect(EMAIL_HUB_PERMISSIONS).toEqual(
-      expect.arrayContaining([
-        "read-email-templates",
-        "manage-email-templates",
-        "read-email-providers",
-        "manage-email-providers",
-      ])
+      expect.arrayContaining(["read-email-templates", "read-email-providers"])
     );
   });
 });

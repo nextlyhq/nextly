@@ -16,6 +16,7 @@
 import { z } from "zod";
 
 import { container } from "../di";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
@@ -62,10 +63,7 @@ const testProviderSchema = z.object({
  */
 export const POST = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
-      { action: "create", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
-    ]);
+    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailProviders.sendTest.anyOf]);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();

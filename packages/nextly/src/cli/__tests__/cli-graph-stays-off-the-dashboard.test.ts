@@ -28,7 +28,7 @@
  * @module cli/__tests__/cli-graph-stays-off-the-dashboard.test
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -98,15 +98,34 @@ function aliased(specifier: string): string[] | undefined {
   return undefined;
 }
 
-/** The source file a path names: as written, by extension, or as a folder. */
-function sourceFile(base: string): string | undefined {
+/**
+ * The files a path may name: as written, by extension, or as a folder. A
+ * folder's index is joined with the platform's separator, so on Windows it is
+ * spelled as every other path in the walk is; joined with `/`, it named the
+ * same file in a spelling no lookup matched, and a module loaded as a folder
+ * read as never reached.
+ */
+function candidatesFor(
+  base: string,
+  path: Pick<typeof win32, "join"> = { join }
+): string[] {
   const candidates = /\.[cm]?[jt]sx?$/.test(base)
     ? [base, base.replace(/\.([cm]?)js(x?)$/, ".$1ts$2")]
     : [];
   candidates.push(
-    ...[".ts", ".tsx", "/index.ts", "/index.tsx"].map(ext => `${base}${ext}`)
+    `${base}.ts`,
+    `${base}.tsx`,
+    path.join(base, "index.ts"),
+    path.join(base, "index.tsx")
   );
-  return candidates.find(file => existsSync(file) && statSync(file).isFile());
+  return candidates;
+}
+
+/** The source file a path names, of the candidates that exist. */
+function sourceFile(base: string): string | undefined {
+  return candidatesFor(base).find(
+    file => existsSync(file) && statSync(file).isFile()
+  );
 }
 
 /** A module a file loads, and whether it loads only when it runs. */
@@ -264,6 +283,15 @@ describe("the CLI's commands", () => {
     );
     expect(sourceFile(join(SRC, "di/register.js"))).toBe(
       join(SRC, "di/register.ts")
+    );
+    // On Windows, a folder's index is spelled with the separator its folder
+    // is, so the lookups above find a module imported as a folder there too.
+    const folder = win32.join(
+      "C:\\nextly\\src",
+      "domains/widgets/core-widgets"
+    );
+    expect(candidatesFor(folder, win32)).toContain(
+      "C:\\nextly\\src\\domains\\widgets\\core-widgets\\index.ts"
     );
     expect(aliased("zod")).toBeUndefined();
     // The package's own name is not a package to skip.
