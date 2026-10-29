@@ -427,9 +427,10 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
           ctx.rbacAccessControlService
         );
       } catch (error) {
-        // A user whose roles or grants cannot be read is refused rather than
-        // failed: the answer is a boolean, and a rule is never asked with a
-        // role set that could not be read.
+        // A lookup the answer needs that fails is refused rather than failed,
+        // since the answer is a boolean: a grant lookup, or a role lookup
+        // wherever a rule would be asked, so a rule is never asked with a role
+        // set that could not be read.
         consoleLogger.error("[rbac] access.check could not read the user", {
           userId: args.userId,
           error,
