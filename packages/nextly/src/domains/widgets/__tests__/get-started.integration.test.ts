@@ -22,9 +22,9 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { refreshContentSources } from "../collection-widgets";
 import { conditionProbe } from "../condition-probe";
 import { evaluateConditions } from "../conditions";
+import { refreshContentSources } from "../content-sources";
 import { getStartedSteps } from "../get-started";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run on a reused database.

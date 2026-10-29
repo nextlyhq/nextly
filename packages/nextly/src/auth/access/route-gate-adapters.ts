@@ -34,13 +34,8 @@ import {
 import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
-import {
-  holdsPermission,
-  isSuperAdmin,
-  manageCounts,
-  type Actor,
-  type KeyActor,
-} from "./actor";
+import { manageCounts, type Actor, type KeyActor } from "./actor";
+import { answeringPermissions, storedSlugHolds } from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
 import { aboutSubject, deviate } from "./deviations";
@@ -156,10 +151,21 @@ export function routeGateVerdict(
   auth: AuthContext,
   action: string,
   resource: string,
-  rules: RouteRules
+  rules: RouteRules,
+  /**
+   * The route's handler applies a collection read rule's filter to what it
+   * reads, so the filter is handed back rather than refused. Only the
+   * entry list and count routes do.
+   */
+  appliesFilter = false
 ): Promise<GateVerdict> {
-  return gateVerdict(callerOf(auth), action, resource, rules, () =>
-    hasPermission(auth.userId, action, resource)
+  return gateVerdict(
+    callerOf(auth),
+    action,
+    resource,
+    rules,
+    () => hasPermission(auth.userId, action, resource),
+    appliesFilter ? "applied" : "refused"
   );
 }
 
@@ -446,7 +452,8 @@ async function entityCapabilities(
       caller,
       slug,
       rules,
-      languageOf(PUBLISH_EVERY_LANGUAGE[kind], "none")
+      languageOf(PUBLISH_EVERY_LANGUAGE[kind], "none"),
+      kind === "single" || !hasLifecycle(slug)
     );
     if (kind === "collection") {
       answered.duplicate = await duplicates(
@@ -485,22 +492,27 @@ async function duplicates(
 
 /**
  * Whether `caller` may publish every language of `resource` at once, on the
- * strict side of how that request is judged: update in every language, then
- * the publish check once for each configured language, with its rules told
- * that one and all of them. The route admits a caller holding the publish
- * grant without update, but a target with no lifecycle asks update of them,
- * and the request asks only the languages it puts live, which depend on the
- * document; asking update and every configured language never allows what
- * the request would refuse.
+ * strict side of how that request is judged: the publish check once for each
+ * configured language, with its rules told that one and all of them. The
+ * request asks only the languages it puts live, which depend on the document,
+ * so asking every configured language never allows what it would refuse.
+ *
+ * On a collection with a lifecycle the request changes only each language's
+ * status, which publish alone judges, so a caller holding publish without
+ * update may make it. A Single, and a collection without a lifecycle, ask
+ * update in every language first (`asksUpdate`).
  */
 async function publishesEveryLanguage(
   caller: GateCaller,
   resource: string,
   rules: RouteRules,
-  everyLanguage: RuleLanguage
+  everyLanguage: RuleLanguage,
+  asksUpdate: boolean
 ): Promise<boolean> {
   return withRuleLanguage(everyLanguage, async () => {
-    if (!(await capability(caller, "update", resource, rules))) return false;
+    if (asksUpdate && !(await capability(caller, "update", resource, rules))) {
+      return false;
+    }
     const refused = await askEachLanguage(everyLanguage.locales, async () =>
       (await capability(caller, "publish", resource, rules))
         ? undefined
@@ -518,8 +530,13 @@ async function capability(
   rules: RouteRules
 ): Promise<boolean> {
   const verdict = await aboutSubject(permissionSlug(action, resource), () =>
-    gateVerdict(caller, action, resource, rules, () =>
-      userHoldsPermission(caller.userId, action, resource)
+    gateVerdict(
+      caller,
+      action,
+      resource,
+      rules,
+      () => userHoldsPermission(caller.userId, action, resource),
+      "some-entries"
     )
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
@@ -537,7 +554,8 @@ function gateVerdict(
   action: string,
   resource: string,
   rules: RouteRules,
-  permissionWithoutService: () => Promise<boolean>
+  permissionWithoutService: () => Promise<boolean>,
+  readFilter: ReadFilterUse = "refused"
 ): Promise<GateVerdict> {
   const registered =
     resource === "" ? undefined : rules?.getRegisteredTarget(resource);
@@ -559,13 +577,41 @@ function gateVerdict(
     principal: null,
     rules,
     permissionWithoutService,
+    appliesFilter: readFilter === "applied",
+    asksSomeEntries: readFilter === "some-entries",
   });
 }
+
+/** Whether a signed-in user holds any permission holding the action. */
+async function userHoldsAnswering(
+  userId: string,
+  action: string,
+  resource: string
+): Promise<boolean> {
+  for (const permission of answeringPermissions(action, resource)) {
+    if (
+      await userHoldsPermission(userId, permission.action, permission.resource)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * What an asker does with a collection read rule's filter: applies it to the
+ * entries it reads (`applied`); asks only whether the caller may read the
+ * collection, which the filter answers yes (`some-entries`); or neither, and
+ * refuses it (`refused`).
+ */
+type ReadFilterUse = "applied" | "some-entries" | "refused";
 
 /**
  * The verdict for an action no rule can name. A key holds it by its stored
  * slug; a session, with the access-control service, by super-admin authority
- * and then the permission, and without it by the permission alone.
+ * and then the permission, and without it by the permission alone. On a
+ * system resource its `manage-` permission holds it too, as it does for the
+ * decision.
  */
 async function permissionVerdict(
   caller: GateCaller,
@@ -575,74 +621,69 @@ async function permissionVerdict(
 ): Promise<GateVerdict> {
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
-    const today = caller.key.permissions.includes(
-      permissionSlug(action, resource)
-    );
+    const today = storedSlugHolds(caller.key.permissions, action, resource);
     // The decision reads the grant's action and resource, which agree with
-    // the stored slug unless a grant was stored under a slug of its own; and
-    // on a system resource it counts the resource's `manage-` permission.
-    const byGrant = holdsPermission(actor, action, resource);
-    await deviate("key-slug-string-match", today, () => byGrant);
+    // the stored slug unless a grant was stored under a slug of its own.
     await deviate(
-      "manage-not-counted",
-      byGrant,
+      "key-slug-string-match",
+      today,
       () => decidePermission(actor, action, resource).allowed
     );
     return verdictOf(today);
   }
-  const today =
-    (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
-    (await userHoldsPermission(caller.userId, action, resource));
-  if (!manageCounts(action, resource)) return verdictOf(today);
   return verdictOf(
-    await deviate(
-      "manage-not-counted",
-      today,
-      async () =>
-        decidePermission(await actorForUser(caller.userId), action, resource)
-          .allowed
-    )
+    (rules !== undefined && (await userIsSuperAdmin(caller.userId))) ||
+      (await userHoldsAnswering(caller.userId, action, resource))
   );
 }
 
 /**
  * The verdict when any one of several permissions will do. Today a key holds
- * one by its stored slug and a session by its database permissions, and no
- * rule is read for either.
+ * one by its stored slug and a session by its database permissions, a system
+ * resource's `manage-` permission counting on it as the decision counts it,
+ * and no rule is read for either.
  */
-export async function anyPermissionVerdict(
+export function anyPermissionVerdict(
   auth: AuthContext,
   permissions: readonly RoutePermission[],
   rules: RouteRules
 ): Promise<GateVerdict> {
-  const caller = callerOf(auth);
+  return anyPermissionVerdictOf(callerOf(auth), permissions, rules);
+}
+
+/** {@link anyPermissionVerdict}, for the caller a gate judges. */
+async function anyPermissionVerdictOf(
+  caller: GateCaller,
+  permissions: readonly RoutePermission[],
+  rules: RouteRules
+): Promise<GateVerdict> {
   if (caller.key) {
-    const actor = keyActorOf(caller, caller.key);
-    const stored = caller.key.permissions;
+    const key = caller.key;
+    const actor = keyActorOf(caller, key);
     const today = permissions.some(({ action, resource }) =>
-      stored.includes(permissionSlug(action, resource))
+      storedSlugHolds(key.permissions, action, resource)
     );
-    // Three steps from today's answer to the decision's, each named apart:
-    // the grants rather than the stored slugs, then a system resource's
-    // `manage-` permission counted, then the targets' rules read.
-    const byGrants = permissions.some(({ action, resource }) =>
-      holdsPermission(actor, action, resource)
-    );
+    // Two steps from today's answer to the decision's, each named apart: the
+    // grants rather than the stored slugs, then the targets' rules read.
     const byPermission = permissions.some(
       ({ action, resource }) =>
         decidePermission(actor, action, resource).allowed
     );
-    await deviate("key-slug-string-match", today, () => byGrants);
-    await deviate("manage-not-counted", byGrants, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
     await deviate("any-of-skips-rules", byPermission, () =>
       anyDecided(actor, permissions, rules)
     );
     return verdictOf(today);
   }
-  const today = await hasAnyPermission(auth.userId, [...permissions]);
+  const today = await hasAnyPermission(
+    caller.userId,
+    permissions.flatMap(({ action, resource }) =>
+      answeringPermissions(action, resource)
+    )
+  );
   // The user's actor is resolved only while a test listens, and once.
   let actor: Promise<Actor> | undefined;
-  const userActor = () => (actor ??= actorForUser(auth.userId));
+  const userActor = () => (actor ??= actorForUser(caller.userId));
   const byPermission = async () => {
     const resolved = await userActor();
     return permissions.some(
@@ -650,7 +691,6 @@ export async function anyPermissionVerdict(
         decidePermission(resolved, action, resource).allowed
     );
   };
-  await deviate("manage-not-counted", today, byPermission);
   // Named only where reading the rules moves the answer past the permissions:
   // the comparison is made against today's answer, so a difference the
   // permissions alone explain is reported as "agrees" here.
@@ -726,23 +766,54 @@ export async function callerMayPerform(
 ): Promise<boolean> {
   if (!user.id) return false;
   const rules = getRBACService();
-  const caller: GateCaller =
-    scope?.actorType === "apiKey"
-      ? {
-          userId: user.id,
-          key: scope,
-          ...(user.roles ? { roles: user.roles } : {}),
-        }
-      : { userId: user.id };
+  const caller = probedCaller(scope, user);
   if (!action || !resource) return refusedEmpty(caller, action, resource);
   if (!caller.key) return sessionAnswer(caller.userId, action, resource, rules);
   // A key is judged on its own scope, the route gate's way, with or without
   // the service.
   return (
-    await gateVerdict(caller, action, resource, rules, () =>
-      Promise.resolve(false)
+    await gateVerdict(
+      caller,
+      action,
+      resource,
+      rules,
+      () => Promise.resolve(false),
+      "some-entries"
     )
   ).allowed;
+}
+
+/** The caller a probe judges: a key on its own scope, else the user. */
+function probedCaller(
+  scope: AuthenticatedScope | undefined,
+  user: { id: string; roles?: readonly string[] }
+): GateCaller {
+  return scope?.actorType === "apiKey"
+    ? {
+        userId: user.id,
+        key: scope,
+        ...(user.roles ? { roles: user.roles } : {}),
+      }
+    : { userId: user.id };
+}
+
+/**
+ * Whether the caller holds any one of `permissions`, as the REST any-of
+ * gates ask it ({@link anyPermissionVerdict}): by grant, no entity's rule
+ * read. For a probe deciding whether to offer what such a gate guards.
+ */
+export async function callerHoldsAny(
+  scope: AuthenticatedScope | undefined,
+  permissions: readonly RoutePermission[],
+  user: { id: string; roles?: readonly string[] }
+): Promise<boolean> {
+  if (!user.id) return false;
+  const verdict = await anyPermissionVerdictOf(
+    probedCaller(scope, user),
+    permissions,
+    getRBACService()
+  );
+  return verdict.allowed;
 }
 
 /**
@@ -775,14 +846,11 @@ async function heldPermission(
       grants: caller.grants ?? [],
       roles: caller.roles,
     });
-    const today = caller.permissions.includes(slug);
-    // Three steps from today's answer to the decision's, each named apart:
-    // the grant rather than the stored slug, then a system resource's
-    // `manage-` permission counted, then the target's rules read.
-    const byGrant = holdsPermission(actor, action, resource);
+    const today = storedSlugHolds(caller.permissions, action, resource);
+    // Two steps from today's answer to the decision's, each named apart: the
+    // grant rather than the stored slug, then the target's rules read.
     const byPermission = decidePermission(actor, action, resource).allowed;
-    await deviate("key-slug-string-match", today, () => byGrant);
-    await deviate("manage-not-counted", byGrant, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
     await deviate("holds-permission-key-skips-rules", byPermission, () =>
       decidedOne(actor, action, resource, rules)
     );
@@ -808,8 +876,13 @@ async function sessionAnswer(
 ): Promise<boolean> {
   const caller: GateCaller = { userId };
   if (!rules) return refusedWithoutService(caller, action, resource);
-  const verdict = await gateVerdict(caller, action, resource, rules, () =>
-    Promise.resolve(false)
+  const verdict = await gateVerdict(
+    caller,
+    action,
+    resource,
+    rules,
+    () => Promise.resolve(false),
+    "some-entries"
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   return verdict.allowed;
@@ -865,7 +938,7 @@ export async function schemaListed<T extends ListedCollection>(
         actor,
         slug,
         rules,
-        key.permissions.includes(permissionSlug("read", slug))
+        storedSlugHolds(key.permissions, "read", slug)
       )
     );
   }
@@ -876,13 +949,14 @@ export async function schemaListed<T extends ListedCollection>(
   const actor = await actorForUserFailingClosed(caller.userId);
   // The super-admin authority the actor's roles carry counts too: it is what
   // each collection's permission check passed first, and it holds when the
-  // cached check above failed but the roles were read.
+  // cached check above failed but the roles were read. So does a system
+  // resource's `manage-` permission, as the decision counts it.
   return keptWhere(collections, slug =>
     readByPermission(
       actor,
       slug,
       rules,
-      isSuperAdmin(actor) || holdsPermission(actor, "read", slug)
+      decidePermission(actor, "read", slug).allowed
     )
   );
 }
@@ -914,16 +988,7 @@ async function readByPermission(
 ): Promise<boolean> {
   const byPermission = decidePermission(actor, "read", slug).allowed;
   if (actor.kind === "key") {
-    await deviate("key-slug-string-match", today, () =>
-      holdsPermission(actor, "read", slug)
-    );
-    await deviate(
-      "manage-not-counted",
-      holdsPermission(actor, "read", slug),
-      () => byPermission
-    );
-  } else {
-    await deviate("manage-not-counted", today, () => byPermission);
+    await deviate("key-slug-string-match", today, () => byPermission);
   }
   await deviate("schema-list-ignores-rules", byPermission, () =>
     decidedOne(actor, "read", slug, rules)

@@ -21,6 +21,7 @@ import {
   authorizeCallerForAny,
   requireAuthentication,
   requirePermission,
+  requireAllPermissions,
   requireAnyPermission,
   requireCollectionAccess,
   requireCollectionWriteAccess,
@@ -51,6 +52,11 @@ import {
   getDashboardRecentEntries,
   getDashboardActivity,
 } from "./api/dashboard";
+import {
+  deleteDashboardPin,
+  getDashboardPins,
+  postDashboardPin,
+} from "./api/dashboard-pins";
 import {
   acquireLock,
   readLock,
@@ -121,10 +127,7 @@ import {
   runWithRequestCaller,
   type RequestCaller,
 } from "./auth/caller-scope";
-import {
-  COLLECTION_DEFINITION_ACTION,
-  COLLECTION_DEFINITION_RESOURCE,
-} from "./auth/collection-definition-policy";
+import { COLLECTION_DEFINITION_PERMISSIONS } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import { hasAuthRateLimit } from "./auth/handlers/router";
 import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
@@ -135,6 +138,12 @@ import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
 } from "./domains/auth/services/role-change-caller";
+import {
+  SCHEMA_CHANGE_PERMISSIONS,
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+  type RouteGrant,
+} from "./domains/auth/system-write-policy";
 import {
   appLocalization,
   withCurrentLanguages,
@@ -537,9 +546,9 @@ async function handleImageSizesRequest(
 /**
  * Delegate a dashboard request directly to the named handler.
  *
- * Dashboard handlers manage their own auth (requireAuthentication) and are
- * read-only (GET). Intercepting here — before req.text() — keeps the pattern
- * consistent with API keys and general settings.
+ * Dashboard handlers manage their own auth (requireAuthentication) and read
+ * their own bodies (the layout's and a pin's). Intercepting here — before
+ * req.text() — keeps the pattern consistent with API keys and general settings.
  */
 async function handleDashboardRequest(
   req: Request,
@@ -562,6 +571,12 @@ async function handleDashboardRequest(
       return putWidgetLayout(req);
     case "deleteWidgetLayout":
       return deleteWidgetLayout(req);
+    case "getDashboardPins":
+      return getDashboardPins(req);
+    case "postDashboardPin":
+      return postDashboardPin(req);
+    case "deleteDashboardPin":
+      return deleteDashboardPin(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
@@ -687,12 +702,23 @@ async function handleSchemaRequest(
  *
  * Membership decides which permission a method resolves to, and the fallthrough
  * is not a refusal: a method absent from this set lands on the definition branch
- * and demands `manage-settings`. That denies the editors who hold
+ * and demands every schema change permission. That denies the editors who hold
  * `update-{slug}` and grants the request to a caller who holds settings but no
  * access to the collection, so an omission fails in both directions at once.
  * Exported so the route-parser suite can assert every entry route's method
  * against it rather than restating the list.
  */
+/**
+ * The collection entry methods whose dispatcher handler reads through the
+ * query service's filtered read: a list, a count and a read by id, which
+ * answers an entry outside a read rule's filter as missing.
+ */
+const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
+  "listEntries",
+  "countEntries",
+  "getEntry",
+]);
+
 export const COLLECTION_ENTRY_METHODS = new Set([
   "listEntries",
   "createEntry",
@@ -724,7 +750,7 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "markEntryVersionSeen",
   // Discarding the working draft reverts the document to its live row; the
   // route parser marks it an `update` operation, so it resolves to the
-  // `update-{slug}` permission rather than a definition mutation's manage-settings.
+  // `update-{slug}` permission rather than a definition mutation's settings grants.
   "discardWorkingDraft",
   // Taking the live shared values rewrites the pending change, as a discard
   // does, so it is authorized as an update of the entry too.
@@ -766,7 +792,7 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleAutosave",
   // Publishing every language writes the document's status, so the route parser
   // marks it an `update` and this resolves it to `update-{slug}` rather than a
-  // definition mutation's manage-settings. The service checks `publish-{slug}`
+  // definition mutation's settings grants. The service checks `publish-{slug}`
   // on top, which no route-level gate can express.
   "publishAllSingleLocales",
   // Discarding the working draft reverts the document to its live row. Left out
@@ -962,6 +988,10 @@ async function resolveAuthorization(
         method,
         params: routeParams ?? {},
         namesOne: entryInPath,
+        // A list, a count and a read by id read through the query service's
+        // filtered read, which applies a read rule's filter; every other entry
+        // route refuses a caller whose rule answers one.
+        appliesReadFilter: FILTERED_READ_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
         return requireCollectionWriteAccess(
@@ -994,11 +1024,7 @@ async function resolveAuthorization(
     // onboarding checklist asks the same question to decide whether to OFFER
     // the step -- and a copy there would go on asking for a grant this route
     // had stopped requiring.
-    return requirePermission(
-      req,
-      COLLECTION_DEFINITION_ACTION,
-      COLLECTION_DEFINITION_RESOURCE
-    );
+    return requireAllPermissions(req, COLLECTION_DEFINITION_PERMISSIONS);
   }
 
   // --- Singles endpoints ---
@@ -1044,20 +1070,21 @@ async function resolveAuthorization(
         params: routeParams ?? {},
       });
     }
-    // Definition mutations (create/delete single, update schema) → manage-settings
-    return requirePermission(req, "manage", "settings");
+    // Definition mutations (create/delete single, update schema) are schema
+    // changes: create, update and delete on settings, all three.
+    return requireAllPermissions(req, SCHEMA_CHANGE_PERMISSIONS);
   }
 
   // --- Plugin settings → the SETTINGS permissions ---
   //
   // Without this branch these routes fell through to the default mapping,
   // which asks for `read-pluginSettings` / `update-pluginSettings`. Neither is
-  // seeded — the repository seeds `manage-settings` and `read-settings` — so
-  // every settings administrator got a 403 and only the super-admin bypass
+  // seeded — settings are granted by their plain permissions on `settings` —
+  // so every settings administrator got a 403 and only the super-admin bypass
   // could use the API at all.
   if (service === "pluginSettings") {
     // A plugin may name its own permission for its settings in place of
-    // `manage-settings` (`contributes.settingsPermission`), checked at boot to
+    // `update-settings` (`contributes.settingsPermission`), checked at boot to
     // be one it declares.
     //
     // Services are booted before the declaration is read, as the dispatch
@@ -1099,19 +1126,18 @@ async function resolveAuthorization(
       // Whoever may change the settings may also read them: a grant of the
       // plugin's permission alone would otherwise open a page that cannot load.
       return authorizeCallerForAny(caller, [
-        { action: "read", resource: "settings" },
-        { action: "manage", resource: "settings" },
+        ...SYSTEM_READ_POLICY.settings.read.anyOf,
         write,
       ]);
     }
     // A write to a plugin's configuration is a settings change, so it takes
     // the same permission a settings change takes anywhere else, unless the
-    // plugin named its own: then that one alone, so `manage-settings` does
-    // not reach settings the plugin kept to a narrower role.
+    // plugin named its own: then that one alone, so a settings role does not
+    // reach settings the plugin kept to a narrower role.
     return authorizeCaller(caller, write.action, write.resource);
   }
 
-  // --- Email providers → manage-email-providers ---
+  // --- Email providers → their own action on email-providers ---
   if (service === "emailProviders") {
     // The provider catalog is the one read a CREATOR also needs. The
     // permissions are seeded independently, so a role holding only
@@ -1119,40 +1145,27 @@ async function resolveAuthorization(
     // the descriptors describing which fields that provider requires --
     // leaving the grant unusable for exactly the contributed providers the
     // catalog exists to describe. It exposes definitions, never stored records.
-    if (method === "listProviderTypes") {
-      return requireAnyPermission(req, [
-        { action: "read", resource: "email-providers" },
-        { action: "create", resource: "email-providers" },
-        { action: "manage", resource: "email-providers" },
-      ]);
-    }
-
-    const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
-    ]);
+    return requireListRead(
+      req,
+      emailGrant("emailProviders", method, httpMethod)
+    );
   }
 
-  // --- Email templates → manage-email-templates ---
+  // --- Email templates → their own action on email-templates ---
   if (service === "emailTemplates") {
-    const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
-    ]);
+    return requireListRead(
+      req,
+      emailGrant("emailTemplates", method, httpMethod)
+    );
   }
 
-  // --- User fields → manage-settings ---
+  // --- User fields → their own action on settings ---
   if (service === "userFields") {
     const action = getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "settings" },
-      { action: "manage", resource: "settings" },
-    ]);
+    return requireAnyPermission(req, [{ action, resource: "settings" }]);
   }
 
-  // --- Field groups → manage-settings ---
+  // --- Field groups → their own action on settings ---
   if (service === "field-groups") {
     // 🔴 The HTTP verb is a PROXY for the action, and these two methods are where the proxy is
     // wrong: both travel over POST while rewriting an EXISTING definition. Verb-derived
@@ -1171,10 +1184,7 @@ async function resolveAuthorization(
     };
     const action =
       FIELD_GROUP_ACTION_OVERRIDES[method] ?? getActionFromMethod(httpMethod);
-    return requireAnyPermission(req, [
-      { action, resource: "settings" },
-      { action: "manage", resource: "settings" },
-    ]);
+    return requireAnyPermission(req, [{ action, resource: "settings" }]);
   }
 
   // --- RBAC: roles and permissions ---
@@ -1937,7 +1947,6 @@ async function serveServiceRequest(
 const NO_WIDGETS: WidgetAudience = {
   visible: [],
   declared: new Set(),
-  generated: [],
   holds: () => false,
   heldActionGates: new Set(),
   token: visibilityToken([], []),
@@ -1959,7 +1968,7 @@ function actionsForAudience<
   W extends {
     id: string;
     actions?: readonly WidgetAction[];
-    empty?: { message?: string; action?: { requiredPermission?: string } };
+    empty?: { message?: string; action?: object };
   },
 >(widget: W, audience: WidgetAudience): W {
   const withheldEmpty = emptyForAudience(widget.empty, audience);
@@ -1983,11 +1992,20 @@ function actionsForAudience<
  * A declared widget's empty state with its action withheld from a reader who
  * may not take it; the same object when there is nothing to withhold.
  */
-function emptyForAudience<
-  E extends { message?: string; action?: { requiredPermission?: string } },
->(empty: E | undefined, audience: WidgetAudience): E | undefined {
+function emptyForAudience<E extends { message?: string; action?: object }>(
+  empty: E | undefined,
+  audience: WidgetAudience
+): E | undefined {
   if (empty?.action === undefined) return empty;
-  if (audience.holds(empty.action.requiredPermission)) return empty;
+  // A link's permission, when it names one; an action opening the card's own settings has none,
+  // since the admin offers it only where the reader can change that card's settings.
+  const { action } = empty;
+  const gate =
+    "requiredPermission" in action &&
+    typeof action.requiredPermission === "string"
+      ? action.requiredPermission
+      : undefined;
+  if (audience.holds(gate)) return empty;
   const { action: _withheld, ...rest } = empty;
   return rest as E;
 }
@@ -2196,17 +2214,11 @@ async function buildAdminMeta(
   // is a whole declaration -- a `text` widget's prose, an `actions` widget's
   // links -- so shipping every one and leaving the browser to hide the gated
   // cards hands a reader the contents of a card they may not see.
-  const widgets = [
-    ...publishableWidgets()
-      .filter(widget => audience.declared.has(widget.id))
-      .map(widget =>
-        collectionDefaultForReader(
-          actionsForAudience(widget, audience),
-          readable
-        )
-      ),
-    ...audience.generated,
-  ];
+  const widgets = publishableWidgets()
+    .filter(widget => audience.declared.has(widget.id))
+    .map(widget =>
+      collectionDefaultForReader(actionsForAudience(widget, audience), readable)
+    );
   if (widgets.length > 0) {
     workspace.widgets = widgets;
   }
@@ -2381,14 +2393,14 @@ async function handleAdminMetaWorkspaceRequest(
   // 🔴 Which widgets this reader may be told about is decided HERE rather than
   // inside `buildAdminMeta`, and by the SAME implementation the layout endpoint
   // places and offers with, so the two cannot disagree about what a reader may
-  // see. A declaration is its whole content -- a generated card's id, title and
-  // query all name a COLLECTION, a `text` widget carries its prose -- so
-  // publishing the whole set and leaving the browser to hide the gated ones
-  // would disclose every collection in the install and the body of every gated
-  // card to any authenticated caller. That the admin would not draw the card
+  // see. A declaration is its whole content -- a Collection setting's default
+  // names a COLLECTION, a `text` widget carries its prose -- so publishing the
+  // whole set and leaving the browser to hide the gated ones would disclose
+  // collections the reader may not read and the body of every gated card to
+  // any authenticated caller. That the admin would not draw the card
   // is not a control; the payload is JSON, and reading it is the bypass.
   //
-  // `widgetAudience` re-derives the generated cards per request, which is why
+  // `widgetAudience` refreshes the content sources per request, which is why
   // it runs on this route and not in the shared builder: the PUBLIC branding
   // handler deliberately does not initialise services, and refreshing there
   // asked an empty container for the collection registry on every anonymous
@@ -2406,16 +2418,52 @@ async function handleAdminMetaWorkspaceRequest(
 }
 
 /**
+ * The catch-all Email routes whose grant is not their verb's action, each the
+ * system policy's entry for what it does, as the standalone routes ask it:
+ * choosing a provider type is a read or a create, making a provider the
+ * default updates it, and a test send through a provider or a template
+ * preview creates nothing stored and asks create.
+ */
+const EMAIL_METHOD_GRANTS: Readonly<Record<string, RouteGrant>> = {
+  listProviderTypes: SYSTEM_READ_POLICY.emailProviders.readTypes,
+  setDefault: SYSTEM_WRITE_POLICY.emailProviders.makeDefault,
+  testProvider: SYSTEM_WRITE_POLICY.emailProviders.sendTest,
+  previewTemplate: SYSTEM_WRITE_POLICY.emailTemplates.preview,
+};
+
+/**
+ * The grant a catch-all Email route asks, read from the system policies:
+ * its method's own entry where it has one, else the entry for the action its
+ * verb names. A `manage-` permission counts as each plain one.
+ */
+function emailGrant(
+  resource: "emailProviders" | "emailTemplates",
+  method: string,
+  httpMethod: string
+): RouteGrant {
+  const named = EMAIL_METHOD_GRANTS[method];
+  if (named) return named;
+  const action = getActionFromMethod(httpMethod);
+  if (action === "create" || action === "update" || action === "delete") {
+    return SYSTEM_WRITE_POLICY[resource][action];
+  }
+  return SYSTEM_READ_POLICY[resource].read;
+}
+
+/**
  * PATCH /api/admin-meta/sidebar-groups
  *
  * Replaces the custom sidebar groups array.
- * Auth: manage-settings permission.
+ * Auth: a settings change (`update-settings`).
  *
  * Body: { groups: [{ slug, name, icon? }, ...] }
  */
 async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
   try {
-    const authResult = await requirePermission(req, "manage", "settings");
+    const authResult = await requireListRead(
+      req,
+      SYSTEM_WRITE_POLICY.settings.update
+    );
     if (isErrorResponse(authResult)) {
       return createJsonErrorResponse(authResult, req);
     }

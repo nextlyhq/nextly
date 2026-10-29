@@ -36,6 +36,7 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
@@ -520,6 +521,9 @@ export class CollectionBulkService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
       // 1. Fetch the source entry with a REAL read check. Duplicating a row is
       // reading it plus creating a copy, and the route only authorized the
@@ -672,6 +676,9 @@ export class CollectionBulkService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<{ id: string }>> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Phase 4.5: result carries minimal `{id}` records for delete (the
     // entries are gone; no value in materializing more) and structured
     // per-item failures keyed by canonical NextlyErrorCode.
@@ -775,6 +782,9 @@ export class CollectionBulkService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<BulkOperationResult<Record<string, unknown>>> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Phase 4.5: successes carry full mutated records (caller needs the
     // post-update values); failures carry canonical NextlyErrorCode.
     // Per-id updates run concurrently via Promise.allSettled. See
@@ -901,6 +911,9 @@ export class CollectionBulkService extends BaseService {
       limit?: number;
     }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
+    // Refused first when the collection is removed from code, before the filter
+    // is checked or any row is matched, so a query matching nothing is refused too.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const limit = options?.limit ?? 1000;
 
     const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1099,6 +1112,8 @@ export class CollectionBulkService extends BaseService {
       limit?: number;
     }
   ): Promise<BulkOperationResult<{ id: string }>> {
+    // Refused first when the collection is removed from code; see bulkUpdateByQuery.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const limit = options?.limit ?? 1000;
 
     const accessUser = params.overrideAccess ? undefined : params.user;
@@ -1276,6 +1291,9 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1413,6 +1431,11 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole when the collection is removed from code, read on the
+    // caller's transaction; see deleteEntries.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1520,6 +1543,9 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole, before any row is read, when the collection is removed
+    // from code, rather than once for each entry it names.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1707,6 +1733,11 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole when the collection is removed from code, read on the
+    // caller's transaction; see deleteEntries.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
@@ -1819,6 +1850,9 @@ export class CollectionBulkService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
+    // Refused whole when the collection is removed from code: each entry's own
+    // refusal would otherwise be counted among the batch's failures, without its code.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Early return for empty input before batch options validation
     if (ids.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };

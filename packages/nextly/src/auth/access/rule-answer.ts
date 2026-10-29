@@ -218,9 +218,52 @@ export async function noteFilterNotApplied(
   answer: RuleAnswer,
   decisionAllows: boolean
 ): Promise<void> {
-  if (answer.kind !== "filter" || action !== "read") return;
-  if (!mayAnswerFilter(kind, action)) return;
+  if (readFilterIn(kind, action, answer) === undefined) return;
   await deviate("filter-not-applied", false, () => decisionAllows);
+}
+
+/**
+ * The filter a collection's read rule answered, well formed: what a way in
+ * that applies a read rule's filter applies. `undefined` for any other
+ * answer, action or target, none of which a way in may apply.
+ */
+export function readFilterIn(
+  kind: "collection" | "single",
+  action: string,
+  answer: RuleAnswer
+): RuleFilter | undefined {
+  if (answer.kind !== "filter" || action !== "read") return undefined;
+  return mayAnswerFilter(kind, action) ? answer.filter : undefined;
+}
+
+/**
+ * A read as a way in that applies a read rule's filter answers it: allowed
+ * for every entry, refused, or allowed only for the entries `filter` matches.
+ * The last reads as refused to anything reading `allowed` alone, so a reader
+ * that cannot apply the filter refuses without being told to.
+ */
+export type FilteredRead =
+  | { readonly allowed: boolean; readonly filter?: undefined }
+  | { readonly allowed: false; readonly filter: RuleFilter };
+
+const READ_ALL: FilteredRead = Object.freeze({ allowed: true });
+const READ_NONE: FilteredRead = Object.freeze({ allowed: false });
+
+/** A yes or no as a {@link FilteredRead}, which carries no filter. */
+export function readOf(allowed: boolean): FilteredRead {
+  return allowed ? READ_ALL : READ_NONE;
+}
+
+/** A decision as a way in that applies a read rule's filter answers it. */
+export function filteredReadOf(
+  decision: Decision,
+  action: string
+): FilteredRead {
+  if (decision.allowed) return READ_ALL;
+  if (decision.reason !== "only-matching-entries" || action !== "read") {
+    return READ_NONE;
+  }
+  return { allowed: false, filter: decision.filter };
 }
 
 /**
@@ -235,22 +278,22 @@ export function allowsSome(decision: Decision, action: string): boolean {
 }
 
 /**
- * A decision as a way in that applies no rule's filter answers it: allowed
- * only when the decision allows every entry. A read the decision allows only
- * for the entries a filter matches is refused there, and recorded as the
- * deviation it is. A write rule's filter is not applied yet anywhere, so it
- * refuses as the decision's answer.
+ * A collection read rule's filter that names a field inside a component,
+ * which a rule's filter may not use yet: only the read that builds it knows
+ * which fields are components, so it reports the filter as not well formed
+ * with this answer.
  */
-export async function allowedUnfiltered(
-  decision: Decision,
-  action: string
-): Promise<boolean> {
-  if (decision.allowed) return true;
-  if (decision.reason !== "only-matching-entries" || action !== "read") {
-    return false;
-  }
-  return deviate("filter-not-applied", false, () => true);
-}
+export const FILTER_NAMES_A_COMPONENT_FIELD: RuleAnswer = Object.freeze({
+  kind: "malformed-filter",
+  problems: Object.freeze([
+    Object.freeze({
+      path: "where",
+      code: "FILTER_COMPONENT_IN_RULE",
+      message:
+        "a field inside a component cannot be used in a rule's filter yet",
+    }),
+  ]),
+});
 
 /** Forgets what has been reported, so a test can watch the first report. */
 export function clearRuleFilterReports(): void {

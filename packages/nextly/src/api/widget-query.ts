@@ -18,11 +18,12 @@ import {
   authorizationScheduler,
   canReadEntity,
 } from "../auth/entity-read-access";
+import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
 import { createBatchScope } from "../domains/widgets/batch-scope";
-import { refreshContentSources } from "../domains/widgets/collection-widgets";
+import { refreshContentSources } from "../domains/widgets/content-sources";
 import {
   entityRead,
   resolveExecutableSource,
@@ -51,7 +52,7 @@ import {
 import { readAccessCaller, readCaller } from "./authenticated-read";
 import { readJsonBody } from "./read-json-body";
 import { respondData } from "./response-shapes";
-import { isCardEntry, prepareCards } from "./widget-cards";
+import { isCardEntry, prepareCards, type CardBatch } from "./widget-cards";
 import {
   answerReadyQueries,
   failedSlot,
@@ -411,6 +412,21 @@ async function checkedAgainst(
 }
 
 /**
+ * Declared cards asked as `caller`: each card's own reads checked by the door
+ * a batch entry goes through. ONE construction, for the query endpoint's batch
+ * and for a dashboard judging which of its cards are shown, so a card's reads
+ * are decided alike wherever it is asked. `mayRead` is the batch's own read
+ * decisions where it keeps them, shared with its queries.
+ */
+export function cardBatchFor(
+  auth: AuthContext,
+  caller: ReadCaller,
+  mayRead: (slug: string) => Promise<boolean> = readDecisionsFor(caller)
+): CardBatch {
+  return { auth, caller, check: raw => checkedQuery(raw, mayRead) };
+}
+
+/**
  * A query a declared widget's card or data function asks, checked exactly as a
  * batch entry is, throwing the refusal that entry's slot would carry.
  */
@@ -500,11 +516,10 @@ async function prepareBatch(req: Request): Promise<PreparedBatch> {
   // A declared widget's cards, asked by card rather than by query: looked up
   // in what this caller was handed, before the first byte, like every other
   // whole-batch step. Each one's own reads are checked by the same door.
-  const cards = await prepareCards(queries, {
-    auth,
-    caller,
-    check: raw => checkedQuery(raw, mayRead),
-  });
+  const cards = await prepareCards(
+    queries,
+    cardBatchFor(auth, caller, mayRead)
+  );
 
   // Read and resolve every query entry FIRST, so the batch's distinct entities
   // are known before a single read decision is taken -- then take them through

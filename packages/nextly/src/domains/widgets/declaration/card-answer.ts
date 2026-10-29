@@ -7,10 +7,11 @@
  * that display draws, or the card would show an error that names nothing the
  * author can fix.
  *
- * 🔴 One rule for every value core is handed as a card's data. A declaration's
- * `example` is checked by it at startup, because the admin draws the example
- * as the card's preview; a value checked one way at startup and another way
- * later would let an example pass that the card itself could never show.
+ * 🔴 One rule for every value core is handed as a card's data. Each of a
+ * declaration's `preview` cases is checked by it at startup, because the
+ * preview draws its data as the card's ready state; a value checked one way at
+ * startup and another way later would let a case pass that the card itself
+ * could never show.
  *
  * @module domains/widgets/declaration/card-answer
  */
@@ -75,14 +76,17 @@ export function cardAnswerProblem(
 export function cardAnswerResult(
   display: unknown,
   value: unknown,
-  widgetId: string
+  subject: { widget: string; owner: string }
 ): WidgetResult {
   const problem = cardAnswerProblem(display, value);
   if (problem !== undefined) {
+    // The owner and the widget, and where in the answer the fault is (a path
+    // and a type, never a value), so the operator can find it and the log
+    // carries none of the data.
     throw NextlyError.internal({
       logContext: {
         reason: "widget-data-answer-refused",
-        widget: widgetId,
+        ...subject,
         kind: problem.kind,
         detail: problem.detail,
       },

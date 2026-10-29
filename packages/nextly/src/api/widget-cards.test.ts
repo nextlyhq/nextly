@@ -6,18 +6,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBatchScope } from "../domains/widgets/batch-scope";
+import { NextlyError } from "../errors/nextly-error";
+import * as loggerModule from "../observability/logger";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
+import { setSiteDashboardRules } from "../domains/widgets/site-rules";
 
-import { prepareCards } from "./widget-cards";
+import { cardIsShownTo, prepareCards } from "./widget-cards";
 import { askableCards } from "./widget-layout";
+import {
+  answerReadyQueries,
+  failedSlot,
+  SLOT_TIMEOUT_MS,
+  type ReadyCardData,
+} from "./widget-slots";
 
 // What this module decides is observed; what it stands on is stood in: the caller's handed cards
-// (the layout read's own lookup), the declarations, and the query executor.
+// (the layout read's own lookup), the declarations, and the query executor a read service runs.
 vi.mock("./widget-layout", () => ({ askableCards: vi.fn() }));
-// Partial: the declarations are stood in for, and the one checked builder of
-// a card's query stays real, since what a card runs is what it judges.
+// Partial: the declarations are stood in for, and the rest of the module stays real.
 vi.mock(
   "../domains/widgets/declaration/declared-widgets",
   async importOriginal => ({
@@ -35,69 +43,196 @@ const check = vi.fn(async (raw: unknown) => raw as WidgetQuery);
 const batch = { auth, caller: person, check };
 
 const ordersFunction = vi.fn(async () => ({ total: 7 }));
+const gatedLoad = vi.fn(async () => ({ total: 1 }));
+const readsLoad = vi.fn(async () => ({ total: 2 }));
+const needsLoad = vi.fn(async () => ({ total: 3 }));
+const maybeLoad = vi.fn(async () => ({ total: 4 }));
+const accessPredicate = vi.fn((_input: { user: unknown }): unknown => true);
+const showsPredicate = vi.fn((_input: unknown): unknown => true);
+// Reads a trend only for a card with the room to draw one: the size it is handed decides how much
+// it asks.
+const trendLoad = vi.fn(
+  async (input: {
+    size: { tier: string };
+    services: { count: Function; timeseries: Function };
+  }) => {
+    const total = (await input.services.count("orders")) as number;
+    if (input.size.tier !== "large") return { total };
+    await input.services.timeseries("orders", { range: "30d" });
+    return { total, trend: true };
+  }
+);
 const declarations: Record<string, unknown> = {
   "acme/orders": {
     owner: "plugin @acme/shop",
+    display: "metric",
     declaration: {
       id: "acme/orders",
       size: { default: { w: 12, h: 3 } },
       settings: { items: { type: "number", default: 5 } },
-      data: ordersFunction,
-      display: "metric",
-      empty: { when: (data: { total: number }) => data.total === 0 },
+      load: ordersFunction,
+      view: "figure",
+      isEmpty: (data: { total: number }) => data.total === 0,
     },
   },
   // Declared, but not a widget this caller could place: what only the write's gate refuses.
   "acme/secret": {
     owner: "plugin @acme/shop",
+    display: "metric",
     declaration: {
       id: "acme/secret",
       size: { default: { w: 12, h: 3 } },
-      data: async () => ({ total: 1 }),
-      display: "metric",
+      load: async () => ({ total: 1 }),
+      view: "figure",
     },
   },
-  "acme/recent": {
+  // Each rule decided before load runs, one widget apiece.
+  "acme/gated": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/gated",
+      size: { default: { w: 12, h: 3 } },
+      access: (input: { user: unknown }) => accessPredicate(input),
+      load: gatedLoad,
+      view: "figure",
+    },
+  },
+  "acme/reads": {
     owner: "plugin @acme/shop",
     collections: { orders: "shop_orders" },
+    display: "metric",
     declaration: {
-      id: "acme/recent",
+      id: "acme/reads",
       size: { default: { w: 12, h: 3 } },
-      settings: { items: { type: "number", default: 5 } },
-      data: {
-        query: ({ settings }: { settings: { items: number } }) => ({
-          collection: "orders",
-          op: "list",
-          select: ["id"],
-          limit: settings.items,
-        }),
-      },
-      display: "list",
+      access: { collections: ["orders", "customers"] },
+      load: readsLoad,
+      view: "figure",
     },
   },
-  // Plain JavaScript, as no type saw it: a list whose query counts once its
-  // card asks for more than the starting number of items.
-  "acme/shifty": {
+  // Gated on permissions, any of several and all of several: judged when the card is handed, by
+  // the requiredPermission each was published as, so nothing here asks again.
+  "acme/any-of": {
     owner: "plugin @acme/shop",
+    display: "metric",
     declaration: {
-      id: "acme/shifty",
+      id: "acme/any-of",
       size: { default: { w: 12, h: 3 } },
-      settings: { items: { type: "number", default: 5 } },
-      data: {
-        query: ({ settings }: { settings: { items: number } }) => ({
-          collection: "orders",
-          op: settings.items > 5 ? "count" : "list",
-          select: ["id"],
-          limit: settings.items,
-        }),
+      access: { anyOf: ["read-orders", "update-orders"] },
+      load: gatedLoad,
+      view: "figure",
+    },
+  },
+  "acme/all-of": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/all-of",
+      size: { default: { w: 12, h: 3 } },
+      access: { allOf: ["read-orders", { anyOf: ["update-orders"] }] },
+      load: gatedLoad,
+      view: "figure",
+    },
+  },
+  "acme/needs": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/needs",
+      size: { default: { w: 12, h: 3 } },
+      settings: { collection: { type: "collection" } },
+      load: needsLoad,
+      view: "figure",
+    },
+  },
+  "acme/maybe": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/maybe",
+      size: { default: { w: 12, h: 3 } },
+      settings: { items: { type: "number", defaultValue: 5 } },
+      shows: (input: unknown) => showsPredicate(input),
+      load: maybeLoad,
+      view: "figure",
+    },
+  },
+  "acme/throws": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/throws",
+      size: { default: { w: 12, h: 3 } },
+      load: async () => {
+        throw new Error("the row for customer 42 at secret@example.com");
       },
-      display: "list",
+      view: "figure",
+    },
+  },
+  // A needed setting with no value, and a `shows` that would say no: which one decides?
+  "acme/needs-maybe": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/needs-maybe",
+      size: { default: { w: 12, h: 3 } },
+      settings: { collection: { type: "collection" } },
+      shows: (input: unknown) => showsPredicate(input),
+      load: needsLoad,
+      view: "figure",
+    },
+  },
+  // Throws the core error type a plugin can import, with its own words in it.
+  "acme/raises": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/raises",
+      size: { default: { w: 12, h: 3 } },
+      load: async () => {
+        throw new NextlyError({
+          code: "INTERNAL_ERROR",
+          publicMessage: "Customer 42 at secret@example.com owes 9000",
+          logMessage: "row secret@example.com",
+          logContext: { row: "secret@example.com" },
+        });
+      },
+      view: "figure",
+    },
+  },
+  "acme/trend": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/trend",
+      // From a third of the row to the whole of it, three to six rows high.
+      size: {
+        default: { w: 6, h: 4 },
+        min: { w: 4, h: 3 },
+        max: { w: 12, h: 6 },
+      },
+      load: trendLoad,
+      view: "figure",
+    },
+  },
+  "acme/dated": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/dated",
+      size: { default: { w: 12, h: 3 } },
+      load: async () => ({ total: 3, at: new Date(0) }),
+      view: "figure",
     },
   },
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Their implementations too, which clearing keeps: a test that makes either say no must not
+  // leave it saying no for the next.
+  accessPredicate.mockImplementation(() => true);
+  showsPredicate.mockImplementation(() => true);
   vi.mocked(declaredWidget).mockImplementation(id => declarations[id] as never);
   vi.mocked(askableCards).mockResolvedValue({
     handed: new Map([
@@ -113,46 +248,122 @@ beforeEach(() => {
         },
       ],
       [
-        "c-recent",
+        "c-gated",
+        { id: "c-gated", widgetId: "acme/gated", w: 12, h: 3, removed: false },
+      ],
+      [
+        "c-reads",
+        { id: "c-reads", widgetId: "acme/reads", w: 12, h: 3, removed: false },
+      ],
+      [
+        "c-any-of",
         {
-          id: "c-recent",
-          widgetId: "acme/recent",
+          id: "c-any-of",
+          widgetId: "acme/any-of",
           w: 12,
           h: 3,
           removed: false,
-          config: { items: 2 },
         },
       ],
       [
-        "c-shifty",
+        "c-all-of",
         {
-          id: "c-shifty",
-          widgetId: "acme/shifty",
+          id: "c-all-of",
+          widgetId: "acme/all-of",
           w: 12,
           h: 3,
           removed: false,
-          config: { items: 9 },
+        },
+      ],
+      [
+        "c-needs",
+        { id: "c-needs", widgetId: "acme/needs", w: 12, h: 3, removed: false },
+      ],
+      [
+        "c-maybe",
+        { id: "c-maybe", widgetId: "acme/maybe", w: 12, h: 3, removed: false },
+      ],
+      [
+        "c-throws",
+        {
+          id: "c-throws",
+          widgetId: "acme/throws",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+      ],
+      [
+        "c-dated",
+        { id: "c-dated", widgetId: "acme/dated", w: 12, h: 3, removed: false },
+      ],
+      [
+        "c-raises",
+        {
+          id: "c-raises",
+          widgetId: "acme/raises",
+          w: 12,
+          h: 3,
+          removed: false,
         },
       ],
       [
         "c-gone",
         { id: "c-gone", widgetId: "acme/gone", w: 12, h: 3, removed: false },
       ],
+      [
+        "c-trend",
+        { id: "c-trend", widgetId: "acme/trend", w: 8, h: 5, removed: false },
+      ],
+      // Stored smaller than its widget now allows, and stored at a height the grid cannot draw.
+      [
+        "c-trend-small",
+        {
+          id: "c-trend-small",
+          widgetId: "acme/trend",
+          w: 3,
+          h: 2,
+          removed: false,
+        },
+      ],
+      [
+        "c-trend-bad",
+        {
+          id: "c-trend-bad",
+          widgetId: "acme/trend",
+          w: 3,
+          h: 1,
+          removed: false,
+        },
+      ],
     ]) as never,
     // The widgets this caller could place: the layout write's own gate.
     placeable: new Set([
       "acme/orders",
-      "acme/recent",
-      "acme/shifty",
+      "acme/gated",
+      "acme/reads",
+      "acme/any-of",
+      "acme/all-of",
+      "acme/needs",
+      "acme/maybe",
+      "acme/throws",
+      "acme/dated",
+      "acme/raises",
       "acme/gone",
+      "acme/trend",
     ]),
   });
   // Answers the op it is asked, as a source must.
-  vi.mocked(executeWidgetQuery).mockImplementation(async query =>
-    query.op === "count"
-      ? { op: "count", total: 1 }
-      : { op: "list", items: [{ id: "row" }] }
-  );
+  vi.mocked(executeWidgetQuery).mockImplementation(async query => {
+    if (query.op === "count") return { op: "count", total: 1 };
+    if (query.op === "timeseries") {
+      return { op: "timeseries", points: [], interval: "day" };
+    }
+    return { op: "list", items: [{ id: "row" }] };
+  });
+  accessPredicate.mockImplementation(() => true);
+  showsPredicate.mockImplementation(() => true);
+  check.mockImplementation(async (raw: unknown) => raw as WidgetQuery);
 });
 
 describe("a card asked for by widget and card id", () => {
@@ -170,7 +381,7 @@ describe("a card asked for by widget and card id", () => {
         },
         // A card handed for one declared widget, asked as another declared widget: refused for the
         // card it is, not for a widget that does not exist.
-        { widget: "acme/recent", card: "c-orders" },
+        { widget: "acme/maybe", card: "c-orders" },
         // A preview of a declared widget this caller could not place.
         { widget: "acme/secret", settings: {} },
         // A preview carrying anything beside its widget and settings.
@@ -226,6 +437,8 @@ describe("a card asked for by widget and card id", () => {
       op: "count",
       source: "collection:orders",
     });
+    // And the checked query runs as the person asking, never as the system.
+    expect(vi.mocked(executeWidgetQuery).mock.calls[0]?.[1]).toBe(person);
   });
 
   it("says when its declared empty test holds, in the same slot", async () => {
@@ -245,55 +458,11 @@ describe("a card asked for by widget and card id", () => {
     });
   });
 
-  it("writes a declaration's query from the card's settings, on the site's collection, and checks it first", async () => {
-    const prepared = await prepareCards(
-      [{ widget: "acme/recent", card: "c-recent" }],
-      batch
-    );
-    const answered = await (prepared.get(0) as { answer: Function }).answer({
-      signal: new AbortController().signal,
-      scope: createBatchScope().forOwner("plugin @acme/shop"),
-      now: new Date(Date.UTC(2026, 9, 22)),
-    });
-    expect(check).toHaveBeenCalledWith({
-      op: "list",
-      select: ["id"],
-      limit: 2,
-      source: "collection:shop_orders",
-    });
-    expect(vi.mocked(executeWidgetQuery).mock.calls[0]?.[1]).toBe(person);
-    // The batch's instant, as a copy the source cannot move for anyone else.
-    const handed = vi.mocked(executeWidgetQuery).mock.calls[0]?.[2]?.now;
-    expect(handed?.getTime()).toBe(Date.UTC(2026, 9, 22));
-    expect(answered).toEqual({
-      result: { op: "list", items: [{ id: "row" }] },
-      empty: false,
-    });
-  });
-
-  it("fails a card whose query its display cannot draw, judged for the card's own settings", async () => {
-    // 🔴 Startup judged the query its starting settings write, a list. This
-    // card's settings write a count, which a list cannot draw: run, it would
-    // reach the admin as an answer the card misreads, for good.
-    const prepared = await prepareCards(
-      [{ widget: "acme/shifty", card: "c-shifty" }],
-      batch
-    );
-    await expect(
-      (prepared.get(0) as { answer: Function }).answer({
-        signal: new AbortController().signal,
-        scope: createBatchScope().forOwner("plugin @acme/shop"),
-        now: new Date(Date.UTC(2026, 9, 22)),
-      })
-    ).rejects.toThrow();
-    expect(executeWidgetQuery).not.toHaveBeenCalled();
-  });
-
   it("reads the caller's cards once for the batch, and not at all for a batch of queries", async () => {
     await prepareCards(
       [
         { widget: "acme/orders", card: "c-orders" },
-        { widget: "acme/recent", card: "c-recent" },
+        { widget: "acme/maybe", card: "c-maybe" },
       ],
       batch
     );
@@ -328,5 +497,637 @@ describe("a card asked for by widget and card id", () => {
       Record<string, unknown>,
     ];
     expect(input.settings).toEqual({ items: 9 });
+  });
+});
+
+/** One card's answer, as the batch asks for it. */
+async function answered(widget: string): Promise<unknown> {
+  const prepared = await prepareCards(
+    [{ widget, card: `c-${widget.slice(5)}` }],
+    batch
+  );
+  return (prepared.get(0) as { answer: Function }).answer({
+    signal: new AbortController().signal,
+    scope: createBatchScope().forOwner("plugin @acme/shop"),
+    now: new Date(Date.UTC(2026, 9, 22)),
+  });
+}
+
+/** What the one "not available" answer is, byte for byte, as an unknown card gets it. */
+async function unavailableBytes(): Promise<string> {
+  const prepared = await prepareCards(
+    [{ widget: "acme/orders", card: "c-unknown" }],
+    batch
+  );
+  return JSON.stringify(prepared.get(0));
+}
+
+describe("a card's load, judged before it runs", () => {
+  it("is not run for a person the widget's predicate refuses, who gets the one not-available answer", async () => {
+    accessPredicate.mockImplementation(() => false);
+    const answer = (await answered("acme/gated")) as { settled: unknown };
+    expect(gatedLoad).not.toHaveBeenCalled();
+    expect(JSON.stringify(answer.settled)).toBe(await unavailableBytes());
+    // Asked with the person, and nothing else.
+    expect(accessPredicate).toHaveBeenCalledWith({ user: { id: "reader" } });
+  });
+
+  it("logs a refusal at debug level only, since a person without access is routine", async () => {
+    accessPredicate.mockImplementation(() => false);
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    };
+    const spy = vi
+      .spyOn(loggerModule, "getNextlyLogger")
+      .mockReturnValue(
+        logger as unknown as ReturnType<typeof loggerModule.getNextlyLogger>
+      );
+    try {
+      await answered("acme/gated");
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith({
+        kind: "declared-widget-access-refused",
+        owner: "plugin @acme/shop",
+        widget: "acme/gated",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is run for a person the predicate admits", async () => {
+    // The control for the refusal above: the same widget, the same card.
+    await expect(answered("acme/gated")).resolves.toEqual({
+      result: { op: "count", total: 1 },
+      empty: false,
+    });
+    expect(gatedLoad).toHaveBeenCalledOnce();
+  });
+
+  it("refuses when the predicate throws, and says so in the log", async () => {
+    // 🔴 The plugin's own decision about who may see data, which could not be made: no.
+    accessPredicate.mockImplementation(() => {
+      throw new Error("lookup failed");
+    });
+    const warn = vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
+    const answer = (await answered("acme/gated")) as { settled: unknown };
+    expect(gatedLoad).not.toHaveBeenCalled();
+    expect(JSON.stringify(answer.settled)).toBe(await unavailableBytes());
+    const logged = vi.mocked(warn.mock.results[0]?.value.warn).mock
+      .calls[0]?.[0];
+    expect(logged).toMatchObject({
+      kind: "declared-widget-refused",
+      logContext: {
+        owner: "plugin @acme/shop",
+        widget: "acme/gated",
+        reason: "widget-access-threw",
+      },
+    });
+    warn.mockRestore();
+  });
+
+  it("fails the card at its time budget when the predicate never settles, and never runs load", async () => {
+    // Judged inside the card's own budget: a predicate that hangs holds its card alone.
+    vi.useFakeTimers();
+    try {
+      accessPredicate.mockImplementation(() => new Promise(() => {}));
+      const prepared = await prepareCards(
+        [
+          { widget: "acme/gated", card: "c-gated" },
+          { widget: "acme/orders", card: "c-orders" },
+        ],
+        batch
+      );
+      const answering = answerReadyQueries(
+        [...prepared.values()].filter(
+          (entry): entry is ReadyCardData => "kind" in entry
+        ),
+        person,
+        createBatchScope()
+      );
+      await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
+      const slots = await answering;
+      expect(slots.get(0)).toMatchObject({
+        ok: false,
+        error: "This widget took too long to answer",
+      });
+      expect(gatedLoad).not.toHaveBeenCalled();
+      expect(slots.get(1)).toEqual({
+        ok: true,
+        result: { op: "count", total: 7 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is not run for a person who may not read a collection the widget reads, judged by the batch's own check", async () => {
+    check.mockImplementation(async (raw: unknown) => {
+      if ((raw as { source: string }).source === "collection:customers") {
+        throw new Error("forbidden");
+      }
+      return raw as WidgetQuery;
+    });
+    const answer = (await answered("acme/reads")) as { settled: unknown };
+    expect(readsLoad).not.toHaveBeenCalled();
+    expect(JSON.stringify(answer.settled)).toBe(await unavailableBytes());
+    // Each collection under the slug the site uses: `orders` was renamed.
+    expect(check).toHaveBeenCalledWith({
+      source: "collection:shop_orders",
+      op: "count",
+    });
+  });
+
+  it("is run once the person may read every collection it reads", async () => {
+    await expect(answered("acme/reads")).resolves.toMatchObject({
+      result: { total: 2 },
+    });
+    expect(readsLoad).toHaveBeenCalledOnce();
+  });
+
+  it("is run for a card gated on permissions it was handed, which are not judged a second time", async () => {
+    // Handed means the gate held: a card's permission gate is judged where the cards are handed,
+    // by its published requiredPermission, and here neither re-judged nor read as collections.
+    for (const widget of ["acme/any-of", "acme/all-of"]) {
+      await expect(answered(widget), widget).resolves.toMatchObject({
+        result: { total: 1 },
+      });
+    }
+    expect(gatedLoad).toHaveBeenCalledTimes(2);
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it("is not run while a setting has no value, and the card asks for it", async () => {
+    const answer = await answered("acme/needs");
+    expect(needsLoad).not.toHaveBeenCalled();
+    expect(answer).toEqual({
+      settled: {
+        ok: false,
+        error: "No collection chosen yet",
+        code: "needs-setting",
+        setting: "collection",
+      },
+    });
+  });
+
+  it("is not run when the widget's shows says no, and the card is left out", async () => {
+    showsPredicate.mockImplementation(() => false);
+    const answer = await answered("acme/maybe");
+    expect(maybeLoad).not.toHaveBeenCalled();
+    expect(answer).toEqual({
+      settled: { ok: false, error: "Not shown for you", code: "not-shown" },
+    });
+  });
+
+  it("is run when shows says yes, which is handed what load is", async () => {
+    await expect(answered("acme/maybe")).resolves.toMatchObject({
+      result: { total: 4 },
+    });
+    const [shown] = showsPredicate.mock.calls[0] as [Record<string, unknown>];
+    const [loaded] = maybeLoad.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+    ];
+    expect(shown).toBe(loaded);
+    expect(shown).toMatchObject({
+      settings: { items: 5 },
+      user: { id: "reader" },
+    });
+  });
+
+  it("is handed the starting value the site's override gives a setting the card leaves unset", async () => {
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([["acme/maybe", { settings: { items: 7 } }]]),
+    });
+    try {
+      await answered("acme/maybe");
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
+    const [shown] = showsPredicate.mock.calls[0] as [Record<string, unknown>];
+    expect(shown).toMatchObject({ settings: { items: 7 } });
+  });
+});
+
+describe("a card's load that fails", () => {
+  it("treats a NextlyError the plugin threw as the plugin's, keeping none of its words", async () => {
+    // 🔴 A NextlyError's message is public by construction, so a plugin's own reached the card
+    // and its log context the production log: trusted only when core raised it.
+    vi.stubEnv("NODE_ENV", "production");
+    let refused: unknown;
+    try {
+      await answered("acme/raises");
+    } catch (error) {
+      refused = error;
+    }
+    vi.unstubAllEnvs();
+    const error = refused as NextlyError;
+    expect(error.publicMessage).toBe("An unexpected error occurred.");
+    expect(error.logContext).toEqual({
+      owner: "plugin @acme/shop",
+      widget: "acme/raises",
+      reason: "widget-load-threw",
+    });
+    const slot = failedSlot(error);
+    expect(slot).toEqual({ ok: false, error: "An unexpected error occurred." });
+    expect(JSON.stringify(error.toLogJSON("widget-query"))).not.toContain(
+      "secret@example.com"
+    );
+  });
+
+  it("fails its card, naming owner, widget and reason, and none of what the plugin said in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    let refused: unknown;
+    try {
+      await answered("acme/throws");
+    } catch (error) {
+      refused = error;
+    }
+    vi.unstubAllEnvs();
+    expect(refused).toBeInstanceOf(NextlyError);
+    const error = refused as NextlyError;
+    expect(error.publicMessage).toBe("An unexpected error occurred.");
+    expect(error.logContext).toEqual({
+      owner: "plugin @acme/shop",
+      widget: "acme/throws",
+      reason: "widget-load-threw",
+    });
+    // 🔴 The plugin's error can carry the data it was reading; in production it is not logged.
+    expect(JSON.stringify(error.toLogJSON("widget-query"))).not.toContain(
+      "secret@example.com"
+    );
+  });
+
+  it("logs the plugin's own error in development, so an author can see why", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    let refused: unknown;
+    try {
+      await answered("acme/throws");
+    } catch (error) {
+      refused = error;
+    }
+    vi.unstubAllEnvs();
+    expect(JSON.stringify((refused as NextlyError).logContext)).toContain(
+      "secret@example.com"
+    );
+  });
+
+  it("fails its card when its answer cannot be sent as JSON, naming owner and widget", async () => {
+    let refused: unknown;
+    try {
+      await answered("acme/dated");
+    } catch (error) {
+      refused = error;
+    }
+    expect((refused as NextlyError).logContext).toMatchObject({
+      reason: "widget-data-answer-refused",
+      owner: "plugin @acme/shop",
+      widget: "acme/dated",
+    });
+  });
+});
+
+describe("whether a card is shown to the person asking, without its load", () => {
+  /** The card of `widget` placed with `config`, asked as the batch asks one. */
+  function shown(widget: string, config?: Record<string, unknown>) {
+    return cardIsShownTo(
+      declarations[widget] as never,
+      {
+        id: `c-${widget.slice(5)}`,
+        widgetId: widget,
+        w: 12,
+        h: 3,
+        removed: false,
+        ...(config === undefined ? {} : { config }),
+      },
+      batch,
+      {
+        signal: new AbortController().signal,
+        scope: createBatchScope().forOwner("plugin @acme/shop"),
+        now: new Date(Date.UTC(2026, 9, 22)),
+      }
+    );
+  }
+
+  it("is shown when nothing says otherwise, and its load is never run", async () => {
+    await expect(shown("acme/orders", { items: 3 })).resolves.toBe(true);
+    expect(ordersFunction).not.toHaveBeenCalled();
+  });
+
+  it("is not shown to a person its access refuses, by predicate or by a collection", async () => {
+    accessPredicate.mockImplementation(() => false);
+    await expect(shown("acme/gated")).resolves.toBe(false);
+    accessPredicate.mockImplementation(() => true);
+    // The control: the same card, admitted.
+    await expect(shown("acme/gated")).resolves.toBe(true);
+    check.mockImplementation(async (raw: unknown) => {
+      if ((raw as { source: string }).source === "collection:customers") {
+        throw new Error("forbidden");
+      }
+      return raw as WidgetQuery;
+    });
+    await expect(shown("acme/reads")).resolves.toBe(false);
+    expect(gatedLoad).not.toHaveBeenCalled();
+    expect(readsLoad).not.toHaveBeenCalled();
+  });
+
+  it("is shown while a setting it needs has no value, with shows not asked", async () => {
+    // The card asks for that setting itself; left out, the step that fixes it would go too.
+    showsPredicate.mockImplementation(() => false);
+    await expect(shown("acme/needs-maybe")).resolves.toBe(true);
+    expect(showsPredicate).not.toHaveBeenCalled();
+    // The control: with the setting given, the same shows decides, and says no.
+    await expect(
+      shown("acme/needs-maybe", { collection: "orders" })
+    ).resolves.toBe(false);
+    expect(showsPredicate).toHaveBeenCalledOnce();
+    expect(needsLoad).not.toHaveBeenCalled();
+  });
+
+  it("is shown only when shows answers true, handed what load would be", async () => {
+    await expect(shown("acme/maybe", { items: 3 })).resolves.toBe(true);
+    expect(showsPredicate.mock.calls[0]?.[0]).toMatchObject({
+      settings: { items: 3 },
+      user: { id: "reader" },
+    });
+    showsPredicate.mockImplementation(() => "yes");
+    await expect(shown("acme/maybe")).resolves.toBe(false);
+    expect(maybeLoad).not.toHaveBeenCalled();
+  });
+
+  it("is not shown when shows throws, which is logged as the widget's", async () => {
+    showsPredicate.mockImplementation(() => {
+      throw new Error("lookup failed");
+    });
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    };
+    const spy = vi
+      .spyOn(loggerModule, "getNextlyLogger")
+      .mockReturnValue(
+        logger as unknown as ReturnType<typeof loggerModule.getNextlyLogger>
+      );
+    try {
+      await expect(shown("acme/maybe")).resolves.toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "declared-widget-not-judged",
+          logContext: expect.objectContaining({
+            owner: "plugin @acme/shop",
+            widget: "acme/maybe",
+            reason: "widget-shows-threw",
+          }),
+        })
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  /** A card judged against a fake clock, its budget run out, and what was logged. */
+  async function timedOut(widget: string) {
+    vi.useFakeTimers();
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    };
+    const spy = vi
+      .spyOn(loggerModule, "getNextlyLogger")
+      .mockReturnValue(
+        logger as unknown as ReturnType<typeof loggerModule.getNextlyLogger>
+      );
+    try {
+      const judging = shown(widget);
+      await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
+      return { shown: await judging, warned: logger.warn.mock.calls };
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
+  }
+
+  it("is not shown when shows does not settle within the card's budget, naming shows", async () => {
+    showsPredicate.mockImplementation(() => new Promise(() => {}));
+    const { shown: answer, warned } = await timedOut("acme/maybe");
+    expect(answer).toBe(false);
+    expect(warned[0]?.[0]).toMatchObject({
+      logContext: {
+        owner: "plugin @acme/shop",
+        widget: "acme/maybe",
+        reason: "widget-judging-timed-out",
+        stage: "shows",
+      },
+    });
+  });
+
+  it("names its access as the stage when the access predicate is what does not settle", async () => {
+    // The budget bounds the whole judgement; the log says which part of it hung.
+    accessPredicate.mockImplementation(() => new Promise(() => {}));
+    const { shown: answer, warned } = await timedOut("acme/gated");
+    expect(answer).toBe(false);
+    expect(warned[0]?.[0]).toMatchObject({
+      logContext: { reason: "widget-judging-timed-out", stage: "access" },
+    });
+  });
+});
+
+/** The card asked by `entry`, answered as the batch answers it. */
+async function answeredEntry(entry: unknown): Promise<unknown> {
+  const prepared = await prepareCards([entry], batch);
+  return (prepared.get(0) as { answer: Function }).answer({
+    signal: new AbortController().signal,
+    scope: createBatchScope().forOwner("plugin @acme/shop"),
+    now: new Date(Date.UTC(2026, 9, 22)),
+  });
+}
+
+/** The ops the read services ran, in order: what reached the executor, not what was asked. */
+function opsRun(): string[] {
+  return vi.mocked(executeWidgetQuery).mock.calls.map(([query]) => query.op);
+}
+
+/** The size the latest run of the trend widget's load was handed. */
+function sizeLoaded(): unknown {
+  const [input] = trendLoad.mock.calls.at(-1) ?? [];
+  return input?.size;
+}
+
+describe("the size a card's load is handed", () => {
+  it("reads a trend only for a large card: a small one makes no trend read", async () => {
+    await expect(
+      answeredEntry({
+        widget: "acme/trend",
+        card: "c-trend",
+        size: { w: 4, h: 3, tier: "small" },
+      })
+    ).resolves.toMatchObject({ result: { total: 1 } });
+    expect(opsRun()).toEqual(["count"]);
+    expect(sizeLoaded()).toEqual({ w: 4, h: 3, tier: "small" });
+
+    vi.mocked(executeWidgetQuery).mockClear();
+    await expect(
+      answeredEntry({
+        widget: "acme/trend",
+        card: "c-trend",
+        size: { w: 12, h: 6, tier: "large" },
+      })
+    ).resolves.toMatchObject({ result: { total: 1 } });
+    // 🔴 The separating pair: a load handed no size, or the same size for both, reads alike.
+    expect(opsRun()).toEqual(["count", "timeseries"]);
+    expect(sizeLoaded()).toEqual({ w: 12, h: 6, tier: "large" });
+  });
+
+  it("answers two asks of one card differing only in size each at its own size", async () => {
+    const prepared = await prepareCards(
+      [
+        {
+          widget: "acme/trend",
+          card: "c-trend",
+          size: { w: 6, h: 4, tier: "medium" },
+        },
+        {
+          widget: "acme/trend",
+          card: "c-trend",
+          size: { w: 12, h: 4, tier: "large" },
+        },
+      ],
+      batch
+    );
+    const run = {
+      signal: new AbortController().signal,
+      scope: createBatchScope().forOwner("plugin @acme/shop"),
+      now: new Date(Date.UTC(2026, 9, 22)),
+    };
+    const answers = await Promise.all(
+      [0, 1].map(index =>
+        (prepared.get(index) as { answer: Function }).answer(run)
+      )
+    );
+    expect(answers).toEqual([
+      { result: { op: "count", total: 1 }, empty: false },
+      { result: { op: "count", total: 1, trend: true }, empty: false },
+    ]);
+    expect(trendLoad.mock.calls.map(([input]) => input.size)).toEqual([
+      { w: 6, h: 4, tier: "medium" },
+      { w: 12, h: 4, tier: "large" },
+    ]);
+  });
+
+  it("hands shows the same size load is handed", async () => {
+    await answeredEntry({
+      widget: "acme/maybe",
+      card: "c-maybe",
+      size: { w: 12, h: 3, tier: "large" },
+    });
+    expect(showsPredicate.mock.calls[0]?.[0]).toMatchObject({
+      size: { w: 12, h: 3, tier: "large" },
+    });
+  });
+
+  it("holds an asked size to the widget's bounds, as the admin draws the card", async () => {
+    await answeredEntry({
+      widget: "acme/trend",
+      card: "c-trend",
+      size: { w: 2, h: 12, tier: "small" },
+    });
+    expect(sizeLoaded()).toEqual({ w: 4, h: 6, tier: "small" });
+  });
+
+  it("is a stored card's own size at the medium tier when the ask says none", async () => {
+    await answeredEntry({ widget: "acme/trend", card: "c-trend" });
+    expect(sizeLoaded()).toEqual({ w: 8, h: 5, tier: "medium" });
+  });
+
+  it("is a stored size held to the bounds, or the default where the grid cannot draw it", async () => {
+    await answeredEntry({ widget: "acme/trend", card: "c-trend-small" });
+    expect(sizeLoaded()).toEqual({ w: 4, h: 3, tier: "medium" });
+    // `h: 1` is no size the grid draws, so the card is drawn, and loaded, at its default.
+    await answeredEntry({ widget: "acme/trend", card: "c-trend-bad" });
+    expect(sizeLoaded()).toEqual({ w: 6, h: 4, tier: "medium" });
+  });
+
+  it("is a preview's own asked size, or its widget's default when it says none", async () => {
+    await answeredEntry({
+      widget: "acme/trend",
+      settings: {},
+      size: { w: 12, h: 6, tier: "large" },
+    });
+    expect(sizeLoaded()).toEqual({ w: 12, h: 6, tier: "large" });
+    await answeredEntry({ widget: "acme/trend", settings: {} });
+    expect(sizeLoaded()).toEqual({ w: 6, h: 4, tier: "medium" });
+  });
+
+  it("refuses an entry whose size is not one, as every malformed entry is refused", async () => {
+    const refused = await prepareCards(
+      [
+        { widget: "acme/trend", card: "c-trend", size: { w: 4, h: 3 } },
+        {
+          widget: "acme/trend",
+          card: "c-trend",
+          size: { w: 13, h: 3, tier: "small" },
+        },
+        {
+          widget: "acme/trend",
+          card: "c-trend",
+          size: { w: 4, h: 3, tier: "huge" },
+        },
+        {
+          widget: "acme/trend",
+          settings: {},
+          size: { w: 4, h: 3, tier: "small", rows: 99 },
+        },
+      ],
+      batch
+    );
+    const bytes = new Set(
+      [0, 1, 2, 3].map(index => JSON.stringify(refused.get(index)))
+    );
+    expect(bytes).toEqual(new Set([await unavailableBytes()]));
+    expect(trendLoad).not.toHaveBeenCalled();
+  });
+
+  it("is the placement's own, at the medium tier, where a card is judged shown with no ask", async () => {
+    await expect(
+      cardIsShownTo(
+        declarations["acme/maybe"] as never,
+        {
+          id: "c-maybe",
+          widgetId: "acme/maybe",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+        batch,
+        {
+          signal: new AbortController().signal,
+          scope: createBatchScope().forOwner("plugin @acme/shop"),
+          now: new Date(Date.UTC(2026, 9, 22)),
+        }
+      )
+    ).resolves.toBe(true);
+    expect(showsPredicate.mock.calls[0]?.[0]).toMatchObject({
+      size: { w: 12, h: 3, tier: "medium" },
+    });
   });
 });

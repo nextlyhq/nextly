@@ -381,6 +381,43 @@ describe("a state the body reports", () => {
   });
 });
 
+describe("an empty card's action in a short card", () => {
+  const empty: CardState = {
+    kind: "empty",
+    empty: {
+      title: "No collection chosen yet",
+      action: { label: "Choose collection", onSelect: () => {} },
+    },
+  };
+
+  it("lays its title and action in one row where the body is too short to stack them", () => {
+    // A two-row card's body is 46 px; stacked, the title and the action take 64, and the action
+    // ran under the footer's room, where the footer took its click.
+    render(
+      <WidgetCard title="Orders" state={empty} h={2}>
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("card-empty")).toHaveAttribute(
+      "data-layout",
+      "inline"
+    );
+  });
+
+  it("stacks them where the body has the room", () => {
+    // The control: the same state in a three-row card.
+    render(
+      <WidgetCard title="Orders" state={empty} h={3}>
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("card-empty")).toHaveAttribute(
+      "data-layout",
+      "stacked"
+    );
+  });
+});
+
 describe("a card that hides when its data is empty", () => {
   const empty: CardState = { kind: "empty", empty: { title: "Nothing" } };
 
@@ -441,6 +478,44 @@ describe("a card that hides when its data is empty", () => {
     );
     expect(screen.getByRole("region", { name: "Posts" })).not.toHaveAttribute(
       "data-hidden-empty"
+    );
+  });
+});
+
+describe("a card its widget does not show for this person", () => {
+  const notShown: CardState = {
+    kind: "empty",
+    empty: { title: "Not shown for you right now" },
+  };
+
+  it("is taken off the dashboard, though its widget does not hide when empty", () => {
+    render(
+      <WidgetCard title="Overdue invoices" state={notShown} notShown>
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(
+      screen.getByRole("region", { name: "Overdue invoices" })
+    ).toHaveAttribute("data-hidden-empty");
+  });
+
+  it("stays in reach in customise mode, marked with why it is not shown", () => {
+    render(
+      <WidgetCard
+        title="Overdue invoices"
+        state={notShown}
+        notShown
+        customizing
+      >
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(
+      screen.getByRole("region", { name: "Overdue invoices" })
+    ).not.toHaveAttribute("data-hidden-empty");
+    // Its own reason, not the hidden-while-empty one a different card gives.
+    expect(screen.getByTestId("hidden-while-empty")).toHaveTextContent(
+      "Not shown for you right now"
     );
   });
 });

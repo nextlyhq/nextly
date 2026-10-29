@@ -89,11 +89,14 @@ function cell(page: Page) {
 }
 
 /**
- * The rows drawn inside `within`, however the card draws them: a list at the medium tier, a table
- * at the large one, which is what a full card on a wide dashboard is.
+ * The rows drawn inside `within`, however the card draws them: a list's entity rows at the medium
+ * tier, a table's rows at the large one, which is what a full card on a wide dashboard is. Read
+ * by the list card's own row hooks, which every list card draws through.
  */
 function rowsIn(within: Locator) {
-  return within.locator('[data-testid="widget-list"] > li, table tbody tr');
+  return within.locator(
+    '[data-testid="entity-row"], [data-testid="list-card-table-row"]'
+  );
 }
 
 /** The rows the card draws. */

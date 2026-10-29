@@ -4,14 +4,18 @@
  *
  * Every fault is gathered and refused together with the widget declarations'
  * own, each naming "the site config" and the entry, so one restart shows the
- * author everything to fix (R-4, R-5). Nothing here applies a key; which keys
- * are applied yet is `siteDashboardKeysNotApplied`'s to say.
+ * author everything to fix. Every key it accepts is applied: `widgets` are
+ * registered with the plugins', `defaultLayout` and `suggestions` through
+ * `siteDefaultLayoutPlan`, and `hide`, `replace` and `overrides` through the
+ * site's rules.
  *
  * @module domains/widgets/declaration/site-dashboard
  */
 
 import { allWidgets, sizeFacts } from "../canonical";
-import { CORE_WIDGETS } from "../core-widgets";
+// Core's ids and default alone, not the widgets: this check runs wherever a config is read.
+import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
+import type { DefaultLayoutPlan } from "../default-layout";
 import type { WidgetDefinition } from "../definition";
 import {
   GRID_COLUMNS,
@@ -24,28 +28,33 @@ import {
   type WidgetSizeBounds,
   type WidgetSizeDeclaration,
 } from "../grid-size";
-import { MAX_PLACEMENTS } from "../layout-limits";
+import { isUsableText, MAX_PLACEMENTS } from "../layout-limits";
 import { getWidget } from "../registry";
+import {
+  inRetiredWidgetNamespace,
+  retiredWidgetReplacement,
+} from "../retired-widget-namespaces";
 import { startingValueProblem, type AnyWidgetSetting } from "../settings";
+import type { SiteDashboardRules } from "../site-rules";
 
+import type { DefaultLayoutCard, WidgetOverride } from "./dashboard";
 import { quote } from "./quote";
+import { SITE_CONFIG, siteComponentProblem } from "./site-component";
 import {
   descriptionProblem,
   requiredTextProblem,
+  sparseListProblem,
   type WidgetDeclarationFault,
 } from "./validate";
 
-/** Who a site config fault names as its owner. */
-export const SITE_CONFIG = "the site config";
+// Who a site config fault names as its owner: declared beside the rule for a
+// site widget's component, which the code generator reads too.
+export { SITE_CONFIG } from "./site-component";
 
 /** What the check needs to know of one widget. */
 export interface SiteWidgetFacts {
-  /**
-   * The sizes its cards may take, every end filled in. Absent for a generated
-   * card not derived yet, whose sizes the check cannot see: then only that a
-   * size is one the grid can draw is checked.
-   */
-  size?: WidgetSizeBounds;
+  /** The sizes its cards may take, every end filled in. */
+  size: WidgetSizeBounds;
   allowsSeveral: boolean;
   /** Its declared settings, or `undefined` where its declaration is not seen. */
   settings?: readonly AnyWidgetSetting[];
@@ -101,7 +110,7 @@ const OVERRIDE_KEYS = ["title", "description", "size", "settings"] as const;
 const SIZE_KEYS = ["default", "min", "max"] as const;
 
 /** The keys a `defaultLayout` card takes. */
-const CARD_KEYS = ["widget", "w", "h", "settings"] as const;
+const CARD_KEYS = ["widget", "id", "w", "h", "settings", "optional"] as const;
 
 /**
  * Each key of `value` that `where` does not take, with the known key it most
@@ -142,37 +151,6 @@ function editDistance(a: string, b: string): number {
   return previous[b.length] ?? 0;
 }
 
-/**
- * The namespaces of the cards core generates from the content itself, one per
- * collection or Single. They are derived when the dashboard is first read, after
- * startup checks the site config, so at startup an id in them may name a card
- * that does not exist yet without being a mistake.
- */
-const GENERATED_NAMESPACES = ["collection/", "single/"] as const;
-
-/**
- * What the check assumes of a generated card it cannot see yet: no sizes and
- * no settings it can judge, so only the config's own shape is checked.
- */
-const NOT_YET_GENERATED: SiteWidgetFacts = {
-  allowsSeveral: true,
-};
-
-/**
- * What the check knows of `id`: the install's widget, or, for an id in a
- * generated namespace not derived yet, `NOT_YET_GENERATED`.
- */
-function factsFor(
-  id: string,
-  ctx: SiteDashboardContext
-): SiteWidgetFacts | undefined {
-  const facts = ctx.factsOf(id);
-  if (facts !== undefined) return facts;
-  return GENERATED_NAMESPACES.some(namespace => id.startsWith(namespace))
-    ? NOT_YET_GENERATED
-    : undefined;
-}
-
 /** Why `id` names no widget, with its nearest match, or `undefined`. */
 function unknownWidget(
   where: string,
@@ -182,7 +160,14 @@ function unknownWidget(
   if (typeof id !== "string") {
     return `${where} must name a widget by its id, got ${quote(id)}`;
   }
-  if (factsFor(id, ctx) !== undefined) return undefined;
+  // 🔴 Refused by NAMESPACE, ahead of the lookup: core no longer makes a card
+  // per collection or per Single, so an id there names nothing, and the
+  // nearest-match hint would point at an unrelated widget. The author is told
+  // what replaced it instead.
+  const replacement = retiredWidgetReplacement(id);
+  if (replacement !== undefined)
+    return `${where} names "${id}", which ${replacement}`;
+  if (ctx.factsOf(id) !== undefined) return undefined;
   const near = nearest(id, ctx.ids);
   return `${where} names "${id}", which no widget declares${near === undefined ? "" : `; did you mean "${near}"?`}`;
 }
@@ -204,7 +189,7 @@ const fitsWithin = (a: GridSize, b: GridSize): boolean =>
  */
 function cardSizeProblems(
   card: Record<string, unknown>,
-  bounds: WidgetSizeBounds | undefined
+  bounds: WidgetSizeBounds
 ): string[] {
   const direction = (key: "w" | "h"): string | undefined => {
     const value = card[key];
@@ -243,9 +228,10 @@ function gridDirectionProblem(
 function boundsDirectionProblem(
   key: "w" | "h",
   value: number,
-  bounds: WidgetSizeBounds | undefined
+  bounds: WidgetSizeBounds
 ): string | undefined {
-  if (bounds === undefined) return undefined;
+  // Every widget the check knows states its bounds, so each drawable
+  // direction is judged against them.
   const low = bounds.min[key];
   const high = bounds.max[key];
   return value >= low && value <= high
@@ -305,8 +291,9 @@ function narrowedBounds(
   id: string,
   site: Record<string, unknown>,
   facts: SiteWidgetFacts
-): WidgetSizeBounds | undefined {
-  if (facts.size === undefined) return undefined;
+): WidgetSizeBounds {
+  // The widget's own bounds are always known: every id the check accepts
+  // names a widget the install declares.
   const overrides = isRecord(site.overrides) ? site.overrides : {};
   const override = overrides[id];
   const size = isRecord(override) ? overrideSize(override.size) : undefined;
@@ -331,6 +318,8 @@ function hideFaults(
   if (!Array.isArray(site.hide)) {
     return [fault("(hide)", "hide must be a list of widget ids")];
   }
+  const sparse = sparseListProblem(site.hide, "hide");
+  if (sparse !== undefined) return [fault("(hide)", sparse)];
   return site.hide.flatMap(id => {
     const problem = unknownWidget("hide", id, ctx);
     return problem === undefined
@@ -360,7 +349,8 @@ function sizeOverrideProblems(size: unknown, facts: SiteWidgetFacts): string[] {
       `overrides.size.${key} must be { w, h } with w a whole number from 1 to ${GRID_COLUMNS} and h a whole number from ${MIN_GRID_ROWS} to ${MAX_GRID_ROWS}, got ${quote(size[key])}`
   );
   const read = overrideSize(size);
-  if (read === undefined || facts.size === undefined) {
+  // Only an override that can be read is judged against the widget's bounds.
+  if (read === undefined) {
     return [...unknownKeys, ...shapes];
   }
   if (narrowedSizeBounds(facts.size, read) !== undefined) return unknownKeys;
@@ -462,7 +452,7 @@ function overridesFaults(
   return Object.entries(site.overrides).flatMap(([id, override]) => {
     const unknown = unknownWidget("overrides", id, ctx);
     if (unknown !== undefined) return [fault(id, unknown)];
-    const facts = factsFor(id, ctx) as SiteWidgetFacts;
+    const facts = ctx.factsOf(id) as SiteWidgetFacts;
     return overrideProblems(override, facts).map(problem => fault(id, problem));
   });
 }
@@ -479,11 +469,30 @@ function defaultCardProblems(
   ctx: SiteDashboardContext
 ): string[] {
   const id = card.widget;
-  const unknownKeys = unknownKeyProblems("defaultLayout card", card, CARD_KEYS);
+  const unknownKeys = [
+    ...unknownKeyProblems("defaultLayout card", card, CARD_KEYS),
+    ...(card.optional === undefined || typeof card.optional === "boolean"
+      ? []
+      : [
+          `defaultLayout optional must be true or false, got ${quote(card.optional)}`,
+        ]),
+  ];
   const unknown = unknownWidget("defaultLayout", id, ctx);
+  // An optional card names a widget the install may not have, such as a
+  // plugin's on a site without the plugin: left out of the default, no fault.
+  // Never a retired card's id, which no install has: that is refused with the
+  // same message whether the card is optional or not.
+  if (
+    unknown !== undefined &&
+    card.optional === true &&
+    typeof id === "string" &&
+    !inRetiredWidgetNamespace(id)
+  ) {
+    return unknownKeys;
+  }
   if (unknown !== undefined) return [...unknownKeys, unknown];
   const widget = id as string;
-  const facts = factsFor(widget, ctx) as SiteWidgetFacts;
+  const facts = ctx.factsOf(widget) as SiteWidgetFacts;
   return [
     ...unknownKeys,
     ...(hiddenIds(site).has(widget)
@@ -524,6 +533,97 @@ function repeatedFaults(
   return faults;
 }
 
+/**
+ * Each fault in the ids the default's cards are kept under. A card's id is the
+ * one its entry names, or its widget's: so a widget placed more than once names
+ * an id for each further card, which no other card and no widget may share. The
+ * id never depends on another card, or on which a reader may see.
+ */
+function cardIdFaults(
+  cards: readonly Record<string, unknown>[],
+  ctx: SiteDashboardContext
+): WidgetDeclarationFault[] {
+  const widgetIds = new Set(ctx.ids);
+  const taken = new Set<string>();
+  return cards.flatMap((card, index) => {
+    const found = cardIdFault(card, index, { widgetIds, taken, ctx });
+    return found === undefined ? [] : [found];
+  });
+}
+
+/** What one card's id is checked against: the install's widgets, and the ids the cards before it took. */
+interface CardIdContext {
+  readonly widgetIds: ReadonlySet<string>;
+  /** Grows as each card takes its id. */
+  readonly taken: Set<string>;
+  readonly ctx: SiteDashboardContext;
+}
+
+/** The fault in one card's id, if it has one; a card whose id is free takes it. */
+function cardIdFault(
+  card: Record<string, unknown>,
+  index: number,
+  { widgetIds, taken, ctx }: CardIdContext
+): WidgetDeclarationFault | undefined {
+  const { widget, id } = card;
+  if (typeof widget !== "string") return undefined;
+  const problem =
+    cardIdShapeProblem(id, widgetIds) ??
+    takenIdProblem(widget, id, index, taken, ctx);
+  if (problem === undefined) return undefined;
+  return fault(id === undefined ? widget : `${widget} (${quote(id)})`, problem);
+}
+
+/**
+ * Whether a card's id is one a card before it took: a further card of its
+ * widget with no id of its own, or two cards under one id. An id still free is
+ * taken here.
+ */
+function takenIdProblem(
+  widget: string,
+  id: unknown,
+  index: number,
+  taken: Set<string>,
+  ctx: SiteDashboardContext
+): string | undefined {
+  const own = typeof id === "string" ? id : widget;
+  if (!taken.has(own)) {
+    taken.add(own);
+    return undefined;
+  }
+  if (typeof id === "string") {
+    return `defaultLayout names two cards "${own}": each card needs an id of its own`;
+  }
+  // A widget that allows one card is named once, by `repeatedFaults`.
+  return ctx.factsOf(widget)?.allowsSeveral === false
+    ? undefined
+    : `defaultLayout places "${widget}" again (entry ${index + 1}) with no id of its own: name the card, as { widget: "${widget}", id: "${suggestedCardId(widget, taken)}" }`;
+}
+
+/** What is wrong with an id as written, whatever the other cards: not a non-empty string, or a widget's. */
+function cardIdShapeProblem(
+  id: unknown,
+  widgetIds: ReadonlySet<string>
+): string | undefined {
+  if (id === undefined) return undefined;
+  // The layout endpoint's own test, so a card startup accepts is one a
+  // reader's save can carry back.
+  if (!isUsableText(id)) {
+    return `defaultLayout id must be a non-empty string, got ${quote(id)}`;
+  }
+  return widgetIds.has(id)
+    ? `defaultLayout names a card "${id}", which is a widget's id; give it a name no widget has`
+    : undefined;
+}
+
+/** An id for a further card of `widget` that no card has taken, for a fault to suggest. */
+function suggestedCardId(widget: string, taken: ReadonlySet<string>): string {
+  const name = widget.slice(widget.lastIndexOf("/") + 1);
+  let ordinal = 2;
+  while (taken.has(`${name}-${ordinal}`)) ordinal += 1;
+  return `${name}-${ordinal}`;
+}
+
 function defaultLayoutFaults(
   site: Record<string, unknown>,
   ctx: SiteDashboardContext
@@ -532,23 +632,35 @@ function defaultLayoutFaults(
   if (!Array.isArray(site.defaultLayout)) {
     return [fault("(defaultLayout)", "defaultLayout must be a list of cards")];
   }
+  const sparse = sparseListProblem(site.defaultLayout, "defaultLayout");
+  if (sparse !== undefined) return [fault("(defaultLayout)", sparse)];
   const entries: readonly unknown[] = site.defaultLayout;
+  const cards = entries.map(asCard);
+  // An optional card whose widget the install does not have is left out of
+  // the default (`defaultLayoutPlacements`), so it takes none of its room.
+  const placed = cards.filter(
+    card =>
+      !(
+        card?.optional === true &&
+        typeof card.widget === "string" &&
+        ctx.factsOf(card.widget) === undefined
+      )
+  ).length;
   const over =
-    entries.length > ctx.maxPlacements
+    placed > ctx.maxPlacements
       ? [
           fault(
             "(defaultLayout)",
-            `defaultLayout holds ${entries.length} cards, and a dashboard holds at most ${ctx.maxPlacements}`
+            `defaultLayout places ${placed} cards, and a dashboard holds at most ${ctx.maxPlacements}`
           ),
         ]
       : [];
-  const cards = entries.map(asCard);
   const each = cards.flatMap((card, index) => {
     if (card === undefined) {
       return [
         fault(
           `(defaultLayout ${index + 1})`,
-          "a default card is a widget id or { widget, w?, h?, settings? }"
+          "a default card is a widget id or { widget, w?, h?, settings?, optional? }"
         ),
       ];
     }
@@ -564,7 +676,12 @@ function defaultLayoutFaults(
   const listed = cards.filter(
     (card): card is Record<string, unknown> => card !== undefined
   );
-  return [...over, ...each, ...repeatedFaults(listed, ctx)];
+  return [
+    ...over,
+    ...each,
+    ...repeatedFaults(listed, ctx),
+    ...cardIdFaults(listed, ctx),
+  ];
 }
 
 function replacementProblem(
@@ -610,6 +727,29 @@ function replaceFaults(
  * Every fault of the site config's `admin.dashboard`, other than its own
  * widgets' declarations, which are checked with the plugins'.
  */
+/**
+ * Each of the site's own widgets whose view component the component map could
+ * not resolve: its module neither relative to the config file nor a package
+ * name. The rest of a widget's declaration is checked with every owner's.
+ */
+function siteWidgetComponentFaults(
+  dashboard: Record<string, unknown>
+): WidgetDeclarationFault[] {
+  if (!Array.isArray(dashboard.widgets)) return [];
+  return (dashboard.widgets as readonly unknown[]).flatMap(widget => {
+    const view = isRecord(widget) ? widget.view : undefined;
+    const component = isRecord(view) ? view.component : undefined;
+    if (typeof component !== "string") return [];
+    const problem = siteComponentProblem(component);
+    if (problem === undefined) return [];
+    const id =
+      isRecord(widget) && typeof widget.id === "string"
+        ? widget.id
+        : "(widgets)";
+    return [fault(id, problem)];
+  });
+}
+
 export function siteDashboardFaults(
   dashboard: unknown,
   ctx: SiteDashboardContext
@@ -635,26 +775,8 @@ export function siteDashboardFaults(
     ...defaultLayoutFaults(dashboard, ctx),
     ...suggestions,
     ...replaceFaults(dashboard, ctx),
+    ...siteWidgetComponentFaults(dashboard),
   ];
-}
-
-/** The keys this version accepts and checks but does not yet apply. */
-const NOT_APPLIED_YET = [
-  "widgets",
-  "hide",
-  "overrides",
-  "defaultLayout",
-  "suggestions",
-  "replace",
-] as const;
-
-/**
- * The keys the site config sets that this version does not apply yet, so
- * startup can say so rather than let a setting appear to do nothing.
- */
-export function siteDashboardKeysNotApplied(dashboard: unknown): string[] {
-  if (!isRecord(dashboard)) return [];
-  return NOT_APPLIED_YET.filter(key => dashboard[key] !== undefined);
 }
 
 /**
@@ -665,7 +787,10 @@ export function siteDashboardKeysNotApplied(dashboard: unknown): string[] {
  */
 export function siteDashboardContext(
   declared: ReadonlyMap<string, WidgetDefinition>,
-  alternatives: ReadonlyMap<string, string>
+  alternatives: ReadonlyMap<string, string>,
+  // Core's ids, derived once where startup registers widgets and handed to
+  // every check that asks whether an id is a built-in.
+  coreIds: ReadonlySet<string>
 ): SiteDashboardContext {
   const registered = new Map(allWidgets().map(widget => [widget.id, widget]));
   const factsOf = (id: string): SiteWidgetFacts | undefined => {
@@ -694,7 +819,7 @@ export function siteDashboardContext(
   return {
     ids: [...declared.keys(), ...registered.keys()],
     factsOf,
-    coreIds: new Set(CORE_WIDGETS.map(widget => widget.id)),
+    coreIds,
     alternatives,
     maxPlacements: MAX_PLACEMENTS,
   };
@@ -707,4 +832,81 @@ export function siteDashboardContext(
  */
 export function siteDashboardSnapshot(dashboard: unknown): unknown {
   return isRecord(dashboard) ? { ...dashboard } : dashboard;
+}
+
+/**
+ * The default dashboard the site config asks for, from the copy startup checked:
+ * its `defaultLayout`, or core's own where it gives none, and whether the
+ * plugins' suggestions (`suggested`, in plugin order) are placed after it.
+ * Read only once the config has passed every check, so each entry is a widget
+ * id or a card of the shape the check admits.
+ */
+export function siteDefaultLayoutPlan(
+  dashboard: unknown,
+  suggested: readonly string[]
+): DefaultLayoutPlan {
+  const site = isRecord(dashboard) ? dashboard : {};
+  const given = site.defaultLayout as
+    | readonly (string | DefaultLayoutCard)[]
+    | undefined;
+  const replaced = replacements(site);
+  const cards =
+    given === undefined
+      ? CORE_DEFAULT_LAYOUT
+      : given.map(
+          (entry): DefaultLayoutCard =>
+            typeof entry === "string" ? { widget: entry } : { ...entry }
+        );
+  return {
+    // An alternative takes the place of the built-in it replaces: the card keeps its own id, its
+    // place and its size (held within the alternative's bounds where it is placed), and drops
+    // the settings, which are the built-in's vocabulary, not the alternative's.
+    cards: cards.map(card => {
+      const alternative = replaced.get(card.widget);
+      return alternative === undefined
+        ? card
+        : {
+            widget: alternative,
+            ...(card.id === undefined ? {} : { id: card.id }),
+            ...(card.w === undefined ? {} : { w: card.w }),
+            ...(card.h === undefined ? {} : { h: card.h }),
+            ...(card.optional === undefined ? {} : { optional: card.optional }),
+          };
+    }),
+    suggestions: site.suggestions !== false,
+    suggested,
+  };
+}
+
+/** The site's `replace`, built-in to alternative, from the copy startup checked. */
+function replacements(site: Record<string, unknown>): Map<string, string> {
+  return new Map(
+    isRecord(site.replace)
+      ? Object.entries(site.replace).filter(
+          (pair): pair is [string, string] => typeof pair[1] === "string"
+        )
+      : []
+  );
+}
+
+/**
+ * The site's rules about other widgets, from the copy startup checked: what it hides, what it
+ * replaces, what it overrides, and every alternative the plugins offer (`alternatives`), which
+ * the site keeps off the dashboard unless it replaces a built-in with one.
+ */
+export function siteDashboardRulesOf(
+  dashboard: unknown,
+  alternatives: ReadonlyMap<string, string>
+): SiteDashboardRules {
+  const site = isRecord(dashboard) ? dashboard : {};
+  return {
+    hidden: hiddenIds(site),
+    replaced: replacements(site),
+    alternatives: new Set(alternatives.keys()),
+    overrides: new Map(
+      isRecord(site.overrides)
+        ? (Object.entries(site.overrides) as [string, WidgetOverride][])
+        : []
+    ),
+  };
 }

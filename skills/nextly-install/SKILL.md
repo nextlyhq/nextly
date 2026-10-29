@@ -23,9 +23,10 @@ Checked against `nextly` 0.0.2-alpha.67 with Next.js 16.4. Run
 
 ## Before you start
 
-- Next.js 16.4.1 or later, or 15.5.28 or later on the 15 line, with the App
-  Router (`app/` or `src/app/`). Earlier versions carry the October 2026
-  security advisories these releases fix.
+- Next.js `^16.4.1` and React `^19.3.0` (16.4.1 or later within 16.x, 19.3.0
+  or later within 19.x), with the App Router (`app/` or `src/app/`). The
+  [supported versions](https://nextlyhq.com/docs/getting-started/installation#requirements)
+  are kept current there.
 - Node.js `^22.12.0 || >=24.0.0`. Node 20 and Node 23 are not supported.
 - A clean git working tree, so every change below is visible in one diff.
 

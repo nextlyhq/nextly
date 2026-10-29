@@ -3,18 +3,18 @@ import { describe, expect, it } from "vitest";
 import { sanitizeConfig } from "../config";
 
 describe("sanitizeConfig — production migration db options", () => {
-  it("defaults runMigrationsOnBoot=false and migrateLockTtlSeconds=900", () => {
+  it("defaults runMigrationsOnBoot=false and the schema lock's lease to 120 s", () => {
     const c = sanitizeConfig({});
     expect(c.db.runMigrationsOnBoot).toBe(false);
-    expect(c.db.migrateLockTtlSeconds).toBe(900);
+    expect(c.db.migrateLockTtlSeconds).toBe(120);
   });
 
   it("passes through overrides", () => {
     const c = sanitizeConfig({
-      db: { runMigrationsOnBoot: true, migrateLockTtlSeconds: 120 },
+      db: { runMigrationsOnBoot: true, migrateLockTtlSeconds: 300 },
     });
     expect(c.db.runMigrationsOnBoot).toBe(true);
-    expect(c.db.migrateLockTtlSeconds).toBe(120);
+    expect(c.db.migrateLockTtlSeconds).toBe(300);
   });
 });
 

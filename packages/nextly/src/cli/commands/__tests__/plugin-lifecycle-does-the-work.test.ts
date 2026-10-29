@@ -24,12 +24,16 @@ import {
   type PluginLifecycleDeps,
 } from "../plugin-lifecycle";
 import { loadDialectTables } from "../../../database/dialect-tables";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 
 // The postgresql tables this file reads; the unit setup loads only
 // the run's own dialect, as an app's adapter would.
 beforeAll(async () => {
   await Promise.all(["postgresql"].map(d => loadDialectTables(d)));
 });
+
+/** The data-loss consent given without targets, as `--accept-data-loss` alone gives it. */
+const EVERY_DELETION = resolveDataLossConsent({ flag: true, env: {} });
 
 const plugin: LifecyclePlugin = {
   name: "@acme/fx",
@@ -232,7 +236,7 @@ describe("what uninstall tells the operator to do next", () => {
     const info = vi.fn();
     await runPluginUninstallCommand(
       "@acme/fx",
-      { ...opts, yes: true },
+      { ...opts, yes: false, consent: EVERY_DELETION },
       deps({
         logger: { ...logger, info } as never,
         ...droppedByDowns(),
@@ -289,7 +293,7 @@ describe("plugins uninstall over a DOWN that leaves a table", () => {
     await expect(
       runPluginUninstallCommand(
         "@acme/fx",
-        { keepData: false, yes: true },
+        { keepData: false, yes: false, consent: EVERY_DELETION },
         deps({ db: db as never })
       )
     ).rejects.toMatchObject({
@@ -394,7 +398,7 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     const runLifecycleHook = vi.fn(async () => {});
     const run = runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: false, yes: true },
+      { keepData: false, yes: false, consent: EVERY_DELETION },
       deps({
         db: db as never,
         runLifecycleHook,
@@ -998,7 +1002,7 @@ describe("plugins uninstall", () => {
     const runDown = vi.fn(async () => 3);
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: false, yes: true },
+      { keepData: false, yes: false, consent: EVERY_DELETION },
       deps({ runDown })
     );
 
@@ -1016,7 +1020,7 @@ describe("plugins uninstall", () => {
     const order: string[] = [];
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: false, yes: true },
+      { keepData: false, yes: false, consent: EVERY_DELETION },
       deps({
         runLifecycleHook: vi.fn(async () => {
           order.push("onUninstall");
@@ -1039,7 +1043,7 @@ describe("plugins uninstall", () => {
     await expect(
       runPluginUninstallCommand(
         "@acme/fx",
-        { keepData: false, yes: true },
+        { keepData: false, yes: false, consent: EVERY_DELETION },
         deps({
           runLifecycleHook: vi.fn(async () => {
             throw new Error("hook failed");
@@ -1064,7 +1068,7 @@ describe("plugins uninstall", () => {
     const runLifecycleHook = vi.fn(async () => {});
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: true, yes: true },
+      { keepData: true, yes: false },
       deps({ runLifecycleHook })
     );
 
@@ -1136,7 +1140,7 @@ describe("plugins uninstall", () => {
     logger.info.mockClear();
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: false, yes: true },
+      { keepData: false, yes: false, consent: EVERY_DELETION },
       deps({ runDown: vi.fn(async () => 7) })
     );
 
@@ -1161,7 +1165,7 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
       }))
     );
 
-  it("asks for --yes before running it, and runs nothing", async () => {
+  it("asks for the data-loss consent before running it, and runs nothing", async () => {
     const runDown = vi.fn(async () => 1);
     const runLifecycleHook = vi.fn(async () => {});
     await expect(
@@ -1173,6 +1177,132 @@ describe("plugins uninstall over a DOWN that drops a column", () => {
     ).rejects.toMatchObject({ code: "PLUGIN_UNINSTALL_UNCONFIRMED" });
     expect(runLifecycleHook).not.toHaveBeenCalled();
     expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("takes only the consent without targets for a drop no owner row names", async () => {
+    // Nothing names the column, so no list of targets can be said to cover it.
+    const runDown = vi.fn(async () => 1);
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        {
+          keepData: false,
+          yes: false,
+          consent: resolveDataLossConsent({ flag: "dep__notes", env: {} }),
+        },
+        deps({ prepareDowns: prepared(true), runDown })
+      )
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(
+        "plugin:@acme/fx/0002_more's DOWN, which drops a table or column"
+      ),
+    });
+    expect(runDown).not.toHaveBeenCalled();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false, consent: EVERY_DELETION },
+      deps({ prepareDowns: prepared(true), runDown })
+    );
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
+  it("names a column the plugin added to another owner's table, which consent naming it covers", async () => {
+    const column = {
+      tableName: "dep__notes",
+      elementKind: "column",
+      elementName: "fx_flag",
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    };
+    const ownsColumn = {
+      select: () => ({
+        from: () => Object.assign([column], { where: () => [column] }),
+      }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    };
+    const runDown = vi.fn(async () => 1);
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false },
+        deps({ db: ownsColumn as never, prepareDowns: prepared(true), runDown })
+      )
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringMatching(
+        /column dep__notes\.fx_flag[\s\S]*--accept-data-loss=dep__notes\.fx_flag/
+      ),
+    });
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      {
+        keepData: false,
+        yes: false,
+        consent: resolveDataLossConsent({
+          flag: "dep__notes.fx_flag",
+          env: {},
+        }),
+      },
+      deps({ db: ownsColumn as never, prepareDowns: prepared(true), runDown })
+    );
+    expect(runDown).toHaveBeenCalledTimes(2);
+
+    // Kept, the column is not deleted, so nothing is asked or refused.
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: true, yes: false },
+      deps({ db: ownsColumn as never, prepareDowns: prepared(true), runDown })
+    );
+  });
+
+  it("lists no column whose record outlived it, nor any when no DOWN loses data", async () => {
+    // The column an earlier `migrate:down --plugin` already removed: its
+    // ownership row stays as history, and the column is gone.
+    const column = {
+      tableName: "dep__notes",
+      elementKind: "column",
+      elementName: "fx_flag",
+      ownerKind: "plugin",
+      ownerId: "@acme/fx",
+      migratedBy: "plugin:@acme/fx",
+      ownerVersion: null,
+      schemaVersion: null,
+      state: "active",
+    };
+    const ownsColumn = {
+      select: () => ({
+        from: () => Object.assign([column], { where: () => [column] }),
+      }),
+      update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+      insert: () => ({ values: () => Promise.resolve() }),
+    };
+    const runDown = vi.fn(async () => 1);
+    // Gone from the table, so a DOWN that loses data still deletes nothing named.
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false },
+        deps({
+          db: ownsColumn as never,
+          prepareDowns: prepared(true),
+          runDown,
+          liveColumns: async () => new Map([["dep__notes", new Set(["id"])]]),
+        })
+      )
+    ).rejects.toMatchObject({
+      publicMessage: expect.not.stringContaining("dep__notes.fx_flag"),
+    });
+    // DOWNs that lose no data (dropping an index, say) need no consent at all.
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false },
+      deps({ db: ownsColumn as never, prepareDowns: prepared(false), runDown })
+    );
+    expect(runDown).toHaveBeenCalledTimes(2);
   });
 
   it("runs a DOWN that loses no data without asking", async () => {
@@ -1246,21 +1376,102 @@ describe("plugins uninstall decides before it takes the lock", () => {
   });
 
   it("proceeds under the lock once confirmed", async () => {
-    // The control: the same fixture with --yes takes the lock and runs
+    // The control: the same fixture with consent takes the lock and runs
     // everything inside it.
     const { reached, deps: d } = watched();
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: false, yes: true },
+      { keepData: false, yes: false, consent: EVERY_DELETION },
       d
     );
+    expect(reached).toEqual(["lock", "hook", "down", "down"]);
+  });
+
+  it("does not take --yes as consent to drop the plugin's tables", async () => {
+    // `--yes` answers a question; deleting data takes the data-loss consent.
+    const { reached, deps: d } = watched();
+    await expect(
+      runPluginUninstallCommand("@acme/fx", { keepData: false, yes: true }, d)
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_UNCONFIRMED",
+      publicMessage: expect.stringMatching(
+        /table fx__notes[\s\S]*--accept-data-loss=fx__notes[\s\S]*--yes does not/
+      ),
+    });
+    expect(reached).toEqual([]);
+  });
+
+  it("drops them with consent naming the table, listing it first", async () => {
+    const { reached, deps: d } = watched();
+    const listed = vi.mocked(d.logger.warn);
+    listed.mockClear();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      {
+        keepData: false,
+        yes: false,
+        consent: resolveDataLossConsent({ flag: "fx__notes", env: {} }),
+      },
+      d
+    );
+    expect(reached).toEqual(["lock", "hook", "down", "down"]);
+    expect(listed).toHaveBeenCalledWith("  - table fx__notes");
+  });
+
+  it("refuses consent that names another table, naming the one it leaves out", async () => {
+    const { reached, deps: d } = watched();
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        {
+          keepData: false,
+          yes: false,
+          consent: resolveDataLossConsent({ flag: "fx__other", env: {} }),
+        },
+        d
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_UNCONFIRMED",
+      publicMessage: expect.stringMatching(
+        /does not cover[\s\S]*table fx__notes[\s\S]*--accept-data-loss=fx__other,fx__notes/
+      ),
+    });
+    expect(reached).toEqual([]);
+  });
+
+  it("asks a terminal, and changes nothing when it says no", async () => {
+    const askToDelete = vi.fn(async () => false);
+    const { reached, deps: d } = watched({ interactive: true, askToDelete });
+    await expect(
+      runPluginUninstallCommand("@acme/fx", { keepData: false, yes: false }, d)
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_UNCONFIRMED",
+      publicMessage: expect.stringContaining("Nothing was changed"),
+    });
+    expect(askToDelete).toHaveBeenCalledTimes(1);
+    expect(reached).toEqual([]);
+  });
+
+  it("asks once, though it decides again under the lock", async () => {
+    const askToDelete = vi.fn(async () => true);
+    const { reached, deps: d } = watched({ interactive: true, askToDelete });
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: false },
+      d
+    );
+    expect(askToDelete).toHaveBeenCalledTimes(1);
     expect(reached).toEqual(["lock", "hook", "down", "down"]);
   });
 
   it("refuses an unknown plugin without taking the lock", async () => {
     const { reached, deps: d } = watched();
     await expect(
-      runPluginUninstallCommand("@acme/nope", { keepData: false, yes: true }, d)
+      runPluginUninstallCommand(
+        "@acme/nope",
+        { keepData: false, yes: false, consent: EVERY_DELETION },
+        d
+      )
     ).rejects.toMatchObject({
       code: "NOT_FOUND",
       publicMessage: expect.stringContaining("Configured: @acme/fx"),
@@ -1274,7 +1485,11 @@ describe("plugins uninstall decides before it takes the lock", () => {
       plugins: [{ ...plugin, modules: [] }],
     });
     await expect(
-      runPluginUninstallCommand("@acme/fx", { keepData: false, yes: true }, d)
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false, consent: EVERY_DELETION },
+        d
+      )
     ).rejects.toMatchObject({
       code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
       logContext: { reason: "no-applied-module" },
@@ -1292,7 +1507,11 @@ describe("plugins uninstall decides before it takes the lock", () => {
     });
     const { reached, deps: d } = watched({ prepareDowns });
     await expect(
-      runPluginUninstallCommand("@acme/fx", { keepData: false, yes: true }, d)
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: false, consent: EVERY_DELETION },
+        d
+      )
     ).rejects.toMatchObject({ code: "DROP_OF_FOREIGN_TABLE" });
     expect(prepareDowns).toHaveBeenCalledWith(plugin, [
       "0002_more",
@@ -1311,7 +1530,7 @@ describe("plugins uninstall decides before it takes the lock", () => {
     const runDown = vi.fn(async () => 1);
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: false, yes: true },
+      { keepData: false, yes: false, consent: EVERY_DELETION },
       deps({
         db: ownsTable as never,
         plugins: [target],
@@ -1463,7 +1682,7 @@ describe("plugins uninstall records how far it got", () => {
     const { order, recordLifecycle } = record();
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: false, yes: true },
+      { keepData: false, yes: false, consent: EVERY_DELETION },
       deps({
         recordLifecycle,
         runLifecycleHook: vi.fn(async () => {
@@ -1490,7 +1709,7 @@ describe("plugins uninstall records how far it got", () => {
     await expect(
       runPluginUninstallCommand(
         "@acme/fx",
-        { keepData: false, yes: true },
+        { keepData: false, yes: false, consent: EVERY_DELETION },
         deps({
           recordLifecycle,
           runDown: vi.fn(async () => {
@@ -1508,7 +1727,7 @@ describe("plugins uninstall records how far it got", () => {
     const { order, recordLifecycle } = record();
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: true, yes: true },
+      { keepData: true, yes: false },
       deps({ recordLifecycle })
     );
     expect(order).toEqual(["record:uninstalling:true", "record:orphaned"]);
@@ -1528,7 +1747,7 @@ describe("plugins uninstall run again after it stopped part way", () => {
     await expect(
       runPluginUninstallCommand(
         "@acme/fx",
-        { keepData: true, yes: true },
+        { keepData: true, yes: false },
         deps({
           readLifecycle: begun(false),
           runLifecycleHook,
@@ -1547,7 +1766,7 @@ describe("plugins uninstall run again after it stopped part way", () => {
     const recordLifecycle = vi.fn(async () => {});
     await runPluginUninstallCommand(
       "@acme/fx",
-      { keepData: false, yes: true },
+      { keepData: false, yes: false, consent: EVERY_DELETION },
       deps({
         readLifecycle: begun(false),
         recordLifecycle,
@@ -1597,7 +1816,7 @@ describe("a disabled plugin is refused by install and uninstall", () => {
     await expect(
       runPluginUninstallCommand(
         "@acme/fx",
-        { keepData: false, yes: true },
+        { keepData: false, yes: false, consent: EVERY_DELETION },
         deps({
           plugins: [disabled],
           recordLifecycle,
