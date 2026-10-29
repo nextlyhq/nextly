@@ -2,7 +2,7 @@
  * The join between `EntryForm` and its header for the shareable link.
  *
  * The two halves are covered separately — `entry-address.test.tsx` pins the
- * locale outcomes, `EntrySystemHeader.preview.test.tsx` pins what the header
+ * locale outcomes, `DocumentBar.preview.test.tsx` pins what the header
  * renders given props — and neither sees the conjunction that consumes them.
  * Measured: removing the `unresolved` guard from `EntryForm` leaves all 126
  * tests in this directory green, because the helper is unchanged when its
@@ -24,8 +24,8 @@ const { headerProps, localization, settings } = vi.hoisted(() => ({
   settings: { current: { siteUrl: "https://site.example" } },
 }));
 
-vi.mock("../EntrySystemHeader", () => ({
-  EntrySystemHeader: (props: Record<string, unknown>) => {
+vi.mock("../DocumentBar", () => ({
+  DocumentBar: (props: Record<string, unknown>) => {
     headerProps(props);
     return null;
   },

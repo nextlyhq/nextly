@@ -13,7 +13,7 @@ const { useDocumentAutosave } = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../EntrySystemHeader", () => ({ EntrySystemHeader: () => null }));
+vi.mock("../DocumentBar", () => ({ DocumentBar: () => null }));
 // Spied for its options: the interval it is handed is the thing under test.
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   ...(await importOriginal<

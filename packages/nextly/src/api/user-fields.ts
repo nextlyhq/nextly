@@ -26,6 +26,7 @@ import { z } from "zod";
 
 import { container } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
+import { SYSTEM_READ_POLICY, SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import { checkUserFieldType } from "../users/config/validate-user-config";
@@ -139,10 +140,7 @@ const createFieldSchema = z
  */
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
-      { action: "read", resource: "settings" },
-      { action: "manage", resource: "settings" },
-    ]);
+    await requireRouteAnyPermission(request, [...SYSTEM_READ_POLICY.settings.read.anyOf]);
 
     const service = await getUserFieldDefinitionService();
     const fields = await service.listFields();
@@ -178,10 +176,7 @@ export const GET = withErrorHandler(
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
-      { action: "create", resource: "settings" },
-      { action: "manage", resource: "settings" },
-    ]);
+    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.userFields.create.anyOf]);
 
     const body = await readJsonBody(request);
 
