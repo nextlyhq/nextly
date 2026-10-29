@@ -4044,6 +4044,14 @@ export class CollectionMutationService extends BaseService {
     /** Who discarded it, for the document's history. */
     actor?: RequestActor;
     user?: UserContext;
+    /**
+     * Ask the update `user` was authorized for again under the lock, so a
+     * change since the caller judged it cannot move the entry out of an
+     * update rule's filter and still have its pending change removed. Set by
+     * a caller that authorized the discard as `user`'s update; without it,
+     * authorization stays the caller's concern.
+     */
+    updateUnderLock?: { authenticatedScope?: AuthenticatedScope };
   }): Promise<number> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -4057,6 +4065,26 @@ export class CollectionMutationService extends BaseService {
       // Serialize with concurrent draft-save upserts, which lock this same parent
       // row before writing the sidecar.
       await tx.lockRow(tableName, params.entryId);
+      if (params.updateUnderLock) {
+        // Route authorization already ran, so only the coarse re-check is
+        // skipped; the document's own rules and their filter are asked here.
+        const denied = await this.refusalOfWriteInTransaction(
+          tx,
+          {
+            collectionName: params.collectionName,
+            operation: "update",
+            entryId: params.entryId,
+            user: params.user,
+            overrideAccess: false,
+            routeAuthorized: true,
+            authenticatedScope: params.updateUnderLock.authenticatedScope,
+            executor: tx.getDrizzle(),
+          },
+          [],
+          params.locale ?? undefined
+        );
+        if (denied) throw errorFromServiceEnvelope(denied);
+      }
       const draftLocale = workingDraftLocale({
         documentLocalized:
           (collection as { localized?: boolean }).localized === true,
@@ -4122,16 +4150,20 @@ export class CollectionMutationService extends BaseService {
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
       // An update of this entry: a rule that answers a filter allows it only
-      // where the filter matches the entry as it is stored.
-      const accessDenied = await this.refusalOfStoredUpdate<TakenLiveValues>({
-        collectionName: params.collectionName,
-        operation: "update",
-        entryId: params.entryId,
-        user: params.overrideAccess ? undefined : params.user,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
-      });
+      // where the filter matches the entry as it is stored, in the language
+      // whose pending change it writes.
+      const accessDenied = await this.refusalOfStoredUpdate<TakenLiveValues>(
+        {
+          collectionName: params.collectionName,
+          operation: "update",
+          entryId: params.entryId,
+          user: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
+        },
+        params.locale ?? undefined
+      );
       if (accessDenied) return accessDenied;
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -4225,6 +4257,25 @@ export class CollectionMutationService extends BaseService {
     // The lock every save and publish of this document takes, so the live
     // values read here are the ones the next publish compares with.
     await tx.lockRow(tableName, params.entryId);
+    // The update asked again on the locked row, so a change since it was
+    // judged above cannot move the entry out of a filter and still have its
+    // pending change written.
+    const deniedUnderLock = await this.refusalOfWriteInTransaction(
+      tx,
+      {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        executor: tx.getDrizzle(),
+      },
+      [],
+      params.locale ?? undefined
+    );
+    if (deniedUnderLock) throw errorFromServiceEnvelope(deniedUnderLock);
     const pending = await new VersionsRepository(tx).findWorkingDraft(
       ref,
       draftLocale
@@ -7642,10 +7693,12 @@ export class CollectionMutationService extends BaseService {
    * where the caller may make it: the update gate's own refusal, or, where
    * its rule answers a filter, that of an entry the filter does not match, in
    * words where the caller may read it and as a missing entry where it may
-   * not.
+   * not. A filter on a translated field is matched in `locale`, the language
+   * the update acts in, or in the default where it names none.
    */
   private async refusalOfStoredUpdate<T>(
-    params: FilteredWriteCheck["params"]
+    params: FilteredWriteCheck["params"],
+    locale?: string
   ): Promise<CollectionServiceResult<T> | null> {
     const access = await this.accessService.checkCollectionWrite<T>(params);
     if (access.denied) return access.denied;
@@ -7656,7 +7709,8 @@ export class CollectionMutationService extends BaseService {
       params.collectionName,
       params.operation,
       schema,
-      access
+      access,
+      { locale }
     );
     if (!match) return null;
     const judged = await this.judgedAgainstWriteFilter<T>(
@@ -11758,16 +11812,24 @@ export class CollectionMutationService extends BaseService {
    * `params` names, asked on that transaction: the gate's own refusal or,
    * where its rule answers a filter, that of an entry outside it. An entry
    * inside the filter has it added to `filteredWrites`, which the written row
-   * is matched against again before the write may stand.
+   * is matched against again before the write may stand. A filter on a
+   * translated field is matched in `locale`, or in the default.
    */
   private async refusalOfWriteInTransaction(
     tx: TransactionContext,
     params: FilteredWriteCheck["params"],
-    filteredWrites: FilteredTransactionWrite[]
+    filteredWrites: FilteredTransactionWrite[],
+    locale?: string
   ): Promise<CollectionServiceResult | null> {
     const access = await this.accessService.checkCollectionWrite(params);
     if (access.denied) return access.denied;
-    return this.refusalOutsideFilterOfWrite(tx, params, access, filteredWrites);
+    return this.refusalOutsideFilterOfWrite(
+      tx,
+      params,
+      access,
+      filteredWrites,
+      locale
+    );
   }
 
   /**
@@ -11780,13 +11842,15 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     params: FilteredWriteCheck["params"],
     access: { filter?: RuleFilter; read?: ReadReach },
-    filteredWrites: FilteredTransactionWrite[]
+    filteredWrites: FilteredTransactionWrite[],
+    locale?: string
   ): Promise<CollectionServiceResult | null> {
     const prepared = await this.matchInTransaction(
       tx,
       params.operation,
       access,
-      params.collectionName
+      params.collectionName,
+      locale
     );
     if (!prepared) return null;
     const judged = await this.judgedAgainstWriteFilter(
@@ -11877,7 +11941,8 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     action: FilteredWrite,
     access: { filter?: RuleFilter; read?: ReadReach },
-    collectionName: string
+    collectionName: string,
+    locale?: string
   ): Promise<
     | {
         schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
@@ -11896,7 +11961,7 @@ export class CollectionMutationService extends BaseService {
       action,
       schema,
       access,
-      { executor }
+      { executor, locale }
     );
     return match ? { schema, match } : undefined;
   }
