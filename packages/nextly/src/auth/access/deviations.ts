@@ -31,7 +31,8 @@ export const DEVIATIONS = [
   // or keys, even where the target declares one.
   "any-of-skips-rules",
   // A read with no caller, a visitor or a plugin's person, keeps the media
-  // rows it populates, where the decision refuses a caller with no grant.
+  // rows it populates, where the decision refuses a caller with no grant; and
+  // a visitor never reads a user, where the decision reads Public's grants.
   "visitor-keeps-media",
   // Without the access-control service, `ctx.caller.can` and a held
   // permission refuse a signed-in user, where a route reads their permission.

@@ -737,6 +737,43 @@ describe("a read whose route already authorized it", () => {
     expect(rule).toHaveBeenCalledTimes(2);
   });
 
+  it("asks a rule again for a visitor once the Public role's grants change", async () => {
+    // A visitor's rule is told the Public role's grants: one revoked between
+    // two asks in the same request, the read kept, is a different question.
+    const NOBODY = { author: { equals: "nobody" } };
+    const rule = vi.fn(({ permissions }: { permissions: readonly string[] }) =>
+      permissions.includes("update-posts")
+        ? (OWN as unknown as boolean)
+        : (NOBODY as unknown as boolean)
+    );
+    const visitorRead = () =>
+      collectionGateVerdict(asked({ read: rule }, { appliesFilter: true }));
+    const [first, second] = await runWithAccessMemo(async () => {
+      publicHolds("read", "update");
+      const before = await visitorRead();
+      publicHolds("read");
+      return [before, await visitorRead()];
+    });
+    expect(first).toMatchObject({ filter: OWN });
+    expect(second).toMatchObject({ filter: NOBODY });
+    expect(rule).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks a visitor's rule once in a request while the Public role's grants stand", async () => {
+    // The control: the same visitor asked twice is one question.
+    const rule = filtering();
+    publicHolds("read");
+    await runWithAccessMemo(async () => {
+      await collectionGateVerdict(
+        asked({ read: rule }, { appliesFilter: true })
+      );
+      await collectionGateVerdict(
+        asked({ read: rule }, { appliesFilter: true })
+      );
+    });
+    expect(rule).toHaveBeenCalledTimes(1);
+  });
+
   it("is allowed as before, asking no rule, where the asker applies no filter", async () => {
     // The control: only an asker that applies a filter has it asked again.
     const rule = filtering();

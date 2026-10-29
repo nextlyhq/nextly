@@ -252,6 +252,24 @@ export async function allowedUnfiltered(
   return deviate("filter-not-applied", false, () => true);
 }
 
+/**
+ * A collection read rule's filter that names a field inside a component,
+ * which a rule's filter may not use yet: only the read that builds it knows
+ * which fields are components, so it reports the filter as not well formed
+ * with this answer.
+ */
+export const FILTER_NAMES_A_COMPONENT_FIELD: RuleAnswer = Object.freeze({
+  kind: "malformed-filter",
+  problems: Object.freeze([
+    Object.freeze({
+      path: "where",
+      code: "FILTER_COMPONENT_IN_RULE",
+      message:
+        "a field inside a component cannot be used in a rule's filter yet",
+    }),
+  ]),
+});
+
 /** Forgets what has been reported, so a test can watch the first report. */
 export function clearRuleFilterReports(): void {
   reported.clear();

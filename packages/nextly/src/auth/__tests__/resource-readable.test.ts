@@ -12,29 +12,38 @@
  *   grants that were read, a failed grant lookup keeps a super-admin's role,
  *   and the read is refused rather than failed;
  * - a `manage-` permission does not count as the read, as it never has here;
- * - the answer is the one decision's, asked about the resource.
+ * - the answer is the one decision's, asked about the resource;
+ * - a visitor is judged by the Public role's grants for media and never reads
+ *   a user, whatever Public holds.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { hasSpy, roleSlugsSpy, grantsSpy, decidePermissionSpy } = vi.hoisted(
-  () => ({
-    hasSpy: vi.fn(),
-    roleSlugsSpy: vi.fn(),
-    grantsSpy: vi.fn(),
-    decidePermissionSpy: vi.fn(),
-  })
-);
+const {
+  hasSpy,
+  roleSlugsSpy,
+  grantsSpy,
+  publicGrantsSpy,
+  decidePermissionSpy,
+} = vi.hoisted(() => ({
+  hasSpy: vi.fn(),
+  roleSlugsSpy: vi.fn(),
+  grantsSpy: vi.fn(),
+  publicGrantsSpy: vi.fn(),
+  decidePermissionSpy: vi.fn(),
+}));
 
 vi.mock("../../di/container", () => ({
   container: { has: hasSpy, get: () => ({}) },
 }));
 
 // The two lookups a signed-in user is resolved from, so each case names what
-// each one answers, or that it fails.
+// each one answers, or that it fails, and the Public role's grants a visitor
+// holds.
 vi.mock("../../services/lib/permissions", async importOriginal => ({
   ...(await importOriginal<typeof import("../../services/lib/permissions")>()),
   listRoleSlugsForUser: roleSlugsSpy,
   listEffectiveGrants: grantsSpy,
+  listPublicGrants: publicGrantsSpy,
 }));
 
 // The one decision, observed rather than replaced: every call is recorded and
@@ -61,6 +70,7 @@ beforeEach(() => {
   hasSpy.mockReturnValue(true);
   roleSlugsSpy.mockResolvedValue(["editor"]);
   grantsSpy.mockResolvedValue([]);
+  publicGrantsSpy.mockResolvedValue([]);
 });
 
 describe("canReadSystemResource — API keys", () => {
@@ -194,5 +204,41 @@ describe("canReadSystemResource — signed-in users", () => {
     );
     expect(roleSlugsSpy).not.toHaveBeenCalled();
     expect(grantsSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("canReadSystemResource — visitors", () => {
+  // Public holds both reads, as a role screen could grant them.
+  const publicHoldsBoth = () =>
+    publicGrantsSpy.mockResolvedValue([
+      grant("read", "media"),
+      grant("read", "users"),
+    ]);
+
+  it("never reads a user, whatever the Public role holds", async () => {
+    // A user row carries a person's address, so a visitor is refused it even
+    // where Public was granted `read-users`; the decision, reading Public's
+    // grants, would allow it, and the difference is named.
+    publicHoldsBoth();
+
+    const { result, deviations } = await recordingDeviations(() =>
+      canReadSystemResource("users", undefined, undefined)
+    );
+    expect(result).toBe(false);
+    expect(deviations).toEqual(["visitor-keeps-media"]);
+  });
+
+  it("reads media by the Public role's grant", async () => {
+    // The control: the same Public role reads media, so the refusal above is
+    // the resource's, not a Public role that went unread.
+    publicHoldsBoth();
+    await expect(
+      canReadSystemResource("media", undefined, undefined)
+    ).resolves.toBe(true);
+
+    publicGrantsSpy.mockResolvedValue([]);
+    await expect(
+      canReadSystemResource("media", undefined, undefined)
+    ).resolves.toBe(false);
   });
 });
