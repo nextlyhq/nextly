@@ -6,7 +6,8 @@
  * the answer reads the rules the access-control service holds now rather than
  * ones an earlier registration declared, a declared read rule is answered
  * by the service without resolving the user's grants, and a visitor is
- * refused a read rule's filter that population cannot apply.
+ * refused a read rule's filter that population cannot apply and, without the
+ * service, is judged by the Public role alone.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -194,6 +195,25 @@ describe("a visitor, without the access-control service", () => {
     await expect(
       relatedRowReads("posts", { principal: null }, undefined)
     ).resolves.toBe(true);
+  });
+
+  it("is judged by the Public role alone, running no rule declared in the process", async () => {
+    // Its direct read without the service reads no rule, so a rule the
+    // process declared for the slug, perhaps for another instance, neither
+    // refuses the populated row nor runs.
+    const rule = vi.fn(() => false);
+    declareTarget({
+      kind: "collection",
+      slug: "posts",
+      access: { read: rule },
+    });
+    visitorSpy.mockResolvedValue(
+      visitorActor([{ slug: "read-posts", action: "read", resource: "posts" }])
+    );
+    await expect(
+      relatedRowReads("posts", { principal: null }, undefined)
+    ).resolves.toBe(true);
+    expect(rule).not.toHaveBeenCalled();
   });
 });
 
