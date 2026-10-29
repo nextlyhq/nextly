@@ -58,3 +58,6 @@ Core's Count, Breakdown, Over time and Recent entries cards are declared with `d
 - **A declared widget's loading skeleton** lays out its rows from its
   `skeleton`: a list loads as a list's rows, and a table as a table with its
   heading and columns on a wide card. Recent entries loads as a table.
+- **A write made outside a request** (a script, a job) no longer retries
+  every pending cache expiry: pending expiries are kept once each and expire
+  at the next write inside a request, and the waiting is logged once.
