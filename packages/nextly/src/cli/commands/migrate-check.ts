@@ -62,6 +62,11 @@ import {
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
 import {
+  describeJudgedAddresses,
+  judgeMigrationAddresses,
+  snapshotTableNames,
+} from "../../domains/schema/migrate-create/addresses";
+import {
   appStreamSnapshots,
   compileAppStreamTables,
   NO_APP_STREAM_TABLES,
@@ -472,6 +477,29 @@ export async function runChecks(args: {
       return;
     }
     throw err;
+  }
+
+  // Addresses, by the one address rule, before the drift a new entity also
+  // shows. A new one the rule refuses fails the check; one an entity already
+  // has (its table is in the latest snapshot) keeps working, and is reported
+  // once as a warning naming the address and the reason.
+  if (args.entities) {
+    const addresses = judgeMigrationAddresses(
+      args.entities,
+      snapshotTableNames(latest)
+    );
+    for (const line of describeJudgedAddresses(addresses.existing)) {
+      logger.warn(
+        `${line}. It already exists, so it keeps working; only a new or changed address is refused.`
+      );
+    }
+    if (addresses.refused.length > 0) {
+      for (const line of describeJudgedAddresses(addresses.refused)) {
+        logger.error(line);
+      }
+      process.exit(1);
+      return;
+    }
   }
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);

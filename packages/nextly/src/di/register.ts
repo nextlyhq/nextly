@@ -263,6 +263,7 @@ import type {
   PasswordHasher,
   UserService,
 } from "../services/users/user-service";
+import { assertConfiguredAddresses } from "../shared/address-rule";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
 import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
@@ -1730,6 +1731,11 @@ async function reconcileBuilderTargets<T>(
   const builderEntities = await loadBuilderEntities(adapter);
 
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
+
+  // The configuration's addresses, judged by the one address rule before the boot writes
+  // anything. Only an address no registry row holds yet is new and judged, against every address
+  // used; an entity a row already holds keeps its address, whatever the rule now says of it.
+  assertConfiguredAddresses(transformedConfig, builderEntities);
 
   // A plugin's settings permission has to be one it owns, which is the
   // collector's answer for the config's entities and the seeder's for the

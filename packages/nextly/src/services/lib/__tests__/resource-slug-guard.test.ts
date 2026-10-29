@@ -49,8 +49,71 @@ function adapterReturning(owner: { id: string } | null) {
       .fn()
       .mockImplementationOnce(async () => owner)
       .mockImplementationOnce(async () => null),
+    // The addresses already used, listed to refuse one with the same
+    // snake_case form. None, unless a test seeds them.
+    select: vi.fn(async () => []),
   } as never;
 }
+
+/** Adapter where no resource owns the slug, and `used` lists each registry's rows. */
+function adapterUsing(used: {
+  dynamic_collections?: Array<{ id: string; slug: string }>;
+  dynamic_singles?: Array<{ id: string; slug: string }>;
+}) {
+  return {
+    selectOne: vi.fn(async () => null),
+    select: vi.fn(async (table: keyof typeof used) => used[table] ?? []),
+  } as never;
+}
+
+describe("assertGlobalResourceSlugAvailable and the snake_case form", () => {
+  it("refuses a new slug whose snake_case form a Single's slug has, naming both", async () => {
+    await expect(
+      assertGlobalResourceSlugAvailable(
+        adapterUsing({ dynamic_singles: [{ id: "s1", slug: "team-updates" }] }),
+        "team_updates",
+        { addressKind: "collection" }
+      )
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "SLUG_SAME_SNAKE_CASE",
+            message: expect.stringMatching(
+              /^Collection address 'team_updates'.*single 'team-updates'/
+            ),
+          },
+        ],
+      },
+    });
+  });
+
+  it("lets a resource be renamed to a slug of its own snake_case form", async () => {
+    await expect(
+      assertGlobalResourceSlugAvailable(
+        adapterUsing({
+          dynamic_collections: [{ id: "c1", slug: "team_updates" }],
+        }),
+        "team-updates",
+        { currentResourceType: "collection", currentResourceId: "c1" }
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("leaves an address a resource already holds alone, whatever its neighbours", async () => {
+    // The slug's own row answers the owner lookup, so the address is not new and is not judged.
+    const adapter = {
+      selectOne: vi.fn(async () => ({ id: "c1" })),
+      select: vi.fn(async () => [{ id: "s1", slug: "team-updates" }]),
+    } as never;
+    await expect(
+      assertGlobalResourceSlugAvailable(adapter, "team_updates", {
+        currentResourceType: "collection",
+        currentResourceId: "c1",
+      })
+    ).resolves.toBeUndefined();
+  });
+});
 
 describe("assertGlobalResourceSlugAvailable", () => {
   it("rejects a reserved name even when no resource holds it", async () => {

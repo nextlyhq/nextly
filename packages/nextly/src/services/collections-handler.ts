@@ -34,6 +34,7 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
+import { assertAddressAllowed } from "../shared/address-rule";
 import type { ValidationIssue } from "../shared/lib/entry-validation";
 import type { DatabaseInstance } from "../types/database-operations";
 
@@ -48,6 +49,7 @@ import {
 import type { TrustBound } from "./collections/trust-grant";
 import type { FieldGroupDataService } from "./field-groups/field-group-data-service";
 import type { FieldGroupRegistryService } from "./field-groups/field-group-registry-service";
+import { assertGlobalResourceSlugAvailable } from "./lib/resource-slug-guard";
 import { consoleLogger } from "./shared";
 import type { Logger } from "./shared";
 
@@ -487,6 +489,18 @@ export class CollectionsHandler {
     fields: FieldDefinition[];
     createdBy?: string;
   }) {
+    // The address is judged here, before the metadata service builds the table: the create
+    // registers its row only after the DDL, so a refusal at registration would leave `dc_<slug>`
+    // behind. The one address rule every road shares, then the addresses already used: one with
+    // the same snake_case form as another collection's or Single's is refused.
+    assertAddressAllowed("collection", data.name);
+    if (container.has("adapter")) {
+      await assertGlobalResourceSlugAvailable(
+        container.get<DrizzleAdapter>("adapter"),
+        data.name,
+        { addressKind: "collection" }
+      );
+    }
     return this.metadataService.createCollection(data);
   }
 

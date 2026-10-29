@@ -417,4 +417,80 @@ describe("runChecks (F11 PR 4)", () => {
       );
     });
   });
+
+  describe("addresses, by the one address rule", () => {
+    const ADMIN_TABLE = { ...POSTS_TABLE, name: "dc_admin" };
+    const entity = (slug: string, tableName: string) => ({
+      slug,
+      tableName,
+      fields: [],
+    });
+
+    async function seed(snapshot: NextlySchemaSnapshot): Promise<void> {
+      const sqlContent = "-- placeholder";
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        sqlContent,
+        "utf-8"
+      );
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        "20260101_120000_001_initial",
+        snapshot,
+        sqlContent
+      );
+    }
+
+    it("warns once for an existing address the rule refuses, and passes", async () => {
+      // A Builder collection made under `admin` before the rule: its table is in the snapshot.
+      await seed({ tables: [ADMIN_TABLE] });
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: { tables: [ADMIN_TABLE] },
+        entities: {
+          collections: [entity("admin", "dc_admin")],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).not.toHaveBeenCalledWith(1);
+      const warnings = logger.warn.mock.calls
+        .map(([line]) => String(line))
+        .filter(line => line.includes("'admin'"));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/SLUG_RESERVED: .*'admin'.*keeps working/);
+    });
+
+    it("fails a new address the rule refuses, naming it and the reason, before the drift", async () => {
+      await seed(POSTS_DESIRED);
+      const CASCADE_TABLE = { ...POSTS_TABLE, name: "dc_cascade" };
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: { tables: [POSTS_TABLE, CASCADE_TABLE] },
+        entities: {
+          collections: [
+            entity("posts", "dc_posts"),
+            entity("cascade", "dc_cascade"),
+          ],
+          singles: [],
+          components: [],
+        },
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.error.mock.calls[0]?.[0]).toMatch(
+        /^SLUG_SQL_KEYWORD: Collection address 'cascade' is a reserved SQL word/
+      );
+      expect(logger.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("SCHEMA_DRIFT")
+      );
+    });
+  });
 });

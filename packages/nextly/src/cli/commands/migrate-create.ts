@@ -56,6 +56,7 @@ import {
   orderedMigrations,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import { assertMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   compileAppStreamTables,
   contributedElementsOf,
@@ -434,6 +435,8 @@ export async function runMigrateCreate(
   });
 
   const latest = await loadLatestSnapshot(resolve(migrationsDir, "meta"));
+  // A new address is judged by the one address rule before anything is written.
+  assertMigrationAddresses(merged, latest, logger);
   // The rows as the previous snapshot recorded each Builder entity, for a
   // migration that writes a row for its settings alone to write back on the
   // way down. A snapshot with no settings record has none to offer.

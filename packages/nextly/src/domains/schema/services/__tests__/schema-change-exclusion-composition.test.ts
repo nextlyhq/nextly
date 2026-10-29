@@ -80,6 +80,11 @@ function makeAdapter(options: MigrationLockSurfaceOptions = {}) {
         return name.includes("_locales") ? false : created;
       }),
       selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+      // The slug guard also lists the addresses already used, to refuse one with the same
+      // snake_case form; none are.
+      select: vi.fn(
+        async (): Promise<Array<{ id: string; slug: string }>> => []
+      ),
       executeQuery: vi.fn(async (sql: string) => {
         executed.push(sql);
         // The lock's DDL is a `CREATE TABLE` too, and it runs first. Letting it set this flag would
