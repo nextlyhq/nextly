@@ -909,6 +909,8 @@ public visitor read media none at rest
 # entries it matches. Each door below refuses it still, as no read there
 # applies a rule's filter yet.
 bound custom-role read related async-filter at population  # filter-not-applied
+public visitor read related async-filter at population  # filter-not-applied
+public visitor read related returns-filter at population  # filter-not-applied
 bound custom-role read related returns-filter at population  # filter-not-applied
 bound key-full-access read related async-filter at population  # filter-not-applied
 bound key-full-access read related returns-filter at population  # filter-not-applied
@@ -1025,11 +1027,6 @@ service user-with read collection returns-filter at can  # filter-not-applied
 service user-with read collection returns-filter at capabilities  # filter-not-applied
 service user-with read collection returns-filter at entity  # filter-not-applied
 service user-with read collection returns-filter at route  # filter-not-applied
-service user-with read collection returns-filter at service  # filter-not-applied
-public visitor read collection returns-filter at direct  # filter-not-applied
-public visitor read collection returns-filter at service  # filter-not-applied
-public visitor read collection async-filter at direct  # filter-not-applied
-public visitor read collection async-filter at service  # filter-not-applied
 service user-with read collection returns-filter at widget  # filter-not-applied
 service user-with read related async-filter at population  # filter-not-applied
 service user-with read related returns-filter at population  # filter-not-applied
