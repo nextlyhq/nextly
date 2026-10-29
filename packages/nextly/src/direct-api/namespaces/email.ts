@@ -10,9 +10,24 @@
  * Each of these shares the same plumbing (error conversion, optional
  * pagination), so they live in one file.
  *
+ * A call that asks to be checked (`overrideAccess: false`) on providers,
+ * templates or user fields is judged as the REST route for the same operation
+ * judges its caller, before any work: `read-`, `create-`, `update-` or
+ * `delete-` on `email-providers` or `email-templates` (sending a test asks
+ * create, making a provider the default and every change to a template's
+ * ownership ask update, previewing a template asks create), and on `settings`
+ * for user fields (reordering them asks update). A checked call that names
+ * nobody is refused as unauthenticated. A trusted call is unchanged. Sending
+ * through `nextly.email.*` is the site's own code acting, with no REST
+ * counterpart, so it takes no grant.
+ *
  * @packageDocumentation
  */
 
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../../domains/auth/system-write-policy";
 import { scopedSender, SITE_KEY_SCOPE } from "../../domains/email/send-claims";
 import type {
   EmailTemplateComparison,
@@ -64,6 +79,8 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  checkRead,
+  checkWrite,
   directApiActor,
   isNotFoundError,
   mergeConfig,
@@ -241,6 +258,11 @@ export function createEmailProvidersNamespace(
     async find(
       args: FindEmailProvidersArgs = {}
     ): Promise<ListResult<EmailProviderRecord>> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.emailProviders.read
+      );
       const providers = await ctx.emailProviderService.listProviders();
       return sliceListResult(providers, args.limit, args.page);
     },
@@ -248,6 +270,11 @@ export function createEmailProvidersNamespace(
     async findByID(
       args: FindEmailProviderByIDArgs
     ): Promise<EmailProviderRecord | null> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.emailProviders.read
+      );
       const config = mergeConfig(ctx.defaultConfig, args);
       try {
         return await ctx.emailProviderService.getProvider(args.id);
@@ -262,6 +289,11 @@ export function createEmailProvidersNamespace(
     async create(
       args: CreateEmailProviderArgs
     ): Promise<MutationResult<EmailProviderRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailProviders.create
+      );
       const item = await ctx.emailProviderService.createProvider(
         {
           name: args.data.name,
@@ -285,6 +317,11 @@ export function createEmailProvidersNamespace(
     async update(
       args: UpdateEmailProviderArgs
     ): Promise<MutationResult<EmailProviderRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailProviders.update
+      );
       const item = await ctx.emailProviderService.updateProvider(
         args.id,
         args.data,
@@ -296,6 +333,11 @@ export function createEmailProvidersNamespace(
     async delete(
       args: DeleteEmailProviderArgs
     ): Promise<MutationResult<{ id: string }>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailProviders.delete
+      );
       await ctx.emailProviderService.deleteProvider(
         args.id,
         directApiActor(ctx.defaultConfig, args)
@@ -313,6 +355,11 @@ export function createEmailProvidersNamespace(
       // Promotion changes a row, so a caller reads the result the way it reads
       // a create or an update rather than remembering that one of the five
       // hands its record back bare.
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailProviders.makeDefault
+      );
       const item = await ctx.emailProviderService.setDefault(
         args.id,
         directApiActor(ctx.defaultConfig, args)
@@ -323,6 +370,11 @@ export function createEmailProvidersNamespace(
     async test(
       args: TestEmailProviderArgs
     ): Promise<{ success: boolean; error?: string }> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailProviders.sendTest
+      );
       return await ctx.emailProviderService.testProvider(
         args.id,
         args.to,
@@ -389,6 +441,11 @@ export function createEmailTemplatesNamespace(
     async find(
       args: FindEmailTemplatesArgs = {}
     ): Promise<ListResult<EmailTemplateRecord>> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.emailTemplates.read
+      );
       const templates = await ctx.emailTemplateService.listTemplates();
       return sliceListResult(templates, args.limit, args.page);
     },
@@ -396,6 +453,11 @@ export function createEmailTemplatesNamespace(
     async findByID(
       args: FindEmailTemplateByIDArgs
     ): Promise<EmailTemplateRecord | null> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.emailTemplates.read
+      );
       const config = mergeConfig(ctx.defaultConfig, args);
       try {
         return await ctx.emailTemplateService.getTemplate(args.id);
@@ -410,6 +472,11 @@ export function createEmailTemplatesNamespace(
     async findBySlug(
       args: FindEmailTemplateBySlugArgs
     ): Promise<EmailTemplateRecord | null> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.emailTemplates.read
+      );
       const config = mergeConfig(ctx.defaultConfig, args);
       try {
         const template = await ctx.emailTemplateService.getTemplateBySlug(
@@ -438,6 +505,11 @@ export function createEmailTemplatesNamespace(
     async create(
       args: CreateEmailTemplateArgs
     ): Promise<MutationResult<EmailTemplateRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailTemplates.create
+      );
       const item = await ctx.emailTemplateService.createTemplate(
         {
           name: args.data.name,
@@ -465,6 +537,11 @@ export function createEmailTemplatesNamespace(
     async update(
       args: UpdateEmailTemplateArgs
     ): Promise<MutationResult<EmailTemplateRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailTemplates.update
+      );
       const { textContent, variables, attachments, ...rest } = args.data;
       const updateData: UpdateEmailTemplateInput = {
         ...rest,
@@ -489,6 +566,11 @@ export function createEmailTemplatesNamespace(
     async delete(
       args: DeleteEmailTemplateArgs
     ): Promise<MutationResult<{ id: string }>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailTemplates.delete
+      );
       await ctx.emailTemplateService.deleteTemplate(
         args.id,
         directApiActor(ctx.defaultConfig, args)
@@ -502,6 +584,11 @@ export function createEmailTemplatesNamespace(
     async preview(
       args: PreviewEmailTemplateArgs
     ): Promise<{ subject: string; html: string }> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailTemplates.preview
+      );
       return await ctx.emailTemplateService.previewTemplate(
         args.id,
         args.data ?? {}
@@ -511,6 +598,11 @@ export function createEmailTemplatesNamespace(
     async override(
       args: OverrideEmailTemplateArgs
     ): Promise<MutationResult<EmailTemplateRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailTemplates.update
+      );
       const item = await ctx.emailTemplateService.overrideTemplate(
         args.id,
         { version: args.version },
@@ -522,6 +614,11 @@ export function createEmailTemplatesNamespace(
     async reset(
       args: ResetEmailTemplateArgs
     ): Promise<MutationResult<EmailTemplateRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailTemplates.update
+      );
       const item = await ctx.emailTemplateService.resetTemplate(
         args.id,
         directApiActor(ctx.defaultConfig, args)
@@ -532,6 +629,11 @@ export function createEmailTemplatesNamespace(
     async compare(
       args: CompareEmailTemplateArgs
     ): Promise<EmailTemplateComparison> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.emailTemplates.read
+      );
       return await ctx.emailTemplateService.compareTemplate(args.id);
     },
 
@@ -540,6 +642,11 @@ export function createEmailTemplatesNamespace(
     ): Promise<
       MutationResult<EmailTemplateRecord> & { undo: OwnerUpdateUndo }
     > {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailTemplates.update
+      );
       const { template, undo } =
         await ctx.emailTemplateService.applyOwnerUpdate(
           args.id,
@@ -553,6 +660,11 @@ export function createEmailTemplatesNamespace(
     async undoUpdate(
       args: UndoEmailTemplateUpdateArgs
     ): Promise<MutationResult<EmailTemplateRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.emailTemplates.update
+      );
       const item = await ctx.emailTemplateService.undoOwnerUpdate(
         args.id,
         args.undo,
@@ -596,6 +708,11 @@ export function createUserFieldsNamespace(
     async find(
       args: FindUserFieldsArgs = {}
     ): Promise<ListResult<UserFieldDefinitionRecord>> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.settings.read
+      );
       const allFields = args.includeInactive
         ? await ctx.userFieldDefinitionService.listFields()
         : await ctx.userFieldDefinitionService.getMergedFields();
@@ -605,6 +722,11 @@ export function createUserFieldsNamespace(
     async findByID(
       args: FindUserFieldByIDArgs
     ): Promise<UserFieldDefinitionRecord | null> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.settings.read
+      );
       const config = mergeConfig(ctx.defaultConfig, args);
       try {
         return await ctx.userFieldDefinitionService.getField(args.id);
@@ -619,6 +741,11 @@ export function createUserFieldsNamespace(
     async create(
       args: CreateUserFieldArgs
     ): Promise<MutationResult<UserFieldDefinitionRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.userFields.create
+      );
       const item = await ctx.userFieldDefinitionService.createField({
         name: args.data.name,
         label: args.data.label,
@@ -637,6 +764,11 @@ export function createUserFieldsNamespace(
     async update(
       args: UpdateUserFieldArgs
     ): Promise<MutationResult<UserFieldDefinitionRecord>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.userFields.update
+      );
       const item = await ctx.userFieldDefinitionService.updateField(
         args.id,
         args.data
@@ -647,6 +779,11 @@ export function createUserFieldsNamespace(
     async delete(
       args: DeleteUserFieldArgs
     ): Promise<MutationResult<{ id: string }>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.userFields.delete
+      );
       await ctx.userFieldDefinitionService.deleteField(args.id);
       return {
         message: "User field deleted.",
@@ -657,6 +794,11 @@ export function createUserFieldsNamespace(
     async reorder(
       args: ReorderUserFieldsArgs
     ): Promise<UserFieldDefinitionRecord[]> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.userFields.update
+      );
       return await ctx.userFieldDefinitionService.reorderFields(
         args.orderedIds
       );

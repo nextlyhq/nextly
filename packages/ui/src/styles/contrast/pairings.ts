@@ -257,6 +257,26 @@ const STATUS_SHADE_ON_SURFACE: Pairing[] = STATUSES.flatMap((s): Pairing[] =>
   }))
 );
 
+// Destructive words on a plain surface where the base red reads under 4.5:1
+// in light mode (contrast/accepted.ts): the media details' Delete, failed-save
+// and focus point messages take the 700 shade in light mode and the base token
+// in dark, which the status text pairs above already assert. These are the
+// light surfaces they sit on: the panel's card, the viewer's page and the
+// muted backdrop around the viewer's image.
+const DESTRUCTIVE_TEXT_ON_LIGHT_SURFACE: Pairing[] = (
+  [
+    ["--nx-card", "card"],
+    ["--nx-background", "page"],
+    ["--nx-muted", "muted"],
+  ] as const
+).map(([bg, name]) => ({
+  fg: "--color-destructive-700",
+  bg,
+  kind: "text" as const,
+  mode: "light" as const,
+  label: `destructive 700 on ${name} (light)`,
+}));
+
 // Tinted status surfaces (badges, alerts, chips). These are `color-mix()`
 // shades, and the light/dark shade choices flip, so each is mode-specific. The
 // pairs asserted are the tightest that render (darkest text on the lightest
@@ -550,6 +570,7 @@ export const PAIRINGS: Pairing[] = [
   ...STATUS_TEXT,
   ...STATUS_ON_SOLID,
   ...STATUS_SHADE_ON_SURFACE,
+  ...DESTRUCTIVE_TEXT_ON_LIGHT_SURFACE,
   ...STATUS_SHADES,
   ...ALERT_ACCENT,
   ...PRIMARY_BADGE,

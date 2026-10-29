@@ -1,0 +1,130 @@
+---
+name: visual-check
+description: Use when a change touches an admin screen, before its pull request is opened or updated - capturing the touched routes signed in, at 390, 1024 and 1440 px in light and dark from a production build, reading every capture, fixing what it shows, and publishing the captures as the pull request's "The look" section.
+metadata:
+  internal: true
+---
+
+# Checking how an admin change looks
+
+Unit tests pass on a component that renders wrong, and the pull request is
+read on a phone by someone who cannot run the branch. So before the pull
+request of any change that touches an admin screen, capture the screens it
+touches, read them, and put them in the pull request.
+
+## The loop
+
+1. Capture the routes the change touches, and any screen sharing the
+   component you changed:
+
+   ```sh
+   pnpm visual-check /admin/collections/posts /admin/collections/posts/create
+   ```
+
+   A run without `--reuse` builds the workspace first (`pnpm build`, cached by
+   turbo, so an unchanged tree costs little), since the playground serves the
+   packages' built output, the admin's CSS among it. It then builds the
+   playground for production and serves it, seeded, on this checkout's own port
+   (`E2E_PROD_PORT`), exactly as the production browser suite does, signs in as
+   the seeded user, and stops the server when done. Every route is captured at
+   390, 1024 and 1440 px, light and dark, as `<route>-<width>-<scheme>.png` in
+   `e2e/.playwright/visual-check/`; a query's keys stay in the name and its
+   values become a short hash, so no token is published. Add `--full` for
+   whole pages rather than the first screen. It shares the production suite's
+   database, build folder and port, so never run the two at once in one
+   checkout.
+
+2. Read what it prints. Each view is checked for sideways scroll, elements
+   whose box ends past the right edge (by selector), and axe's serious and
+   critical violations (by rule and selector); any of these exits non-zero.
+   A route is captured not at all when it answers 400 or more, is sent to
+   sign-in, draws no visible `<main>`, never shows the scheme asked for, or
+   gives axe nothing to judge. The screens the admin lists as public
+   (`PUBLIC_ROUTE_PATHS`: sign-in, setup, register and the rest) are captured
+   signed out, as their visitors see them; every other route signed in, the
+   session renewed during a long run.
+3. Open and read EVERY capture, not a sample: the checks above find only what
+   can be measured. What to look for is below.
+4. Fix, and capture again. A fix to the code needs a new build, so run without
+   `--reuse`. To capture more routes, or a state you set up by hand, from the
+   same build, add `--keep` to a run: it leaves its server running and prints
+   the command that stops it; later runs pass `--reuse` and build nothing.
+   Stop it when you are done, and never `--reuse` a server built before your
+   last change: it captures that older build.
+5. Publish once it reads right:
+
+   ```sh
+   pnpm visual-check /admin/collections/posts --publish posts-list
+   ```
+
+   This pushes the captures, alone, to `pr-screenshots/posts-list`, a branch
+   with no history in common with `main`, under your own git credentials, and
+   prints the "The look" section, 390 px first. Paste it into the pull request
+   body. When `origin` is not a GitHub URL (an ssh alias, a mirror), the run
+   refuses before pushing: pass `--raw-base
+https://raw.githubusercontent.com/<owner>/<repo>` for the repository it
+   pushes to.
+
+   Only a clean, complete run is published: a route not captured always
+   refuses it, and so do findings. When the findings predate your change (the
+   same on `main`), add `--allow-findings`: the run publishes, and the section
+   lists them under the captures for the reviewer. Say in the pull request why
+   they are not yours to fix.
+
+   A capture over 1 MB is refused by name; capture without `--full`, or a
+   shorter page. Publishing again under the same topic, from the same branch,
+   replaces the images the section links to. The branch records which branch
+   published it, and a topic another branch published is refused, naming that
+   branch: pick another topic.
+
+6. Once the pull request is merged or closed, delete its captures:
+
+   ```sh
+   pnpm visual-check --unpublish posts-list --owner <your-branch>
+   ```
+
+   Only the branch that published a topic may delete it: run it from that
+   branch, or name it with `--owner`, as after a merge when you are on
+   `main`. The name must match the branch the topic records, so a typo, or
+   another change's topic, is refused. Deleting them breaks the images in that
+   pull request's body, which is why it waits until the pull request is done.
+   A topic never published, or already deleted, deletes nothing and says so.
+
+## What the reader checks that the tool cannot
+
+- **Every state the change covers**, not only the seeded one: empty, loading,
+  an error, long content (a long title, many rows, a long word that will not
+  wrap), and the screen with its dialog, menu or sheet open. Capture each
+  (seed or set up the state first) and say in the pull request which are shown.
+  A dialog, menu or sheet is opened for the capture with `--prepare` (below).
+
+## Staging a dialog, a menu or a sheet
+
+`--prepare <module.mjs>` runs the module's default export on every view after
+the page settles and before it is read and captured, so the capture and the
+checks see what it opened:
+
+```js
+// ./open-filters.mjs, a scratch file kept out of the commit
+export default async (page, { route, width, scheme }) => {
+  await page.getByRole("button", { name: "Filters" }).click();
+  await page.getByRole("dialog", { name: "Filters" }).waitFor();
+};
+```
+
+```sh
+pnpm visual-check /admin/collections/posts --prepare ./open-filters.mjs
+```
+
+Find what to open by its accessible name, as a reader would, not by a class
+name. A prepare that throws fails that view, naming its route, width and
+scheme, and nothing of that route is captured. Run it in its own topic, or
+alongside a run without it, so the screen is shown closed as well as open.
+
+- **Tokens in both schemes**: nothing that stays light in dark, or vanishes
+  against its background in either; borders and focus rings visible; no
+  colour that is not a `--nx-*` token.
+- **Text at least 12 px**, and nothing clipped, overlapping or truncated
+  without a way to read the whole of it.
+- The page's one `<h1>` is visible, and nothing is drawn under a header or
+  banner.

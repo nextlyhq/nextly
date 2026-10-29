@@ -10,6 +10,7 @@ import type {
   FieldStoragePrimitive,
   FieldTypeCategory,
 } from "../collections/fields/catalog";
+import { withSiteOverride } from "../domains/widgets/site-rules";
 import type { PluginOverride } from "../shared/types/config";
 
 import type {
@@ -116,7 +117,7 @@ export interface PluginAdminMeta {
   /**
    * Settings UI — present only for enabled plugins. `permission` is the one a
    * change to the plugin's settings needs, which the settings page asks for:
-   * the plugin's own `settingsPermission`, or `manage-settings`.
+   * the plugin's own `settingsPermission`, or `update-settings`.
    */
   settings?: { component: string; permission: string };
   /** Admin header-slot component — present only for enabled plugins. */
@@ -444,7 +445,10 @@ export function buildPluginAdminMeta(
       // accept what boot rejected; called again here because the reduced value
       // is what publishes.
       const widgets = validatedAdminWidgets(plugin);
-      if (widgets && widgets.length > 0) meta.widgets = widgets;
+      // As the site's `overrides` change each one, the same application every
+      // other reading of a widget takes.
+      if (widgets && widgets.length > 0)
+        meta.widgets = widgets.map(widget => withSiteOverride(widget));
       if (admin.schemaBuilderSlot)
         meta.schemaBuilderSlot = admin.schemaBuilderSlot;
       if (admin.entryFormToolbarSlot)
