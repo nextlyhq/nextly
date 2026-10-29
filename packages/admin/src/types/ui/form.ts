@@ -63,6 +63,8 @@ export interface PermissionMatrixProps {
   value: string[];
   onChange: (value: string[]) => void;
   disabled?: boolean;
+  /** Shown but not changed: its search still narrows it. */
+  readOnly?: boolean;
   lockedIds?: string[];
 }
 

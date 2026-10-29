@@ -56,8 +56,12 @@ export const VISITOR_LEVELS: readonly AccessLevel[] = ["none", "view"];
 /** What a visitor is never offered: a visitor never publishes. */
 const NEVER_FOR_VISITORS = new Set(["publish", "unpublish"]);
 
-/** The actions that change entries, warned about when visitors hold one. */
-const VISITOR_WRITES = new Set(["create", "update", "delete"]);
+/**
+ * The actions that change entries, warned about when visitors hold one. A
+ * retired `manage` grant is one too: saving the role stores it as the plain
+ * read, create, update and delete.
+ */
+const VISITOR_WRITES = new Set(["create", "update", "delete", "manage"]);
 
 /** The warning beside a row whose switches give visitors a write. */
 export const VISITOR_WRITE_WARNING =

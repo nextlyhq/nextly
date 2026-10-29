@@ -9,6 +9,7 @@ import {
 } from "@admin/components/ui/form";
 import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
 import type { LevelRow, PluginGroup } from "@admin/lib/permissions/level-rows";
+import { offeredSwitches } from "@admin/lib/roles/role-screen-mode";
 import type { Permission } from "@admin/types/ui/form";
 
 import { PermissionLevelRows } from "./PermissionLevelRows";
@@ -66,7 +67,8 @@ export function RolePermissionsSection({
                 onChange={field.onChange}
                 lockedIds={lockedPermissionIds}
                 bases={bases}
-                disabled={isLoading || readOnly}
+                disabled={isLoading}
+                readOnly={readOnly}
                 visitors={visitors}
               />
               <div className="flex flex-col gap-4">
@@ -74,10 +76,13 @@ export function RolePermissionsSection({
                   Other permissions
                 </h3>
                 <PermissionMatrix
-                  permissions={otherPermissions}
+                  // The Public role's table offers what its rows offer: a
+                  // visitor never publishes.
+                  permissions={[...offeredSwitches(otherPermissions, visitors)]}
                   value={field.value || []}
                   onChange={field.onChange}
-                  disabled={isLoading || readOnly}
+                  disabled={isLoading}
+                  readOnly={readOnly}
                   lockedIds={lockedPermissionIds}
                 />
               </div>
