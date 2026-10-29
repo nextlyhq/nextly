@@ -53,10 +53,14 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `component-map-dev`: a development server refusing a stale component map.
  * - The Schema Builder specs: a production build turns the builder off unless
  *   the app opts in, and refuses its writes with `BUILDER_DISABLED`.
+ * - `widget-preview`: the widget preview page exists only while the server
+ *   runs in development; a production build answers its address as not found
+ *   (`tests/production/widget-preview.spec.ts`).
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
   "**/component-map-dev.spec.ts",
+  "**/widget-preview.spec.ts",
   "**/schema-builder.spec.ts",
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
@@ -239,6 +243,9 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
+      // The render-retry harness route, gated the same way: its render fails on
+      // an id's first load, for the test of an error boundary's retry().
+      NEXTLY_E2E_RETRY_HARNESS: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout

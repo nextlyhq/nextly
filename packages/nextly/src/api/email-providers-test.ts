@@ -63,7 +63,9 @@ const testProviderSchema = z.object({
  */
 export const POST = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailProviders.sendTest.anyOf]);
+    await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.emailProviders.sendTest.anyOf,
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();

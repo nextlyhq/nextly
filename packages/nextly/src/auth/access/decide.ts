@@ -41,6 +41,7 @@ import {
   type Actor,
   type SystemActor,
 } from "./actor";
+import { MANAGE_BRIDGED_ACTIONS, isRetiredManage } from "./manage-bridge";
 import {
   mayAnswerFilter,
   reportRuleFilterMisuse,
@@ -347,6 +348,16 @@ export function decidePermission(
   if (actor.kind === "system") return ALLOW;
   if (actor.kind === "principal") return refuse("principal-without-rule");
   if (isSuperAdmin(actor)) return ALLOW;
+  // A retired `manage-` permission, asked by a gate written before it was
+  // retired, is answered by the plain four it stood for, each counted as
+  // below: an unconverted role's `manage-` permission still holds all four.
+  if (isRetiredManage(action, resource)) {
+    return MANAGE_BRIDGED_ACTIONS.every(
+      plain => decidePermission(actor, plain, resource).allowed
+    )
+      ? ALLOW
+      : refuse("no-permission");
+  }
   return holdsPermission(actor, action, resource) ||
     holdsByManage(actor, action, resource)
     ? ALLOW

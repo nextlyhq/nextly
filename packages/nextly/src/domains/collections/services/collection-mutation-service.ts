@@ -156,6 +156,8 @@ import {
   type StatusMove,
   type WriteEventInput,
 } from "../../content-events/write-event";
+import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
+import { transactionTableProbe } from "../../dashboard/table-presence";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
@@ -7507,6 +7509,9 @@ export class CollectionMutationService extends BaseService {
   async unpublishAllLocales(
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before the
+    // translation table's shape is read: whatever it holds, the write is refused.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     if (await this.companionLacksStatus(params.collectionName)) {
       return {
         success: false,
@@ -11583,6 +11588,25 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The delete gate's answer: allowed, with the delete rule's filter to match
+   * the entry against where it answered one, or the refusal to hand back.
+   * Where the delete does not apply a filter, the gate that refuses one is
+   * asked instead.
+   */
+  private async deleteAccess(
+    accessParams: Parameters<
+      CollectionAccessService["checkCollectionWrite"]
+    >[0],
+    appliesFilter: boolean
+  ): ReturnType<CollectionAccessService["checkCollectionWrite"]> {
+    if (appliesFilter) {
+      return this.accessService.checkCollectionWrite(accessParams);
+    }
+    const denied = await this.accessService.checkCollectionAccess(accessParams);
+    return denied ? { denied } : { denied: null };
+  }
+
+  /**
    * The match a write limited to a rule's filter makes of its entry, prepared
    * before any transaction opens: the filter's facts about the collection are
    * read here, so the match itself can be asked on the write's own
@@ -12084,6 +12108,12 @@ export class CollectionMutationService extends BaseService {
      * super-admin-owned key on the delete gate.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Whether a delete rule's filter is applied, deleting the entry only where
+     * it matches. `false` refuses a rule that answers a filter, as a bulk
+     * delete by ids does. Defaults to `true`.
+     */
+    appliesFilter?: boolean;
   }): Promise<CollectionServiceResult> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -12137,8 +12167,10 @@ export class CollectionMutationService extends BaseService {
         // super-admin bypass does not apply to a super-admin-owned key here.
         authenticatedScope: params.authenticatedScope,
       };
-      const access =
-        await this.accessService.checkCollectionWrite(accessParams);
+      const access = await this.deleteAccess(
+        accessParams,
+        params.appliesFilter !== false
+      );
       if (access.denied) {
         return access.denied;
       }
@@ -12279,6 +12311,10 @@ export class CollectionMutationService extends BaseService {
       // Set when the locked row is outside the caller's filter: a concurrent
       // write moved it out after the check above, and nothing is deleted.
       let refusedUnderLock: CollectionServiceResult | null = null;
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+      };
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
@@ -12371,11 +12407,15 @@ export class CollectionMutationService extends BaseService {
         // So do the versions features have pinned against retention, and each
         // person's "last looked at" marker: nothing could release or read
         // either once the document is gone.
-        await sweepDeletedDocument(tx, {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId: params.entryId,
-        });
+        await sweepDeletedDocument(
+          tx,
+          {
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          },
+          tables
+        );
 
         // The document's last history event: the whole document, every
         // language, is gone. Its history is kept for the activity log's window
@@ -14690,12 +14730,22 @@ export class CollectionMutationService extends BaseService {
         entryId,
       });
 
-      // Pins and markers go with it; see the single-delete path.
-      await sweepDeletedDocument(tx, {
-        scopeKind: "collection",
-        scopeSlug: params.collectionName,
-        entryId,
-      });
+      // Pins and markers go with it; see the single-delete path. The caller
+      // owns this transaction, so the dashboard pins table's presence is asked
+      // through it: on its own connection, never the pool, which on a pool of
+      // one waits for the connection this transaction holds. A catalogue read,
+      // it cannot fail the way a statement against a missing table would.
+      await sweepDeletedDocument(
+        tx,
+        { scopeKind: "collection", scopeSlug: params.collectionName, entryId },
+        {
+          dashboardPinsPresent: await dashboardPinsPresent(
+            this.adapter,
+            undefined,
+            transactionTableProbe(this.adapter, tx)
+          ),
+        }
+      );
 
       // The document's last history event; see the single-delete path.
       await this.recordHistoryEvent(tx, params.collectionName, entryId, {

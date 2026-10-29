@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { CopyrightYear } from "./CopyrightYear";
 import { Logo } from "./Logo";
 import { NewsletterCta } from "./NewsletterCta";
 
@@ -39,8 +40,6 @@ export function Footer({
   social,
   navigation,
 }: FooterProps) {
-  const currentYear = new Date().getFullYear();
-
   const socialLinks = [
     social?.twitter && { label: "Twitter", url: social.twitter, icon: XIcon },
     social?.github && { label: "GitHub", url: social.github, icon: GitHubIcon },
@@ -137,7 +136,7 @@ export function Footer({
           style={{ borderColor: "var(--color-border)" }}
         >
           <p className="text-xs" style={{ color: "var(--color-fg-muted)" }}>
-            &copy; {currentYear} {siteName || "My Blog"}
+            &copy; <CopyrightYear /> {siteName || "My Blog"}
           </p>
           <p className="text-xs" style={{ color: "var(--color-fg-muted)" }}>
             Powered by{" "}
