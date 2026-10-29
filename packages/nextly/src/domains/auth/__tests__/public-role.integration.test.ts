@@ -194,6 +194,32 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     expect((await nextly.nextly.roles.findByID({ id })).assignable).toBe(false);
   });
 
+  it("is marked as the built-in Public role, as super-admin is marked as its own, where roles are listed and read", async () => {
+    const nextly = await boot(dialect);
+    await seedPermissionsAndRolePresets();
+    const id = await publicRoleId(nextly);
+    const roles = services(nextly).roles;
+
+    const { data } = await roles.listRoles({ limit: 100 });
+    const marked = new Map(data.map(role => [role.slug, role.builtIn]));
+    expect(marked.get(PUBLIC_ROLE_SLUG)).toBe("public");
+    expect(marked.get("super-admin")).toBe("super-admin");
+    // The positive control: the presets and every other role carry no mark.
+    const others = data.filter(
+      role => role.slug !== PUBLIC_ROLE_SLUG && role.slug !== "super-admin"
+    );
+    expect(others).not.toEqual([]);
+    expect(others.every(role => role.builtIn === undefined)).toBe(true);
+    expect((await roles.getRoleById(id)).builtIn).toBe("public");
+
+    // And through the Direct API, which maps roles for its own callers.
+    expect((await nextly.nextly.roles.findByID({ id })).builtIn).toBe("public");
+    const found = await nextly.nextly.roles.find({ limit: 100 });
+    expect(found.items.find(role => role.slug === "super-admin")?.builtIn).toBe(
+      "super-admin"
+    );
+  });
+
   it("can't be deleted or renamed", async () => {
     const nextly = await boot(dialect);
     await seedPermissionsAndRolePresets();
