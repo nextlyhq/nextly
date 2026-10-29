@@ -27,16 +27,41 @@ export const RETIRED_WIDGET_NAMESPACES = ["collection", "single"] as const;
 
 type RetiredNamespace = (typeof RETIRED_WIDGET_NAMESPACES)[number];
 
+/** A collection a door may name to the person it answers: one they may read. */
+export interface NamedCollection {
+  slug: string;
+  label: string;
+}
+
 /**
- * The slug a retired card was minted from: `collection/blog-posts-count` gives
- * `blog-posts`. Each id was `<namespace>/<slug>-<kind>` with a one-word kind,
- * so the slug is all but the last segment; an id of any other shape is named
- * whole.
+ * The slug as a retired card's id spelled it: `collection/blog-posts-count`
+ * gives `blog-posts`. Each id was `<namespace>/<slug>-<kind>` with a one-word
+ * kind, so the slug is all but the last segment; an id of any other shape is
+ * taken whole.
+ *
+ * 🔴 Lossy, so never shown: the cards were minted with each `_` written as
+ * `-`, so `customer_notes` and `customer-notes` read back alike. It is only
+ * ever compared with a collection's slug written the same way.
  */
 function mintedSlug(widgetId: string, namespace: RetiredNamespace): string {
   const rest = widgetId.slice(namespace.length + 1);
   const cut = rest.lastIndexOf("-");
   return cut > 0 ? rest.slice(0, cut) : rest;
+}
+
+/**
+ * The collection a retired card was for, named by its label, when exactly one
+ * of `collections` minted its id; `undefined` when none did or several could
+ * have, as `customer_notes` and `customer-notes` both mint `customer-notes`.
+ */
+function collectionMinted(
+  minted: string,
+  collections: readonly NamedCollection[]
+): string | undefined {
+  const matches = collections.filter(
+    collection => collection.slug.replaceAll("_", "-") === minted
+  );
+  return matches.length === 1 ? matches[0]?.label : undefined;
 }
 
 /**
@@ -50,9 +75,12 @@ function mintedSlug(widgetId: string, namespace: RetiredNamespace): string {
  * are named by their titles here, as a person finds them in the add panel; this
  * module cannot load them (see above), so the titles are spelled out.
  */
-const RETIRED_CARD: Record<RetiredNamespace, (slug: string) => string> = {
-  collection: slug =>
-    `is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to ${slug}.`,
+const RETIRED_CARD: Record<
+  RetiredNamespace,
+  (collection: string | undefined) => string
+> = {
+  collection: collection =>
+    `is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to ${collection ?? "the collection this card showed"}.`,
   single: () =>
     `is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (${CORE_WIDGET_ID.recentlyEdited}).`,
 };
@@ -73,10 +101,20 @@ export function inRetiredWidgetNamespace(widgetId: string): boolean {
  * What the card `widgetId` names is, as every door that refuses one says it
  * after the id (`"<id>" is a retired card: ...`), or `undefined` for an id in
  * no retired namespace.
+ *
+ * `collections` are the ones this door may name to the person it answers, the
+ * ones they may read: the card's collection is named by its label when exactly
+ * one of them minted the id, and described otherwise. A door with none in hand
+ * (startup, before any is read) describes it.
  */
-export function retiredWidgetReplacement(widgetId: string): string | undefined {
+export function retiredWidgetReplacement(
+  widgetId: string,
+  collections: readonly NamedCollection[] = []
+): string | undefined {
   const namespace = retiredNamespaceOf(widgetId);
   return namespace === undefined
     ? undefined
-    : RETIRED_CARD[namespace](mintedSlug(widgetId, namespace));
+    : RETIRED_CARD[namespace](
+        collectionMinted(mintedSlug(widgetId, namespace), collections)
+      );
 }

@@ -69,13 +69,16 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * The judged project's pins, each a margin above what it measured when it was
  * set (62 heavy files, and a mean of 1,191 modules over the heaviest tenth,
  * over 597 files; CI's runs measured 61 and 1,190), and the heavy files of
- * that measurement. Each pin is the higher measurement plus its margin, at
+ * that measurement. The heavy files' pin was raised when three tests that
+ * load the service registry by design joined them (the boot refusal of an
+ * unsupported framework and two migrate commands' tests): 65 measured, so 67
+ * holds whether CI measures one fewer, as it has before. Each pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
  * measures below a pin by more than its margin fails, naming the pin to set;
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 64, tailMeanModules: 1_225 };
+export const BUDGET = { heavyFiles: 67, tailMeanModules: 1_225 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

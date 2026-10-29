@@ -28,6 +28,7 @@ import { collectionSettingsToken } from "./collection-cards";
 import { refreshContentSources } from "./content-sources";
 import { holdsWidgetPermission, requiredPermissionSlugs } from "./gate";
 import { visibilityToken } from "./layout";
+import { keptOffBySite } from "./site-rules";
 import { listSources, sourceTarget } from "./sources";
 
 // Re-exported from its own module rather than moved-and-forgotten: this is
@@ -128,9 +129,14 @@ async function decide(caller: ReadAccessCaller): Promise<{
   );
 
   // Every widget is a declared one, gated by the permission it declares; a
-  // card's collection is judged per card, by `unreadableCollectionCard`.
-  const visible = all.filter(widget =>
-    holdsWidgetPermission(widget.requiredPermission, verdicts)
+  // card's collection is judged per card, by `unreadableCollectionCard`. What
+  // the site keeps off the dashboard is kept off it for everyone, before any
+  // reader's verdict: hidden, a built-in an alternative replaces, or an
+  // alternative not put anywhere.
+  const visible = all.filter(
+    widget =>
+      !keptOffBySite(widget.id) &&
+      holdsWidgetPermission(widget.requiredPermission, verdicts)
   );
   return {
     visible,

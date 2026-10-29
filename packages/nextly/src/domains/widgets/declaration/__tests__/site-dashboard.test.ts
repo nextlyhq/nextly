@@ -17,8 +17,13 @@ import {
   definePlugin,
   type PluginDefinition,
 } from "../../../../plugins/plugin-context";
+import { allWidgets } from "../../canonical";
 import { CORE_DEFAULT_LAYOUT } from "../../core-widgets/ids";
-import { defaultLayoutPlan } from "../../default-layout";
+import {
+  defaultLayoutPlacements,
+  defaultLayoutPlan,
+} from "../../default-layout";
+import { siteDashboardRules } from "../../site-rules";
 import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
 import { SITE_CONFIG, siteDashboardContext } from "../site-dashboard";
 
@@ -68,7 +73,7 @@ beforeEach(() => {
 });
 
 describe("a site config that names what exists", () => {
-  it("starts, and says which keys it accepts but does not apply yet", () => {
+  it("starts, and applies what it hides, replaces and overrides, warning of none of them", () => {
     expect(() =>
       resetWidgetRegistries([shop], {
         hide: ["core/team"],
@@ -95,15 +100,24 @@ describe("a site config that names what exists", () => {
         replace: { "core/recently-edited": "acme/recent-orders" },
       })
     ).not.toThrow();
-    expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "site-dashboard-keys-not-applied",
-        keys: ["hide", "overrides", "replace"],
-      })
-    );
+    // The rules every reading of a widget takes, from the copy checked.
+    const rules = siteDashboardRules();
+    expect([...rules.hidden]).toEqual(["core/team"]);
+    expect([...rules.replaced]).toEqual([
+      ["core/recently-edited", "acme/recent-orders"],
+    ]);
+    expect([...rules.alternatives]).toEqual(["acme/recent-orders"]);
+    expect(rules.overrides.get("core/recently-edited")).toEqual({
+      title: "Latest edits",
+      description: "What changed most recently",
+    });
+    // The alternative takes the built-in's place, at its own starting size.
+    expect(defaultLayoutPlan().cards[0]).toEqual({
+      widget: "acme/recent-orders",
+    });
   });
 
-  it("keeps the site's own widgets as a plugin's are, which the rest may name, and warns of none", () => {
+  it("keeps the site's own widgets as a plugin's are, which the rest may name", () => {
     resetWidgetRegistries([shop], {
       widgets: [{ ...revenue, id: "site/revenue" }],
       defaultLayout: [{ widget: "site/revenue", w: 12 }],
@@ -111,9 +125,6 @@ describe("a site config that names what exists", () => {
     expect(declaredWidget("site/revenue")).toMatchObject({
       owner: SITE_CONFIG,
     });
-    expect(warn).not.toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "site-dashboard-keys-not-applied" })
-    );
   });
 
   it("refuses a site widget whose component names a path alias, saying what to write", () => {
@@ -149,7 +160,7 @@ describe("a site config that names what exists", () => {
     );
     // The collection's card is told the widgets that replace it and the
     // collection to set them to, the slug its id was minted from.
-    const told = `which is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.`;
+    const told = `which is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.`;
     // A Single's card is never told to pick a collection: the widgets with a
     // Collection setting offer collections only.
     const toldSingle = `which is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`;
@@ -197,13 +208,6 @@ describe("a site config that names what exists", () => {
         ],
       })
     ).not.toThrow();
-  });
-
-  it("says nothing when it sets no key", () => {
-    resetWidgetRegistries([shop], {});
-    expect(warn).not.toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "site-dashboard-keys-not-applied" })
-    );
   });
 });
 
@@ -285,6 +289,19 @@ describe("a site config with faults", () => {
     ).toContain(
       'the site config, widget "acme/recent-orders": defaultLayout places "acme/recent-orders" again (entry 2) with no id of its own: name the card, as { widget: "acme/recent-orders", id: "recent-orders-2" }'
     );
+  });
+
+  it("refuses a card id with no text in it, as a save would refuse it", () => {
+    expect(
+      refusal(() =>
+        resetWidgetRegistries([shop], {
+          defaultLayout: [
+            "acme/recent-orders",
+            { widget: "acme/recent-orders", id: "   " },
+          ],
+        })
+      )
+    ).toContain('defaultLayout id must be a non-empty string, got "   "');
   });
 
   it("refuses two cards under one id, and a card named after a widget", () => {
@@ -561,6 +578,67 @@ describe("a plugin's suggestions and alternatives", () => {
 });
 
 describe("the default the site config asks for", () => {
+  it("checks a reload's config against the widgets as declared, not the last boot's overrides", () => {
+    // An older-shape widget, whose facts the check reads from the widget list
+    // the site's overrides apply to (a declared one is read from its declaration).
+    const reports = definePlugin({
+      name: "@acme/reports",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        admin: {
+          widgets: [
+            {
+              id: "acme/reports",
+              component: "@acme/reports/admin#Reports",
+              size: { default: { w: 6, h: 3 }, max: { w: 12, h: 6 } },
+            },
+          ],
+        },
+      },
+    } as unknown as Parameters<typeof definePlugin>[0]);
+    // The first boot narrows it to half the width.
+    resetWidgetRegistries([reports], {
+      overrides: { "acme/reports": { size: { max: { w: 6, h: 6 } } } },
+    });
+    // The second drops that override and places it at full width, which the
+    // widget as declared allows.
+    expect(() =>
+      resetWidgetRegistries([reports], {
+        defaultLayout: [{ widget: "acme/reports", w: 12 }],
+      })
+    ).not.toThrow();
+  });
+
+  it("keeps each replaced card's own id, place and size, and drops only the built-in's settings", () => {
+    const notes = plainPlugin("@acme/notes", {
+      widgets: [{ ...revenue, id: "acme/notes", several: true }],
+      alternatives: { "acme/notes": "core/note" },
+    });
+    resetWidgetRegistries([notes], {
+      defaultLayout: [
+        "core/team",
+        { widget: "core/note", id: "note-a", w: 4, settings: { text: "a" } },
+        { widget: "core/note", id: "note-b", w: 8 },
+      ],
+      replace: { "core/note": "acme/notes" },
+    });
+    expect(defaultLayoutPlan().cards).toEqual([
+      { widget: "core/team" },
+      { widget: "acme/notes", id: "note-a", w: 4 },
+      { widget: "acme/notes", id: "note-b", w: 8 },
+    ]);
+    // Two cards, two identities, each held within the alternative's bounds
+    // (it is at least 6 wide): a save carries both back.
+    const placed = defaultLayoutPlacements(allWidgets()).filter(
+      placement => placement.widgetId === "acme/notes"
+    );
+    expect(placed.map(p => [p.id, p.w, p.config])).toEqual([
+      ["note-a", 6, undefined],
+      ["note-b", 8, undefined],
+    ]);
+  });
+
   it("is set at startup from the copy checked: its defaultLayout, suggestions off, and what plugins suggest", () => {
     resetWidgetRegistries([shop], {
       defaultLayout: [
@@ -703,10 +781,27 @@ describe("a plugin that adds only Needs attention items", () => {
 describe("startup's warnings", () => {
   it("go through the registration's logger, and never the process-wide one", () => {
     const registration = { warn: vi.fn() };
-    resetWidgetRegistries([shop], { hide: ["core/team"] }, registration);
+    // Two plugins declaring one widget id in the old shape: startup keeps the
+    // first and warns.
+    const oldShape = (name: string) =>
+      definePlugin({
+        name,
+        version: "1.0.0",
+        nextly: "*",
+        contributes: {
+          admin: {
+            widgets: [{ id: "shared/card", component: `${name}/admin#Card` }],
+          },
+        } as unknown as PluginContributions,
+      });
+    resetWidgetRegistries(
+      [oldShape("@one/a"), oldShape("@two/b")],
+      { widgets: [{ ...revenue, id: "site/revenue" }] },
+      registration
+    );
     expect(registration.warn).toHaveBeenCalledWith(
-      "admin.dashboard.hide is accepted but not applied yet in this version.",
-      { kind: "site-dashboard-keys-not-applied", keys: ["hide"] }
+      expect.stringContaining('each declare a widget "shared/card"'),
+      expect.objectContaining({ kind: "widget-id-shared-old-shape" })
     );
     expect(warn).not.toHaveBeenCalled();
   });

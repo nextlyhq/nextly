@@ -284,6 +284,7 @@ function sharedCardProps(
     ...controls,
     hidesWhenEmpty: definition.hidesWhenEmpty === true,
     cardId: placement?.id ?? definition.id,
+    widgetId: definition.id,
     // The card's height, which its list rows are counted from.
     ...(placement?.size === undefined ? {} : { h: placement.size.h }),
     skeleton: skeletonFor(definition.archetype),
