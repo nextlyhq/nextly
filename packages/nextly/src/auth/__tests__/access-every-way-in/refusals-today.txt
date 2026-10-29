@@ -5177,7 +5177,6 @@ service key-role-based-super-admin delete collection async-false at rest  404 NO
 service key-role-based-super-admin delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-role-based-super-admin delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-role-based-super-admin delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5210,7 +5209,6 @@ service key-role-based-super-admin delete collection returns-false at rest  404 
 service key-role-based-super-admin delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-role-based-super-admin delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-role-based-super-admin delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5338,7 +5336,6 @@ service key-role-based-super-admin publish collection async-false at rest  404 N
 service key-role-based-super-admin publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-role-based-super-admin publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-role-based-super-admin publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5375,7 +5372,6 @@ service key-role-based-super-admin publish collection returns-false at rest  404
 service key-role-based-super-admin publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-role-based-super-admin publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-role-based-super-admin publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5567,7 +5563,6 @@ service key-role-based-super-admin unpublish collection async-false at rest  404
 service key-role-based-super-admin unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service key-role-based-super-admin unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service key-role-based-super-admin unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5604,7 +5599,6 @@ service key-role-based-super-admin unpublish collection returns-false at rest  4
 service key-role-based-super-admin unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service key-role-based-super-admin unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service key-role-based-super-admin unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5690,7 +5684,6 @@ service key-role-based-super-admin update collection async-false at route  403 F
 service key-role-based-super-admin update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based-super-admin update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-role-based-super-admin update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5736,7 +5729,6 @@ service key-role-based-super-admin update collection returns-false at route  403
 service key-role-based-super-admin update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based-super-admin update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-role-based-super-admin update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
