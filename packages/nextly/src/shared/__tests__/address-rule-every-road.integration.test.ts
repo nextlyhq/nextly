@@ -49,6 +49,7 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { DynamicCollectionRegistryService } from "../../domains/dynamic-collections/services/dynamic-collection-registry-service";
+import { DynamicCollectionSchemaService } from "../../domains/dynamic-collections/services/dynamic-collection-schema-service";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { ServiceContainer } from "../../services";
 import { judgeAddress } from "../address-rule";
@@ -129,7 +130,7 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
 }
 
 /** Addresses the rule refuses for a reason other than a shared snake_case form. */
-const REFUSED = ["admin", "select", "accounts", "a".repeat(51)];
+const REFUSED = ["admin", "select", "accounts", "a".repeat(51), "posts-"];
 
 const REGISTRY = {
   collection: "dynamic_collections",
@@ -316,6 +317,69 @@ for (const dialect of getConfiguredTestDialects()) {
             ],
           });
           expect(await stateOf(database.adapter, "collection")).toEqual(before);
+        }
+      });
+    });
+
+    describe("a relationship to a Builder collection", () => {
+      it("references the table a hyphenated or `dc_`-prefixed target was created under", async () => {
+        const t = await boot();
+        const build = (name: string, fields: unknown[]) =>
+          inDevelopment(() =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "createCollection",
+              {},
+              { name, label: name, fields }
+            )
+          );
+        await build("team-updates", BODY);
+        await build("dc_posts", BODY);
+        const relations = [
+          { target: "team-updates", table: "dc_team_updates" },
+          { target: "dc_posts", table: "dc_dc_posts" },
+        ];
+        const fields = relations.flatMap(({ target }, i) => [
+          {
+            name: `one${i}`,
+            type: "relationship",
+            options: { target, relationType: "manyToOne" },
+          },
+          {
+            name: `many${i}`,
+            type: "relationship",
+            options: { target, relationType: "manyToMany" },
+          },
+        ]);
+        await build("notes", fields);
+
+        for (const [i, { target, table }] of relations.entries()) {
+          expect(await t.adapter.tableExists(table), target).toBe(true);
+          const targetEntry = await t.nextly.create({
+            collection: target,
+            data: { title: "Target", body: "b" },
+          });
+          const targetId = (targetEntry.item as { id: string }).id;
+          const note = await t.nextly.create({
+            collection: "notes",
+            data: {
+              title: `Note ${i}`,
+              [`one${i}`]: targetId,
+              [`many${i}`]: [targetId],
+            },
+          });
+          const read = (await t.nextly.findByID({
+            collection: "notes",
+            id: (note.item as { id: string }).id,
+            depth: 0,
+          })) as Record<string, unknown> | null;
+          expect(read?.[`one${i}`], target).toBe(targetId);
+          // The junction keeps the name it has always been given.
+          const junction = new DynamicCollectionSchemaService(
+            undefined,
+            dialect
+          ).junctionTableNameFor("dc_notes", fields[i * 2 + 1] as never);
+          expect(await t.adapter.tableExists(junction), junction).toBe(true);
         }
       });
     });

@@ -19,4 +19,5 @@ export const ADDRESS_CASES: readonly string[] = [
   "a".repeat(48),
   "a".repeat(49),
   "team_updates",
+  "posts-",
 ];

@@ -215,6 +215,16 @@ function* refusals(
       !CONFIG_SQL_KEYWORDS.has(lower)
     );
   }
+  // A repeated or trailing separator is written differently by each road's
+  // table naming (`posts-` is `dc_posts_` from one and `dc_posts` from
+  // another), so only an address without one names the same table everywhere.
+  if (SLUG_PATTERN.test(address) && /[-_]{2,}|[-_]$/.test(address)) {
+    yield refuse(
+      "SLUG_INVALID_FORMAT",
+      `${label} address '${address}' must not repeat '-' or '_', nor end with one`,
+      true
+    );
+  }
   // PostgreSQL silently truncates a name past 63 bytes and MySQL refuses one
   // past 64, so the tighter limit holds for every name the address leads to.
   // Judged only within the product's own bound, which configuration applied.

@@ -318,3 +318,24 @@ describe("assertConfiguredAddresses", () => {
     expect(tableExists).not.toHaveBeenCalled();
   });
 });
+
+describe("repeated and trailing separators", () => {
+  // Each road writes a table name from the address its own way; they agree only when no separator
+  // repeats or ends the address. Configuration accepted such addresses before the rule, so an
+  // entity may already hold one and only a new one is refused.
+  it.each(KINDS)("refuses them in a new address (%s)", kind => {
+    for (const address of [
+      "posts-",
+      "posts_",
+      "team__updates",
+      "team-_updates",
+      "a--b",
+    ]) {
+      const refusal = judgeAddress(kind, address);
+      expect(refusal?.code, address).toBe("SLUG_INVALID_FORMAT");
+      expect(refusal?.mayAlreadyExist, address).toBe(true);
+      expect(judgeConfiguredAddress(kind, address), address).toBeNull();
+    }
+    expect(judgeAddress(kind, "team-updates_v2")).toBeNull();
+  });
+});

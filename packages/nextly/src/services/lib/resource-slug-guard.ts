@@ -4,6 +4,7 @@ import { NextlyError } from "../../errors";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import {
   addressRefusalError,
+  assertAddressAllowed,
   findSameSnakeCaseAddress,
   addressSnakeForm,
   type UsedAddress,
@@ -137,6 +138,13 @@ export async function assertGlobalResourceSlugAvailable(
     // The kind names the refusal; a caller that does not say it gets one
     // naming the address alone, since collections and Singles share it.
     const kind = options?.addressKind ?? options?.currentResourceType;
+    // A rename: an existing resource taking an address no row holds. It is a
+    // changed address, so the whole rule judges it. A create is left to the
+    // road that made it, which has judged it already (a start keeping an
+    // existing entity's address among them).
+    if (options?.currentResourceId !== undefined && kind !== undefined) {
+      assertAddressAllowed(kind, slug);
+    }
     const twin = findSameSnakeCaseAddress(
       kind ?? "collection",
       slug,

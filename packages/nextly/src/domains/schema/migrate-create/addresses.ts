@@ -23,14 +23,52 @@ import {
 
 type Tabled = ReadonlyArray<{ slug: string; tableName: string }>;
 
+/** The latest snapshot, as far as telling a new address from an existing one needs it. */
+type LatestSnapshot = {
+  data: {
+    snapshot: { tables: ReadonlyArray<{ name: string }> };
+    entities?: Record<
+      "collections" | "singles" | "fieldGroups",
+      Readonly<Record<string, unknown>>
+    >;
+  };
+} | null;
+
+const RECORD_KEY = {
+  collection: "collections",
+  single: "singles",
+  fieldGroup: "fieldGroups",
+} as const;
+
 /**
- * Judges the merged entities' addresses against the latest snapshot's tables
- * (`null` when there is no snapshot): `refused` for a new address the rule
- * refuses, `existing` for an address an entity already has that it refuses.
+ * Whether an entity is new against the latest snapshot: one its record of
+ * entities does not hold, by kind and address, so a changed address is new
+ * even when its table (a kept `dbName`) is in the snapshot. A snapshot written
+ * before entities were recorded is read by its tables instead. With no
+ * snapshot nothing can be told apart, and nothing is new.
+ */
+function isNewAgainst(
+  latest: LatestSnapshot,
+  kind: AddressKind,
+  entity: { slug: string; tableName: string }
+): boolean {
+  if (latest === null) return false;
+  const recorded = latest.data.entities;
+  if (recorded !== undefined)
+    return !(entity.slug in recorded[RECORD_KEY[kind]]);
+  return !latest.data.snapshot.tables.some(
+    table => table.name === entity.tableName
+  );
+}
+
+/**
+ * Judges the merged entities' addresses against the latest snapshot (`null`
+ * when there is none): `refused` for a new address the rule refuses,
+ * `existing` for an address an entity already has that it refuses.
  */
 export function judgeMigrationAddresses(
   merged: { collections: Tabled; singles: Tabled; components: Tabled },
-  latestTables: ReadonlySet<string> | null
+  latest: LatestSnapshot
 ): { refused: JudgedAddress[]; existing: JudgedAddress[] } {
   const kinds: Array<[AddressKind, Tabled]> = [
     ["collection", merged.collections],
@@ -41,7 +79,7 @@ export function judgeMigrationAddresses(
     list.map(entity => ({
       kind,
       address: entity.slug,
-      isNew: latestTables !== null && !latestTables.has(entity.tableName),
+      isNew: isNewAgainst(latest, kind, entity),
     }))
   );
   return judgeAddresses(entities);
@@ -52,17 +90,6 @@ function describeJudgedAddresses(judged: readonly JudgedAddress[]): string[] {
   return judged.map(({ refusal }) => `${refusal.code}: ${refusal.message}`);
 }
 
-/** The table names the latest snapshot records, or `null` with no snapshot. */
-function snapshotTableNames(
-  latest: {
-    data: { snapshot: { tables: ReadonlyArray<{ name: string }> } };
-  } | null
-): ReadonlySet<string> | null {
-  return latest === null
-    ? null
-    : new Set(latest.data.snapshot.tables.map(table => table.name));
-}
-
 /**
  * `migrate:create`'s check: logs each new address the rule refuses, naming the
  * address and the reason, and throws before anything is written, so the
@@ -70,13 +97,10 @@ function snapshotTableNames(
  */
 export function assertMigrationAddresses(
   merged: { collections: Tabled; singles: Tabled; components: Tabled },
-  latest: Parameters<typeof snapshotTableNames>[0],
+  latest: LatestSnapshot,
   logger: { error(message: string): void }
 ): void {
-  const { refused } = judgeMigrationAddresses(
-    merged,
-    snapshotTableNames(latest)
-  );
+  const { refused } = judgeMigrationAddresses(merged, latest);
   if (refused.length === 0) return;
   for (const line of describeJudgedAddresses(refused)) logger.error(line);
   throw addressRefusalsError(refused);
@@ -92,14 +116,11 @@ export function reportMigrationAddresses(
   merged:
     | { collections: Tabled; singles: Tabled; components: Tabled }
     | undefined,
-  latest: Parameters<typeof snapshotTableNames>[0],
+  latest: LatestSnapshot,
   logger: { warn(message: string): void; error(message: string): void }
 ): boolean {
   if (merged === undefined) return true;
-  const { refused, existing } = judgeMigrationAddresses(
-    merged,
-    snapshotTableNames(latest)
-  );
+  const { refused, existing } = judgeMigrationAddresses(merged, latest);
   for (const line of describeJudgedAddresses(existing)) {
     logger.warn(
       `${line}. It already exists, so it keeps working; only a new or changed address is refused.`

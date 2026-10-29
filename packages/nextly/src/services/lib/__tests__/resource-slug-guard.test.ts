@@ -176,4 +176,29 @@ describe("assertGlobalResourceSlugAvailable", () => {
       })
     ).resolves.toBeUndefined();
   });
+
+  it("judges a rename to a new address by the whole rule", async () => {
+    // The new slug is free (no row holds it), so the address is new and changed.
+    for (const [kind, slug, code] of [
+      ["collection", "admin", "SLUG_RESERVED"],
+      ["collection", "select", "SLUG_SQL_KEYWORD"],
+      ["single", "a".repeat(49), "SLUG_TOO_LONG"],
+    ] as const) {
+      await expect(
+        assertGlobalResourceSlugAvailable(adapterUsing({}), slug, {
+          currentResourceType: kind,
+          currentResourceId: "r1",
+        }),
+        slug
+      ).rejects.toMatchObject({ publicData: { errors: [{ code }] } });
+    }
+  });
+
+  it("leaves a create to the road that judged it", async () => {
+    // A registration with no resource being renamed is a create its road has already judged,
+    // a start among them, which may keep an existing entity's address.
+    await expect(
+      assertGlobalResourceSlugAvailable(adapterUsing({}), "cascade")
+    ).resolves.toBeUndefined();
+  });
 });

@@ -5,6 +5,11 @@ import { ADDRESS_CASES } from "../../../../shared/__tests__/helpers/address-case
 import { resolveCollectionTableName } from "../../../schema/utils/resolve-table-name";
 import { judgeMigrationAddresses } from "../addresses";
 
+/** A latest snapshot written before entities were recorded: only its tables say what exists. */
+const older = (tables: string[]) => ({
+  data: { snapshot: { tables: tables.map(name => ({ name })) } },
+});
+
 const collection = (slug: string) => ({
   slug,
   tableName: resolveCollectionTableName(slug),
@@ -16,7 +21,7 @@ describe("judgeMigrationAddresses", () => {
     address => {
       const { refused } = judgeMigrationAddresses(
         { collections: [collection(address)], singles: [], components: [] },
-        new Set(["dc_posts"])
+        older(["dc_posts"])
       );
       expect(refused[0]?.refusal.message ?? null).toBe(
         judgeAddress("collection", address)?.message ?? null
@@ -31,7 +36,7 @@ describe("judgeMigrationAddresses", () => {
         singles: [],
         components: [],
       },
-      new Set(["dc_admin", "dc_team_updates"])
+      older(["dc_admin", "dc_team_updates"])
     );
     expect(refused).toEqual([]);
     expect(existing.map(e => e.entity.address)).toEqual(["admin"]);
@@ -44,7 +49,7 @@ describe("judgeMigrationAddresses", () => {
         singles: [{ slug: "team_updates", tableName: "single_team_updates" }],
         components: [],
       },
-      new Set(["dc_team_updates"])
+      older(["dc_team_updates"])
     );
     expect(refused.map(r => [r.entity.kind, r.refusal.code])).toEqual([
       ["single", "SLUG_SAME_SNAKE_CASE"],
@@ -58,5 +63,29 @@ describe("judgeMigrationAddresses", () => {
     );
     expect(refused).toEqual([]);
     expect(existing.map(e => e.entity.address)).toEqual(["cascade"]);
+  });
+
+  it("decides by the recorded entities when the snapshot has them, not by the table", async () => {
+    // A Single renamed while it keeps its `dbName`: its table is in the snapshot, but the snapshot
+    // records the Single under its old address, so the new address is new.
+    const renamed = "a".repeat(49);
+    const { refused } = judgeMigrationAddresses(
+      {
+        collections: [],
+        singles: [{ slug: renamed, tableName: "single_custom" }],
+        components: [],
+      },
+      {
+        data: {
+          snapshot: { tables: [{ name: "single_custom" }] },
+          entities: {
+            collections: {},
+            singles: { "old-address": {} },
+            fieldGroups: {},
+          },
+        },
+      }
+    );
+    expect(refused.map(r => r.refusal.code)).toEqual(["SLUG_TOO_LONG"]);
   });
 });
