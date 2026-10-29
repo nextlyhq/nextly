@@ -67,7 +67,9 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
     formRef,
   } = useRoleForm(roleId);
   // A preset is changed by copying it into a new role, which starts from it.
-  const copyRole = useRoleCopy(roleId, form);
+  const { copyRole, copying } = useRoleCopy(roleId, form);
+  // Held while the role loads or saves, and while a copied role loads.
+  const busy = isLoading || copying;
   // Each plugin as the admin names it everywhere, by its package name.
   const { plugins } = useBranding();
   const pluginNames = new Map(
@@ -147,7 +149,7 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
                   form={form}
                   isEditMode={isEditMode}
                   isSystemRole={isSystemRole}
-                  isLoading={isLoading}
+                  isLoading={busy}
                   handleNameChange={handleNameChange}
                 />
 
@@ -181,7 +183,7 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
                   otherPermissions={otherPermissions}
                   lockedPermissionIds={lockedPermissionIds}
                   bases={baseGrants}
-                  isLoading={isLoading}
+                  isLoading={busy}
                   readOnly={screenMode === "preset"}
                   visitors={screenMode === "public"}
                 />
@@ -200,7 +202,11 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
                 Cancel
               </Button>
               {screenSaves(screenMode) && (
-                <SaveRoleButton isLoading={isLoading} isEditMode={isEditMode} />
+                <SaveRoleButton
+                  isLoading={isLoading}
+                  held={copying}
+                  isEditMode={isEditMode}
+                />
               )}
             </FormActions>
           </form>
@@ -271,13 +277,16 @@ function RolePermissionsArea({
 /** The form's save, naming whether it updates the role or creates it. */
 function SaveRoleButton({
   isLoading,
+  held,
   isEditMode,
 }: {
   isLoading: boolean;
+  /** Not offered yet, without being under way: a copied role still loads. */
+  held: boolean;
   isEditMode: boolean;
 }): JSX.Element {
   return (
-    <Button type="submit" form={ROLE_FORM_ID} disabled={isLoading}>
+    <Button type="submit" form={ROLE_FORM_ID} disabled={isLoading || held}>
       {isLoading ? (
         <>
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
