@@ -39,10 +39,11 @@ test.describe.configure({
  * Its own `next dev`, with the fixture plugin that declares the widget switched
  * on, so the suite's server keeps its dashboard for the other specs. Its own
  * port, build directory and database, so it never shares `.next-e2e` or the
- * suite's database with that server. The database is seeded before the server
- * starts, as the suite's production server's is: development signs in the
- * playground's dev user only when that user exists, and a fresh database has
- * none, so unseeded the admin opens on first-run setup instead.
+ * suite's database with that server. The dev user is seeded into that
+ * database before the server starts: development signs in the playground's
+ * dev user only when that user exists, and a fresh database has none, so
+ * unseeded the admin opens on first-run setup instead. The user alone, with no
+ * demo content, so no upload outlives the database this spec removes.
  *
  * @module tests/component-map-dev
  */
@@ -58,6 +59,12 @@ const COMPONENT = "@nextly-e2e/missing-widget-fixture/admin#NeverBuilt";
 /** This spec's own build directory and database, removed when it ends. */
 const DIST_DIR = ".next-e2e-component-map";
 const DB_FILE = "./data/e2e-component-map.db";
+/** How long seeding the dev user may take, on a cold runner. */
+const SEED_BUDGET_MS = 180_000;
+/** How long the server may take to answer its health route: a cold boot compiles on first request. */
+const BOOT_BUDGET_MS = 240_000;
+/** Room for the rest of the hook: removing old files and spawning the server. */
+const HOOK_MARGIN_MS = 30_000;
 
 let server: ChildProcess | undefined;
 let output = "";
@@ -94,7 +101,8 @@ function removeOwnFiles(): void {
 }
 
 test.beforeAll(async () => {
-  test.setTimeout(300_000);
+  // Both phases in full, one after the other, so a slow seed never shortens the boot's window.
+  test.setTimeout(SEED_BUDGET_MS + BOOT_BUDGET_MS + HOOK_MARGIN_MS);
   removeOwnFiles();
   cleanNextWrites = cleanUpNextWrites();
   const env = {
@@ -107,10 +115,10 @@ test.beforeAll(async () => {
     NEXTLY_GENERATED_FILES_WRITE: "0",
     NEXTLY_E2E_MISSING_WIDGET: "1",
   };
-  // The dev user development signs in, and the roles it holds, in this spec's
-  // own database, with the same environment the server gets.
+  // The dev user development signs in, and the permissions it holds, in this
+  // spec's own database, with the same environment the server gets.
   const seeding = pnpmInvocation(
-    ["--filter", "playground", "exec", "tsx", "scripts/seed.ts"],
+    ["--filter", "playground", "run", "db:seed:dev-user"],
     process.platform,
     env
   );
@@ -119,7 +127,7 @@ test.beforeAll(async () => {
     env,
     encoding: "utf8",
     shell: seeding.shell,
-    timeout: 180_000,
+    timeout: SEED_BUDGET_MS,
   });
   if (seeded.status !== 0) {
     throw new Error(
@@ -157,7 +165,7 @@ test.beforeAll(async () => {
   }
   // A cold development boot compiles on first request, so the health route
   // can take as long as the suite's own server allows for its boot.
-  await waitForHealth(FIXTURE_URL, 240_000);
+  await waitForHealth(FIXTURE_URL, BOOT_BUDGET_MS);
 });
 
 test.afterAll(async () => {
