@@ -35,6 +35,8 @@ const GRANTS: GrantedPermission[] = [
 vi.mock("../../services/lib/permissions", async importOriginal => ({
   ...(await importOriginal<typeof import("../../services/lib/permissions")>()),
   isSuperAdmin: vi.fn(async () => false),
+  isSuperAdminOrRefuse: vi.fn(async () => false),
+  isSuperAdminOrThrow: vi.fn(async () => false),
   hasPermission: vi.fn(async () => true),
   listRoleSlugsForUser: vi.fn(async () => ["editor"]),
   listEffectiveGrants: vi.fn(async () => GRANTS),
