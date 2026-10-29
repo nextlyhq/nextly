@@ -375,6 +375,7 @@ export function assertAddressAllowed(
 }
 
 type Slugged = ReadonlyArray<{ slug: string; dbName?: string }>;
+type Registered = ReadonlyArray<{ slug: string; tableName?: string }>;
 
 /** The table a configured entity is stored in, as each kind's resolver names it. */
 function configuredTable(
@@ -397,10 +398,11 @@ function configuredTable(
  *
  * An entity a registry row holds exists and keeps its address. One no row
  * holds is new and judged by the whole rule and against every address used,
- * unless its table already exists: then an earlier start or `nextly migrate`
- * made it (a new environment migrated before its first start, or a registry
- * read that answered nothing), and it keeps its address too. The tables are
- * asked about only for an address the rule would refuse.
+ * unless its table already exists and no registry row owns it: then an earlier
+ * start or `nextly migrate` made it (a new environment migrated before its
+ * first start, or a registry read that answered nothing), and it keeps its
+ * address too. The tables are asked about only for an address the rule would
+ * refuse.
  */
 export async function assertConfiguredAddresses(
   config: {
@@ -408,14 +410,25 @@ export async function assertConfiguredAddresses(
     singles?: Slugged;
     fieldGroups?: Slugged;
   },
-  registered: { collections: Slugged; singles: Slugged; components: Slugged },
+  registered: {
+    collections: Registered;
+    singles: Registered;
+    components: Registered;
+  },
   tableExists: (table: string) => Promise<boolean>
 ): Promise<void> {
-  const configured: Array<[AddressKind, Slugged, Slugged]> = [
+  const configured: Array<[AddressKind, Slugged, Registered]> = [
     ["collection", config.collections ?? [], registered.collections],
     ["single", config.singles ?? [], registered.singles],
     ["fieldGroup", config.fieldGroups ?? [], registered.components],
   ];
+  // A table a registry row owns is that entity's, so finding it says nothing about a
+  // configured entity of another address having been made (a same-form twin names it too).
+  const ownedTables = new Set(
+    configured.flatMap(([, , rows]) =>
+      rows.flatMap(row => (row.tableName === undefined ? [] : [row.tableName]))
+    )
+  );
   const entities: AddressedEntity[] = [];
   const tables = new Map<AddressedEntity, string>();
   const used: UsedAddress[] = [];
@@ -438,7 +451,11 @@ export async function assertConfiguredAddresses(
   const refused: JudgedAddress[] = [];
   for (const judged of judgeAddresses(entities, used).refused) {
     const table = tables.get(judged.entity);
-    if (table === undefined || !(await tableExists(table))) {
+    if (
+      table === undefined ||
+      ownedTables.has(table) ||
+      !(await tableExists(table))
+    ) {
       refused.push(judged);
     }
   }

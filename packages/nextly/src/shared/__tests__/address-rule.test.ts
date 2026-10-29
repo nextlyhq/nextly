@@ -290,6 +290,24 @@ describe("assertConfiguredAddresses", () => {
     expect(asked).toEqual(["dc_cascade", `single_${"a".repeat(49)}`]);
   });
 
+  it("judges a twin whose table another entity's row owns, even though that table exists", async () => {
+    // `team_updates` and `team-updates` name one table. It exists because the registered
+    // collection owns it, which says nothing about `team_updates` having been made.
+    await expect(
+      assertConfiguredAddresses(
+        { collections: [{ slug: "team-updates" }, { slug: "team_updates" }] },
+        {
+          collections: [{ slug: "team-updates", tableName: "dc_team_updates" }],
+          singles: [],
+          components: [],
+        },
+        async () => true
+      )
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ code: "SLUG_SAME_SNAKE_CASE" }] },
+    });
+  });
+
   it("asks about no table when nothing is refused", async () => {
     const tableExists = vi.fn(async () => false);
     await assertConfiguredAddresses(
