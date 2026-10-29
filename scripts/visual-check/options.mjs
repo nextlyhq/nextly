@@ -76,11 +76,14 @@ function slugOf(text) {
 export function publishedRoute(route) {
   const at = route.search(/[?#]/);
   if (at === -1) return route;
-  // A query hashes as it always has, so names already published still
-  // stand; a fragment hashes with its `#`, which no query holds, so `?_=x`
-  // and `#_=x` stay apart even where the slug drops the rest.
+  // A query alone hashes as it always has, so names already published still
+  // stand. With a fragment, the hash takes the delimiter too: a query alone
+  // holds no `#`, a fragment alone starts with one and a query with a
+  // fragment starts with `?`, so `?_=x`, `#_=x` and `?#_=x` stay apart even
+  // where the slug drops the rest.
+  const queryAlone = route[at] === "?" && !route.includes("#", at);
   const hash = createHash("sha256")
-    .update(route.slice(route[at] === "?" ? at + 1 : at))
+    .update(route.slice(queryAlone ? at + 1 : at))
     .digest("hex")
     .slice(0, 8);
   if (route[at] === "#") return `${route.slice(0, at)}#${hash}`;

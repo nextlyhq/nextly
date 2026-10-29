@@ -129,6 +129,28 @@ describe("what the visual check is asked to do", () => {
     expect(captureName("/admin/x?_=foo", 390, "light")).not.toBe(
       captureName("/admin/x#_=foo", 390, "light")
     );
+    // Nor does an empty query before a fragment.
+    expect(captureName("/admin/x?#_=foo", 390, "light")).not.toBe(
+      captureName("/admin/x#_=foo", 390, "light")
+    );
+  });
+
+  /*
+   * Distinct routes, distinct names, across every way a query and a fragment
+   * can sit together: empty, bare, a key the slug drops, a delimiter inside
+   * the other part. A pair-by-pair test only covers the pairs someone
+   * thought of.
+   */
+  it("names every query and fragment form apart", () => {
+    const queries = ["", "?", "?_", "?_=f", "?a", "?a=1", "??_=f", "?_=f?"];
+    const fragments = ["", "#", "#_", "#_=f", "#a", "#?_=f", "##_=f", "#_=f#"];
+    const routes = queries.flatMap(query =>
+      fragments.map(fragment => `/x${query}${fragment}`)
+    );
+    const names = new Set(
+      routes.map(route => captureName(route, 390, "light"))
+    );
+    expect(names.size).toBe(routes.length);
   });
 
   /*
