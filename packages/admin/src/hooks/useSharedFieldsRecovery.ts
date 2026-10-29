@@ -210,9 +210,15 @@ export function useSharedFieldsRecovery(args: {
       holding.current.delete(id);
     }
   }, [documentKey]);
+  // Whether the editor is still there. Leaving it renders nothing more, so
+  // `onScreen` keeps naming the document it last showed: a recovery whose
+  // Save finishes after the editor has gone asks this instead.
+  const mounted = useRef(false);
   useEffect(() => {
+    mounted.current = true;
     const held = holding.current;
     return () => {
+      mounted.current = false;
       for (const [id, hold] of held) {
         toast.dismiss(id);
         hold.letGo();
@@ -332,9 +338,14 @@ export function useSharedFieldsRecovery(args: {
               letGo: () => undefined,
             });
             toast.loading("Taking the live values…", { id: taking });
-            // Asked with nothing awaited before the take: the editor still
-            // shows the change the refusal was for, and may still write it.
-            if (onScreen.current !== refusedFor || !form.mayWrite()) {
+            // Asked with nothing awaited before the take: the editor is still
+            // there, still shows the change the refusal was for, and may
+            // still write it.
+            if (
+              !mounted.current ||
+              onScreen.current !== refusedFor ||
+              !form.mayWrite()
+            ) {
               throw NOT_TAKEN;
             }
             let taken: TakenLiveValues;

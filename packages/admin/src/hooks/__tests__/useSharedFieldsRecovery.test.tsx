@@ -342,6 +342,29 @@ describe("useSharedFieldsRecovery", () => {
     expect(take).not.toHaveBeenCalled();
   });
 
+  it("takes nothing once the editor has gone while its Save ran", async () => {
+    const { recover, unmount } = renderRecovery();
+    // The author leaves the editor while the Save is in flight; it stores,
+    // but there is no editor left to show what a take would bring.
+    const form = formHolding({}, [], () => {
+      unmount();
+      return { ok: true };
+    });
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(form.recover).toHaveBeenCalled());
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(take).not.toHaveBeenCalled();
+  });
+
   it("keeps one refusal toast per document and language, and closes it when the editor leaves", () => {
     const { recover, unmount } = renderRecovery();
     const stale = refusal({
