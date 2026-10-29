@@ -130,9 +130,10 @@ describe("a visitor, with the access-control service", () => {
       visitorActor([{ slug: "read-posts", action: "read", resource: "posts" }])
     );
 
-  it("is refused where the read rule answers a filter population cannot apply", async () => {
-    // Population fetches the related ids whole, so a rule that allows only
-    // the entries it matches would hand the visitor every one of them.
+  it("is handed back a read rule's filter, which population applies to the rows", async () => {
+    // Population reads only the related rows a filter matches, so the
+    // visitor's answer is the filter, as a user's or a key's is: not an
+    // allow of every row, and not a refusal of all of them.
     publicReadsPosts();
     const { result, deviations } = await recordingDeviations(() =>
       relatedRowReads(
@@ -141,8 +142,11 @@ describe("a visitor, with the access-control service", () => {
         service({ read: () => ({ author: { equals: "u1" } }) })
       )
     );
-    expect(result).toBe(false);
-    expect(deviations).toEqual(["filter-not-applied"]);
+    expect(result).toEqual({
+      allowed: false,
+      filter: { author: { equals: "u1" } },
+    });
+    expect(deviations).toEqual([]);
   });
 
   it("is shown the rows where the read rule answers true", async () => {
@@ -154,7 +158,7 @@ describe("a visitor, with the access-control service", () => {
         { principal: null },
         service({ read: () => true })
       )
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
   });
 });
 
@@ -166,7 +170,7 @@ describe("a visitor, without the access-control service", () => {
     visitorSpy.mockResolvedValue(visitorActor([]));
     await expect(
       relatedRowReads("posts", { principal: null }, undefined)
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false });
   });
 
   it("is judged by the Public role its own database records, not the process's", async () => {
@@ -182,7 +186,7 @@ describe("a visitor, without the access-control service", () => {
         { principal: null, visitorWithoutService: own },
         undefined
       )
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false });
     expect(own).toHaveBeenCalledTimes(1);
     expect(visitorSpy).not.toHaveBeenCalled();
   });
@@ -194,7 +198,7 @@ describe("a visitor, without the access-control service", () => {
     );
     await expect(
       relatedRowReads("posts", { principal: null }, undefined)
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
   });
 
   it("is judged by the Public role alone, running no rule declared in the process", async () => {
@@ -212,7 +216,7 @@ describe("a visitor, without the access-control service", () => {
     );
     await expect(
       relatedRowReads("posts", { principal: null }, undefined)
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
     expect(rule).not.toHaveBeenCalled();
   });
 });

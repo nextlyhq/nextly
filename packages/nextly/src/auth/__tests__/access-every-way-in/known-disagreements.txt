@@ -92,8 +92,6 @@ service key-role-based read collection principal-kind at schema  # schema-list-i
 service key-super-admin read collection principal-kind at schema  # schema-list-ignores-rules
 service user-partial read collection principal-kind at schema  # schema-list-ignores-rules
 service key-partial read collection principal-kind at schema  # schema-list-ignores-rules
-service principal read media none at population  # visitor-keeps-media
-service principal-other read media none at population  # visitor-keeps-media
 no-service user-with read collection none at can  # can-no-service-refuses-people
 no-service user-with read collection none at entity  # no-service
 no-service user-with read collection none at capabilities  # no-service
@@ -910,20 +908,6 @@ public visitor read media none at rest
 # A collection's read rule that answers a well-formed filter allows the
 # entries it matches. Each door below refuses it still, as no read there
 # applies a rule's filter yet.
-bound custom-role read related async-filter at population  # filter-not-applied
-public visitor read related async-filter at population  # filter-not-applied
-public visitor read related returns-filter at population  # filter-not-applied
-bound custom-role read related returns-filter at population  # filter-not-applied
-bound key-full-access read related async-filter at population  # filter-not-applied
-bound key-full-access read related returns-filter at population  # filter-not-applied
-bound key-partial read related async-filter at population  # filter-not-applied
-bound key-partial read related returns-filter at population  # filter-not-applied
-bound key-read-only read related async-filter at population  # filter-not-applied
-bound key-read-only read related returns-filter at population  # filter-not-applied
-bound key-role-based read related async-filter at population  # filter-not-applied
-bound key-role-based read related returns-filter at population  # filter-not-applied
-bound key-super-admin read related async-filter at population  # filter-not-applied
-bound key-super-admin read related returns-filter at population  # filter-not-applied
 bound key-without-rows read related async-filter at population  # key-slug-string-match, filter-not-applied
 bound key-without-rows read related returns-filter at population  # key-slug-string-match, filter-not-applied
 no-service user-with read collection async-filter at can  # can-no-service-refuses-people

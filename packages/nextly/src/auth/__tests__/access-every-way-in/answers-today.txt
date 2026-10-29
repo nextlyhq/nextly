@@ -3891,7 +3891,7 @@ service     principal                read       related     publish-false       
 service     principal-other          read       related     publish-false         .     .       .        .      .    .        .       .       R           .       .       .     .
 service     key-without-rows         read       related     publish-false         .     .       .        .      .    .        .       .       A           .       .       .     .
 service     user-naming-super-admin  read       related     publish-false         .     .       .        .      .    .        .       .       R           .       .       .     .
-service     visitor                  read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
+service     visitor                  read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
 service     user-with                read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
 service     user-without             read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
 service     custom-role              read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
@@ -3907,7 +3907,7 @@ service     principal                read       related     returns-filter      
 service     principal-other          read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
 service     key-without-rows         read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
 service     user-naming-super-admin  read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
-service     visitor                  read       related     async-filter          .     .       .        .      .    .        .       .       A           .       .       .     .
+service     visitor                  read       related     async-filter          .     .       .        .      .    .        .       .       R           .       .       .     .
 service     user-with                read       related     async-filter          .     .       .        .      .    .        .       .       A           .       .       .     .
 service     user-without             read       related     async-filter          .     .       .        .      .    .        .       .       R           .       .       .     .
 service     custom-role              read       related     async-filter          .     .       .        .      .    .        .       .       A           .       .       .     .
@@ -5133,7 +5133,7 @@ bound       user-partial             read       related     publish-false       
 bound       key-partial              read       related     publish-false         .     .       .        .      .    .        .       .       A           .       .       .     .
 bound       key-without-rows         read       related     publish-false         .     .       .        .      .    .        .       .       A           .       .       .     .
 bound       user-naming-super-admin  read       related     publish-false         .     .       .        .      .    .        .       .       R           .       .       .     .
-bound       visitor                  read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
+bound       visitor                  read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
 bound       user-with                read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
 bound       user-without             read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
 bound       custom-role              read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
@@ -5147,7 +5147,7 @@ bound       user-partial             read       related     returns-filter      
 bound       key-partial              read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
 bound       key-without-rows         read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
 bound       user-naming-super-admin  read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
-bound       visitor                  read       related     async-filter          .     .       .        .      .    .        .       .       A           .       .       .     .
+bound       visitor                  read       related     async-filter          .     .       .        .      .    .        .       .       R           .       .       .     .
 bound       user-with                read       related     async-filter          .     .       .        .      .    .        .       .       A           .       .       .     .
 bound       user-without             read       related     async-filter          .     .       .        .      .    .        .       .       R           .       .       .     .
 bound       custom-role              read       related     async-filter          .     .       .        .      .    .        .       .       A           .       .       .     .
@@ -5489,8 +5489,8 @@ public      visitor                  read       related     role-screen-spelling
 public      visitor                  read       related     principal-kind        .     .       .        .      .    .        .       .       R           .       .       .     .
 public      visitor                  read       related     user-is-key-maker     .     .       .        .      .    .        .       .       R           .       .       .     .
 public      visitor                  read       related     publish-false         .     .       .        .      .    .        .       .       A           .       .       .     .
-public      visitor                  read       related     returns-filter        .     .       .        .      .    .        .       .       R           .       .       .     .
-public      visitor                  read       related     async-filter          .     .       .        .      .    .        .       .       R           .       .       .     .
+public      visitor                  read       related     returns-filter        .     .       .        .      .    .        .       .       A           .       .       .     .
+public      visitor                  read       related     async-filter          .     .       .        .      .    .        .       .       A           .       .       .     .
 public      visitor                  read       related     returns-empty-in      .     .       .        .      .    .        .       .       R           .       .       .     .
 public      visitor                  read       related     malformed-filter      .     .       .        .      .    .        .       .       R           .       .       .     .
 public      visitor                  read       media       none                  401   .       .        .      .    .        .       .       A           A       .       .     .
