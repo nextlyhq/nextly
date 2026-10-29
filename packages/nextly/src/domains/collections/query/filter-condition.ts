@@ -254,7 +254,21 @@ export async function ruleFilterCondition(
     sources,
     logger
   );
-  return prepared.condition(params.schema, params.localizedCtx);
+  return prepared.condition(params.schema, asReadOf(params.localizedCtx));
+}
+
+/**
+ * The language a read judges a rule's filter in: a localized field the read
+ * shows from a fallback language is judged on that language's value too, so
+ * the read shows nothing the rule refuses. Every answer to "may the caller
+ * read this entry" builds its filter in this context.
+ */
+export function asReadOf(
+  localizedCtx: LocalizedQueryContext | null
+): LocalizedQueryContext | null {
+  return localizedCtx
+    ? { ...localizedCtx, inEveryFallbackLanguage: true }
+    : null;
 }
 
 /**
@@ -288,6 +302,8 @@ export function localizedFilterContext(
     localizedFields: companion.localizedFields,
     mainIdColumn: schema.id,
     locale: localeChain[0],
+    localeChain,
+    companionTable: companion.table,
     // Only constrain by status when the collection has per-locale status and the
     // read resolved to a single status; otherwise leave it unfiltered.
     statusValues:
