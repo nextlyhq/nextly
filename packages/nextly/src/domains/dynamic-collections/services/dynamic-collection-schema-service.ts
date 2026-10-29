@@ -51,6 +51,9 @@ import {
 } from "../../schema/pipeline/sql-templates/index";
 import {
   fieldProducesColumn,
+  junctionTableNameBetween,
+  junctionTableNameFor,
+  junctionTablesOf,
   usesJunctionTable,
   getColumnDescriptor,
   getSystemColumnDescriptors,
@@ -67,11 +70,6 @@ import {
 import { backfillDefaultForType } from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
-import {
-  junctionTableNameBetween,
-  junctionTableNameFor,
-  junctionTablesOf,
-} from "./collection-tables";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
 
 /**
@@ -3418,7 +3416,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
    * The junction table a many-to-many field's links live in: the author's own
    * name when the field sets one, else the generated one. Asked here by the
    * CREATE, the DROP and the RENAME alike, so the three cannot name different
-   * tables for one field. The rule itself is `collection-tables`, which the
+   * tables for one field. The rule itself is in `field-column-descriptor`, which the
    * check before a delete asks too.
    */
   junctionTableNameFor(
@@ -3437,7 +3435,7 @@ ${this.dialect === "mysql" ? "CREATE INDEX" : "CREATE INDEX IF NOT EXISTS"} ${q(
 
   /**
    * The generated name of the junction table between two tables for one
-   * field, by the rule `junctionTableNameFor` applies (`collection-tables`).
+   * field, by the rule `junctionTableNameFor` applies (`field-column-descriptor`).
    */
   generateJunctionTableName(
     sourceTable: string,

@@ -25,12 +25,11 @@ import {
   type FieldOwner,
 } from "../../collections/services/collection-dependents";
 import type { RemovedCollectionSeed } from "../../collections/services/collection-dependents-schema";
-import { collectionOwnTables } from "../../dynamic-collections/services/collection-tables";
 import type { ExtensionSchemaRecord } from "../ownership/dependent-elements";
+import { collectionOwnTables } from "../services/field-column-descriptor";
 import { resolveCollectionTableName } from "../utils/resolve-table-name";
 
-import type { MinimalConfigEntity } from "./generate";
-import { COLLECTION_TABLE_PREFIX } from "./removed-collection-tables";
+import { COLLECTION_TABLE_PREFIX, type MinimalConfigEntity } from "./generate";
 
 /**
  * The collections Nextly provides itself, which a relationship or upload may

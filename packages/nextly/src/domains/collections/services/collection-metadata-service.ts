@@ -990,7 +990,7 @@ export class CollectionMetadataService extends BaseService {
       ] = await Promise.all([
         import("./collection-dependents"),
         import("./collection-drop-order"),
-        import("../../dynamic-collections/services/collection-tables"),
+        import("../../schema/services/field-column-descriptor"),
       ]);
       const slugs = [
         ...new Set([params.collectionName, ...(params.together ?? [])]),

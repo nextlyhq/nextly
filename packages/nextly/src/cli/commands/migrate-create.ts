@@ -75,13 +75,15 @@ import {
   formatTimestamp,
   slugify,
 } from "../../domains/schema/migrate-create/format-file";
-import { generateMigration } from "../../domains/schema/migrate-create/generate";
+import {
+  generateMigration,
+  removedCollectionTables,
+} from "../../domains/schema/migrate-create/generate";
 import {
   generateBlankPluginMigration,
   generatePluginMigration,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import { removedCollectionTables } from "../../domains/schema/migrate-create/removed-collection-tables";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,

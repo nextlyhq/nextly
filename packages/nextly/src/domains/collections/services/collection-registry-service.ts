@@ -596,7 +596,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       { collectionOwnTables },
     ] = await Promise.all([
       import("./collection-dependents"),
-      import("../../dynamic-collections/services/collection-tables"),
+      import("../../schema/services/field-column-descriptor"),
     ]);
     const collections = [];
     for (const slug of slugs) {
