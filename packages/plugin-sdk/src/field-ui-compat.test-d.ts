@@ -273,29 +273,88 @@ interface TodayValidationRulesEditorProps {
 // shape added to it is checked by construction.
 
 /**
- * A shape a consumer of today's PASSES values into: today's values are still
- * accepted, and every member today's consumer may set is still declared.
+ * Why a type would check nothing, or `false`. `any` passes every assignability
+ * check one way and `never` the other, and `keyof never` holds every key, so a
+ * shape, an item of a list or a member typed as either would pass the checks
+ * below while a consumer could no longer use it.
  */
-type Accepts<Today, Now> = 0 extends 1 & Now
+type Degenerate<T> = 0 extends 1 & T
   ? "resolved to any"
-  : [Today] extends [Now]
-    ? [keyof Today] extends [keyof Now]
-      ? true
-      : "drops or renames a member today's consumer sets"
-    : "refuses a value today's consumer passes";
+  : [T] extends [never]
+    ? "resolved to never"
+    : false;
+
+/** A list's item, so a list is held to what each item carries. */
+type Item<T> = T extends readonly (infer Element)[] ? Element : T;
 
 /**
- * A shape a consumer of today's READS: what it hands back still fits where
- * today's consumer reads it, and every member that consumer reads is still
+ * Each member today's consumer uses that resolved to `any` or `never`, named,
+ * or `never` when there is none.
+ */
+type DegenerateMembers<Now, Today> = Extract<
+  {
+    [Key in keyof Item<Today> & keyof Item<Now>]: Degenerate<
+      Item<Now>[Key]
+    > extends string
+      ? `${Key & string} ${Degenerate<Item<Now>[Key]>}`
+      : false;
+  }[keyof Item<Today> & keyof Item<Now>],
+  string
+>;
+
+/** The degenerate-type verdict for a shape, its items and its members. */
+type Usable<Now, Today> =
+  Degenerate<Now> extends string
+    ? Degenerate<Now>
+    : Degenerate<Item<Now>> extends string
+      ? `its items ${Degenerate<Item<Now>>}`
+      : [DegenerateMembers<Now, Today>] extends [never]
+        ? true
+        : DegenerateMembers<Now, Today>;
+
+/**
+ * A shape a consumer of today's PASSES values into: usable, today's values
+ * still accepted, and every member today's consumer may set still declared.
+ */
+type Accepts<Today, Now> =
+  Usable<Now, Today> extends true
+    ? [Today] extends [Now]
+      ? [keyof Item<Today>] extends [keyof Item<Now>]
+        ? true
+        : "drops or renames a member today's consumer sets"
+      : "refuses a value today's consumer passes"
+    : Usable<Now, Today>;
+
+/**
+ * A shape a consumer of today's READS: usable, what it hands back still fits
+ * where today's consumer reads it, and every member that consumer reads still
  * there.
  */
-type ReadsAs<Now, Today> = 0 extends 1 & Now
-  ? "resolved to any"
-  : [Now] extends [Today]
-    ? [keyof Today] extends [keyof Now]
-      ? true
-      : "drops or renames a member today's consumer reads"
-    : "hands back a value today's consumer cannot read";
+type ReadsAs<Now, Today> =
+  Usable<Now, Today> extends true
+    ? [Now] extends [Today]
+      ? [keyof Item<Today>] extends [keyof Item<Now>]
+        ? true
+        : "drops or renames a member today's consumer reads"
+      : "hands back a value today's consumer cannot read"
+    : Usable<Now, Today>;
+
+/**
+ * A function as today's consumer calls it: today's arguments still accepted,
+ * and its result held as a shape that consumer reads. Checked through the
+ * result rather than the function type, because a function declared to
+ * return `never` is assignable to any signature with the same parameters.
+ */
+type Calls<Now, TodayArgs extends readonly unknown[], TodayResult> =
+  Degenerate<Now> extends string
+    ? Degenerate<Now>
+    : Now extends (...args: infer Args) => infer Result
+      ? [TodayArgs] extends [Args]
+        ? ReadsAs<Result, TodayResult> extends true
+          ? true
+          : `its result ${ReadsAs<Result, TodayResult> & string}`
+        : "refuses arguments today's consumer passes"
+      : "is no longer callable";
 
 /** Two built-in types a surface passes as `types`, the admin's own way. */
 type BuiltInPick = "text" | "number";
@@ -390,28 +449,33 @@ type FieldUiVerdicts = {
 
   // The functions, hook and constant, as a consumer calls them: today's
   // arguments accepted, today's results readable.
-  withOptionIds: ReadsAs<
+  withOptionIds: Calls<
     typeof withOptionIds,
-    (
+    [
       options: ReadonlyArray<{ label: string; value: string }>,
-      idPrefix?: string
-    ) => TodayFieldOption[]
+      idPrefix?: string,
+    ],
+    TodayFieldOption[]
   >;
-  usePluginFieldTypeEntries: ReadsAs<
+  usePluginFieldTypeEntries: Calls<
     typeof usePluginFieldTypeEntries,
-    (surface: TodaySurface) => TodayCatalogEntry<string>[]
+    [surface: TodaySurface],
+    TodayCatalogEntry<string>[]
   >;
-  operatorsForType: ReadsAs<
+  operatorsForType: Calls<
     typeof operatorsForType,
-    (sourceType: string | undefined) => TodayOperator[]
+    [sourceType: string | undefined],
+    TodayOperator[]
   >;
-  operatorTakesValue: ReadsAs<
+  operatorTakesValue: Calls<
     typeof operatorTakesValue,
-    (operator: TodayOperator) => boolean
+    [operator: TodayOperator],
+    boolean
   >;
-  drawsAnyValidationRule: ReadsAs<
+  drawsAnyValidationRule: Calls<
     typeof drawsAnyValidationRule,
-    (allowed: readonly TodayValidationRule[]) => boolean
+    [allowed: readonly TodayValidationRule[]],
+    boolean
   >;
   EDITABLE_VALIDATION_RULES: ReadsAs<
     typeof EDITABLE_VALIDATION_RULES,
