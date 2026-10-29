@@ -13,6 +13,7 @@
  * @packageDocumentation
  */
 
+import { apiKeyScopeFrom } from "../../auth/authenticated-scope";
 import type { AuthContext } from "../../auth/middleware";
 import {
   apiKeyPermissionsFor,
@@ -20,6 +21,7 @@ import {
 } from "../../domains/auth/api-key-policy";
 import {
   apiKeyViewer,
+  resolveKeyCaller,
   type ApiKeyMeta,
 } from "../../domains/auth/services/api-key-service";
 import {
@@ -415,18 +417,10 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
         const auth = await ctx.apiKeyService.authenticateApiKey(args.rawKey);
         if (!auth) return { valid: false };
 
-        const [permissions, roles, meta] = await Promise.all([
-          ctx.apiKeyService.resolveApiKeyPermissions(
-            auth.tokenType,
-            auth.roleId,
-            auth.userId,
-            auth.id
-          ),
-          ctx.apiKeyService.resolveApiKeyRoles(
-            auth.tokenType,
-            auth.roleId,
-            auth.userId
-          ),
+        // Resolved as REST authentication resolves a key, so the actor below
+        // is the scope a request on this key is judged by.
+        const [resolved, meta] = await Promise.all([
+          resolveKeyCaller(ctx.apiKeyService, auth),
           ctx.apiKeyService.getApiKeyById(auth.id, auth.userId, {
             allUsers: true,
           }),
@@ -436,9 +430,10 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
           valid: true,
           userId: auth.userId,
           tokenType: auth.tokenType,
-          permissions,
-          roles,
+          permissions: resolved.grants.map(grant => grant.slug),
+          roles: resolved.roles,
           expiresAt: meta?.expiresAt ?? null,
+          actor: apiKeyScopeFrom(resolved),
         };
       } catch {
         return { valid: false };

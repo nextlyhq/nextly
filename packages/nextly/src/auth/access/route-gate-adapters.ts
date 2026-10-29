@@ -29,12 +29,13 @@ import {
 } from "../../services/lib/permissions";
 import {
   apiKeyScopeFrom,
+  scopeHoldsSuperAdmin,
   type AuthenticatedScope,
 } from "../authenticated-scope";
 import { getRBACService, type ReadAccessCaller } from "../code-access";
 import type { AuthContext } from "../middleware";
 
-import { manageCounts, type Actor, type KeyActor } from "./actor";
+import { isSuperAdmin, manageCounts, type Actor, type KeyActor } from "./actor";
 import { answeringPermissions, storedSlugHolds } from "./answering-permissions";
 import { decide, decidePermission, type AccessTarget } from "./decide";
 import { declaredTarget } from "./declared-rules";
@@ -126,14 +127,29 @@ function callerOf(auth: AuthContext): GateCaller {
     : { userId: auth.userId };
 }
 
-/** The key's actor, from what authentication resolved; it makes no query. */
+/**
+ * The key's actor, from what authentication resolved; it makes no query. Its
+ * super-admin authority is the scope's, which only authentication gives.
+ */
 function keyActorOf(caller: GateCaller, key: AuthenticatedScope): KeyActor {
   return actorForKey({
     keyId: caller.keyId ?? "",
     userId: caller.userId,
     grants: key.grants ?? [],
     roles: key.roles ?? caller.roles ?? [],
+    superAdmin: scopeHoldsSuperAdmin(key),
   });
+}
+
+/**
+ * Whether a key holds every permission by its maker's super-admin authority,
+ * as a super-admin's session does, whatever its stored list names. Asked
+ * first by the single-permission gate and the any-of gate alike, so a key the
+ * one lets through the other does not refuse on a list that lags the
+ * catalogue.
+ */
+function keyHoldsEveryPermission(actor: KeyActor): boolean {
+  return isSuperAdmin(actor);
 }
 
 /** The caller's actor: a key's from its scope, a user's looked up. */
@@ -409,8 +425,14 @@ export async function routeGateCapabilities(
 ): Promise<RouteCapabilities> {
   const answer = () =>
     entityCapabilities(caller, entities, rules, languageOf, hasLifecycle);
-  // A key never carries super-admin authority through the gates.
-  if (caller.key) return { isSuperAdmin: false, entities: await answer() };
+  // A key carries super-admin authority only as authentication gave it: a
+  // full-access key whose maker is an active super-admin.
+  if (caller.key) {
+    return {
+      isSuperAdmin: scopeHoldsSuperAdmin(caller.key),
+      entities: await answer(),
+    };
+  }
   return withHeldPermissions(caller.userId, async held => ({
     isSuperAdmin: held.superAdmin,
     entities: await answer(),
@@ -621,6 +643,7 @@ async function permissionVerdict(
 ): Promise<GateVerdict> {
   if (caller.key) {
     const actor = keyActorOf(caller, caller.key);
+    if (keyHoldsEveryPermission(actor)) return verdictOf(true);
     const today = storedSlugHolds(caller.key.permissions, action, resource);
     // The decision reads the grant's action and resource, which agree with
     // the stored slug unless a grant was stored under a slug of its own.
@@ -660,6 +683,7 @@ async function anyPermissionVerdictOf(
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
+    if (keyHoldsEveryPermission(actor)) return verdictOf(true);
     const today = permissions.some(({ action, resource }) =>
       storedSlugHolds(key.permissions, action, resource)
     );
@@ -845,7 +869,11 @@ async function heldPermission(
       userId: caller.userId,
       grants: caller.grants ?? [],
       roles: caller.roles,
+      superAdmin: caller.keyHoldsSuperAdmin === true,
     });
+    // A key carrying its maker's super-admin authority holds every
+    // permission, as a super-admin's session does.
+    if (isSuperAdmin(actor)) return true;
     const today = storedSlugHolds(caller.permissions, action, resource);
     // Two steps from today's answer to the decision's, each named apart: the
     // grant rather than the stored slug, then the target's rules read.
@@ -933,6 +961,9 @@ export async function schemaListed<T extends ListedCollection>(
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
+    // A key carrying its maker's super-admin authority is shown every one,
+    // as a super-admin's session is.
+    if (isSuperAdmin(actor)) return [...collections];
     return keptWhere(collections, slug =>
       readByPermission(
         actor,
