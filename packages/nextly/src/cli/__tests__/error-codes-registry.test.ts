@@ -258,45 +258,44 @@ const FACTORY_CODES: Record<string, string> = {
   internal: "INTERNAL_ERROR",
 };
 
-/**
- * Each `NextlyError` built in `text`, with its code and the `logContext.reason` it is given:
- * a literal, or the fixed start of a template (`data-loss-${…}`).
- */
+/** The text of the call opening at `from`: up to the parenthesis that closes it. */
+function callAt(text: string, from: number): string {
+  let depth = 0;
+  for (let end = text.indexOf("(", from); end < text.length; end += 1) {
+    if (text[end] === "(") depth += 1;
+    else if (text[end] === ")" && --depth === 0)
+      return text.slice(from, end + 1);
+  }
+  return text.slice(from);
+}
+
+/** The `logContext.reason` a call gives: a literal, or the fixed start of a template. */
+function reasonOf(call: string): { reason?: string; prefix?: string } {
+  const at = call.indexOf("logContext");
+  if (at === -1) return {};
+  const context = call.slice(at);
+  return {
+    reason: /\breason:\s*"([^"]+)"/.exec(context)?.[1],
+    prefix: /\breason:\s*`([^`$]*)\$\{/.exec(context)?.[1],
+  };
+}
+
+/** Each `NextlyError` built in `text`, with its code and the reason it is given. */
 function constructions(
   text: string
 ): Array<{ code: string; reason?: string; prefix?: string; at: number }> {
-  const found: Array<{
-    code: string;
-    reason?: string;
-    prefix?: string;
-    at: number;
-  }> = [];
-  const start = /new NextlyError\(|NextlyError\.(\w+)\(/g;
-  for (const match of text.matchAll(start)) {
-    // The call's own text: up to the parenthesis that closes it.
-    let depth = 0;
-    let end = match.index + match[0].length - 1;
-    for (; end < text.length; end += 1) {
-      if (text[end] === "(") depth += 1;
-      else if (text[end] === ")" && --depth === 0) break;
+  return [...text.matchAll(/new NextlyError\(|NextlyError\.(\w+)\(/g)].flatMap(
+    match => {
+      const call = callAt(text, match.index);
+      const code =
+        match[1] === undefined
+          ? /code:\s*"([A-Z][A-Z0-9_]*)"/.exec(call)?.[1]
+          : FACTORY_CODES[match[1]];
+      return code === undefined
+        ? []
+        : [{ code, ...reasonOf(call), at: match.index }];
     }
-    const call = text.slice(match.index, end + 1);
-    const code =
-      match[1] === undefined
-        ? /code:\s*"([A-Z][A-Z0-9_]*)"/.exec(call)?.[1]
-        : FACTORY_CODES[match[1]];
-    if (code === undefined) continue;
-    const context = call.slice(Math.max(0, call.indexOf("logContext")));
-    const literal = /\breason:\s*"([^"]+)"/.exec(context)?.[1];
-    const template = /\breason:\s*`([^`$]*)\$\{/.exec(context)?.[1];
-    found.push({
-      code,
-      reason: call.includes("logContext") ? literal : undefined,
-      prefix: call.includes("logContext") ? template : undefined,
-      at: match.index,
-    });
-  }
-  return found;
+  );
 }
 
 describe("the reasons a mapping reads", () => {
