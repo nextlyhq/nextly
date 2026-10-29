@@ -20,12 +20,19 @@ vi.mock("../../../services/lib/permissions", async importOriginal => ({
     typeof import("../../../services/lib/permissions")
   >()),
   isSuperAdmin: vi.fn(async () => false),
+  isSuperAdminOrRefuse: vi.fn(async () => false),
+  isSuperAdminOrThrow: vi.fn(async () => false),
   listRoleSlugsForUser: vi.fn(async () => ["editor"]),
-  // The user holds `read-posts` exactly when a case says so.
+  // The user holds `read-posts` exactly when a case says so, by every lookup
+  // the check can make.
   listEffectiveGrants: vi.fn(async () =>
     access.holds
       ? [{ slug: "read-posts", action: "read", resource: "posts" }]
       : []
+  ),
+  hasPermission: vi.fn(
+    async (_userId: string, action: string, resource: string) =>
+      access.holds && action === "read" && resource === "posts"
   ),
   listEffectivePermissions: vi.fn(async () => []),
 }));
