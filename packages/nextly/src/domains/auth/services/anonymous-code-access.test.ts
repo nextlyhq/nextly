@@ -181,7 +181,7 @@ describe("a function rule's answer for a caller with no session", () => {
 });
 
 describe("a rule that answers with a filter, for a caller with no session", () => {
-  /** A read rule answering `filter`, which the rule type does not allow yet. */
+  /** A read rule answering `filter`, unchecked by the filter type, as untyped code may. */
   const answering = (filter: unknown) => () => filter as boolean;
 
   beforeEach(() => {

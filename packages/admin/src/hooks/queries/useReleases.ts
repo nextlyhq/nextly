@@ -11,6 +11,9 @@
  * - `["releases", "every-id", params]` — every id a list read matches
  * - `["releases", "detail", id]` — one release
  * - `["releases", "members", id]` — its contents
+ * - `["releases", "readiness", id]` — what its checks say now
+ * - `["releases", "history", id]` — its history, newest first
+ * - `["releases", "documents", id, scope]` — its documents' titles
  *
  * ## Why every mutation invalidates the LIST as well as the detail
  *
@@ -24,48 +27,67 @@
 
 import {
   keepPreviousData,
+  useInfiniteQuery,
   useMutation,
   useQueries,
   useQuery,
   useQueryClient,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
 
+import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import { toast } from "@admin/components/ui";
+import { collectionApi } from "@admin/services/collectionApi";
+import { entryApi } from "@admin/services/entryApi";
 import {
   addReleaseMember,
   cancelRelease,
+  changeReleaseMemberAction,
   createRelease,
   deleteRelease,
   fetchRelease,
   fetchReleaseBlockers,
   fetchReleaseCalendar,
+  fetchReleaseHistory,
   fetchReleaseMembers,
+  fetchReleaseReadiness,
   fetchReleasesReadiness,
   fetchReleases,
   publishReleaseNow,
   removeReleaseMember,
   scheduleRelease,
+  updateRelease,
   type ReleaseReadinessListResponse,
   type ReleaseMutationResponse,
   type ReleaseListResponse,
   type MemberMutationResponse,
   type MemberListResponse,
   type BlockerListResponse,
+  type ReleaseHistoryResponse,
+  type ReleaseMemberRemovalResponse,
 } from "@admin/services/releaseApi";
+import { singleApi } from "@admin/services/singleApi";
 import {
   RELEASE_LIST_TABS,
   type AddReleaseMemberPayload,
   type CreateReleasePayload,
   type ReleaseCalendarParams,
   type ReleaseCalendarRead,
+  type ReleaseDocumentInfo,
   type ReleaseDocumentRef,
   type ReleaseKind,
   type ReleaseListParams,
   type ReleaseListTab,
+  type ReleaseMember,
+  type ReleaseMemberAction,
+  type ReleaseScopeNames,
   type ScheduleReleasePayload,
+  type UpdateReleasePayload,
   type Release,
+  type ReleaseReadiness,
 } from "@admin/types/releases";
 
 export const releaseKeys = {
@@ -88,6 +110,19 @@ export const releaseKeys = {
     ["releases", "members", id] as const,
   blockers: (id: string): readonly ["releases", "blockers", string] =>
     ["releases", "blockers", id] as const,
+  readinessOf: (id: string): readonly ["releases", "readiness", string] =>
+    ["releases", "readiness", id] as const,
+  history: (id: string): readonly ["releases", "history", string] =>
+    ["releases", "history", id] as const,
+  created: (id: string): readonly ["releases", "history", string, "created"] =>
+    ["releases", "history", id, "created"] as const,
+  documents: (
+    id: string,
+    scopeKind: string,
+    scopeSlug: string,
+    ids: string
+  ): readonly ["releases", "documents", string, string, string, string] =>
+    ["releases", "documents", id, scopeKind, scopeSlug, ids] as const,
   readiness: (
     ids: readonly string[],
     listReadAt: number
@@ -608,14 +643,22 @@ export function useAddReleaseMember(
   });
 }
 
-export function useRemoveReleaseMember(releaseId: string): UseMutationResult<
-  {
-    message: string;
-  },
-  Error,
-  string,
-  unknown
-> {
+/**
+ * What a removal tells the editor, from what the server says it did: taking
+ * the only document out of a single-document release cancels the release, so
+ * the toast says that rather than that the document was removed.
+ */
+export function releaseRemovalMessage(
+  result: ReleaseMemberRemovalResponse
+): string {
+  return result.releaseCancelled
+    ? "Release cancelled."
+    : "Removed from release.";
+}
+
+export function useRemoveReleaseMember(
+  releaseId: string
+): UseMutationResult<ReleaseMemberRemovalResponse, Error, string, unknown> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -623,9 +666,9 @@ export function useRemoveReleaseMember(releaseId: string): UseMutationResult<
     // belonging to another release, so a stale view cannot edit one the editor
     // never opened.
     mutationFn: (memberId: string) => removeReleaseMember(releaseId, memberId),
-    onSuccess: () => {
+    onSuccess: result => {
       refresh(releaseId);
-      toast.success("Removed from release.");
+      toast.success(releaseRemovalMessage(result));
     },
   });
 }
@@ -660,6 +703,300 @@ export function useDeleteRelease(
       queryClient.removeQueries({ queryKey: releaseKeys.detail(id) });
       refresh();
       toast.success("Release deleted.");
+    },
+  });
+}
+
+/**
+ * What the checks say about one release's documents now, for its page.
+ *
+ * Asked again on the page's own schedule and on return to the tab, so a
+ * problem fixed in another tab reads as fixed without the reader asking, and
+ * after every release write through the `releases` root. The previous answer
+ * stays on screen while the next one loads. Not asked for a release that has
+ * run or been cancelled: it has nothing left to get ready.
+ */
+export function useReleaseReadiness(
+  id: string | undefined,
+  enabled = true
+): UseQueryResult<ReleaseReadiness, Error> {
+  return useQuery({
+    queryKey: releaseKeys.readinessOf(id ?? ""),
+    queryFn: () => fetchReleaseReadiness(id as string),
+    enabled: enabled && Boolean(id),
+    placeholderData: keepPreviousData,
+    refetchInterval: PENDING_RELEASE_POLL_MS,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/** How many history events a page of the release's history asks for. */
+const HISTORY_PAGE = 25;
+
+/**
+ * A release's history, newest first, a page at a time: each page asks for
+ * the events older than the last one shown.
+ */
+export function useReleaseHistory(
+  id: string | undefined
+): UseInfiniteQueryResult<
+  InfiniteData<ReleaseHistoryResponse, string | undefined>,
+  Error
+> {
+  return useInfiniteQuery({
+    queryKey: releaseKeys.history(id ?? ""),
+    queryFn: ({ pageParam }) =>
+      fetchReleaseHistory(id as string, {
+        limit: HISTORY_PAGE,
+        ...(pageParam ? { before: pageParam } : {}),
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: last =>
+      last.meta.hasNext ? last.items[last.items.length - 1]?.id : undefined,
+    enabled: Boolean(id),
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * The event that created a release, read on its own: the history pages from
+ * the newest, and a long history would otherwise keep its owner off screen.
+ */
+export function useReleaseCreation(
+  id: string | undefined
+): UseQueryResult<ReleaseHistoryResponse["items"][number] | null, Error> {
+  return useQuery({
+    queryKey: releaseKeys.created(id ?? ""),
+    queryFn: async () =>
+      (
+        await fetchReleaseHistory(id as string, {
+          kind: "release-created",
+          limit: 1,
+        })
+      ).items[0] ?? null,
+    enabled: Boolean(id),
+  });
+}
+
+/** The ids a collection read asks for at once. */
+const DOCUMENTS_PER_READ = 100;
+
+/** One collection's or Single's documents in a release, as one read answers them. */
+interface ScopeDocuments {
+  names: ReleaseScopeNames;
+  documents: Map<string, ReleaseDocumentInfo>;
+}
+
+/** A document's status, where the read gave a recognised one. */
+function statusOf(value: unknown): ReleaseDocumentInfo["status"] {
+  return value === "draft" || value === "published" ? value : null;
+}
+
+/** One document's row, as the release page names and places it. */
+function documentInfoOf(
+  row: Record<string, unknown>,
+  useAsTitle: string | undefined
+): ReleaseDocumentInfo {
+  return {
+    title: entryTitleValue(row, useAsTitle) ?? null,
+    status: statusOf(row.status),
+    everPublished:
+      "firstPublishedAt" in row ? row.firstPublishedAt != null : null,
+    updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : null,
+  };
+}
+
+/**
+ * A collection's documents, by id: its names, then the documents in batches,
+ * as the reader may read them. A list read answers with each document's
+ * stored row, so a document is named by the title it has now rather than one
+ * an unpublished draft gives it; reading every draft would be a request per
+ * document.
+ */
+async function readCollectionDocuments(
+  slug: string,
+  ids: readonly string[]
+): Promise<ScopeDocuments> {
+  const collection = await collectionApi.get(slug);
+  const useAsTitle = collection.admin?.useAsTitle;
+  const documents = new Map<string, ReleaseDocumentInfo>();
+  for (let from = 0; from < ids.length; from += DOCUMENTS_PER_READ) {
+    const batch = ids.slice(from, from + DOCUMENTS_PER_READ);
+    const found = await entryApi.find(slug, {
+      where: { id: { in: batch } },
+      limit: batch.length,
+      depth: 0,
+    });
+    for (const entry of found.items) {
+      const row = entry as Record<string, unknown>;
+      documents.set(String(row.id), documentInfoOf(row, useAsTitle));
+    }
+  }
+  const singular = collection.labels?.singular ?? slug;
+  return {
+    names: { singular, plural: collection.labels?.plural ?? singular },
+    documents,
+  };
+}
+
+/** A Single, named by its label: it is one document, and its label names it. */
+async function readSingleDocument(
+  slug: string,
+  entryIds: readonly string[]
+): Promise<ScopeDocuments> {
+  const single = await singleApi.getSchema(slug);
+  const label = single.label || slug;
+  const documents = new Map<string, ReleaseDocumentInfo>();
+  for (const id of entryIds) {
+    documents.set(id, {
+      title: label,
+      status: null,
+      everPublished: null,
+      updatedAt: null,
+    });
+  }
+  return { names: { singular: label, plural: label }, documents };
+}
+
+/** What the release page knows of its documents' names. */
+export interface ReleaseDocumentNames {
+  /** A document's title and state, or `undefined` while unknown or unread. */
+  documentOf: (
+    member: Pick<ReleaseMember, "scopeKind" | "scopeSlug" | "entryId">
+  ) => ReleaseDocumentInfo | undefined;
+  /** A collection's or Single's names, once read. */
+  scopeNamesOf: (scopeSlug: string) => ReleaseScopeNames | undefined;
+  /** Whether a scope's read has not answered yet. */
+  isPending: (scopeSlug: string) => boolean;
+  /** Whether a scope's read failed. */
+  isError: (scopeSlug: string) => boolean;
+}
+
+/**
+ * The titles of a release's documents, one read per collection or Single.
+ *
+ * The members list names a document by its collection and id; its page names
+ * it by title. One read per collection, for every member in it at once, keeps
+ * a release of two hundred documents to a handful of requests. Keyed under the
+ * `releases` root, so a release write refreshes the titles with the rest, and
+ * by the ids asked for, so a document added is read with its collection.
+ */
+export function useReleaseDocumentNames(
+  releaseId: string | undefined,
+  members: readonly ReleaseMember[]
+): ReleaseDocumentNames {
+  const scopes = new Map<
+    string,
+    { scopeKind: ReleaseMember["scopeKind"]; scopeSlug: string; ids: string[] }
+  >();
+  for (const member of members) {
+    const key = `${member.scopeKind}:${member.scopeSlug}`;
+    const held = scopes.get(key) ?? {
+      scopeKind: member.scopeKind,
+      scopeSlug: member.scopeSlug,
+      ids: [],
+    };
+    if (!held.ids.includes(member.entryId)) held.ids.push(member.entryId);
+    scopes.set(key, held);
+  }
+  const list = [...scopes.values()];
+  const results = useQueries({
+    queries: list.map(scope => {
+      const ids = [...scope.ids].sort();
+      return {
+        queryKey: releaseKeys.documents(
+          releaseId ?? "",
+          scope.scopeKind,
+          scope.scopeSlug,
+          ids.join(",")
+        ),
+        queryFn: () =>
+          scope.scopeKind === "single"
+            ? readSingleDocument(scope.scopeSlug, ids)
+            : readCollectionDocuments(scope.scopeSlug, ids),
+        enabled: Boolean(releaseId),
+        placeholderData: keepPreviousData,
+      };
+    }),
+  });
+  const bySlug = new Map<string, (typeof results)[number]>();
+  list.forEach((scope, index) => {
+    const result = results[index];
+    if (result) bySlug.set(scope.scopeSlug, result);
+  });
+  return {
+    documentOf: member =>
+      bySlug.get(member.scopeSlug)?.data?.documents.get(member.entryId),
+    scopeNamesOf: slug => bySlug.get(slug)?.data?.names,
+    isPending: slug => bySlug.get(slug)?.isPending ?? false,
+    isError: slug => bySlug.get(slug)?.isError ?? false,
+  };
+}
+
+/**
+ * Other releases a page names, such as one that also holds a document, read
+ * for their titles. Shares the detail read's cache, so a release already read
+ * is not read again.
+ */
+export function useReleaseTitles(
+  ids: readonly string[]
+): (id: string) => string | undefined {
+  const results = useQueries({
+    queries: ids.map(id => ({
+      queryKey: releaseKeys.detail(id),
+      queryFn: () => fetchRelease(id),
+    })),
+  });
+  const titles = new Map<string, string>();
+  ids.forEach((id, index) => {
+    const title = results[index]?.data?.title;
+    if (title) titles.set(id, title);
+  });
+  return (id: string) => titles.get(id);
+}
+
+export function useUpdateRelease(
+  id: string
+): UseMutationResult<
+  ReleaseMutationResponse,
+  Error,
+  UpdateReleasePayload,
+  unknown
+> {
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: (payload: UpdateReleasePayload) => updateRelease(id, payload),
+    onSuccess: () => {
+      refresh(id);
+      toast.success("Release updated.");
+    },
+  });
+}
+
+export function useChangeReleaseMemberAction(
+  releaseId: string
+): UseMutationResult<
+  MemberMutationResponse,
+  Error,
+  { memberId: string; action: ReleaseMemberAction },
+  unknown
+> {
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: ({
+      memberId,
+      action,
+    }: {
+      memberId: string;
+      action: ReleaseMemberAction;
+    }) => changeReleaseMemberAction(releaseId, memberId, action),
+    onSuccess: (_result, { action }) => {
+      refresh(releaseId);
+      toast.success(
+        action === "publish" ? "It now goes live." : "It now comes down."
+      );
     },
   });
 }
