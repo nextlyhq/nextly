@@ -1407,10 +1407,10 @@ function canBeTranslated(field: MinimalConfigField): boolean {
  *   (`mayBeAbout`, which counts a file naming no entity): that is the entity becoming translated.
  *
  * For an entity not translated now that the previous snapshot doesn't record as translated, when
- * the migration files say its companion was there, or no record says and a localization file is
- * about it: a shared field the main table gains, which may be coming back from the companion. A
- * disable is planned only from the snapshot's record. One no file is about was never translated
- * through the files, and goes through.
+ * the migration files say its companion was there, or no record says and a localization file may
+ * be about it (`mayBeAbout` again): a shared field the main table gains, which may be coming back
+ * from the companion. A disable is planned only from the snapshot's record. One no file may be
+ * about was never translated through the files, and goes through.
  */
 function fieldsThatMayChangeTranslation(
   entry: TaggedConfigEntity,
@@ -1491,9 +1491,10 @@ function sharedFieldsThatMayReturn(
   history: TranslationRecords
 ): ColumnedField[] {
   if (prevMain.localized === true) return [];
+  // A file that names no entity may have made this one's companion too.
   const companionMayHaveBeen =
     previous === undefined
-      ? history.mentions(kind, c.slug)
+      ? history.mayBeAbout(kind, c.slug)
       : previous.companion;
   return companionMayHaveBeen ? gainedSharedFields(columned, false) : [];
 }
@@ -1522,11 +1523,17 @@ function refuseUnrecordedTranslationChanges(
     );
     if (fields.length === 0) continue;
     const named = fields.map(f => `"${f.name}"`).join(", ");
+    // The files that keep the history from settling it, so the developer can see why.
+    const unreadable = history.unreadable(kind, c.slug);
+    const because =
+      unreadable.length === 0
+        ? ""
+        : ` This build can't read ${unreadable.length === 1 ? "the localization migration file" : "the localization migration files"} ${unreadable.join(", ")}.`;
     throw new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage:
         `Can't tell whether ${named} in ${KIND_NAMES[kind]} "${c.slug}" ${fields.length === 1 ? "moves" : "move"} between translated and shared: ` +
-        "the latest snapshot was written before snapshots recorded which fields are translated, and the migration files alone don't settle it. " +
+        `the latest snapshot was written before snapshots recorded which fields are translated, and the migration files alone don't settle it.${because} ` +
         "Nothing was written: moving the values on a guess could lose them. " +
         "To record the translated fields, put the config back as it was at the last migration, run `nextly migrate:create --record-snapshot`, " +
         `then make your changes again and run \`nextly migrate:create --name ${slugify(name)}\`.`,
@@ -1534,6 +1541,7 @@ function refuseUnrecordedTranslationChanges(
         entity: c.slug,
         kind,
         fields: fields.map(f => f.name),
+        unreadable,
       },
     });
   }

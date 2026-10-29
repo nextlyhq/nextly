@@ -55,15 +55,15 @@ export interface CompanionHistory {
    */
   describes(kind: I18nTransitionKind, slug: string): boolean;
   /**
-   * Whether a localization file is about this entity: one this build reads for it, or one it
-   * cannot read whose header names its slug. A file that names no entity is not counted.
-   */
-  mentions(kind: I18nTransitionKind, slug: string): boolean;
-  /**
-   * Whether a localization file may be about this entity: one that `mentions` it, or one this
-   * build cannot read that names no entity at all, which may be anyone's.
+   * Whether a localization file may be about this entity: one this build reads for it, or one of
+   * its `unreadable` files.
    */
   mayBeAbout(kind: I18nTransitionKind, slug: string): boolean;
+  /**
+   * The files this build cannot read that may be about this entity: those whose header names its
+   * slug, and those that name no entity or cannot be opened, which may be anyone's.
+   */
+  unreadable(kind: I18nTransitionKind, slug: string): string[];
 }
 
 /**
@@ -92,8 +92,7 @@ export async function readCompanionHistory(
     columns: new Map(),
     present: new Set(),
     settled: new Map(),
-    unreadBySlug: new Map(),
-    unreadAny: -1,
+    unread: [],
   };
   let names: string[];
   try {
@@ -104,22 +103,23 @@ export async function readCompanionHistory(
   for (const [at, name] of names.sort().entries()) {
     const reading = await readFileIntent(migrationsDir, name);
     if (reading.kind === "intent") replayIntent(replay, reading.intent, at);
-    if (reading.kind === "unread") replayUnread(replay, reading.content, at);
+    if (reading.kind === "unread") {
+      replay.unread.push({ at, name, slugs: namedSlugs(reading.content) });
+    }
   }
   return historyOf(replay);
 }
 
 /**
  * The replay as it stands after the files read so far. Positions are in the run order: where
- * each companion was last made or dropped whole, by key (`settled`), and where the last
- * unreadable file comes that may be about each slug, or about any entity.
+ * each companion was last made or dropped whole, by key (`settled`), and where each unreadable
+ * file comes, with the slugs its header names (none: it may be about any entity).
  */
 interface Replay {
   columns: Map<string, Map<string, LocalizedColumnSpec>>;
   present: Set<string>;
   settled: Map<string, number>;
-  unreadBySlug: Map<string, number>;
-  unreadAny: number;
+  unread: { at: number; name: string; slugs: readonly string[] }[];
 }
 
 /** What one migration file says about a companion. */
@@ -217,37 +217,28 @@ function addColumns(
   return "made";
 }
 
-/**
- * Counts an unreadable file at `at` against the slugs its header names, or against every entity
- * when it names none or could not be opened.
- */
-function replayUnread(
-  replay: Replay,
-  content: string | null,
-  at: number
-): void {
-  const headers = content === null ? null : parseEntityHeaders(content);
-  const slugs = headers
-    ? [...headers.collections, ...headers.singles, ...headers.components]
-    : [];
-  if (slugs.length === 0) replay.unreadAny = at;
-  for (const slug of slugs) replay.unreadBySlug.set(slug, at);
+/** The slugs an unreadable file's header names, or none when it names none or could not be opened. */
+function namedSlugs(content: string | null): string[] {
+  if (content === null) return [];
+  const headers = parseEntityHeaders(content);
+  return [...headers.collections, ...headers.singles, ...headers.components];
 }
 
 /** The history the replay leaves. */
 function historyOf(replay: Replay): CompanionHistory {
+  const unreadFor = (slug: string) =>
+    replay.unread.filter(u => u.slugs.length === 0 || u.slugs.includes(slug));
   const lastUnread = (slug: string) =>
-    Math.max(replay.unreadAny, replay.unreadBySlug.get(slug) ?? -1);
-  const mentions = (kind: I18nTransitionKind, slug: string) =>
-    replay.columns.has(companionHistoryKey(kind, slug)) ||
-    replay.unreadBySlug.has(slug);
+    Math.max(-1, ...unreadFor(slug).map(u => u.at));
   return {
     columns: replay.columns,
     present: replay.present,
     describes: (kind, slug) =>
       (replay.settled.get(companionHistoryKey(kind, slug)) ?? -1) >
       lastUnread(slug),
-    mentions,
-    mayBeAbout: (kind, slug) => mentions(kind, slug) || replay.unreadAny >= 0,
+    mayBeAbout: (kind, slug) =>
+      replay.columns.has(companionHistoryKey(kind, slug)) ||
+      unreadFor(slug).length > 0,
+    unreadable: (_kind, slug) => unreadFor(slug).map(u => u.name),
   };
 }

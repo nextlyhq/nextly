@@ -128,7 +128,7 @@ Snapshots written by early versions of Nextly don't record which fields are tran
 
 - Adding a shared field to a translated collection, Single or field group counts as such a change: without the record, a new column reads the same as a field leaving translation. A field whose type can never be translated, such as a password, doesn't count.
 - Turning translation off for a whole collection, Single or field group is refused too, since that's planned only from the snapshot's record.
-- Changes to entities that aren't translated, and that no localization file is about, go through as usual.
+- Changes to entities that aren't translated go through as usual, as long as no localization file may be about them. A file `migrate:create` can't read that names no entity may be about any, so while one is there the refusal names it, and `--record-snapshot` clears it.
 
 To record the translated fields, take two steps:
 

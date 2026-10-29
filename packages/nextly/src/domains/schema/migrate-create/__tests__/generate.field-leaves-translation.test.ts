@@ -624,8 +624,11 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect(await contentsOf(dir)).toEqual(before);
     });
 
-    it("lets a collection that isn't translated change beside a localization file that names no collection", async () => {
-      const files = await secondRun(dialect, [TRANSLATED, NOTES_GROWN], {
+    it("refuses a column a collection that isn't translated gains beside a localization file that names no collection, naming the file", async () => {
+      // The file may have made notes' companion, so `summary` may be coming back from it.
+      let dir = "";
+      let before: Record<string, string> = {};
+      const run = secondRun(dialect, [TRANSLATED, NOTES_GROWN], {
         first: [TRANSLATED, NOTES],
         beforeSecond: async d => {
           await forgetTranslatedFieldRecord(d);
@@ -636,12 +639,36 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
               "-- UP\nSELECT 1;\n\n-- DOWN\nSELECT 1;\n",
             "utf-8"
           );
+          dir = d;
+          before = await contentsOf(d);
         },
       });
 
-      expect(files.map(f => f.name)).toEqual([
-        expect.stringMatching(/_two\.sql$/),
-      ]);
+      await expect(run).rejects.toThrow(/"summary" in collection "notes"/);
+      await expect(run).rejects.toThrow(/20261016_103000_000_hand_edited\.sql/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
+      expect(await contentsOf(dir)).toEqual(before);
+    });
+
+    it("refuses turning translation off for a collection whose nameless localization file made its companion, writing nothing", async () => {
+      let dir = "";
+      let before: Record<string, string> = {};
+      const run = secondRun(
+        dialect,
+        { ...TRANSLATED, localized: false },
+        {
+          beforeSecond: async d => {
+            await forgetCompanionHeaders(d);
+            dir = d;
+            before = await contentsOf(d);
+          },
+        }
+      );
+
+      await expect(run).rejects.toThrow(/"body" in collection "docs"/);
+      await expect(run).rejects.toThrow(/_create_localization_docs\.sql/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
+      expect(await contentsOf(dir)).toEqual(before);
     });
 
     it("refuses as before beside a record migration whose snapshot was never written", async () => {
