@@ -7,6 +7,7 @@
  *   the body-level parts of a card, each reading the card's size tier and the admin's theme
  *   tokens, so a plugin's card matches core's beside it in light and dark. The frame and every
  *   state around the body are the host's.
+ * - `Widget.FooterLink`: a link drawn in the card's own footer, where core's cards draw theirs.
  *
  * The number and change formatters and the chart colour accessor are not here: they are
  * published from `@nextlyhq/plugin-sdk`'s server-safe root, since every module of the admin is
@@ -33,6 +34,7 @@ import {
 } from "../charts/over-time-chart";
 import { CardFigure } from "../frame/figure";
 
+import { WidgetFooterLink } from "./footer-link";
 import { WidgetList, WidgetTable } from "./list";
 
 export type {
@@ -67,6 +69,8 @@ export interface WidgetKit {
   readonly Table: typeof WidgetTable;
   readonly BarChart: typeof GroupsChart;
   readonly SeriesChart: typeof OverTimeChart;
+  /** @experimental A link in the card's own footer: `<Widget.FooterLink href label />`. */
+  readonly FooterLink: typeof WidgetFooterLink;
 }
 
 /**
@@ -78,6 +82,8 @@ export interface WidgetKit {
  * - `Table`: rows across named columns, a table on a wide card.
  * - `BarChart`: one bar per group, longest first, with an optional `unit` for its tooltip.
  * - `SeriesChart`: one line per series over time, with an optional `unit`.
+ * - `FooterLink`: one link in the card's own footer, as a list's "View all" is drawn, taking the
+ *   place of the widget's own link while it is there, so the footer holds one link.
  */
 export const Widget: WidgetKit = Object.freeze({
   Figure: CardFigure,
@@ -85,4 +91,5 @@ export const Widget: WidgetKit = Object.freeze({
   Table: WidgetTable,
   BarChart: GroupsChart,
   SeriesChart: OverTimeChart,
+  FooterLink: WidgetFooterLink,
 });

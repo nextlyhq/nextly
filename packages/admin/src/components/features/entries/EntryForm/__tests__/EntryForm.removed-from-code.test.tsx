@@ -115,7 +115,6 @@ function renderEditor(removed: boolean) {
       mode="edit"
       documentBanner={<p>the page's banner</p>}
       documentActions={[releaseAction]}
-      onDuplicate={vi.fn()}
     />,
     { wrapper: Providers }
   );

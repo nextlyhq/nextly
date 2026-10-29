@@ -30,14 +30,21 @@ import { z } from "zod";
 
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
-import { LiveDocumentRecoveryOffer } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import {
   DocumentActionsHost,
   DocumentSaveShortcuts,
   SaveActionFormProvider,
 } from "@admin/components/features/entries/EntryForm/DocumentActionsContext";
-import { DocumentLockBanner } from "@admin/components/features/entries/EntryForm/DocumentLockBanner";
+import { DocumentBanners } from "@admin/components/features/entries/EntryForm/DocumentBanners";
+import { DocumentBar } from "@admin/components/features/entries/EntryForm/DocumentBar";
+import {
+  DOCUMENT_COLUMN_INSET,
+  DOCUMENT_PANEL_STICKY,
+  DocumentEditorLayout,
+} from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import { DocumentTitleBlock } from "@admin/components/features/entries/EntryForm/DocumentTitleBlock";
+import { DocumentTrail } from "@admin/components/features/entries/EntryForm/DocumentTrail";
 import {
   DocumentViewBody,
   type DocumentViewMount,
@@ -49,11 +56,15 @@ import {
 } from "@admin/components/features/entries/EntryForm/EntryFormContext";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
-import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/EntrySystemHeader";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
+import {
+  readerStatusWrite,
+  statusWritesHeld,
+} from "@admin/components/features/entries/EntryForm/reader-status-write";
 import { submitDocument } from "@admin/components/features/entries/EntryForm/submit-document";
 import {
   submitBusy,
+  submitFailed,
   submitHeld,
   type SubmitOutcome,
 } from "@admin/components/features/entries/EntryForm/submit-outcome";
@@ -139,8 +150,8 @@ export interface SingleSchema extends RemovedFromCodeMark {
   admin?: SingleAdminOptions;
   /**
    * Whether this Single has the Draft/Published lifecycle enabled. When
-   * true, the system header splits into Save Draft + Update buttons and the
-   * Document panel + meta strip surface a status pill. Backed by the
+   * true, the document bar splits into Save Draft + Update buttons and shows
+   * the status pill. Backed by the
    * `dynamic_singles.status` boolean column.
    */
   status?: boolean;
@@ -185,11 +196,11 @@ export interface SingleFormProps {
    */
   documentActions?: readonly ContributedAction[];
   /**
-   * A strip about the whole document, such as its scheduled release, drawn in
-   * the editor's column directly under the header. Given here rather than
-   * placed above the form by the page: the editor's row pulls itself up over
-   * the page's top inset, so anything placed before it slides under the
-   * sticky header.
+   * A strip about the whole document, such as its scheduled release, drawn
+   * first among the banners directly under the document bar. Given here rather
+   * than placed above the form by the page: the editor's frame pulls itself up
+   * over the page's top inset, so anything placed before it slides under the
+   * sticky bar.
    */
   documentBanner?: React.ReactNode;
   /** Single schema with field definitions */
@@ -298,6 +309,7 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
 function SingleFormLanguagePanel({
   actionsDisabled,
   navigationDisabled,
+  publishAllDisabled,
   enabled,
   hasStatus,
   locale,
@@ -307,6 +319,7 @@ function SingleFormLanguagePanel({
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
+  publishAllDisabled: boolean;
   enabled: boolean;
   hasStatus: boolean;
   locale?: string;
@@ -316,7 +329,14 @@ function SingleFormLanguagePanel({
 }) {
   if (!enabled) return null;
   return (
-    <div className={cn("px-6 pt-4", !railCollapsed && "@4xl/content:hidden")}>
+    // In line with the title and the fields, not indented past them.
+    <div
+      className={cn(
+        "pt-4",
+        DOCUMENT_COLUMN_INSET,
+        !railCollapsed && "@4xl/content:hidden"
+      )}
+    >
       <DocumentLanguagePanel
         translations={translations}
         locale={locale}
@@ -324,6 +344,7 @@ function SingleFormLanguagePanel({
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
       />
     </div>
   );
@@ -341,6 +362,7 @@ function SingleFormFieldsPanel({
   mainFields,
   readOnly,
   versionActionsHeld,
+  versionBannerSlot,
 }: {
   historicalFields: FieldConfig[] | null;
   historicalValues: Record<string, unknown> | null;
@@ -349,12 +371,15 @@ function SingleFormFieldsPanel({
   readOnly: boolean;
   /** Why a past version's restore is withheld (see `useVersionActions`). */
   versionActionsHeld: boolean;
+  /** Where the version's comparison bar is drawn, among the banners. */
+  versionBannerSlot: HTMLElement | null;
 }) {
   return (
     <ViewedVersionBody
       fields={historicalFields ?? mainFields}
       values={historicalValues ?? undefined}
       actionsDisabled={versionActionsHeld}
+      bannerSlot={versionBannerSlot}
     >
       {mainFields.length > 0 && (
         <div className="@4xl/content:p-8 pt-6">
@@ -379,18 +404,18 @@ function SingleFormFieldsPanel({
 function SingleFormRail({
   actionsDisabled,
   navigationDisabled,
+  publishAllDisabled,
   entry,
   hasStatus,
-  isDirty,
   locale,
   onLocaleChange,
   railCollapsed,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
+  publishAllDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
-  isDirty: boolean;
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   railCollapsed: boolean;
@@ -398,14 +423,20 @@ function SingleFormRail({
   if (railCollapsed) return null;
   return (
     <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-      <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+      {/* Sticks under the document bar, as the entry editor's panel does. */}
+      <div
+        className={cn(
+          DOCUMENT_PANEL_STICKY,
+          "overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col"
+        )}
+      >
         <EntryFormSidebar
           mode="edit"
           entry={entry}
           hasStatus={hasStatus}
-          isDirty={isDirty}
           actionsDisabled={actionsDisabled}
           navigationDisabled={navigationDisabled}
+          publishAllDisabled={publishAllDisabled}
           {...(locale === undefined ? {} : { locale })}
           {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         />
@@ -587,6 +618,14 @@ export function SingleForm({
    */
   const [savedCount, setSavedCount] = useState(0);
 
+  /*
+   * Where the past version's comparison bar is drawn: a place among the
+   * Single's banners under the bar, which the version body draws into. State
+   * rather than a ref, so the body re-renders once the place exists.
+   */
+  const [versionBannerSlot, setVersionBannerSlot] =
+    useState<HTMLDivElement | null>(null);
+
   // Submit handler. The intent arg names the user's button click and
   // determines payload shape — same intent set as the collection
   // EntryForm (see EntryFormIntent). Mirrors the EntryForm pattern.
@@ -621,7 +660,8 @@ export function SingleForm({
     readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
   });
 
-  // System fields: title (system header) and slug (meta strip). Per the
+  // System fields: title (drawn first in the editor) and slug (not drawn for a
+  // Single, whose slug its config fixes). Per the
   // special-casing. Any user-defined field with admin.position: "sidebar"
   // now renders inline like every other Builder field.
   const allFields = schema.fields;
@@ -657,6 +697,13 @@ export function SingleForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
   const editsHeld = writesHeld || !mayEdit;
+  // Publishing every language changes only each language's status, so a
+  // reader whose document nothing else holds is still offered it.
+  const publishAllHeld = statusWritesHeld({
+    editsHeld,
+    refused: readOnlyForReader,
+    writesHeld,
+  });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
   const versionWritesHeld = lock.actionsDisabled || updatesHeld;
@@ -682,6 +729,29 @@ export function SingleForm({
   });
   const busy = isSubmitting || discardMutation.isPending;
 
+  // A write of the status alone, as a reader's publish or unpublish sends it:
+  // it names no field, so the server judges it by that permission alone, and
+  // it does not read the form, which a reader cannot change.
+  const writeStatus = useCallback(
+    async (status: "published" | "draft"): Promise<SubmitOutcome> => {
+      if (busy || submissionLatch.current) return submitBusy;
+      submissionLatch.current = true;
+      try {
+        const stored = await onSubmit({ status });
+        setSavedCount(n => n + 1);
+        if (stored) {
+          ownSave.current.storedKey = singleResetKey(stored, locale);
+        }
+        return { ok: true, item: { id: document.id } };
+      } catch (error) {
+        return submitFailed(error);
+      } finally {
+        submissionLatch.current = false;
+      }
+    },
+    [busy, onSubmit, locale, document.id]
+  );
+
   // Resolves to what the submission came to, never rejects, as the entry
   // editor's does: the toasts report to the author, the outcome to the caller.
   const handleSubmit = useCallback(
@@ -700,7 +770,14 @@ export function SingleForm({
       // handler acts on the live document, which is not what is on screen. And
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
-      if (editsHeld) return submitHeld;
+      if (editsHeld) {
+        // A reader's publish and unpublish still go, as the status alone.
+        const status = readerStatusWrite(intent, {
+          refused: readOnlyForReader,
+          writesHeld,
+        });
+        return status === undefined ? submitHeld : writeStatus(status);
+      }
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
 
@@ -756,6 +833,9 @@ export function SingleForm({
       blankPasswordFields,
       busy,
       editsHeld,
+      readOnlyForReader,
+      writesHeld,
+      writeStatus,
       document.id,
       schema,
       locale,
@@ -786,12 +866,12 @@ export function SingleForm({
   // ---------------------------------------------------------------------------
 
   // Status flag — singles can opt into Draft/Published via schema.status.
-  // When true, EntrySystemHeader shows Save Draft / Update split, and
-  // EntryMetaStrip / DocumentPanel surface the status pill.
+  // When true, the document bar shows Save Draft / Update split and the
+  // status pill.
   const hasStatus = schema.status === true;
 
   // Auto-fill slug from title — same form-level pattern as EntryForm. The
-  // title input lives in EntrySystemHeader (not TextInput) so the slug
+  // title input is the editor's own (DocumentTitleBlock, not TextInput) so the slug
   // generator must be mounted at the form level to see its keystrokes.
   // Why "name" in f narrowing: SingleForm's allFields type union still
   // includes options without `name` (legacy SingleSchema typing); the
@@ -811,6 +891,12 @@ export function SingleForm({
   });
   const documentStatus =
     (document as { status?: string } | undefined)?.status ?? "draft";
+  // The status the bar's pill shows and the context carries, once, so the two
+  // cannot disagree.
+  const editedStatus = {
+    status: documentStatus,
+    hasWorkingDraft: hasPendingWorkingDraft(document),
+  };
 
   // Rail collapse pref (shared with collection EntryForm via the same
   // localStorage key).
@@ -848,7 +934,7 @@ export function SingleForm({
     }
   )._translations;
 
-  // Adapt the SingleDocumentData shape into what EntrySystemHeader and the
+  // Adapt the SingleDocumentData shape into what the document bar and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
   // entry.updated_at). The structural alignment is straightforward — singles
   // already carry id and updatedAt; status/createdAt are passed through if
@@ -856,7 +942,7 @@ export function SingleForm({
   const entryLike = {
     id: document.id,
     status: documentStatus,
-    // The flag the header reads to show Changed and offer Discard. Forwarded
+    // The flag the bar reads to show Changed and offer Discard. Forwarded
     // rather than recomputed: the server sets it only when a pending change was
     // actually overlaid, which is what makes it per-language.
     _isWorkingDraft:
@@ -868,7 +954,7 @@ export function SingleForm({
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: singleTranslations,
-  } as unknown as Parameters<typeof EntrySystemHeader>[0]["entry"];
+  } as unknown as Parameters<typeof DocumentBar>[0]["entry"];
 
   // i18n: content-locale context for field components + the rail's language panel.
   //
@@ -1032,6 +1118,14 @@ export function SingleForm({
       onCancel={onSeedHandled}
     >
       <UnsavedWorkProvider report={unsavedWork.report}>
+        {/* The Single's place in the admin's top bar: Content, Singles, then
+            this Single. */}
+        <DocumentTrail
+          kind="single"
+          label={schema.label}
+          control={form.control}
+          titleName={titleFieldName}
+        />
         {/*
         Which document the fields are inside. The entry editor has always
         supplied this and the Single editor did not, so a field rendered here
@@ -1046,15 +1140,9 @@ export function SingleForm({
           collectionSlug={schema.slug}
           entryId={document.id}
           isCreateMode={false}
-          // The same status the meta strip below shows, plus the pending-draft
-          // fact the strip does not yet surface for a Single. Carrying the richer
-          // answer rather than the strip's: "changed" means published with a
-          // pending change, so a field reading it says MORE than the strip rather
-          // than something different.
-          documentStatus={{
-            status: documentStatus,
-            hasWorkingDraft: hasPendingWorkingDraft(document),
-          }}
+          // The same status, and pending-draft fact, the document bar's pill
+          // shows: a field covering the bar reports what the bar would have.
+          documentStatus={editedStatus}
         >
           <EntryLocaleProvider value={localeCtx}>
             {/* Above the header — which mounts the history panel — and above
@@ -1118,23 +1206,13 @@ export function SingleForm({
                             waits for. */}
                         <SaveActionFormProvider form={form}>
                           <CopyFromLanguageScope>
-                            <FormErrorSummary
-                              errors={errors}
-                              submitCount={submitCount}
-                              className="mx-6 mt-3"
-                            />
-
-                            <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
-                              {/* Main column */}
-                              <div className="flex-1 min-w-0 flex flex-col">
-                                {/* No horizontal compensation here, and none needed. The
-                parent's `-my-8` cancels the page's VERTICAL inset only; the
-                horizontal inset is spent as grid columns on a measured page and
-                is not a padding any margin can pull back from. A horizontal one here
-                would not cancel anything — it would push the header and meta
-                strip past the content column, which is what it did when the
-                parent still cancelled both axes. */}
-                                <EntrySystemHeader
+                            {/* The bar, the banners under it and the row of
+                              field column and panel, in the frame the entry
+                              editor draws: one bar and one banner order on
+                              both. */}
+                            <DocumentEditorLayout
+                              bar={
+                                <DocumentBar
                                   autosaveEnabled={autosaveScope !== null}
                                   // A recovery point newer than the stored document, still on offer:
                                   // its edits are not stored, whatever the form says.
@@ -1143,14 +1221,18 @@ export function SingleForm({
                                   }
                                   autosaveLastSavedAt={autosave.lastSavedAt}
                                   mode="edit"
-                                  titleField={titleField}
+                                  hasStatus={hasStatus}
+                                  // The status the pill reports, and whether a
+                                  // published Single has a working draft pending,
+                                  // as the context below carries them.
+                                  documentStatus={editedStatus}
                                   historyFields={schema.fields}
                                   historyEnabled={historyEnabledFrom(schema)}
                                   historyRetention={historyRetentionFrom(
                                     schema
                                   )}
                                   historyLifecycle={hasStatus}
-                                  // The whole busy state: the header's spinner,
+                                  // The whole busy state: the bar's spinner,
                                   // disabled reasons and discard dialog all
                                   // reflect a discard in flight as well as a save.
                                   isSubmitting={busy}
@@ -1195,56 +1277,56 @@ export function SingleForm({
                                     "single",
                                     controllerNames[0]
                                   )}
-                                  /* Why: Singles share the Show JSON dialog with collections,
-                 but at the /api/singles/{slug} URL pattern. Passing
-                 `scope="single"` routes the dialog through singleApi
-                 instead of entryApi. */
+                                  // Singles address their history at
+                                  // /api/singles/{slug} rather than by an
+                                  // entry id.
                                   scope="single"
-                                  lockIdentity
                                   documentLocked={lock.readOnly}
                                   writesRefused={removedFromCode}
                                   isRailCollapsed={railCollapsed}
                                   onToggleRail={toggleRail}
                                 />
-                                {/* Directly under the header, as in the entry
-                                    editor: a fact about the whole Single is
-                                    read before the details of its address. */}
-                                {documentBanner}
-                                <EntryMetaStrip
-                                  slugField={slugField}
-                                  hasStatus={hasStatus}
-                                  status={documentStatus}
-                                  // The pill shows wherever the panel is off
-                                  // screen, a phone included, so it reports a
-                                  // pending working draft as the panel does.
-                                  hasWorkingDraft={hasPendingWorkingDraft(
-                                    document
-                                  )}
-                                  isRailCollapsed={railCollapsed}
-                                  lockSlug
-                                  documentId={document.id}
-                                />
-
-                                {/* Inside the main column, below the header, matching the entry
-                  editor. Placed above the flex row it sat UNDER the sticky
-                  header, which intercepted pointer events: the offer was
-                  visible and its buttons were not clickable. */}
-                                <DocumentLockBanner
-                                  notice={lock.notice}
-                                  onTakeOver={lock.takeOver}
-                                  onRequestAccess={lock.requestAccess}
-                                  className="mx-6 mt-3"
-                                />
-                                <LiveDocumentRecoveryOffer
+                              }
+                              banners={
+                                <DocumentBanners
+                                  documentBanner={documentBanner}
+                                  lock={lock}
                                   recovery={recovery}
                                   viewingVersion={viewingVersion}
+                                  versionBannerRef={setVersionBannerSlot}
+                                />
+                              }
+                              notices={
+                                <FormErrorSummary
+                                  errors={errors}
+                                  submitCount={submitCount}
                                   className="mx-6 mt-3"
+                                />
+                              }
+                            >
+                              {/* Main column */}
+                              <div className="flex-1 min-w-0 flex flex-col">
+                                {/* The title, fixed by the Single's config and
+                                  so read-only. No slug line: a Single's slug
+                                  is fixed by its config too, and is not part
+                                  of its address on most sites. */}
+                                <DocumentTitleBlock
+                                  mode="edit"
+                                  titleField={titleField}
+                                  lockIdentity
+                                  documentLocked={lock.readOnly}
+                                  isSubmitting={busy}
+                                />
+                                <EntryMetaStrip
+                                  isRailCollapsed={railCollapsed}
+                                  documentId={document.id}
                                 />
 
                                 {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
                                 <SingleFormLanguagePanel
                                   actionsDisabled={editsHeld}
+                                  publishAllDisabled={publishAllHeld}
                                   // A reader may still open the other languages.
                                   navigationDisabled={writesHeld}
                                   enabled={localizationEnabled}
@@ -1273,23 +1355,24 @@ export function SingleForm({
                                   // survive.
                                   // A reader's page holds restoring as well.
                                   versionActionsHeld={versionWritesHeld || busy}
+                                  versionBannerSlot={versionBannerSlot}
                                 />
                               </div>
 
                               {/* Rail (collapsible). */}
                               <SingleFormRail
                                 actionsDisabled={editsHeld}
+                                publishAllDisabled={publishAllHeld}
                                 navigationDisabled={writesHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
-                                isDirty={isDirty}
                                 railCollapsed={railCollapsed}
                                 {...(locale === undefined ? {} : { locale })}
                                 {...(onLocaleChange === undefined
                                   ? {}
                                   : { onLocaleChange })}
                               />
-                            </div>
+                            </DocumentEditorLayout>
                           </CopyFromLanguageScope>
                         </SaveActionFormProvider>
                       </div>

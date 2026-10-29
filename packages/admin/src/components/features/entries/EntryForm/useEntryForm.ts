@@ -36,6 +36,7 @@ import { submitDocument } from "./submit-document";
 import {
   deleteFailed,
   submitBusy,
+  submitFailed,
   type DeleteOutcome,
   type SubmitOutcome,
 } from "./submit-outcome";
@@ -294,6 +295,11 @@ export interface UseEntryFormReturn {
     e?: React.BaseSyntheticEvent,
     intent?: EntryFormIntent
   ) => Promise<SubmitOutcome>;
+  /** Publish (`published`) or unpublish (`draft`) the saved entry with a
+   *  write naming its status alone, without the form: what a user who may
+   *  publish and not change the document sends. Resolves to what the write
+   *  came to; never rejects. */
+  writeStatus: (status: "published" | "draft") => Promise<SubmitOutcome>;
   /** Delete the entry (edit mode only). Resolves to what the delete came to;
    *  never rejects. */
   handleDelete: () => Promise<DeleteOutcome>;
@@ -704,6 +710,36 @@ export function useEntryForm({
     ]
   );
 
+  // A write of the status alone. It names no field, so the server judges it by
+  // the publish or unpublish permission alone, and it does not read the form:
+  // a user who may only publish cannot change what the form holds, and a
+  // check of it could refuse what the server would allow. The same latch as a
+  // submission, so a double click writes once.
+  const writeStatus = useCallback(
+    async (status: "published" | "draft"): Promise<SubmitOutcome> => {
+      if (mode !== "edit" || !entry?.id) {
+        return {
+          ok: false,
+          reason: "refused",
+          message: "Only a saved entry can be published or unpublished.",
+        };
+      }
+      if (isSubmitting || submissionLatch.current) return submitBusy;
+      submissionLatch.current = true;
+      try {
+        const result = await updateMutation.mutateAsync({ status });
+        onSuccess?.(result.item);
+        return { ok: true, item: result.item };
+      } catch (error) {
+        onError?.(error);
+        return submitFailed(error);
+      } finally {
+        submissionLatch.current = false;
+      }
+    },
+    [mode, entry?.id, updateMutation, isSubmitting, onSuccess, onError]
+  );
+
   // Delete handler. Resolves once the delete has been answered, with what it
   // came to, and never rejects: the toast reports to the author as before, and
   // the outcome reports to a caller that acts on it.
@@ -777,6 +813,7 @@ export function useEntryForm({
   return {
     form,
     handleSubmit,
+    writeStatus,
     handleDelete,
     // Returned as a promise (not fire-and-forget) so the confirm dialog can
     // await the discard and keep its loading state visible until it settles.
