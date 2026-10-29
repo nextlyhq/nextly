@@ -53,6 +53,11 @@ import {
   getDashboardActivity,
 } from "./api/dashboard";
 import {
+  deleteDashboardPin,
+  getDashboardPins,
+  postDashboardPin,
+} from "./api/dashboard-pins";
+import {
   acquireLock,
   readLock,
   releaseLock,
@@ -541,9 +546,9 @@ async function handleImageSizesRequest(
 /**
  * Delegate a dashboard request directly to the named handler.
  *
- * Dashboard handlers manage their own auth (requireAuthentication) and are
- * read-only (GET). Intercepting here — before req.text() — keeps the pattern
- * consistent with API keys and general settings.
+ * Dashboard handlers manage their own auth (requireAuthentication) and read
+ * their own bodies (the layout's and a pin's). Intercepting here — before
+ * req.text() — keeps the pattern consistent with API keys and general settings.
  */
 async function handleDashboardRequest(
   req: Request,
@@ -566,6 +571,12 @@ async function handleDashboardRequest(
       return putWidgetLayout(req);
     case "deleteWidgetLayout":
       return deleteWidgetLayout(req);
+    case "getDashboardPins":
+      return getDashboardPins(req);
+    case "postDashboardPin":
+      return postDashboardPin(req);
+    case "deleteDashboardPin":
+      return deleteDashboardPin(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
