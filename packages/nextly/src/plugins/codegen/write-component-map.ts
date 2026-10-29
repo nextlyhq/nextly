@@ -46,7 +46,9 @@ export async function writeComponentMapFiles(
    * whose import is worked out from where the map sits, or an import an earlier write chose, kept
    * as it stands. None where there is no config, and the map is then written unchecked, as before.
    */
-  config?: string | { import: string }
+  config?: string | { import: string },
+  /** The site config's `admin.dashboard`, whose own widgets the map lists beside the plugins'. */
+  siteDashboard?: unknown
 ): Promise<ComponentMapWrite> {
   const configImport =
     config === undefined || typeof config !== "string"
@@ -56,16 +58,19 @@ export async function writeComponentMapFiles(
           resolve(cwd, config)
         );
   const planned = await Promise.all(
-    buildImportMapArtifacts(plugins, typesOutputPath, configImport).map(
-      async artifact => {
-        const file = resolve(cwd, artifact.path);
-        return {
-          file,
-          code: artifact.code,
-          previous: await currentContent(file),
-        };
-      }
-    )
+    buildImportMapArtifacts(
+      plugins,
+      typesOutputPath,
+      configImport,
+      siteDashboard
+    ).map(async artifact => {
+      const file = resolve(cwd, artifact.path);
+      return {
+        file,
+        code: artifact.code,
+        previous: await currentContent(file),
+      };
+    })
   );
   // Every file a write was started on, the failing one included: a write
   // that fails partway can leave its own file cut short.
