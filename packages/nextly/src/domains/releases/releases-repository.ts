@@ -1632,7 +1632,16 @@ export class ReleasesRepository {
     if (members.length === 0 || this.revalidateConfigs === undefined) {
       return releaseRevalidationIntent(members);
     }
-    const { collections, singles } = await this.revalidateConfigs();
+    let loaded: Awaited<ReturnType<NonNullable<typeof this.revalidateConfigs>>>;
+    try {
+      loaded = await this.revalidateConfigs();
+    } catch (error) {
+      // The settings could not be read: flush the members' own tags anyway,
+      // which over-expires an opted-out scope rather than leaving a page stale.
+      logReleaseFlushFailure(error);
+      return releaseRevalidationIntent(members);
+    }
+    const { collections, singles } = loaded;
     const configs = new Map<string, RevalidateConfig | undefined>();
     for (const record of collections) {
       configs.set(`collection:${record.slug}`, readRevalidateConfig(record));

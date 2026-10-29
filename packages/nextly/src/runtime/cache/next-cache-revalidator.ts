@@ -21,6 +21,7 @@
 import { recordAdvisoryNotice } from "../../hooks/side-effect-warnings";
 import {
   expiryHandoff,
+  holdForNextFlush,
   takePendingExpiries,
   type ExpiryHandoff,
 } from "../../revalidation/expiry-handoff";
@@ -311,11 +312,15 @@ export class NextCacheRevalidator implements CacheRevalidator {
         consoleLogger.error(
           `[nextly] the cache expiry hand-off did not answer within ${HANDOFF_TIMEOUT_MS} ms: ${tags.join(", ")}`
         );
+        // It may still take them, but it may not: keep them for the next flush too.
+        holdForNextFlush(tags);
       }
     } catch (error) {
       consoleLogger.error(
         `[nextly] the cache expiry hand-off failed: ${error instanceof Error ? error.message : String(error)}`
       );
+      // Not lost with the hand-off: the next flush in this process drains them.
+      holdForNextFlush(tags);
     } finally {
       clearTimeout(timer);
     }

@@ -37,10 +37,8 @@ import {
   ReleasesService,
   scopeKeyOf,
 } from "../../domains/releases/services/releases-service";
-import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
-import type { CollectionRegistryService } from "../../services/collections/collection-registry-service";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import {
   resolveDocumentVisibilityScope,
@@ -49,6 +47,10 @@ import {
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
+import {
+  languageChangeContentCache,
+  registryRevalidateConfigs,
+} from "./language-change-content-cache";
 import {
   releaseDocumentChecks,
   singleRowExists,
@@ -82,24 +84,13 @@ export function registerReleaseServices({
           container.has("cacheRevalidator")
             ? container.get<CacheRevalidator>("cacheRevalidator")
             : undefined,
-          // The opt-out and extra tags a release's flush must honour: each
-          // registry's slugs and `revalidate` settings, one query apiece,
-          // resolved per call for the reason the targets below are.
-          async () => {
-            const [collections, singles] = await Promise.all([
-              container.has("collectionRegistryService")
-                ? container
-                    .get<CollectionRegistryService>("collectionRegistryService")
-                    .getAllRevalidateConfigs()
-                : [],
-              container.has("singleRegistryService")
-                ? container
-                    .get<SingleRegistryService>("singleRegistryService")
-                    .getAllRevalidateConfigs()
-                : [],
-            ]);
-            return { collections, singles };
-          }
+          // The opt-out and extra tags a release's flush must honour, read as a
+          // language change reads them; none where the registered revalidator
+          // flushes nothing (no Next runtime, the CLI), so those read no registry.
+          async () =>
+            languageChangeContentCache().revalidator()
+              ? registryRevalidateConfigs()
+              : { collections: [], singles: [] }
         ),
 
         // The system resource, whose three authorities are seeded by

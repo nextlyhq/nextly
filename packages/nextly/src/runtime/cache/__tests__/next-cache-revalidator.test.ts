@@ -22,6 +22,13 @@ import {
   type NextCacheModule,
 } from "../next-cache-revalidator";
 
+// What one case hands off is held in this process for the next flush; each case
+// starts with nothing held and the default hand-off installed.
+afterEach(() => {
+  takePendingExpiries();
+  setExpiryHandoff(null);
+});
+
 function fakeNextCache() {
   return {
     revalidateTag:
@@ -456,5 +463,62 @@ describe("NextCacheRevalidator, deferring rather than dropping", () => {
       () => slow
     ).flush([{ tags: ["a"] }]);
     expect(settled).toBe(true);
+  });
+});
+
+/*
+ * A hand-off the app installed may refuse the tags (a queue that is down) or not
+ * answer in time. Those tags are not lost with it: this process keeps them, and
+ * its next flush expires them.
+ */
+describe("NextCacheRevalidator, when the installed hand-off fails", () => {
+  afterEach(() => {
+    setExpiryHandoff(null);
+    takePendingExpiries();
+    vi.useRealTimers();
+  });
+
+  it("expires the tags a rejecting hand-off refused, with the next flush", async () => {
+    const failing = fakeNextCache();
+    failing.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await new NextCacheRevalidator(
+      () => failing,
+      () => ({
+        handOff: () => Promise.reject(new Error("queue down")),
+      })
+    ).flush([{ tags: ["nextly:posts:id:1"] }]);
+
+    const next = fakeNextCache();
+    await new NextCacheRevalidator(() => next).flush([
+      { tags: ["nextly:pages"] },
+    ]);
+    expect(next.revalidateTag.mock.calls.map(([tag]) => tag).sort()).toEqual([
+      "nextly:pages",
+      "nextly:posts:id:1",
+    ]);
+    error.mockRestore();
+  });
+
+  it("keeps the tags of a hand-off that did not answer in time", async () => {
+    vi.useFakeTimers();
+    const failing = fakeNextCache();
+    failing.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const flushed = new NextCacheRevalidator(
+      () => failing,
+      () => ({
+        handOff: () => new Promise<void>(() => {}),
+      })
+    ).flush([{ tags: ["nextly:posts:id:2"] }]);
+    await vi.advanceTimersByTimeAsync(HANDOFF_TIMEOUT_MS);
+    await flushed;
+
+    expect(takePendingExpiries()).toEqual(["nextly:posts:id:2"]);
+    error.mockRestore();
   });
 });

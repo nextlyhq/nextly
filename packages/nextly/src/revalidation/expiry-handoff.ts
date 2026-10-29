@@ -77,8 +77,28 @@ export function setExpiryHandoff(handoff: ExpiryHandoff | null): void {
   globalForHandoff.__nextly_expiry_handoff = handoff ?? undefined;
 }
 
-/** The tags the in-process default holds, drained. Empty when another hand-off is installed. */
+/**
+ * Tags an installed hand-off refused, or did not take in time. Kept in this
+ * process whichever hand-off is installed, so they are not lost with it: the
+ * next flush drains them.
+ */
+const globalForFallback = globalThis as unknown as {
+  __nextly_expiry_fallback?: PendingExpiryHandoff;
+};
+
+/** Keeps tags a hand-off failed to take, for the next flush in this process. */
+export function holdForNextFlush(tags: string[]): void {
+  globalForFallback.__nextly_expiry_fallback ??= new PendingExpiryHandoff();
+  globalForFallback.__nextly_expiry_fallback.handOff(tags, "");
+}
+
+/**
+ * The tags this process holds, drained: the in-process default's, and those an
+ * installed hand-off failed to take.
+ */
 export function takePendingExpiries(): string[] {
   const handoff = expiryHandoff();
-  return handoff instanceof PendingExpiryHandoff ? handoff.take() : [];
+  const held = handoff instanceof PendingExpiryHandoff ? handoff.take() : [];
+  const refused = globalForFallback.__nextly_expiry_fallback?.take() ?? [];
+  return [...new Set([...held, ...refused])];
 }

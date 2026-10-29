@@ -658,6 +658,31 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("still flushes the members' own tags when the settings cannot be read", async () => {
+      // A failed read of the registries must not leave the release's pages
+      // stale: its documents' own tags go out without the settings.
+      const app = await boot(dialect);
+      const flushed: { tags: string[] }[] = [];
+      const repo = new ReleasesRepository(
+        app.adapter,
+        { flush: intents => void flushed.push(...intents) },
+        async () => {
+          throw new Error("registry unreachable");
+        }
+      );
+      const release = await repo.createRelease({ title: "Unread" });
+      await repo.addMember(
+        { releaseId: release.id, ...ref("e1"), action: "publish" },
+        ANY_EDITABLE_STATE
+      );
+      flushed.length = 0;
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      expect(flushed.flatMap(intent => intent.tags).sort()).toEqual([
+        "nextly:posts",
+        "nextly:posts:id:e1",
+      ]);
+    });
+
     it("reads every scope's revalidate config in one load per flush, however many documents it holds", async () => {
       // One read per registry per flush, not one per member: a release can hold
       // hundreds of documents across many collections.
