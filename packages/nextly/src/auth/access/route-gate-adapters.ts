@@ -166,7 +166,7 @@ export function routeGateVerdict(
     resource,
     rules,
     () => hasPermission(auth.userId, action, resource),
-    appliesFilter
+    appliesFilter ? "applied" : "refused"
   );
 }
 
@@ -531,8 +531,13 @@ async function capability(
   rules: RouteRules
 ): Promise<boolean> {
   const verdict = await aboutSubject(permissionSlug(action, resource), () =>
-    gateVerdict(caller, action, resource, rules, () =>
-      userHoldsPermission(caller.userId, action, resource)
+    gateVerdict(
+      caller,
+      action,
+      resource,
+      rules,
+      () => userHoldsPermission(caller.userId, action, resource),
+      "some-entries"
     )
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
@@ -551,7 +556,7 @@ function gateVerdict(
   resource: string,
   rules: RouteRules,
   permissionWithoutService: () => Promise<boolean>,
-  appliesFilter = false
+  readFilter: ReadFilterUse = "refused"
 ): Promise<GateVerdict> {
   const registered =
     resource === "" ? undefined : rules?.getRegisteredTarget(resource);
@@ -573,7 +578,8 @@ function gateVerdict(
     principal: null,
     rules,
     permissionWithoutService,
-    appliesFilter,
+    appliesFilter: readFilter === "applied",
+    asksSomeEntries: readFilter === "some-entries",
   });
 }
 
@@ -592,6 +598,14 @@ async function userHoldsAnswering(
   }
   return false;
 }
+
+/**
+ * What an asker does with a collection read rule's filter: applies it to the
+ * entries it reads (`applied`); asks only whether the caller may read the
+ * collection, which the filter answers yes (`some-entries`); or neither, and
+ * refuses it (`refused`).
+ */
+type ReadFilterUse = "applied" | "some-entries" | "refused";
 
 /**
  * The verdict for an action no rule can name. A key holds it by its stored
@@ -770,8 +784,13 @@ export async function callerMayPerform(
   // A key is judged on its own scope, the route gate's way, with or without
   // the service.
   return (
-    await gateVerdict(caller, action, resource, rules, () =>
-      Promise.resolve(false)
+    await gateVerdict(
+      caller,
+      action,
+      resource,
+      rules,
+      () => Promise.resolve(false),
+      "some-entries"
     )
   ).allowed;
 }
@@ -875,8 +894,13 @@ async function sessionAnswer(
 ): Promise<boolean> {
   const caller: GateCaller = { userId };
   if (!rules) return refusedWithoutService(caller, action, resource);
-  const verdict = await gateVerdict(caller, action, resource, rules, () =>
-    Promise.resolve(false)
+  const verdict = await gateVerdict(
+    caller,
+    action,
+    resource,
+    rules,
+    () => Promise.resolve(false),
+    "some-entries"
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   return verdict.allowed;

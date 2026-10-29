@@ -12,6 +12,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { dashboardPinsPresent } from "../../domains/dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../domains/field-groups/services/teardown-entity-field-group-data";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { teardownEntityI18n } from "../../domains/i18n/migration/teardown-entity-i18n";
@@ -741,8 +742,12 @@ async function handleRemovedSingles(
       // Delete the registry entry directly, then the Single's autosaves and
       // version pins, in one transaction and in that order, as the
       // registry's own delete does: see `deleteEntityRegistryRow`.
+      // Asked before the transaction opens: see `DashboardTables`.
+      const tables = {
+        dashboardPinsPresent: await dashboardPinsPresent(adapter),
+      };
       await adapter.transaction(tx =>
-        deleteEntityRegistryRow(tx, "single", slug)
+        deleteEntityRegistryRow(tx, "single", slug, tables)
       );
 
       // Drop the data table
