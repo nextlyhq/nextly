@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A page picked on the media page straight after it loads now stays picked. Moving to another page within a moment of the page opening used to send you back to page one, because the search box reset the page while settling a search that had not changed.
+On the media page, a page picked straight after it loads now stays picked. Moving to another page within a moment of the page opening used to send you back to page one, because the search box reset the page while settling a search that had not changed. Media tiles and their checkboxes are also named by the file name the tile shows, not its storage path, so screen readers read the name you uploaded, and voice control or a search by that name finds the tile.
