@@ -215,7 +215,10 @@ describe("a delete rule that answers a filter", () => {
     expect(await stillThere(t, OPEN_POSTS, others)).toBe(true);
   });
 
-  it("refuses a bulk delete by ids every entry, the matching one too, and deletes nothing", async () => {
+  it("deletes the matching entry of a bulk delete by ids, and fails the other, leaving it", async () => {
+    // Each id is judged as a single delete judges it: the filter is matched
+    // against the entry, so the author's own is deleted, and another's, which
+    // the author may read, fails as forbidden.
     const t = await boot();
     const { own, others } = await seed(t, OPEN_POSTS);
 
@@ -225,14 +228,11 @@ describe("a delete rule that answers a filter", () => {
       ...asAuthor,
     });
 
-    expect(result.successes).toEqual([]);
-    expect(result.failures.map(f => [f.id, f.code]).sort()).toEqual(
-      [
-        [own, "FORBIDDEN"],
-        [others, "FORBIDDEN"],
-      ].sort()
-    );
-    expect(await stillThere(t, OPEN_POSTS, own)).toBe(true);
+    expect(result.successes.map(s => s.id)).toEqual([own]);
+    expect(result.failures.map(f => [f.id, f.code])).toEqual([
+      [others, "FORBIDDEN"],
+    ]);
+    expect(await stillThere(t, OPEN_POSTS, own)).toBe(false);
     expect(await stillThere(t, OPEN_POSTS, others)).toBe(true);
   });
 
