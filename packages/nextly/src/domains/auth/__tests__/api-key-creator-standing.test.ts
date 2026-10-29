@@ -34,6 +34,9 @@ describe("ApiKeyService.authenticateApiKey and the key's creator", () => {
   let creatorId: string;
   let key: string;
   let keyId: string;
+  // A day ahead, on a whole second, so every dialect stores it exactly and
+  // the admitted key's `expiresAt` can be read back as this value.
+  let keyExpiresAt: Date;
 
   beforeEach(async () => {
     accountIsActive.mockReset();
@@ -48,6 +51,9 @@ describe("ApiKeyService.authenticateApiKey and the key's creator", () => {
     });
     const { fullKey, keyHash, keyPrefix } = generateApiKey();
     keyId = randomUUID();
+    keyExpiresAt = new Date(
+      Math.floor(Date.now() / 1000) * 1000 + 24 * 60 * 60 * 1000
+    );
     await testDb.db.insert(testDb.schema.apiKeys).values({
       id: keyId,
       name: "Creator's key",
@@ -55,7 +61,7 @@ describe("ApiKeyService.authenticateApiKey and the key's creator", () => {
       keyPrefix,
       tokenType: "read-only",
       userId: creatorId,
-      expiresAt: null,
+      expiresAt: keyExpiresAt,
     });
     key = fullKey;
   });
@@ -66,14 +72,27 @@ describe("ApiKeyService.authenticateApiKey and the key's creator", () => {
   });
 
   it("admits the key while its creator is active", async () => {
-    accountIsActive.mockResolvedValue(true);
+    // The standing time is taken just before the creator's standing is
+    // asked, so it falls between the call's start and the ask itself.
+    let askedAt = Number.NaN;
+    accountIsActive.mockImplementation(() => {
+      askedAt = performance.now();
+      return Promise.resolve(true);
+    });
+    const calledAt = performance.now();
 
-    expect(await service.authenticateApiKey(key)).toEqual({
+    const admitted = await service.authenticateApiKey(key);
+
+    expect(admitted).toEqual({
       id: keyId,
       userId: creatorId,
       tokenType: "read-only",
       roleId: null,
+      standingAskedAt: expect.any(Number),
+      expiresAt: keyExpiresAt.getTime(),
     });
+    expect(admitted?.standingAskedAt).toBeGreaterThanOrEqual(calledAt);
+    expect(admitted?.standingAskedAt).toBeLessThanOrEqual(askedAt);
     expect(accountIsActive).toHaveBeenCalledWith(creatorId);
   });
 
