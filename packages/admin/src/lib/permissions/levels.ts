@@ -89,7 +89,7 @@ const LEGACY_MANAGE = "manage";
  * roles screen reads it as no access too. Core's own list, so the two cannot
  * name different resources.
  */
-const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set(
+export const MANAGE_BRIDGE_RESOURCES: ReadonlySet<string> = new Set(
   RETIRED_MANAGE_RESOURCES
 );
 
