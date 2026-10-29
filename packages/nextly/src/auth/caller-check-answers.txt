@@ -172,7 +172,7 @@ service none key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -292,7 +292,7 @@ service none key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -355,7 +355,7 @@ service none key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service none key-manage
@@ -385,7 +385,7 @@ service none key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service true user-with
@@ -562,7 +562,7 @@ service true key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -682,7 +682,7 @@ service true key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -745,7 +745,7 @@ service true key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service true key-manage
@@ -775,7 +775,7 @@ service true key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service false user-with
@@ -952,7 +952,7 @@ service false key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -1072,7 +1072,7 @@ service false key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -1135,7 +1135,7 @@ service false key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service false key-manage
@@ -1165,7 +1165,7 @@ service false key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-true user-with
@@ -1342,7 +1342,7 @@ service returns-true key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -1462,7 +1462,7 @@ service returns-true key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -1525,7 +1525,7 @@ service returns-true key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-true key-manage
@@ -1555,7 +1555,7 @@ service returns-true key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-false user-with
@@ -1732,7 +1732,7 @@ service returns-false key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -1852,7 +1852,7 @@ service returns-false key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -1915,7 +1915,7 @@ service returns-false key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-false key-manage
@@ -1945,7 +1945,7 @@ service returns-false key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-null user-with
@@ -2122,7 +2122,7 @@ service returns-null key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -2242,7 +2242,7 @@ service returns-null key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -2305,7 +2305,7 @@ service returns-null key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-null key-manage
@@ -2335,7 +2335,7 @@ service returns-null key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-undefined user-with
@@ -2512,7 +2512,7 @@ service returns-undefined key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -2632,7 +2632,7 @@ service returns-undefined key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -2695,7 +2695,7 @@ service returns-undefined key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-undefined key-manage
@@ -2725,7 +2725,7 @@ service returns-undefined key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-truthy user-with
@@ -2902,7 +2902,7 @@ service returns-truthy key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -3022,7 +3022,7 @@ service returns-truthy key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -3085,7 +3085,7 @@ service returns-truthy key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-truthy key-manage
@@ -3115,7 +3115,7 @@ service returns-truthy key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service throws user-with
@@ -3292,7 +3292,7 @@ service throws key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -3412,7 +3412,7 @@ service throws key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -3475,7 +3475,7 @@ service throws key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service throws key-manage
@@ -3505,7 +3505,7 @@ service throws key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service role-name user-with
@@ -3682,7 +3682,7 @@ service role-name key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -3802,7 +3802,7 @@ service role-name key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -3865,7 +3865,7 @@ service role-name key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service role-name key-manage
@@ -3895,7 +3895,7 @@ service role-name key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service permission-spelling user-with
@@ -4072,7 +4072,7 @@ service permission-spelling key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -4192,7 +4192,7 @@ service permission-spelling key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -4255,7 +4255,7 @@ service permission-spelling key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service permission-spelling key-manage
@@ -4285,7 +4285,7 @@ service permission-spelling key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 no-service none user-with
@@ -4462,7 +4462,7 @@ no-service none key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -4582,7 +4582,7 @@ no-service none key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
+  holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
@@ -4645,7 +4645,7 @@ no-service none key-custom-slugs
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 no-service none key-manage
@@ -4675,6 +4675,6 @@ no-service none key-manage
   holds(manage-settings):false
   holds(read-media):false
   holds(update-email-providers):false
-  holds(manage-email-providers):true
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
