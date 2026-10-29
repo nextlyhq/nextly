@@ -4,8 +4,9 @@
  * The properties that separate the reader from a plausible broken one: a key
  * is judged on its stored slug wherever that and its rows answer differently,
  * the answer reads the rules the access-control service holds now rather than
- * ones an earlier registration declared, and a declared read rule is answered
- * by the service without resolving the user's grants.
+ * ones an earlier registration declared, a declared read rule is answered
+ * by the service without resolving the user's grants, and a visitor is
+ * refused a read rule's filter that population cannot apply.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +35,7 @@ import { makePrincipal } from "../../plugins/principals/principal";
 
 import { userActor, visitorActor } from "./actor";
 import { clearDeclaredTargets, declareTarget } from "./declared-rules";
+import { recordingDeviations } from "./deviations";
 import { relatedRowReads } from "./population-read";
 
 const checkAccess = vi.fn();
@@ -116,6 +118,40 @@ describe("an API key", () => {
         "posts",
         { user: owner, scope, principal: null },
         service()
+      )
+    ).resolves.toBe(true);
+  });
+});
+
+describe("a visitor, with the access-control service", () => {
+  const publicReadsPosts = () =>
+    visitorSpy.mockResolvedValue(
+      visitorActor([{ slug: "read-posts", action: "read", resource: "posts" }])
+    );
+
+  it("is refused where the read rule answers a filter population cannot apply", async () => {
+    // Population fetches the related ids whole, so a rule that allows only
+    // the entries it matches would hand the visitor every one of them.
+    publicReadsPosts();
+    const { result, deviations } = await recordingDeviations(() =>
+      relatedRowReads(
+        "posts",
+        { principal: null },
+        service({ read: () => ({ author: { equals: "u1" } }) })
+      )
+    );
+    expect(result).toBe(false);
+    expect(deviations).toEqual(["filter-not-applied"]);
+  });
+
+  it("is shown the rows where the read rule answers true", async () => {
+    // The control: the same Public role and rule slot, answering every entry.
+    publicReadsPosts();
+    await expect(
+      relatedRowReads(
+        "posts",
+        { principal: null },
+        service({ read: () => true })
       )
     ).resolves.toBe(true);
   });
