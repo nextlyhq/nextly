@@ -15,7 +15,8 @@
  * may have kept editing, and the reload would otherwise replace those edits.
  * Once taken, the form starts afresh from the reloaded document, so it shows
  * the live values of the fields taken rather than the stale ones the next
- * Publish would put back live.
+ * Publish would put back live. So it does when the take's request fails, as
+ * its answer can be lost after the server took them.
  *
  * The toast stays until it is acted on or closed: an action in a toast that
  * vanishes on a timer can be missed. There is one per document and language,
@@ -108,6 +109,38 @@ const LET_GO = new Error("The editor moved to another document.");
 const NOT_TAKEN = new Error(
   "Your changes were saved, but the live values weren't taken: the editor moved to another language or document, or someone else is editing it now. Publish again to be offered them."
 );
+
+/** What a recovery says when its take's request failed, taken or not. */
+const MAYBE_NOT_TAKEN =
+  "The live values may not have been taken. The editor reloads to show what is stored.";
+
+/** What a recovery's hold says while the editor can't load its document. */
+interface NotLoadedNotice {
+  title: string;
+  description: string;
+  /** Said while a reload the author asked for is under way. */
+  loading: string;
+}
+
+/** Said once the live values are taken. */
+const TAKEN_NOT_LOADED: NotLoadedNotice = {
+  title:
+    "The live values were taken and saved, but the editor couldn't load them.",
+  description:
+    "It stays read-only until it has them, so the next publish can't send the old values.",
+  loading: "Loading the live values…",
+};
+
+/**
+ * Said after a take's request failed: whether the take committed is unknown,
+ * so it claims neither.
+ */
+const STORED_NOT_LOADED: NotLoadedNotice = {
+  title: "The editor couldn't load what is stored.",
+  description:
+    "It stays read-only until it has, so the next publish can't send values the take may have replaced.",
+  loading: "Loading what is stored…",
+};
 
 /** The refusal toast of one document in one language. */
 function refusalToastId(scope: VersionScope, locale?: string): string {
@@ -214,7 +247,7 @@ export function useSharedFieldsRecovery(args: {
       // and says what happened, until a reload succeeds.
       // The document the recovery was refused for, and takes into.
       const forDocument = JSON.stringify(scope);
-      const reloaded = async (): Promise<void> => {
+      const reloaded = async (notLoaded: NotLoadedNotice): Promise<void> => {
         try {
           await onTaken();
           return;
@@ -247,39 +280,35 @@ export function useSharedFieldsRecovery(args: {
           const offer = () => {
             // Only while this recovery still holds the form.
             if (!holding.current.has(taking)) return;
-            toast.error(
-              "The live values were taken and saved, but the editor couldn't load them.",
-              {
-                id: taking,
-                description:
-                  "It stays read-only until it has them, so the next publish can't send the old values.",
-                duration: Number.POSITIVE_INFINITY,
-                // Not closed by a swipe or a close button: its Reload is the
-                // hold's only way out.
-                dismissible: false,
-                action: {
-                  label: "Reload",
-                  onClick: event => {
-                    // Kept: the toast now says the reload is under way, and
-                    // the action would otherwise close it.
-                    event.preventDefault();
-                    if (reloading) return;
-                    reloading = true;
-                    toast.loading("Loading the live values…", { id: taking });
-                    onTaken().then(
-                      () => {
-                        reloading = false;
-                        resolve();
-                      },
-                      () => {
-                        reloading = false;
-                        offer();
-                      }
-                    );
-                  },
+            toast.error(notLoaded.title, {
+              id: taking,
+              description: notLoaded.description,
+              duration: Number.POSITIVE_INFINITY,
+              // Not closed by a swipe or a close button: its Reload is the
+              // hold's only way out.
+              dismissible: false,
+              action: {
+                label: "Reload",
+                onClick: event => {
+                  // Kept: the toast now says the reload is under way, and
+                  // the action would otherwise close it.
+                  event.preventDefault();
+                  if (reloading) return;
+                  reloading = true;
+                  toast.loading(notLoaded.loading, { id: taking });
+                  onTaken().then(
+                    () => {
+                      reloading = false;
+                      resolve();
+                    },
+                    () => {
+                      reloading = false;
+                      offer();
+                    }
+                  );
                 },
-              }
-            );
+              },
+            });
           };
           offer();
         });
@@ -305,15 +334,29 @@ export function useSharedFieldsRecovery(args: {
             if (onScreen.current !== refusedFor || !form.mayWrite()) {
               throw NOT_TAKEN;
             }
-            const { item } = await versionApi.takeLiveSharedValues(
-              scope,
-              locale
-            );
+            let taken: TakenLiveValues;
+            try {
+              ({ item: taken } = await versionApi.takeLiveSharedValues(
+                scope,
+                locale
+              ));
+            } catch (failure) {
+              // The request went out, and its answer can be lost after the
+              // server took the values: the form would then still show the
+              // ones the take replaced, for the next Publish to send. So the
+              // form starts afresh from what is stored either way, which is
+              // what its Save just stored if nothing was taken.
+              toast.error(MAYBE_NOT_TAKEN, {
+                description: apiErrorMessage(failure, "The request failed."),
+              });
+              await reloaded(STORED_NOT_LOADED);
+              return;
+            }
             // Said once it has committed, before the reload, so a reload
             // that fails can't hide that it did. The Save said what it
             // stored on its own toast.
-            toast.success(takenMessage(item, language, labelOf));
-            await reloaded();
+            toast.success(takenMessage(taken, language, labelOf));
+            await reloaded(TAKEN_NOT_LOADED);
           });
         } catch (failure) {
           // Let go by a move: nothing failed that the author must hear of.

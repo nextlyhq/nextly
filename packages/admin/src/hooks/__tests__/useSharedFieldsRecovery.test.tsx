@@ -187,7 +187,9 @@ describe("useSharedFieldsRecovery", () => {
     [
       "fails",
       () => Promise.reject(new Error("offline")),
-      ["hold", "save", "taking", "release", "failed", "done"],
+      // The take may have committed before its answer was lost, so the
+      // editor reloads, still held, before letting go.
+      ["hold", "save", "taking", "failed", "reload", "release", "done"],
     ],
   ])(
     "says the live values are being taken while it takes them, and stops once the take %s",
@@ -219,6 +221,40 @@ describe("useSharedFieldsRecovery", () => {
       expect(toast.dismiss).toHaveBeenLastCalledWith(shown.id);
     }
   );
+
+  it("reloads inside its hold when the take's request fails, then lets the form start afresh from what is stored", async () => {
+    // The answer is lost after the server took the values: the form still
+    // shows the ones the take replaced, which the next Publish would send.
+    take.mockRejectedValue(new TypeError("Failed to fetch"));
+    const order: string[] = [];
+    const { recover } = renderRecovery({
+      onTaken: () => order.push("reload"),
+    });
+    const form = formHolding({}, order);
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() => expect(order).toContain("release"));
+
+    expect(order).toEqual(["hold", "save", "reload", "release"]);
+    // The hold ends as it does after a take, so the form starts afresh from
+    // the reloaded document rather than keeping what it showed.
+    await expect(vi.mocked(form.recover).mock.results[0]?.value).resolves.toBe(
+      undefined
+    );
+    // Whether the take committed is unknown, so neither outcome is claimed.
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenLastCalledWith(
+      "The live values may not have been taken. The editor reloads to show what is stored.",
+      { description: "Failed to fetch" }
+    );
+  });
 
   it.each([
     ["failed", "The entry couldn't be saved."],
@@ -545,14 +581,15 @@ describe("a recovery whose reload fails", () => {
   /** A click on a toast's action, whose default would close the toast. */
   const click = () => ({ preventDefault: vi.fn() });
 
-  /** The toast offering the reload again, once it has been offered. */
-  function reloadOffer():
-    | { onClick: (event: ReturnType<typeof click>) => void }
-    | undefined {
+  /**
+   * The toast offering the reload again, once it has been offered: by
+   * default the one said once the live values are taken.
+   */
+  function reloadOffer(
+    title = "The live values were taken and saved, but the editor couldn't load them."
+  ): { onClick: (event: ReturnType<typeof click>) => void } | undefined {
     const call = toast.error.mock.calls.find(
-      ([message]) =>
-        message ===
-        "The live values were taken and saved, but the editor couldn't load them."
+      ([message]) => message === title
     ) as
       | [
           string,
@@ -620,6 +657,41 @@ describe("a recovery whose reload fails", () => {
       id: string;
     };
     expect(toast.dismiss).toHaveBeenLastCalledWith(shown.id);
+  });
+
+  it("keeps the form held behind Reload when the take's request fails and so does the reload, claiming no take", async () => {
+    take.mockRejectedValue(new TypeError("Failed to fetch"));
+    const order: string[] = [];
+    const reload = vi
+      .fn<() => unknown>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(undefined);
+    const { recover } = renderRecovery({
+      onTaken: () => {
+        order.push("reload");
+        return reload();
+      },
+    });
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      formHolding({ articleCount: 3 }, order)
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    const unsure = "The editor couldn't load what is stored.";
+    await vi.waitFor(() => expect(reloadOffer(unsure)).toBeDefined());
+    // Held, since the form may still show values the take replaced; and it
+    // says nothing was taken no more than that something was.
+    expect(order).not.toContain("release");
+    expect(reloadOffer()).toBeUndefined();
+    expect(toast.success).not.toHaveBeenCalled();
+
+    reloadOffer(unsure)?.onClick(click());
+    await vi.waitFor(() => expect(order).toContain("release"));
+    expect(reload).toHaveBeenCalledTimes(2);
   });
 
   it("offers the reload in a toast that can't be swiped away, kept across a language switch and gone with the editor", async () => {
