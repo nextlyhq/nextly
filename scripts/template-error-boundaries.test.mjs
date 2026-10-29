@@ -6,7 +6,10 @@
  * server failure (a database blip, a flaky upstream call) can recover from the
  * button. `reset()` only re-renders what already failed, so the same button
  * shows the same error. The behaviour itself is proven in a browser by
- * `e2e/tests/render-retry.spec.ts`; this holds each template to the call.
+ * `e2e/tests/render-retry.spec.ts`; that each shipped button calls the
+ * `retry` it is handed is checked by rendering every boundary, in
+ * create-nextly-app's `template-error-boundaries-retry.test.ts`. This holds
+ * each template to the call, and to never using `reset`.
  *
  * A scan over source, so its reading carries controls of its own.
  */

@@ -813,6 +813,23 @@ jobs:
             exit 1
           fi
 
+      # The step below writes categories, tags and posts into the scaffold's database, and
+      # the Cache Components check after it first serves an EMPTY one, so the database the
+      # build left is kept here, while no server holds it, for that check to put back.
+      - name: Keep the empty database for the Cache Components check
+        if: matrix.cacheComponents == 'on'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          url=$(grep -E '^DATABASE_URL=' .env | head -1 | cut -d= -f2- | tr -d "\"'")
+          db=${url#file:}
+          [ -f "$db" ] || { echo "no SQLite database at $db (DATABASE_URL=$url)"; exit 1; }
+          mkdir -p /tmp/blog-empty-db
+          for f in "$db" "$db-wal" "$db-shm"; do
+            [ -f "$f" ] && cp "$f" /tmp/blog-empty-db/
+          done
+          echo "$db" > /tmp/blog-empty-db/path
+
       # A fresh blog has no categories or tags, so its build renders no archive page, and
       # Next.js counted the archive routes as static. The archive pages read `searchParams`
       # for pagination, which a static render refuses, so every category and tag page
@@ -976,6 +993,14 @@ jobs:
           }
           crawler='Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
           browser='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36'
+
+          # The database the build left, from before the step above added content.
+          db=$(cat /tmp/blog-empty-db/path)
+          rm -f "$db" "$db-wal" "$db-shm"
+          for f in /tmp/blog-empty-db/*; do
+            case "$f" in */path) ;; *) cp "$f" "$(dirname "$db")/" ;; esac
+          done
+          cmp "$db" "/tmp/blog-empty-db/$(basename "$db")" || { echo "the empty database was not put back"; exit 1; }
 
           serve /tmp/blog-cc-empty.log
           for route in /blog /authors /categories /tags; do
