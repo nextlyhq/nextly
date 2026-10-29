@@ -56,13 +56,14 @@ export interface DesiredCollection {
    */
   builderOwned?: boolean;
   /**
-   * The names of the fields the registry records for this collection before the change, so a
-   * field outside them is one the change adds. A Schema Builder save states it: MySQL commits each
-   * schema statement, so an apply refused part-way can leave an added field's column in place
-   * without its foreign key, and the next apply keys it (`withBuilderForeignKeys`). Absent, no
-   * column already in place is keyed, as before.
+   * The fields the registry records for this collection before the change, as it records them, so
+   * a field outside them is one the change adds. A Schema Builder save states it: MySQL commits
+   * each schema statement, so an apply refused part-way can leave an added field's column in place
+   * without its foreign key, and the next apply keys it (`withBuilderForeignKeys`). A recorded
+   * relationship's target tells a column that apply renamed from one it added. Absent, no column
+   * already in place is keyed, as before.
    */
-  recordedFields?: readonly string[];
+  recordedFields?: readonly FieldConfig[];
 }
 
 export interface DesiredSingle {

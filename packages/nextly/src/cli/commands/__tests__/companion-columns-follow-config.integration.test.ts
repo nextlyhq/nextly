@@ -471,5 +471,36 @@ describe.each(getConfiguredTestDialects())(
         });
       }
     );
+
+    // A collation in a schema off the search path resolves only by its schema; the case's own
+    // database, and the schema with it, is dropped when the case ends.
+    it.runIf(dialect === "postgresql")(
+      "keeps a collation from a schema off the search path when PostgreSQL widens the column",
+      async () => {
+        await runSync(dialect, configWith(code(20)));
+        await query(`CREATE SCHEMA ${q("cfollow_collations")}`);
+        await query(
+          `CREATE COLLATION ${q("cfollow_collations")}.${q("cfollow_c")} FROM "C"`
+        );
+        await query(
+          `ALTER TABLE ${q(COMPANION)} ALTER COLUMN ${q("code")} TYPE VARCHAR(20) COLLATE ${q("cfollow_collations")}.${q("cfollow_c")}`
+        );
+
+        expect(await runSync(dialect, configWith(code(60)))).toEqual([]);
+
+        const [column] = await query<{
+          size: number;
+          schema: string | null;
+          collation: string | null;
+        }>(
+          `SELECT character_maximum_length AS size, collation_schema AS schema, collation_name AS collation FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${COMPANION}' AND column_name = 'code'`
+        );
+        expect(column).toEqual({
+          size: 60,
+          schema: "cfollow_collations",
+          collation: "cfollow_c",
+        });
+      }
+    );
   }
 );

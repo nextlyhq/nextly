@@ -203,19 +203,42 @@ function desiredFor(
 
 /**
  * `desired` with the posts' fields as the registry records them before the save, as a Schema
- * Builder save states them.
+ * Builder save states them: the named ones among the fields the posts were made with.
  */
 function recordingPosts(
   desired: DesiredSchema,
-  recordedFields: readonly string[]
+  pair: Pair,
+  recorded: readonly string[]
 ): DesiredSchema {
+  const recordedFields = postFields(pair, "text").filter(field =>
+    recorded.includes(field.name)
+  );
   return {
     ...desired,
     collections: {
       ...desired.collections,
-      posts: { ...desired.collections.posts, recordedFields },
+      posts: {
+        ...desired.collections.posts,
+        recordedFields: recordedFields as never,
+      },
     },
   };
+}
+
+/**
+ * The real executor, failing once a batch that renames a column has run: MySQL has committed the
+ * rename by then, as when a later statement of the same apply fails; PostgreSQL rolls it back.
+ */
+function failingAfterRename(target: Target): DrizzleStatementExecutor {
+  const executor = new DrizzleStatementExecutor(target.dialect, target.db);
+  const execute = executor.executeStatements.bind(executor);
+  executor.executeStatements = async (tx, statements) => {
+    await execute(tx, statements);
+    if (statements.some(statement => /\bRENAME COLUMN\b/i.test(statement))) {
+      throw new Error("a later statement of the apply failed");
+    }
+  };
+  return executor;
 }
 
 /**
@@ -242,10 +265,13 @@ function authorColumnWithoutKey(dialect: SupportedDialect, pair: Pair): string {
 function save(
   target: Target,
   desired: DesiredSchema,
-  { confirmRenames = false }: { confirmRenames?: boolean } = {}
+  {
+    confirmRenames = false,
+    executor = new DrizzleStatementExecutor(target.dialect, target.db),
+  }: { confirmRenames?: boolean; executor?: DrizzleStatementExecutor } = {}
 ) {
   return new PushSchemaPipeline({
-    executor: new DrizzleStatementExecutor(target.dialect, target.db),
+    executor,
     renameDetector: confirmRenames
       ? new RegexRenameDetector()
       : noopRenameDetector,
@@ -307,6 +333,7 @@ const postsWithAuthorRenamed = (pair: Pair) =>
       ...postFields(pair, "text", false),
       { ...authorField(pair), name: "writer" },
     ]),
+    pair,
     ["title", "score", "leadAuthor"]
   );
 
@@ -407,6 +434,7 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
         target,
         recordingPosts(
           desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+          pair,
           recorded
         )
       );
@@ -428,6 +456,26 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
 
     expect(result.error).toBeUndefined();
     // The premise: the column was renamed, not dropped and re-added.
+    expect(await postColumns(target, pair)).toContain("writer");
+    expect(await postColumns(target, pair)).not.toContain("lead_author");
+    expect(await postKeys(target, pair)).toEqual([]);
+  });
+
+  // The same rename, saved again after an apply that failed once it had renamed the column.
+  it("keeps a renamed relationship without a key when the save is retried after a failure", async () => {
+    createTables(false);
+    sqlite.exec(authorColumnWithoutKey("sqlite", pair));
+    const failed = await save(target, postsWithAuthorRenamed(pair), {
+      confirmRenames: true,
+      executor: failingAfterRename(target),
+    });
+    expect(failed.success).toBe(false);
+
+    const retried = await save(target, postsWithAuthorRenamed(pair), {
+      confirmRenames: true,
+    });
+
+    expect(retried.error).toBeUndefined();
     expect(await postColumns(target, pair)).toContain("writer");
     expect(await postColumns(target, pair)).not.toContain("lead_author");
     expect(await postKeys(target, pair)).toEqual([]);
@@ -915,6 +963,7 @@ for (const server of SERVERS) {
             connection.target,
             recordingPosts(
               desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+              pair,
               recorded
             )
           );
@@ -952,6 +1001,53 @@ for (const server of SERVERS) {
         );
 
         expect(result.error).toBeUndefined();
+        expect(await postColumns(connection.target, pair)).toContain("writer");
+        expect(await postColumns(connection.target, pair)).not.toContain(
+          "lead_author"
+        );
+        expect(await postKeys(connection.target, pair)).toEqual([]);
+      });
+
+      // MySQL commits the rename before the failure, so the retry finds the column renamed and the
+      // registry still on the old name, with no rename left to answer. PostgreSQL rolls the rename
+      // back, and the retry answers it as the first save did.
+      it("keeps a renamed relationship without a key when the save is retried after a failure", async () => {
+        await dropTables();
+        for (const statement of [
+          ...builderStatements(
+            server.dialect,
+            pair.authors,
+            authorFields("text")
+          ),
+          ...builderStatements(
+            server.dialect,
+            pair.posts,
+            postFields(pair, "text", false)
+          ),
+          authorColumnWithoutKey(server.dialect, pair),
+        ]) {
+          await connection.run(statement);
+        }
+        const failed = await save(
+          connection.target,
+          postsWithAuthorRenamed(pair),
+          {
+            confirmRenames: true,
+            executor: failingAfterRename(connection.target),
+          }
+        );
+        expect(failed.success).toBe(false);
+        expect(await postColumns(connection.target, pair)).toContain(
+          server.dialect === "mysql" ? "writer" : "lead_author"
+        );
+
+        const retried = await save(
+          connection.target,
+          postsWithAuthorRenamed(pair),
+          { confirmRenames: true }
+        );
+
+        expect(retried.error).toBeUndefined();
         expect(await postColumns(connection.target, pair)).toContain("writer");
         expect(await postColumns(connection.target, pair)).not.toContain(
           "lead_author"

@@ -24,7 +24,11 @@
  * A relationship the save renames keeps what its old column had: the keys are
  * planned before the save's renames are known, so its new column reads as
  * added, and `withoutKeysOnKeylessRenames` takes back a key its old column
- * never had.
+ * never had. A rename an earlier apply already made (MySQL committed it, and a
+ * later statement failed before the registry learned the new name) leaves no
+ * rename to answer, so it is read from what the earlier apply left: a recorded
+ * relationship gone from the change and from the live table, beside one the
+ * registry does not record over a live column to the same table.
  *
  * @module domains/schema/pipeline/builder-foreign-keys
  */
@@ -55,11 +59,32 @@ export function withBuilderForeignKeys(
   const liveColumns = new Set(
     (live?.columns ?? []).map(column => lower(column.name))
   );
+  const builder = new DynamicCollectionSchemaService(undefined, dialect);
+  const fields = collection.fields as unknown as FieldDefinition[];
+  const recordedFields = collection.recordedFields as
+    | readonly FieldDefinition[]
+    | undefined;
   // Without the recorded field list, every column already in place counts as recorded.
   const recorded =
-    collection.recordedFields === undefined
+    recordedFields === undefined
       ? undefined
-      : new Set(collection.recordedFields);
+      : new Set(recordedFields.map(field => field.name));
+  // The tables a recorded relationship pointed at whose field the change no longer has and whose
+  // column the live table no longer holds: an earlier apply moved that column, and an unrecorded
+  // relationship to the same table over a column already in place is where it went. It is not
+  // keyed, so the rename keeps what its old column had, as a rename this save answers does. A
+  // drop and an add that the earlier apply made look the same, so that added relationship is left
+  // without a key too, as it was before any of this.
+  const desiredNames = new Set(fields.map(field => field.name));
+  const movedFrom = new Set(
+    (recordedFields ?? []).flatMap(field => {
+      if (desiredNames.has(field.name)) return [];
+      const described = builder.relationshipForeignKey(spec.name, field, false);
+      return described === null || liveColumns.has(lower(described.columns[0]))
+        ? []
+        : [lower(described.referencesTable)];
+    })
+  );
 
   // Kept: every key the live table holds whose columns the table keeps. A key
   // over a column this push drops goes with the column.
@@ -69,9 +94,8 @@ export function withBuilderForeignKeys(
   const keyed = new Set(kept.flatMap(fk => fk.columns.map(lower)));
 
   // Created: the key of each relationship whose column this push adds.
-  const builder = new DynamicCollectionSchemaService(undefined, dialect);
   const created: ForeignKeySpec[] = [];
-  for (const field of collection.fields as unknown as FieldDefinition[]) {
+  for (const field of fields) {
     // Read first without judging the actions: a relationship whose column
     // already exists keeps whatever it has, and a combination an older save
     // accepted (a required relationship that nulls on delete) must not block
@@ -81,7 +105,9 @@ export function withBuilderForeignKeys(
     const column = lower(described.columns[0]);
     const addedByThisChange =
       !liveColumns.has(column) ||
-      (recorded !== undefined && !recorded.has(field.name));
+      (recorded !== undefined &&
+        !recorded.has(field.name) &&
+        !movedFrom.has(lower(described.referencesTable)));
     if (!columns.has(column) || !addedByThisChange || keyed.has(column)) {
       continue;
     }

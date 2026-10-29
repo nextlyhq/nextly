@@ -31,17 +31,25 @@ const author = (options: Record<string, unknown>, required = false) => ({
   options: { target: "authors", relationType: "manyToOne", ...options },
 });
 
+const TITLE = { name: "title", type: "text" };
+
+/** `author` under another name, as a rename leaves it. */
+const writer = (options: Record<string, unknown> = {}) => ({
+  ...author(options),
+  name: "writer",
+});
+
 function collection(
   fields: unknown[],
   builderOwned = true,
-  recordedFields?: readonly string[]
+  recordedFields?: readonly unknown[]
 ): DesiredCollection {
   return {
     slug: "posts",
     tableName: TABLE,
     fields: fields as never,
     builderOwned,
-    ...(recordedFields ? { recordedFields } : {}),
+    ...(recordedFields ? { recordedFields: recordedFields as never } : {}),
   };
 }
 
@@ -97,15 +105,48 @@ describe("withBuilderForeignKeys", () => {
   it("adds the key of a relationship this change adds whose column an earlier apply left without one", () => {
     const fields = [{ name: "title", type: "text" }, author({})];
     expect(
-      keysFor(collection(fields, true, ["title"]), live(fields, []))
+      keysFor(collection(fields, true, [TITLE]), live(fields, []))
     ).toEqual([LIVE_KEY]);
   });
 
   it("leaves a recorded relationship without a key as it was", () => {
     const fields = [{ name: "title", type: "text" }, author({})];
     expect(
-      keysFor(collection(fields, true, ["title", "author"]), live(fields, []))
+      keysFor(collection(fields, true, [TITLE, author({})]), live(fields, []))
     ).toEqual([]);
+  });
+
+  // MySQL commits a rename on its own, so an apply can rename a relationship's column and stop
+  // before the registry learns the new name. The next apply has no rename to answer: the registry
+  // records the old name, the change has the new one, and its column is already in place.
+  it("plans no key on a relationship an earlier apply renamed", () => {
+    expect(
+      keysFor(
+        collection([TITLE, writer()], true, [TITLE, author({})]),
+        live([TITLE, writer()], [])
+      )
+    ).toEqual([]);
+  });
+
+  it("keys a relationship the change adds while a recorded one to another table is gone", () => {
+    expect(
+      keysFor(
+        collection([TITLE, writer()], true, [
+          TITLE,
+          author({ target: "editors" }),
+        ]),
+        live([TITLE, writer()], [])
+      )
+    ).toEqual([expect.objectContaining({ columns: ["writer"] })]);
+  });
+
+  it("keys a relationship the change adds while the recorded one keeps its column", () => {
+    expect(
+      keysFor(
+        collection([TITLE, writer()], true, [TITLE, author({})]),
+        live([TITLE, author({}), writer()], [])
+      )
+    ).toEqual([expect.objectContaining({ columns: ["writer"] })]);
   });
 
   it("reads a legacy relationship without judging it", () => {

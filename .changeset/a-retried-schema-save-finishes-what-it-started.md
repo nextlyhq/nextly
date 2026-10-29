@@ -31,17 +31,19 @@
 
 A Schema Builder change that MySQL refused part-way is finished by saving it again:
 
-- The schema pipeline keys a relationship the change adds even when the earlier attempt already
-  added its column, so the retry no longer leaves it without its foreign key. A relationship the
-  collection already records is planned no new key, and one the change renames keeps what its old
-  column had: no key where it had none.
+- A relationship whose options name its target collection (`options.target`), the relationships
+  the schema pipeline gives a foreign key, gets that key when the change adds it, even when the
+  earlier attempt already added its column. A relationship the collection already records is
+  planned no new key, and one the change renames, in this attempt or in the one that failed,
+  keeps what its old column had: no key where it had none.
 - A field made translated over a column the translations table already has takes that column as
   its own only when it holds every value the field allows: the same type, a length or precision at
   least as large, and empty values allowed. Otherwise the change is refused before anything
   changes, naming the column, both definitions and how to go on, since the column may hold the
   field's values from the change that did not finish.
-- A field the change made translated whose values the earlier attempt already moved is no longer
-  refused on the retry because its length or precision changed meanwhile.
+- A field the change made translated whose values the earlier attempt already moved is finished by
+  the retry. A retry that also narrows its length or precision is refused, saying how to finish
+  the earlier change first.
 
 The same check applies where a config sync (`nextly db:sync`, its `--watch` loop, `nextly migrate`
 and a config reload under `next dev`) takes a translations column already there as a field's own,

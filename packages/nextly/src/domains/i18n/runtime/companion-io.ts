@@ -461,7 +461,7 @@ export interface CompanionReconcileAdapter extends CompanionIntrospectAdapter {
  * column holds, and keeps the rest of the column's definition as it is.
  *
  * - PostgreSQL: `ALTER COLUMN ... TYPE` keeps the column's NULL rule and default but sets the new
- *   type's default collation, so a collation of the column's own is restated
+ *   type's default collation, so a collation of the column's own is restated with its schema
  *   (`readPgColumnCollations`). A decimal's new precision rewrites the table.
  * - MySQL: `MODIFY COLUMN` drops whatever it does not restate, so the statement is built from the
  *   column's own catalog entry with only its type changed (`restatedColumn`), on one connection.
@@ -488,9 +488,12 @@ async function widenCompanionColumns(
       );
       for (const { column, type } of widen) {
         const collation = collations.get(column);
+        // Named with its schema, so a collation outside the search path is the one restated.
         await adapter.executeQuery(
           `ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} TYPE ${type}` +
-            (collation === undefined ? "" : ` COLLATE ${q(collation)}`)
+            (collation === undefined
+              ? ""
+              : ` COLLATE ${q(collation.schema)}.${q(collation.name)}`)
         );
       }
     } else if (adapter.dialect === "mysql") {
