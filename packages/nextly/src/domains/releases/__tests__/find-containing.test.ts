@@ -323,3 +323,19 @@ describe("the document filter NARROWS the list rather than replacing it", () => 
     ]);
   });
 });
+
+describe("each row names the document's membership", () => {
+  it("carries the member's id, so the document can be taken out of that release", async () => {
+    // Two releases holding the one document, each through its own member: the
+    // id a row carries has to be that row's member, not the first one read.
+    const svc = service([
+      { id: "a", at: "2026-09-01T00:00:00.000Z", memberId: "m-in-a" },
+      { id: "b", at: "2026-09-20T00:00:00.000Z", memberId: "m-in-b" },
+    ]);
+    const page = await svc.find({ containing: REF }, ACTOR);
+    expect(page.rows.map(r => [r.id, r.memberId])).toEqual([
+      ["a", "m-in-a"],
+      ["b", "m-in-b"],
+    ]);
+  });
+});
