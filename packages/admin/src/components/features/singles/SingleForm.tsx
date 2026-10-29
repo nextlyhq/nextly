@@ -304,6 +304,72 @@ function singleFormDefaults(
   return values;
 }
 
+/**
+ * The Single's write gate, declared once with its refused publish's way out.
+ *
+ * The latch is the synchronous half of the gate. `isSubmitting` is render
+ * state: it publishes one render behind the mutation, so two submissions in
+ * the same turn both read false and both write. The latch is set the moment
+ * the first submission enters and released when it settles, closing that gap;
+ * the recovery takes it too. What the recovery reads when it runs is set by
+ * the form as it renders: whether its writes are held, and the Save that
+ * never publishes, handed up from inside the document's actions where the
+ * Save lives. So is whether it holds unsaved work, a field's own held work
+ * included, read when newer content arrives under the same key.
+ */
+function useSingleWriteGate(resetToDocument: () => void) {
+  const submissionLatch = useRef(false);
+  const writesHeldNow = useRef(false);
+  const saveWithoutPublishing = useRef<
+    DocumentActionBindings["saveWithoutPublishing"] | undefined
+  >(undefined);
+  const hasUnsavedWorkNow = useRef(false);
+  // Stored with the Single's own Save, run inside its own write gate, then
+  // started afresh from the Single that carries the live values it takes.
+  const { refusedForm, recovering } = useRefusedForm({
+    writesHeld: () => writesHeldNow.current,
+    latch: submissionLatch,
+    saveWithoutPublishing,
+    resetToDocument,
+  });
+  return {
+    submissionLatch,
+    writesHeldNow,
+    saveWithoutPublishing,
+    hasUnsavedWorkNow,
+    refusedForm,
+    recovering,
+  };
+}
+
+/**
+ * The Single's holds with a refused publish's recovery on top: until its
+ * reloaded document is on screen it holds the actions and the autosave
+ * (`busy`), the language panels' copies into the form, publishing every
+ * language and a version's own writes, as the lock holds the fields.
+ */
+function recoveryHolds(
+  recovering: boolean,
+  own: {
+    writePending: boolean;
+    editsHeld: boolean;
+    publishAllHeld: boolean;
+    versionWritesHeld: boolean;
+  }
+): {
+  busy: boolean;
+  contentHeld: boolean;
+  publishAllDisabled: boolean;
+  versionWritesHeld: boolean;
+} {
+  return {
+    busy: own.writePending || recovering,
+    contentHeld: own.editsHeld || recovering,
+    publishAllDisabled: own.publishAllHeld || recovering,
+    versionWritesHeld: own.versionWritesHeld || recovering,
+  };
+}
+
 /** Which stored version of which document, in which language, is on screen. */
 function singleResetKey(document: SingleDocumentData, locale: unknown): string {
   return `${document.id}:${String(document.updatedAt)}:${String(locale)}`;
@@ -596,44 +662,21 @@ export function SingleForm({
     inFlight: false,
   });
 
-  //
-  // The synchronous half of the write gate. `isSubmitting` is render state: it
-  // publishes one render behind the mutation, so two submissions in the same
-  // turn both read false and both write. The latch is set the moment the
-  // first submission enters and released when it settles, closing that gap.
-  // A refused publish's recovery takes it too.
-  //
-  const submissionLatch = useRef(false);
-  // Whether this Single's writes are held, as decided below once the lock and
-  // the version on screen are known; read when a recovery runs.
-  const writesHeldNow = useRef(false);
-
-  // The Single's Save that never publishes, handed up from inside its
-  // document's actions, where the Save lives.
-  const saveWithoutPublishing = useRef<
-    DocumentActionBindings["saveWithoutPublishing"] | undefined
-  >(undefined);
-
-  // The form as a refused publish's way out reaches it: stored with the
-  // Single's own Save, run inside this form's own write gate, then started
-  // afresh from the Single that carries the live values it takes.
-  const { refusedForm, recovering } = useRefusedForm({
-    writesHeld: () => writesHeldNow.current,
-    latch: submissionLatch,
+  // The write gate and a refused publish's way out, declared once.
+  const {
+    submissionLatch,
+    writesHeldNow,
     saveWithoutPublishing,
-    resetToDocument: () => {
-      form.reset(defaultValuesRef.current);
-      // The take rewrote the pending change after its Save had stored it, so
-      // it counts as a save too: the preview pane moves past the values it
-      // replaced, and a recovery point from before it is withdrawn.
-      setSavedCount(n => n + 1);
-    },
+    hasUnsavedWorkNow,
+    refusedForm,
+    recovering,
+  } = useSingleWriteGate(() => {
+    form.reset(defaultValuesRef.current);
+    // The take rewrote the pending change after its Save had stored it, so
+    // it counts as a save too: the preview pane moves past the values it
+    // replaced, and a recovery point from before it is withdrawn.
+    setSavedCount(n => n + 1);
   });
-
-  // Whether the Single holds unsaved work, a field's own held work included,
-  // as decided below once its fields have reported; read when newer content
-  // arrives under the same key.
-  const hasUnsavedWorkNow = useRef(false);
 
   useEffect(() => {
     if (!document) return;
@@ -655,7 +698,7 @@ export function SingleForm({
       sameDocument &&
       (ownSave.current.inFlight || resetKey === ownSave.current.storedKey);
     form.reset(defaultValuesRef.current, { keepDirtyValues: echoOfOwnSave });
-  }, [document, locale, form]);
+  }, [document, locale, form, hasUnsavedWorkNow]);
 
   // submitCount gates the top-level "Please fix" toast so the user
   // doesn't see it until they actually click Save Draft / Publish.
@@ -758,11 +801,6 @@ export function SingleForm({
     refused: readOnlyForReader,
     writesHeld,
   });
-  // A colleague's claim or a reader's page, without the version on screen:
-  // what holds the actions a version's own surfaces offer, Restore among them.
-  // A refused publish's recovery holds them too, until its reloaded document
-  // is on screen.
-  const versionWritesHeld = lock.actionsDisabled || updatesHeld || recovering;
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
   writesHeldNow.current = editsHeld;
@@ -782,11 +820,17 @@ export function SingleForm({
   });
   // A save or a discard in flight.
   const writePending = isSubmitting || discardMutation.isPending;
-  // And a refused publish's recovery: it holds the Single's actions and the
-  // autosave until its reloaded document is on screen, as the lock holds the
-  // fields, and the language panel's copies into the form.
-  const busy = writePending || recovering;
-  const contentHeld = editsHeld || recovering;
+  // Each of the Single's holds, and a refused publish's recovery on top.
+  const { busy, contentHeld, publishAllDisabled, versionWritesHeld } =
+    recoveryHolds(recovering, {
+      writePending,
+      editsHeld,
+      publishAllHeld,
+      // A colleague's claim or a reader's page, without the version on
+      // screen: what holds the actions a version's own surfaces offer,
+      // Restore among them.
+      versionWritesHeld: lock.actionsDisabled || updatesHeld,
+    });
 
   // A write of the status alone, as a reader's publish or unpublish sends it:
   // it names no field, so the server judges it by that permission alone, and
@@ -808,7 +852,7 @@ export function SingleForm({
         submissionLatch.current = false;
       }
     },
-    [busy, onSubmit, locale, document.id]
+    [busy, onSubmit, locale, document.id, submissionLatch]
   );
 
   // Resolves to what the submission came to, never rejects, as the entry
@@ -905,6 +949,8 @@ export function SingleForm({
       document.id,
       schema,
       locale,
+      writesHeldNow,
+      submissionLatch,
     ]
   );
 
@@ -1405,11 +1451,7 @@ export function SingleForm({
                               of the rail, shown where the rail is not. */}
                                 <SingleFormLanguagePanel
                                   actionsDisabled={contentHeld}
-                                  // Publishing every language is a write
-                                  // too, so a recovery holds it as well.
-                                  publishAllDisabled={
-                                    publishAllHeld || recovering
-                                  }
+                                  publishAllDisabled={publishAllDisabled}
                                   // A reader may still open the other languages.
                                   navigationDisabled={writesHeld}
                                   enabled={localizationEnabled}
@@ -1445,11 +1487,7 @@ export function SingleForm({
                               {/* Rail (collapsible). */}
                               <SingleFormRail
                                 actionsDisabled={contentHeld}
-                                // Publishing every language is a write too,
-                                // so a recovery holds it as well.
-                                publishAllDisabled={
-                                  publishAllHeld || recovering
-                                }
+                                publishAllDisabled={publishAllDisabled}
                                 navigationDisabled={writesHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}

@@ -497,6 +497,41 @@ const writesNeverHeld = () => false;
 /** A host with no Save to offer a recovery. */
 const noSaveWithoutPublishing: RefObject<undefined> = { current: undefined };
 
+/**
+ * The entry form's write gate, declared once with its refused publish's way
+ * out: the latch every submission takes, and the recovery that takes it too.
+ *
+ * The latch is the synchronous half of the submit guard. `isSubmitting` is
+ * render state: it publishes one render behind the mutation, so two
+ * submissions in the same turn both read false and both write — two identical
+ * creates. The latch is set the moment the first submission enters and
+ * released when it settles, closing that gap.
+ *
+ * The recovery reads its gate when it runs, so it starts the form afresh from
+ * the defaults of the render then on screen, which carry the reloaded entry.
+ */
+function useEntryWriteGate(gate: {
+  form: UseFormReturn<Record<string, unknown>>;
+  defaultValues: Record<string, unknown>;
+  writesHeld: () => boolean;
+  saveWithoutPublishing: RefObject<
+    (() => Promise<DocumentActionOutcome>) | undefined
+  >;
+  onRecovered: (() => void) | undefined;
+}) {
+  const submissionLatch = useRef(false);
+  const { refusedForm, recovering } = useRefusedForm({
+    writesHeld: gate.writesHeld,
+    latch: submissionLatch,
+    saveWithoutPublishing: gate.saveWithoutPublishing,
+    resetToDocument: () => {
+      gate.form.reset(gate.defaultValues);
+      gate.onRecovered?.();
+    },
+  });
+  return { submissionLatch, refusedForm, recovering };
+}
+
 export function useEntryForm({
   collection,
   entry = null,
@@ -579,31 +614,14 @@ export function useEntryForm({
     inFlight: false,
   });
 
-  //
-  // The synchronous half of the submit guard. `isSubmitting` is render state:
-  // it publishes one render behind the mutation, so two submissions in the
-  // same turn both read false and both write — two identical creates. The
-  // latch is set the moment the first submission enters and released when it
-  // settles, closing that gap. A refused publish's recovery takes it too.
-  //
-  const submissionLatch = useRef(false);
-
-  // The entry as last handed over, for the recovery to start the form afresh
-  // from once its reloaded entry is on screen.
-  const latestDefaults = useRef(defaultValues);
-  latestDefaults.current = defaultValues;
-
-  // The form as a refused publish's way out reaches it: stored with the
-  // host's own Save, then started afresh from the entry that carries the
-  // live values it takes.
-  const { refusedForm, recovering } = useRefusedForm({
+  // The submit guard's synchronous half, and the form as a refused publish's
+  // way out reaches it, which takes the same latch.
+  const { submissionLatch, refusedForm, recovering } = useEntryWriteGate({
+    form,
+    defaultValues,
     writesHeld,
-    latch: submissionLatch,
     saveWithoutPublishing,
-    resetToDocument: () => {
-      form.reset(latestDefaults.current);
-      onRecovered?.();
-    },
+    onRecovered,
   });
 
   useEffect(() => {
@@ -775,6 +793,7 @@ export function useEntryForm({
       blankPasswordFields,
       fields,
       writesHeld,
+      submissionLatch,
     ]
   );
 
@@ -805,7 +824,15 @@ export function useEntryForm({
         submissionLatch.current = false;
       }
     },
-    [mode, entry?.id, updateMutation, isSubmitting, onSuccess, onError]
+    [
+      mode,
+      entry?.id,
+      updateMutation,
+      isSubmitting,
+      onSuccess,
+      onError,
+      submissionLatch,
+    ]
   );
 
   // Delete handler. Resolves once the delete has been answered, with what it
@@ -871,7 +898,16 @@ export function useEntryForm({
     } finally {
       submissionLatch.current = false;
     }
-  }, [isSubmitting, mode, entry?.id, discardMutation, form, fields, onError]);
+  }, [
+    isSubmitting,
+    mode,
+    entry?.id,
+    discardMutation,
+    form,
+    fields,
+    onError,
+    submissionLatch,
+  ]);
 
   // Cancel handler
   const handleCancel = useCallback(() => {
