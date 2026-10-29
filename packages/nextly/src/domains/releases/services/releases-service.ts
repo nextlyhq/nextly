@@ -562,16 +562,15 @@ function editCapabilities(
     );
   return {
     addMember: mayChange("add") && takesAnother(release.kind, held),
-    // `removeMember` means "may change this release's documents". Taking the
-    // document out of a single release that has not run cancels it, through
-    // `cancel`, so for one it is the authority every membership change asks
-    // first (`create`), in each state that removal is answered in rather than
-    // refused, the scheduled one included. Whether this reader may also
-    // cancel is `cancel`, which `runCapabilities` answers beside it, so a
-    // client shows the control disabled with its reason instead of hiding
-    // it; the write still refuses a caller who may not cancel
-    // (`REMOVAL_CANCELS_REFUSAL`).
-    removeMember: removalCancels(release) ? may.mayCreate : mayChange("remove"),
+    // Taking the document out of a single release that has not run cancels
+    // it, through `cancel`, so for one `removeMember` answers both things that
+    // write asks: changing a release's documents (`create`) and cancelling it
+    // (`publish`, in a state `removalCancels` has already held to the ones
+    // cancelling takes, as `runCapabilities` holds `cancel`). A client reading
+    // `removeMember` alone then offers no control that can only be refused.
+    removeMember: removalCancels(release)
+      ? may.mayCreate && may.mayPublish
+      : mayChange("remove"),
     // Any state, as `update` writes it: the title is a label.
     update: may.mayUpdate,
     delete: may.mayDelete && whyNotDeletable(release, history) === null,
@@ -1563,6 +1562,19 @@ function removalCancels(
     release?.kind === "single" &&
     RELEASE_CANCELLABLE_FROM.includes(release.state)
   );
+}
+
+/**
+ * Whether taking the document out of this release is already done: a
+ * single-document release that is cancelled still holds its document, as
+ * the cancelling removal leaves it. A retry after a lost answer finds exactly
+ * that, and is answered as the removal was rather than refused as a removal
+ * from a finished release.
+ */
+function removalAlreadyCancelled(
+  release: Pick<ReleaseRow, "kind" | "state"> | undefined
+): boolean {
+  return release?.kind === "single" && release.state === "cancelled";
 }
 
 /**
@@ -3652,10 +3664,22 @@ export class ReleasesService {
     // itself, so it asks exactly the permission cancelling asks, before it
     // writes, and moves the release by the same fenced transition. The release is kept as cancelled, holding the document as the
     // record of what it was for; deleting it is a separate act, under its
-    // own permission. A single release that ran is refused below, as any
-    // finished release is.
+    // own permission. A published single release is refused below, as any
+    // finished release is; a cancelled one is the retry answered next.
     if (removalCancels(release) && release !== undefined) {
-      await this.cancelForRemoval(release.id, actor);
+      await this.asRemovalThatCancels(release.id, () =>
+        this.cancel(release.id, actor)
+      );
+      return { releaseCancelled: true };
+    }
+    // A retry after the cancelling removal: the release is already cancelled
+    // and holds its document, which is what that removal left. It is answered
+    // as the removal was, under the permission the cancel asked, and nothing
+    // is written.
+    if (removalAlreadyCancelled(release) && release !== undefined) {
+      await this.asRemovalThatCancels(release.id, () =>
+        this.authorize(actor, "publish")
+      );
       return { releaseCancelled: true };
     }
     await this.assertNotEmptyingCommittedSingle(release, actor);
@@ -3681,19 +3705,19 @@ export class ReleasesService {
   }
 
   /**
-   * Cancel a single release because its document is being taken out:
-   * `cancel` itself, its permission and its transition, with one difference
-   * in what a refused caller is told. The cancel's own refusal is kept, its
-   * code and status and what it logs, and only its sentence says why
+   * Run `step` of taking a single release's document out, which cancels it
+   * (`cancel` itself, or the permission check a retry repeats), with one
+   * difference in what a refused caller is told. The refusal's code and
+   * status and what it logs are kept, and only its sentence says why
    * removing a document needed more: that it cancels the release. The
    * permission named is the one the admin names it by.
    */
-  private async cancelForRemoval(
+  private async asRemovalThatCancels(
     releaseId: string,
-    actor: ReleaseActor
+    step: () => Promise<void>
   ): Promise<void> {
     try {
-      await this.cancel(releaseId, actor);
+      await step();
     } catch (error) {
       if (!NextlyError.is(error) || error.code !== "FORBIDDEN") throw error;
       throw new NextlyError({

@@ -57,6 +57,39 @@ describe("planMemberBatch", () => {
     ).toMatchObject({ code: "INVALID_INPUT" });
   });
 
+  it("refuses a document whose kind, collection, id, language or action is not one, naming its place", () => {
+    // A JavaScript caller of the Direct API can send any of these. A kind
+    // that is neither `collection` nor `single` would be stored as given and
+    // then read back as no document at all.
+    const malformed: unknown[] = [
+      { ...post("e1"), scopeKind: "page" },
+      { ...post("e1"), scopeKind: undefined },
+      { ...post("e1"), scopeSlug: "" },
+      { ...post("e1"), scopeSlug: 3 },
+      { ...post("e1"), entryId: "" },
+      { ...post("e1"), entryId: undefined },
+      { ...post("e1"), locale: 7 },
+      { ...post("e1"), action: "go" },
+    ];
+    for (const member of malformed) {
+      const refusal = refusalOf(() =>
+        planMemberBatch([post("e0"), member] as BatchMember[])
+      );
+      expect(refusal, JSON.stringify(member)).toMatchObject({
+        code: "INVALID_INPUT",
+      });
+      expect(refusal.message, JSON.stringify(member)).toContain("members[1]");
+    }
+    // A language given as text or null, or left out, is a document.
+    expect(
+      planMemberBatch([
+        { ...post("a"), locale: "fr" },
+        { ...post("b"), locale: null },
+        post("c"),
+      ])
+    ).toHaveLength(3);
+  });
+
   it("takes as many documents as a release holds, and refuses one more", () => {
     const full = Array.from({ length: RELEASE_MEMBER_LIMIT }, (_, i) =>
       post(`e${i}`)
@@ -132,6 +165,8 @@ describe("planDocumentSchedule", () => {
       { ...own(), at: undefined },
       { ...own(), timezone: undefined },
       { ...own(), timezone: 3 },
+      // Text, but no zone: stored, it would fail every read that shows it.
+      { ...own(), timezone: "Europe/Berln" },
     ];
     for (const input of malformed) {
       expect(

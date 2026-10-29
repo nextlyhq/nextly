@@ -253,12 +253,12 @@ describe("taking a document out of a release", () => {
     return answer;
   }
 
-  it("says the release was cancelled when its only document was taken out", async () => {
+  it("says the release is cancelled when taking out its only document cancelled it", async () => {
     const answer = await remove(true);
     expect(answer.status).toBe(200);
     expect(answer.json).toEqual({
-      message:
-        "The release was cancelled, because its only document was taken out.",
+      // True of the first removal and of a retry after it alike.
+      message: "The release is cancelled, and its only document stays in it.",
       memberId: "m1",
       releaseId: "r1",
       releaseCancelled: true,

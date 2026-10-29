@@ -317,13 +317,11 @@ describe("capabilities, for a single-document release", () => {
     expect(can.get("s")?.addMember).toBe(true);
   });
 
-  it("offers taking its document out to whoever may change its documents, and says apart whether they may cancel", async () => {
+  it("offers taking its document out to whoever may change its documents and cancel it", async () => {
     // Out of a single release that has not run, removing the document calls
-    // the release off through `cancel`. `removeMember` still means "may
-    // change this release's documents", and `cancel` says whether this
-    // reader may also call it off, so a client can show the control disabled
-    // with its reason rather than hide it. A publisher may do both in every
-    // unrun state.
+    // the release off through `cancel`, so `removeMember` answers what that
+    // write asks: changing the release's documents and cancelling it. A
+    // publisher may do both in every unrun state.
     const { svc } = service(ALL, { d: 1, s: 1, b: 1, o: 1 });
     const can = await svc.capabilities(
       [
@@ -352,11 +350,12 @@ describe("capabilities, for a single-document release", () => {
     expect(ran.get("c")?.removeMember).toBe(false);
   });
 
-  it("offers it to whoever may only assemble releases, who may not cancel", async () => {
-    // Whoever may only assemble releases may change a single's documents in
-    // every unrun state, the scheduled one included, and may not cancel: the
-    // removal itself is refused at the write (see releases-service.test.ts,
-    // "refuses taking it out to whoever may not cancel").
+  it("withholds it from whoever may only assemble releases, who may not cancel", async () => {
+    // Whoever may only assemble releases may not cancel, and the removal is
+    // refused at the write for them (see releases-service.test.ts, "refuses
+    // taking it out to whoever may not cancel"). So it is not offered: a
+    // client reading `removeMember` alone shows no control that can only be
+    // refused. An ordinary release's document stays theirs to take out.
     const assembler = service(["read", "create"], { d: 1, s: 1, b: 1, o: 1 });
     const theirs = await assembler.svc.capabilities(
       [
@@ -368,7 +367,7 @@ describe("capabilities, for a single-document release", () => {
       ACTOR
     );
     for (const id of ["d", "s", "b"]) {
-      expect(theirs.get(id)?.removeMember, id).toBe(true);
+      expect(theirs.get(id)?.removeMember, id).toBe(false);
       expect(theirs.get(id)?.cancel, id).toBe(false);
     }
     expect(theirs.get("o")?.removeMember).toBe(true);

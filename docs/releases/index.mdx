@@ -88,13 +88,16 @@ releases, as well as the permission to create them that removing a document need
 without it is refused, told "Removing the last document cancels this release, which needs
 permission to schedule or cancel releases.", and nothing changes. The release is kept as cancelled, still holding its
 document as the record of what it was for, and is never deleted by this: deleting it is a
-separate act, with its own permission. Out of a single-document release that ran (published
-or cancelled), the document can't be taken at all. This is experimental.
+separate act, with its own permission. A release's `can.removeMember` says whether its reader
+may do this, so it is `false` for someone who may create releases but not publish them. Out of
+a published single-document release, the document can't be taken at all. Out of a cancelled
+one, which still holds its document, taking it out is answered as done and changes nothing, so
+a removal retried after its answer was lost succeeds again. This is experimental.
 
 The answer says which of the two happened. `releases.removeMember` resolves to
 `{ releaseCancelled }`, true when the release was cancelled instead of the document removed,
 and `DELETE /api/releases/:id/members/:memberId` returns the same `releaseCancelled` field,
-with the message "The release was cancelled, because its only document was taken out."
+with the message "The release is cancelled, and its only document stays in it."
 
 ## Adding several documents, and scheduling a document, in one step
 

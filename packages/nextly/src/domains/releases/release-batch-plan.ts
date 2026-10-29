@@ -8,9 +8,10 @@
  * add offered. Both are all-or-nothing, so everything a request can be
  * refused for on its own face is refused here, before a document is read or
  * a row is written: an empty batch, one larger than a release may hold, a
+ * document that is not one (its kind, collection, id, language or action), a
  * document named twice, a path that is not one of the three, linked
  * documents offered with a document that is coming down, and a schedule whose
- * instant is not a date or whose zone is not text.
+ * instant is not a date or whose zone is not one the platform knows.
  *
  * Pure, so its rules are tested without a database.
  *
@@ -23,6 +24,8 @@ import {
   type ReleaseKind,
   type ReleaseMemberAction,
 } from "../../schemas/releases/types";
+
+import { isKnownTimeZone } from "./release-calendar";
 
 /**
  * A document as a batch names it: which one, and what the release does to
@@ -76,7 +79,7 @@ export type ScheduleDocumentInput = {
 } & DocumentScheduleTarget;
 
 /** The ways a document scheduled in one step can go out. */
-export const DOCUMENT_SCHEDULE_PATHS = ["own", "existing", "new"] as const;
+const DOCUMENT_SCHEDULE_PATHS = ["own", "existing", "new"] as const;
 
 /**
  * What scheduling a document will write: its documents, the document first,
@@ -147,12 +150,7 @@ export function planMemberBatch<M extends BatchMember>(
   }
   const seen = new Map<string, number>();
   for (const [index, member] of members.entries()) {
-    if (member === null || typeof member !== "object") {
-      throw NextlyError.invalidInput({
-        message: `\`members[${index}]\` must be a document.`,
-        logContext: { reason: "member-batch-entry-not-object", index },
-      });
-    }
+    assertBatchMember(member, index);
     const key = documentKey(member);
     const first = seen.get(key);
     if (first !== undefined) {
@@ -167,6 +165,71 @@ export function planMemberBatch<M extends BatchMember>(
     seen.set(key, index);
   }
   return [...members];
+}
+
+/** A text that names something: not empty. */
+const isNamed = (value: unknown): boolean =>
+  typeof value === "string" && value.length > 0;
+
+/**
+ * What a document a batch names must be, each with the sentence a refusal
+ * says. A JavaScript caller of the Direct API can send any value: a kind that
+ * is neither `collection` nor `single` would be stored as given and then read
+ * back as no document at all, and an empty collection or id names nothing.
+ */
+const BATCH_MEMBER_RULES: ReadonlyArray<{
+  holds: (member: Record<string, unknown>) => boolean;
+  says: string;
+  reason: string;
+}> = [
+  {
+    holds: member =>
+      member.scopeKind === "collection" || member.scopeKind === "single",
+    says: "must name its `scopeKind`: `collection` or `single`.",
+    reason: "member-batch-invalid-scope-kind",
+  },
+  {
+    holds: member => isNamed(member.scopeSlug),
+    says: "must name its `scopeSlug`.",
+    reason: "member-batch-without-scope-slug",
+  },
+  {
+    holds: member => isNamed(member.entryId),
+    says: "must name its `entryId`.",
+    reason: "member-batch-without-entry-id",
+  },
+  {
+    holds: member =>
+      member.locale === undefined ||
+      member.locale === null ||
+      typeof member.locale === "string",
+    says: "must give its `locale` as text or null.",
+    reason: "member-batch-invalid-locale",
+  },
+  {
+    holds: member =>
+      member.action === "publish" || member.action === "unpublish",
+    says: "must say its `action`: `publish` or `unpublish`.",
+    reason: "member-batch-invalid-action",
+  },
+];
+
+/** Refuse a document a batch names that is not one, by its place in it. */
+function assertBatchMember(
+  member: unknown,
+  index: number
+): asserts member is BatchMember {
+  const refusal = (says: string, reason: string) =>
+    NextlyError.invalidInput({
+      message: `\`members[${index}]\` ${says}`,
+      logContext: { reason, index },
+    });
+  if (member === null || typeof member !== "object") {
+    throw refusal("must be a document.", "member-batch-entry-not-object");
+  }
+  const fields = member as Record<string, unknown>;
+  const broken = BATCH_MEMBER_RULES.find(rule => !rule.holds(fields));
+  if (broken !== undefined) throw refusal(broken.says, broken.reason);
 }
 
 /**
@@ -294,10 +357,13 @@ function scheduleOf(input: { at?: unknown; timezone?: unknown }): {
       logContext: { reason: "schedule-document-invalid-at" },
     });
   }
-  if (typeof timezone !== "string" || timezone.length === 0) {
+  // A zone the platform knows, asked as the REST route asks it: a name that
+  // is no zone would be stored and then fail every read that shows it.
+  if (typeof timezone !== "string" || !isKnownTimeZone(timezone)) {
     throw NextlyError.invalidInput({
-      message: "`timezone` names the time zone the document is scheduled in.",
-      logContext: { reason: "schedule-document-without-timezone" },
+      message:
+        "`timezone` must name a time zone, such as Europe/Berlin: the zone the document is scheduled in.",
+      logContext: { reason: "schedule-document-invalid-timezone" },
     });
   }
   return { at, timezone };

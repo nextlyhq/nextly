@@ -466,16 +466,50 @@ describe("ReleasesService keeps a single-document release to one document", () =
       repo.findReleases.mockResolvedValue([
         { id: "r1", state, kind: "single" },
       ]);
-      await svc.removeMember("m0", ADMIN);
+      await expect(svc.removeMember("m0", ADMIN), state).resolves.toEqual({
+        releaseCancelled: true,
+      });
       expect(repo.cancelRelease, state).toHaveBeenCalledTimes(1);
       expect(repo.removeMember, state).not.toHaveBeenCalled();
     }
   });
 
+  it("answers a retry on a single release its removal already cancelled as done, writing nothing", async () => {
+    // The first removal cancelled the release and kept its document, so a
+    // retry after a lost answer finds both. That is the outcome already
+    // reached, answered as the first removal answered it, not as a removal
+    // from a finished release.
+    const { svc, repo } = service({ holds: ["create", "publish"] });
+    repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "cancelled", kind: "single" },
+    ]);
+    await expect(svc.removeMember("m0", ADMIN, "r1")).resolves.toEqual({
+      releaseCancelled: true,
+    });
+    expect(repo.cancelRelease).not.toHaveBeenCalled();
+    expect(repo.removeMember).not.toHaveBeenCalled();
+  });
+
+  it("asks a retry on a cancelled single release the permission the cancel asked", async () => {
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "cancelled", kind: "single" },
+    ]);
+    await expect(svc.removeMember("m0", ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      publicMessage:
+        "Removing the last document cancels this release, which needs permission to schedule or cancel releases.",
+    });
+    expect(repo.cancelRelease).not.toHaveBeenCalled();
+    expect(repo.removeMember).not.toHaveBeenCalled();
+  });
+
   it("refuses taking it out to whoever may not cancel, and changes nothing", async () => {
-    // In every unrun state: `capabilities` offers this caller the removal
-    // (they may change the release's documents), so the write is what holds
-    // the cancel permission.
+    // In every unrun state. `capabilities` does not offer this caller the
+    // removal, and the write holds the cancel permission whatever a client
+    // offers.
     for (const state of ["draft", "scheduled", "blocked"]) {
       const { svc, repo, deps } = service({ holds: ["create"] });
       repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
@@ -512,19 +546,18 @@ describe("ReleasesService keeps a single-document release to one document", () =
     expect(repo.cancelRelease).not.toHaveBeenCalled();
   });
 
-  it("refuses taking the document out of a single release that ran", async () => {
-    for (const state of ["published", "cancelled"]) {
-      const { svc, repo } = service({ holds: ["create", "publish"] });
-      repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
-      repo.findReleases.mockResolvedValue([
-        { id: "r1", state, kind: "single" },
-      ]);
-      await expect(svc.removeMember("m0", ADMIN), state).rejects.toMatchObject({
-        code: "CONFLICT",
-      });
-      expect(repo.cancelRelease).not.toHaveBeenCalled();
-      expect(repo.removeMember).not.toHaveBeenCalled();
-    }
+  it("refuses taking the document out of a single release that was published", async () => {
+    // A cancelled one is the retry answered as done, above.
+    const { svc, repo } = service({ holds: ["create", "publish"] });
+    repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "published", kind: "single" },
+    ]);
+    await expect(svc.removeMember("m0", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(repo.cancelRelease).not.toHaveBeenCalled();
+    expect(repo.removeMember).not.toHaveBeenCalled();
   });
 
   const SINGLE = { id: "r1", state: "draft", kind: "single" };

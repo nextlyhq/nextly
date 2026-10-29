@@ -1131,10 +1131,11 @@ const RELEASE_OPERATIONS: Record<
     });
     // Taking the only document out of an unrun single-document release
     // cancels it and keeps the document, so the answer says so rather than
-    // telling a client the document is gone and the release goes on.
+    // telling a client the document is gone and the release goes on. Worded
+    // to hold for a retry too, which finds the release already cancelled.
     return respondAction(
       releaseCancelled
-        ? "The release was cancelled, because its only document was taken out."
+        ? "The release is cancelled, and its only document stays in it."
         : "Removed from release.",
       { memberId, releaseId, releaseCancelled }
     );

@@ -5,11 +5,16 @@
  * The server names only the documents the reader may read and counts the
  * rest by collection; the page shows that count beside the contents.
  *
+ * And taking the only document out of a single-document release says what it
+ * does: it cancels the release, so the page asks to confirm a cancellation,
+ * and the answer says the release was cancelled when the server says so.
+ *
  * @module components/features/releases/__tests__/ReleaseDetail.test
  */
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render } from "@admin/__tests__/utils";
+import { render, screen } from "@admin/__tests__/utils";
 
 const { releaseMock, membersMock } = vi.hoisted(() => ({
   releaseMock: vi.fn(),
@@ -118,5 +123,51 @@ describe("a release holding documents its reader cannot view", () => {
     render(<ReleaseDetail id="r1" />);
     expect(text()).toMatch(/nothing has been added yet/i);
     expect(text()).not.toMatch(/you can't view/);
+  });
+});
+
+describe("taking a document out", () => {
+  /** Open the confirmation for the release's only document. */
+  async function openRemoval(kind: "single" | "release") {
+    releaseMock.mockReturnValue({
+      data: { ...RELEASE, kind },
+      isPending: false,
+      isError: false,
+    });
+    membersMock.mockReturnValue(members([MEMBER]));
+    render(<ReleaseDetail id="r1" />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove posts from this release" })
+    );
+  }
+
+  it("asks to confirm cancelling a single-document release, which is what it does", async () => {
+    idle.mutate.mockClear();
+    await openRemoval("single");
+    expect(await screen.findByText("Cancel this release?")).toBeTruthy();
+    expect(text()).toMatch(/taking it out cancels the release/);
+    expect(text()).not.toMatch(/Remove from this release\?/);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Cancel release" })
+    );
+    expect(idle.mutate).toHaveBeenCalledWith("m1");
+  });
+
+  it("asks to confirm a removal from an ordinary release, which is the control", async () => {
+    await openRemoval("release");
+    expect(await screen.findByText("Remove from this release?")).toBeTruthy();
+    expect(text()).not.toMatch(/Cancel this release\?/);
+  });
+
+  it("says the release was cancelled when the server answers that it was", async () => {
+    const { releaseRemovalMessage } = await vi.importActual<
+      typeof import("@admin/hooks/queries/useReleases")
+    >("@admin/hooks/queries/useReleases");
+    expect(releaseRemovalMessage({ message: "", releaseCancelled: true })).toBe(
+      "Release cancelled."
+    );
+    expect(
+      releaseRemovalMessage({ message: "", releaseCancelled: false })
+    ).toBe("Removed from release.");
   });
 });

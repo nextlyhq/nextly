@@ -57,4 +57,7 @@ but not publish releases is now refused this, and the release's
 `can.removeMember` says so. The answer says which happened:
 `nextly.releases.removeMember` now resolves to `{ releaseCancelled }`
 instead of nothing, and `DELETE /api/releases/:id/members/:memberId`
-returns the same field.
+returns the same field. A removal retried after its answer was lost finds
+the release already cancelled and is answered as done. The admin's release
+page asks to confirm cancelling a single-document release when its document
+is taken out, and says the release was cancelled.

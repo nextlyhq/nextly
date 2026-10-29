@@ -73,7 +73,8 @@ const ACTION_LABEL: Record<ReleaseMember["action"], string> = {
  */
 function memberColumns(
   releaseId: string,
-  removable: boolean
+  removable: boolean,
+  removalCancels: boolean
 ): NextlyColumn<ReleaseMember>[] {
   const columns: NextlyColumn<ReleaseMember>[] = [
     {
@@ -120,7 +121,11 @@ function memberColumns(
       name: "remove",
       header: "",
       cell: ({ row }) => (
-        <MemberRemoveButton member={row} releaseId={releaseId} />
+        <MemberRemoveButton
+          member={row}
+          releaseId={releaseId}
+          cancelsRelease={removalCancels}
+        />
       ),
     });
   }
@@ -146,9 +151,12 @@ function documentHref(member: ReleaseMember): string {
 function MemberRemoveButton({
   member,
   releaseId,
+  cancelsRelease,
 }: {
   member: ReleaseMember;
   releaseId: string;
+  /** True when taking this document out cancels its release. */
+  cancelsRelease: boolean;
 }) {
   const remove = useRemoveReleaseMember(releaseId);
   const [confirming, setConfirming] = useState(false);
@@ -177,25 +185,35 @@ function MemberRemoveButton({
         <Trash2 className="size-4" aria-hidden />
       </Button>
       <AlertDialogContent>
+        {/* Said as what it does: out of a single-document release, the
+            removal cancels the release, which is a different act to confirm
+            than a document leaving an ordinary one. */}
         <AlertDialogHeader>
-          <AlertDialogTitle>Remove from this release?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {cancelsRelease
+              ? "Cancel this release?"
+              : "Remove from this release?"}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            The document itself is not changed. It simply stops being part of
-            what goes live with this release.
+            {cancelsRelease
+              ? "This is its only document, so taking it out cancels the release. The release is kept as cancelled, still holding the document, and the document itself is not changed."
+              : "The document itself is not changed. It simply stops being part of what goes live with this release."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {remove.isError ? (
           <p role="alert" className="text-sm text-destructive">
             {releaseErrorMessage(
               remove.error,
-              "This document was not removed — it is still in the release."
+              cancelsRelease
+                ? "The release was not cancelled — it still holds this document."
+                : "This document was not removed — it is still in the release."
             )}
           </p>
         ) : null}
         <AlertDialogFooter>
           <AlertDialogCancel>Keep it</AlertDialogCancel>
           <AlertDialogAction onClick={() => remove.mutate(member.id)}>
-            Remove
+            {cancelsRelease ? "Cancel release" : "Remove"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -380,7 +398,15 @@ export function ReleaseDetail({ id }: { id: string }): JSX.Element {
         />
       ) : null}
 
-      <ReleaseContents id={id} members={members} removable={removable} />
+      <ReleaseContents
+        id={id}
+        members={members}
+        removable={removable}
+        // The server offers a single-document release's removal only where
+        // it cancels the release (one that has not run, to a reader who may
+        // cancel), so where the control is shown that is what it does.
+        removalCancels={release.data.kind === "single"}
+      />
     </>
   );
 }
@@ -417,10 +443,13 @@ function ReleaseContents({
   id,
   members,
   removable,
+  removalCancels,
 }: {
   id: string;
   members: ReturnType<typeof useReleaseMembers>;
   removable: boolean;
+  /** True when taking a document out cancels the release. */
+  removalCancels: boolean;
 }) {
   const view = contentsView(members);
   return (
@@ -437,7 +466,7 @@ function ReleaseContents({
         </Card>
       ) : (
         <DataTableView<ReleaseMember>
-          columns={memberColumns(id, removable)}
+          columns={memberColumns(id, removable, removalCancels)}
           rows={view.rows}
           // BOTH forwarded, because an unanswered query and an empty release
           // are not the same thing. Without them the table renders "nothing
