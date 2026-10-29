@@ -8389,6 +8389,44 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The held component values in `draftDocument`, judged as the publish would
+   * judge them: merged into the draft, since a save carries only the
+   * sub-fields it changed, and without the type tags the draft holds, which no
+   * ordinary write shows a validator. Judged by the pass the component write
+   * runs, so a value the publish would refuse is refused now, with the same
+   * issues, before any draft or version is recorded.
+   */
+  private async validateHeldComponents(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext,
+    draftDocument: Record<string, unknown>
+  ): Promise<void> {
+    const { collection, draftLocale, fields, params, splitComponentSchemas } =
+      ctx;
+    const heldComponentNames = Object.keys(ctx.componentFieldData ?? {});
+    if (!this.fieldGroupDataService || heldComponentNames.length === 0) return;
+    await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
+      parentId: params.entryId,
+      parentTable: collectionTableName(collection, params.collectionName),
+      fields: fields as unknown as FieldConfig[],
+      data: stripSingleComponentTags(
+        Object.fromEntries(
+          heldComponentNames.map(name => [name, draftDocument[name]])
+        ),
+        fields as unknown as FieldConfig[],
+        componentSlug => splitComponentSchemas?.get(componentSlug)?.fields
+      ),
+      // The language this held write is keyed under: the request's, or the
+      // companion's write locale when the patch touched localized columns.
+      locale: draftLocale ?? undefined,
+      req: params.user ? { user: params.user } : {},
+      // Who the write is made as, for each instance's own field rules: the
+      // caller and trust the entry's own fields are judged with.
+      access: fieldGroupWriteAccessOf(params),
+    });
+  }
+
+  /**
    * The held field-group values in `draftDocument`, judged by their own rules
    * before anything is recorded, in place, each denied one kept at what the
    * draft replaces: no save judges a held instance, and a later publisher
@@ -8496,34 +8534,7 @@ export class CollectionMutationService extends BaseService {
     );
     if (refusedBy) return { refusedBy };
     await this.judgeHeldFieldGroups(tx, ctx, draftDocument, replaces);
-    // The held component values are judged as the publish would judge them:
-    // merged into the draft, since a save carries only the sub-fields it
-    // changed, and without the type tags the draft holds, which no ordinary
-    // write shows a validator. Judged by the pass the component write runs, so
-    // a value the publish would refuse is refused now, with the same issues,
-    // before any draft or version is recorded.
-    const heldComponentNames = Object.keys(ctx.componentFieldData ?? {});
-    if (this.fieldGroupDataService && heldComponentNames.length > 0) {
-      await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
-        parentId: params.entryId,
-        parentTable: collectionTableName(collection, params.collectionName),
-        fields: fields as unknown as FieldConfig[],
-        data: stripSingleComponentTags(
-          Object.fromEntries(
-            heldComponentNames.map(name => [name, draftDocument[name]])
-          ),
-          fields as unknown as FieldConfig[],
-          componentSlug => splitComponentSchemas?.get(componentSlug)?.fields
-        ),
-        // The language this held write is keyed under: the request's, or the
-        // companion's write locale when the patch touched localized columns.
-        locale: draftLocale ?? undefined,
-        req: params.user ? { user: params.user } : {},
-        // Who the write is made as, for each instance's own field rules: the
-        // caller and trust the entry's own fields are judged with.
-        access: fieldGroupWriteAccessOf(params),
-      });
-    }
+    await this.validateHeldComponents(tx, ctx, draftDocument);
     // The response and hooks see the draft as an ordinary read, so
     // shape the accumulated snapshot through the current schema the
     // same way the read overlay does. The persisted `draftDocument`
