@@ -23,7 +23,6 @@ export const contentWidget = {
     min: { w: 6, h: 3 },
     max: { w: 12, h: 6 },
   },
-  defaultOrder: 50,
   component: "core#CollectionQuickLinks",
   // Each collection's entries and drafts, and each Single, counted as the reader, in the batch
   // like every card. Asked the most any widget query may return: an omitted limit is the

@@ -24,12 +24,19 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 
 // The permissions the signed-in caller holds, as the guard asks about them.
 const held = new Set<string>();
-vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
-  useCurrentUserPermissions: () => ({
-    hasPermission: (slug: string) => held.has(slug),
-    isLoading: false,
-  }),
-}));
+vi.mock("@admin/hooks/useCurrentUserPermissions", async () => {
+  // Asked as the product asks: a `manage-` permission counts as the plain
+  // ones it stands for.
+  const { holdsPermission } = await import(
+    "@admin/lib/permissions/holds-permission"
+  );
+  return {
+    useCurrentUserPermissions: () => ({
+      hasPermission: (slug: string) => holdsPermission(held, slug),
+      isLoading: false,
+    }),
+  };
+});
 
 // Where a refused caller is sent; observed rather than followed.
 const navigateTo = vi.hoisted(() => vi.fn());
@@ -111,6 +118,43 @@ describe("PluginDetailPage", () => {
     expect(
       screen.queryByRole("link", { name: /Open settings/ })
     ).not.toBeInTheDocument();
+  });
+
+  it("links to the settings page only for a caller the page will let in", () => {
+    const withSettings = (permission?: string): AdminBranding => ({
+      plugins: [
+        {
+          name: "@acme/p",
+          version: "1.0.0",
+          collections: [],
+          settings: {
+            component: "@acme/p/admin#Settings",
+            ...(permission ? { permission } : {}),
+          },
+        },
+      ],
+    });
+    const linked = (grants: string[], permission?: string): boolean => {
+      held.clear();
+      for (const grant of grants) held.add(grant);
+      mockBranding = withSettings(permission);
+      const { unmount } = renderWithProviders(
+        <PluginDetailPage params={{ slug: "acme-p" }} />
+      );
+      const found =
+        screen.queryByRole("link", { name: /Open settings/ }) !== null;
+      unmount();
+      return found;
+    };
+
+    // Core's default asks a settings change: creating or deleting settings
+    // opens the detail page but not the settings page.
+    expect(linked(["create-settings"])).toBe(false);
+    expect(linked(["delete-settings"])).toBe(false);
+    expect(linked(["update-settings"])).toBe(true);
+    // A plugin that names its own permission is linked for its holder only.
+    expect(linked(["update-settings"], "update-acme")).toBe(false);
+    expect(linked(["update-acme"], "update-acme")).toBe(true);
   });
 
   it("offers no settings link for a disabled plugin", () => {

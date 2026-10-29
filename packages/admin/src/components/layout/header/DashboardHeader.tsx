@@ -20,6 +20,7 @@ import {
   headerControlsSettled,
   type HeaderButtonId,
 } from "./header-visibility";
+import { HeaderTrail } from "./HeaderTrail";
 
 interface DashboardHeaderProps {
   className?: string;
@@ -56,18 +57,25 @@ export function DashboardHeader({
     <header
       className={cn(
         "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
-        "flex items-center justify-between px-6",
+        "flex items-center px-6",
+        // A container, so the trail on the left answers to the bar's own
+        // width: a sidebar narrows it as much as a small window does.
+        "@container/topbar",
         className
       )}
     >
-      <div className="flex items-center gap-4">
-        {/* Placeholder for breadcrumbs or page title if needed in future */}
-      </div>
-
-      {/* The row fills the bar's free width and packs its controls to the
-          right, so its own box is the same whatever it holds: controls
-          arriving at its left end move neither the row nor the menu. */}
-      <div className="flex flex-1 items-center justify-end gap-1">
+      {/* One row across the whole bar: the trail, the controls, then the
+          account menu at its right end. Its box is the bar's whatever it
+          holds, so neither a trail nor controls arriving in it moves it. */}
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+        {/* The trail the page on screen registered, such as an open
+            document's place under Content. It takes the width the controls
+            leave, from a basis of none, so it shrinks and truncates rather
+            than pushing into them; the controls keep their size. Controls
+            arriving narrow it from its right end, so nothing in it moves. */}
+        <div className="mr-3 flex min-w-0 flex-1 items-center gap-4">
+          <HeaderTrail />
+        </div>
         {/* The controls mount from the first paint and stay hidden until they
             settle, rather than mounting late: the bell and plugin controls
             read the same permissions as the header, and a reader mounted

@@ -21,6 +21,10 @@
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
@@ -54,8 +58,7 @@ async function getEmailProviderService(): Promise<EmailProviderService> {
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
     await requireRouteAnyPermission(request, [
-      { action: "read", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
+      ...SYSTEM_READ_POLICY.emailProviders.read.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -98,8 +101,7 @@ export const PATCH = withErrorHandler(
     // mutation through them recorded nothing -- the trail would have covered
     // one supported REST surface and not the other.
     const auth = await requireRouteAnyPermission(request, [
-      { action: "update", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
+      ...SYSTEM_WRITE_POLICY.emailProviders.update.anyOf,
     ]);
 
     const { id } = await context.params;
@@ -156,8 +158,7 @@ export const DELETE = withErrorHandler(
     // mutation through them recorded nothing -- the trail would have covered
     // one supported REST surface and not the other.
     const auth = await requireRouteAnyPermission(request, [
-      { action: "delete", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
+      ...SYSTEM_WRITE_POLICY.emailProviders.delete.anyOf,
     ]);
 
     const { id } = await context.params;

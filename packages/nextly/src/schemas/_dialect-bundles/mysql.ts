@@ -110,6 +110,11 @@ export { nextlyJobsMysql as nextlyJobs } from "../jobs/mysql";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";
+// Each reader's pinned entries and dashboard preferences; in the bundle for
+// the reason the releases note above gives — this map is what the push
+// creates.
+export { nextlyDashboardPinsMysql as nextlyDashboardPins } from "../dashboard-pins/mysql";
+export { nextlyDashboardPreferencesMysql as nextlyDashboardPreferences } from "../dashboard-preferences/mysql";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.
