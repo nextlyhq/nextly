@@ -250,8 +250,12 @@ function readServicesSuite(label: string, boot: () => Promise<TestNextly>) {
 
     it("counts entries over a range in the interval the range draws, as the series view draws them", async () => {
       await bootWithParcels();
-      // One instant for the reads and the windows they are compared with.
-      const now = new Date();
+      // One instant for the reads and the windows they are compared with, a
+      // second after the rows were made: MySQL stores a DATETIME to the
+      // second, rounding to the nearest, so a row made at x.6s is stored at
+      // x+1s and would sit past a `now` taken straight after it, outside the
+      // window that ends there.
+      const now = new Date(Date.now() + 1000);
       const services = servicesFor(reader, undefined, now);
       for (const range of ["7d", "30d", "90d", "12m"] as const) {
         const series = await services.timeseries(PARCELS, {

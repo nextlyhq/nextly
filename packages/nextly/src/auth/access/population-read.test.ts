@@ -39,7 +39,7 @@ import { clearDeclaredTargets, declareTarget } from "./declared-rules";
 import { recordingDeviations } from "./deviations";
 import { relatedRowReads } from "./population-read";
 
-const checkAccess = vi.fn();
+const checkAccessApplyingFilter = vi.fn();
 
 /** A service registering `access` for `posts`, or nothing. */
 const service = (access?: Record<string, unknown>): RBACAccessControlService =>
@@ -48,8 +48,8 @@ const service = (access?: Record<string, unknown>): RBACAccessControlService =>
       access && slug === "posts"
         ? { kind: "collection", slug, access }
         : undefined,
-    checkAccess,
-    checkAnonymousCodeAccess: vi.fn(),
+    checkAccessApplyingFilter,
+    checkAnonymousCodeAccessApplyingFilter: vi.fn(),
   }) as unknown as RBACAccessControlService;
 
 const owner = { id: "owner-1", roles: ["editor"] };
@@ -83,7 +83,7 @@ describe("an API key", () => {
         { user: owner, scope, principal: null },
         service()
       )
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
   });
 
   it("is refused where its row holds the read under a slug of its own", async () => {
@@ -100,7 +100,7 @@ describe("an API key", () => {
         { user: owner, scope, principal: null },
         service()
       )
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false });
   });
 
   it("is judged by the rules registered now, not ones declared before", async () => {
@@ -120,7 +120,7 @@ describe("an API key", () => {
         { user: owner, scope, principal: null },
         service()
       )
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
   });
 });
 
@@ -225,7 +225,7 @@ describe("a signed-in user", () => {
         { user: { id: "u1" }, principal: null },
         service()
       )
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
     expect(failingClosedSpy).toHaveBeenCalledWith("u1");
   });
 
@@ -242,7 +242,7 @@ describe("a signed-in user", () => {
         { user: { id: "u1" }, principal: null },
         service()
       )
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
   });
 
   it("is handed a declared rule's answer without their grants being read", async () => {
@@ -250,7 +250,7 @@ describe("a signed-in user", () => {
     // user's full roles and grants are not needed for that answer, so a
     // lookup that cannot read them does not fail it.
     failingClosedSpy.mockRejectedValue(new Error("grants unreadable"));
-    checkAccess.mockResolvedValue(true);
+    checkAccessApplyingFilter.mockResolvedValue({ allowed: true });
 
     await expect(
       relatedRowReads(
@@ -258,8 +258,23 @@ describe("a signed-in user", () => {
         { user: { id: "u1" }, principal: null },
         service({ read: true })
       )
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
     expect(failingClosedSpy).not.toHaveBeenCalled();
+  });
+
+  it("is handed the filter a declared read rule answers, to apply", async () => {
+    // Population applies a read rule's filter, so the service's filter comes
+    // back as the answer rather than as a refusal.
+    const filter = { team: { equals: "public" } };
+    checkAccessApplyingFilter.mockResolvedValue({ allowed: false, filter });
+
+    await expect(
+      relatedRowReads(
+        "posts",
+        { user: { id: "u1" }, principal: null },
+        service({ read: () => filter })
+      )
+    ).resolves.toEqual({ allowed: false, filter });
   });
 });
 
@@ -267,7 +282,7 @@ describe("a plugin's signed-in person", () => {
   it("is judged as the person, not as a user the read also names", async () => {
     // The user's path would hand back the service's answer for the rule,
     // `true` here; the person is judged by the rule itself, which refuses.
-    checkAccess.mockResolvedValue(true);
+    checkAccessApplyingFilter.mockResolvedValue({ allowed: true });
 
     await expect(
       relatedRowReads(
@@ -278,12 +293,12 @@ describe("a plugin's signed-in person", () => {
         },
         service({ read: false })
       )
-    ).resolves.toBe(false);
-    expect(checkAccess).not.toHaveBeenCalled();
+    ).resolves.toEqual({ allowed: false });
+    expect(checkAccessApplyingFilter).not.toHaveBeenCalled();
   });
 
   it("is judged as the person even where the user the read names is called super-admin", async () => {
-    checkAccess.mockResolvedValue(true);
+    checkAccessApplyingFilter.mockResolvedValue({ allowed: true });
 
     await expect(
       relatedRowReads(
@@ -294,7 +309,7 @@ describe("a plugin's signed-in person", () => {
         },
         service({ read: false })
       )
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false });
   });
 });
 
@@ -308,7 +323,7 @@ describe("a user handed in naming the super-admin role", () => {
 
     await expect(
       relatedRowReads("posts", { user: named, principal: null }, service())
-    ).resolves.toBe(false);
+    ).resolves.toEqual({ allowed: false });
   });
 
   it("is shown the rows once they hold the role", async () => {
@@ -320,6 +335,6 @@ describe("a user handed in naming the super-admin role", () => {
 
     await expect(
       relatedRowReads("posts", { user: named, principal: null }, service())
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ allowed: true });
   });
 });
