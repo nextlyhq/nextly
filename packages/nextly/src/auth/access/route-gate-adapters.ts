@@ -661,7 +661,8 @@ async function permissionVerdict(
 /**
  * The verdict when any one of several permissions will do. Today a key holds
  * one by its stored slug and a session by its database permissions, and no
- * rule is read for either.
+ * rule is read for either. A retired `manage-` permission among them is held
+ * as {@link permissionVerdict} holds it.
  */
 export function anyPermissionVerdict(
   auth: AuthContext,
@@ -677,6 +678,25 @@ async function anyPermissionVerdictOf(
   permissions: readonly RoutePermission[],
   rules: RouteRules
 ): Promise<GateVerdict> {
+  // A retired `manage-` permission in the list is asked as the single gate
+  // asks it, held only by the four plain permissions it stood for, never by
+  // its own stored row; the rest are asked together, any one of them doing.
+  const retired = permissions.filter(({ action, resource }) =>
+    isRetiredManage(action, resource)
+  );
+  if (retired.length > 0) {
+    for (const { action, resource } of retired) {
+      if ((await permissionVerdict(caller, action, resource, rules)).allowed) {
+        return verdictOf(true);
+      }
+    }
+    const rest = permissions.filter(
+      ({ action, resource }) => !isRetiredManage(action, resource)
+    );
+    return rest.length > 0
+      ? anyPermissionVerdictOf(caller, rest, rules)
+      : verdictOf(false);
+  }
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
