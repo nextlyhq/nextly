@@ -39,6 +39,10 @@
  * ```
  */
 
+import {
+  asDeclaredFields,
+  toTitleCase,
+} from "../../collections/config/declared-config";
 import type {
   AuthorableFieldConfig,
   FieldConfig,
@@ -58,23 +62,6 @@ import { assertValidSingleConfig } from "./validate-single";
 // ============================================================
 // Utility Functions
 // ============================================================
-
-/**
- * Converts a slug to title case for display.
- *
- * @param str - The string to convert
- * @returns Title-cased string
- *
- * @example
- * ```typescript
- * toTitleCase('site-settings') // 'Site Settings'
- * toTitleCase('header_nav') // 'Header Nav'
- * toTitleCase('footer') // 'Footer'
- * ```
- */
-function toTitleCase(str: string): string {
-  return str.replace(/[-_]/g, " ").replace(/\b\w/g, char => char.toUpperCase());
-}
 
 // ============================================================
 // defineSingle Function
@@ -191,21 +178,6 @@ function toTitleCase(str: string): string {
  * A single as an author writes it: `SingleConfig` with a fields array that
  * also admits a contributed type declared through `pluginField()`.
  */
-
-/**
- * The authored fields as the rest of the system reads them.
- *
- * A contributed declaration is structurally a field — a name, a type, and the
- * options its own type reads — and every internal consumer dispatches on
- * `type` as a string. The authoring widening exists so a plugin type can be
- * written down; it is dropped at this boundary, after validation, rather than
- * carried into the union every reader shares, where an index-signature member
- * would widen property access for all of them.
- */
-function asDeclaredFields(fields: AuthorableFieldConfig[]): FieldConfig[] {
-  return fields as FieldConfig[];
-}
-
 export type SingleConfigInput = Omit<SingleConfig, "fields"> & {
   fields: AuthorableFieldConfig[];
 };

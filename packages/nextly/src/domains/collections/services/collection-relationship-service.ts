@@ -84,6 +84,7 @@ import {
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import {
   localizedFilterContext,
+  matchColumn,
   ruleFilterCondition,
   type DynamicSchema,
 } from "../query/filter-condition";
@@ -1771,10 +1772,7 @@ export class CollectionRelationshipService extends BaseService {
       },
       this.logger
     );
-    if (condition === undefined) return undefined;
-    return sql<number>`case when ${condition} then 1 else 0 end`.mapWith(
-      Number
-    );
+    return condition === undefined ? undefined : matchColumn(condition);
   }
 
   /**
