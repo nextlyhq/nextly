@@ -843,11 +843,20 @@ export function siteDefaultLayoutPlan(
             typeof entry === "string" ? { widget: entry } : { ...entry }
         );
   return {
-    // An alternative takes the place of the built-in it replaces, at its own starting size:
-    // the built-in's size and settings are the built-in's, not the alternative's.
+    // An alternative takes the place of the built-in it replaces: the card keeps its own id, its
+    // place and its size (held within the alternative's bounds where it is placed), and drops
+    // the settings, which are the built-in's vocabulary, not the alternative's.
     cards: cards.map(card => {
       const alternative = replaced.get(card.widget);
-      return alternative === undefined ? card : { widget: alternative };
+      return alternative === undefined
+        ? card
+        : {
+            widget: alternative,
+            ...(card.id === undefined ? {} : { id: card.id }),
+            ...(card.w === undefined ? {} : { w: card.w }),
+            ...(card.h === undefined ? {} : { h: card.h }),
+            ...(card.optional === undefined ? {} : { optional: card.optional }),
+          };
     }),
     suggestions: site.suggestions !== false,
     suggested,

@@ -70,7 +70,10 @@ import {
 } from "../../domains/widgets/declaration/site-dashboard";
 import { setDefaultLayoutPlan } from "../../domains/widgets/default-layout";
 import { clearWidgets } from "../../domains/widgets/registry";
-import { setSiteDashboardRules } from "../../domains/widgets/site-rules";
+import {
+  clearSiteDashboardRules,
+  setSiteDashboardRules,
+} from "../../domains/widgets/site-rules";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import {
@@ -100,6 +103,9 @@ export function resetWidgetRegistries(
   // are checked against this boot's alone.
   clearDeclaredWidgets();
   clearAttentionItems();
+  // The previous boot's hide, replace and overrides, before this config is
+  // checked: they would otherwise narrow the widget facts it is checked against.
+  clearSiteDashboardRules();
   clearSources();
   // 🔴 Cleared WITH the source store, never apart from it. The two are halves
   // of one registration and both are pinned to `globalThis`, so a reset that
