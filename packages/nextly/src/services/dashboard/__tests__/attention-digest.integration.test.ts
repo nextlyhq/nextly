@@ -254,6 +254,23 @@ describe.each(getConfiguredTestDialects())(
       // reader of one of two collections gets that one's numbers, the item is
       // not failed, and nothing about the other is disclosed.
       const t = await boot();
+      // The notes backdated a day, on the stored row: made unambiguously
+      // before the batch's instant, so the readable series' count is known
+      // whatever a database rounds a just-written time to.
+      const { items: written } = await t.nextly.find({
+        collection: NOTES,
+        limit: 10,
+      });
+      for (const { id } of written) {
+        if (typeof id !== "string" && typeof id !== "number") {
+          throw new Error("a note was written with no id");
+        }
+        await t.adapter.update(
+          `dc_${NOTES}`,
+          { created_at: new Date(Date.now() - DAY) },
+          { and: [{ column: "id", op: "=", value: id }] }
+        );
+      }
       const seen: Record<string, { buckets: number; points: number[] }> = {};
       declare([
         {
@@ -303,6 +320,11 @@ describe.each(getConfiguredTestDialects())(
       // at zero: an empty collection's answer, not an empty list.
       expect(tasks?.points).toEqual(notes?.points.map(() => 0));
       expect(notes?.points.length).toBeGreaterThan(1);
+      // 🔴 The positive control: the readable collection's series counts its
+      // two notes, so the zeros beside it are the unreadable one's answer and
+      // not a series that counts nothing for anyone.
+      expect(notes?.points.some(count => count > 0)).toBe(true);
+      expect(notes?.points.reduce((sum, count) => sum + count, 0)).toBe(2);
     });
 
     it("refuses a malformed read of a collection the reader may not read, as it does for a reader of it", async () => {
