@@ -39,7 +39,10 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 
-import type { GrantedPermission } from "../../../auth/authenticated-scope";
+import {
+  keyCallerHoldsSuperAdmin,
+  type GrantedPermission,
+} from "../../../auth/authenticated-scope";
 import { accountIsActive } from "../../../auth/session/session-standing";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
@@ -278,14 +281,19 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
  * Here, beside the metadata it narrows, so the REST routes and the Direct API
  * answer one caller the same way.
  */
-export async function apiKeyViewer(caller: {
-  userId: string;
-  authMethod: string;
-  permissions: readonly string[];
-}): Promise<(key: ApiKeyMeta) => ApiKeyMeta> {
+export async function apiKeyViewer(
+  caller: {
+    userId: string;
+    authMethod: string;
+    permissions: readonly string[];
+  } & Parameters<typeof keyCallerHoldsSuperAdmin>[0]
+): Promise<(key: ApiKeyMeta) => ApiKeyMeta> {
   const byKey = caller.authMethod === "api-key";
+  // A key carrying its maker's super-admin authority holds every permission,
+  // as every other way in treats it, its grant list notwithstanding.
   const readsUsers = byKey
-    ? caller.permissions.includes(permissionSlug("read", "users"))
+    ? keyCallerHoldsSuperAdmin(caller) ||
+      caller.permissions.includes(permissionSlug("read", "users"))
     : await hasPermission(caller.userId, "read", "users");
   return key =>
     readsUsers || (!byKey && key.owner?.id === caller.userId)
@@ -494,6 +502,8 @@ export async function resolveKeyCaller(
     roleId: string | null;
     /** When authentication asked the maker's standing, where it says. */
     standingAskedAt?: number;
+    /** When the key itself expires (epoch ms), where it does. */
+    expiresAt?: number | null;
   }
 ): Promise<ResolvedKeyCaller> {
   const [grants, roles, superAdmin] = await Promise.all([
@@ -501,13 +511,19 @@ export async function resolveKeyCaller(
     service.resolveApiKeyRoles(key.tokenType, key.roleId, key.userId),
     keyHoldsSuperAdmin(key.tokenType, key.userId),
   ]);
+  // The authority ends at the first of the maker's role expiry and the key's
+  // own, so a kept scope never outlives a key fresh authentication refuses.
+  const ends = [superAdmin.until, key.expiresAt ?? undefined].filter(
+    (at): at is number => at !== undefined
+  );
+  const until = ends.length > 0 ? Math.min(...ends) : undefined;
   return {
     grants,
     roles,
     keyHoldsSuperAdmin: superAdmin.holds,
-    ...(superAdmin.until === undefined
+    ...(!superAdmin.holds || until === undefined
       ? {}
-      : { keyHoldsSuperAdminUntil: superAdmin.until }),
+      : { keyHoldsSuperAdminUntil: until }),
     ...(key.standingAskedAt === undefined
       ? {}
       : { keyStandingAskedAt: key.standingAskedAt }),
@@ -1242,6 +1258,11 @@ export class ApiKeyService extends BaseService {
      * carries counts from here, not from when the scope is made.
      */
     standingAskedAt: number;
+    /**
+     * When the key itself expires (epoch ms), or null where it does not: any
+     * authority a scope made from it carries ends there too.
+     */
+    expiresAt: number | null;
   } | null> {
     const keyHash = hashApiKey(rawKey);
 
@@ -1307,6 +1328,7 @@ export class ApiKeyService extends BaseService {
       tokenType: row.tokenType as ApiKeyTokenType,
       roleId: row.roleId ?? null,
       standingAskedAt,
+      expiresAt: expiresAt === null ? null : expiresAt.getTime(),
     };
   }
 

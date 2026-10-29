@@ -232,6 +232,21 @@ export function apiKeyScopeFrom(caller: {
 }
 
 /**
+ * Whether an authenticated key caller carries its maker's super-admin
+ * authority now: the answer a scope made from it would give, bounds
+ * included. A door that has the caller rather than a scope asks this, so it
+ * cannot admit a key after the scope's bound has passed.
+ */
+export function keyCallerHoldsSuperAdmin(
+  caller: Parameters<typeof apiKeyScopeFrom>[0]
+): boolean {
+  return (
+    caller.keyHoldsSuperAdmin === true &&
+    scopeHoldsSuperAdmin(apiKeyScopeFrom(caller))
+  );
+}
+
+/**
  * A copy of `scope` holding only the grants `keep` accepts.
  *
  * `undefined` in, `undefined` out: a session caller has no scope to narrow.

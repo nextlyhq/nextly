@@ -69,6 +69,21 @@ describe("resolveKeyCaller", () => {
     expect(resolved.keyStandingAskedAt).toBe(1234);
   });
 
+  it("ends the authority at the key's own expiry where that comes before the role's", async () => {
+    vi.mocked(resolveUserRoles).mockResolvedValue({
+      roleIds: new Set(["super-admin"]),
+      validUntil: EXPIRES,
+    });
+    vi.mocked(isSuperAdmin).mockResolvedValue(true);
+
+    const resolved = await resolveKeyCaller(service, {
+      ...key("full-access"),
+      expiresAt: EXPIRES - 1_000,
+    });
+
+    expect(resolved.keyHoldsSuperAdminUntil).toBe(EXPIRES - 1_000);
+  });
+
   it("reads the expiry before it asks whether the maker is a super-admin", async () => {
     const order: string[] = [];
     vi.mocked(resolveUserRoles).mockImplementation(async () => {
