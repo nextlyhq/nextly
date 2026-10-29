@@ -11,6 +11,10 @@ import {
   sizeFacts,
   type CanonicalWidget,
 } from "../canonical";
+import {
+  collectionWidgets,
+  unreadableCollectionCard,
+} from "../collection-cards";
 import type { WidgetDefinition } from "../definition";
 import { sizeBounds } from "../grid-size";
 import { clearWidgets, registerWidget } from "../registry";
@@ -405,6 +409,51 @@ describe("the canonical widget set", () => {
 });
 
 describe("a widget the site config overrides", () => {
+  it("withholds a card whose Collection setting the override starts at a collection the reader may not read", () => {
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([["acme/pinned", { settings: { source: "secret" } }]]),
+    });
+    try {
+      // Contributed, so the canonical summary's own copy of the setting is
+      // the one withholding and the token read.
+      const listed = canonicalWidgets([
+        {
+          id: "acme/pinned",
+          collectionSetting: {
+            name: "source",
+            type: "collection",
+            label: "Collection",
+            defaultValue: "posts",
+          },
+        },
+      ]);
+      const withheld = unreadableCollectionCard(
+        collectionWidgets(listed),
+        new Set(["posts"])
+      );
+      // A card that stores no value reads the starting value, now "secret".
+      expect(
+        withheld({
+          id: "c",
+          widgetId: "acme/pinned",
+          w: 3,
+          h: 2,
+          removed: false,
+        })
+      ).toBe(true);
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
+  });
+
   it("is listed as the override changes it, whichever channel supplied it", () => {
     setSiteDashboardRules({
       hidden: new Set(),

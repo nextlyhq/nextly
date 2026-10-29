@@ -7,6 +7,7 @@ import {
   capturePlan,
   parseOptions,
   prodPort,
+  publishedRoute,
   UsageError,
 } from "./options.mjs";
 
@@ -87,6 +88,79 @@ describe("what the visual check is asked to do", () => {
     );
     expect(captureName("/admin/x?tab=fields", 390, "dark")).not.toBe(
       captureName("/admin/x?tab=api", 390, "dark")
+    );
+  });
+
+  /*
+   * A fragment is published the same way a query would be: an address such as
+   * `#access_token=…` carries a credential there, and a `?` inside a fragment
+   * is still the fragment's, not a query to read keys from. Distinct names
+   * stay the property, so two fragments still name two captures.
+   */
+  it("keeps a fragment's text out of the name, and two fragments apart", () => {
+    // Assembled from pieces, so no credential-shaped text sits in the source.
+    const secret = ["9d1e", "a07c", "44b2f3"].join("");
+    for (const route of [
+      `/admin/plugin#access_token=${secret}`,
+      `/admin/plugin#access_token=${secret}?view=1`,
+      `/admin/plugin?tab=api#access_token=${secret}`,
+    ]) {
+      expect(captureName(route, 390, "light"), route).not.toContain(secret);
+      expect(publishedRoute(route), route).not.toContain(secret);
+    }
+    expect(
+      captureName(`/admin/plugin#access_token=${secret}`, 390, "light")
+    ).toMatch(/^admin-plugin-[0-9a-f]{8}-390-light\.png$/);
+    // The `?` is the fragment's: nothing after the `#` is read as a key.
+    expect(
+      publishedRoute(`/admin/plugin#access_token=${secret}?view=1`)
+    ).toMatch(/^\/admin\/plugin#[0-9a-f]{8}$/);
+    expect(
+      publishedRoute(`/admin/plugin?tab=api#access_token=${secret}`)
+    ).toMatch(/^\/admin\/plugin\?tab=…#[0-9a-f]{8}$/);
+    expect(captureName("/admin/x#a", 390, "dark")).not.toBe(
+      captureName("/admin/x#b", 390, "dark")
+    );
+    expect(captureName("/admin/x?tab=api", 390, "dark")).not.toBe(
+      captureName("/admin/x?tab=api#more", 390, "dark")
+    );
+    // A key that leaves no slug characters still keeps a query and a fragment
+    // with the same text apart.
+    expect(captureName("/admin/x?_=foo", 390, "light")).not.toBe(
+      captureName("/admin/x#_=foo", 390, "light")
+    );
+    // Nor does an empty query before a fragment.
+    expect(captureName("/admin/x?#_=foo", 390, "light")).not.toBe(
+      captureName("/admin/x#_=foo", 390, "light")
+    );
+  });
+
+  /*
+   * Distinct routes, distinct names, across every way a query and a fragment
+   * can sit together: empty, bare, a key the slug drops, a delimiter inside
+   * the other part. A pair-by-pair test only covers the pairs someone
+   * thought of.
+   */
+  it("names every query and fragment form apart", () => {
+    const queries = ["", "?", "?_", "?_=f", "?a", "?a=1", "??_=f", "?_=f?"];
+    const fragments = ["", "#", "#_", "#_=f", "#a", "#?_=f", "##_=f", "#_=f#"];
+    const routes = queries.flatMap(query =>
+      fragments.map(fragment => `/x${query}${fragment}`)
+    );
+    const names = new Set(
+      routes.map(route => captureName(route, 390, "light"))
+    );
+    expect(names.size).toBe(routes.length);
+  });
+
+  /*
+   * Names already published stay valid: they are files in the screenshot
+   * branch and raw URLs in merged pull requests' "The look". A route with
+   * only a query is named exactly as it was before fragments were hidden.
+   */
+  it("names a route with only a query as it always has", () => {
+    expect(captureName("/admin/x?tab=fields", 390, "dark")).toBe(
+      "admin-x-tab-35aba774-390-dark.png"
     );
   });
 

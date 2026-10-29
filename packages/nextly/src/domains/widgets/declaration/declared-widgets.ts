@@ -449,8 +449,6 @@ export interface DashboardWidgets {
     declared: ReadonlyMap<string, WidgetDefinition>,
     groups: readonly DeclaredWidgetGroup[]
   ) => readonly WidgetDeclarationFault[];
-  /** Declarations checked with the rest, duplicates and references included, but not kept or published. */
-  checkedOnly?: readonly DeclaredWidgetGroup[];
   /** Where startup's warnings go: the registration's logger, or the process-wide one. */
   logger?: StartupLogger;
 }
@@ -469,24 +467,22 @@ export function registerDashboardWidgets({
   groups: given = [],
   legacy = [],
   references,
-  checkedOnly = [],
   logger = NEXTLY_STARTUP_LOGGER,
 }: DashboardWidgets): void {
   const groups = given.map(snapshot);
-  const checked = [...groups, ...checkedOnly.map(snapshot)];
   const faults = [
     ...coreWidgetFaults(core),
-    ...collectWidgetDeclarationFaults(checked),
-    ...sharedWithLegacy(checked, legacy),
+    ...collectWidgetDeclarationFaults(groups),
+    ...sharedWithLegacy(groups, legacy),
   ];
   if (references !== undefined) {
     // Core's widgets among them: nothing is kept until every check has passed,
     // so what names a core widget finds it here rather than in the registry.
     const declared = new Map([
       ...core.map(definition => [definition.id, definition] as const),
-      ...wellFormedDefinitions(checked, faults),
+      ...wellFormedDefinitions(groups, faults),
     ]);
-    faults.push(...references(declared, checked));
+    faults.push(...references(declared, groups));
   }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
   warnSharedLegacyIds(legacy, logger);
