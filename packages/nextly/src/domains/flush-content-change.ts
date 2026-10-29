@@ -10,7 +10,6 @@
  *
  * @module domains/flush-content-change
  */
-import { container } from "../di/container";
 import type {
   CacheRevalidator,
   RevalidationIntent,
@@ -32,6 +31,10 @@ export async function flushContentChange(
   what: string
 ): Promise<void> {
   if (!intent || intent.tags.length === 0) return;
+  // Loaded here rather than at the top: the metadata services that call this
+  // are imported by CLI paths that never reach the service registry, and a
+  // static import would make every one of them load it.
+  const { container } = await import("../di/container");
   if (!container.has("cacheRevalidator")) return;
   try {
     await container.get<CacheRevalidator>("cacheRevalidator").flush([intent]);
