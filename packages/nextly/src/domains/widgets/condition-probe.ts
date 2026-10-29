@@ -29,6 +29,7 @@
  */
 
 import { callerHoldsAny } from "../../auth/access/route-gate-adapters";
+import { scopeHoldsSuperAdmin } from "../../auth/authenticated-scope";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "../../auth/collection-definition-policy";
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
@@ -178,6 +179,7 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
         userId: caller.user.id,
         isApiKey: caller.authenticatedScope?.actorType === "apiKey",
         permissions: caller.authenticatedScope?.permissions ?? [],
+        keyHoldsSuperAdmin: scopeHoldsSuperAdmin(caller.authenticatedScope),
       });
     })();
     return createCollection;

@@ -126,18 +126,16 @@ describe("in production", () => {
 describe("in development", () => {
   beforeEach(() => vi.stubEnv("NODE_ENV", "development"));
 
-  it("lists the site's own widgets beside the plugins', handing the writer the config's dashboard", async () => {
+  it("lists the site's own widgets beside the plugins', handing the writer the dashboard the boot registered", async () => {
     const dashboard = {
       widgets: [
         { id: "site/notes", view: { component: "./dashboard/notes#Notes" } },
       ],
     };
-    await checkAdminComponents({
-      // A plain object, as the fixture config above is: the check reads only
-      // the widgets' ids and components.
-      config: { ...config, admin: { dashboard } } as unknown as typeof config,
-      registeredComponentPaths: [],
-    });
+    // As a plugin's setup() hands it to the boot: the config as written has
+    // no dashboard, and the boot registered this one.
+    setAdminComponentPlugins([shop], dashboard);
+    await checkAdminComponents({ config, registeredComponentPaths: [] });
     expect(writeComponentMapFiles).toHaveBeenCalledWith(
       [shop],
       expect.any(String),
@@ -387,14 +385,11 @@ describe("the config a development rewrite checks against", () => {
       { id: "site/notes", view: { component: "./dashboard/notes#Notes" } },
     ],
   };
-  const checkNotes = (registeredComponentPaths: readonly string[]) =>
-    checkAdminComponents({
-      config: {
-        ...config,
-        admin: { dashboard: notesDashboard },
-      } as unknown as typeof config,
-      registeredComponentPaths,
-    });
+  /** A check with the notes widget registered by the boot, as its own site dashboard. */
+  const checkNotes = (registeredComponentPaths: readonly string[]) => {
+    setAdminComponentPlugins([shop], notesDashboard);
+    return checkAdminComponents({ config, registeredComponentPaths });
+  };
 
   it("writes a map again whose config has moved, though it lists every path, so its site component resolves from the new folder", async () => {
     // The map was written for `config/nextly.config.ts`, and the config now sits at the root.
