@@ -1073,7 +1073,7 @@ async function resolveAuthorization(
   // could use the API at all.
   if (service === "pluginSettings") {
     // A plugin may name its own permission for its settings in place of
-    // `manage-settings` (`contributes.settingsPermission`), checked at boot to
+    // `update-settings` (`contributes.settingsPermission`), checked at boot to
     // be one it declares.
     //
     // Services are booted before the declaration is read, as the dispatch
@@ -1121,8 +1121,8 @@ async function resolveAuthorization(
     }
     // A write to a plugin's configuration is a settings change, so it takes
     // the same permission a settings change takes anywhere else, unless the
-    // plugin named its own: then that one alone, so `manage-settings` does
-    // not reach settings the plugin kept to a narrower role.
+    // plugin named its own: then that one alone, so a settings role does not
+    // reach settings the plugin kept to a narrower role.
     return authorizeCaller(caller, write.action, write.resource);
   }
 
