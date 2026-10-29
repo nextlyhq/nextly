@@ -3,11 +3,13 @@
 /**
  * MediaEditDialog Component
  *
- * Dialog for editing media metadata. For image media the focal-point picker
- * (image preview + ratio previews) is always visible; "Edit advanced options"
- * gates only the generated image-size list (URLs to copy, file sizes). Folder
- * is intentionally NOT editable here -- moving files between folders is its
- * own dedicated dialog (one click in the bulk action bar or per-item menu).
+ * Dialog for editing media metadata, opened from an upload field. For an
+ * image it shows the whole image with the shared focus point control. Here
+ * Done only places the point: "Save changes" sends it with the text in one
+ * `onSave`, as this exported dialog always has, so a caller whose handler
+ * closes or submits runs once. "Show image sizes" gates only the generated
+ * image-size list. Folder is intentionally NOT editable here -- moving files
+ * between folders is its own dedicated dialog.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -39,9 +41,24 @@ import {
   Trash2,
   Download,
 } from "@admin/components/icons";
-import { copyableMediaUrl, formatFileSize } from "@admin/lib/media-utils";
+import {
+  MEDIA_ALT_TEXT_MAX_LENGTH,
+  MEDIA_CAPTION_MAX_LENGTH,
+} from "@admin/constants/media";
+import {
+  copyableMediaUrl,
+  formatFileSize,
+  mediaImageSrc,
+  parseMediaSizes,
+} from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
+
+import {
+  isFocalPointKeyEvent,
+  MediaFocalPoint,
+  type MediaFocalPointValue,
+} from "../MediaFocalPoint";
 
 // ============================================================
 // Schema
@@ -50,12 +67,18 @@ import type { Media, MediaUpdateInput } from "@admin/types/media";
 const mediaEditSchema = z.object({
   altText: z
     .string()
-    .max(500, "Alt text must be less than 500 characters")
+    .max(
+      MEDIA_ALT_TEXT_MAX_LENGTH,
+      `Alt text can be at most ${MEDIA_ALT_TEXT_MAX_LENGTH} characters`
+    )
     .optional()
     .nullable(),
   caption: z
     .string()
-    .max(1000, "Caption must be less than 1000 characters")
+    .max(
+      MEDIA_CAPTION_MAX_LENGTH,
+      `Caption can be at most ${MEDIA_CAPTION_MAX_LENGTH} characters`
+    )
     .optional()
     .nullable(),
 });
@@ -75,120 +98,6 @@ export interface MediaEditDialogProps {
   onDownload?: (media: Media) => void;
   onCopyUrl?: (url: string) => void;
   isLoading?: boolean;
-}
-
-// ============================================================
-// Crop Point Picker Component
-// ============================================================
-
-function CropPointPicker({
-  imageUrl,
-  focalX,
-  focalY,
-  onChange,
-  disabled,
-}: {
-  imageUrl: string;
-  focalX: number;
-  focalY: number;
-  onChange: (x: number, y: number) => void;
-  disabled?: boolean;
-}) {
-  const containerRef = React.useRef<HTMLDivElement>(null);
-
-  // Handle click on image to set crop point
-  const handleClick = React.useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (disabled) return;
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = Math.round(((e.clientX - rect.left) / rect.width) * 100);
-      const y = Math.round(((e.clientY - rect.top) / rect.height) * 100);
-      // Clamp to 0-100
-      onChange(Math.max(0, Math.min(100, x)), Math.max(0, Math.min(100, y)));
-    },
-    [onChange, disabled]
-  );
-
-  return (
-    <div className="space-y-3">
-      {/* Image with crop point overlay */}
-      <div
-        ref={containerRef}
-        className={cn(
-          "relative rounded-md overflow-hidden border border-input bg-muted/30 cursor-crosshair",
-          disabled && "cursor-not-allowed opacity-60"
-        )}
-        onClick={handleClick}
-        role="button"
-        tabIndex={0}
-        aria-label={`Set crop point. Current position: ${focalX}%, ${focalY}%`}
-      >
-        <img
-          src={imageUrl}
-          alt="Preview"
-          className="w-full h-auto max-h-[300px] object-contain"
-          draggable={false}
-        />
-        {/* Crosshair overlay */}
-        <div
-          className="absolute w-6 h-6 -translate-x-1/2 -translate-y-1/2 pointer-events-none"
-          style={{ left: `${focalX}%`, top: `${focalY}%` }}
-        >
-          {/* Outer ring. The token ring outlines the marker against image
-              areas that match the background color; shadows are not part of
-              the design system. The marker stays circular: it denotes a
-              point on the image, not a UI surface, so the radius-0 rule
-              does not apply. */}
-          <div className="absolute inset-0 rounded-full border-2 border-background ring-1 ring-foreground/40" />
-          {/* Inner dot */}
-          <div className="absolute inset-1.75 rounded-full bg-background" />
-          {/* Crosshair lines */}
-          <div className="absolute top-1/2 left-0 w-full h-px bg-background/70 -translate-y-px" />
-          <div className="absolute left-1/2 top-0 h-full w-px bg-background/70 -translate-x-px" />
-        </div>
-      </div>
-
-      {/* Crop point label */}
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>Click image to set the focal point</span>
-        <span className="font-mono">
-          ({focalX}, {focalY})
-        </span>
-      </div>
-
-      {/* Preview strip: shows how the image renders at common aspect ratios
-          with the current focal point. Informational, not interactive. */}
-      <div className="flex gap-4 pt-1">
-        {[
-          { label: "1:1", w: 56, h: 56 },
-          { label: "16:9", w: 72, h: 40 },
-          { label: "4:3", w: 64, h: 48 },
-        ].map(({ label, w, h }) => (
-          <div
-            key={label}
-            className="flex flex-col items-center gap-1.5"
-            aria-label={`Preview at ${label} aspect ratio`}
-          >
-            <div
-              className="rounded-md border border-input overflow-hidden bg-muted/30"
-              style={{ width: w, height: h }}
-            >
-              <img
-                src={imageUrl}
-                alt={`${label} crop preview`}
-                className="w-full h-full object-cover"
-                style={{ objectPosition: `${focalX}% ${focalY}%` }}
-                draggable={false}
-              />
-            </div>
-            <span className="text-xs font-medium text-muted-foreground leading-none">
-              {label}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 // ============================================================
@@ -262,9 +171,10 @@ export function MediaEditDialog({
 }: MediaEditDialogProps): React.JSX.Element | null {
   const [isSaving, setIsSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [focalX, setFocalX] = React.useState(media?.focalX ?? 50);
-  const [focalY, setFocalY] = React.useState(media?.focalY ?? 50);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
+  // The point as placed by Done, sent by "Save changes"; null until placed.
+  const [focalDraft, setFocalDraft] =
+    React.useState<MediaFocalPointValue | null>(null);
 
   const isPending = isSaving || isLoading;
   const isImage = media?.mimeType?.startsWith("image/") ?? false;
@@ -285,18 +195,11 @@ export function MediaEditDialog({
         altText: media.altText || "",
         caption: media.caption || "",
       });
-      setFocalX(media.focalX ?? 50);
-      setFocalY(media.focalY ?? 50);
       setAdvancedOpen(false);
       setError(null);
+      setFocalDraft(null);
     }
   }, [media, form]);
-
-  // Handle crop point change
-  const handleCropPointChange = React.useCallback((x: number, y: number) => {
-    setFocalX(x);
-    setFocalY(y);
-  }, []);
 
   // Handle form submission
   const handleSubmit = form.handleSubmit(async data => {
@@ -306,26 +209,22 @@ export function MediaEditDialog({
       setIsSaving(true);
       setError(null);
 
-      // Only include focal point in the payload when the user actually moved
-      // the crop point. The picker is now always visible for images, so the
-      // user can intentionally set a focal point on first open without
-      // accidentally overwriting the saved value.
-      const cropPointChanged =
-        isImage &&
-        (focalX !== (media.focalX ?? 50) || focalY !== (media.focalY ?? 50));
-
+      // The point goes only when Done moved it from the stored one, so a
+      // save that didn't touch it doesn't cut the image's sizes again.
+      const pointMoved =
+        focalDraft !== null &&
+        (focalDraft.focalX !== (media.focalX ?? 50) ||
+          focalDraft.focalY !== (media.focalY ?? 50));
       const updates: MediaUpdateInput = {
         altText: data.altText || undefined,
         caption: data.caption || undefined,
-        ...(cropPointChanged ? { focalX, focalY } : {}),
+        ...(pointMoved ? focalDraft : {}),
       };
 
       await onSave(updates);
 
       toast.success("Media updated", {
-        description: cropPointChanged
-          ? "Metadata and crop point saved. Image sizes will be regenerated."
-          : `Updated "${media.originalFilename}"`,
+        description: `Updated "${media.originalFilename}"`,
       });
 
       onOpenChange(false);
@@ -348,17 +247,11 @@ export function MediaEditDialog({
     [handleSubmit]
   );
 
-  // Parse sizes if they exist (might be a JSON string from some DB adapters)
-  const parsedSizes = React.useMemo(() => {
-    if (!media?.sizes) return null;
-    if (typeof media.sizes === "object") return media.sizes;
-    try {
-      return JSON.parse(media.sizes);
-    } catch (e) {
-      console.error("Failed to parse media sizes:", e);
-      return null;
-    }
-  }, [media?.sizes]);
+  // Sizes may arrive as a JSON string from some adapters; one parser for both.
+  const parsedSizes = React.useMemo(
+    () => parseMediaSizes(media?.sizes),
+    [media?.sizes]
+  );
 
   if (!media) return null;
 
@@ -369,6 +262,11 @@ export function MediaEditDialog({
           "p-0 gap-0 overflow-hidden",
           isImage ? "sm:max-w-4xl" : "sm:max-w-2xl"
         )}
+        // Escape while placing the focus point stops placing it; the dialog
+        // stays open.
+        onEscapeKeyDown={event => {
+          if (isFocalPointKeyEvent(event)) event.preventDefault();
+        }}
       >
         <DialogHeader className="p-6 pb-2">
           <DialogTitle>Edit media</DialogTitle>
@@ -380,15 +278,19 @@ export function MediaEditDialog({
         <form onSubmit={handleFormSubmit}>
           <div className="px-6 pb-6">
             <div className={cn("flex gap-6", !isImage && "flex-col")}>
-              {/* Left Panel - Image Preview + Focal Point (always for images) */}
+              {/* Left Panel - the whole image with its focus point. The
+                  original, not the thumbnail, which is a square crop. */}
               {isImage && (
                 <div className="w-full sm:w-[340px] flex-shrink-0">
-                  <CropPointPicker
-                    imageUrl={media.thumbnailUrl || media.url}
-                    focalX={focalX}
-                    focalY={focalY}
-                    onChange={handleCropPointChange}
-                    disabled={isPending}
+                  <MediaFocalPoint
+                    src={mediaImageSrc(media, { purpose: "preview" })}
+                    alt={media.altText || media.originalFilename}
+                    focalX={media.focalX}
+                    focalY={media.focalY}
+                    readOnly={isPending}
+                    imageClassName="max-h-[300px]"
+                    // Done places the point; "Save changes" sends it.
+                    onSave={setFocalDraft}
                   />
                 </div>
               )}
@@ -416,6 +318,7 @@ export function MediaEditDialog({
                     id="altText"
                     placeholder="Describe the image for screen readers..."
                     {...form.register("altText")}
+                    maxLength={MEDIA_ALT_TEXT_MAX_LENGTH}
                     disabled={isPending}
                   />
                 </div>
@@ -429,6 +332,7 @@ export function MediaEditDialog({
                     id="caption"
                     placeholder="Optional caption or description..."
                     {...form.register("caption")}
+                    maxLength={MEDIA_CAPTION_MAX_LENGTH}
                     disabled={isPending}
                   />
                 </div>

@@ -16,6 +16,7 @@
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
+import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { EmailProviderService } from "../services/email/email-provider-service";
 
@@ -56,10 +57,7 @@ export const PATCH = withErrorHandler(
     // mount instead of the catch-all dispatcher, so without the actor every
     // provider mutation through them recorded nothing -- the trail would have
     // covered one supported REST surface and not the other.
-    const auth = await requireRouteAnyPermission(request, [
-      { action: "update", resource: "email-providers" },
-      { action: "manage", resource: "email-providers" },
-    ]);
+    const auth = await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailProviders.makeDefault.anyOf]);
 
     const { id } = await context.params;
     const service = await getEmailProviderService();

@@ -24,6 +24,7 @@ import { z } from "zod";
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
+import { SYSTEM_READ_POLICY, SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
@@ -92,10 +93,7 @@ const createTemplateSchema = z.object({
  */
 export const GET = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    await requireRouteAnyPermission(request, [
-      { action: "read", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
-    ]);
+    await requireRouteAnyPermission(request, [...SYSTEM_READ_POLICY.emailTemplates.read.anyOf]);
 
     const service = await getEmailTemplateService();
     const templates = await service.listTemplates();
@@ -124,10 +122,7 @@ export const GET = withErrorHandler(
  */
 export const POST = withErrorHandler(
   async (request: Request): Promise<Response> => {
-    const auth = await requireRouteAnyPermission(request, [
-      { action: "create", resource: "email-templates" },
-      { action: "manage", resource: "email-templates" },
-    ]);
+    const auth = await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailTemplates.create.anyOf]);
 
     const body = await readJsonBody(request);
 

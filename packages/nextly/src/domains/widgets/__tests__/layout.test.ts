@@ -468,6 +468,19 @@ describe("a row of an earlier format is no saved arrangement", () => {
     ]);
   });
 
+  it("starts a card afresh when its id was stored for another widget", () => {
+    // The config now names `slot` a card of core/b; the row kept core/a's
+    // removal and settings under it, which core/b must not take.
+    const defaults = [card("slot", "core/b")];
+    const row = readStoredLayout(
+      serializeLayout(
+        [card("slot", "core/a", { removed: true, config: { range: "7d" } })],
+        false
+      )
+    );
+    expect(dismissalsApplied(defaults, row)).toEqual(defaults);
+  });
+
   it("reads only the version: an earlier row whose content no format allows is still no row", () => {
     // Nothing past the version number is looked at, so content no reader of
     // that format would have accepted cannot make the row unreadable.
@@ -667,6 +680,13 @@ describe("the visibility token", () => {
   it("depends on the sets, not the order they were registered in", () => {
     expect(visibilityToken(["a", "b"], ["x"])).toBe(
       visibilityToken(["b", "a"], ["x"])
+    );
+  });
+
+  it("tells apart two sets of withheld cards whatever their ids hold", () => {
+    // A card's id is the site config's to choose, a line break included.
+    expect(visibilityToken(["a"], [], [], [], ["x\nhides:y"])).not.toBe(
+      visibilityToken(["a"], [], [], [], ["x", "y"])
     );
   });
 

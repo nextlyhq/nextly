@@ -24,7 +24,7 @@ import {
   NEXTLY_ROOT,
   PORT,
   productionServerEnv,
-} from "../../production-server";
+} from "../../production-server.mjs";
 import { stop } from "../../support/playground-dev-server";
 
 /**

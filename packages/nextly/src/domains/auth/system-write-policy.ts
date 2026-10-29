@@ -1,8 +1,8 @@
 /**
  * What each write, and each read, of a system resource asks of its caller.
  *
- * Roles, permissions, users, field groups and media are written and read
- * through more than one door, the REST routes and the Direct API when it is
+ * Roles, permissions, users, settings, the Email hub and media are written
+ * and read through more than one door, the REST routes and the Direct API when it is
  * asked to be checked (and, for media writes, a plugin's
  * `ctx.services.media`), and every door must ask the same question. Declared
  * once here, as `API_KEY_ACTION_POLICY` is for API keys;
@@ -41,12 +41,35 @@ function ownOrManage(action: string, resource: string): RouteGrant {
 }
 
 /**
+ * `action` on `resource` alone, asked through the any-of check as a list of
+ * one. The settings and Email hub routes have always asked the any-of check;
+ * a list of one keeps them on it, and so keeps a `manage-` permission
+ * counting as the plain one there, rather than moving them to the
+ * single-grant check, which reads an entity's own rule where an entity of
+ * that name exists.
+ */
+function only(
+  action: string,
+  resource: string
+): { readonly anyOf: readonly SystemPermission[] } {
+  return { anyOf: [{ action, resource }] };
+}
+
+/**
  * The grant each system write asks.
  *
  * - Roles: their own action on `roles`; changing what a role grants is
  *   updating the role.
  * - Permissions: their own action on `permissions`, or `manage-permissions`.
- * - Field groups: their own action on `settings`, or `manage-settings`.
+ * - Settings: the general settings, languages, image sizes, user fields,
+ *   field groups, the sidebar's groups, a plugin's settings and the preview
+ *   links all ask their own action on `settings`. Regenerating image sizes
+ *   updates them. A role still holding `manage-settings` passes each, since
+ *   it counts as the plain four on settings.
+ * - Email providers and email templates: their own action on each. Sending
+ *   a test through a provider, or previewing a template, creates nothing
+ *   stored and asks create, as the routes have; making a provider the
+ *   default updates it. `manage-` counts as on settings.
  * - Media: `create-media` to add a file or a folder, `update-media` to edit
  *   or move one, `delete-media` to delete one, as REST's media routes ask.
  *   A bulk upload has no REST route of its own and asks what one upload asks.
@@ -67,10 +90,37 @@ export const SYSTEM_WRITE_POLICY = {
     update: { action: "update", resource: "users" },
     delete: { action: "delete", resource: "users" },
   },
+  settings: {
+    update: only("update", "settings"),
+  },
+  imageSizes: {
+    create: only("create", "settings"),
+    update: only("update", "settings"),
+    delete: only("delete", "settings"),
+    regenerate: only("update", "settings"),
+  },
+  userFields: {
+    create: only("create", "settings"),
+    update: only("update", "settings"),
+    delete: only("delete", "settings"),
+  },
   fieldGroups: {
-    create: ownOrManage("create", "settings"),
-    update: ownOrManage("update", "settings"),
-    delete: ownOrManage("delete", "settings"),
+    create: only("create", "settings"),
+    update: only("update", "settings"),
+    delete: only("delete", "settings"),
+  },
+  emailProviders: {
+    create: only("create", "email-providers"),
+    update: only("update", "email-providers"),
+    delete: only("delete", "email-providers"),
+    sendTest: only("create", "email-providers"),
+    makeDefault: only("update", "email-providers"),
+  },
+  emailTemplates: {
+    create: only("create", "email-templates"),
+    update: only("update", "email-templates"),
+    delete: only("delete", "email-templates"),
+    preview: only("create", "email-templates"),
   },
   media: {
     upload: { action: "create", resource: "media" },
@@ -111,9 +161,13 @@ const ROLE_OR_PERMISSION_READ: RouteGrant = {
  * - Media: `read-media`, for files and folders, as the admin's media routes
  *   ask; the public media mount serves reads without a check, but a call that
  *   asks to be checked is judged as the admin's are.
+ * - Settings: `read-settings`, for every settings page's read, the field
+ *   groups' settings-gated list included.
+ * - Email providers and templates: `read-` on each. The provider types are
+ *   read to choose one to add, so `create-email-providers` reads them too.
  *
- * Field groups ask no grant: REST serves their list and each one to any
- * signed-in caller, since the builder's palette reads them.
+ * The Direct API asks field groups no grant: it reads them as the builder's
+ * palette does, open to any signed-in caller.
  */
 export const SYSTEM_READ_POLICY = {
   users: {
@@ -134,4 +188,33 @@ export const SYSTEM_READ_POLICY = {
   media: {
     read: { action: "read", resource: "media" },
   },
+  settings: {
+    read: only("read", "settings"),
+  },
+  emailProviders: {
+    read: only("read", "email-providers"),
+    readTypes: {
+      anyOf: [
+        { action: "read", resource: "email-providers" },
+        { action: "create", resource: "email-providers" },
+      ],
+    },
+  },
+  emailTemplates: {
+    read: only("read", "email-templates"),
+  },
 } as const satisfies Record<string, Record<string, RouteGrant>>;
+
+/**
+ * What a change to the schema asks: a collection's or a Single's definition
+ * created, changed or deleted, or a schema change previewed or applied. It
+ * changes settings of every kind at once, so it asks all three of create,
+ * update and delete on `settings`; updating settings alone, enough to rename
+ * the site, does not reach the schema. A role still holding
+ * `manage-settings` holds all three.
+ */
+export const SCHEMA_CHANGE_PERMISSIONS: readonly SystemPermission[] = [
+  { action: "create", resource: "settings" },
+  { action: "update", resource: "settings" },
+  { action: "delete", resource: "settings" },
+];

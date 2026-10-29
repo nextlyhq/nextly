@@ -246,14 +246,9 @@ pnpm test:integration:postgres15
 pnpm test:integration:postgres17
 ```
 
-On a pull request, CI runs the integration legs (PostgreSQL, MySQL, SQLite)
-only once it carries the `run-integration` label; without it they report
-`skipped`. The merge queue runs all three before merging, so a MySQL or SQLite
-failure is caught there at the latest. A documentation-only change (files under
-`docs/`, or Markdown) skips them everywhere, label or not. Add the label when you want that
-answer before the queue: it re-runs Integration on the pull request's head. On
-a pull request from a fork it cannot, so after adding the label, re-run the
-head's Integration run from the Actions tab.
+On a pull request, CI runs the integration legs (PostgreSQL, MySQL, SQLite) on
+every push, as the merge queue does. A documentation-only change (files under
+`docs/`, or Markdown) skips them everywhere.
 
 ### Writing a new integration test
 
