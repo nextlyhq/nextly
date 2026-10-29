@@ -45,6 +45,16 @@ vi.mock("../../../i18n/config/require-app-config", () => ({
   assertLocalizationConfigured: vi.fn(),
 }));
 
+// A field made translated has its companion column read before anything changes, to refuse one
+// already there that cannot hold its values. These doubles hold no companion, so the read answers
+// none, as a database without one would; the refusal itself is proven against real databases.
+vi.mock("../../../i18n/runtime/companion-io", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../i18n/runtime/companion-io")
+  >()),
+  liveCompanionColumns: vi.fn(async () => []),
+}));
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../../errors";

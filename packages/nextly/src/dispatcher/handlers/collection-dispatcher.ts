@@ -195,6 +195,20 @@ function formatToastSummary(summary: {
 }
 
 /**
+ * The fields the registry records for a collection before a Schema Builder change, as it records
+ * them, so a relationship the change adds over a column an earlier apply already added still gets
+ * its foreign key, and one that apply renamed does not. The preview and the apply both hand the
+ * pipeline this one list, so they plan the same keys.
+ */
+function recordedFieldsOf(collection: {
+  fields?: unknown;
+}): DesiredCollection["fields"] {
+  return Array.isArray(collection.fields)
+    ? (collection.fields as DesiredCollection["fields"])
+    : [];
+}
+
+/**
  * Both directions of the all-locales lifecycle, as one handler.
  *
  * Publishing every language of an entry at once has a twin, the takedown.
@@ -647,6 +661,7 @@ const COLLECTIONS_METHODS: Record<
           (collection as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
       };
 
       return respondData(
@@ -918,6 +933,7 @@ const COLLECTIONS_METHODS: Record<
         localized: isLocalized,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
       };
 
       // A field leaving translation has preconditions of its own, asked before the push alters
