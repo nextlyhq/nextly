@@ -136,6 +136,19 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Destroy `handle` within the bound the work had. A transaction the timeout
+ * abandoned can still hold the pool's only connection, and destroying the
+ * handle ends the pool, which waits for that connection: unbounded, the
+ * teardown of a run that already failed would hang it.
+ */
+async function destroyWithin(
+  handle: TestNextly | undefined,
+  ms = 15_000
+): Promise<void> {
+  if (handle) await withTimeout(handle.destroy(), ms);
+}
+
 // A collection whose create/read/update/publish are all allowed for a session
 // editor. Judging each of those still reads the RBAC and metadata tables — the
 // reads that must run on the transaction's own connection.
@@ -266,7 +279,7 @@ describePg(
         ).length;
         expect(after).toBe(before);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -307,7 +320,7 @@ describePg(
         // so publish is denied — the point is the decision was REACHED on the tx.
         expect(allowed).toBe(false);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -343,7 +356,7 @@ describePg(
         );
         expect(row?.status).toBe("published");
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -383,7 +396,7 @@ describePg(
         );
         expect(row?.status).toBe("published");
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -418,7 +431,7 @@ describePg(
         );
         expect(row?.status).toBe("published");
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -461,7 +474,7 @@ describePg(
         );
         expect(row?.status).toBe("published");
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -518,7 +531,7 @@ describePg(
         expect(result.successful).toBe(1);
         expect(result.failed).toBe(0);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -567,7 +580,7 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterHook("afterCreate", AFTER_HOOK_SLUG, afterHook);
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -616,7 +629,7 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterHook("beforeDelete", DELETE_SLUG, beforeDeleteHook);
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -680,7 +693,7 @@ describePg(
         expect(result.success).toBe(false);
         expect(result.statusCode).toBe(403);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
         for (const stmt of [
           `DROP TABLE IF EXISTS comp_${FILTERED_DELETE_GROUP}`,
           `DELETE FROM dynamic_components WHERE slug = '${FILTERED_DELETE_GROUP}'`,
@@ -729,7 +742,7 @@ describePg(
           true
         );
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -772,7 +785,7 @@ describePg(
         expect(result.failed).toBe(0);
       } finally {
         unregisterBeforeOperationHook(BEFOREOP_SLUG, beforeOpHook);
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
 
@@ -831,7 +844,7 @@ describePg(
         expect(result.successful).toBe(1);
         expect(result.failed).toBe(0);
       } finally {
-        await handle?.destroy();
+        await destroyWithin(handle);
       }
     }, 30_000);
   }
