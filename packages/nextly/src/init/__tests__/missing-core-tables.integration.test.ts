@@ -15,6 +15,7 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { warnIfCoreSchemaIsBehind } from "../first-run";
+import { seedPermissionsAndRolePresets } from "../seed-permissions";
 
 let current: TestNextly | undefined;
 
@@ -68,6 +69,42 @@ describe.each(getConfiguredTestDialects())(
       expect(warnings[0]).toContain("nextly_version_pins");
       expect(warnings[0]).toContain("nextly_version_views");
       expect(warnings[0]).toContain("nextly migrate");
+    });
+
+    it("names a missing role_permissions table rather than failing on it", async () => {
+      current = await createTestNextly({ dialect });
+      // Seeded, so the scan for roles holding a retired manage permission has
+      // one to look up the holders of, in the table that is gone.
+      await seedPermissionsAndRolePresets();
+      await current.adapter.executeQuery("DROP TABLE role_permissions");
+
+      // A check that fails says so only at debug, so that is kept too.
+      const said: string[] = [];
+      const failed: string[] = [];
+      await warnIfCoreSchemaIsBehind(
+        current.adapter as unknown as Parameters<
+          typeof warnIfCoreSchemaIsBehind
+        >[0],
+        {
+          debug: (message: string) => {
+            failed.push(message);
+          },
+          info: () => undefined,
+          warn: (message: string) => {
+            said.push(message);
+          },
+          error: () => undefined,
+        },
+        60_000
+      );
+      const warnings = said.filter(w => w.includes("missing tables"));
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("role_permissions");
+      // The check ran to its end: none of it failed on the missing table.
+      expect(
+        failed.filter(m => m.includes("Could not check core schema state"))
+      ).toEqual([]);
     });
   }
 );

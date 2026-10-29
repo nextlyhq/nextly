@@ -38,6 +38,7 @@ import {
 } from "./displays";
 import { isPermissionName } from "./permission-name";
 import { quote } from "./quote";
+import { transportableProblem } from "./transportable";
 
 /** One thing wrong with one declaration, said where an author reads it. */
 export interface WidgetDeclarationFault {
@@ -373,7 +374,7 @@ function previewProblems(
       problems.push(`${at}.settings must be an object of setting values`);
     } else if (entry.settings !== undefined) {
       problems.push(
-        ...previewSettingsProblems(`${at}.settings`, entry.settings, settings)
+        ...previewCaseSettingsProblems(at, entry.settings, settings)
       );
     }
     const problem = cardAnswerProblem(display, entry.data);
@@ -386,6 +387,32 @@ function previewProblems(
     }
     return problems;
   });
+}
+
+/**
+ * Why a preview case's settings cannot be drawn: first whether they reach the
+ * browser as themselves, then whether each value is one the widget accepts.
+ *
+ * 🔴 The transport rule first, and on its own. The preview page is sent each
+ * case whole, its settings beside its data, and a setting's own type does not
+ * keep every value out that JSON changes: a `filter` setting accepts any plain
+ * object, so a `Date`, a `Map` or a class instance nested in one passed its
+ * type and arrived as a string or `{}`. Judged by the rule a card's data is
+ * held to (`transportableProblem`), in the words a case's data is refused in.
+ */
+function previewCaseSettingsProblems(
+  at: string,
+  values: Record<string, unknown>,
+  settings: unknown
+): string[] {
+  const where = `${at}.settings`;
+  const untransportable = transportableProblem(values);
+  if (untransportable !== undefined) {
+    return [
+      `${where} cannot be sent to the browser as it is: ${untransportable.replace("the value", where)}`,
+    ];
+  }
+  return previewSettingsProblems(where, values, settings);
 }
 
 /**

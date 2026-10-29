@@ -8,7 +8,7 @@ import {
   FormMessage,
 } from "@admin/components/ui/form";
 import type { RoleFormValuesType } from "@admin/hooks/useRoleForm";
-import type { LevelRow } from "@admin/lib/permissions/level-rows";
+import type { LevelRow, PluginGroup } from "@admin/lib/permissions/level-rows";
 import type { Permission } from "@admin/types/ui/form";
 
 import { PermissionLevelRows } from "./PermissionLevelRows";
@@ -16,8 +16,12 @@ import { PermissionMatrix } from "./PermissionMatrix";
 
 interface RolePermissionsSectionProps {
   form: UseFormReturn<RoleFormValuesType>;
-  /** One row per collection and Single. */
+  /** One row per collection and Single of the app's own. */
   levelRows: LevelRow[];
+  /** Each plugin's collections and own permissions. */
+  pluginGroups: PluginGroup[];
+  /** What each plugin is called, by its package name. */
+  pluginNames: ReadonlyMap<string, string>;
   /** The permissions no row takes, shown in the grid below the rows. */
   otherPermissions: Permission[];
   lockedPermissionIds: string[];
@@ -33,6 +37,8 @@ interface RolePermissionsSectionProps {
 export function RolePermissionsSection({
   form,
   levelRows,
+  pluginGroups,
+  pluginNames,
   otherPermissions,
   lockedPermissionIds,
   bases,
@@ -48,6 +54,8 @@ export function RolePermissionsSection({
             <div className="flex flex-col gap-8">
               <PermissionLevelRows
                 rows={levelRows}
+                groups={pluginGroups}
+                pluginNames={pluginNames}
                 value={field.value || []}
                 onChange={field.onChange}
                 lockedIds={lockedPermissionIds}
