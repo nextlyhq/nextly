@@ -11518,6 +11518,12 @@ export class CollectionMutationService extends BaseService {
      * super-admin-owned key on the delete gate.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Whether a delete rule's filter is applied, deleting the entry only where
+     * it matches. `false` refuses a rule that answers a filter, as a bulk
+     * delete by ids does. Defaults to `true`.
+     */
+    appliesFilter?: boolean;
   }): Promise<CollectionServiceResult> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -11571,8 +11577,14 @@ export class CollectionMutationService extends BaseService {
         // super-admin bypass does not apply to a super-admin-owned key here.
         authenticatedScope: params.authenticatedScope,
       };
+      // A delete that does not apply a filter asks the gate that refuses one.
       const access =
-        await this.accessService.checkCollectionWrite(accessParams);
+        params.appliesFilter === false
+          ? {
+              denied:
+                await this.accessService.checkCollectionAccess(accessParams),
+            }
+          : await this.accessService.checkCollectionWrite(accessParams);
       if (access.denied) {
         return access.denied;
       }
