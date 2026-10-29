@@ -163,6 +163,34 @@ Only `slug` and `fields` are required.
 
 Unique identifier used as the database table name (unless `dbName` is set), the REST path (`/admin/api/collections/[slug]/entries`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
 
+#### The address rule
+
+A collection's, Single's or field group's slug is its address, and one rule judges a new address
+the same way wherever it is set: in `nextly.config.ts`, in the Visual Schema Builder, through the
+REST schema endpoints, through `nextly.fieldGroups.create()`, and by `nextly migrate:check` and
+`nextly migrate:create`. An address:
+
+- starts with a lowercase letter and holds only lowercase letters, numbers, hyphens and
+  underscores (`team-updates` and `team_updates` are both valid);
+- is not a route or system table Nextly uses (`admin`, `api`, `users`, `accounts`, `media` and
+  others), nor, for a collection or Single, a system resource such as `settings`, nor, for a field
+  group, `field-groups`;
+- is not a reserved SQL word (`select`, `order`, `cascade` and others) and does not end in
+  `_locales`;
+- is at most 50 characters, and short enough that every table it leads to fits the 63 characters
+  PostgreSQL allows: 48 for a Single (`single_<slug>_locales`) and 47 for a field group
+  (`idx_comp_<slug>_parent`).
+
+The table is named from the address's snake_case form, each hyphen written as an underscore:
+`team-updates` is stored in `dc_team_updates`. So two addresses that differ only by `-` and `_`
+are refused: a collection or Single cannot take `team_updates` beside a collection or Single
+`team-updates`, and a field group cannot take it beside another field group `team-updates`. A
+field group may share that form with a collection, since field groups have their own addresses.
+
+A refusal names the address and the reason. The rule applies only when an address is created:
+an entity that already exists under an address the rule now refuses keeps working, and
+`nextly migrate:check` warns about it once.
+
 ### `fields`
 
 | | |
