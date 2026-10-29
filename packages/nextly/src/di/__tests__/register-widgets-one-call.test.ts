@@ -11,6 +11,10 @@ import {
   CORE_WIDGETS,
 } from "../../domains/widgets/core-widgets";
 import * as declaredWidgets from "../../domains/widgets/declaration/declared-widgets";
+import {
+  adminComponentPlugins,
+  adminSiteDashboard,
+} from "../../domains/widgets/declaration/component-map-store";
 import { SITE_CONFIG } from "../../domains/widgets/declaration/site-dashboard";
 import {
   dashboard,
@@ -82,5 +86,16 @@ describe("the one call", () => {
     expect(getWidget(revenue.id)).toBeDefined();
     // And the site's under the site config, as a plugin's are kept.
     expect(widgetSource(site.id)).toBe(SITE_CONFIG);
+  });
+});
+
+describe("what the component map is checked against", () => {
+  it("is the plugins and the site dashboard this boot registered", () => {
+    const siteDashboard = {
+      widgets: [{ ...revenue, id: "site/notes" }],
+    };
+    resetWidgetRegistries([shop], siteDashboard);
+    expect(adminComponentPlugins()).toEqual([shop]);
+    expect(adminSiteDashboard()).toBe(siteDashboard);
   });
 });
