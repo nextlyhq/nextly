@@ -45,6 +45,12 @@ export interface Role {
    * API returns carries it; optional so a Role built by hand still compiles.
    */
   assignable?: boolean;
+  /**
+   * Which built-in role this is: `"public"` for the role whose permissions
+   * are what visitors who aren't signed in may do, `"super-admin"` for the
+   * role holding every permission. Absent for every other role.
+   */
+  builtIn?: "public" | "super-admin";
 }
 
 /**

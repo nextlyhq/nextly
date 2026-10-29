@@ -199,6 +199,8 @@ describe.each(getConfiguredTestDialects())("the Public role (%s)", dialect => {
     await seedPermissionsAndRolePresets();
     const id = await publicRoleId(nextly);
     const roles = services(nextly).roles;
+    // Made as the first person's sign-up makes it.
+    await roles.ensureSuperAdminRole();
 
     const { data } = await roles.listRoles({ limit: 100 });
     const marked = new Map(data.map(role => [role.slug, role.builtIn]));

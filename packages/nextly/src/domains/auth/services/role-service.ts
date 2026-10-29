@@ -3,6 +3,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 
+import type { BuiltInRole } from "./public-role";
 import {
   type CreateRoleOptions,
   RoleMutationService,
@@ -100,6 +101,8 @@ export class RoleService extends BaseService {
       isSystem: boolean;
       /** Whether it may be given to someone or inherited. */
       assignable: boolean;
+      /** Which built-in role it is, if one. */
+      builtIn?: BuiltInRole;
     }>;
     meta: {
       total: number;
@@ -128,6 +131,8 @@ export class RoleService extends BaseService {
     isSystem: boolean;
     /** Whether it may be given to someone or inherited. */
     assignable: boolean;
+    /** Which built-in role it is, if one. */
+    builtIn?: BuiltInRole;
   }> {
     return this.queryService.getRoleById(roleId);
   }

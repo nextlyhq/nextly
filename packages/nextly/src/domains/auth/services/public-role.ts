@@ -15,6 +15,7 @@ import { and, eq, inArray } from "drizzle-orm";
 
 import { getDialectTables } from "../../../database";
 import { NextlyError } from "../../../errors/nextly-error";
+import { SUPER_ADMIN_SLUG } from "../../../services/access/super-admin";
 import type { Logger } from "../../../services/shared";
 import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
 
@@ -35,6 +36,22 @@ export const PUBLIC_ROLE_META_KEY = "public-role-created";
  */
 export function isAssignableRole(role: { slug: string }): boolean {
   return role.slug !== PUBLIC_ROLE_SLUG;
+}
+
+/** A built-in role the admin treats apart from every other. */
+export type BuiltInRole = "public" | "super-admin";
+
+/**
+ * Which built-in role `role` is: the Public role, whose permissions are what
+ * visitors who aren't signed in may do, or super-admin, which holds every
+ * permission and is never edited; `undefined` for every other role. Sent
+ * with each role, from the same slugs as {@link isAssignableRole}, so a
+ * screen tells them apart without naming either slug.
+ */
+export function builtInRoleOf(role: { slug: string }): BuiltInRole | undefined {
+  if (role.slug === PUBLIC_ROLE_SLUG) return "public";
+  if (role.slug === SUPER_ADMIN_SLUG) return "super-admin";
+  return undefined;
 }
 
 /**
