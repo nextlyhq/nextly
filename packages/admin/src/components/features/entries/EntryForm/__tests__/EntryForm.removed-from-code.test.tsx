@@ -1,8 +1,9 @@
 /**
  * The entry editor of a collection removed from code offers no control that
  * would write, for a user holding every permission: no Save or Publish, no
- * Unpublish, Delete, Duplicate or discard, no page-contributed action, its
- * fields read-only and no claim made on the document. Reading stays: the menu
+ * Unpublish, Delete, Duplicate or discard, no publishing of every language,
+ * no page-contributed action, its fields read-only and no claim made on the
+ * document. Reading stays: the menu
  * keeps "View API response". The notice is the page's document banner, drawn
  * under the header; the lock strip adds no reader's sentence of its own.
  *
@@ -18,11 +19,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cleanup, createTestQueryClient, screen } from "@admin/__tests__/utils";
 
-const { useDocumentLock } = vi.hoisted(() => ({
+const { useDocumentLock, sidebarProps } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
+  sidebarProps: vi.fn(),
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+// Drawn as it is, its props recorded: the publish-all hold is handed down here.
+vi.mock("../EntryFormSidebar", async importOriginal => {
+  const actual = await importOriginal<typeof import("../EntryFormSidebar")>();
+  return {
+    EntryFormSidebar: (
+      props: Parameters<typeof actual.EntryFormSidebar>[0]
+    ) => {
+      sidebarProps(props);
+      return actual.EntryFormSidebar(props);
+    },
+  };
+});
 vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
   useUpdateEntry: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -148,6 +162,14 @@ describe("the entry editor of a collection removed from code", () => {
     );
   });
 
+  it("holds publishing every language, which the page offers a reader", () => {
+    renderEditor(true);
+
+    expect(sidebarProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ publishAllDisabled: true })
+    );
+  });
+
   it("shows its fields read-only, makes no claim, and adds no reader's sentence", () => {
     renderEditor(true);
 
@@ -173,6 +195,9 @@ describe("the entry editor of a collection removed from code", () => {
     );
     expect(useDocumentLock).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: true })
+    );
+    expect(sidebarProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ publishAllDisabled: false })
     );
   });
 });

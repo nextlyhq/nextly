@@ -697,12 +697,16 @@ export function SingleForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
   const editsHeld = writesHeld || !mayEdit;
+  // A status write alone is held where the document's writes are, and for a
+  // Single removed from code, whose publish the server refuses as it refuses
+  // a save.
+  const statusWriteHold = writesHeld || removedFromCode;
   // Publishing every language changes only each language's status, so a
   // reader whose document nothing else holds is still offered it.
   const publishAllHeld = statusWritesHeld({
     editsHeld,
     refused: readOnlyForReader,
-    writesHeld,
+    writesHeld: statusWriteHold,
   });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
@@ -774,7 +778,7 @@ export function SingleForm({
         // A reader's publish and unpublish still go, as the status alone.
         const status = readerStatusWrite(intent, {
           refused: readOnlyForReader,
-          writesHeld,
+          writesHeld: statusWriteHold,
         });
         return status === undefined ? submitHeld : writeStatus(status);
       }
@@ -834,7 +838,7 @@ export function SingleForm({
       busy,
       editsHeld,
       readOnlyForReader,
-      writesHeld,
+      statusWriteHold,
       writeStatus,
       document.id,
       schema,

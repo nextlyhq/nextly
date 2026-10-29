@@ -658,12 +658,16 @@ export function EntryForm({
   // Changing the content is held for a reader as well. Deleting is not: it
   // follows its own permission, and is offered only with it.
   const editsHeld = writesHeld || !mayEdit;
+  // A status write alone is held where the document's writes are, and for a
+  // collection removed from code, whose publish the server refuses as it
+  // refuses a save.
+  const statusWriteHold = writesHeld || removedFromCode;
   // Publishing every language changes only each language's status, so a
   // reader whose document nothing else holds is still offered it.
   const publishAllHeld = statusWritesHeld({
     editsHeld,
     refused: readOnlyForReader,
-    writesHeld,
+    writesHeld: statusWriteHold,
   });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
@@ -707,7 +711,7 @@ export function EntryForm({
     // their own permissions judge; everything else stays held.
     const status = readerStatusWrite(intent, {
       refused: readOnlyForReader,
-      writesHeld,
+      writesHeld: statusWriteHold,
     });
     return status === undefined
       ? Promise.resolve(submitHeld)

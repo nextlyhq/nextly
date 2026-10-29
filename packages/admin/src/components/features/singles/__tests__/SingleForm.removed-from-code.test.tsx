@@ -1,9 +1,10 @@
 /**
  * The Single editor of a Single removed from code offers no control that would
  * write, for a user holding every permission: no Save or Publish, no
- * Unpublish, no page-contributed action, its fields read-only and no claim made
- * on the document. Its history and a preview stay. The notice is the page's
- * document banner; the lock strip adds no reader's sentence of its own.
+ * Unpublish, no publishing of every language, no page-contributed action, its
+ * fields read-only and no claim made on the document. Its history and a
+ * preview stay. The notice is the page's document banner; the lock strip adds
+ * no reader's sentence of its own.
  *
  * The control is the same editor for the same user on a declared Single.
  */
@@ -16,11 +17,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { cleanup, createTestQueryClient, screen } from "@admin/__tests__/utils";
 
-const { useDocumentLock } = vi.hoisted(() => ({
+const { useDocumentLock, sidebarProps } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
+  sidebarProps: vi.fn(),
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+// Drawn as it is, its props recorded: the publish-all hold is handed down here.
+vi.mock(
+  "@admin/components/features/entries/EntryForm/EntryFormSidebar",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("@admin/components/features/entries/EntryForm/EntryFormSidebar")
+      >();
+    return {
+      EntryFormSidebar: (
+        props: Parameters<typeof actual.EntryFormSidebar>[0]
+      ) => {
+        sidebarProps(props);
+        return actual.EntryFormSidebar(props);
+      },
+    };
+  }
+);
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   useAutosaveRecovery: () => ({
     offer: null,
@@ -149,6 +169,14 @@ describe("the Single editor of a Single removed from code", () => {
     expect(items).toContain("History");
   });
 
+  it("holds publishing every language, which the page offers a reader", () => {
+    renderEditor(true);
+
+    expect(sidebarProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ publishAllDisabled: true })
+    );
+  });
+
   it("shows its fields read-only, makes no claim, and adds no reader's sentence", () => {
     renderEditor(true);
 
@@ -171,6 +199,9 @@ describe("the Single editor of a Single removed from code", () => {
     );
     expect(useDocumentLock).toHaveBeenLastCalledWith(
       expect.objectContaining({ enabled: true })
+    );
+    expect(sidebarProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ publishAllDisabled: false })
     );
   });
 });
