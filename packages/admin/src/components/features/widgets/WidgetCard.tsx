@@ -613,14 +613,17 @@ function useFooterClaims(widgetId: string | undefined): {
   }, []);
   const drawn = drawnClaim(held);
   const explicit = held.filter(c => c.rank === "explicit").length;
+  // Whether this card has said so yet: once per card, however often its count of links changes
+  // while it is drawn, so a body redrawing its links does not repeat the same warning.
+  const warned = useRef(false);
   // A widget's body names one link for its footer; a second is a mistake its author should hear
   // of, while developing, and the footer still draws one (the last).
   useEffect(() => {
-    if (explicit > 1 && isDevelopmentRuntime()) {
-      console.warn(
-        `Widget "${widgetId ?? "(unnamed)"}" draws ${explicit} Widget.FooterLink; a card's footer holds one link, so only the last is drawn.`
-      );
-    }
+    if (warned.current || explicit <= 1 || !isDevelopmentRuntime()) return;
+    warned.current = true;
+    console.warn(
+      `Widget "${widgetId ?? "(unnamed)"}" draws ${explicit} Widget.FooterLink; a card's footer holds one link, so only the last is drawn.`
+    );
   }, [explicit, widgetId]);
   const claims = useMemo(() => ({ claim, drawn }), [claim, drawn]);
   return { held: held.length > 0, claims };

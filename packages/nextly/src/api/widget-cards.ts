@@ -132,12 +132,17 @@ const UNSTATED_TIER: WidgetLoadSize["tier"] = "medium";
  *   preview's, its widget's default size, the size a new card starts at;
  * - its tier: the one the entry carries, else {@link UNSTATED_TIER}.
  *
- * The bounds are the registry's, which a site's override narrows, falling back
- * to the declaration's own.
+ * The bounds are the registry's, falling back to the declaration's own, read
+ * through the site's `overrides` (`withSiteOverride`) as the layout and the
+ * admin read them, so a load is never handed a size the site's narrower bounds
+ * would not draw.
  */
 function cardSize(declared: DeclaredWidget, asked: AskedCard): WidgetLoadSize {
+  const registered = getWidget(declared.declaration.id);
   const bounds = sizeBounds(
-    getWidget(declared.declaration.id)?.size ?? declared.declaration.size
+    registered === undefined
+      ? withSiteOverride(declared.declaration).size
+      : withSiteOverride(registered).size
   );
   const { placement, preview, size } = asked;
   const stated: GridSize | undefined =

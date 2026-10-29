@@ -185,6 +185,11 @@ const clientEntries = [
   // module imports only the row limits, so the admin reaching it takes nothing
   // more.
   "src/domains/widgets/card-geometry.ts",
+  // The one humaniser of a field's key, as its own entry: the admin names a
+  // field by it on screen and a widget's `describe` read names one by it on
+  // the server, so neither keeps a copy; it imports nothing. Internal: not a
+  // public API.
+  "src/collections/fields/field-label.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.

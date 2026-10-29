@@ -13,7 +13,10 @@ export {
   type AnyWidget,
   type WidgetAccess,
   type WidgetAccessGate,
+  type WidgetCollectionDescription,
+  type WidgetCollectionField,
   type WidgetComponentMap,
+  type WidgetCountWindow,
   type WidgetData,
   type WidgetDataInput,
   type WidgetEmpty,
@@ -25,6 +28,7 @@ export {
   type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
+  type WidgetSkeleton,
   type WidgetSummary,
 } from "./define-widget";
 export {

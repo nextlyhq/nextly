@@ -67,6 +67,7 @@ import {
   type MemberListResponse,
   type BlockerListResponse,
   type ReleaseHistoryResponse,
+  type ReleaseMemberRemovalResponse,
 } from "@admin/services/releaseApi";
 import { singleApi } from "@admin/services/singleApi";
 import {
@@ -642,14 +643,22 @@ export function useAddReleaseMember(
   });
 }
 
-export function useRemoveReleaseMember(releaseId: string): UseMutationResult<
-  {
-    message: string;
-  },
-  Error,
-  string,
-  unknown
-> {
+/**
+ * What a removal tells the editor, from what the server says it did: taking
+ * the only document out of a single-document release cancels the release, so
+ * the toast says that rather than that the document was removed.
+ */
+export function releaseRemovalMessage(
+  result: ReleaseMemberRemovalResponse
+): string {
+  return result.releaseCancelled
+    ? "Release cancelled."
+    : "Removed from release.";
+}
+
+export function useRemoveReleaseMember(
+  releaseId: string
+): UseMutationResult<ReleaseMemberRemovalResponse, Error, string, unknown> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -657,9 +666,9 @@ export function useRemoveReleaseMember(releaseId: string): UseMutationResult<
     // belonging to another release, so a stale view cannot edit one the editor
     // never opened.
     mutationFn: (memberId: string) => removeReleaseMember(releaseId, memberId),
-    onSuccess: () => {
+    onSuccess: result => {
       refresh(releaseId);
-      toast.success("Removed from release.");
+      toast.success(releaseRemovalMessage(result));
     },
   });
 }

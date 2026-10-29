@@ -42,6 +42,7 @@ import type { PluginSelf } from "../self";
 
 import { composeMiddleware } from "./middleware";
 import { parsePermissionSlug } from "./permission-slug";
+import { noteRetiredManageAsked } from "./retired-manage-asked";
 import { buildPluginRouteCaller } from "./route-caller";
 import {
   checkRouteCsrf,
@@ -138,6 +139,11 @@ async function resolvePluginRouteAuth(
 
   const required = requiredPermissionOrRefusal(route, self);
   if ("error" in required) return required;
+  // A route asking a retired permission is answered by the plain four, and
+  // its plugin is told once what to ask instead.
+  if (required.permission) {
+    noteRetiredManageAsked(self.name, ...permissionArgs(required.permission));
+  }
 
   // requirePermission already enforces authentication, so the permission-gated
   // path needs a single call (avoids verifying the session twice).
@@ -148,7 +154,7 @@ async function resolvePluginRouteAuth(
   if (isErrorResponse(authResult)) {
     return { error: toNextlyAuthError(authResult) };
   }
-  return authenticatedCaller(authResult);
+  return authenticatedCaller(authResult, self);
 }
 
 /**
@@ -245,7 +251,8 @@ function authenticatedCaller(
   authResult: Exclude<
     Awaited<ReturnType<typeof requireAuthentication>>,
     { statusCode: number }
-  >
+  >,
+  self: PluginSelf
 ): RouteAuth & { user: AuthUser; caller: PluginRouteCaller } {
   const user: AuthUser = {
     id: authResult.userId as AuthUser["id"],
@@ -261,7 +268,7 @@ function authenticatedCaller(
     // Built from the same `authResult` the scope above is derived from, so
     // the raw grant and the question asked of it cannot disagree about who
     // is asking.
-    caller: buildPluginRouteCaller(authResult),
+    caller: buildPluginRouteCaller(authResult, self.name),
     principal: null,
     credential: authResult.authMethod === "session" ? "cookie" : "bearer",
   };

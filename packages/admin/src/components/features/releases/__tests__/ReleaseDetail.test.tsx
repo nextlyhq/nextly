@@ -6,6 +6,10 @@
  * The release's `can` is the server's verdict; each permission set below is
  * one the server could send, and the page must offer exactly what it allows.
  *
+ * And taking the only document out of a single-document release says what it
+ * does: it cancels the release, so the page asks to confirm a cancellation,
+ * and the answer says the release was cancelled when the server says so.
+ *
  * @module components/features/releases/__tests__/ReleaseDetail.test
  */
 import userEvent from "@testing-library/user-event";
@@ -657,5 +661,19 @@ describe("Schedule and Publish now while the checks are read", () => {
     expect(
       screen.getByRole("button", { name: "Show the first to fix" })
     ).toBeTruthy();
+  });
+});
+
+describe("the answer to taking a document out", () => {
+  it("says the release was cancelled when the server answers that it was", async () => {
+    const { releaseRemovalMessage } = await vi.importActual<
+      typeof import("@admin/hooks/queries/useReleases")
+    >("@admin/hooks/queries/useReleases");
+    expect(releaseRemovalMessage({ message: "", releaseCancelled: true })).toBe(
+      "Release cancelled."
+    );
+    expect(
+      releaseRemovalMessage({ message: "", releaseCancelled: false })
+    ).toBe("Removed from release.");
   });
 });

@@ -18,7 +18,15 @@ import type {
   TransactionContext,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
-import { eq, ne, and, like, ilike, inArray } from "drizzle-orm";
+import {
+  eq,
+  ne,
+  and,
+  like,
+  ilike,
+  inArray,
+  type SQLWrapper,
+} from "drizzle-orm";
 
 // `OperationType` was removed during the PR 4 migration — this module no longer
 // references it, so we import only `BeforeOperationArgs`.
@@ -26,6 +34,7 @@ import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { holdsGrant } from "../../../auth/access/gate-adapters";
+import type { RuleFilter } from "../../../auth/access/rule-answer";
 import {
   askEachLanguage,
   withRuleLanguage,
@@ -195,6 +204,7 @@ import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import { reachesLocalizedFieldGroup } from "../../i18n/per-language-fields";
 import {
   isValidLocale,
+  resolveLocaleChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import {
@@ -271,6 +281,7 @@ import {
 import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
 import type { WebhookResource } from "../../webhooks/types";
+import type { FilterConditionSources } from "../query/filter-condition";
 
 import {
   PUBLISH_ALL_LOCALES,
@@ -278,7 +289,10 @@ import {
   type AllLocalesLifecycleParams,
   type LifecycleDirection,
 } from "./all-locales-lifecycle";
-import type { CollectionAccessService } from "./collection-access-service";
+import type {
+  CollectionAccessService,
+  FilteredWrite,
+} from "./collection-access-service";
 import type {
   CollectionHookService,
   QueryDatabaseParams,
@@ -296,6 +310,14 @@ import {
   generateSlug,
 } from "./collection-utils";
 import { entryWriteContext } from "./stored-field-read";
+import {
+  prepareWriteMatch,
+  readLocalizedContext,
+  writeLocalizedContext,
+  writeMatchOf,
+  type FilteredWriteMatch,
+  type ReadReach,
+} from "./write-filter-match";
 
 /** The Drizzle executor shape the companion-join readers accept (a transaction
  * handle's `getDrizzle()` result, or the pooled `this.db`). */
@@ -11309,6 +11331,182 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The delete gate's answer: allowed, with the delete rule's filter to match
+   * the entry against where it answered one, or the refusal to hand back.
+   * Where the delete does not apply a filter, the gate that refuses one is
+   * asked instead.
+   */
+  private async deleteAccess(
+    accessParams: Parameters<
+      CollectionAccessService["checkCollectionWrite"]
+    >[0],
+    appliesFilter: boolean
+  ): ReturnType<CollectionAccessService["checkCollectionWrite"]> {
+    if (appliesFilter) {
+      return this.accessService.checkCollectionWrite(accessParams);
+    }
+    const denied = await this.accessService.checkCollectionAccess(accessParams);
+    return denied ? { denied } : { denied: null };
+  }
+
+  /**
+   * The match a write limited to a rule's filter makes of its entry, prepared
+   * before any transaction opens: the filter's facts about the collection are
+   * read here, so the match itself can be asked on the write's own
+   * transaction. `undefined` where the caller is not limited to a filter.
+   *
+   * A filter on a translated field is matched in `locale`, the language the
+   * write acts in; a write acting on every language matches in the default.
+   */
+  private async prepareFilteredWrite(
+    collectionName: string,
+    action: FilteredWrite,
+    schema: Record<string, SQLWrapper | undefined>,
+    access: { filter?: RuleFilter; read?: ReadReach },
+    options: { locale?: string; executor?: unknown } = {}
+  ): Promise<FilteredWriteMatch | undefined> {
+    if (!access.filter || !access.read) return undefined;
+    const { executor } = options;
+    // Every read the filter's facts need runs on the caller's transaction
+    // where it holds one, as the write's own reads do: a pooled read inside it
+    // would wait for the connection the transaction holds.
+    const sources: FilterConditionSources = {
+      getCollection: name =>
+        this.collectionService.getCollection(name, executor),
+      adapter: executor
+        ? {
+            dialect: this.adapter.dialect,
+            getDrizzle: <T>() => executor as T,
+          }
+        : this.adapter,
+      ...(this.fieldGroupDataService
+        ? {
+            getComponentTableName: slug =>
+              this.fieldGroupDataService?.getComponentTableName(
+                slug,
+                executor
+              ) ?? Promise.resolve(undefined),
+          }
+        : {}),
+    };
+    const prepared = await prepareWriteMatch(
+      { collectionName, action, filter: access.filter, read: access.read },
+      sources
+    );
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      executor
+    );
+    // A companion that is not ready yet, a collection still in its
+    // pre-migration state, keeps its translated values on the main table, so
+    // the filter reads them there. Resolved on the pool, or read from the
+    // verdict already resolved where the write holds a transaction.
+    const readiness = !companion
+      ? undefined
+      : executor
+        ? cachedCompanionReadiness(this.adapter, companion.companionTableName)
+        : await resolveCompanionReadiness(this.adapter, {
+            companionTableName: companion.companionTableName,
+            mainTableName: companion.companionTableName.replace(
+              /_locales$/,
+              ""
+            ),
+            localizedColumns: companion.localizedFields.map(f => f.column),
+          });
+    const ready = readiness === "ready" ? companion : null;
+    return {
+      columns: prepared.columns(schema, {
+        writes: writeLocalizedContext(
+          ready,
+          schema,
+          options.locale ?? this.localization?.defaultLocale
+        ),
+        // Whether the caller may read the entry is a plain read's question,
+        // asked in the default language and its fallbacks, as that read is.
+        reads: readLocalizedContext(
+          ready,
+          schema,
+          resolveLocaleChain(this.localization, undefined, undefined)
+        ),
+      }),
+    };
+  }
+
+  /**
+   * The refusal of a write to `entryId` made inside the caller's transaction,
+   * where the entry is outside the caller's filter: matched on that
+   * transaction, under the row lock taken here, so the entry written is the
+   * entry judged. `null` where it is inside the filter.
+   */
+  private async refusalOutsideFilterInTransaction<T>(
+    tx: TransactionContext,
+    tableName: string,
+    entryId: string,
+    access: { filter?: RuleFilter; read?: ReadReach },
+    accessParams: Parameters<
+      CollectionAccessService["refusalOutsideFilter"]
+    >[0] & { operation: FilteredWrite }
+  ): Promise<CollectionServiceResult<T> | null> {
+    const executor = tx.getDrizzle();
+    const schema = await this.fileManager.loadDynamicSchema(
+      accessParams.collectionName,
+      executor
+    );
+    const filtered = await this.prepareFilteredWrite(
+      accessParams.collectionName,
+      accessParams.operation,
+      schema,
+      access,
+      { executor }
+    );
+    if (!filtered) return null;
+    await tx.lockRow(tableName, entryId);
+    return this.refusalOutsideWriteFilter<T>(
+      tx.getDrizzle<typeof this.db>(),
+      schema,
+      entryId,
+      filtered,
+      accessParams,
+      { underLock: true }
+    );
+  }
+
+  /**
+   * The refusal of a write to `entryId` where the entry is outside the
+   * caller's filter, asked on `db`: the pool before the write's hooks run, and
+   * the write's own transaction under its row lock. `null` where the entry is
+   * inside the filter, or gone, which the write answers as it answers any
+   * missing entry.
+   *
+   * Under the row lock the match is itself a locking read. A plain read there
+   * would answer from the transaction's snapshot, which on MySQL's REPEATABLE
+   * READ is fixed at its first read and can predate a commit that moved the
+   * entry out of the filter; a locking read sees the row the lock holds.
+   */
+  private async refusalOutsideWriteFilter<T>(
+    db: typeof this.db,
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    entryId: string,
+    match: FilteredWriteMatch,
+    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0],
+    options: { underLock?: boolean } = {}
+  ): Promise<CollectionServiceResult<T> | null> {
+    const query = db
+      .select({ writes: match.columns.writes, reads: match.columns.reads })
+      .from(schema)
+      .where(eq(schema.id as never, entryId))
+      .limit(1);
+    // SQLite runs one writer at a time, and has no `FOR UPDATE`.
+    const [row] =
+      options.underLock && this.adapter.dialect !== "sqlite"
+        ? await query.for("update")
+        : await query;
+    const found = writeMatchOf(row);
+    if (!found.exists || found.writes) return null;
+    return this.accessService.refusalOutsideFilter<T>(access, found.reads);
+  }
+
+  /**
    * Delete an entry.
    * Applies collection-level access control and hooks.
    *
@@ -11339,6 +11537,12 @@ export class CollectionMutationService extends BaseService {
      * super-admin-owned key on the delete gate.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Whether a delete rule's filter is applied, deleting the entry only where
+     * it matches. `false` refuses a rule that answers a filter, as a bulk
+     * delete by ids does. Defaults to `true`.
+     */
+    appliesFilter?: boolean;
   }): Promise<CollectionServiceResult> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -11378,10 +11582,12 @@ export class CollectionMutationService extends BaseService {
         };
       }
 
-      // 1. Check collection-level access FIRST (with document for owner checks)
-      const accessDenied = await this.accessService.checkCollectionAccess({
+      // 1. Check collection-level access FIRST. A delete rule that answers a
+      // filter allows only the entries it matches, so the gate hands the
+      // filter back for this delete to match its entry against.
+      const accessParams = {
         collectionName: params.collectionName,
-        operation: "delete",
+        operation: "delete" as const,
         entryId: params.entryId,
         user: accessUser,
         overrideAccess: params.overrideAccess,
@@ -11389,9 +11595,31 @@ export class CollectionMutationService extends BaseService {
         // A scoped API key is judged on its own delete grant, so the session
         // super-admin bypass does not apply to a super-admin-owned key here.
         authenticatedScope: params.authenticatedScope,
-      });
-      if (accessDenied) {
-        return accessDenied;
+      };
+      const access = await this.deleteAccess(
+        accessParams,
+        params.appliesFilter !== false
+      );
+      if (access.denied) {
+        return access.denied;
+      }
+      // An entry outside the filter is refused before any hook runs, and asked
+      // again under the row lock below, so the entry removed is the one judged.
+      const filtered = await this.prepareFilteredWrite(
+        params.collectionName,
+        "delete",
+        schema,
+        access
+      );
+      if (filtered) {
+        const outside = await this.refusalOutsideWriteFilter(
+          this.db,
+          schema,
+          params.entryId,
+          filtered,
+          accessParams
+        );
+        if (outside) return outside;
       }
 
       // Get collection metadata for stored hooks
@@ -11507,6 +11735,9 @@ export class CollectionMutationService extends BaseService {
       // False when the collection opted out of recording, so the post-commit
       // drain is not scheduled for a delete that recorded nothing.
       let recorded = false;
+      // Set when the locked row is outside the caller's filter: a concurrent
+      // write moved it out after the check above, and nothing is deleted.
+      let refusedUnderLock: CollectionServiceResult | null = null;
       // Asked before the transaction opens: see `DashboardTables`.
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
@@ -11526,6 +11757,17 @@ export class CollectionMutationService extends BaseService {
           .where(eq(schema.id, params.entryId))
           .limit(1);
         if (!currentRow) return; // a concurrent delete won the race.
+        if (filtered) {
+          refusedUnderLock = await this.refusalOutsideWriteFilter(
+            tx.getDrizzle<typeof this.db>(),
+            schema,
+            params.entryId,
+            filtered,
+            accessParams,
+            { underLock: true }
+          );
+          if (refusedUnderLock) return;
+        }
 
         // Read the removed document before the cascade delete removes its
         // relations, in the read shape create/update events use. A localized
@@ -11637,6 +11879,7 @@ export class CollectionMutationService extends BaseService {
       // event that isn't there; a later hook failure must not hide it. `recorded`
       // is false when the collection opted out, so an opted-out delete schedules
       // no drain.
+      if (refusedUnderLock) return refusedUnderLock;
       eventRecorded = deletedRow && recorded;
       // The row is durable-gone exactly when it was removed, independent of the
       // opt-out flags — the retention-pass signal.
@@ -13662,20 +13905,29 @@ export class CollectionMutationService extends BaseService {
         // with the caller's `overrideAccess` as the create and update paths
         // forward it. Without it, trusted work naming no user was judged as
         // an anonymous visitor, whose write needs a rule that allows it.
-        const accessDenied = await this.accessService.checkCollectionAccess<{
-          deleted: boolean;
-        }>({
+        const accessParams = {
           collectionName: params.collectionName,
-          operation: "delete",
+          operation: "delete" as const,
           // The one entry it deletes, so a caller who may not read it is
           // answered as if it were missing, as the ordinary delete answers.
           entryId,
           user: params.user,
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),
-        });
-        if (accessDenied) {
-          return accessDenied;
+        };
+        const access = await this.accessService.checkCollectionWrite<{
+          deleted: boolean;
+        }>(accessParams);
+        if (access.denied) {
+          return access.denied;
+        }
+        // A delete rule's filter allows only the entries it matches. Matched on
+        // the caller's transaction under the row lock, before any hook runs.
+        if (access.filter) {
+          const refused = await this.refusalOutsideFilterInTransaction<{
+            deleted: boolean;
+          }>(tx, tableName, entryId, access, accessParams);
+          if (refused) return refused;
         }
       }
 

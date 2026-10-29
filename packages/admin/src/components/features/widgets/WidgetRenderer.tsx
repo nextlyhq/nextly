@@ -287,7 +287,9 @@ function sharedCardProps(
     widgetId: definition.id,
     // The card's height, which its list rows are counted from.
     ...(placement?.size === undefined ? {} : { h: placement.size.h }),
-    skeleton: skeletonFor(definition.archetype),
+    // The display the widget says it looks like, else its archetype's: a
+    // declared card's `skeleton`, published as its `sketch`.
+    skeleton: skeletonFor(definition.sketch ?? definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
     // The density the card's list rows, and the skeleton holding their place, are drawn at.
     listDensity: listDensityOf(placement?.settings),

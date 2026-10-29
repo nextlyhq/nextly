@@ -323,6 +323,8 @@ function resolveRegistered(
     size: boundsOf(meta.size),
     query: meta.query,
     ...(meta.serverData === true ? { serverData: true as const } : {}),
+    // What its loading state is drawn as, where it is not its archetype's.
+    ...(meta.sketch === undefined ? {} : { sketch: meta.sketch }),
     ...declaredEmptyOf(meta.empty),
     settings: meta.settings,
     component: meta.component,

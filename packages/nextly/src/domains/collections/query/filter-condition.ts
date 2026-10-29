@@ -14,7 +14,6 @@
  *
  * @module domains/collections/query/filter-condition
  */
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import { and, or, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
@@ -39,7 +38,10 @@ import {
   type WhereFilter,
 } from "../../../services/collections/query-operators";
 import type { Logger } from "../../../services/shared";
-import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import {
+  resolveTypeColumns,
+  type CatalogReadAdapter,
+} from "../../field-groups/storage/resolve-storage-names";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import { collectionTableName } from "../services/collection-utils";
 
@@ -52,8 +54,12 @@ export interface FilterConditionSources {
   getCollection(collectionName: string): Promise<unknown>;
   /** The physical table name of a component, where the registry knows it. */
   getComponentTableName?(slug: string): Promise<string | null | undefined>;
-  /** The adapter whose catalog names a component table's discriminator. */
-  adapter: DrizzleAdapter;
+  /**
+   * Where the catalog naming a component table's discriminator is read: the
+   * adapter, or one bound to the transaction a write already holds, so the
+   * read takes no second connection.
+   */
+  adapter: CatalogReadAdapter;
 }
 
 /** A filter whose facts are loaded, ready to be built as SQL with no I/O. */
@@ -325,7 +331,7 @@ export async function componentTableNamesFor(
 async function componentTypeColumnsFor(
   filters: readonly ComponentFieldFilter[],
   tableNames: Iterable<string>,
-  adapter: DrizzleAdapter
+  adapter: CatalogReadAdapter
 ): Promise<Map<string, string>> {
   // Only a `_componentType` filter addresses the discriminator. Every other
   // component filter names a user column, so introspecting here would spend

@@ -59,7 +59,7 @@ import {
   userHoldsPermission,
   userIsSuperAdmin,
 } from "./resolve-actor";
-import { allowsSome, readFilterIn, type RuleFilter } from "./rule-answer";
+import { allowsSome, mayAnswerFilter, type RuleFilter } from "./rule-answer";
 import {
   noticePermissionNowComesFirst,
   noticeRuleNoLongerAllows,
@@ -72,7 +72,7 @@ import {
 
 /**
  * Allowed, refused with the kind of refusal the gate words, or allowed only
- * for the entries a read rule's filter matches. The last is handed only to an
+ * for the entries a rule's filter matches. The last is handed only to an
  * asker that applies the filter ({@link GateQuestion.appliesFilter}), and is
  * not `allowed`, which means every entry.
  */
@@ -146,24 +146,55 @@ const isLifecycle = (action: AccessOperation) =>
   action === "publish" || action === "unpublish";
 
 /**
+ * The actions whose rule's filter the gate hands to an asker that applies it:
+ * a read, which lists only the matching entries, and a delete, which matches
+ * the entry it removes against the filter first. A filter from any other
+ * action's rule is not applied yet, so it refuses.
+ */
+const FILTER_APPLIED: ReadonlySet<AccessOperation> = new Set<AccessOperation>([
+  "read",
+  "delete",
+]);
+
+/**
+ * The filter a collection's rule for `action` answered, where it answered a
+ * well-formed one and the action is one whose filter is applied; `undefined`
+ * for any other answer, action or target.
+ */
+function appliedFilterOf(
+  target: AccessTarget,
+  action: AccessOperation,
+  outcome: RuleOutcome
+): RuleFilter | undefined {
+  if (!FILTER_APPLIED.has(action) || !mayAnswerFilter(target.kind, action)) {
+    return;
+  }
+  if (!outcome.declared || "threw" in outcome) return;
+  const answer = outcomeAnswer(outcome);
+  return answer.kind === "filter" ? answer.filter : undefined;
+}
+
+/**
  * The filter a collection's read rule answered, where it answered a
- * well-formed one; `undefined` for any other answer, action or target.
+ * well-formed one. A visitor is limited by a read filter alone: its writes
+ * are not judged by a filter yet.
  */
 function readFilterOf(
   target: AccessTarget,
   action: AccessOperation,
   outcome: RuleOutcome
 ): RuleFilter | undefined {
-  if (!outcome.declared || "threw" in outcome) return;
-  return readFilterIn(target.kind, action, outcomeAnswer(outcome));
+  return action === "read"
+    ? appliedFilterOf(target, action, outcome)
+    : undefined;
 }
 
 /**
- * A read rule's filter as the gate answers it: the filter, to an asker that
+ * A rule's filter as the gate answers it: the filter, to an asker that
  * applies it, and a refusal to any other. That refusal differs from the
  * decision, which allows the entries the filter matches to a caller it lets
- * read the collection (`decisionAllows`), so it is recorded as the deviation
- * it is.
+ * act on the collection (`decisionAllows`), so it is recorded as the
+ * deviation it is.
  */
 async function onlyMatching(
   q: GateQuestion,
@@ -201,9 +232,11 @@ export interface GateQuestion {
   /** The caller's transaction, when the gate is asked inside one. */
   readonly executor?: unknown;
   /**
-   * The asker applies a collection read rule's filter to the entries it
-   * reads, so the gate hands the filter back. Any other asker is refused it,
-   * as it cannot limit what it reads to the entries the filter matches.
+   * The asker applies a collection rule's filter to the entries it acts on:
+   * a read lists only the matching entries, and a delete matches the entry it
+   * removes against the filter first. So the gate hands the filter back. Any
+   * other asker is refused it, as it cannot limit what it acts on to the
+   * entries the filter matches.
    */
   readonly appliesFilter?: boolean;
   /**
@@ -430,15 +463,15 @@ function askedOnce<T>(
 }
 
 /**
- * The decision's answer as the gate gives it. A filter it names for a read is
- * handed to an asker that applies it; a write rule's filter is not applied
- * yet, so it refuses.
+ * The decision's answer as the gate gives it. A filter it names for an action
+ * whose filter is applied is handed to an asker that applies it; any other
+ * rule's filter is not applied yet, so it refuses.
  */
 function answerOf(q: GateQuestion, decision: Decision): Promise<GateVerdict> {
   if (
     !decision.allowed &&
     decision.reason === "only-matching-entries" &&
-    q.action === "read"
+    FILTER_APPLIED.has(q.action)
   ) {
     return onlyMatching(q, decision.filter, true);
   }
@@ -786,7 +819,7 @@ async function ruleVerdict({
     () => askRule(actor, q.action, target),
     "rule"
   );
-  const filter = readFilterOf(target, q.action, outcome);
+  const filter = appliedFilterOf(target, q.action, outcome);
   if (filter) {
     if (!q.appliesFilter && !q.asksSomeEntries) {
       noticeWhereRuleAllowedBefore(

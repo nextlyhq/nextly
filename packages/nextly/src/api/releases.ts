@@ -104,6 +104,14 @@ const RELEASE_AUTHORITY: Record<string, ReleaseAuthority> = {
   listReleasesReadiness: "read",
   createRelease: "create",
   addReleaseMember: "create",
+  // Several documents at once asks what one does: `create` here, and the
+  // service asks each document's own authority and `publish` for a
+  // scheduled release.
+  addReleaseMembers: "create",
+  // `create` is what every path of it needs; scheduling a document on its own
+  // needs `publish` too, and only the service knows which path the body
+  // takes, so it asks.
+  scheduleDocument: "create",
   // Removing a member un-does part of assembling a release and can only ever
   // make LESS content go live, so it is `create` rather than `publish`.
   removeReleaseMember: "create",
@@ -146,6 +154,86 @@ const RELEASE_DETAILS_BODY = z
     body => body.title !== undefined || body.description !== undefined,
     "Give a `title`, a `description`, or both."
   );
+
+/** A document as a body names it for a release: which, and what it does. */
+const RELEASE_DOCUMENT = z
+  .object({
+    scopeKind: z.enum(["collection", "single"], {
+      error: "`scopeKind` must be `collection` or `single`.",
+    }),
+    scopeSlug: z.string().min(1, "`scopeSlug` is required."),
+    entryId: z.string().min(1, "`entryId` is required."),
+    // A string or null, never coerced: a numeric locale read as `null` would
+    // widen the member to the whole document. The service refuses a locale.
+    locale: z.string().nullable().optional(),
+    action: z.enum(["publish", "unpublish"], {
+      error: "`action` must be `publish` or `unpublish`.",
+    }),
+  })
+  .strict();
+
+/**
+ * What adding several documents in one step sends: the documents, each with
+ * its action. Strict, so a field this route does not read is refused rather
+ * than ignored. How many, and whether one is named twice, is the service's
+ * to say, as for the Direct API.
+ *
+ * @experimental
+ */
+const RELEASE_MEMBERS_BODY = z
+  .object({ members: z.array(RELEASE_DOCUMENT) })
+  .strict();
+
+/** A release name a body gives: text, not empty, as create takes it. */
+const RELEASE_TITLE = z
+  .string()
+  .min(1, "`title` must not be empty.")
+  .max(
+    MAX_RELEASE_TITLE_LENGTH,
+    `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`
+  );
+
+/**
+ * What scheduling a document in one step sends: the document, the linked
+ * documents accepted with it (each going live, so they name no action), and
+ * how it goes out, chosen by `into`. The instant and the zone are parsed as
+ * scheduling parses them, below.
+ *
+ * @experimental
+ */
+const SCHEDULE_DOCUMENT_BODY = z.discriminatedUnion(
+  "into",
+  [
+    z
+      .object({
+        into: z.literal("own"),
+        document: RELEASE_DOCUMENT,
+        linked: z.array(RELEASE_DOCUMENT.omit({ action: true })).optional(),
+        title: RELEASE_TITLE,
+        at: z.string(),
+        timezone: z.string(),
+      })
+      .strict(),
+    z
+      .object({
+        into: z.literal("existing"),
+        document: RELEASE_DOCUMENT,
+        linked: z.array(RELEASE_DOCUMENT.omit({ action: true })).optional(),
+        releaseId: z.string().min(1, "`releaseId` is required."),
+      })
+      .strict(),
+    z
+      .object({
+        into: z.literal("new"),
+        document: RELEASE_DOCUMENT,
+        linked: z.array(RELEASE_DOCUMENT.omit({ action: true })).optional(),
+        title: RELEASE_TITLE,
+        description: z.string().nullable().optional(),
+      })
+      .strict(),
+  ],
+  { error: "`into` must be one of: own, existing, new." }
+);
 
 /**
  * Reject a body that is not a JSON object.
@@ -911,6 +999,60 @@ const RELEASE_OPERATIONS: Record<
   },
 
   /**
+   * Several documents added in one step, all or none, answered as the
+   * release the step left and its new members.
+   *
+   * @experimental
+   */
+  addReleaseMembers: async ({ request, caller, releases, releaseId }) => {
+    const parsed = RELEASE_MEMBERS_BODY.safeParse(await jsonObject(request));
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    return respondMutation(
+      "Added to release.",
+      await releases.addMembers({
+        ...caller,
+        releaseId,
+        // An absent language is the whole document, as one add reads it.
+        members: parsed.data.members.map(member => ({
+          ...member,
+          locale: member.locale ?? null,
+        })),
+      }),
+      { status: 201 }
+    );
+  },
+
+  /**
+   * A document scheduled in one step, its path chosen by the body: on its
+   * own, with an existing release, or in a new one. All or nothing.
+   *
+   * @experimental
+   */
+  scheduleDocument: async ({ request, caller, releases }) => {
+    const body = await jsonObject(request);
+    const parsed = SCHEDULE_DOCUMENT_BODY.safeParse(body);
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    const input = parsed.data;
+    const scheduled = await releases.scheduleDocument(
+      input.into === "own"
+        ? {
+            ...caller,
+            ...input,
+            // The instant and the zone held to scheduling's own contract:
+            // ISO 8601 with an offset, and a zone this runtime knows.
+            at: requireInstant(body, "at"),
+            timezone: requireTimezone(body),
+          }
+        : { ...caller, ...input }
+    );
+    return respondMutation(
+      input.into === "own" ? "Document scheduled." : "Added to release.",
+      scheduled,
+      { status: 201 }
+    );
+  },
+
+  /**
    * What stands between this release and its instant, asked before committing.
    *
    * The same derivation the drain would reach at the instant, offered at the
@@ -982,8 +1124,21 @@ const RELEASE_OPERATIONS: Record<
     // `/api/releases/A/members/B` removes B even when B belongs to release C —
     // a stale client URL then quietly edits a release the caller never named,
     // and the response says it worked.
-    await releases.removeMember({ ...caller, memberId, releaseId });
-    return respondAction("Removed from release.", { memberId, releaseId });
+    const { releaseCancelled } = await releases.removeMember({
+      ...caller,
+      memberId,
+      releaseId,
+    });
+    // Taking the only document out of an unrun single-document release
+    // cancels it and keeps the document, so the answer says so rather than
+    // telling a client the document is gone and the release goes on. Worded
+    // to hold for a retry too, which finds the release already cancelled.
+    return respondAction(
+      releaseCancelled
+        ? "The release is cancelled, and its only document stays in it."
+        : "Removed from release.",
+      { memberId, releaseId, releaseCancelled }
+    );
   },
 
   scheduleRelease: async ({ request, caller, releases, releaseId }) => {
