@@ -18,6 +18,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { columnHolds } from "../../schema/pipeline/diff/declared-size";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
+import { resolveLocalizedFieldNames } from "../classify-fields";
 
 import { ddlType } from "./ddl-types";
 import {
@@ -26,6 +27,7 @@ import {
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
+import type { RecordedEntity } from "./recorded-before";
 
 /** One field whose companion column cannot hold its values, as a refusal names it. */
 export interface CompanionColumnThatCannotHold {
@@ -148,6 +150,53 @@ export function planColumnsTranslatedBefore(args: {
     );
   }
   return plan;
+}
+
+/**
+ * One entity's companion columns as the code-first sync judges them against the registry as it
+ * recorded the entity before the run: the refusals, each column that cannot hold a field the run
+ * newly translates or one it changed, and the plan for the columns of fields translated before.
+ * The reconcile acts on it, and `nextly migrate` asks it before recording a run's metadata, so a
+ * refused change is judged the same way wherever it is applied.
+ */
+export function judgeCompanionColumns(args: {
+  /** The entity's translated fields, as declared now. */
+  fields: readonly CompanionFieldLike[];
+  /** The entity as the registry recorded it before the run; `null` when it held none. */
+  recordedBefore: RecordedEntity | null;
+  live: readonly ColumnSpec[];
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+}): {
+  refused: CompanionColumnThatCannotHold[];
+  plan: ColumnsTranslatedBeforePlan;
+} {
+  const recorded =
+    args.recordedBefore?.localized === true ? args.recordedBefore.fields : [];
+  const translatedBefore = new Set(
+    resolveLocalizedFieldNames([...recorded], true)
+  );
+  const judged = {
+    live: args.live,
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+  };
+  const plan = planColumnsTranslatedBefore({
+    ...judged,
+    fields: args.fields.filter(f => translatedBefore.has(f.name)),
+    before: new Map(recorded.map(f => [f.name, f])),
+  });
+  return {
+    refused: [
+      ...companionColumnsThatCannotHold({
+        ...judged,
+        fields: args.fields.filter(f => !translatedBefore.has(f.name)),
+        surface: "code",
+      }),
+      ...plan.refuse,
+    ],
+    plan,
+  };
 }
 
 /** A column's definition as a refusal names it: its type, its size, and NOT NULL if it has it. */

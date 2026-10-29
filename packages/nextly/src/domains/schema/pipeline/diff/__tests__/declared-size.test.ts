@@ -183,6 +183,17 @@ describe("columnHolds", () => {
     );
   });
 
+  it("holds a bounded string in a text column at least as wide as text", () => {
+    // PostgreSQL's text has no limit; MySQL's holds the 65,535 bytes no varchar exceeds.
+    expect(columnHolds(desired("text"), desired("varchar(255)"))).toBe(true);
+    expect(columnHolds(desired("longtext"), desired("varchar(255)"))).toBe(
+      true
+    );
+    expect(columnHolds(desired("tinytext"), desired("varchar(255)"))).toBe(
+      false
+    );
+  });
+
   it("judges by type alone when either side states no size, as typesDiffer does", () => {
     expect(columnHolds(live("varchar"), desired("varchar(100)"))).toBe(true);
   });

@@ -35,10 +35,14 @@ import {
 import type { LocalizedFieldRef } from "../companion-join";
 import {
   companionColumnsThatCannotHold,
-  planColumnsTranslatedBefore,
+  judgeCompanionColumns,
 } from "../migration/companion-column-holds";
 import { companionIndexFacts } from "../migration/reconcile-companion";
-import type { RecordedEntity } from "../migration/recorded-before";
+import {
+  recordedBeforeOf,
+  type RecordedEntities,
+  type RecordedEntity,
+} from "../migration/recorded-before";
 import { claimGuardCondition } from "../migration/transition-state";
 import type {
   I18nTransitionKind,
@@ -47,6 +51,7 @@ import type {
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
 import { encodeStamp } from "./companion-stamp-column";
+import { localizableConfigEntities } from "./localizable-config-entities";
 
 /**
  * A held transition, plus the condition a statement can carry to prove it is still held.
@@ -447,6 +452,54 @@ export async function survivingCompanionRefusal(
 }
 
 /**
+ * Refuses a run whose translated entities' companions hold a column the column reconcile would
+ * refuse (`judgeCompanionColumns`): one that cannot hold a field the run newly translates, or one
+ * that cannot be widened to a field the run changed. `nextly migrate` asks this once its migration
+ * files have applied and before their metadata is recorded. Its reconcile runs after the metadata,
+ * so a refusal there left the registry on the new definitions, and the next run judged the same
+ * change as made before and only warned. Asked here, a refusal leaves the registry as it was, and
+ * the next run is refused the same way. Undefined `recordedBefore` judges nothing.
+ */
+export async function refuseCompanionColumnsThatCannotHold(
+  adapter: CompanionIntrospectAdapter,
+  config: Parameters<typeof localizableConfigEntities>[0],
+  recordedBefore: RecordedEntities | undefined
+): Promise<void> {
+  if (recordedBefore === undefined) return;
+  const reasons: string[] = [];
+  const errors: { path: string; code: string; message: string }[] = [];
+  for (const [kind, group, resolveTableName] of localizableConfigEntities(
+    config
+  )) {
+    for (const entity of group) {
+      if (!entity.slug || entity.localized !== true) continue;
+      const tableName = resolveTableName(entity);
+      const live = await liveCompanionColumns(adapter, tableName);
+      if (live.length === 0) continue;
+      const fields = entity.fields ?? [];
+      const translated = new Set(resolveLocalizedFieldNames(fields, true));
+      const { refused } = judgeCompanionColumns({
+        fields: fields.filter(f => translated.has(f.name)),
+        recordedBefore:
+          recordedBeforeOf(recordedBefore, kind, entity.slug) ?? null,
+        live,
+        dialect: adapter.dialect,
+        builtBy: "codeFirst",
+      });
+      for (const { refusal } of refused) {
+        errors.push({ ...refusal, path: `${entity.slug}.${refusal.path}` });
+        reasons.push(
+          `The translations table for "${entity.slug}" (${tableName}_locales): ${refusal.message}`
+        );
+      }
+    }
+  }
+  if (errors.length === 0) return;
+  // The CLI prints a refusal's context, so its reasons travel there as well as in its errors.
+  throw NextlyError.validation({ errors, logContext: { reasons } });
+}
+
+/**
  * What the column reconcile needs besides reading: a transaction, which holds one connection for
  * a MySQL statement built from the catalog in a session variable (`restatedColumn`).
  */
@@ -555,6 +608,11 @@ export function versionScopeForEntityKind(
   return kind === "collection" ? "collection" : undefined;
 }
 
+/**
+ * Brings an existing companion's translated columns in step with the entity's fields, additively.
+ * Resolves false when it reported a failure through `onError`, a refused column among them, so
+ * the caller builds nothing more on the companion's columns this run.
+ */
 export async function reconcileCompanionColumns(
   adapter: CompanionReconcileAdapter,
   args: {
@@ -587,14 +645,22 @@ export async function reconcileCompanionColumns(
   onError?: (error: unknown) => void,
   /** Told of a column left as it is that cannot hold its field, which fails nothing. */
   onWarning?: (message: string) => void
-): Promise<void> {
+): Promise<boolean> {
   const companionTableName = `${args.tableName}_locales`;
   // Hoisted so the concurrency recheck in the catch can reuse it.
   const localizedNames = new Set(resolveLocalizedFieldNames(args.fields, true));
   const desired = args.fields.filter(f => localizedNames.has(f.name));
+  // Whether the companion's columns are left in step: false once a failure is reported, so the
+  // caller builds nothing more on them, such as a unique index over a column this run refused.
+  let failed = false;
+  const fail = (error: unknown) => {
+    failed = true;
+    onError?.(error);
+  };
   try {
-    if (!(await companionTableExists(adapter, companionTableName))) return;
-    if (desired.length === 0) return;
+    if (!(await companionTableExists(adapter, companionTableName)))
+      return !failed;
+    if (desired.length === 0) return !failed;
 
     const { introspectLiveSnapshot } = await import(
       "../../schema/pipeline/diff/introspect-live"
@@ -614,34 +680,16 @@ export async function reconcileCompanionColumns(
     // (`planColumnsTranslatedBefore`). What cannot be taken or widened stops the reconcile
     // before it changes anything, and the run is told which column and why.
     if (args.recordedBefore !== undefined) {
-      const recorded =
-        args.recordedBefore?.localized === true
-          ? args.recordedBefore.fields
-          : [];
-      const translatedBefore = new Set(
-        resolveLocalizedFieldNames([...recorded], true)
-      );
-      const judged = {
+      const { refused, plan } = judgeCompanionColumns({
+        fields: desired,
+        recordedBefore: args.recordedBefore,
         live: liveColumns,
         dialect: args.dialect,
         builtBy: args.builtBy,
-      };
-      const plan = planColumnsTranslatedBefore({
-        ...judged,
-        fields: desired.filter(f => translatedBefore.has(f.name)),
-        before: new Map(recorded.map(f => [f.name, f])),
       });
-      const refused = [
-        ...companionColumnsThatCannotHold({
-          ...judged,
-          fields: desired.filter(f => !translatedBefore.has(f.name)),
-          surface: "code",
-        }),
-        ...plan.refuse,
-      ];
       if (refused.length > 0) {
-        onError?.(new Error(refused.map(c => c.refusal.message).join(" ")));
-        return;
+        fail(new Error(refused.map(c => c.refusal.message).join(" ")));
+        return !failed;
       }
       for (const warning of plan.warn) onWarning?.(warning.refusal.message);
       if (
@@ -649,10 +697,10 @@ export async function reconcileCompanionColumns(
           adapter,
           companionTableName,
           plan.widen,
-          onError
+          fail
         ))
       ) {
-        return;
+        return !failed;
       }
     }
     // `_status` is deliberately NOT reconciled here. Adding the column is one statement and
@@ -695,7 +743,7 @@ export async function reconcileCompanionColumns(
     // Only this direction is a problem. Status switched OFF while the column remains is
     // harmless: the column is simply unused, and the additive policy keeps it.
     if (args.status === true && !hasStatus) {
-      onError?.(
+      fail(
         new Error(
           `The translations table ${companionTableName} predates Draft/Published being enabled ` +
             `for "${args.slug}", so it has no _status column. Run \`nextly migrate\` to add it: ` +
@@ -703,7 +751,7 @@ export async function reconcileCompanionColumns(
             `default locale's status cannot be retried safely if only the first half lands.`
         )
       );
-      return;
+      return !failed;
     }
 
     // Nothing missing — the overwhelmingly common case, and worth leaving before the statement
@@ -720,7 +768,7 @@ export async function reconcileCompanionColumns(
     // version scope emits no back-fill at all, so for it this stays a plain early return.
     const columnsInStep =
       hasUpdatedAt && desired.every(f => present.has(toColumn(f.name)));
-    if (columnsInStep && args.versionScope === undefined) return;
+    if (columnsInStep && args.versionScope === undefined) return !failed;
 
     // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
     // emits is exactly the difference. `old` is a subset of `new` by construction here, which
@@ -759,9 +807,10 @@ export async function reconcileCompanionColumns(
     // exactly like one never seeded, so no introspection can report that. The back-fill is
     // re-issued on the next reconcile instead of being inferred complete here.
     if (await companionShapeIsPresent(adapter, companionTableName, desired))
-      return;
-    onError?.(error);
+      return !failed;
+    fail(error);
   }
+  return !failed;
 }
 
 /**

@@ -1138,7 +1138,7 @@ export async function ensureLocalizedCompanions(
       // then splits the value into a companion column that does not exist. Additive only,
       // Additive only. The reload path reconciles too — it is dev-only, behind its own
       // production return — so the two stay in step.
-      await reconcileCompanionColumns(
+      const columnsInStep = await reconcileCompanionColumns(
         adapter as unknown as DrizzleAdapter,
         {
           ...companionEntityArgs,
@@ -1163,7 +1163,10 @@ export async function ensureLocalizedCompanions(
           )
       );
       // Its per-language unique indexes, once its columns are in step. A field whose rule cannot
-      // hold is reported, which fails the command, and left without its index.
+      // hold is reported, which fails the command, and left without its index. Not after a column
+      // failure: a refused column is not the field's, and on MySQL an index built over it would
+      // stay in place though the run fails.
+      if (!columnsInStep) continue;
       const { reconcileCompanionUniqueIndexes } = await import(
         "../../domains/i18n/runtime/companion-unique-reconcile"
       );

@@ -357,6 +357,36 @@ describe.each(getConfiguredTestDialects())(
       expect(await companionColumn(dialect, "code")).toEqual(before);
     });
 
+    // The refused column is not the field's: no per-language unique index is built over it, which
+    // on MySQL would stay in place though the run fails.
+    it("builds no unique index over a column it refused for a unique translated field", async () => {
+      await runSync(dialect, configWith());
+      await query(
+        `ALTER TABLE ${q(COMPANION)} ADD COLUMN ${q("code")} INTEGER`
+      );
+
+      const refusal = await refusalOf(
+        runSync(dialect, configWith({ ...code(20), unique: true }))
+      );
+
+      expect(String((refusal as Error).message)).toMatch(
+        /column "code" \(.+\) that cannot hold every value code allows/
+      );
+      if (!target) throw new Error("no sync target");
+      const snapshot = await introspectLiveSnapshot(
+        target.adapter.getDrizzle(),
+        dialect,
+        [COMPANION]
+      );
+      const indexes = snapshot.tables.find(t => t.name === COMPANION)?.indexes;
+      expect(indexes).toBeDefined();
+      expect(
+        (indexes ?? []).filter(
+          index => index.unique && index.columns.includes("code")
+        )
+      ).toEqual([]);
+    });
+
     it("refuses turning translation back on over a column the field outgrew while it was off, copying and syncing nothing", async () => {
       const q = (name: string) => quote(dialect, name);
       await runSync(dialect, configWith(price(10, 2)));

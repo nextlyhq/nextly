@@ -1284,7 +1284,7 @@ async function ensureLocalizedCompanionsForReload(
       // for. Running it early would compare the companion against a main table the apply has not
       // finished shaping.
       if (phase === "beforeApply") continue;
-      await reconcileCompanionColumns(
+      const columnsInStep = await reconcileCompanionColumns(
         adapter,
         {
           // Same config-edit path as the companion creation above.
@@ -1312,7 +1312,9 @@ async function ensureLocalizedCompanionsForReload(
           );
         }
       );
-      // Its per-language unique indexes, once its columns are in step. Best-effort, as above.
+      // Its per-language unique indexes, once its columns are in step. Best-effort, as above, and
+      // not after a column failure: a refused column is not the field's to index.
+      if (!columnsInStep) continue;
       const { reconcileCompanionUniqueIndexes } = await import(
         "../domains/i18n/runtime/companion-unique-reconcile"
       );

@@ -129,6 +129,9 @@ const TEXT_WIDTHS = ["tinytext", "text", "mediumtext", "longtext"];
  * differently: a wider MySQL text type holds a narrower one's values, and
  * `longtext` holds JSON's, which is how MariaDB stores and reports a JSON
  * column. Refusing those would refuse a column of the very storage asked for.
+ * A `text` column, or a wider one, holds any bounded string: PostgreSQL's
+ * `text` has no limit, and MySQL's holds the 65,535 bytes no `varchar` can
+ * exceed. MySQL's `tinytext`, of 255 bytes, does not.
  */
 function textHolds(
   live: string | undefined,
@@ -137,6 +140,7 @@ function textHolds(
   const have = TEXT_WIDTHS.indexOf(live ?? "");
   if (have === -1) return false;
   if (wanted === "json") return live === "longtext";
+  if (wanted === "varchar") return have >= TEXT_WIDTHS.indexOf("text");
   const need = TEXT_WIDTHS.indexOf(wanted ?? "");
   return need !== -1 && have >= need;
 }

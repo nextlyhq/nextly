@@ -226,17 +226,16 @@ function recordingPosts(
 }
 
 /**
- * The real executor, failing once a batch that renames a column has run: MySQL has committed the
- * rename by then, as when a later statement of the same apply fails; PostgreSQL rolls it back.
+ * The real executor, failing once its first batch has run, as when a later statement of an apply
+ * fails. The rename runs before that point, in the batch or ahead of it, so MySQL has committed it
+ * by then; PostgreSQL rolls it back.
  */
 function failingAfterRename(target: Target): DrizzleStatementExecutor {
   const executor = new DrizzleStatementExecutor(target.dialect, target.db);
   const execute = executor.executeStatements.bind(executor);
   executor.executeStatements = async (tx, statements) => {
     await execute(tx, statements);
-    if (statements.some(statement => /\bRENAME COLUMN\b/i.test(statement))) {
-      throw new Error("a later statement of the apply failed");
-    }
+    throw new Error("a later statement of the apply failed");
   };
   return executor;
 }

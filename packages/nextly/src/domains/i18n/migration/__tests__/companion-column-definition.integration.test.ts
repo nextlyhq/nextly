@@ -275,6 +275,29 @@ describeEachDialect(
       ]);
     });
 
+    // A text column holds any bounded string: PostgreSQL's text has no limit, MySQL's holds what any
+    // varchar can, and SQLite's text is the field's own type.
+    it("takes a text column for a short text field as it is", async () => {
+      await create("cdef_posts", true, [translated(HEADING)]);
+      await query(
+        `ALTER TABLE ${q("dc_cdef_posts_locales")} ADD COLUMN ${q("code")} TEXT`
+      );
+      const column = await columnOf("dc_cdef_posts_locales", "code");
+
+      expect(
+        await saveInDialog("cdef_posts", [
+          translated(HEADING),
+          translated(CODE),
+        ])
+      ).toBeUndefined();
+
+      expect((await recordedFields("cdef_posts")).map(f => f.name)).toEqual([
+        "heading",
+        "code",
+      ]);
+      expect(await columnOf("dc_cdef_posts_locales", "code")).toEqual(column);
+    });
+
     it("refuses a decimal column narrower than the field, naming both precisions", async () => {
       await create("cdef_posts", true, [translated(HEADING)]);
       await addAsTheTransitionDoes("cdef_posts", price(8, 2));
