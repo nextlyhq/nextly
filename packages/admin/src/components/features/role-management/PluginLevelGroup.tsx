@@ -13,6 +13,7 @@ import {
   type PluginGroup,
 } from "@admin/lib/permissions/level-rows";
 import { cn } from "@admin/lib/utils";
+import type { Permission } from "@admin/types/ui/form";
 
 import { PermissionLevelRow, PermissionSwitches } from "./PermissionLevelRow";
 import { useHeldPermissions } from "./useHeldPermissions";
@@ -52,6 +53,17 @@ export function PluginLevelGroup({
     group.rows.length > 0
       ? group.rows.map(row => row.plural).join(", ")
       : `${ownCount} ${ownCount === 1 ? "permission" : "permissions"}`;
+
+  // A plugin's own permission is named by its declared name; where two share
+  // one, each is told apart by the resource it acts on.
+  const nameCounts = new Map<string, number>();
+  for (const permission of group.permissions) {
+    nameCounts.set(permission.name, (nameCounts.get(permission.name) ?? 0) + 1);
+  }
+  const ownLabel = (permission: Permission) =>
+    (nameCounts.get(permission.name) ?? 0) > 1
+      ? `${permission.name} (${permission.resource})`
+      : permission.name;
 
   const setOwn = (id: string, on: boolean) => {
     onChange(on ? [...value, id] : value.filter(kept => kept !== id));
@@ -102,7 +114,7 @@ export function PluginLevelGroup({
               name={displayName}
               // A plugin's own action has no level to be named after: its
               // permission's own name says what it does.
-              labelOf={permission => permission.name}
+              labelOf={ownLabel}
               held={held}
               locked={locked}
               owned={owned}

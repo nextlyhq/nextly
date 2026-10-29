@@ -348,7 +348,42 @@ describe("pluginGroups", () => {
   });
 });
 
+describe("pluginGroups, for the app's own declared permissions", () => {
+  it('keeps a permission the app declares (owner "app") out of every plugin group', () => {
+    const { rows, rest } = levelRows(ENTITIES, [
+      ...PERMISSIONS,
+      permission("reports", "export", "app"),
+    ]);
+    const grouped = pluginGroups(rows, rest);
+
+    expect(grouped.groups.map(group => group.plugin)).toEqual([FORMS]);
+    expect(grouped.rest.map(p => p.id)).toContain("export-reports");
+  });
+});
+
 describe("groupLevel", () => {
+  it("reads custom where a plugin's own action on one of its collections is held", () => {
+    // A plugin may declare an action of its own on a collection it
+    // contributes; the row takes it, under its switch.
+    const entities: ScreenEntity[] = [
+      {
+        slug: "forms",
+        kind: "collection",
+        labels: { singular: "Form", plural: "Forms" },
+        plugin: FORMS,
+        declaredRules: [],
+      },
+    ];
+    const { rows, rest } = levelRows(entities, [
+      permission("forms", "read"),
+      permission("forms", "manage", FORMS),
+    ]);
+    const [group] = pluginGroups(rows, rest).groups;
+
+    expect(groupLevel(group, ["read-forms"])).toBe("view");
+    expect(groupLevel(group, ["read-forms", "manage-forms"])).toBe("custom");
+  });
+
   it("reads the level every row of the group reads", () => {
     const { rows, rest } = withPlugin();
     const [group] = pluginGroups(rows, rest).groups;

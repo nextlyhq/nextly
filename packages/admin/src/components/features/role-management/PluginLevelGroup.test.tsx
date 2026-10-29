@@ -163,6 +163,56 @@ describe("PluginLevelGroup", () => {
     ).toBeInTheDocument();
   });
 
+  it("warns of a permission that takes data off the site, as the grid did", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        group={{
+          ...GROUP,
+          permissions: [
+            { ...permission("submissions", "export", FORMS), danger: true },
+          ],
+        }}
+        initial={[]}
+      />
+    );
+
+    await user.click(fold());
+    const dangerous = screen.getByRole("switch", {
+      name: /Form builder: Export submissions — grant with care, this gives access to data beyond this site/,
+    });
+    expect(dangerous).toHaveAttribute("data-danger", "true");
+  });
+
+  it("tells apart two of the plugin's own permissions that share a name", async () => {
+    const user = userEvent.setup();
+    const shared = (resource: string): Permission => ({
+      id: `${resource}-export`,
+      name: "Export",
+      resource,
+      action: "export",
+      owner: FORMS,
+    });
+    render(
+      <Harness
+        group={{
+          ...GROUP,
+          permissions: [shared("reports"), shared("submissions")],
+        }}
+        initial={[]}
+      />
+    );
+
+    await user.click(fold());
+
+    expect(
+      screen.getByRole("switch", { name: "Form builder: Export (reports)" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "Form builder: Export (submissions)" })
+    ).toBeInTheDocument();
+  });
+
   it("gives a plugin with no collection a switch for each permission it declares", async () => {
     const user = userEvent.setup();
     render(<Harness group={{ ...GROUP, rows: [] }} initial={[]} />);

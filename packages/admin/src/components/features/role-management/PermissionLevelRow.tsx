@@ -283,7 +283,15 @@ export function PermissionSwitches({
           >
             <span aria-hidden="true">{action}</span>
             <Switch
-              aria-label={`${name}: ${action}`}
+              // A permission that takes data off the site is marked in the
+              // host's own words, as the grid's cell marks it, on the
+              // accessible name so it is not colour alone.
+              aria-label={
+                permission.danger
+                  ? `${name}: ${action} — grant with care, this gives access to data beyond this site`
+                  : `${name}: ${action}`
+              }
+              data-danger={permission.danger ? "true" : undefined}
               checked={held.has(permission.id)}
               disabled={disabled || baseOnly}
               onCheckedChange={on => onChange(permission.id, on)}

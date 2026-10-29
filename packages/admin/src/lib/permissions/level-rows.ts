@@ -198,6 +198,14 @@ export function offeredLevels(
 }
 
 /**
+ * The owner the server records for a permission the app itself declares, as
+ * opposed to a plugin. Such a permission belongs to no plugin's group. A
+ * plugin may be named the same, and its loose permissions then stay in the
+ * grid beside the app's: never put in a group that is not theirs.
+ */
+const APP_OWNER = "app";
+
+/**
  * One plugin on the roles screen: the collections and Singles it contributes,
  * and the permissions it declares that no row takes (an action of its own,
  * such as exporting submissions).
@@ -239,7 +247,7 @@ export function pluginGroups(
   }
   const left: Permission[] = [];
   for (const permission of rest) {
-    if (permission.owner)
+    if (permission.owner && permission.owner !== APP_OWNER)
       groupOf(permission.owner).permissions.push(permission);
     else left.push(permission);
   }
@@ -257,7 +265,19 @@ export function groupLevel(
   ids: Iterable<string>
 ): RowLevel {
   const held = new Set(ids);
-  const ownHeld = group.permissions.some(permission => held.has(permission.id));
+  // The plugin's own permissions: its loose ones, and the actions it declares
+  // on its own collections outside what a level decides, which the rows hold
+  // under their switches and a level never reads.
+  const own = [
+    ...group.permissions,
+    ...group.rows.flatMap(row => {
+      const decided = standardActions(row.kind, row.slug);
+      return row.permissions.filter(
+        permission => permission.owner && !decided.has(permission.action)
+      );
+    }),
+  ];
+  const ownHeld = own.some(permission => held.has(permission.id));
   const levels = new Set(group.rows.map(row => rowLevel(row, held)));
   if (levels.size === 0) return ownHeld ? "custom" : "none";
   if (levels.size > 1 || ownHeld) return "custom";
