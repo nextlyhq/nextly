@@ -36,6 +36,23 @@ const REGISTERED_SHARED = {
 } as unknown as RegisteredWidgetMeta;
 
 describe("resolveDashboardWidgets", () => {
+  it("carries a registered widget's sketch, which its loading state is drawn as", () => {
+    const declared = {
+      id: "acme/orders",
+      title: "Orders",
+      archetype: "custom",
+      component: "acme#Orders",
+      serverData: true,
+      sketch: "bars",
+      size: { default: { w: 4, h: 3 } },
+    } as unknown as RegisteredWidgetMeta;
+    const [widget] = resolveDashboardWidgets([], [declared], allow);
+    expect(widget?.sketch).toBe("bars");
+    // The control: a registration naming none carries none.
+    const [plain] = resolveDashboardWidgets([], [REGISTERED_SHARED], allow);
+    expect(plain).not.toHaveProperty("sketch");
+  });
+
   it("names the plugin that contributed a widget drawn by its own component, and none for any other", () => {
     const widgets = resolveDashboardWidgets(
       contributing([

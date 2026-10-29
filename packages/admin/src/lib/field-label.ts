@@ -12,10 +12,13 @@
  * Two functions rather than one because two questions are asked. `fieldLabel`
  * is `humanizeFieldName` plus the label-wins rule; a caller holding only a key
  * — a table column with no field config behind it — wants the narrower one, and
- * without it exported would write a fifth copy.
+ * without it exported would write a fifth copy. `humanizeFieldName` itself is
+ * core's (`nextly/field-label`), so the server names a field as the admin does.
  *
  * @module lib/field-label
  */
+
+import { humanizeFieldName } from "nextly/field-label";
 
 /** The minimum a field must carry to be named on screen. */
 export interface LabelledField {
@@ -24,25 +27,11 @@ export interface LabelledField {
 }
 
 /**
- * A field's key as a human reads it.
- *
- * Kebab and snake are both legal in a schema and both mean a word boundary, so
- * they are treated identically — one earlier copy split on `_` alone and left
- * `user-email` as "User-email".
- *
- * @example
- * humanizeFieldName("firstName")  // "First Name"
- * humanizeFieldName("user_email") // "User Email"
- * humanizeFieldName("user-email") // "User Email"
- * humanizeFieldName("address1Line") // "Address1 Line"
+ * A field's key as a human reads it: core's one humaniser, which a widget's
+ * `describe` read names fields by on the server too, so the admin keeps no copy
+ * of its own. Re-exported for this module's callers.
  */
-export function humanizeFieldName(name: string): string {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, char => char.toUpperCase())
-    .trim();
-}
+export { humanizeFieldName };
 
 /**
  * What this field is called on screen: its declared label, else its key made
