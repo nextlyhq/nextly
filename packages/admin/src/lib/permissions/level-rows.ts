@@ -177,8 +177,8 @@ const SCHEMA_CHANGE_ACTIONS = ["create", "update", "delete"] as const;
  *
  * - A built-in resource whose role still holds its retired `manage-`
  *   permission reads Can edit, which that permission gives until `nextly
- *   upgrade` replaces it with the plain four; saving keeps it unless the row
- *   is changed.
+ *   upgrade` converts it into the plain four. Saving the role stores the same
+ *   access as plain permissions unless the row is changed.
  * - Settings says that changing collections and Singles needs Can edit on it,
  *   since the schema routes ask create, update and delete on settings
  *   together; a role holding update without the other two is told it can
@@ -190,9 +190,9 @@ export function rowNotes(row: LevelRow, ids: Iterable<string>): string[] {
   const notes: string[] = [];
   if (held.has("manage")) {
     notes.push(
-      `This role still holds the retired manage-${row.slug} permission, which ` +
-        "gives Can edit until nextly upgrade converts it into the plain " +
-        "permissions. Changing this row saves the plain permissions instead."
+      `This role still holds the retired manage-${row.slug} permission, ` +
+        "which gives Can edit. Run nextly upgrade to convert it into the " +
+        "plain permissions; saving this role converts it too."
     );
   }
   if (row.slug === "settings") {
