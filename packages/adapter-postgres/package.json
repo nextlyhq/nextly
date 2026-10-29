@@ -34,15 +34,15 @@
   "dependencies": {
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "drizzle-orm": "1.0.0-rc.4",
-    "pg": "^8.16.3"
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@nextlyhq/tsconfig": "workspace:*",
-    "@types/pg": "^8.15.5",
+    "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^5.0.5",
     "@vitest/ui": "^5.0.5",
-    "pg": "^8.16.3",
-    "tsdown": "^0.23.1",
+    "pg": "^8.23.1",
+    "tsdown": "^0.23.2",
     "typescript": "7.0.2",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^5.0.5"
