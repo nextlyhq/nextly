@@ -29,6 +29,8 @@ import {
   request,
   test as base,
   type APIRequestContext,
+  type Locator,
+  type Page,
   type TestInfo,
 } from "@playwright/test";
 
@@ -188,7 +190,49 @@ async function signInNewAccount(
   return storageState;
 }
 
+/**
+ * The page's locators that, unlike a role locator, match hidden elements as
+ * well as visible ones.
+ */
+const MATCHES_HIDDEN = [
+  "getByText",
+  "getByLabel",
+  "getByTestId",
+  "getByPlaceholder",
+] as const;
+
+/** Make one of `page`'s locators find visible elements only. */
+function findVisibleOnly<M extends (typeof MATCHES_HIDDEN)[number]>(
+  page: Page,
+  method: M
+): void {
+  const find = page[method].bind(page) as (
+    ...args: Parameters<Page[M]>
+  ) => Locator;
+  page[method] = ((...args: Parameters<Page[M]>) =>
+    find(...args).filter({ visible: true })) as Page[M];
+}
+
+/**
+ * The page's whole document, for a spec that means to find a hidden element:
+ * locators chained from it are not held to visible elements, as the page's
+ * own are. Named at each use, so a spec reaching a hidden element says so.
+ */
+export function includingHidden(page: Page): Locator {
+  return page.locator(":root");
+}
+
 export const test = base.extend<{ freshSession: string }>({
+  // Under Cache Components, Next.js keeps a visited page mounted but hidden,
+  // so the document can hold a hidden copy of the page a spec is on. A role
+  // locator leaves hidden elements out, but a text, label, test-id or
+  // placeholder locator would match the hidden copy's as readily as the
+  // visible one's, so on the page every spec is handed they find visible
+  // elements only. A locator chained from one of them is held to it.
+  page: async ({ page }, use) => {
+    for (const method of MATCHES_HIDDEN) findVisibleOnly(page, method);
+    await use(page);
+  },
   freshSession: [
     async ({ baseURL }, use) => {
       if (baseURL) await keepSessionFresh(baseURL);

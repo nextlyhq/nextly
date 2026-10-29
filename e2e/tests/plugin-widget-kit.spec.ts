@@ -21,7 +21,7 @@ import { expectNoAxeViolations } from "./support/axe";
 import { defaultSizeOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 import { ok } from "./support/releases-api";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
 test.describe.configure({ lock: [LOCK.dashboard] });
@@ -133,7 +133,9 @@ test("a card whose data function throws on the server shows its own error, and t
   // Answered in the same batch, the cards beside it draw.
   await expect(page.getByTestId("kit-card")).toBeVisible();
   await expect(
-    page.getByTestId(`widget-cell-${HIDES}`).locator('[role="region"]')
+    includingHidden(page)
+      .getByTestId(`widget-cell-${HIDES}`)
+      .locator('[role="region"]')
   ).toHaveAttribute("data-hidden-empty", "");
 });
 
@@ -145,7 +147,10 @@ test("a card its widget does not show is off the dashboard, and shown marked whi
   await gotoAdmin(page, "/");
 
   await expect(page.getByTestId("kit-card")).toBeVisible();
-  const notShown = page.getByTestId(`widget-cell-${NOT_SHOWN}`);
+  // Hidden until the dashboard is customised, which is what this checks.
+  const notShown = includingHidden(page).getByTestId(
+    `widget-cell-${NOT_SHOWN}`
+  );
   await expect(notShown.locator('[role="region"]')).toHaveAttribute(
     "data-hidden-empty",
     ""
@@ -196,7 +201,8 @@ test("a card that hides when empty leaves the dashboard at rest, and is shown ma
 
   // The card beside it draws, so the dashboard has answered.
   await expect(page.getByTestId("kit-card")).toBeVisible();
-  const hides = page.getByTestId(`widget-cell-${HIDES}`);
+  // Hidden until the dashboard is customised, which is what this checks.
+  const hides = includingHidden(page).getByTestId(`widget-cell-${HIDES}`);
   // Its answer is empty: it is on the page, marked, and takes no room. Found by
   // its role attribute, since a role query skips what is hidden.
   await expect(hides.locator('[role="region"]')).toHaveAttribute(
