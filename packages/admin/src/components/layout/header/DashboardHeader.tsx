@@ -18,6 +18,7 @@ import { UserProfileDropdown } from "../sidebar/UserProfileDropdown";
 import {
   computeHiddenHeaderButtons,
   headerControlsSettled,
+  type HeaderAnswersPending,
   type HeaderButtonId,
 } from "./header-visibility";
 import { HeaderTrail } from "./HeaderTrail";
@@ -34,18 +35,10 @@ export function DashboardHeader({
   const branding = useBranding();
   const hidden = computeHiddenHeaderButtons(branding?.plugins);
   const { isPending: isWorkspacePending } = useBrandingStatus();
-  // The same answer the bell reads to decide whether it is the reader's.
-  const { isLoading: isPermissionsLoading } = useCurrentUserPermissions();
   // Where the builder runs and no plugin hides it; the bell itself then shows
   // for super-admins only. Gated on an explicit `false`, as the bell below is.
   const bellOffered =
     !hidden.has("notifications") && branding?.showBuilder !== false;
-  // Until the answers that decide the row are in, only the account menu is
-  // shown, at the row's right end where nothing arriving beside it moves it.
-  const controlsSettled = headerControlsSettled(
-    { workspace: isWorkspacePending, permissions: isPermissionsLoading },
-    bellOffered
-  );
   // Plugin-contributed header-slot components; each self-gates on
   // permission. Read `header.slot` (current) with `headerSlot` (deprecated)
   // fallback.
@@ -76,24 +69,26 @@ export function DashboardHeader({
         <div className="mr-3 flex min-w-0 flex-1 items-center gap-4">
           <HeaderTrail />
         </div>
-        {/* The controls mount from the first paint and stay hidden until they
-            settle, rather than mounting late: the bell and plugin controls
-            read the same permissions as the header, and a reader mounted
-            after that answer arrives asks for it again, one round trip later.
-            Mounted early, each joins the request already out. Hidden, the
-            wrapper takes no space; settled, `contents` lays its controls out
-            as the row's own. No display utility while hidden, as one would
-            override the `hidden` attribute's `display: none`. */}
-        <div
-          hidden={!controlsSettled}
-          className={controlsSettled ? "contents" : undefined}
-        >
-          <HeaderControls
+        {/* The bell is the one control the row waits on the reader's
+            permissions for, so the permissions are read only where it is
+            offered: elsewhere nothing would use that answer, and reading it
+            asks for it again each time the bar is drawn. Whether it is offered
+            changes only as the workspace answer arrives, while the row is
+            still hidden, so swapping one row for the other is never seen. */}
+        {bellOffered ? (
+          <ControlsAwaitingPermissions
+            workspacePending={isWorkspacePending}
             hidden={hidden}
             headerSlots={headerSlots}
-            bellOffered={bellOffered}
           />
-        </div>
+        ) : (
+          <ControlsRow
+            pending={{ workspace: isWorkspacePending, permissions: false }}
+            hidden={hidden}
+            headerSlots={headerSlots}
+            bellOffered={false}
+          />
+        )}
         <div className="ml-2">
           <UserProfileDropdown
             user={user}
@@ -107,10 +102,55 @@ export function DashboardHeader({
   );
 }
 
+/** What the controls row is drawn from. */
+interface ControlsProps {
+  hidden: ReadonlySet<HeaderButtonId>;
+  headerSlots: readonly { name: string; slot: string }[];
+}
+
 /**
- * The header's controls left of the account menu, shown together once what decides them is
- * known (see `headerControlsSettled`).
+ * The controls where the bell is offered: they wait on the reader's permissions as well as the
+ * workspace answer, from the same answer the bell reads to decide whether it is the reader's.
  */
+function ControlsAwaitingPermissions({
+  workspacePending,
+  ...controls
+}: ControlsProps & { workspacePending: boolean }): JSX.Element {
+  const { isLoading } = useCurrentUserPermissions();
+  return (
+    <ControlsRow
+      {...controls}
+      pending={{ workspace: workspacePending, permissions: isLoading }}
+      bellOffered
+    />
+  );
+}
+
+/**
+ * The controls left of the account menu, mounted from the first paint and hidden until they
+ * settle (see `headerControlsSettled`), rather than mounted late: the bell and plugin controls
+ * read the same permissions, and a reader mounted after that answer arrives asks for it again,
+ * one round trip later. Mounted early, each joins the request already out. Hidden, the wrapper
+ * takes no space; settled, `contents` lays its controls out as the row's own. No display utility
+ * while hidden, as one would override the `hidden` attribute's `display: none`.
+ */
+function ControlsRow({
+  pending,
+  bellOffered,
+  ...controls
+}: ControlsProps & {
+  pending: HeaderAnswersPending;
+  bellOffered: boolean;
+}): JSX.Element {
+  const settled = headerControlsSettled(pending, bellOffered);
+  return (
+    <div hidden={!settled} className={settled ? "contents" : undefined}>
+      <HeaderControls {...controls} bellOffered={bellOffered} />
+    </div>
+  );
+}
+
+/** The header's controls left of the account menu, shown together once what decides them is known. */
 function HeaderControls({
   hidden,
   headerSlots,
