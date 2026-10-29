@@ -22,6 +22,7 @@ import {
   offeredLevels,
   ownWithLevel,
   rowLevel,
+  rowNotes,
   type LevelRow,
 } from "@admin/lib/permissions/level-rows";
 import { levelsFor, type AccessLevel } from "@admin/lib/permissions/levels";
@@ -112,6 +113,9 @@ export function PermissionLevelRow({
     level === "custom"
       ? customSummary(row.permissions.filter(p => held.has(p.id)))
       : "";
+  // A built-in resource's lines: a retired `manage-` permission still held,
+  // and what Settings must hold to change the schema.
+  const notes = rowNotes(row, held, owned);
 
   const setLevel = (chosen: string) => {
     const next = levels.find(candidate => candidate === chosen);
@@ -138,6 +142,7 @@ export function PermissionLevelRow({
           custom={level === "custom"}
           summary={summary}
           givers={givers}
+          notes={notes}
         />
 
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6 xl:shrink-0">
@@ -220,6 +225,7 @@ function RowHeading({
   custom,
   summary,
   givers,
+  notes,
 }: {
   row: LevelRow;
   custom: boolean;
@@ -227,6 +233,8 @@ function RowHeading({
   summary: string;
   /** The names of the bases that give the row something. */
   givers: readonly string[];
+  /** Lines shown under the row's name; see `rowNotes`. */
+  notes: readonly string[];
 }): JSX.Element {
   const narrowed = row.declaredRules.length > 0;
   return (
@@ -265,6 +273,11 @@ function RowHeading({
           {narrowedInCode(row.kind, row.declaredRules)}
         </span>
       )}
+      {notes.map(note => (
+        <span key={note} className="text-xs text-muted-foreground">
+          {note}
+        </span>
+      ))}
     </div>
   );
 }

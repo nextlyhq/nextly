@@ -120,16 +120,15 @@ function addressOf(world: World, row: Row, door: string) {
   const slug = collectionOf(row.rule);
   const seeded = world.seeded.get(slug);
   if (!seeded) throw new Error(`nothing seeded for ${slug}`);
-  const id =
-    row.action === "read"
+  // A filtered write's twin outside the filter first: an update's twin is a
+  // row of its own, not the one row every update rewrites.
+  const id = askingOutside.getStore()
+    ? (seeded.own.get(outsideKey(door, row.caller, row.action)) ?? "")
+    : row.action === "read"
       ? seeded.readId
       : row.action === "update"
         ? seeded.updateId
-        : (seeded.own.get(
-            askingOutside.getStore()
-              ? outsideKey(door, row.caller, row.action)
-              : ownKey(door, row.caller, row.action)
-          ) ?? "");
+        : (seeded.own.get(ownKey(door, row.caller, row.action)) ?? "");
   return { slug, id };
 }
 
