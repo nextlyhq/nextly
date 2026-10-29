@@ -3454,9 +3454,12 @@ service key-read-only-super-admin delete collection async-false at rest  404 NOT
 service key-read-only-super-admin delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-read-only-super-admin delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
+service key-read-only-super-admin delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
+service key-read-only-super-admin delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only-super-admin delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-read-only-super-admin delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
+service key-read-only-super-admin delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only-super-admin delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
@@ -3502,9 +3505,12 @@ service key-read-only-super-admin delete collection returns-false at rest  404 N
 service key-read-only-super-admin delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-read-only-super-admin delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
+service key-read-only-super-admin delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
+service key-read-only-super-admin delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only-super-admin delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-read-only-super-admin delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
+service key-read-only-super-admin delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-read-only-super-admin delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-read-only-super-admin delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.
@@ -5134,10 +5140,11 @@ service key-role-based-super-admin delete collection async-false at direct  404 
 service key-role-based-super-admin delete collection async-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-role-based-super-admin delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection async-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
+service key-role-based-super-admin delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
+service key-role-based-super-admin delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
-service key-role-based-super-admin delete collection async-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
+service key-role-based-super-admin delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-throws at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-throws at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-throws at route  403 FORBIDDEN error  | You can't delete c async throws.
@@ -5166,10 +5173,11 @@ service key-role-based-super-admin delete collection returns-false at direct  40
 service key-role-based-super-admin delete collection returns-false at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-role-based-super-admin delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-filter at direct  404 NOT_FOUND thrown  missing=same  | Not found.
+service key-role-based-super-admin delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
+service key-role-based-super-admin delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
-service key-role-based-super-admin delete collection returns-filter at service  404 NOT_FOUND thrown  missing=same  | Not found.
+service key-role-based-super-admin delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-null at direct  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-null at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-null at route  403 FORBIDDEN error  | You can't delete c returns nulls.

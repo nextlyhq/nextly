@@ -1048,10 +1048,10 @@ service key-role-based delete collection async-filter at rest
 service key-role-based delete collection async-filter at route  # filter-not-applied
 service key-role-based delete collection returns-filter at rest
 service key-role-based delete collection returns-filter at route  # filter-not-applied
-service key-super-admin delete collection async-filter at rest
-service key-super-admin delete collection async-filter at route  # filter-not-applied
-service key-super-admin delete collection returns-filter at rest
-service key-super-admin delete collection returns-filter at route  # filter-not-applied
+service key-role-based-super-admin delete collection async-filter at rest
+service key-role-based-super-admin delete collection async-filter at route  # filter-not-applied
+service key-role-based-super-admin delete collection returns-filter at rest
+service key-role-based-super-admin delete collection returns-filter at route  # filter-not-applied
 service user-with delete collection async-filter at rest
 service user-with delete collection async-filter at route  # filter-not-applied
 service user-with delete collection returns-filter at rest
