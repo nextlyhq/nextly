@@ -1,8 +1,10 @@
 /**
- * `nextly.access.check` refuses, rather than throws, when it cannot read the
- * user: a role or grant lookup that fails refuses the check, so a caller
- * branching on the answer is told `false`, never a failure, and a rule is
- * never asked with a role set that could not be read.
+ * `nextly.access.check` refuses, rather than throws, when it cannot read what
+ * its answer needs: a grant lookup that fails refuses, and a role lookup that
+ * fails refuses wherever a rule would be asked, so a rule is never asked with
+ * a role set that could not be read. A caller branching on the answer is told
+ * `false`, never a failure. Where no rule is asked, the grants that were read
+ * answer alone, as they do at the route gates.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,9 +16,15 @@ const user = vi.hoisted(() => ({
   ],
   rolesFail: false,
   grantsFail: false,
+  /** How often the posts rule was asked, and with which roles. */
+  ruleAsked: [] as string[][],
 }));
 
-/** Every role and grant lookup the check can make, failing on demand. */
+/**
+ * Every role and grant lookup the check can make, failing on demand as each
+ * fails in production: `isSuperAdmin` answers `false` on a role lookup that
+ * fails, and the others throw.
+ */
 vi.mock("../../services/lib/permissions", async importOriginal => {
   const roles = async () => {
     if (user.rolesFail) throw new Error("roles unreadable");
@@ -29,6 +37,13 @@ vi.mock("../../services/lib/permissions", async importOriginal => {
   const holds = async (_userId: string, action: string, resource: string) =>
     (await grants()).some(g => g.action === action && g.resource === resource);
   const superAdmin = async () => (await roles()).includes("super-admin");
+  const superAdminOrFalse = async () => {
+    try {
+      return await superAdmin();
+    } catch {
+      return false;
+    }
+  };
   return {
     ...(await importOriginal<
       typeof import("../../services/lib/permissions")
@@ -47,7 +62,7 @@ vi.mock("../../services/lib/permissions", async importOriginal => {
         return false;
       }
     ),
-    isSuperAdmin: vi.fn(superAdmin),
+    isSuperAdmin: vi.fn(superAdminOrFalse),
     isSuperAdminOrRefuse: vi.fn(superAdmin),
     isSuperAdminOrThrow: vi.fn(superAdmin),
   };
@@ -61,7 +76,11 @@ import { createAccessNamespace } from "../namespaces/rbac";
 function access() {
   const rbac = new RBACAccessControlService();
   rbac.registerCollectionAccess("posts", {
-    read: ({ req }) => !(req.user?.roles ?? []).includes("suspended"),
+    read: ({ req }) => {
+      const roles = req.user?.roles ?? [];
+      user.ruleAsked.push([...roles]);
+      return !roles.includes("suspended");
+    },
   });
   return createAccessNamespace({
     rbacAccessControlService: rbac,
@@ -81,6 +100,7 @@ beforeEach(() => {
   user.roles = ["editor"];
   user.rolesFail = false;
   user.grantsFail = false;
+  user.ruleAsked = [];
 });
 
 describe("nextly.access.check when it cannot read the user", () => {
@@ -90,6 +110,8 @@ describe("nextly.access.check when it cannot read the user", () => {
     await expect(readsPosts()).resolves.toBe(true);
     user.roles = ["editor", "suspended"];
     await expect(readsPosts()).resolves.toBe(false);
+    // The rule was asked, with the roles as read.
+    expect(user.ruleAsked).toEqual([["editor"], ["editor", "suspended"]]);
   });
 
   it("refuses when the grant lookup fails", async () => {
@@ -104,6 +126,10 @@ describe("nextly.access.check when it cannot read the user", () => {
     user.roles = ["editor", "suspended"];
     user.rolesFail = true;
     await expect(readsPosts()).resolves.toBe(false);
-    await expect(updatesSettings()).resolves.toBe(false);
+    expect(user.ruleAsked).toEqual([]);
+    // Where no rule is asked the grants it read answer alone: an unreadable
+    // role set only means the user is not taken for a super-admin, and the
+    // grant to update settings was read.
+    await expect(updatesSettings()).resolves.toBe(true);
   });
 });
