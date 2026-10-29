@@ -16,13 +16,12 @@
  */
 import { z } from "zod";
 
-import { container } from "../../di/container";
-import { hasPermission } from "../../services/lib/permissions";
 import { defineNoticeKind } from "../notices/notice-kinds";
-import type { VersionsDbApi } from "../versions/db-api";
 
-import { RELEASES_TABLE } from "./release-tables";
-import { RELEASES_RESOURCE } from "./releases-resource";
+import {
+  mayReadReleaseNotices,
+  releaseNoticeLinks,
+} from "./release-notice-links";
 
 /** What the notice keeps of its release, so it reads after a deletion. */
 const stoppedData = z.object({
@@ -49,19 +48,8 @@ export const RELEASE_STOPPED_NOTICE =
         ? "The release has since been deleted."
         : "It stopped because one of its documents has a problem, or because it shares documents with a release that has one. Open it to see what needs attention, then schedule it again.",
     }),
-    // The releases that still exist, each with its page in the admin. One read
-    // for a page of notices.
-    link: async ids => {
-      if (ids.length === 0 || !container.has("adapter")) return new Map();
-      const rows = await container
-        .get<Pick<VersionsDbApi, "select">>("adapter")
-        .select<{ id: string }>(RELEASES_TABLE, {
-          columns: ["id"],
-          where: { and: [{ column: "id", op: "IN", value: [...ids] }] },
-        });
-      return new Map(rows.map(row => [row.id, `/admin/releases/${row.id}`]));
-    },
-    // A person who may no longer read releases stops seeing these, as the
-    // releases themselves are hidden from them.
-    visible: userId => hasPermission(userId, "read", RELEASES_RESOURCE),
+    // The releases that still exist, each with its page in the admin, and
+    // only for a person who may still read releases: as every release notice.
+    link: releaseNoticeLinks,
+    visible: mayReadReleaseNotices,
   });
