@@ -11,6 +11,7 @@ import type {
 
 // PR 4 migration: replaced legacy result-shape returns and
 // mapDbErrorToServiceError calls with throw-based NextlyError.
+import { storedAsPlain } from "../../../../auth/access/manage-bridge";
 import { toDbError } from "../../../../database/errors";
 import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -24,7 +25,6 @@ import {
 } from "../../../users/services/last-super-admin";
 import { PUBLIC_ROLE_SLUG, refuseLinkingPublicRole } from "../public-role";
 import { afterRoleGrantsChanged } from "../role-grants-changed";
-import { storedAsPlain } from "../role-permission-service";
 import { refuseGrantingSuperAdmin } from "../super-admin-grant";
 
 import { toDialectBool, validateRoleId } from "./utils";
@@ -311,6 +311,43 @@ export class RoleMutationService extends BaseService {
   }
 
   /**
+   * Refuses child role ids that name no existing role, before a role is
+   * created or updated to inherit from them.
+   */
+  private async refuseUnknownChildRoles(childRoleIds: string[]): Promise<void> {
+    if (childRoleIds.length > 0) {
+      const existingChildRoles = await (
+        this.db as RBACDatabaseInstance
+      ).query.roles.findMany({
+        where: { id: { in: childRoleIds } },
+        columns: { id: true },
+      });
+
+      const existingChildRoleIds = new Set(
+        existingChildRoles.map(r => String(r.id))
+      );
+
+      const invalidChildRoleIds = childRoleIds.filter(
+        id => !existingChildRoleIds.has(id)
+      );
+
+      if (invalidChildRoleIds.length > 0) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "childRoleIds",
+              code: "INVALID",
+              message:
+                "One or more child role IDs do not reference an existing role.",
+            },
+          ],
+          logContext: { invalidChildRoleIds },
+        });
+      }
+    }
+  }
+
+  /**
    * Create a new role with permissions and child roles.
    *
    * This method wraps all database mutations in a transaction to ensure atomicity.
@@ -484,36 +521,7 @@ export class RoleMutationService extends BaseService {
       );
 
       // Verify all child roles exist before creating the role
-      if (uniqueChildRoleIds.length > 0) {
-        const existingChildRoles = await (
-          this.db as RBACDatabaseInstance
-        ).query.roles.findMany({
-          where: { id: { in: uniqueChildRoleIds } },
-          columns: { id: true },
-        });
-
-        const existingChildRoleIds = new Set(
-          existingChildRoles.map(r => String(r.id))
-        );
-
-        const invalidChildRoleIds = uniqueChildRoleIds.filter(
-          id => !existingChildRoleIds.has(id)
-        );
-
-        if (invalidChildRoleIds.length > 0) {
-          throw NextlyError.validation({
-            errors: [
-              {
-                path: "childRoleIds",
-                code: "INVALID",
-                message:
-                  "One or more child role IDs do not reference an existing role.",
-              },
-            ],
-            logContext: { invalidChildRoleIds },
-          });
-        }
-      }
+      await this.refuseUnknownChildRoles(uniqueChildRoleIds);
 
       // Every mutation in one transaction. better-sqlite3 rejects an async
       // callback in Drizzle's own transaction, so `withTransaction` runs it
@@ -810,36 +818,7 @@ export class RoleMutationService extends BaseService {
         );
 
         // Verify all child roles exist
-        if (uniqueChildRoleIds.length > 0) {
-          const existingChildRoles = await (
-            this.db as RBACDatabaseInstance
-          ).query.roles.findMany({
-            where: { id: { in: uniqueChildRoleIds } },
-            columns: { id: true },
-          });
-
-          const existingChildRoleIds = new Set(
-            existingChildRoles.map(r => String(r.id))
-          );
-
-          const invalidChildRoleIds = uniqueChildRoleIds.filter(
-            id => !existingChildRoleIds.has(id)
-          );
-
-          if (invalidChildRoleIds.length > 0) {
-            throw NextlyError.validation({
-              errors: [
-                {
-                  path: "childRoleIds",
-                  code: "INVALID",
-                  message:
-                    "One or more child role IDs do not reference an existing role.",
-                },
-              ],
-              logContext: { invalidChildRoleIds },
-            });
-          }
-        }
+        await this.refuseUnknownChildRoles(uniqueChildRoleIds);
       }
 
       // Wrap all database mutations in a transaction for atomicity. The

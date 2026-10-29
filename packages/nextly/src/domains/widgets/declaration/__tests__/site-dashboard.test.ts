@@ -147,7 +147,7 @@ describe("a site config that names what exists", () => {
     );
     // The collection's card is told the widgets that replace it and the
     // collection to set them to, the slug its id was minted from.
-    const told = `which is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to posts.`;
+    const told = `which is a retired card: core no longer makes a card per collection. Add Count, Breakdown, Over time or Recent entries and set its Collection to the collection this card showed.`;
     // A Single's card is never told to pick a collection: the widgets with a
     // Collection setting offer collections only.
     const toldSingle = `which is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`;

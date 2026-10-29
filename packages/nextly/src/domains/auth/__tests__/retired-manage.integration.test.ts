@@ -22,7 +22,7 @@ process.env.NEXTLY_SECRET =
 import { randomUUID } from "node:crypto";
 
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { runUpgrade, type UpgradeAdapter } from "../../../cli/commands/upgrade";
 import { getDialectTables } from "../../../database/index";
@@ -201,6 +201,59 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("adds manage-<resource> by action in one transaction, as one plain permission is added", async () => {
+        const ids = await idsBySlug();
+        const role = await services().roles.createRole({
+          name: "Added at once",
+          slug: "added-at-once",
+          permissionIds: [ids.get("read-users")!],
+        });
+        const roleId = String(role.id);
+        const transactions = vi.spyOn(t.adapter, "transaction");
+        try {
+          await services().rolePermissions.addPermissionToRole(roleId, {
+            action: "read",
+            resource: "roles",
+          });
+          const forOne = transactions.mock.calls.length;
+          transactions.mockClear();
+          await services().rolePermissions.addPermissionToRole(roleId, {
+            action: "manage",
+            resource: "settings",
+          });
+          // All four land together or none do, and no other writer of the
+          // role's permissions lands between them.
+          expect(transactions.mock.calls.length).toBe(forOne);
+        } finally {
+          transactions.mockRestore();
+        }
+        expect((await holds(roleId)).sort()).toEqual(
+          ["read-users", "read-roles", ...plainOn("settings")].sort()
+        );
+      });
+
+      it("takes the plain four off when manage-<resource> is taken off by action, one held before it too", async () => {
+        const ids = await idsBySlug();
+        // `read-media` is held on its own before `manage-media` is added, and
+        // goes with it: the role stores the four it stands for, not where
+        // each came from.
+        const role = await services().roles.createRole({
+          name: "Taken off",
+          slug: "taken-off",
+          permissionIds: [ids.get("read-users")!, ids.get("read-media")!],
+        });
+        const roleId = String(role.id);
+        await services().rolePermissions.addPermissionToRole(roleId, {
+          action: "manage",
+          resource: "media",
+        });
+        await services().rolePermissions.removePermissionFromRole(roleId, {
+          action: "manage",
+          resource: "media",
+        });
+        expect(await holds(roleId)).toEqual(["read-users"]);
+      });
+
       it("leaves no role holding a retired manage permission after a reboot, presets and the super-admin seeder included", async () => {
         await seedSuperAdmin(t.adapter, {
           email: "root@retired-manage.test",
@@ -283,6 +336,37 @@ describe.each(getConfiguredTestDialects())(
         expect(await holds(String(role.id))).toEqual([
           "manage-email-templates",
         ]);
+      });
+
+      it("adds manage-<resource> as itself by action too", async () => {
+        const ids = await idsBySlug();
+        const role = await services().roles.createRole({
+          name: "Missing plain, by action",
+          slug: "missing-plain-by-action",
+          permissionIds: [ids.get("read-users")!],
+        });
+        await services().rolePermissions.addPermissionToRole(String(role.id), {
+          action: "manage",
+          resource: "email-templates",
+        });
+        expect((await holds(String(role.id))).sort()).toEqual(
+          ["manage-email-templates", "read-users"].sort()
+        );
+      });
+
+      it("has nextly upgrade say how many roles it could not convert, and what to do", async () => {
+        const holders = (await retiredHolders()).length;
+        expect(holders).toBeGreaterThan(0);
+        lines.length = 0;
+        await upgrade();
+        expect(
+          lines.filter(line =>
+            line.includes(
+              `${holders} role(s) still hold a retired manage permission`
+            )
+          )
+        ).toHaveLength(1);
+        expect(lines.join("\n")).toContain("nextly upgrade");
       });
     });
   }

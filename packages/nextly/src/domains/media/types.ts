@@ -72,6 +72,10 @@ export interface UpdateMediaInput {
   caption?: string | null;
   tags?: string[];
   folderId?: string | null;
+  /** Focus point, whole percent from the left edge (0 to 100). */
+  focalX?: number;
+  /** Focus point, whole percent from the top edge (0 to 100). */
+  focalY?: number;
 }
 
 /**

@@ -18,10 +18,16 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import { intervalWindow } from "../../collections/query/timeseries-interval";
 import { answerAsAsked } from "../answer-as-asked";
 import { executeWidgetQuery } from "../execute";
 import { publishableContentSources } from "../publish";
-import { isRangeInterval, type WidgetQuery } from "../query";
+import {
+  isRangeInterval,
+  isTimeseriesRange,
+  rangeWindow,
+  type WidgetQuery,
+} from "../query";
 import type { WidgetResult } from "../result";
 import { naturalGroupBy } from "../settings";
 
@@ -53,6 +59,16 @@ export interface ReadServiceBinding {
   now: Date;
   /** The owner's collections the site renamed: declared slug to the site's. */
   collections?: Readonly<Record<string, string>>;
+  /**
+   * 🔴 A collection, by the site's slug, that this binding answers "nothing
+   * there" for. A read of it is checked exactly as any other, so a malformed
+   * one is refused for every reader alike, and is then answered as an empty
+   * collection answers, without running. A plugin's attention item uses it for
+   * a declared collection its reader may not read: their count of the others
+   * stands, the item is not failed for a permission gap, and nothing about
+   * that collection is disclosed.
+   */
+  answersNothing?: (slug: string) => boolean;
 }
 
 /** A call's own options, of which only the ones a read may carry are kept. */
@@ -165,11 +181,55 @@ function answeredOtherwise(asked: string): NextlyError {
   });
 }
 
+/** A read the binding's check passed: its query, its signal and the site's slug it reads. */
+type CheckedRead = WidgetQuery & { signal: AbortSignal; slug: string };
+
+/**
+ * What an empty collection answers a checked read of each kind: no entries, no
+ * rows, no groups, and a series at zero in every interval of its range, built
+ * through the window the read itself takes (`rangeWindow`, then
+ * `intervalWindow`), as a read of no rows answers it.
+ */
+function nothingThere(query: WidgetQuery, now: Date): WidgetResult {
+  switch (query.op) {
+    case "count":
+      return { op: "count", total: 0 };
+    case "list":
+      return { op: "list", items: [] };
+    case "groupBy":
+      return { op: "groupBy", buckets: [] };
+    case "timeseries": {
+      if (!isTimeseriesRange(query.range)) {
+        throw answeredOtherwise("timeseries");
+      }
+      const window = rangeWindow(query.range, now);
+      return {
+        op: "timeseries",
+        points: intervalWindow(
+          window.anchor,
+          window.interval,
+          window.intervals
+        ).map(start => ({ start: start.toISOString(), count: 0 })),
+        interval: window.interval,
+      };
+    }
+    default:
+      throw answeredOtherwise(query.op);
+  }
+}
+
 /** The read services for one card, bound to `binding`. */
 export function bindReadServices(
   binding: ReadServiceBinding
 ): WidgetReadServices {
-  const { caller, prepare, signal: card, now, collections } = binding;
+  const {
+    caller,
+    prepare,
+    signal: card,
+    now,
+    collections,
+    answersNothing,
+  } = binding;
 
   /**
    * The one path every read takes: the card is still waiting, the call names
@@ -180,7 +240,7 @@ export function bindReadServices(
     collection: unknown,
     shape: (slug: string) => Record<string, unknown>,
     options: unknown
-  ): Promise<WidgetQuery & { signal: AbortSignal }> {
+  ): Promise<CheckedRead> {
     const signal = signalOf(options, card);
     if (signal.aborted) throw cardGaveUp();
     if (typeof collection !== "string" || collection.trim() === "") {
@@ -196,7 +256,7 @@ export function bindReadServices(
     // Checked again after the check, which awaited: a card that gave up
     // meanwhile has no one to answer.
     if (signal.aborted) throw cardGaveUp();
-    return { ...query, signal };
+    return { ...query, signal, slug };
   }
 
   /**
@@ -206,8 +266,13 @@ export function bindReadServices(
    */
   async function run({
     signal,
+    slug,
     ...query
-  }: WidgetQuery & { signal: AbortSignal }): Promise<WidgetResult> {
+  }: CheckedRead): Promise<WidgetResult> {
+    // After the check, never instead of it: see `answersNothing`.
+    if (answersNothing?.(slug) === true) {
+      return answerAsAsked(query, nothingThere(query, now));
+    }
     return answerAsAsked(
       query,
       await executeWidgetQuery(query, caller, { signal, now: new Date(now) })

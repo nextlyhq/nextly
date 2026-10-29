@@ -57,9 +57,14 @@ import {
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryMetaStrip } from "@admin/components/features/entries/EntryForm/EntryMetaStrip";
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
+import {
+  readerStatusWrite,
+  statusWritesHeld,
+} from "@admin/components/features/entries/EntryForm/reader-status-write";
 import { submitDocument } from "@admin/components/features/entries/EntryForm/submit-document";
 import {
   submitBusy,
+  submitFailed,
   submitHeld,
   type SubmitOutcome,
 } from "@admin/components/features/entries/EntryForm/submit-outcome";
@@ -302,6 +307,7 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
 function SingleFormLanguagePanel({
   actionsDisabled,
   navigationDisabled,
+  publishAllDisabled,
   enabled,
   hasStatus,
   locale,
@@ -311,6 +317,7 @@ function SingleFormLanguagePanel({
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
+  publishAllDisabled: boolean;
   enabled: boolean;
   hasStatus: boolean;
   locale?: string;
@@ -335,6 +342,7 @@ function SingleFormLanguagePanel({
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
       />
     </div>
   );
@@ -394,6 +402,7 @@ function SingleFormFieldsPanel({
 function SingleFormRail({
   actionsDisabled,
   navigationDisabled,
+  publishAllDisabled,
   entry,
   hasStatus,
   locale,
@@ -402,6 +411,7 @@ function SingleFormRail({
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
+  publishAllDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
   locale?: string;
@@ -424,6 +434,7 @@ function SingleFormRail({
           hasStatus={hasStatus}
           actionsDisabled={actionsDisabled}
           navigationDisabled={navigationDisabled}
+          publishAllDisabled={publishAllDisabled}
           {...(locale === undefined ? {} : { locale })}
           {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         />
@@ -675,6 +686,13 @@ export function SingleForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
   const editsHeld = writesHeld || !mayEdit;
+  // Publishing every language changes only each language's status, so a
+  // reader whose document nothing else holds is still offered it.
+  const publishAllHeld = statusWritesHeld({
+    editsHeld,
+    refused: readOnlyForReader,
+    writesHeld,
+  });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
   const versionWritesHeld = lock.actionsDisabled || updatesHeld;
@@ -700,6 +718,29 @@ export function SingleForm({
   });
   const busy = isSubmitting || discardMutation.isPending;
 
+  // A write of the status alone, as a reader's publish or unpublish sends it:
+  // it names no field, so the server judges it by that permission alone, and
+  // it does not read the form, which a reader cannot change.
+  const writeStatus = useCallback(
+    async (status: "published" | "draft"): Promise<SubmitOutcome> => {
+      if (busy || submissionLatch.current) return submitBusy;
+      submissionLatch.current = true;
+      try {
+        const stored = await onSubmit({ status });
+        setSavedCount(n => n + 1);
+        if (stored) {
+          ownSave.current.storedKey = singleResetKey(stored, locale);
+        }
+        return { ok: true, item: { id: document.id } };
+      } catch (error) {
+        return submitFailed(error);
+      } finally {
+        submissionLatch.current = false;
+      }
+    },
+    [busy, onSubmit, locale, document.id]
+  );
+
   // Resolves to what the submission came to, never rejects, as the entry
   // editor's does: the toasts report to the author, the outcome to the caller.
   const handleSubmit = useCallback(
@@ -718,7 +759,14 @@ export function SingleForm({
       // handler acts on the live document, which is not what is on screen. And
       // so is a submit already in flight — parallel writes would let completion
       // order decide which contents survive.
-      if (editsHeld) return submitHeld;
+      if (editsHeld) {
+        // A reader's publish and unpublish still go, as the status alone.
+        const status = readerStatusWrite(intent, {
+          refused: readOnlyForReader,
+          writesHeld,
+        });
+        return status === undefined ? submitHeld : writeStatus(status);
+      }
       if (busy || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
 
@@ -774,6 +822,9 @@ export function SingleForm({
       blankPasswordFields,
       busy,
       editsHeld,
+      readOnlyForReader,
+      writesHeld,
+      writeStatus,
       document.id,
       schema,
       locale,
@@ -1262,6 +1313,7 @@ export function SingleForm({
                               of the rail, shown where the rail is not. */}
                                 <SingleFormLanguagePanel
                                   actionsDisabled={editsHeld}
+                                  publishAllDisabled={publishAllHeld}
                                   // A reader may still open the other languages.
                                   navigationDisabled={writesHeld}
                                   enabled={localizationEnabled}
@@ -1297,6 +1349,7 @@ export function SingleForm({
                               {/* Rail (collapsible). */}
                               <SingleFormRail
                                 actionsDisabled={editsHeld}
+                                publishAllDisabled={publishAllHeld}
                                 navigationDisabled={writesHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}

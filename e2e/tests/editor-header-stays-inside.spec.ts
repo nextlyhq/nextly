@@ -33,8 +33,10 @@ test("keeps Save draft and Publish inside an editor narrowed by the preview", as
   // The editor at the narrowest the divider allows.
   await page.keyboard.press("Home");
 
+  // `:visible`: a hidden copy of this page, which Next.js may keep mounted,
+  // holds the same id.
   const editorPane = page.locator(
-    `[id="${await divider.getAttribute("aria-controls")}"]`
+    `[id="${await divider.getAttribute("aria-controls")}"]:visible`
   );
   const controls = page.getByRole("button", {
     name: /^(Save draft|Publish|More actions)$/,
