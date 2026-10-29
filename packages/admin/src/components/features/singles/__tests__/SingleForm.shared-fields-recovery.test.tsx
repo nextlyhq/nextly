@@ -34,24 +34,29 @@ import {
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
 
-const { useDocumentLock, autosaveOffer } = vi.hoisted(() => ({
+const { useDocumentLock, autosaveOffer, savedCount } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
   // A recovery point the editor offers back, when a test sets one.
   autosaveOffer: {
     current: null as { savedAt: Date; snapshot: unknown } | null,
   },
+  // How many saves the editor last reported, which its preview follows.
+  savedCount: { current: 0 },
 }));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   // As the hook does: an offer is withdrawn once a save lands, which the
   // editor reports through `savedCount` (see the hook's own tests).
-  useAutosaveRecovery: ({ savedCount = 0 }: { savedCount?: number }) => ({
-    offer: savedCount > 0 ? null : autosaveOffer.current,
-    isResolved: true,
-    dismiss: () => {},
-    restore: () => {},
-  }),
+  useAutosaveRecovery: ({ savedCount: saves = 0 }: { savedCount?: number }) => {
+    savedCount.current = saves;
+    return {
+      offer: saves > 0 ? null : autosaveOffer.current,
+      isResolved: true,
+      dismiss: () => {},
+      restore: () => {},
+    };
+  },
 }));
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   ...(await importOriginal<
@@ -156,6 +161,7 @@ function refusedFormOf(
 beforeEach(() => {
   vi.clearAllMocks();
   autosaveOffer.current = null;
+  savedCount.current = 0;
   heldWork.current = false;
   registerComponent(VIEW, EditorView);
   useDocumentLock.mockReturnValue({
@@ -490,6 +496,30 @@ describe("a Single's form, for a publish refused over shared values", () => {
     expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
     // The same editor throughout, never remounted, so its claim stands.
     expect(container.querySelector("form")).toBe(formBefore);
+  });
+
+  it("counts the take as one of the Single's saves, so an open preview moves past the values it replaced", async () => {
+    const onSubmit = refusedOnce();
+    render(
+      <SingleForm schema={schema} document={first} onSubmit={onSubmit} />,
+      { wrapper: Providers }
+    );
+    // An edit, so the Single has a Save to offer.
+    fireEvent.change(screen.getByRole("textbox", { name: "Hero Title" }), {
+      target: { value: "Edited" },
+    });
+    fireEvent.submit(document.querySelector("form") as HTMLFormElement);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const take = vi.fn(async () => undefined);
+
+    await act(async () => {
+      await refusedFormOf(onSubmit)?.recover(take);
+    });
+
+    // The Save counts once, before the take replaced what it stored; the
+    // take once more, once the form starts afresh from what it wrote.
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(savedCount.current).toBe(2);
   });
 
   it("takes nothing where every Save of the Single would publish it", async () => {

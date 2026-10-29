@@ -15,21 +15,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, createTestQueryClient } from "@admin/__tests__/utils";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 
-const { useDocumentLock, updateOptions, autosaveOffer, update, answer } =
-  vi.hoisted(() => ({
-    useDocumentLock: vi.fn(),
-    // The server's answer on changing the entry in the language on screen.
-    answer: { current: "allowed" as "allowed" | "switching" },
-    // The entry's update, where a save leaves the editor.
-    update: vi.fn(),
-    // A recovery point the editor offers back, when a test sets one.
-    autosaveOffer: {
-      current: null as { savedAt: Date; snapshot: unknown } | null,
-    },
-    updateOptions: {
-      current: undefined as { refusedForm?: RefusedForm } | undefined,
-    },
-  }));
+const {
+  useDocumentLock,
+  updateOptions,
+  autosaveOffer,
+  savedCount,
+  update,
+  answer,
+} = vi.hoisted(() => ({
+  useDocumentLock: vi.fn(),
+  // How many saves the editor last reported, which its preview follows.
+  savedCount: { current: 0 },
+  // The server's answer on changing the entry in the language on screen.
+  answer: { current: "allowed" as "allowed" | "switching" },
+  // The entry's update, where a save leaves the editor.
+  update: vi.fn(),
+  // A recovery point the editor offers back, when a test sets one.
+  autosaveOffer: {
+    current: null as { savedAt: Date; snapshot: unknown } | null,
+  },
+  updateOptions: {
+    current: undefined as { refusedForm?: RefusedForm } | undefined,
+  },
+}));
 
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
 // The form the editor hands its update mutation, which the recovery uses.
@@ -42,12 +50,15 @@ vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
 vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
   // As the hook does: an offer is withdrawn once a save lands, which the
   // editor reports through `savedCount` (see the hook's own tests).
-  useAutosaveRecovery: ({ savedCount = 0 }: { savedCount?: number }) => ({
-    offer: savedCount > 0 ? null : autosaveOffer.current,
-    isResolved: true,
-    dismiss: () => {},
-    restore: () => {},
-  }),
+  useAutosaveRecovery: ({ savedCount: saves = 0 }: { savedCount?: number }) => {
+    savedCount.current = saves;
+    return {
+      offer: saves > 0 ? null : autosaveOffer.current,
+      isResolved: true,
+      dismiss: () => {},
+      restore: () => {},
+    };
+  },
 }));
 vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
   ...(await importOriginal<
@@ -113,6 +124,7 @@ beforeEach(() => {
   answer.current = "allowed";
   updateOptions.current = undefined;
   autosaveOffer.current = null;
+  savedCount.current = 0;
 });
 
 afterEach(() => {
@@ -312,6 +324,23 @@ describe("the entry editor's recovery from a refused publish", () => {
     // Its Save stored the change, as any save does, which withdraws it.
     expect(update).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+  });
+
+  it("counts the take as one of the editor's saves, so an open preview moves past the values it replaced", async () => {
+    lockedBy("held-by-me");
+    render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+    const take = vi.fn(async () => undefined);
+
+    await act(async () => {
+      await updateOptions.current?.refusedForm?.recover(take);
+    });
+
+    // The Save counts once, before the take replaced what it stored; the
+    // take once more, once the form starts afresh from what it wrote.
+    expect(take).toHaveBeenCalledTimes(1);
+    expect(savedCount.current).toBe(2);
   });
 
   it("keeps the entry's claim and its editor through the recovery", async () => {

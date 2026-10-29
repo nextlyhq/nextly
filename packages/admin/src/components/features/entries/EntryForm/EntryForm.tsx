@@ -378,6 +378,10 @@ export function EntryForm({
       setSavedCount(n => n + 1);
       onSuccess?.(data);
     },
+    // The take rewrote the pending change after its Save had stored it, so it
+    // counts as a save too: the preview pane moves past the values it
+    // replaced, and a recovery point from before it is withdrawn.
+    onRecovered: () => setSavedCount(n => n + 1),
     onError,
     onDelete,
     onCancel,

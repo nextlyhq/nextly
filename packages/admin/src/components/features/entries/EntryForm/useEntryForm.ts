@@ -190,6 +190,12 @@ export interface UseEntryFormOptions {
   saveWithoutPublishing?: RefObject<
     (() => Promise<DocumentActionOutcome>) | undefined
   >;
+  /**
+   * Hears a refused publish's recovery start the form afresh, its take
+   * written: a write to the pending change, as a save is, after the save it
+   * ran first.
+   */
+  onRecovered?: () => void;
 }
 
 /**
@@ -497,6 +503,7 @@ export function useEntryForm({
   readDraft,
   writesHeld = writesNeverHeld,
   saveWithoutPublishing = noSaveWithoutPublishing,
+  onRecovered,
 }: UseEntryFormOptions): UseEntryFormReturn {
   // Get fields from collection (supports both old and new API formats)
   const fields = getCollectionFields(collection);
@@ -587,7 +594,10 @@ export function useEntryForm({
     writesHeld,
     latch: submissionLatch,
     saveWithoutPublishing,
-    resetToDocument: () => form.reset(latestDefaults.current),
+    resetToDocument: () => {
+      form.reset(latestDefaults.current);
+      onRecovered?.();
+    },
   });
 
   useEffect(() => {

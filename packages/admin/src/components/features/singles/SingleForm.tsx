@@ -589,7 +589,13 @@ export function SingleForm({
     writesHeld: () => writesHeldNow.current,
     latch: submissionLatch,
     saveWithoutPublishing,
-    resetToDocument: () => form.reset(defaultValuesRef.current),
+    resetToDocument: () => {
+      form.reset(defaultValuesRef.current);
+      // The take rewrote the pending change after its Save had stored it, so
+      // it counts as a save too: the preview pane moves past the values it
+      // replaced, and a recovery point from before it is withdrawn.
+      setSavedCount(n => n + 1);
+    },
   });
 
   // Whether the Single holds unsaved work, a field's own held work included,
