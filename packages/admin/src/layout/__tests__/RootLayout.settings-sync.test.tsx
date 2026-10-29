@@ -63,6 +63,13 @@ vi.mock("@admin/components/shared/plugin-page-registrar", () => ({
   PluginPageRegistrar: () => null,
 }));
 
+// Stubbed like the plugin page registrar beside it: both only write a route
+// registry from the branding answer this suite mocks.
+vi.mock(
+  "@admin/components/features/widgets/preview/WidgetPreviewsRegistrar",
+  () => ({ WidgetPreviewsRegistrar: () => null })
+);
+
 vi.mock("@admin/components/features/schema-builder/RestartOverlay", () => ({
   RestartOverlay: () => null,
 }));
