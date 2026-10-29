@@ -891,10 +891,8 @@ export class CollectionMutationService extends BaseService {
   private fieldGroupAccess(
     caller: Parameters<typeof fieldGroupWriteAccessOf>[0]
   ): FieldGroupWriteAccess {
-    return {
-      ...fieldGroupWriteAccessOf(caller),
-      visitor: this.accessService.fieldRuleVisitor,
-    };
+    // Through the one builder, which carries the service's visitor loader.
+    return fieldGroupWriteAccessOf(caller, this.accessService.fieldRuleVisitor);
   }
 
   /**
