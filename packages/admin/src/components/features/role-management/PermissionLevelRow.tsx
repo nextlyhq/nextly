@@ -8,7 +8,7 @@ import {
   Switch,
 } from "@nextlyhq/ui";
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
-import { useMemo, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 
 import {
   actionLabel,
@@ -27,6 +27,8 @@ import {
 import { levelsFor, type AccessLevel } from "@admin/lib/permissions/levels";
 import { cn } from "@admin/lib/utils";
 import type { Permission } from "@admin/types/ui/form";
+
+import { useHeldPermissions } from "./useHeldPermissions";
 
 export interface PermissionLevelRowProps {
   row: LevelRow;
@@ -72,13 +74,7 @@ export function PermissionLevelRow({
   disabled = false,
 }: PermissionLevelRowProps): JSX.Element {
   const [eachAction, setEachAction] = useState(false);
-  const locked = useMemo(() => new Set(lockedIds), [lockedIds]);
-  const owned = useMemo(() => new Set(value), [value]);
-  // What the row shows held: the role's own and its base role's.
-  const held = useMemo(
-    () => new Set([...value, ...lockedIds]),
-    [value, lockedIds]
-  );
+  const { owned, locked, held } = useHeldPermissions(value, lockedIds);
 
   const level = rowLevel(row, held);
   const levels = levelsFor(row.kind);

@@ -4,7 +4,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@nextlyhq/ui";
-import { useMemo, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 
 import { ChevronRight } from "@admin/components/icons";
 import { LEVEL_LABELS } from "@admin/lib/permissions/level-labels";
@@ -15,6 +15,7 @@ import {
 import { cn } from "@admin/lib/utils";
 
 import { PermissionLevelRow, PermissionSwitches } from "./PermissionLevelRow";
+import { useHeldPermissions } from "./useHeldPermissions";
 
 export interface PluginLevelGroupProps {
   group: PluginGroup;
@@ -44,13 +45,7 @@ export function PluginLevelGroup({
   disabled = false,
 }: PluginLevelGroupProps): JSX.Element {
   const [open, setOpen] = useState(false);
-  const locked = useMemo(() => new Set(lockedIds), [lockedIds]);
-  const owned = useMemo(() => new Set(value), [value]);
-  // What the group shows held: the role's own and its base roles'.
-  const held = useMemo(
-    () => new Set([...value, ...lockedIds]),
-    [value, lockedIds]
-  );
+  const { owned, locked, held } = useHeldPermissions(value, lockedIds);
   const level = groupLevel(group, held);
   const ownCount = group.permissions.length;
   const summary =
