@@ -34,6 +34,21 @@ import { runMigrateCreate } from "../migrate-create";
 const loaded = vi.hoisted(() => ({
   config: undefined as unknown,
 }));
+// `../program` imports every command, `migrate` with its whole graph among
+// them; the command under test needs only its context factory, and is handed
+// its context here anyway.
+vi.mock("../../program", () => ({
+  createContext: () => ({
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      success: () => {},
+    },
+  }),
+}));
+
 vi.mock("../../utils/config-loader", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/config-loader")>()),
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
