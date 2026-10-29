@@ -26,6 +26,7 @@ import {
 } from "@admin/lib/permissions/level-rows";
 import { levelsFor, type AccessLevel } from "@admin/lib/permissions/levels";
 import { cn } from "@admin/lib/utils";
+import type { Permission } from "@admin/types/ui/form";
 
 export interface PermissionLevelRowProps {
   row: LevelRow;
@@ -169,8 +170,8 @@ export function PermissionLevelRow({
       </div>
 
       {eachAction && (
-        <ActionSwitches
-          row={row}
+        <PermissionSwitches
+          permissions={row.permissions}
           name={name}
           held={held}
           locked={locked}
@@ -232,23 +233,27 @@ function RowHeading({
 }
 
 /**
- * A switch for each of the row's permissions, under "Each action". A base
- * role's grant shows held; where the role also holds it, turning it off takes
- * away the role's own copy, and where the base gives it alone it is locked,
- * since the way to drop it is to change the base.
+ * A switch for each of `permissions`: a row's, under "Each action", or those
+ * a plugin declares of its own. A base role's grant shows held; where the
+ * role also holds it, turning it off takes away the role's own copy, and
+ * where the base gives it alone it is locked, since the way to drop it is to
+ * change the base.
  */
-function ActionSwitches({
-  row,
+export function PermissionSwitches({
+  permissions,
   name,
+  labelOf = actionLabel,
   held,
   locked,
   owned,
   disabled,
   onChange,
 }: {
-  row: LevelRow;
-  /** The row's accessible name, label and slug. */
+  permissions: readonly Permission[];
+  /** What the switches belong to, which each switch's name begins with. */
   name: string;
+  /** What each switch is called: its action's name unless told otherwise. */
+  labelOf?: (permission: Permission) => string;
   held: ReadonlySet<string>;
   locked: ReadonlySet<string>;
   owned: ReadonlySet<string>;
@@ -257,8 +262,8 @@ function ActionSwitches({
 }): JSX.Element {
   return (
     <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-      {inActionOrder(row.permissions).map(permission => {
-        const action = actionLabel(permission);
+      {inActionOrder(permissions).map(permission => {
+        const action = labelOf(permission);
         const baseOnly = locked.has(permission.id) && !owned.has(permission.id);
         return (
           <label
