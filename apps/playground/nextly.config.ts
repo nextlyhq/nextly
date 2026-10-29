@@ -37,6 +37,7 @@ import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { TranslatedPages } from "./src/collections/translated-pages";
 import { TranslatorNotes } from "./src/collections/translator-notes";
+import { siteNotesWidget } from "./src/dashboard/site-notes-widget";
 import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
@@ -80,6 +81,9 @@ export default defineConfig({
       email: "dev@nextly.local",
       password: "DevPassword123!",
     },
+    // A widget the site declares itself, offered in the Add panel like a
+    // plugin's, for site-widget.spec.ts.
+    dashboard: { widgets: [siteNotesWidget] },
   },
   localization: {
     locales: [
