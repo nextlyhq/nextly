@@ -435,15 +435,20 @@ describe("a delete rule's filter on a collection with languages", () => {
   });
 });
 
-// MySQL's default REPEATABLE READ fixes a transaction's snapshot at its first
-// read, so only there can a row seen early differ from the row a later lock
-// holds.
-describe.skipIf(!getConfiguredTestDialects().includes("mysql"))(
-  "a delete rule's filter inside the caller's transaction on MySQL",
-  () => {
+// The databases that lock a row a transaction reads. MySQL's default
+// REPEATABLE READ fixes a transaction's snapshot at its first read, so there a
+// row seen early can differ from the row a later lock holds; PostgreSQL's
+// READ COMMITTED reads afresh, and the case pins its locking read alike.
+const lockingDialects = getConfiguredTestDialects().filter(
+  dialect => dialect !== "sqlite"
+);
+
+describe.skipIf(lockingDialects.length === 0).each(lockingDialects)(
+  "a delete rule's filter inside the caller's transaction (%s)",
+  dialect => {
     it("refuses an entry another writer moved out of the filter after the transaction first read it", async () => {
       current = await createTestNextly({
-        dialect: "mysql",
+        dialect,
         collections: [
           defineCollection({
             slug: OPEN_POSTS,
