@@ -12,7 +12,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // running in a browser) without breaking server-side build/test.
 // The verify-server-only.mjs CI script asserts the runtime throw.
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 // Phase 4 note: use relative paths instead of TS path aliases.
 // Vitest's vite-tsconfig-paths plugin sometimes fails to resolve
@@ -47,7 +47,6 @@ import {
 } from "./rbac-epoch";
 import {
   cacheExpiry,
-  roleAssignmentInForce,
   soonestExpiry,
   userRoleAssignmentsInForce,
   type ResolvedRoles,
@@ -1226,62 +1225,6 @@ async function decideSuperAdmin(
     .limit(1);
 
   return superAdmin.length > 0;
-}
-
-/**
- * Check if any user OTHER than the given userId has the super-admin role.
- *
- * Used for last-super-admin removal protection: prevents stripping the
- * super_admin role from a user if they are the only super-admin in the system.
- *
- * @param excludeUserId - The user ID to exclude from the check
- * @returns `true` if at least one other user has the super-admin role
- */
-export async function hasSuperAdminExcluding(
-  excludeUserId: string
-): Promise<boolean> {
-  if (!excludeUserId) return false;
-
-  try {
-    const t = getTablesLazy();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { roles, userRoles } = t as any;
-
-    // Find the super-admin role ID
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const superAdminRole = await (getDb() as any)
-      .select({ id: roles.id })
-      .from(roles)
-      .where(eq(roles.slug, "super-admin"))
-      .limit(1);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if ((superAdminRole as any[]).length === 0) return false;
-
-    const superAdminRoleId = superAdminRole[0]!.id;
-
-    // Check if any other user holds the super-admin role. Held means in force
-    // now: an expired assignment grants nothing, so it cannot be the one that
-    // keeps the site administrable once this user's role is removed.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const otherSuperAdmins = await (getDb() as any)
-      .select({ userId: userRoles.userId })
-      .from(userRoles)
-      .where(
-        and(
-          eq(userRoles.roleId, superAdminRoleId),
-          ne(userRoles.userId, excludeUserId),
-          roleAssignmentInForce(userRoles, new Date())
-        )
-      )
-      .limit(1);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (otherSuperAdmins as any[]).length > 0;
-  } catch {
-    // fail-open: don't block operations if check fails
-    return true;
-  }
 }
 
 /**

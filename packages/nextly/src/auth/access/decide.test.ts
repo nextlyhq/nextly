@@ -762,6 +762,56 @@ describe("something no rule can name", () => {
     );
   });
 
+  it("answers a system resource's manage permission, asked of it, by the plain four together", () => {
+    // A gate written before `manage-` was retired still asks it; holding the
+    // plain read, create, update and delete there is holding it.
+    const plain = (resource: string, actions: readonly string[]) =>
+      actions.map(action => ({
+        slug: `${action}-${resource}`,
+        action,
+        resource,
+      }));
+    const four = ["read", "create", "update", "delete"] as const;
+    for (const resource of [
+      "media",
+      "settings",
+      "email-providers",
+      "email-templates",
+    ]) {
+      const person = (actions: readonly string[]) =>
+        userActor({
+          userId: "u13",
+          roles: ["holder"],
+          permissions: plain(resource, actions),
+        });
+      const key = keyActor({
+        keyId: "k4",
+        userId: "u13",
+        roles: [],
+        permissions: plain(resource, four),
+        superAdmin: false,
+      });
+      expect(
+        decidePermission(person(four), "manage", resource).allowed,
+        resource
+      ).toBe(true);
+      expect(decidePermission(key, "manage", resource).allowed, resource).toBe(
+        true
+      );
+      expect(
+        decidePermission(person(four.slice(0, 3)), "manage", resource),
+        resource
+      ).toEqual({ allowed: false, reason: "no-permission" });
+    }
+    // A `manage-` permission outside the four is still held only as stored.
+    const apiKeys = userActor({
+      userId: "u13",
+      roles: ["holder"],
+      permissions: plain("api-keys", four),
+    });
+    expect(decidePermission(apiKeys, "manage", "api-keys").allowed).toBe(false);
+  });
+
   it("is refused to a visitor and a plugin's person, who hold no permission", () => {
     const person = principalActor(MEMBER);
     expect(decidePermission(visitorActor(), "read", "settings")).toEqual({
