@@ -8389,6 +8389,21 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The refusal of a held edit its update filter refused, answered as a write
+   * that moved the entry out of the filter is; none where nothing refused it.
+   */
+  private async heldEditRefusal(
+    draftWrite: WorkingDraftWriteResult
+  ): Promise<CollectionServiceResult | undefined> {
+    if (!draftWrite.refusedBy) return undefined;
+    return this.accessService.refusalOutsideFilter(
+      draftWrite.refusedBy.params,
+      draftWrite.refusedBy.reads,
+      true
+    );
+  }
+
+  /**
    * The held component values in `draftDocument`, judged as the publish would
    * judge them: merged into the draft, since a save carries only the
    * sub-fields it changed, and without the type tags the draft holds, which no
@@ -8757,6 +8772,13 @@ export class CollectionMutationService extends BaseService {
     // no longer identifies the sentinel after the throw, but this result stays
     // correct regardless of how the error is wrapped.
     let transitionDeniedResult: CollectionServiceResult | undefined;
+    // Rolls the transaction back with `refusal`, where there is one, for the
+    // catch to return.
+    const refuseWith = (refusal: CollectionServiceResult | undefined): void => {
+      if (!refusal) return;
+      transitionDeniedResult = refusal;
+      throw new StatusTransitionDeniedError();
+    };
     // The shared fields a pending change may not publish, and the live
     // document they were judged against; see `SharedValuesOutOfDateError`.
     let outOfDateShared:
@@ -9657,16 +9679,14 @@ export class CollectionMutationService extends BaseService {
           // Each filter that judged the write, matched again on the row as it
           // is locked, so a write that moved the entry out of one since it was
           // judged above changes nothing.
-          const outside = await this.refusalOutsideWriteFilters(
-            tx,
-            schema,
-            params.entryId,
-            writeFilters
+          refuseWith(
+            await this.refusalOutsideWriteFilters(
+              tx,
+              schema,
+              params.entryId,
+              writeFilters
+            )
           );
-          if (outside) {
-            transitionDeniedResult = outside;
-            throw new StatusTransitionDeniedError();
-          }
 
           // The status event uses the true prior value even after a conflict
           // retry. Only recorded for versioned collections (the only ones that
@@ -10508,16 +10528,14 @@ export class CollectionMutationService extends BaseService {
           // relations are written, and rolled back where it left one. The
           // caller could see the entry, which was inside the filter, so the
           // refusal is in words.
-          const movedOut = await this.refusalMovedOutOfWriteFilters(
-            tx,
-            schema,
-            params.entryId,
-            writeFilters
+          refuseWith(
+            await this.refusalMovedOutOfWriteFilters(
+              tx,
+              schema,
+              params.entryId,
+              writeFilters
+            )
           );
-          if (movedOut) {
-            transitionDeniedResult = movedOut;
-            throw new StatusTransitionDeniedError();
-          }
 
           // Capture a version snapshot of the post-update document atomically
           // with the write when the collection opts into versioning. The parent
@@ -10779,15 +10797,7 @@ export class CollectionMutationService extends BaseService {
                 });
                 // Refused as a write moving the entry out of its filter is,
                 // before anything of the edit is held.
-                if (draftWrite.refusedBy) {
-                  transitionDeniedResult =
-                    await this.accessService.refusalOutsideFilter(
-                      draftWrite.refusedBy.params,
-                      draftWrite.refusedBy.reads,
-                      true
-                    );
-                  throw new StatusTransitionDeniedError();
-                }
+                refuseWith(await this.heldEditRefusal(draftWrite));
                 workingDraftDocument = draftWrite.workingDraftDocument;
                 priorWorkingDraftDocument =
                   draftWrite.priorWorkingDraftDocument;
