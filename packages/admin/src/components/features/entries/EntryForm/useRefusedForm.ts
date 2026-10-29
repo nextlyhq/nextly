@@ -127,12 +127,13 @@ export function useRefusedForm(gate: {
         const { writesHeld, latch } = gateNow.current;
         if (writesHeld()) throw new Error(HELD);
         if (latch.current || running.current) throw new Error(BUSY);
-        running.current = true;
-        // Held from the action, through the Save, until the form starts
-        // afresh: no moment between the two writes when a field is open.
-        setRecovering(true);
         let holdsLatch = false;
         try {
+          // Taken and let go in this one try, so nothing can leave it set.
+          running.current = true;
+          // Held from the action, through the Save, until the form starts
+          // afresh: no moment between the two writes when a field is open.
+          setRecovering(true);
           const save = gateNow.current.saveWithoutPublishing.current;
           const saved = save ? await save() : NO_SAVE_WITHOUT_PUBLISHING;
           if (!saved.ok) throw new RecoverySaveRefused(saved);
