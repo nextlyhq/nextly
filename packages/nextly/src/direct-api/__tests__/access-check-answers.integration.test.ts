@@ -43,6 +43,7 @@ const RULE_TRUE = "acchk_rule_true";
 const RULE_FALSE = "acchk_rule_false";
 const RULE_FILTER = "acchk_rule_filter";
 const RULE_THROWS = "acchk_rule_throws";
+const READ_FILTER = "acchk_read_filter";
 const BANNER = "acchk-banner";
 
 describe.each(getConfiguredTestDialects())(
@@ -81,6 +82,11 @@ describe.each(getConfiguredTestDialects())(
             access: { update: throwing },
             fields: [text({ name: "title" })],
           }),
+          defineCollection({
+            slug: READ_FILTER,
+            access: { read: answering({ title: { equals: "mine" } }) },
+            fields: [text({ name: "title" })],
+          }),
         ],
         singles: [
           defineSingle({
@@ -98,6 +104,7 @@ describe.each(getConfiguredTestDialects())(
         RULE_FILTER,
         RULE_THROWS,
       ]);
+      await grantTo(t, "acchk-ruled-writer", "read", [READ_FILTER]);
       await userWhoMay(t, "acchk-banner-editor", "update", [BANNER]);
       await grantTo(t, "acchk-banner-editor", "read", [BANNER]);
       await userWhoMay(t, "acchk-settings-updater", "update", ["settings"]);
@@ -153,6 +160,19 @@ describe.each(getConfiguredTestDialects())(
       expect(await check("acchk-ruled-writer", "update", RULE_THROWS)).toBe(
         false
       );
+    });
+
+    it("refuses a read whose rule answers a filter", async () => {
+      // A list applies the filter and shows the entries it matches; this
+      // check is about the resource as a whole, which the filter does not
+      // allow.
+      expect(await check("acchk-ruled-writer", "read", READ_FILTER)).toBe(
+        false
+      );
+      // The control: the same user, without the permission, is refused too,
+      // and a holder of a rule that allows reads it.
+      expect(await check("acchk-reader", "read", READ_FILTER)).toBe(false);
+      expect(await check("acchk-banner-editor", "read", BANNER)).toBe(true);
     });
 
     it("asks a Single's rule as a collection's", async () => {
