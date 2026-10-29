@@ -555,9 +555,19 @@ async function runCoreSchemaChecks(
   }
 
   // Roles an earlier release gave a retired `manage-` permission, each named
-  // at every start until `nextly upgrade` converts it.
+  // at every start until `nextly upgrade` converts it. Read only when the
+  // tables it reads are there and whole: where one is missing or behind, the
+  // warnings above name it, and reading it would throw instead.
   const { select } = adapter;
-  if (select) {
+  const behind = new Set(
+    [...missingTables, ...drift.map(table => table.table)].map(name =>
+      name.toLowerCase()
+    )
+  );
+  const rolesReadable = !["roles", "permissions", "role_permissions"].some(
+    table => behind.has(table)
+  );
+  if (select && rolesReadable) {
     const { formatRetiredManageWarning, rolesHoldingRetiredManage } =
       await import("../domains/auth/retired-manage");
     const holding = await rolesHoldingRetiredManage({

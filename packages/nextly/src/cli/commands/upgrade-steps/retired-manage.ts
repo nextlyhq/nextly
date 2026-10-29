@@ -34,8 +34,18 @@ export const retiredManageStep: UpgradeStep = {
     const adapter = adapterOf(context);
     const roles = new RolePermissionService(adapter, consoleLogger);
     let converted = 0;
+    let kept = 0;
     for (const role of await rolesHoldingRetiredManage(adapter)) {
       if (await roles.convertRetiredManage(role.id)) converted++;
+      else kept++;
+    }
+    // A role whose resource lacks one of the plain four keeps its `manage-`
+    // permission rather than lose access, so the upgrade is not done for it:
+    // said here with the remedy, never counted as converted.
+    if (kept > 0) {
+      context.warn(
+        `${kept} role(s) still hold a retired manage permission: a plain read, create, update or delete permission it stands for is missing. Start Nextly once so it seeds them, then run \`nextly upgrade\` again.`
+      );
     }
     return converted;
   },

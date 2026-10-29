@@ -9,7 +9,6 @@ import type {
   RolePermissionInsertData,
 } from "@nextly/types/rbac-operations";
 
-import { MANAGE_BRIDGED_ACTIONS } from "../../../auth/access/manage-bridge";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
@@ -17,7 +16,12 @@ import { writingPermissions } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 
 import { afterRoleGrantsChanged } from "./role-grants-changed";
-import { batches, isRetiredManage, storedAsPlain } from "./stored-as-plain";
+import {
+  batches,
+  isRetiredManage,
+  plainFourOn,
+  storedAsPlain,
+} from "./stored-as-plain";
 
 /**
  * The transaction methods this service calls.
@@ -75,15 +79,28 @@ export class RolePermissionService extends BaseService {
     perm: { action: string; resource: string; name?: string; slug?: string }
   ): Promise<void> {
     // A retired `manage-` permission is added as the plain four it stands
-    // for, each as a permission of its own.
+    // for, all four in one transaction under the lock on the role's row, so
+    // the add lands whole and no other writer lands between its parts. Where
+    // one of the four is missing, it is added as itself, as `storedAsPlain`
+    // keeps it.
     if (isRetiredManage(perm.action, perm.resource)) {
-      for (const action of MANAGE_BRIDGED_ACTIONS) {
-        await this.addPermissionToRole(roleId, {
-          action,
-          resource: perm.resource,
-        });
+      let added = false;
+      await this.adapter.transaction(async tx => {
+        await tx.lockRow("roles", roleId);
+        const four = await plainFourOn(tx, perm.resource);
+        if (four.length === 0) return;
+        const held = await this.heldIn(tx, roleId);
+        await this.insertAssignments(
+          tx,
+          roleId,
+          four.filter(id => !held.has(id))
+        );
+        added = true;
+      });
+      if (added) {
+        await afterRoleGrantsChanged(roleId);
+        return;
       }
-      return;
     }
     // Composed by the shared helpers rather than written out. This method
     // creates the permission row when the pair has none, and it is reached from
@@ -244,17 +261,25 @@ export class RolePermissionService extends BaseService {
         id: true,
       },
     });
-    if (!permission) return;
+    const retired = isRetiredManage(perm.action, perm.resource);
+    if (!permission && !retired) return;
 
     // Under the lock on the role's row that every other writer of its
     // permissions takes, so a removal never lands between another writer's
     // read of what the role holds and its write.
     await this.adapter.transaction(async tx => {
       await tx.lockRow("roles", roleId);
+      const ids = [
+        ...(permission ? [String(permission.id)] : []),
+        // A retired `manage-` permission is stored as the plain four it
+        // stands for, so taking it off takes them off too.
+        ...(retired ? await plainFourOn(tx, perm.resource) : []),
+      ];
+      if (ids.length === 0) return;
       await tx.delete("role_permissions", {
         and: [
           { column: "roleId", op: "=", value: roleId },
-          { column: "permissionId", op: "=", value: String(permission.id) },
+          { column: "permissionId", op: "IN", value: ids },
         ],
       });
     });

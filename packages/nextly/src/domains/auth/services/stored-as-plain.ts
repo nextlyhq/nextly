@@ -27,6 +27,43 @@ type PermissionReader = Pick<TransactionContext, "select">;
 type PermissionRow = { id: unknown; action: string; resource: string };
 
 /**
+ * The ids of the plain read, create, update and delete on `resource` among
+ * `rows`, or none unless all four are there: a retired `manage-` permission
+ * is stored as the plain four whole, or kept as it is.
+ */
+function wholeFour(rows: readonly PermissionRow[], resource: string): string[] {
+  const four = rows.filter(
+    row =>
+      row.resource === resource && MANAGE_BRIDGED_ACTIONS.includes(row.action)
+  );
+  return MANAGE_BRIDGED_ACTIONS.every(action =>
+    four.some(row => row.action === action)
+  )
+    ? four.map(row => String(row.id))
+    : [];
+}
+
+/**
+ * The ids of the plain four a retired `manage-` permission on `resource` is
+ * stored as, or none where one of them is missing and it is kept as it is.
+ */
+export async function plainFourOn(
+  reader: PermissionReader,
+  resource: string
+): Promise<string[]> {
+  const rows = await reader.select<PermissionRow>("permissions", {
+    columns: ["id", "action", "resource"],
+    where: {
+      and: [
+        { column: "action", op: "IN", value: [...MANAGE_BRIDGED_ACTIONS] },
+        { column: "resource", op: "=", value: resource },
+      ],
+    },
+  });
+  return wholeFour(rows, resource);
+}
+
+/**
  * The permission ids as a role stores them: each retired `manage-` one
  * replaced by the plain read, create, update and delete on its resource, and
  * every other id as it is. Where a resource lacks one of the plain four, its
@@ -64,18 +101,12 @@ export async function storedAsPlain(
   const replaced = new Set<string>();
   const added: string[] = [];
   for (const resource of resources) {
-    const four = plain.filter(row => row.resource === resource);
-    if (
-      !MANAGE_BRIDGED_ACTIONS.every(action =>
-        four.some(row => row.action === action)
-      )
-    ) {
-      continue;
-    }
+    const four = wholeFour(plain, resource);
+    if (four.length === 0) continue;
     for (const row of retired) {
       if (row.resource === resource) replaced.add(String(row.id));
     }
-    added.push(...four.map(row => String(row.id)));
+    added.push(...four);
   }
   return [...new Set([...ids.filter(id => !replaced.has(id)), ...added])];
 }
