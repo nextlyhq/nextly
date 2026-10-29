@@ -48,12 +48,15 @@ import {
 } from "@admin/hooks/queries/useSingles";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
+import {
+  type RefusedForm,
+  reloadDocument,
+  useSharedFieldsRecovery,
+} from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
-import { singleApi } from "@admin/services/singleApi";
 
 // ============================================================================
 // Types
@@ -364,13 +367,16 @@ export default function SingleEditPage({
   // Handle form submission
   // Answers with the stored document, so the form starts from what the server
   // kept rather than from what it sent.
-  const handleSubmit = async (data: Record<string, unknown>) => {
+  const handleSubmit = async (
+    data: Record<string, unknown>,
+    form?: RefusedForm
+  ) => {
     try {
       const stored = await updateDocument(data);
       toast.success(`${singleLabel} has been updated successfully.`);
       return stored;
     } catch (err) {
-      reportSaveFailure(err, data);
+      reportSaveFailure(err, form);
       throw err; // Re-throw to prevent form from marking as clean
     }
   };
@@ -468,9 +474,9 @@ function singleDocumentView(
 /**
  * Reports a failed save of a Single. A publish refused over shared values
  * someone else published since offers to take them, and the reload that
- * follows shows the change brought up to date; saving the refused values
- * without their status keeps them as the pending change first. Any other
- * failure is reported as it always was.
+ * follows shows the change brought up to date; the form, as it is when the
+ * author acts, is saved as the pending change first. Any other failure is
+ * reported as it always was.
  */
 function useSingleSaveFailure(args: {
   slug?: string;
@@ -478,7 +484,7 @@ function useSingleSaveFailure(args: {
   locale?: string;
   /** The Single's schema, for the labels a refusal names its fields by. */
   schema?: { fields?: readonly { name?: string; label?: unknown }[] } | null;
-}): (error: unknown, refused: Record<string, unknown>) => void {
+}): (error: unknown, form: RefusedForm | undefined) => void {
   const slug = args.slug ?? "";
   const documentId = args.document?.id;
   const { locale } = args;
@@ -487,25 +493,23 @@ function useSingleSaveFailure(args: {
     scope: slug && documentId ? { kind: "single", slug, documentId } : null,
     locale,
     fields: args.schema?.fields ?? NO_FIELDS,
-    onTaken: useCallback(() => {
-      void queryClient.invalidateQueries({
-        queryKey: singleDocumentKeys.detail(slug),
-      });
-    }, [queryClient, slug]),
+    // Answers once the reloaded document is back, which the recovery waits
+    // for before letting the editor save again.
+    onTaken: useCallback(
+      () =>
+        reloadDocument(queryClient, singleDocumentKeys.detail(slug), locale),
+      [queryClient, slug, locale]
+    ),
   });
   return useCallback(
-    (error: unknown, refused: Record<string, unknown>) => {
-      const recovered = recover(error, () => {
-        const { status: _status, ...values } = refused;
-        return singleApi.updateDocument(slug, values, { locale });
-      });
-      if (!recovered) {
+    (error: unknown, form: RefusedForm | undefined) => {
+      if (!recover(error, form)) {
         toast.error(
           error instanceof Error ? error.message : "Failed to save changes"
         );
       }
     },
-    [recover, slug, locale]
+    [recover]
   );
 }
 
