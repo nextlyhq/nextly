@@ -62,16 +62,6 @@ export function DocumentActionsHost({
 }
 
 /**
- * The editor's keyboard shortcuts, with Mod+S running the document's Save.
- *
- * The Save action, not a save of its own: the shortcut used to pick its submit
- * intent by a rule written beside the header's, and two rules for one question
- * agree only until one of them changes. Running the action also means the
- * shortcut is refused for exactly the reasons the control is.
- *
- * Rendered inside `DocumentActionsHost`, which is where the action lives.
- */
-/**
  * Hands the host's Save that never publishes to the editor rendering the
  * host, which sits above it: a refused publish's way out stores the form
  * with it, as the Save control would, rather than with a write of its own.
@@ -91,6 +81,16 @@ export function SaveWithoutPublishingBridge({
   return null;
 }
 
+/**
+ * The editor's keyboard shortcuts, with Mod+S running the document's Save.
+ *
+ * The Save action, not a save of its own: the shortcut used to pick its submit
+ * intent by a rule written beside the header's, and two rules for one question
+ * agree only until one of them changes. Running the action also means the
+ * shortcut is refused for exactly the reasons the control is.
+ *
+ * Rendered inside `DocumentActionsHost`, which is where the action lives.
+ */
 export function DocumentSaveShortcuts({
   onCancel,
   hasUnsavedWork,
