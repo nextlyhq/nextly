@@ -172,7 +172,7 @@ describe("roleScreenRows", () => {
       kind: "collection" as const,
       labels: { singular: "Setting", plural: "Settings" },
       plugin: null,
-      declaredRules: [],
+      declaredRules: ["update"],
     },
     {
       slug: "posts",
@@ -196,6 +196,8 @@ describe("roleScreenRows", () => {
       "manage",
       "publish",
     ]);
+    // The rule its code declares still limits it, so the row says so.
+    expect(settings[0]?.declaredRules).toEqual(["update"]);
     // POPULATION CONTROL: another collection still gets its own row.
     expect(
       screen.appRows.filter(r => r.slug === "posts").map(r => r.kind)

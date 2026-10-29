@@ -165,18 +165,29 @@ export function systemLevelRows(permissions: readonly Permission[]): {
  * and its permissions are the built-in resource's own permissions, so it is
  * shown as the built-in row rather than as a collection; any action of its
  * own that no level holds, such as `publish`, sits under that row's switch.
+ * The rules its code declares still limit it, so the built-in row carries
+ * them and says so.
  */
 export function roleScreenRows(
   entities: readonly ScreenEntity[],
   permissions: readonly Permission[]
 ): { appRows: LevelRow[]; groups: PluginGroup[]; rest: Permission[] } {
+  const reservedRules = new Map(
+    entities
+      .filter(entity => MANAGE_BRIDGE_RESOURCES.has(entity.slug))
+      .map(entity => [entity.slug, entity.declaredRules])
+  );
   const system = systemLevelRows(permissions);
+  const systemRows = system.rows.map(row => ({
+    ...row,
+    declaredRules: reservedRules.get(row.slug) ?? row.declaredRules,
+  }));
   const built = levelRows(
     entities.filter(entity => !MANAGE_BRIDGE_RESOURCES.has(entity.slug)),
     system.rest
   );
   const sorted = pluginGroups(built.rows, built.rest);
-  return { ...sorted, appRows: [...sorted.appRows, ...system.rows] };
+  return { ...sorted, appRows: [...sorted.appRows, ...systemRows] };
 }
 
 /** The actions `ids` hold on `row`; an id of another row is not counted. */
