@@ -36,3 +36,4 @@ A reader can now pin up to 20 entries and Singles to come back to, from the "Pin
 - Deleting an entry (one, several, or by query), a Single or a whole collection deletes every reader's pins of it, in the delete's own transaction.
 - Before `nextly migrate` creates the pins table, a reader has no pins, a pin is refused naming the command, and deletes work as before: the table's presence is asked before the delete's transaction opens.
 - The admin's `useDashboardPins` hook and the pin action are ready for the dashboard to draw pins (`@experimental`).
+- A delete inside a transaction its caller holds asks whether the pins table exists on that transaction's own connection, so it completes on a pool of one connection. `DrizzleAdapter` gains the internal `tableExistsThrough`, the catalogue lookup `tableExists` makes, run on a given executor; `tableExists` answers as before.

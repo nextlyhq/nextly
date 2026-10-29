@@ -30,6 +30,12 @@
  * asked on every read rather than frozen here. Whether a size is one the grid
  * can draw at all is the grid's own rule, so it is the one field judged here.
  *
+ * One widget-id question IS answered here, because its answer never changes:
+ * a card in a retired per-collection or per-Single namespace
+ * (`retired-widget-namespaces.ts`) is dropped when the row is read. Any other
+ * id the live registry does not know is kept, so a disabled plugin's cards
+ * return with it.
+ *
  * ## What a placement deliberately does NOT hold
  *
  * 🔴 No `requiredPermission`, and no other copy of anything the definition
@@ -42,9 +48,9 @@
  *
  * A placement is one card with its own identity, so one widget can appear
  * twice with different `config`. The DEFAULT set names each placement after its
- * widget, because that is the one arrangement where the two are one-to-one and
- * a stable id keeps repeated reads identical; a card added later gets a
- * generated id.
+ * widget, a stable id that keeps repeated reads identical, and each further
+ * card of one widget by the id the site config names for it; a card added
+ * later gets a generated id.
  *
  * @module domains/widgets/layout
  */
@@ -59,8 +65,9 @@ import {
   MAX_GRID_ROWS,
   MIN_GRID_ROWS,
 } from "./grid-size";
-import { MAX_PLACEMENTS } from "./layout-limits";
+import { isUsableText, MAX_PLACEMENTS } from "./layout-limits";
 import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
+import { inRetiredWidgetNamespace } from "./retired-widget-namespaces";
 
 // The payload's version, writer and size check live in the import-free
 // `layout-payload.ts`, so the browser asks the endpoint's own question about
@@ -134,10 +141,6 @@ export interface StoredLayout {
    * Read it through {@link layoutIsArranged}, never directly.
    */
   unarranged?: true;
-}
-
-function isUsableText(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -382,7 +385,17 @@ export function readStoredLayout(raw: string): StoredLayout | undefined {
     });
   }
 
-  const placements = readPlacements(decoded.placements);
+  // 🔴 A card core once minted per collection or per Single is DROPPED here,
+  // by namespace: no widget can answer to one again (the namespaces are
+  // reserved, so no plugin or site may declare one), and a card about one
+  // collection is now a core widget set to it. Dropped rather than carried
+  // like a disabled plugin's card, which may come back. The read still
+  // writes nothing; a write merges over these placements, so the reader's
+  // next save of any kind stores the row without them. Before the repeat
+  // check below, so a dropped card claims no placement id.
+  const placements = readPlacements(decoded.placements).filter(
+    placement => !inRetiredWidgetNamespace(placement.widgetId)
+  );
   // 🔴 REPORTS a repeat rather than resolving one. Resolving across the whole
   // row would let a card this caller may not know exists claim an id and push a
   // card they CAN see onto a different one, so the id they are handed would
@@ -426,27 +439,35 @@ export function layoutIsArranged(stored: StoredLayout): boolean {
  * and reading only the removals back dropped it on every read. A setting the
  * default's own entry starts a card with gives way to one stored for it.
  *
- * Keyed by WIDGET, across the whole stored row and whatever its visibility, so
+ * Keyed by CARD, across the whole stored row and whatever its visibility, so
  * a removal or a setting on a card the reader has since lost access to is
  * still honoured the day access returns, and a removed card keeps its settings
  * for when it is put back. `undefined` is a reader with no row.
+ *
+ * 🔴 By placement id and widget together, so two cards of one widget the
+ * default places keep a choice each (keyed by widget, the last card's choice
+ * was every card's), and an id reused for another widget starts afresh. A
+ * widget the default and the row each hold ONE card of is matched by widget
+ * too, so a row whose card was stored under another id keeps its choice.
  */
 export function dismissalsApplied(
   defaults: readonly WidgetPlacement[],
   stored: StoredLayout | undefined
 ): WidgetPlacement[] {
-  const chosen = new Map<
-    string,
-    { removed: boolean; config?: Record<string, unknown> }
-  >();
-  for (const placement of stored?.placements ?? []) {
-    chosen.set(placement.widgetId, {
-      removed: placement.removed,
-      ...(placement.config === undefined ? {} : { config: placement.config }),
-    });
-  }
+  const placements = stored?.placements ?? [];
+  const byId = new Map(placements.map(placement => [placement.id, placement]));
+  const soleCardOf = soleCardsByWidget(placements);
+  const soleInDefault = soleCardsByWidget(defaults);
   return defaults.map(placement => {
-    const choice = chosen.get(placement.widgetId);
+    // The card stored under this id, only while it is still a card of the same
+    // widget: an id a config gives another widget is a new card, whose
+    // settings would read another widget's vocabulary.
+    const sameCard = byId.get(placement.id);
+    const choice =
+      (sameCard?.widgetId === placement.widgetId ? sameCard : undefined) ??
+      (soleInDefault.has(placement.widgetId)
+        ? soleCardOf.get(placement.widgetId)
+        : undefined);
     if (choice === undefined) return placement;
     return {
       ...placement,
@@ -454,6 +475,20 @@ export function dismissalsApplied(
       ...(choice.config === undefined ? {} : { config: choice.config }),
     };
   });
+}
+
+/** Each widget that `placements` holds exactly one card of, with that card. */
+function soleCardsByWidget(
+  placements: readonly WidgetPlacement[]
+): ReadonlyMap<string, WidgetPlacement> {
+  const sole = new Map<string, WidgetPlacement>();
+  const repeated = new Set<string>();
+  for (const placement of placements) {
+    if (sole.has(placement.widgetId)) repeated.add(placement.widgetId);
+    else sole.set(placement.widgetId, placement);
+  }
+  for (const widgetId of repeated) sole.delete(widgetId);
+  return sole;
 }
 
 /**
@@ -627,7 +662,11 @@ export function visibilityToken(
   readableCollections: Iterable<string> = [],
   // Each Collection setting, as `id=declaration`: a plugin changing one, its
   // name or its default, moves a stored card between withheld and shown.
-  collectionSettings: Iterable<string> = []
+  collectionSettings: Iterable<string> = [],
+  // The default's cards a reader following it was not handed because their
+  // widgets' own rules would not show them: a verdict that changes between a
+  // read and the first save moves a card between carried and dropped.
+  notShown: Iterable<string> = []
 ): string {
   return (
     createHash("sha256")
@@ -639,6 +678,10 @@ export function visibilityToken(
           ...[...heldActionGates].sort().map(slug => `holds:${slug}`),
           ...[...readableCollections].sort().map(slug => `reads:${slug}`),
           ...[...collectionSettings].sort().map(entry => `settings:${entry}`),
+          // As JSON, which escapes a line break: a card's id is the site
+          // config's to choose, so one holding the separator could otherwise
+          // read as two, and two different sets hash alike.
+          ...[...notShown].sort().map(id => `hides:${JSON.stringify(id)}`),
         ].join("\n")
       )
       .digest("base64url")

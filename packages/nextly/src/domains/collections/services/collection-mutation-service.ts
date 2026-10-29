@@ -26,7 +26,11 @@ import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { holdsGrant } from "../../../auth/access/gate-adapters";
-import { askEachLanguage } from "../../../auth/access/rule-language";
+import {
+  askEachLanguage,
+  withRuleLanguage,
+  writeLanguagesFor,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
@@ -137,7 +141,9 @@ import {
   type WriteEventInput,
 } from "../../content-events/write-event";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
+import { transactionTableProbe } from "../../dashboard/table-presence";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import {
   applyFieldGroupWriteAccessToDocument,
   applyInlineFieldGroupWriteAccess,
@@ -3218,6 +3224,8 @@ export class CollectionMutationService extends BaseService {
       /** The entry as stored, which the rules compare the promotion with. */
       live: Record<string, unknown>;
       user: UserContext;
+      /** The scope an API key arrived with, judged on its own grants. */
+      authenticatedScope?: AuthenticatedScope;
       grants: () => Promise<CallerGrants>;
     }
   ): Promise<ValidationIssue[]> {
@@ -3246,6 +3254,7 @@ export class CollectionMutationService extends BaseService {
         collectionName: args.collectionName,
         storedId: args.entryId,
         user: args.user,
+        authenticatedScope: args.authenticatedScope,
         overrideAccess: false,
         grants: args.grants,
         componentSchemas: shared.splitComponentSchemas,
@@ -3254,6 +3263,100 @@ export class CollectionMutationService extends BaseService {
       });
       return [];
     });
+  }
+
+  /**
+   * Whether the field rules refuse `user` the promotion of this entry's
+   * working draft, judged as its publish judges them: the snapshot against the
+   * entry as stored, in the language the draft is kept for, through
+   * {@link promotionAccessIssues}.
+   *
+   * A read asks it before showing a pending change to a caller who may publish
+   * the entry and not update it, so the change is shown only where that caller
+   * could put it live: a value a field rule keeps them from writing is not
+   * theirs to see before it is published. `true` where the entry or its
+   * promotion cannot be judged.
+   */
+  async workingDraftPromotionRefused(params: {
+    collectionName: string;
+    entryId: string;
+    /** The working draft the read would show, as stored. */
+    snapshot: unknown;
+    /** The slot it is kept under, as the read keyed it. */
+    draftLocale: string | null;
+    /** The language read, whose translations the stored entry is judged with. */
+    locale: string | undefined;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    // Judged in the status write's language, whatever the read that asks it
+    // involves: a field rule told every language could refuse a promotion
+    // the write allows, or allow one it refuses.
+    return withRuleLanguage(
+      writeLanguagesFor(this.localization, params.locale),
+      () => this.judgeWorkingDraftPromotion(params)
+    );
+  }
+
+  /** {@link workingDraftPromotionRefused}, in the language it is asked in. */
+  private async judgeWorkingDraftPromotion(
+    params: Parameters<
+      CollectionMutationService["workingDraftPromotionRefused"]
+    >[0]
+  ): Promise<boolean> {
+    // No rule a promotion asks could refuse it.
+    if (!this.promotionRulesCanAsk(params.collectionName)) return false;
+    const collection = await this.releaseCollection(params.collectionName);
+    if (collection === null) return true;
+    const base = await this.releaseWriteContext(
+      collection,
+      params.collectionName,
+      "published"
+    );
+    if (base.promoteRestoreCtx === null) return true;
+    // The status write of the language read, not the release's write of every
+    // language: its draft, and the stored values it is compared with.
+    const localizedUpdate = await this.splitLocalizedWriteData(
+      params.collectionName,
+      base.finalData,
+      params.locale,
+      false
+    );
+    const shared: ReleaseWriteContext = {
+      ...base,
+      locale: params.locale,
+      draftLocaleKey: params.draftLocale,
+      localizedUpdate,
+    };
+    const row = await this.storedEntry(params.collectionName, params.entryId);
+    if (row === undefined) return true;
+    const entryId = String(row.id);
+    const live = (
+      await this.storedDocumentsOf({
+        collectionName: params.collectionName,
+        rows: new Map([[entryId, row]]),
+        tableName: collectionTableName(collection, params.collectionName),
+        fields: shared.fields,
+        manyToManyFields: shared.manyToManyFields,
+        locale: localizedUpdate?.writeLocale,
+        reads: await this.goingLiveReadsOf(params.collectionName, [entryId]),
+      })
+    ).get(entryId);
+    if (live === undefined) return true;
+    const refused = await this.promotionAccessIssues(shared, {
+      collectionName: params.collectionName,
+      entryId,
+      snapshot: params.snapshot,
+      restoreCtx: base.promoteRestoreCtx,
+      live,
+      user: params.user,
+      authenticatedScope: params.authenticatedScope,
+      grants: await resolvedCallerGrants(
+        params.user,
+        params.authenticatedScope
+      ),
+    });
+    return refused.length > 0;
   }
 
   /** The violations of the document a promoted working draft would write. */
@@ -3827,6 +3930,9 @@ export class CollectionMutationService extends BaseService {
     actor?: RequestActor;
     user?: UserContext;
   }): Promise<number> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
@@ -3896,6 +4002,9 @@ export class CollectionMutationService extends BaseService {
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<TakenLiveValues>> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
       const accessDenied =
         await this.accessService.checkCollectionAccess<TakenLiveValues>({
@@ -5047,6 +5156,9 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set once the outbox event is appended (below), so the catch can report a
     // committed-but-hook-failed write as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -6317,6 +6429,9 @@ export class CollectionMutationService extends BaseService {
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code: publishing or
+    // withdrawing every language is a write to the entry like any other.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set when the publish rule, asked inside the transaction once for each
     // language going live, refuses one of them. Declared out here so the
     // catch can read it: the adapter re-wraps the thrown sentinel in a
@@ -8406,6 +8521,9 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", rawParams.collectionName);
     // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale, and the
     // body of this method must never see it as one. Resolved here, once, so the
     // fourteen places below that read `params.locale` keep receiving a real
@@ -11219,6 +11337,9 @@ export class CollectionMutationService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult> {
+    // Refused first when the collection is removed from code, before any hook
+    // or read of the entry, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     // Set once the outbox event is appended (below); lets the catch report a
     // committed-but-hook-failed delete as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -11678,6 +11799,11 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     options: CreateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
+    // Refused first when the collection is removed from code. Read on the
+    // caller's transaction, which every write in it then rolls back with.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Computed right after the row is written (before response redaction can
     // strip the slug, and before the after-hooks run) and carried on every
     // post-write return, so a committed item whose after-hook then throws still
@@ -12256,6 +12382,10 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     options: UpdateEntryWriteOptions
   ): Promise<CollectionServiceResult<unknown>> {
+    // Refused first when the collection is removed from code; see createEntryWrite.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // Computed right after the row is updated (before redaction can strip the
     // slug and before the after-hooks run) and carried on every post-write
     // return, so a committed item whose after-hook then throws still surfaces
@@ -13469,6 +13599,10 @@ export class CollectionMutationService extends BaseService {
     entryId: string,
     options: DeleteEntryWriteOptions
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
+    // Refused first when the collection is removed from code; see createEntryWrite.
+    await refuseWriteIfRemovedFromCode("collection", params.collectionName, {
+      executor: tx.getDrizzle(),
+    });
     // True only in the window between the row delete and the outbox insert: a
     // failure there has left this shared transaction with a delete but no event,
     // so the catch re-throws to force a rollback. Cleared once the event is
@@ -13705,12 +13839,19 @@ export class CollectionMutationService extends BaseService {
 
       // Pins and markers go with it; see the single-delete path. The caller
       // owns this transaction, so the dashboard pins table's presence is asked
-      // here, on the adapter: a presence check reads the catalogue and cannot
-      // fail the way a statement against a missing table would.
+      // through it: on its own connection, never the pool, which on a pool of
+      // one waits for the connection this transaction holds. A catalogue read,
+      // it cannot fail the way a statement against a missing table would.
       await sweepDeletedDocument(
         tx,
         { scopeKind: "collection", scopeSlug: params.collectionName, entryId },
-        { dashboardPinsPresent: await dashboardPinsPresent(this.adapter) }
+        {
+          dashboardPinsPresent: await dashboardPinsPresent(
+            this.adapter,
+            undefined,
+            transactionTableProbe(this.adapter, tx)
+          ),
+        }
       );
 
       // The document's last history event; see the single-delete path.

@@ -34,14 +34,21 @@ export const MAX_PINS_PER_READER = 20;
  * Whether the pins table exists yet, asked once per database and remembered
  * once found ({@link tablePresence}). One answer per database for every
  * caller: the repository, and each delete path that sweeps a deleted entry's
- * or Single's pins, which asks BEFORE its transaction opens, so no statement
- * against a missing table can abort that transaction on PostgreSQL.
+ * or Single's pins. A path that opens its own transaction asks BEFORE it
+ * opens; one inside a transaction its caller holds asks `via` that
+ * transaction's connection (`transactionTableProbe`), never the pool. Either
+ * way no statement against a missing table can abort the transaction on
+ * PostgreSQL.
  */
-const presenceByDb = new WeakMap<TableProbe, () => Promise<boolean>>();
+const presenceByDb = new WeakMap<
+  TableProbe,
+  (via?: TableProbe) => Promise<boolean>
+>();
 
 export function dashboardPinsPresent(
   db: TableProbe,
-  logger?: DashboardLogger
+  logger?: DashboardLogger,
+  via?: TableProbe
 ): Promise<boolean> {
   let present = presenceByDb.get(db);
   if (present === undefined) {
@@ -53,7 +60,7 @@ export function dashboardPinsPresent(
     );
     presenceByDb.set(db, present);
   }
-  return present();
+  return present(via);
 }
 
 /** What a pin names: an entry of a collection, or a Single. */

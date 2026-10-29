@@ -226,6 +226,10 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
     setIsLoading(true);
 
     try {
+      // The value is the role's own permissions alone; the base roles' are
+      // shown locked beside them but kept apart, since the save replaces the
+      // role's own assignments and one sent here would be copied onto it.
+      const currentIds = (role?.permissions || []).map(p => p.id);
       const roleData = {
         roleName: values.name,
         description: values.description || "",
@@ -242,9 +246,11 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         // a custom one on any save, including a description-only edit.
         await roleApi.updateRole(roleId, roleData);
         try {
-          const currentIds = (role?.permissions || []).map(p => p.id);
-          const nextIds = values.permissions;
-          await roleApi.updateRolePermissions(roleId, currentIds, nextIds);
+          await roleApi.updateRolePermissions(
+            roleId,
+            currentIds,
+            values.permissions
+          );
         } finally {
           // The signed-in user may hold this role, so what they may do is
           // asked again, as every other role, permission and assignment change
@@ -256,6 +262,19 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
         toast.success("Role updated successfully");
       } else {
         debugLog("useRoleForm", "Creating role...");
+        // A role on one base with nothing of its own is that base under
+        // another name, which the server refuses; said here, before anything
+        // is sent, rather than satisfied by copying the base's permissions.
+        if (
+          selectedBaseRoleIds.length === 1 &&
+          values.permissions.length === 0
+        ) {
+          const message =
+            "A role built on one base needs at least one permission of its own.";
+          setError(message);
+          toast.error(message);
+          return;
+        }
         // A role someone creates here is theirs, not the framework's. Being a
         // system role locks the name and slug, and the seeder is the only
         // thing that should hand that out.
@@ -457,11 +476,8 @@ export function useRoleForm(roleId?: string): UseRoleFormReturn {
               allPermissions = Array.from(union);
             }
             setRolePermissionsMap(nextMap);
+            // Locked and shown beside the role's own, never merged into them.
             setLockedPermissionIds(allPermissions);
-
-            const current = form.getValues("permissions") || [];
-            const merged = Array.from(new Set([...current, ...allPermissions]));
-            form.setValue("permissions", merged, { shouldDirty: false });
           }
         } catch (_err) {
           toast.error(

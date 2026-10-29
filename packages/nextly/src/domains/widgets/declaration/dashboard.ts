@@ -39,9 +39,13 @@ export type AttentionCount = number | { count: number; atLeast: true };
 export type AttentionItem = {
   id: string;
   label: string;
-  /** Counts as the person asking, through services bound to them. */
+  /**
+   * Counts as the person asking, through services bound to them. Handed no
+   * `size`: an item is one line of the Needs attention card, not a card of
+   * its own, so it has no size to be loaded for.
+   */
   count: (
-    input: Omit<WidgetDataInput<never>, "settings">
+    input: Omit<WidgetDataInput<never>, "settings" | "size">
   ) => Promise<AttentionCount>;
   /** A path relative to the admin, which core resolves. */
   link: string;
@@ -104,6 +108,13 @@ export type WidgetRef = CoreWidgetId | (string & {});
  */
 export interface DefaultLayoutCard {
   widget: WidgetRef;
+  /**
+   * The card's own id, which a reader's choices about it are kept under. A
+   * widget placed once needs none: its card is named after the widget. Each
+   * further card of a widget placed more than once must name one, and no two
+   * cards, nor a card and a widget, may share one.
+   */
+  id?: string;
   /** Columns, of twelve. */
   w?: number;
   /** Rows. */

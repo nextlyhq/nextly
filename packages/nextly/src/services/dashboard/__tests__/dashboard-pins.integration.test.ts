@@ -6,7 +6,8 @@
  * target; that a 21st is refused while a re-pin at 20 is not; that a pin its
  * reader may no longer read is hidden and kept, and shown again when access
  * returns; that deleting an entry, several entries or a Single takes every
- * reader's pins of it, and no others; and that before `nextly migrate` creates
+ * reader's pins of it, and no others, also inside a transaction the caller
+ * holds on a pool of one connection; and that before `nextly migrate` creates
  * the table, pins read as none, a pin is refused naming the command, and a
  * delete still succeeds (on PostgreSQL, a statement against a missing table
  * would abort the delete's whole transaction).
@@ -19,6 +20,8 @@
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
+
+import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -53,7 +56,23 @@ afterEach(async () => {
   refused.clear();
   await current?.destroy();
   current = undefined;
+  delete process.env.DB_POOL_MAX;
 });
+
+/**
+ * `work`, or a rejection once `ms` pass: on a pool of one, a read that waits
+ * for a second connection never settles, and the test fails rather than hangs.
+ */
+function within<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`did not settle within ${ms} ms`)),
+      ms
+    );
+  });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
 
 const as = (id: string): ReadCaller => ({ user: { id } }) as ReadCaller;
 
@@ -222,6 +241,41 @@ describe.each(getConfiguredTestDialects())(
         `pn-ben:${NOTES}/${kept}`,
       ]);
     });
+
+    it("deletes an entry and its pins inside the caller's own transaction, on a pool of one connection", async () => {
+      // One connection: the caller's transaction holds it, so anything that
+      // asks the pool from inside waits for ever. SQLite has no pool, and the
+      // delete must still sweep there.
+      process.env.DB_POOL_MAX = "1";
+      const t = await boot();
+      const ana = await superAdminUser(t, "pn-ana");
+      const doomed = await note(t, "Doomed");
+      // Written straight to the table, so nothing has asked whether the pins
+      // table exists yet: the delete is the first to ask.
+      await t.adapter.insert(DASHBOARD_PINS_TABLE, {
+        id: randomUUID(),
+        userId: ana,
+        targetType: "collection",
+        targetSlug: NOTES,
+        entryId: doomed,
+        pinnedAt: new Date(),
+      });
+      const entries = t.getService("collectionsHandler").getEntryService();
+
+      const result = await within(
+        t.adapter.transaction(tx =>
+          entries.deleteEntryInTransaction(tx, {
+            collectionName: NOTES,
+            entryId: doomed,
+            overrideAccess: true,
+          })
+        ),
+        15_000
+      );
+
+      expect((result.data as { deleted?: boolean } | null)?.deleted).toBe(true);
+      expect(await stored(t)).toEqual([]);
+    }, 60_000);
 
     it("before nextly migrate: no pins, a pin refused naming the command, and a delete still succeeds", async () => {
       const t = await boot();
