@@ -17,7 +17,12 @@ import { test } from "./support/test";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ lock: [LOCK.ownServer, LOCK.heavy] });
+// The dashboard too: the layout it writes is its own server's, but the lock is
+// asked of every spec whose source writes a layout, and it costs this one only
+// parallelism.
+test.describe.configure({
+  lock: [LOCK.ownServer, LOCK.heavy, LOCK.dashboard],
+});
 
 /**
  * A development server whose component map lacks a dashboard widget's
@@ -34,7 +39,10 @@ test.describe.configure({ lock: [LOCK.ownServer, LOCK.heavy] });
  * Its own `next dev`, with the fixture plugin that declares the widget switched
  * on, so the suite's server keeps its dashboard for the other specs. Its own
  * port, build directory and database, so it never shares `.next-e2e` or the
- * suite's database with that server.
+ * suite's database with that server. The database is seeded before the server
+ * starts, as the suite's production server's is: development signs in the
+ * playground's dev user only when that user exists, and a fresh database has
+ * none, so unseeded the admin opens on first-run setup instead.
  *
  * @module tests/component-map-dev
  */
@@ -99,6 +107,25 @@ test.beforeAll(async () => {
     NEXTLY_GENERATED_FILES_WRITE: "0",
     NEXTLY_E2E_MISSING_WIDGET: "1",
   };
+  // The dev user development signs in, and the roles it holds, in this spec's
+  // own database, with the same environment the server gets.
+  const seeding = pnpmInvocation(
+    ["--filter", "playground", "exec", "tsx", "scripts/seed.ts"],
+    process.platform,
+    env
+  );
+  const seeded = spawnSync(seeding.command, seeding.args, {
+    cwd: NEXTLY_ROOT,
+    env,
+    encoding: "utf8",
+    shell: seeding.shell,
+    timeout: 180_000,
+  });
+  if (seeded.status !== 0) {
+    throw new Error(
+      `seeding this spec's database failed:\n${seeded.stdout}\n${seeded.stderr}`
+    );
+  }
   // Through the repository's pnpm wrapper, as every spawn of pnpm is: on
   // Windows pnpm is a `.cmd` launcher, which Node runs only through a shell.
   const starting = pnpmInvocation(
