@@ -1020,9 +1020,7 @@ service key-full-access delete collection async-filter at route  # filter-not-ap
 service key-full-access delete collection returns-filter at route  # filter-not-applied
 service key-role-based delete collection async-filter at route  # filter-not-applied
 service key-role-based delete collection returns-filter at route  # filter-not-applied
-service key-role-based-super-admin delete collection async-filter at rest
 service key-role-based-super-admin delete collection async-filter at route  # filter-not-applied
-service key-role-based-super-admin delete collection returns-filter at rest
 service key-role-based-super-admin delete collection returns-filter at route  # filter-not-applied
 service user-with delete collection async-filter at route  # filter-not-applied
 service user-with delete collection returns-filter at route  # filter-not-applied
@@ -1057,18 +1055,12 @@ service key-role-based publish collection returns-filter at route  # filter-not-
 service key-role-based unpublish collection async-filter at route  # filter-not-applied
 service key-role-based unpublish collection returns-filter at route  # filter-not-applied
 service key-role-based-super-admin update collection async-filter at lock  # filter-not-applied
-service key-role-based-super-admin update collection async-filter at rest
 service key-role-based-super-admin update collection async-filter at route  # filter-not-applied
 service key-role-based-super-admin update collection returns-filter at lock  # filter-not-applied
-service key-role-based-super-admin update collection returns-filter at rest
 service key-role-based-super-admin update collection returns-filter at route  # filter-not-applied
-service key-role-based-super-admin publish collection async-filter at rest
 service key-role-based-super-admin publish collection async-filter at route  # filter-not-applied
-service key-role-based-super-admin publish collection returns-filter at rest
 service key-role-based-super-admin publish collection returns-filter at route  # filter-not-applied
-service key-role-based-super-admin unpublish collection async-filter at rest
 service key-role-based-super-admin unpublish collection async-filter at route  # filter-not-applied
-service key-role-based-super-admin unpublish collection returns-filter at rest
 service key-role-based-super-admin unpublish collection returns-filter at route  # filter-not-applied
 service user-partial update collection async-filter at lock  # filter-not-applied
 service user-partial update collection async-filter at route  # filter-not-applied
