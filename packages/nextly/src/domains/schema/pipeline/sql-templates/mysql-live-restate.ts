@@ -116,11 +116,20 @@ function columnFilter(table: string, column: string): string {
   return `TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${literal(table)} AND COLUMN_NAME = ${literal(column)}`;
 }
 
+/** `MODIFY COLUMN` with the nullability the operation asks for (`restatedColumn`). */
+function restatedNullability(op: ChangeColumnNullableOp): string[] {
+  return restatedColumn(op.tableName, op.columnName, {
+    nullable: op.toNullable,
+  });
+}
+
 /**
- * `MODIFY COLUMN` with the nullability the operation asks for and everything else as the column
- * has it now: its type, character set and collation, a generated column's expression, its default,
- * `AUTO_INCREMENT`, `ON UPDATE`, visibility and comment. Position, indexes, keys and checks are
- * not part of a column's definition and MODIFY leaves them where they are.
+ * `MODIFY COLUMN` with what `change` asks for, a type or a nullability, and everything else as the
+ * column has it now: its type and nullability where `change` leaves them, character set and
+ * collation, a generated column's expression, its default, `AUTO_INCREMENT`, `ON UPDATE`,
+ * visibility and comment. Position, indexes, keys and checks are not part of a column's definition
+ * and MODIFY leaves them where they are. A caller that runs the four statements itself runs them on
+ * one connection, which the variable and the prepared statement live on.
  *
  * A default is restated the way `information_schema` reports it: an expression default
  * (`DEFAULT_GENERATED`) in parentheses, with the catalog's escaping taken off (`decoded`), except
@@ -131,15 +140,19 @@ function columnFilter(table: string, column: string): string {
  * cannot read back, leaves the variable holding a sentence saying so, which PREPARE rejects with
  * that sentence in its message.
  */
-function restatedNullability(op: ChangeColumnNullableOp): string[] {
+export function restatedColumn(
+  tableName: string,
+  columnName: string,
+  change: { type?: string; nullable?: boolean }
+): string[] {
   const definition = [
-    literal(
-      `ALTER TABLE ${q(op.tableName)} MODIFY COLUMN ${q(op.columnName)} `
-    ),
-    "COLUMN_TYPE",
+    literal(`ALTER TABLE ${q(tableName)} MODIFY COLUMN ${q(columnName)} `),
+    change.type === undefined ? "COLUMN_TYPE" : literal(change.type),
     "IF(CHARACTER_SET_NAME IS NULL, '', CONCAT(' CHARACTER SET ', CHARACTER_SET_NAME, ' COLLATE ', COLLATION_NAME))",
     "IF(COALESCE(GENERATION_EXPRESSION, '') = '', '', CONCAT(' GENERATED ALWAYS AS (', GENERATION_EXPRESSION, ')', IF(EXTRA LIKE '%STORED GENERATED%', ' STORED', ' VIRTUAL')))",
-    literal(op.toNullable ? " NULL" : " NOT NULL"),
+    change.nullable === undefined
+      ? "IF(IS_NULLABLE = 'YES', ' NULL', ' NOT NULL')"
+      : literal(change.nullable ? " NULL" : " NOT NULL"),
     "IF(COLUMN_DEFAULT IS NULL, '', IF(EXTRA LIKE '%DEFAULT_GENERATED%', " +
       "IF(LEFT(COLUMN_DEFAULT, 17) = 'CURRENT_TIMESTAMP', CONCAT(' DEFAULT ', COLUMN_DEFAULT), " +
       `CONCAT(' DEFAULT (', ${decoded("COLUMN_DEFAULT")}, ')')), ` +
@@ -151,9 +164,9 @@ function restatedNullability(op: ChangeColumnNullableOp): string[] {
   ].join(", ");
   const unwritable = `EXTRA LIKE '%DEFAULT_GENERATED%' AND ${unreadableHere(decoded("COLUMN_DEFAULT"))}`;
   return runBuilt(
-    `COALESCE((SELECT IF(${unwritable}, ${literal(`cannot restate ${op.tableName}.${op.columnName}: its default needs backslash escapes`)}, CONCAT(${definition})) ` +
-      `FROM information_schema.COLUMNS WHERE ${columnFilter(op.tableName, op.columnName)}), ` +
-      `${literal(`column ${op.tableName}.${op.columnName} is not in this database`)})`
+    `COALESCE((SELECT IF(${unwritable}, ${literal(`cannot restate ${tableName}.${columnName}: its default needs backslash escapes`)}, CONCAT(${definition})) ` +
+      `FROM information_schema.COLUMNS WHERE ${columnFilter(tableName, columnName)}), ` +
+      `${literal(`column ${tableName}.${columnName} is not in this database`)})`
   );
 }
 

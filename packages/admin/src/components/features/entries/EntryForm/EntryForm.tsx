@@ -19,7 +19,7 @@
  */
 
 import type { JSX, ReactNode } from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
@@ -67,6 +67,7 @@ import type { ContributedAction } from "./DocumentActionBar";
 import {
   DocumentActionsHost,
   DocumentSaveShortcuts,
+  SaveWithoutPublishingBridge,
   SaveActionFormProvider,
 } from "./DocumentActionsContext";
 import { DocumentBanners } from "./DocumentBanners";
@@ -104,6 +105,7 @@ import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
 import {
   storingHandlers,
+  type DocumentActionBindings,
   type DocumentActionBindingsInput,
 } from "./useDocumentActionBindings";
 import { useDocumentLockSurface } from "./useDocumentLockSurface";
@@ -115,6 +117,12 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
+import {
+  heldLocaleChange,
+  heldWhileRecovering,
+  offerHeldWhileRecovering,
+  quickEditSave,
+} from "./useRefusedForm";
 
 // ============================================================================
 // Types
@@ -353,6 +361,16 @@ export function EntryForm({
    */
   const [savedCount, setSavedCount] = useState(0);
 
+  // Whether this document's writes are held, as decided below once the lock
+  // and the version on screen are known. Read by the form when a refused
+  // publish's recovery runs, which writes like the handlers below do.
+  const writesHeldNow = useRef(false);
+  // The entry's Save that never publishes, handed up from inside its
+  // document's actions, where the Save lives.
+  const saveWithoutPublishing = useRef<
+    DocumentActionBindings["saveWithoutPublishing"] | undefined
+  >(undefined);
+
   const {
     form,
     handleSubmit: submitEntry,
@@ -360,7 +378,8 @@ export function EntryForm({
     handleDelete: deleteEntry,
     handleDiscardWorkingDraft: discardWorkingDraft,
     handleCancel,
-    isSubmitting,
+    isSubmitting: savePending,
+    recovering,
     isDirty,
   } = useEntryForm({
     collection,
@@ -368,6 +387,10 @@ export function EntryForm({
     mode,
     locale,
     readDraft,
+    writesHeld: () => writesHeldNow.current,
+    // The quick-edit modal renders no document actions, so nothing hands its
+    // Save up: a recovery there refuses and points to the document.
+    saveWithoutPublishing: embedded ? quickEditSave : saveWithoutPublishing,
     onSuccess: data => {
       // Before the caller's handler, which may navigate away: this is the only
       // point that knows a write landed, and a revision that misses one leaves
@@ -375,10 +398,23 @@ export function EntryForm({
       setSavedCount(n => n + 1);
       onSuccess?.(data);
     },
+    // The take rewrote the pending change after its Save had stored it, so it
+    // counts as a save too: the preview pane moves past the values it
+    // replaced, and a recovery point from before it is withdrawn.
+    onRecovered: () => setSavedCount(n => n + 1),
     onError,
     onDelete,
     onCancel,
   });
+  // Busy while a save is in flight, and while a refused publish's recovery
+  // runs through to its reloaded entry: every surface that holds for a save
+  // holds for it too. Only the fields' own `disabled` follows the save alone;
+  // the recovery holds them read-only through the lock, so a field keeps focus.
+  const isSubmitting = savePending || recovering;
+  // Every switch to another language goes through here, held while a
+  // refused publish's recovery runs, so its Save and take stay on the
+  // language they are for.
+  const switchLocale = heldLocaleChange(onLocaleChange, recovering);
 
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
@@ -434,7 +470,7 @@ export function EntryForm({
     fields: getCollectionFields(collection),
     sourceValues,
     inTranslationMode: translationMode.active,
-    onLocaleChange,
+    onLocaleChange: switchLocale,
     seedFromLocale,
     onSeedHandled,
     onEnterTranslationMode: translationMode.onEnter,
@@ -565,27 +601,6 @@ export function EntryForm({
     [conditionNames, watchedConditions]
   );
 
-  /*
-   * Delegated whole, including the decision to answer NULL when there is
-   * nothing to draw — which is what withholds the panel rather than opening an
-   * empty one. Kept out of this callback so the rule is reachable by a test
-   * without standing up the entire form.
-   *
-   * Declared here rather than beside the other field derivations because it
-   * needs `hasPublicAddress`: a surface offering the slug has to carry the same
-   * warning the meta strip it covers would have shown.
-   */
-  const renderEntryFields = useCallback(
-    (excludePath: string) =>
-      fieldsBesidePanel(allFields, excludePath, {
-        disabled: isSubmitting,
-        mode,
-        values: conditionValues,
-        hasPublicAddress,
-      }),
-    [allFields, isSubmitting, mode, conditionValues, hasPublicAddress]
-  );
-
   useAutoSlug({
     form,
     titleFieldName: titleField?.name ?? "title",
@@ -630,13 +645,46 @@ export function EntryForm({
   // preview (minting a link needs it on the server) and a version's restore,
   // for a reader and while a language switch's answer is on its way.
   const updatesHeld = !mayEdit;
-  const lock = useDocumentLockSurface({
+  // While a refused publish's recovery runs, every field it reaches is
+  // read-only, as it is while someone else holds the entry.
+  const lockSurface = useDocumentLockSurface({
     scopeKind: "collection",
     slug: collectionSlug,
     entryId: entry?.id,
     enabled: mode === "edit",
     readOnlyForReader,
   });
+  const lock = heldWhileRecovering(lockSurface, recovering);
+
+  /*
+   * Delegated whole, including the decision to answer NULL when there is
+   * nothing to draw — which is what withholds the panel rather than opening an
+   * empty one. Kept out of this callback so the rule is reachable by a test
+   * without standing up the entire form.
+   *
+   * Declared here rather than beside the other field derivations because it
+   * needs `hasPublicAddress`: a surface offering the slug has to carry the same
+   * warning the meta strip it covers would have shown. And after the lock,
+   * whose read-only answer it shares with every other field.
+   */
+  const renderEntryFields = useCallback(
+    (excludePath: string) =>
+      fieldsBesidePanel(allFields, excludePath, {
+        disabled: savePending,
+        readOnly: lock.readOnly,
+        mode,
+        values: conditionValues,
+        hasPublicAddress,
+      }),
+    [
+      allFields,
+      savePending,
+      lock.readOnly,
+      mode,
+      conditionValues,
+      hasPublicAddress,
+    ]
+  );
   // One answer for every surface offering a write: the header reads the same
   // through the document-actions model, the rail, the language panel and the
   // submission handlers from here. Derived from the HOST's state, not the
@@ -655,7 +703,13 @@ export function EntryForm({
   });
   // A colleague's claim or a reader's page, without the version on screen:
   // what holds the actions a version's own surfaces offer, Restore among them.
-  const versionWritesHeld = lock.actionsDisabled || updatesHeld;
+  // A refused publish's recovery holds them too, until its reloaded entry is
+  // on screen.
+  const versionWritesHeld = lock.actionsDisabled || updatesHeld || recovering;
+  // And the language panel's copies into the form, as it holds the fields.
+  const contentHeld = editsHeld || recovering;
+  // And moving to another language, so its Save and take stay on this one.
+  const navigationHeld = writesHeld || recovering;
   // Delete is offered only to a caller who may delete in this collection.
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
@@ -669,6 +723,9 @@ export function EntryForm({
     "updateInDefaultLanguage"
   );
   const canSave = mode === "create" ? canCreate : canUpdateUnnamed;
+  // A refused publish's recovery changes the content, so it is held exactly
+  // as the content's own saves are.
+  writesHeldNow.current = editsHeld;
 
   /*
    * The one gate every write passes through.
@@ -711,13 +768,16 @@ export function EntryForm({
   );
   // The other half of recording: offer the work back when the editor opens, and
   // write it into this form when the author accepts.
-  const recovery = useAutosaveRecovery({
-    // A reader is offered no recovery point: restoring one would make the
-    // read-only form dirty with work it cannot save.
-    scope: readOnlyForReader ? null : autosaveScope,
-    form,
-    savedCount,
-  });
+  const recovery = offerHeldWhileRecovering(
+    useAutosaveRecovery({
+      // A reader is offered no recovery point: restoring one would make the
+      // read-only form dirty with work it cannot save.
+      scope: readOnlyForReader ? null : autosaveScope,
+      form,
+      savedCount,
+    }),
+    recovering
+  );
 
   /*
    * Work a FIELD holds that the form's values do not contain. The page builder
@@ -881,6 +941,7 @@ export function EntryForm({
       >
         <EntryFormProvider
           form={form}
+          recovering={recovering}
           // The quick-edit form submits natively and reports through its own
           // toasts, so what the save came to is not read here. A caller who
           // may not save sends nothing: Enter in a field submits even with
@@ -924,7 +985,7 @@ export function EntryForm({
                 round-trips), so it is not treated as a required-field miss. */}
             <EntryFormContent
               fields={getCollectionFields(collection)}
-              disabled={isSubmitting}
+              disabled={savePending}
               // Without the permission to save, the entry is shown as it is
               // rather than as a form whose changes go nowhere.
               readOnly={lock.readOnly || !canSave}
@@ -953,7 +1014,9 @@ export function EntryForm({
     // dialogs would answer one navigation.
     <UnsavedChangesGuard
       isDirty={hasUnsavedWork}
-      disabled={isSubmitting}
+      // A save alone: during a recovery, work that reaches the form after its
+      // one read is still unsaved, so leaving still asks.
+      disabled={savePending}
       fields={getCollectionFields(collection)}
       // A refused switch takes its seed with it. The request to fill the target
       // from this language was made ALONGSIDE a navigation; if the navigation
@@ -1035,6 +1098,7 @@ export function EntryForm({
                       recovery, the shortcut and the document's actions are
                       this editor's own either way. */}
                   <DocumentActionsHost input={documentActionsInput}>
+                    <SaveWithoutPublishingBridge into={saveWithoutPublishing} />
                     {/* Standalone only: an embedded editor in a modal takes no
                       shortcuts. Mod+S runs the Save action, so the shortcut
                       and the button cannot save by different rules. A
@@ -1054,6 +1118,7 @@ export function EntryForm({
                         lock={lock}
                         recovery={recovery}
                         viewingVersion={viewingVersion}
+                        recovering={recovering}
                         fields={getCollectionFields(collection)}
                         // A document view has no header, so the banner goes
                         // in among its own: an author working in the view
@@ -1066,7 +1131,10 @@ export function EntryForm({
                             submit-typed Save — runs the Save action, so it
                             stores what Mod+S does and waits for what Save
                             waits for. */}
-                        <SaveActionFormProvider form={form}>
+                        <SaveActionFormProvider
+                          form={form}
+                          recovering={recovering}
+                        >
                           <CopyFromLanguageScope>
                             {/* The bar, the banners under it and the row of
                               field column and panel, in one frame shared with
@@ -1186,7 +1254,10 @@ export function EntryForm({
                                   mode={mode}
                                   titleField={titleField}
                                   documentLocked={lock.readOnly}
-                                  isSubmitting={isSubmitting}
+                                  // A save alone: the title's own `disabled`
+                                  // follows it, and a recovery holds the title
+                                  // read-only through the lock instead.
+                                  isSubmitting={savePending}
                                   slug={
                                     slugField
                                       ? {
@@ -1234,12 +1305,16 @@ export function EntryForm({
                                           | undefined
                                       }
                                       locale={locale}
-                                      onLocaleChange={onLocaleChange}
+                                      onLocaleChange={switchLocale}
                                       hasStatus={hasStatus}
-                                      actionsDisabled={editsHeld}
-                                      publishAllDisabled={publishAllHeld}
+                                      actionsDisabled={contentHeld}
+                                      // Publishing every language is a write
+                                      // too, so a recovery holds it as well.
+                                      publishAllDisabled={
+                                        publishAllHeld || recovering
+                                      }
                                       // A reader may still open the other languages.
-                                      navigationDisabled={writesHeld}
+                                      navigationDisabled={navigationHeld}
                                     />
                                   </div>
                                 )}
@@ -1274,7 +1349,7 @@ export function EntryForm({
                         above). */}
                                       <EntryFormContent
                                         fields={mainFields}
-                                        disabled={isSubmitting}
+                                        disabled={savePending}
                                         readOnly={lock.readOnly}
                                         withCard
                                         mode={mode}
@@ -1308,13 +1383,17 @@ export function EntryForm({
                                       {...(locale === undefined
                                         ? {}
                                         : { locale })}
-                                      {...(onLocaleChange === undefined
+                                      {...(switchLocale === undefined
                                         ? {}
-                                        : { onLocaleChange })}
-                                      actionsDisabled={editsHeld}
-                                      publishAllDisabled={publishAllHeld}
+                                        : { onLocaleChange: switchLocale })}
+                                      actionsDisabled={contentHeld}
+                                      // Publishing every language is a write
+                                      // too, so a recovery holds it as well.
+                                      publishAllDisabled={
+                                        publishAllHeld || recovering
+                                      }
                                       // A reader may still open the other languages.
-                                      navigationDisabled={writesHeld}
+                                      navigationDisabled={navigationHeld}
                                     />
                                   </div>
                                 </div>

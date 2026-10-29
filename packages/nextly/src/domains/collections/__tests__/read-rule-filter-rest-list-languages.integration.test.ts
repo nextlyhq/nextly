@@ -31,7 +31,7 @@ const NOTES = "rulefilter_restlang_notes";
 const READER = "rulefilter-restlang-reader";
 const ORIGIN = "http://localhost";
 
-/** A read rule answering `value`, which the rule type does not allow yet. */
+/** A read rule answering `value`, unchecked by the filter type, as untyped code may. */
 const answering = (value: unknown) => () => value as boolean;
 
 let current: TestNextly | undefined;
