@@ -151,10 +151,21 @@ export function routeGateVerdict(
   auth: AuthContext,
   action: string,
   resource: string,
-  rules: RouteRules
+  rules: RouteRules,
+  /**
+   * The route's handler applies a collection read rule's filter to what it
+   * reads, so the filter is handed back rather than refused. Only the
+   * entry list and count routes do.
+   */
+  appliesFilter = false
 ): Promise<GateVerdict> {
-  return gateVerdict(callerOf(auth), action, resource, rules, () =>
-    hasPermission(auth.userId, action, resource)
+  return gateVerdict(
+    callerOf(auth),
+    action,
+    resource,
+    rules,
+    () => hasPermission(auth.userId, action, resource),
+    appliesFilter
   );
 }
 
@@ -441,7 +452,8 @@ async function entityCapabilities(
       caller,
       slug,
       rules,
-      languageOf(PUBLISH_EVERY_LANGUAGE[kind], "none")
+      languageOf(PUBLISH_EVERY_LANGUAGE[kind], "none"),
+      kind === "single" || !hasLifecycle(slug)
     );
     if (kind === "collection") {
       answered.duplicate = await duplicates(
@@ -480,22 +492,27 @@ async function duplicates(
 
 /**
  * Whether `caller` may publish every language of `resource` at once, on the
- * strict side of how that request is judged: update in every language, then
- * the publish check once for each configured language, with its rules told
- * that one and all of them. The route admits a caller holding the publish
- * grant without update, but a target with no lifecycle asks update of them,
- * and the request asks only the languages it puts live, which depend on the
- * document; asking update and every configured language never allows what
- * the request would refuse.
+ * strict side of how that request is judged: the publish check once for each
+ * configured language, with its rules told that one and all of them. The
+ * request asks only the languages it puts live, which depend on the document,
+ * so asking every configured language never allows what it would refuse.
+ *
+ * On a collection with a lifecycle the request changes only each language's
+ * status, which publish alone judges, so a caller holding publish without
+ * update may make it. A Single, and a collection without a lifecycle, ask
+ * update in every language first (`asksUpdate`).
  */
 async function publishesEveryLanguage(
   caller: GateCaller,
   resource: string,
   rules: RouteRules,
-  everyLanguage: RuleLanguage
+  everyLanguage: RuleLanguage,
+  asksUpdate: boolean
 ): Promise<boolean> {
   return withRuleLanguage(everyLanguage, async () => {
-    if (!(await capability(caller, "update", resource, rules))) return false;
+    if (asksUpdate && !(await capability(caller, "update", resource, rules))) {
+      return false;
+    }
     const refused = await askEachLanguage(everyLanguage.locales, async () =>
       (await capability(caller, "publish", resource, rules))
         ? undefined
@@ -532,7 +549,8 @@ function gateVerdict(
   action: string,
   resource: string,
   rules: RouteRules,
-  permissionWithoutService: () => Promise<boolean>
+  permissionWithoutService: () => Promise<boolean>,
+  appliesFilter = false
 ): Promise<GateVerdict> {
   const registered =
     resource === "" ? undefined : rules?.getRegisteredTarget(resource);
@@ -554,6 +572,7 @@ function gateVerdict(
     principal: null,
     rules,
     permissionWithoutService,
+    appliesFilter,
   });
 }
 
@@ -610,12 +629,20 @@ async function permissionVerdict(
  * resource's `manage-` permission counting on it as the decision counts it,
  * and no rule is read for either.
  */
-export async function anyPermissionVerdict(
+export function anyPermissionVerdict(
   auth: AuthContext,
   permissions: readonly RoutePermission[],
   rules: RouteRules
 ): Promise<GateVerdict> {
-  const caller = callerOf(auth);
+  return anyPermissionVerdictOf(callerOf(auth), permissions, rules);
+}
+
+/** {@link anyPermissionVerdict}, for the caller a gate judges. */
+async function anyPermissionVerdictOf(
+  caller: GateCaller,
+  permissions: readonly RoutePermission[],
+  rules: RouteRules
+): Promise<GateVerdict> {
   if (caller.key) {
     const key = caller.key;
     const actor = keyActorOf(caller, key);
@@ -635,14 +662,14 @@ export async function anyPermissionVerdict(
     return verdictOf(today);
   }
   const today = await hasAnyPermission(
-    auth.userId,
+    caller.userId,
     permissions.flatMap(({ action, resource }) =>
       answeringPermissions(action, resource)
     )
   );
   // The user's actor is resolved only while a test listens, and once.
   let actor: Promise<Actor> | undefined;
-  const userActor = () => (actor ??= actorForUser(auth.userId));
+  const userActor = () => (actor ??= actorForUser(caller.userId));
   const byPermission = async () => {
     const resolved = await userActor();
     return permissions.some(
@@ -725,14 +752,7 @@ export async function callerMayPerform(
 ): Promise<boolean> {
   if (!user.id) return false;
   const rules = getRBACService();
-  const caller: GateCaller =
-    scope?.actorType === "apiKey"
-      ? {
-          userId: user.id,
-          key: scope,
-          ...(user.roles ? { roles: user.roles } : {}),
-        }
-      : { userId: user.id };
+  const caller = probedCaller(scope, user);
   if (!action || !resource) return refusedEmpty(caller, action, resource);
   if (!caller.key) return sessionAnswer(caller.userId, action, resource, rules);
   // A key is judged on its own scope, the route gate's way, with or without
@@ -742,6 +762,39 @@ export async function callerMayPerform(
       Promise.resolve(false)
     )
   ).allowed;
+}
+
+/** The caller a probe judges: a key on its own scope, else the user. */
+function probedCaller(
+  scope: AuthenticatedScope | undefined,
+  user: { id: string; roles?: readonly string[] }
+): GateCaller {
+  return scope?.actorType === "apiKey"
+    ? {
+        userId: user.id,
+        key: scope,
+        ...(user.roles ? { roles: user.roles } : {}),
+      }
+    : { userId: user.id };
+}
+
+/**
+ * Whether the caller holds any one of `permissions`, as the REST any-of
+ * gates ask it ({@link anyPermissionVerdict}): by grant, no entity's rule
+ * read. For a probe deciding whether to offer what such a gate guards.
+ */
+export async function callerHoldsAny(
+  scope: AuthenticatedScope | undefined,
+  permissions: readonly RoutePermission[],
+  user: { id: string; roles?: readonly string[] }
+): Promise<boolean> {
+  if (!user.id) return false;
+  const verdict = await anyPermissionVerdictOf(
+    probedCaller(scope, user),
+    permissions,
+    getRBACService()
+  );
+  return verdict.allowed;
 }
 
 /**

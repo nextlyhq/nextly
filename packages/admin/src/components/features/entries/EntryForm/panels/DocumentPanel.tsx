@@ -2,9 +2,8 @@
 
 import type React from "react";
 
-import { Circle, Clock, Hash } from "@admin/components/icons";
+import { Clock, Hash } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
-import { cn } from "@admin/lib/utils";
 
 import { DocumentLanguagePanel } from "../../LanguagePanel";
 import { DocumentIdCopy } from "../DocumentIdCopy";
@@ -13,15 +12,16 @@ import type { EntryData, EntryFormMode } from "../useEntryForm";
 // "heavy" polish pass on top of that — neutral monochrome lucide icons
 // in front of each row label, a thin separator above the timestamps,
 // the entry ID rendered as a `first5…last3` shortcode with a persistent
-// copy button (not hover-gated), and a slightly more prominent Status
-// pill so the lifecycle state stands out from the surrounding metadata.
+// copy button (not hover-gated). The document's status is not repeated
+// here: the document bar's pill says it, read from the language being edited.
 
 export interface DocumentPanelProps {
-  /** Form mode. ID/timestamps/status only render in edit mode. */
+  /** Form mode. The ID and timestamps only render in edit mode. */
   mode: EntryFormMode;
   /** Entry data with id, status, and timestamps. */
   entry?: EntryData | null;
-  /** Whether the collection has the Draft/Published feature enabled. */
+  /** Whether the collection has the Draft/Published feature enabled, which
+   *  the language panel reads to say each language's publish state. */
   hasStatus: boolean;
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
@@ -31,15 +31,8 @@ export interface DocumentPanelProps {
   actionsDisabled?: boolean;
   /** Withholds opening another language; the same as `actionsDisabled` unless given. */
   navigationDisabled?: boolean;
-  /** Whether the form has unsaved local changes. When the entry is
-   *  published and the form is dirty, the status pill renders as
-   *  "Modified" (Strapi pattern) so the user sees both "what's live"
-   *  and "what you've changed" in one place.
-   *
-   *  Default false. Optional so existing call sites that pass only the
-   *  three required props keep working — they just won't see the
-   *  Modified state. */
-  isDirty?: boolean;
+  /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
+  publishAllDisabled?: boolean;
 }
 
 /**
@@ -88,23 +81,12 @@ export function DocumentPanel({
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
-  isDirty = false,
+  publishAllDisabled = actionsDisabled,
 }: DocumentPanelProps): React.ReactElement | null {
   const isCreate = mode === "create";
 
   // Hide entirely on create — nothing to show until the entry exists.
   if (isCreate) return null;
-
-  // A published entry whose overlay read carried `_isWorkingDraft` has a pending
-  // working draft (draft/published split) — surfaced as the "Changed" state.
-  const hasWorkingDraft =
-    (entry as { _isWorkingDraft?: boolean } | null | undefined)
-      ?._isWorkingDraft === true;
-  const pill = pillStateFromForm(
-    entry?.status as string | undefined,
-    isDirty,
-    hasWorkingDraft
-  );
 
   // Per-language translation-status pills. Present only when the entry was
   // fetched with `?translation-status=1` on a localized collection; inert otherwise.
@@ -118,7 +100,9 @@ export function DocumentPanel({
         Document
       </p>
       <dl className="space-y-3">
-        {hasStatus && <StatusRow state={pill} />}
+        {/* No status row: the document bar's pill says where the document
+            stands, read from the language being edited, and a second pill
+            here read the main row and could disagree with it. */}
         <IdRow id={entry?.id} />
         <Separator />
         <TimestampRows entry={entry} />
@@ -130,6 +114,7 @@ export function DocumentPanel({
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
       />
     </div>
   );
@@ -146,6 +131,7 @@ function TranslationsRow({
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
+  publishAllDisabled = actionsDisabled,
 }: {
   translations?: Record<string, { translated: boolean; status?: string }>;
   hasStatus?: boolean;
@@ -153,6 +139,7 @@ function TranslationsRow({
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   actionsDisabled?: boolean;
   navigationDisabled?: boolean;
+  publishAllDisabled?: boolean;
 }) {
   // The panel self-hides when localization is off, so an absent map is not a
   // reason to withhold it: a localized entry fetched without
@@ -172,6 +159,7 @@ function TranslationsRow({
         hasStatus={hasStatus}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
       />
     </div>
   );
@@ -187,44 +175,6 @@ function RowIcon({ icon: Icon }: { icon: typeof Hash }) {
       className="h-3.5 w-3.5 text-muted-foreground shrink-0"
       aria-hidden="true"
     />
-  );
-}
-
-function StatusRow({ state }: { state: PillState }) {
-  // Why: heavier pill than the meta-strip variant — matched padding and
-  // font weight so the lifecycle state reads as the most important row.
-  // Both pending states use the muted amber `warning` token (light + dark) —
-  // distinct from Draft (neutral) and Published (foreground/background), and
-  // avoiding saturated AI-style hues. "Modified" flags unsaved local edits;
-  // "Changed" flags a persisted working draft pending publish. They share the
-  // colour because both mean "diverges from what's live"; the label says which,
-  // and pillStateFromForm guarantees they never render at once.
-  const PILL_CLASS: Record<PillState, string> = {
-    draft: "bg-muted text-muted-foreground border border-border",
-    modified:
-      "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
-    changed:
-      "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
-    published: "bg-foreground text-background",
-  };
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <dt className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
-        <RowIcon icon={Circle} />
-        <span>Status</span>
-      </dt>
-      <dd>
-        <span
-          data-pill-state={state}
-          className={cn(
-            "px-2 py-0.5 text-xs font-bold tracking-[0.08em] uppercase rounded",
-            PILL_CLASS[state]
-          )}
-        >
-          {PILL_LABEL[state]}
-        </span>
-      </dd>
-    </div>
   );
 }
 

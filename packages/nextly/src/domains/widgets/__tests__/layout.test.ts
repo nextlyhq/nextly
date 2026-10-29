@@ -221,6 +221,48 @@ describe("reading a stored row", () => {
     expect(read.unarranged).toBeUndefined();
   });
 
+  it("drops every card of a retired per-collection or per-Single namespace, and keeps every other id", () => {
+    // 🔴 By namespace: core once minted `collection/<slug>-<kind>` and
+    // `single/<slug>-<kind>` cards from each install's own content, so no list
+    // of ids could name them all. An id the registry does not know is NOT
+    // dropped in general -- a disabled plugin's card comes back with its
+    // plugin -- so `acme/x` is the control, and `collections/x`, whose
+    // namespace only starts with the same letters, is kept as well.
+    const row = readRow(
+      JSON.stringify({
+        schemaVersion: LAYOUT_SCHEMA_VERSION,
+        placements: [
+          card("count", "collection/posts-count", { config: { n: 1 } }),
+          card("team", "core/team"),
+          card("about", "single/about-card", { removed: true }),
+          card("x", "acme/x"),
+          card("near", "collections/x"),
+        ],
+      })
+    );
+    expect(row.placements.map(p => p.widgetId)).toEqual([
+      "core/team",
+      "acme/x",
+      "collections/x",
+    ]);
+  });
+
+  it("lets a dropped card claim no placement id", () => {
+    // A retired card sharing an id with a live one would otherwise rekey the
+    // live card's repeat, for a card nobody can be shown.
+    const row = readRow(
+      JSON.stringify({
+        schemaVersion: LAYOUT_SCHEMA_VERSION,
+        placements: [
+          card("p", "collection/posts-count"),
+          card("p", "core/team"),
+        ],
+      })
+    );
+    expect(row.placements).toEqual([card("p", "core/team")]);
+    expect(row.duplicatePlacementIds).toBeUndefined();
+  });
+
   it("keeps the unarranged mark through a round trip", () => {
     expect(readRow(serializeLayout([card("a")], false)).unarranged).toBe(true);
   });
@@ -405,6 +447,38 @@ describe("a row of an earlier format is no saved arrangement", () => {
       )
     );
     expect(dismissalsApplied(defaults, row)).not.toEqual(defaults);
+  });
+
+  it("keeps each card's own choice where the default places one widget twice", () => {
+    const twice = [card("core/a", "core/a"), card("a-second", "core/a")];
+    const row = readStoredLayout(
+      serializeLayout(
+        [
+          card("core/a", "core/a", { removed: true, config: { range: "7d" } }),
+          card("a-second", "core/a", { config: { range: "30d" } }),
+        ],
+        false
+      )
+    );
+    expect(
+      dismissalsApplied(twice, row).map(each => [each.removed, each.config])
+    ).toEqual([
+      [true, { range: "7d" }],
+      [false, { range: "30d" }],
+    ]);
+  });
+
+  it("starts a card afresh when its id was stored for another widget", () => {
+    // The config now names `slot` a card of core/b; the row kept core/a's
+    // removal and settings under it, which core/b must not take.
+    const defaults = [card("slot", "core/b")];
+    const row = readStoredLayout(
+      serializeLayout(
+        [card("slot", "core/a", { removed: true, config: { range: "7d" } })],
+        false
+      )
+    );
+    expect(dismissalsApplied(defaults, row)).toEqual(defaults);
   });
 
   it("reads only the version: an earlier row whose content no format allows is still no row", () => {
@@ -606,6 +680,13 @@ describe("the visibility token", () => {
   it("depends on the sets, not the order they were registered in", () => {
     expect(visibilityToken(["a", "b"], ["x"])).toBe(
       visibilityToken(["b", "a"], ["x"])
+    );
+  });
+
+  it("tells apart two sets of withheld cards whatever their ids hold", () => {
+    // A card's id is the site config's to choose, a line break included.
+    expect(visibilityToken(["a"], [], [], [], ["x\nhides:y"])).not.toBe(
+      visibilityToken(["a"], [], [], [], ["x", "y"])
     );
   });
 

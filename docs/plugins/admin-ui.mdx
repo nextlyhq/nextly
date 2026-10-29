@@ -429,8 +429,10 @@ widget instead. A widget nobody suggests is offered and never placed.
 
 A site writes its own default as widget ids, or as cards with a size in grid units and
 starting settings. An entry marked `optional` is left out where its widget is not installed,
-such as a plugin's on a site without that plugin; any other entry must name a widget the
-install has, or startup refuses it:
+such as a plugin's on a site without that plugin, and takes none of the dashboard's room; any
+other entry must name a widget the install has, or startup refuses it. A widget that allows
+several cards may be listed more than once: each further card names an `id` of its own, which
+no other card and no widget has, and keeps its own settings under it:
 
 ```ts
 admin: {
@@ -439,6 +441,8 @@ admin: {
       "core/needs-attention",
       { widget: "acme/orders-by-state", w: 6, h: 4, optional: true },
       "core/recently-edited",
+      { widget: "core/count", settings: { collection: "posts" } },
+      { widget: "core/count", id: "pages-count", settings: { collection: "pages" } },
     ],
     suggestions: false,
   },
@@ -452,6 +456,38 @@ states it.
 
 A reader's saved layout, once they have arranged their dashboard, wins over all of this.
 Think of the default as where a card starts, not where it stays.
+
+### Hiding, replacing and overriding widgets
+
+The site config can change any widget, built-in or a plugin's, for everyone:
+
+```ts
+admin: {
+  dashboard: {
+    hide: ["core/team"],
+    replace: { "core/recently-edited": "acme/recent-orders" },
+    overrides: {
+      "core/recent-activity": {
+        title: "Latest changes",
+        size: { max: { w: 6, h: 6 } },
+        settings: { limit: 5 },
+      },
+    },
+  },
+}
+```
+
+- **`hide`**: nobody is offered a hidden widget and no card of it is drawn. Cards already saved
+  are kept, and come back where they were once the widget is no longer hidden.
+- **`replace`**: a plugin offers an alternative to a built-in in `contributes.dashboard.alternatives`,
+  and the site puts it in the built-in's place. The default places the alternative where the
+  built-in was, at the alternative's own starting size. The built-in is then kept off the
+  dashboard like a hidden widget, and an alternative no `replace` names is never offered.
+- **`overrides`**: a new title, description, starting settings, or sizes narrowed within the
+  widget's own. An override never widens a widget's sizes; startup refuses one that would.
+
+Each holds on every door at once: the add panel, the default, the cards a dashboard draws and
+the card data the server answers.
 
 ### The card frame and its states
 

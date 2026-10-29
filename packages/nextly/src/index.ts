@@ -640,14 +640,14 @@ export type {
 
 // @experimental Widgets declared once with `defineWidget()`, which a plugin
 // contributes under `contributes.dashboard`: the declaration, its setting
-// builders (as `widgetSettings`, since `settings` alone would read as the
-// site's own settings here), and the types a widget's component is written
-// against. Startup checks every declaration and reports each fault; the data
+// builders (`setting`, the collections' field builders as a card's settings
+// take them, with the collections' own `option` for a select's choices), and
+// the types a widget's component is written against. Startup checks every declaration and reports each fault; the data
 // code stays on the server, and the admin is sent data only.
 export {
   defineAttentionItem,
   defineWidget,
-  settings as widgetSettings,
+  setting,
   type AnyWidget,
   type AttentionCount,
   type AttentionItem,
@@ -663,19 +663,30 @@ export {
   type WidgetRef,
   type ChartStyle,
   type WidgetAccess,
+  // The permission gate `access` takes.
+  type WidgetAccessGate,
   type WidgetComponentMap,
   type WidgetData,
   type WidgetDataInput,
   type WidgetDisplay,
   type WidgetEmpty,
   type WidgetFilter,
+  // A series' interval and range.
+  type WidgetInterval,
+  // The size a card's `load` is handed.
+  type WidgetLoadSize,
   type WidgetPreviewCase,
   type WidgetProps,
+  type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
   type WidgetSummary,
   type WidgetView,
 } from "./domains/widgets/declaration/public";
+// @experimental The list rows a card of a given height draws at a density: what a widget's `load`
+// reads its `size` by to ask for no more rows than the card shows, by the formula core's own list
+// cards are drawn with. From the module the admin draws the frame by, which imports nothing more.
+export { rowsThatFit } from "./domains/widgets/card-geometry";
 // @experimental The check a site's generated admin component map applies, and what it reads:
 // the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
 export type {

@@ -1,8 +1,8 @@
 /**
  * What the settings sheet needs to know about a card's content settings
- * (Collection, Filter, Sort, Group by, Fields) beyond drawing them: which settings
- * follow a collection, and which stored values name a field the reader may no
- * longer be offered.
+ * (Collection, Filter, Sort, Group by, Fields, Field) beyond drawing them:
+ * which settings follow a collection, and which stored values name a field
+ * the reader may no longer be offered.
  *
  * Pure, and read from what the server sent: `widgetSources` lists only the
  * fields no read rule can refuse, so a field missing from it is one this
@@ -27,7 +27,8 @@ export function isContentSetting(
     setting.type === "filter" ||
     setting.type === "sort" ||
     setting.type === "groupBy" ||
-    setting.type === "fields"
+    setting.type === "fields" ||
+    setting.type === "field"
   );
 }
 
@@ -49,8 +50,9 @@ export function dependentsOf(
 }
 
 /**
- * The fields a dependent setting's value names: a filter's, sort's or
- * grouping's one, or each of a Fields setting's, and none when unset.
+ * The fields a dependent setting's value names: a filter's, sort's,
+ * grouping's or Field setting's one, or each of a Fields setting's, and none
+ * when unset.
  */
 export function fieldsNamedBy(
   setting: DependentSetting,

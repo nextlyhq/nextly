@@ -136,6 +136,11 @@ export interface ImageSizeFormProps {
   imageSize?: ImageSize | null;
   isPending: boolean;
   onSubmit: (data: Partial<ImageSize>) => void;
+  /**
+   * Shown and not changed: the caller may read the size but not update it,
+   * so every control is disabled and nothing is offered to save.
+   */
+  readOnly?: boolean;
 }
 
 export function ImageSizeForm({
@@ -143,8 +148,12 @@ export function ImageSizeForm({
   imageSize,
   isPending,
   onSubmit,
+  readOnly = false,
 }: ImageSizeFormProps): JSX.Element {
   const isEdit = mode === "edit";
+  // Controls are held while a save is in flight, and for good when the caller
+  // may only read.
+  const isLocked = isPending || readOnly;
 
   const form = useForm<ImageSizeFormValues>({
     resolver: zodResolver(
@@ -195,7 +204,7 @@ export function ImageSizeForm({
               >
                 <Input
                   placeholder="e.g., thumbnail, medium, large"
-                  disabled={isEdit || isPending}
+                  disabled={isEdit || isLocked}
                   {...field}
                 />
               </FieldShell>
@@ -230,7 +239,7 @@ export function ImageSizeForm({
                       placeholder="Width (px)"
                       min={1}
                       max={10000}
-                      disabled={isPending}
+                      disabled={isLocked}
                       value={field.value ?? ""}
                       onChange={e => {
                         const v = e.target.value;
@@ -253,7 +262,7 @@ export function ImageSizeForm({
                       placeholder="Height (px)"
                       min={1}
                       max={10000}
-                      disabled={isPending}
+                      disabled={isLocked}
                       value={field.value ?? ""}
                       onChange={e => {
                         const v = e.target.value;
@@ -283,7 +292,7 @@ export function ImageSizeForm({
                   <Select
                     value={field.value}
                     onValueChange={field.onChange}
-                    disabled={isPending}
+                    disabled={isLocked}
                   >
                     <SelectTrigger
                       id={id}
@@ -326,7 +335,7 @@ export function ImageSizeForm({
                   <Select
                     value={field.value}
                     onValueChange={field.onChange}
-                    disabled={isPending}
+                    disabled={isLocked}
                   >
                     <SelectTrigger
                       id={id}
@@ -364,7 +373,7 @@ export function ImageSizeForm({
                   type="number"
                   min={1}
                   max={100}
-                  disabled={isPending}
+                  disabled={isLocked}
                   value={field.value ?? ""}
                   onChange={e => {
                     const v = e.target.value;
@@ -379,25 +388,27 @@ export function ImageSizeForm({
           />
         </SettingsSection>
 
-        <FormActions dirty={form.formState.isDirty}>
-          <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
-            <Button type="button" variant="outline" disabled={isPending}>
-              Cancel
+        {!readOnly && (
+          <FormActions dirty={form.formState.isDirty}>
+            <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
+              <Button type="button" variant="outline" disabled={isPending}>
+                Cancel
+              </Button>
+            </Link>
+            <Button type="submit" disabled={isPending}>
+              {isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {isEdit ? "Updating..." : "Creating..."}
+                </>
+              ) : isEdit ? (
+                "Update Image Size"
+              ) : (
+                "Create Image Size"
+              )}
             </Button>
-          </Link>
-          <Button type="submit" disabled={isPending}>
-            {isPending ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {isEdit ? "Updating..." : "Creating..."}
-              </>
-            ) : isEdit ? (
-              "Update Image Size"
-            ) : (
-              "Create Image Size"
-            )}
-          </Button>
-        </FormActions>
+          </FormActions>
+        )}
       </form>
     </Form>
   );

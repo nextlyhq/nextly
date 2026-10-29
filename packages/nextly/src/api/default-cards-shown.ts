@@ -17,7 +17,7 @@
 
 import type { AuthContext } from "../auth/middleware";
 import { createBatchScope } from "../domains/widgets/batch-scope";
-import { refreshContentSources } from "../domains/widgets/collection-widgets";
+import { refreshContentSources } from "../domains/widgets/content-sources";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { ReadCaller } from "../services/dashboard/readable-resources";

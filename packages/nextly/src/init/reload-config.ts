@@ -37,6 +37,10 @@ import {
   declaredSlugsOf,
   withoutRemovedFromCode,
 } from "../domains/dynamic-collections/services/removed-from-code";
+import {
+  publishDeclaredEntities,
+  restoreDeclaredEntities,
+} from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -234,8 +238,8 @@ type ComponentDef = {
  *
  * That row is not merely cosmetic. Anything deciding whether an entity's table
  * can be queried reads it -- the widget source refresh does -- so a field edit
- * under `next dev` silently withdrew that entity's generated cards from the
- * dashboard for the rest of the session.
+ * under `next dev` silently withdrew that entity's widget source, and with it
+ * every card set to it, from the dashboard for the rest of the session.
  *
  * The edited set is taken from the SYNC'S OWN REPORT rather than from the
  * snapshot, because the snapshot answers "did this table exist before the
@@ -1704,6 +1708,14 @@ async function applyReloadHolding(
   // nothing a refused reload did leaves its options live.
   const previousDbOptions = publishedCollectionDbOptions();
   reloadUndo.push(() => publishCollectionDbOptions(previousDbOptions));
+  // The declared collections and Singles the write guard judges by, likewise:
+  // published at commit, and the set in force put back when the reload does
+  // not land, so a refused reload neither refuses nor allows a write.
+  let previousDeclared: ReturnType<typeof publishDeclaredEntities>;
+  let declaredPublished = false;
+  reloadUndo.push(() => {
+    if (declaredPublished) restoreDeclaredEntities(previousDeclared);
+  });
   // The workflows in force when the reload started, put back if it does not
   // land, as the db options are.
   const previousWorkflows = publishedWorkflows();
@@ -1731,6 +1743,8 @@ async function applyReloadHolding(
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
     );
+    previousDeclared = publishDeclaredEntities(newConfig);
+    declaredPublished = true;
     // Published here rather than when the file is read. A reload that is later
     // refused still parsed a valid config, and publishing early would leave a
     // policy the process explicitly rejected in force — deleting on windows

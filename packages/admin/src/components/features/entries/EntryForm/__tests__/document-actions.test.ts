@@ -394,10 +394,41 @@ describe("a user who may read the document but not change it", () => {
   const ids = (over: Partial<DocumentActionState>) =>
     documentActions(state(over)).map(action => action.id);
 
-  it("is offered nothing that changes the content, and no leading action", () => {
+  /** The leading action offered a reader of `over`'s document, if any. */
+  const leading = (over: Partial<DocumentActionState>) =>
+    documentActions(state({ canEdit: false, ...over })).find(
+      action => action.placement === "primary"
+    );
+
+  it("leads with Publish on a draft, where they may publish", () => {
+    // Publishing changes only the status, which the publish permission
+    // judges alone, so a reader who holds it may publish the draft.
+    expect(leading({ status: "draft" })).toMatchObject({
+      id: "publish",
+      label: "Publish",
+    });
+  });
+
+  it("leads with Publish changes on a published document holding a draft", () => {
+    expect(
+      leading({ status: "published", hasWorkingDraft: true })
+    ).toMatchObject({ id: "publish", label: "Publish changes" });
+  });
+
+  it("leads with nothing where there is nothing to publish, or no publish", () => {
+    expect(leading({ status: "published", hasWorkingDraft: false })).toBe(
+      undefined
+    );
+    expect(leading({ status: "draft", canPublish: false })).toBe(undefined);
+    expect(leading({ status: "draft", hasStatus: false })).toBe(undefined);
+    expect(leading({ status: "draft", mode: "create" })).toBe(undefined);
+  });
+
+  it("is offered nothing that changes the content, and no leading action without publish", () => {
     const offered = documentActions(
       state({
         canEdit: false,
+        canPublish: false,
         status: "published",
         hasWorkingDraft: true,
         isDirty: true,
@@ -416,7 +447,12 @@ describe("a user who may read the document but not change it", () => {
 
   it("keeps unpublishing, deleting and reading the API, which follow their own permissions", () => {
     expect(
-      ids({ canEdit: false, status: "published", hasWorkingDraft: true })
+      ids({
+        canEdit: false,
+        canPublish: false,
+        status: "published",
+        hasWorkingDraft: true,
+      })
     ).toEqual(["view-api", "unpublish", "delete"]);
     // POPULATION CONTROL: the same document for a user who may change it
     // offers each edit, so their absence above is the permission.
