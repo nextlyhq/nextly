@@ -295,6 +295,11 @@ describe.each(getConfiguredTestDialects())(
         // Media no longer has all four plain permissions, so the retired one
         // is kept as itself, and the edited row is granted nothing.
         expect(await holds(String(role.id))).toEqual(["manage-media"]);
+        // Left holding nothing, so no case after this counts the role.
+        await services().rolePermissions.setRolePermissions(
+          String(role.id),
+          []
+        );
       });
 
       it("leaves no role holding a retired manage permission after a reboot, presets and the super-admin seeder included", async () => {

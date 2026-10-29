@@ -154,9 +154,9 @@ export async function storedAsPlainLocked(
   const asked = [...new Set(permissionIds.map(String))];
   for (const id of asked) await tx.lockRow("permissions", id);
   const first = await storedAsPlain(tx, asked, maxParams);
-  for (const id of first) {
-    if (!asked.includes(id)) await tx.lockRow("permissions", id);
-  }
+  const chosen = first.filter(id => !asked.includes(id));
+  if (chosen.length === 0) return new Set(first);
+  for (const id of chosen) await tx.lockRow("permissions", id);
   return new Set(await storedAsPlain(tx, asked, maxParams));
 }
 
