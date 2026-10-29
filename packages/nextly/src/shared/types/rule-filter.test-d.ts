@@ -290,6 +290,16 @@ const stored = [
   number({ name: "score" }),
 ];
 type Stored = typeof stored;
+// Declared inline, where the factories' results are inferred against the
+// collection's fields, a field holding one value stays a key.
+defineCollection({
+  slug: "inline",
+  fields: [
+    relationship({ name: "author", relationTo: "users" }),
+    number({ name: "score" }),
+  ],
+  access: { read: () => ({ author: "u", score: { not_equals: 5 } }) },
+});
 expectTypeOf<
   ExactAnswer<Stored, { author: string; score: { not_equals: number } }>
 >().toEqualTypeOf<{ author: string; score: { not_equals: number } }>();
