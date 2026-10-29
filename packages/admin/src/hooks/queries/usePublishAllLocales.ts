@@ -17,6 +17,11 @@ import {
 import { toast } from "@admin/components/ui";
 import { entryApi, entryKeys } from "@admin/services/entryApi";
 
+import {
+  refreshRemovedFromCodeSchema,
+  removedFromCodeRefusal,
+} from "./removed-from-code-refusal";
+
 export interface UsePublishAllLocalesOptions {
   collectionSlug: string;
   /** Suppress the success/error toast (default: false). */
@@ -50,8 +55,15 @@ export function usePublishAllLocales({
       });
       if (!silent) toast.success("All languages published.");
     },
-    onError: () => {
-      if (!silent) toast.error("Couldn't publish all languages.");
+    onError: error => {
+      // A collection removed from code refuses in a sentence that says what to
+      // do next, so that is shown in place of the general one.
+      refreshRemovedFromCodeSchema(queryClient, error);
+      if (!silent) {
+        toast.error(
+          removedFromCodeRefusal(error) ?? "Couldn't publish all languages."
+        );
+      }
     },
   });
 }

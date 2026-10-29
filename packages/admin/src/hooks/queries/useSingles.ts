@@ -45,6 +45,8 @@ import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 
 import { useBulkMutation } from "../useBulkMutation";
 
+import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
+
 /**
  * Default table parameters for Single queries
  */
@@ -739,6 +741,12 @@ export function useUpdateSingleDocument(
       void queryClient.invalidateQueries({
         queryKey: singleDocumentKeys.all(),
       });
+    },
+    // The editor reports the failure itself. A refusal because the Single was
+    // removed from code also reads its schema again, so an editor opened
+    // before the removal turns read-only.
+    onError: error => {
+      refreshRemovedFromCodeSchema(queryClient, error);
     },
   });
 }
