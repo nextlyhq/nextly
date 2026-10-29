@@ -22,6 +22,7 @@ import type { FieldConfig } from "nextly/config";
 import type React from "react";
 import { useCallback } from "react";
 
+import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
@@ -49,6 +50,7 @@ import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 import { singleApi } from "@admin/services/singleApi";
@@ -237,6 +239,10 @@ export default function SingleEditPage({
    * produces is only read once those guards pass; while the schema or the
    * document is still loading it reports no action, which is correct.
    */
+  // The reader's own pin of this Single, offered beside "Add to release".
+  const pin = usePinAction(
+    document && slug ? { targetType: "single", targetSlug: slug } : null
+  );
   const release = useAddToReleaseAction({
     scopeKind: "single",
     scopeSlug: slug,
@@ -302,9 +308,10 @@ export default function SingleEditPage({
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
+          {/* The server's message as it is: it already says what went wrong
+              ("Not found.", "You can't see Home."). */}
           <AlertDescription>
-            Failed to load Single:{" "}
-            {error instanceof Error ? error.message : "Unknown error"}
+            {apiErrorMessage(error, "The Single couldn't be loaded.")}
           </AlertDescription>
         </Alert>
         <div className="mt-6">
@@ -384,17 +391,24 @@ export default function SingleEditPage({
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
         <MeasuredPageFrame>
-          {/* Full width and first, for the reason the entry editor gives. */}
-          <ScheduledReleaseBanner
-            document={
-              slug
-                ? { scopeKind: "single", scopeSlug: slug, entryId: document.id }
-                : undefined
-            }
-            onDefaultLocale={!isNonDefaultLocale}
-          />
           {release.dialog}
           <SingleForm
+            /* Under the editor's header, for the reason the entry editor
+             gives. */
+            documentBanner={
+              <ScheduledReleaseBanner
+                document={
+                  slug
+                    ? {
+                        scopeKind: "single",
+                        scopeSlug: slug,
+                        entryId: document.id,
+                      }
+                    : undefined
+                }
+                onDefaultLocale={!isNonDefaultLocale}
+              />
+            }
             // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
             // expects FieldConfig[] (discriminated). The runtime payload is the
             // same; widening here until the schema layer unifies on FieldConfig.
@@ -405,9 +419,10 @@ export default function SingleEditPage({
              omitting this control here would leave the Single half reachable
              only through the API. With the form's own actions, matching the
              collection editor. */
-            documentActions={
-              release.contributed === null ? [] : [release.contributed]
-            }
+            documentActions={[
+              ...(release.contributed === null ? [] : [release.contributed]),
+              ...(pin === null ? [] : [pin]),
+            ]}
             onSubmit={handleSubmit}
             isSubmitting={isUpdating}
             onCancel={handleCancel}

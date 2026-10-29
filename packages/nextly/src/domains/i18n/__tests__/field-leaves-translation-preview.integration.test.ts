@@ -254,36 +254,58 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     expect(preview.leavingTranslation?.[0]?.entriesWithoutDefault).toBe(1);
   });
 
-  it("names the refusal before Apply for a field that cannot leave in one change", async () => {
+  it("names the refusal before Apply when the entries cannot take a Required field's setting", async () => {
     await seedCollection([
       { name: "heading", type: "text", required: true },
       { name: "views", type: "number" },
     ]);
+    const leaving = [
+      { name: "heading", type: "text", required: true, localized: false },
+      { name: "views", type: "number" },
+    ];
 
-    const preview = await bodyOf(
-      await dispatchCollections(
-        {} as ServiceContainer,
-        "previewSchemaChanges",
-        { collectionName: "posts" },
-        {
-          fields: [
-            { name: "heading", type: "text", required: true, localized: false },
-            { name: "views", type: "number" },
-          ],
-          localized: true,
-        }
-      )
+    // Every entry has an English heading, so the field can be shared with the setting on.
+    expect(
+      (await previewShared(leaving)).leavingTranslation?.[0]?.refusal
+    ).toBe(undefined);
+
+    // One entry translated before it had an English row, as an older install may hold.
+    await query(
+      `DELETE FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
     );
 
-    expect(preview.leavingTranslation?.[0]?.refusal).toEqual({
+    expect(
+      (await previewShared(leaving)).leavingTranslation?.[0]?.refusal
+    ).toEqual({
       reason:
-        "A required field can't stop being translated in the same change.",
+        "1 entry has no English heading, and its English value becomes the shared one.",
       steps: [
-        "Turn off Required and save.",
-        "Turn off Localized and save.",
-        "Turn Required back on and save.",
+        "Give that entry an English heading, or turn off Required, and save again.",
       ],
     });
+  });
+
+  // Five entries in two groups sharing an English heading, of two and of three: every entry in
+  // either is in the way, so the preview counts five, as Apply's refusal does.
+  it("counts the entries of every group that would share a value for a Unique field", async () => {
+    await seedCollection();
+    const entries = handler().getEntryService();
+    for (const heading of ["One", "Two", "Two"]) {
+      const entry = await entries.createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading, views: 1 }
+      );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+    }
+
+    const preview = await previewShared([
+      { name: "heading", type: "text", unique: true, localized: false },
+      { name: "views", type: "number" },
+    ]);
+
+    expect(preview.leavingTranslation?.[0]?.refusal?.reason).toMatch(
+      /^5 entries would share a value for heading, which must be unique/
+    );
   });
 
   it("counts a Single's values", async () => {

@@ -25,7 +25,7 @@
 
 import { Button, Input } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
@@ -66,6 +66,12 @@ export interface LanguagePanelProps {
    * write the live document). States stay readable.
    */
   actionsDisabled?: boolean;
+  /**
+   * Withholds publishing every language. The same as `actionsDisabled` unless
+   * given: it changes only each language's status, which the publish
+   * permission judges, so a user held from every edit may still be offered it.
+   */
+  publishAllDisabled?: boolean;
   /**
    * Withholds opening another language. The same as `actionsDisabled` unless
    * given: a user who may only read the document is held from every mutation
@@ -170,6 +176,7 @@ function StateLegend() {
 function PanelHeader({
   counts,
   actionsDisabled,
+  publishAllDisabled,
   canPublishAll,
   publishPending,
   onPublishAll,
@@ -189,6 +196,7 @@ function PanelHeader({
   activeState: LanguageState;
   metaKnown: boolean;
   actionsDisabled: boolean;
+  publishAllDisabled: boolean;
   canPublishAll: boolean;
   publishPending: boolean;
   onPublishAll: () => void;
@@ -237,7 +245,7 @@ function PanelHeader({
           variant="outline"
           size="sm"
           className="h-7 px-2 text-xs"
-          disabled={actionsDisabled || publishPending}
+          disabled={publishAllDisabled || publishPending}
           onClick={onPublishAll}
         >
           {publishPending ? "Publishing…" : "Publish all"}
@@ -694,12 +702,62 @@ export function DocumentLanguagePanel({
   );
 }
 
+/**
+ * The publish-all confirmation, open only while publishing is offered. One
+ * already open when the panel's actions are held (a language switch's answer
+ * on its way, a past version on screen) or publishing every language stops
+ * being offered is closed, not hidden, so it does not reopen on its own once
+ * the hold ends.
+ */
+function PublishAllConfirm({
+  open,
+  held,
+  onOpenChange,
+  languageCount,
+  pendingCount,
+  publish,
+}: {
+  open: boolean;
+  held: boolean;
+  onOpenChange: (open: boolean) => void;
+  languageCount: number;
+  // Null where the languages' states were not read, so no count is known.
+  pendingCount: number | null;
+  publish: ReturnType<typeof usePublishAllLanguages>;
+}) {
+  const offered = !held && publish.available;
+  useEffect(() => {
+    if (open && !offered) onOpenChange(false);
+  }, [open, offered, onOpenChange]);
+  return (
+    <PublishAllConfirmDialog
+      open={open && offered}
+      onOpenChange={onOpenChange}
+      languageCount={languageCount}
+      pendingCount={pendingCount}
+      isLoading={publish.pending}
+      onConfirm={() => {
+        publish.publishAll();
+        onOpenChange(false);
+      }}
+    />
+  );
+}
+
+/** The publish hook's options: the lifecycle flag only where the caller knows it. */
+function publishOptions(
+  hasStatus: boolean | undefined
+): Parameters<typeof usePublishAllLanguages>[0] {
+  return hasStatus === undefined ? {} : { hasStatus };
+}
+
 export function LanguagePanel({
   translations,
   activeLocale,
   onSelect,
   hasStatus,
   actionsDisabled = false,
+  publishAllDisabled = actionsDisabled,
   navigationDisabled = actionsDisabled,
   className,
 }: LanguagePanelProps): JSX.Element | null {
@@ -710,9 +768,7 @@ export function LanguagePanel({
   const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
     useEntryLocale();
   const copy = useCopyFromLanguageScope();
-  const publish = usePublishAllLanguages(
-    hasStatus === undefined ? {} : { hasStatus }
-  );
+  const publish = usePublishAllLanguages(publishOptions(hasStatus));
 
   if (!hasLanguages(enabled, collectionLocalized, locales.length)) return null;
 
@@ -736,6 +792,7 @@ export function LanguagePanel({
         activeState={activeLanguage.state}
         metaKnown={activeLanguage.metaKnown}
         actionsDisabled={actionsDisabled}
+        publishAllDisabled={publishAllDisabled}
         canPublishAll={publish.available}
         publishPending={publish.pending}
         onPublishAll={() => setConfirmPublishAll(true)}
@@ -747,16 +804,13 @@ export function LanguagePanel({
         onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
       />
 
-      <PublishAllConfirmDialog
+      <PublishAllConfirm
         open={confirmPublishAll}
+        held={publishAllDisabled}
         onOpenChange={setConfirmPublishAll}
         languageCount={locales.length}
         pendingCount={pendingCount}
-        isLoading={publish.pending}
-        onConfirm={() => {
-          publish.publishAll();
-          setConfirmPublishAll(false);
-        }}
+        publish={publish}
       />
 
       {offersFilter && (

@@ -7,6 +7,8 @@ import { Link } from "@admin/components/ui/link";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 
 import { CountValue, countLabel } from "../widgets/archetypes/count-value";
+import { pointLabel } from "../widgets/archetypes/timeseries";
+import { useCollectionUnit } from "../widgets/charts/chart-unit";
 import { OverTimeChart } from "../widgets/charts/over-time-chart";
 import { FrameState } from "../widgets/frame/card-state";
 import { CardFigure } from "../widgets/frame/figure";
@@ -37,6 +39,11 @@ export const CountCard: React.FC<WidgetComponentProps> = ({
   // Named in the number's accessible name, as the frame's title names it, so
   // two Count cards for different collections can be told apart aloud.
   const collection = collectionLabelOf(settings, useBranding().widgetSources);
+  // What its trend counts, for the chart's tooltip ("3 new posts").
+  const unit = useCollectionUnit(
+    typeof settings.collection === "string" ? settings.collection : undefined,
+    "new"
+  );
 
   if (view.state === "loading") {
     return (
@@ -85,9 +92,10 @@ export const CountCard: React.FC<WidgetComponentProps> = ({
           <OverTimeChart
             title="Entries created, last 30 days"
             labelHeading="Day"
+            unit={unit}
             intervals={view.trend.points.map(point => ({
               key: point.start,
-              label: point.start.slice(0, 10),
+              label: pointLabel(point.start, "day"),
             }))}
             series={[
               {

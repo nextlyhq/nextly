@@ -631,6 +631,26 @@ describe("LanguagePanel", () => {
     expect(rows()[2]).toHaveTextContent("not translated");
   });
 
+  it("offers a reader who may publish every language Publish all, and no edit", () => {
+    // Publishing every language changes only each language's status, which
+    // the publish permission judges: held from every edit, it is still offered.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({
+      translations: TRANSLATIONS,
+      activeLocale: "de",
+      onSelect: vi.fn(),
+      hasStatus: true,
+      actionsDisabled: true,
+      publishAllDisabled: false,
+      navigationDisabled: false,
+    });
+
+    expect(screen.getByRole("button", { name: "Publish all" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Start Arabic from another language" })
+    ).toBeDisabled();
+  });
+
   it("lets a user held from every action still open the other languages", () => {
     // A user who may only read the document: every mutation is withheld,
     // reading another language is not.
@@ -649,6 +669,55 @@ describe("LanguagePanel", () => {
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Open English" })).toBeEnabled();
+  });
+
+  it("closes an open publish-all confirmation once the actions are held", async () => {
+    // The confirmation was open when a language switch began: its Confirm is
+    // not left to publish on the answer for the language moved from.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const props = { translations: TRANSLATIONS, hasStatus: true };
+    const { rerender } = renderPanel(props);
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} actionsDisabled />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(publishAll).not.toHaveBeenCalled();
+
+    // Closed, not hidden: the hold ending does not bring it back.
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("closes an open publish-all confirmation once publishing every language is not offered", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const props = { translations: TRANSLATIONS, hasStatus: true };
+    const { rerender } = renderPanel(props);
+    await userEvent.click(screen.getByRole("button", { name: "Publish all" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    publishState.mockReturnValue({ ...PUBLISH_IDLE, available: false });
+    rerender(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel {...props} />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(publishAll).not.toHaveBeenCalled();
   });
 
   it("warns that any held change goes live where the languages' states were not read", async () => {

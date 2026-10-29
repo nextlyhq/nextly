@@ -120,7 +120,7 @@ const SPEAKING_ENVIRONMENTS = new Set(["development", "test"]);
  * every warning below to real users' consoles. Silence in an environment that
  * cannot be identified is the cheaper of the two mistakes.
  */
-function isDevelopmentRuntime(): boolean {
+export function isDevelopmentRuntime(): boolean {
   const env = process.env.NODE_ENV;
   return env !== undefined && SPEAKING_ENVIRONMENTS.has(env);
 }

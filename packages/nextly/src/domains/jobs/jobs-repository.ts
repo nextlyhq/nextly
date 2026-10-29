@@ -35,10 +35,11 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 import { getColumns } from "drizzle-orm";
 
+import { loadedDialect } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors";
-import { nextlyJobsMysql } from "../../schemas/jobs/mysql";
-import { nextlyJobsPg } from "../../schemas/jobs/postgres";
-import { nextlyJobsSqlite } from "../../schemas/jobs/sqlite";
+import type { nextlyJobsMysql } from "../../schemas/jobs/mysql";
+import type { nextlyJobsPg } from "../../schemas/jobs/postgres";
+import type { nextlyJobsSqlite } from "../../schemas/jobs/sqlite";
 import type { JobState } from "../../schemas/jobs/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
@@ -223,11 +224,11 @@ function jobsTableFor(
 ): typeof nextlyJobsPg | typeof nextlyJobsMysql | typeof nextlyJobsSqlite {
   switch (dialect) {
     case "postgresql":
-      return nextlyJobsPg;
     case "mysql":
-      return nextlyJobsMysql;
     case "sqlite":
-      return nextlyJobsSqlite;
+      // The loaded dialect's own table, so only that dialect's file is
+      // imported; `createAdapter` loads it.
+      return loadedDialect(dialect).tables.nextlyJobs;
     default:
       throw NextlyError.internal({
         logContext: { reason: "unsupported dialect for jobs", dialect },

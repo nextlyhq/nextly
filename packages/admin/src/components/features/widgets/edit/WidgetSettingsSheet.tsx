@@ -25,11 +25,16 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@nextlyhq/ui";
-import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
+import {
+  resolveWidgetSettings,
+  type AnyWidgetSetting,
+  type PublishedContentSource,
+} from "nextly/config";
 import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type JSX,
@@ -83,7 +88,19 @@ export interface WidgetSettingsSheetProps {
    * `toStoredConfig` builds them, which is what Done would keep.
    */
   renderPreview?: (draft: Record<string, unknown>) => ReactNode;
+  /**
+   * Open with focus on the form's first field rather than where the sheet puts it, as a card's
+   * empty state opens it to ask for the setting it is missing.
+   */
+  focusFirstField?: boolean;
 }
+
+/**
+ * What a reader fills in, in the order the form lays them out: the first match is the first field.
+ * A select and a switch are buttons by their roles, so they are named by them.
+ */
+const SETTINGS_FIELD =
+  "input:not([type='hidden']), textarea, select, [role='combobox'], [role='switch'], [role='radio']";
 
 /** How a Done ended, told back to the sheet that asked. */
 export interface DoneSettled {
@@ -97,8 +114,12 @@ export interface DoneSettled {
  * 🔴 Built from the DECLARATION rather than from the stored config, so a
  * setting the reader has never touched still opens at its default instead of
  * blank — and a key the declaration no longer knows about does not appear as a
- * ghost field. This mirrors `resolveWidgetSettings` on purpose: what the form
- * shows is what the card is actually using.
+ * ghost field. Read through `resolveWidgetSettings`, the server's own reader,
+ * so what the form shows is what the card is actually using: a stored value
+ * the setting no longer accepts (a retired option, a number past a narrowed
+ * bound, a value of another kind) opens at the default the card fell back to,
+ * not at the value it set aside. A note's own text over its bound is the
+ * exception, opened as written so it can be shortened.
  */
 export function initialValues(
   settings: readonly AnyWidgetSetting[],
@@ -112,9 +133,16 @@ export function initialValues(
    * prototype-free for the same reason, and this function exists to mirror it.
    */
   const values: Record<string, unknown> = Object.create(null);
+  const resolved = resolveWidgetSettings(settings, config);
   for (const setting of settings) {
     const stored = config?.[setting.name];
-    values[setting.name] = stored ?? setting.defaultValue ?? "";
+    // A note over its bound is the one stale value kept as written: it is the
+    // reader's own text, so they shorten it rather than lose it, and Done
+    // refuses it until it fits (`overlongSetting`).
+    values[setting.name] =
+      setting.type === "textarea" && typeof stored === "string"
+        ? stored
+        : (resolved[setting.name] ?? "");
   }
   return values;
 }
@@ -511,6 +539,7 @@ export function WidgetSettingsSheet(
   const { form, reset } = useSheetForm(open, settings, sources, defaultValues);
   const draft = useSheetDraft(form, settings, config);
   const { saving, failure, submit, changeOpen } = useSheetDone(props);
+  const formRef = useRef<HTMLFormElement>(null);
 
   return (
     <Sheet open={open} onOpenChange={changeOpen}>
@@ -525,6 +554,18 @@ export function WidgetSettingsSheet(
             ? "flex w-full flex-col overflow-hidden sm:max-w-md lg:max-w-4xl"
             : "flex w-full flex-col overflow-hidden sm:max-w-md"
         }
+        {...(props.focusFirstField
+          ? {
+              onOpenAutoFocus: (event: Event) => {
+                const first =
+                  formRef.current?.querySelector<HTMLElement>(SETTINGS_FIELD);
+                // Where there is no field to land on, the sheet's own choice stands.
+                if (!first) return;
+                event.preventDefault();
+                first.focus();
+              },
+            }
+          : {})}
       >
         <SheetHeader>
           <SheetTitle>{title} settings</SheetTitle>
@@ -542,6 +583,7 @@ export function WidgetSettingsSheet(
           ) : null}
           <FormProvider {...form}>
             <form
+              ref={formRef}
               // `handleSubmit` answers with a promise and `onSubmit` expects
               // nothing back, so the result is voided deliberately rather than
               // handed to an attribute that would ignore it silently.

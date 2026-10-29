@@ -39,6 +39,7 @@ import {
   type ListDensity,
   type WidgetQuery,
 } from "nextly/config";
+import type { WidgetRenderSize } from "nextly/widget-result";
 import { useMemo } from "react";
 
 import type {
@@ -48,7 +49,11 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { fetchWidgetBatch, type CardAsk } from "./widget-query-stream";
+import {
+  fetchWidgetBatch,
+  type CardAsk,
+  type SentCardAsk,
+} from "./widget-query-stream";
 
 export type { CardAsk } from "./widget-query-stream";
 
@@ -100,6 +105,16 @@ export interface WidgetQueryRequest {
    * unsaved. Present exactly when `query` is absent.
    */
   card?: CardAsk;
+  /**
+   * The size a card core answers on the server is drawn at: its grid size and the tier predicted
+   * for it, sent beside `card` and handed to the widget's `load`, which may read it.
+   *
+   * 🔴 Part of what the answer is filed as asked with (`appliedKey`), and kept out of the cache
+   * key, as `sized` is. The size a load saw is part of its answer's identity, so a card resized or
+   * crossing a tier asks again; filed by `appliedKey` it asks again ALONE (`useCardRetries`),
+   * while a size in the key would make one card's resize a new question for its whole partition.
+   */
+  cardSize?: WidgetRenderSize;
   /**
    * The stored settings a card asked for by id was asked with: what its answer
    * is filed under, so a saved change of them asks this card again alone.
@@ -171,23 +186,38 @@ export type CellsApplied = Readonly<Record<string, string>>;
  * The question a request asks with, before sizing, as one comparable string: what an answer is
  * filed as having been asked with, and what a card compares against when its settings change.
  *
- * A card's is its ask with the stored settings it was asked with, so a saved change of them is
- * a different question, and a preview's ask, which carries its own settings, never reads as the
- * stored card's.
+ * A card's is its ask with the stored settings it was asked with and the size it is drawn at, so
+ * a saved change of them, a resize or a change of tier is a different question, and a preview's
+ * ask, which carries its own settings, never reads as the stored card's.
  */
 export function appliedKey(request: WidgetQueryRequest): string {
   return request.card === undefined
     ? JSON.stringify(request.applied ?? request.query)
-    : JSON.stringify({ card: request.card, config: request.config ?? null });
+    : JSON.stringify({
+        card: request.card,
+        config: request.config ?? null,
+        // Its three numbers in one fixed order, so two equal sizes are one key however the object
+        // holding them was built.
+        size:
+          request.cardSize === undefined
+            ? null
+            : [request.cardSize.w, request.cardSize.h, request.cardSize.tier],
+      });
 }
 
-/** What one request sends as its entry of the batch: its card, or its query as sized and applied. */
+/**
+ * What one request sends as its entry of the batch: its card with the size it is drawn at, or its
+ * query as sized and applied.
+ */
 export function sentEntry(
   request: WidgetQueryRequest
-): WidgetQuery | CardAsk | undefined {
-  return (
-    request.card ?? request.sized?.query ?? request.applied ?? request.query
-  );
+): WidgetQuery | SentCardAsk | undefined {
+  if (request.card !== undefined) {
+    return request.cardSize === undefined
+      ? request.card
+      : { ...request.card, size: request.cardSize };
+  }
+  return request.sized?.query ?? request.applied ?? request.query;
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -415,11 +445,12 @@ function readSlot(value: Record<string, unknown>): WidgetSlot {
     ok?: unknown;
     error?: unknown;
     code?: unknown;
+    setting?: unknown;
     result?: unknown;
     empty?: unknown;
   };
 
-  if (slot.ok === false) return refusal(slot.error, slot.code);
+  if (slot.ok === false) return refusal(slot.error, slot.code, slot.setting);
   if (slot.ok !== true) return malformed();
 
   const result = asResult(slot.result);
@@ -873,17 +904,30 @@ function malformed(): WidgetSlot {
  * failure -- refusing to show it would be a second, silent one -- so it falls
  * back rather than being discarded.
  */
-function refusal(error: unknown, code?: unknown): WidgetSlot {
+function refusal(
+  error: unknown,
+  code?: unknown,
+  setting?: unknown
+): WidgetSlot {
   const usable = typeof error === "string" && error.trim() !== "";
-  return {
-    ok: false,
-    error: usable ? error : MALFORMED_SLOT_ERROR,
-    // The one code the server sends for a source that is not available, kept so the card can
-    // say "Not available to you" rather than offering Retry for something that will not change.
-    // Only on a well-formed refusal: a slot missing its message is a broken answer that may
-    // recover, and the code would hide that behind a state that removes Retry.
-    ...(usable && code === "unavailable" && { code: "unavailable" as const }),
-  };
+  if (!usable) return { ok: false, error: MALFORMED_SLOT_ERROR };
+  // The codes the server sends for a card that is not a failure, each kept so the card says so
+  // rather than offering Retry for something a retry will not change: a source not available to
+  // the reader, a setting the card needs and lacks (naming it), and a widget not shown for them.
+  // Only on a well-formed refusal: a slot missing its message is a broken answer that may
+  // recover, and a code would hide that behind a state that removes Retry. So is a needs-setting
+  // that names no setting, which is read as the failure it then is.
+  if (code === "unavailable" || code === "not-shown") {
+    return { ok: false, error, code };
+  }
+  if (
+    code === "needs-setting" &&
+    typeof setting === "string" &&
+    setting.trim() !== ""
+  ) {
+    return { ok: false, error, code, setting };
+  }
+  return { ok: false, error };
 }
 
 /** One partition's answer as the cache holds it, filled in slot by slot while it streams. */
@@ -1337,14 +1381,15 @@ function sizesSent(
 }
 
 /**
- * A request as the cache keys it: everything but the sizing and the settings it is sent with.
+ * A request as the cache keys it: everything but the sizing (`sized`, `cardSize`) and the settings
+ * it is sent with.
  * Named field by field, so a field added to the request is a decision about the key rather than
  * an accident; TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as
  * before.
  */
 function unsized(
   request: WidgetQueryRequest
-): Omit<WidgetQueryRequest, "sized" | "applied" | "undrawn"> {
+): Omit<WidgetQueryRequest, "sized" | "applied" | "undrawn" | "cardSize"> {
   return {
     placementId: request.placementId,
     cellKey: request.cellKey,
