@@ -281,8 +281,12 @@ export function useUpdateEntry<
     // for before letting the editor save again.
     onTaken: useCallback(
       () =>
-        reloadDocument(queryClient, entryKeys.detail(collectionSlug, entryId)),
-      [queryClient, collectionSlug, entryId]
+        reloadDocument(
+          queryClient,
+          entryKeys.detail(collectionSlug, entryId),
+          locale
+        ),
+      [queryClient, collectionSlug, entryId, locale]
     ),
   });
   const { enabled: localizationEnabled } = useLocalization();

@@ -998,4 +998,41 @@ describe("reloadDocument", () => {
     expect(client.getQueryData(["doc"])).toEqual({ version: 2 });
     unsubscribe();
   });
+
+  it("judges the editor's own reads, in its language, not another language's read of the document", async () => {
+    // Keyed as the editors' reads are: the document's key, then the read's
+    // scope, its language normalised to null for the default.
+    const own = ["doc", { locale: "es" }];
+    const source = ["doc", { locale: "en" }];
+    const failing = new Set<string>();
+    const client = new QueryClient();
+    const observers = [own, source].map(queryKey =>
+      new QueryObserver(client, {
+        queryKey,
+        queryFn: async () => {
+          const language = (queryKey[1] as { locale: string }).locale;
+          if (failing.has(language)) throw new Error("forbidden");
+          return { language };
+        },
+        retry: false,
+      }).subscribe(() => {})
+    );
+    await vi.waitFor(() => {
+      expect(client.getQueryData(own)).toBeDefined();
+      expect(client.getQueryData(source)).toBeDefined();
+    });
+
+    // The translation source can't be read now: the document the form
+    // starts afresh from is back all the same.
+    failing.add("en");
+    await expect(reloadDocument(client, ["doc"], "es")).resolves.toBe(
+      undefined
+    );
+    // Its own read failing still holds it.
+    failing.add("es");
+    await expect(reloadDocument(client, ["doc"], "es")).rejects.toThrow(
+      "couldn't be reloaded"
+    );
+    for (const unsubscribe of observers) unsubscribe();
+  });
 });

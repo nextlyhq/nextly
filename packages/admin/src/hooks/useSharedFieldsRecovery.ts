@@ -415,21 +415,45 @@ export function useSharedFieldsRecovery(args: {
  */
 export async function reloadDocument(
   queryClient: QueryClient,
-  queryKey: QueryKey
+  queryKey: QueryKey,
+  /** The language the editor shows; absent means the default. */
+  locale?: string
 ): Promise<void> {
   await queryClient.invalidateQueries({ queryKey });
   // Judged by what the editor's reads now hold, not by the refetch's answer:
   // a refetch that failed answers all the same, and one paused while offline
   // answers as if it had run. The document is back only when every read of
-  // it the editor has open fetched.
+  // it in the editor's language fetched. Another language's read under the
+  // same key, such as a translation's source, isn't what the form starts
+  // afresh from, and one that fails would otherwise hold the form for good.
   const notBack = queryClient
     .getQueryCache()
-    .findAll({ queryKey, type: "active" })
+    .findAll({
+      queryKey,
+      type: "active",
+      predicate: query => {
+        const language = languageOfRead(query.queryKey, queryKey);
+        return language === undefined || language === (locale ?? null);
+      },
+    })
     .some(
       query =>
         query.state.status === "error" || query.state.fetchStatus === "paused"
     );
   if (notBack) throw new Error("The document couldn't be reloaded.");
+}
+
+/**
+ * The language a read of the document is for: its key carries the read's
+ * scope right after the document's, with the language normalised to null for
+ * the default (`entryKeys.detailScoped`, `useSingleDocument`). Undefined for
+ * a read whose key names none.
+ */
+function languageOfRead(read: QueryKey, documentKey: QueryKey): unknown {
+  const scope: unknown = read[documentKey.length];
+  return typeof scope === "object" && scope !== null && "locale" in scope
+    ? scope.locale
+    : undefined;
 }
 
 /** What the success toast says the take did. */

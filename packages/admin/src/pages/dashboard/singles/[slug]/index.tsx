@@ -490,8 +490,9 @@ function useSingleSaveFailure(args: {
     // Answers once the reloaded document is back, which the recovery waits
     // for before letting the editor save again.
     onTaken: useCallback(
-      () => reloadDocument(queryClient, singleDocumentKeys.detail(slug)),
-      [queryClient, slug]
+      () =>
+        reloadDocument(queryClient, singleDocumentKeys.detail(slug), locale),
+      [queryClient, slug, locale]
     ),
   });
   return useCallback(
