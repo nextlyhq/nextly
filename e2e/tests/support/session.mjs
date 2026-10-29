@@ -15,6 +15,9 @@
  * token that contexts still open were handed, and a new session leaves theirs
  * alone.
  *
+ * Plain JavaScript, so the visual check (`scripts/visual-check`) can load it
+ * on every Node version `engines` allows, with no type stripping.
+ *
  * @module tests/support/session
  */
 import { renameSync, statSync } from "node:fs";
@@ -52,11 +55,12 @@ export const SESSION_MAX_AGE_MS = 10 * 60_000;
  *
  * Written beside the file and moved into place, so a test opening its context
  * meanwhile reads the old session or the new one, never half of either.
+ *
+ * @param {string} baseURL
+ * @param {string} [file]
+ * @returns {Promise<void>}
  */
-export async function signIn(
-  baseURL: string,
-  file: string = STORAGE_STATE
-): Promise<void> {
+export async function signIn(baseURL, file = STORAGE_STATE) {
   const browser = await chromium.launch();
   try {
     // An empty jar, said explicitly: inside a test, Playwright gives every new
@@ -102,8 +106,14 @@ export async function signIn(
   }
 }
 
-/** How long ago the session at `file` was stored; never stored is infinitely long. */
-function ageOf(file: string, now: number): number {
+/**
+ * How long ago the session at `file` was stored; never stored is infinitely long.
+ *
+ * @param {string} file
+ * @param {number} now
+ * @returns {number}
+ */
+function ageOf(file, now) {
   try {
     return now - statSync(file).mtimeMs;
   } catch {
@@ -114,12 +124,17 @@ function ageOf(file: string, now: number): number {
 /**
  * Signs in again when the session at `file` is older than `maxAgeMs`, and says
  * whether it did.
+ *
+ * @param {string} baseURL
+ * @param {string} [file]
+ * @param {number} [maxAgeMs]
+ * @returns {Promise<boolean>}
  */
 export async function keepSessionFresh(
-  baseURL: string,
-  file: string = STORAGE_STATE,
-  maxAgeMs: number = SESSION_MAX_AGE_MS
-): Promise<boolean> {
+  baseURL,
+  file = STORAGE_STATE,
+  maxAgeMs = SESSION_MAX_AGE_MS
+) {
   if (ageOf(file, Date.now()) <= maxAgeMs) return false;
   await signIn(baseURL, file);
   return true;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ROUTES } from "@admin/constants/routes";
+import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 import { routeConfig } from "@admin/pages/registry";
 
 import {
@@ -11,10 +12,15 @@ import {
 } from "../lib/settings-nav";
 import { resolveSettingsLanding } from "../lib/resolve-settings-landing";
 
-/** A reader holding exactly the listed grants and nothing else. */
+/**
+ * A reader holding exactly the listed grants and nothing else, asked as the
+ * product asks (`holdsPermission`, where a `manage-` permission counts as the
+ * plain ones it stands for).
+ */
 function only(...grants: string[]): SettingsNavAccess {
   const held = new Set(grants);
-  const hasPermission = (permission: string) => held.has(permission);
+  const hasPermission = (permission: string) =>
+    holdsPermission(held, permission);
   return {
     hasPermission,
     canAccessApiKeys:
@@ -33,7 +39,7 @@ describe("resolveSettingsLanding", () => {
    * The defect this function exists for. Background Jobs was added to the
    * panel table and to none of the hand-written arms, so a jobs-only operator
    * saw the Settings entry, followed it, and landed on General Settings —
-   * whose query answers to `manage-settings` and returns 403. Their one
+   * whose query answers to `read-settings` and returns 403. Their one
    * reachable destination was never offered.
    */
   it("sends a jobs-only operator to Background Jobs", () => {
@@ -43,10 +49,12 @@ describe("resolveSettingsLanding", () => {
   });
 
   /**
-   * The unchanged case. General Settings answers to `manage-settings`, so this
-   * reader lands on the panel's first entry rather than being routed past it.
+   * The unchanged case. General Settings answers to `read-settings`, so this
+   * reader lands on the panel's first entry rather than being routed past it,
+   * as does a reader still holding `manage-settings`, which counts as it.
    */
-  it("still sends a settings manager to General", () => {
+  it("still sends a settings reader to General", () => {
+    expect(resolveSettingsLanding(only("read-settings"))).toBe(ROUTES.SETTINGS);
     expect(resolveSettingsLanding(only("manage-settings"))).toBe(
       ROUTES.SETTINGS
     );
@@ -141,10 +149,10 @@ describe("resolveSettingsLanding", () => {
    *
    * A landing on `/admin/settings` itself does not count as placed.
    * `settingsPanelSlugs()` admits a reader to that URL, but the page behind it
-   * is General Settings, whose query answers to `manage-settings` and returns
+   * is General Settings, whose query answers to `read-settings` and returns
    * 403 without it — so a reader sent there has been placed on a page that
    * fails. There is therefore no escape hatch for the fallthrough: within this
-   * set it must never occur except for `manage-settings`, which is the grant
+   * set it must never occur except for `read-settings`, which is the grant
    * General Settings itself needs.
    */
   it("lands every panel-reaching grant on a page that grant can open", () => {
@@ -159,8 +167,8 @@ describe("resolveSettingsLanding", () => {
         expect(
           grant,
           `"${grant}" reaches the panel but lands on the panel URL itself, ` +
-            "whose page answers to manage-settings and returns 403 without it"
-        ).toBe("manage-settings");
+            "whose page answers to read-settings and returns 403 without it"
+        ).toBe("read-settings");
         continue;
       }
 
@@ -244,7 +252,7 @@ describe("resolveSettingsLanding", () => {
       const access = only(grant);
       return (
         resolveSettingsLanding(access) === ROUTES.SETTINGS &&
-        grant !== "manage-settings"
+        grant !== "read-settings"
       );
     });
 

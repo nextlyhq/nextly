@@ -28,6 +28,8 @@ export interface EntryFormSidebarProps {
   actionsDisabled?: boolean;
   /** Withholds opening another language; the same as `actionsDisabled` unless given. */
   navigationDisabled?: boolean;
+  /** Withholds publishing every language; the same as `actionsDisabled` unless given. */
+  publishAllDisabled?: boolean;
 }
 
 export function EntryFormSidebar({
@@ -39,6 +41,7 @@ export function EntryFormSidebar({
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
+  publishAllDisabled = actionsDisabled,
 }: EntryFormSidebarProps): JSX.Element | null {
   if (hidden) return null;
 
@@ -52,6 +55,7 @@ export function EntryFormSidebar({
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
       />
     </div>
   );
