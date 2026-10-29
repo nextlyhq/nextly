@@ -12,6 +12,8 @@
  * @module components/features/releases/ReleaseAboutPanel
  */
 
+import type { JSX } from "react";
+
 import {
   dayHeading,
   timeOfDay,
@@ -39,7 +41,7 @@ export function ReleaseAboutPanel({
 }: {
   release: Release;
   historyContext: ReleaseHistoryContext;
-}) {
+}): JSX.Element {
   return (
     <aside
       aria-label="About this release"

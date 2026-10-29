@@ -14,7 +14,7 @@
  * @module components/features/releases/ReleasePageHeader
  */
 
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useState, type FormEvent, type JSX, type KeyboardEvent } from "react";
 
 import {
   CalendarClock,
@@ -75,7 +75,7 @@ export function ReleasePageHeader({
    */
   commitBlockedReason: string | null;
   onOpenDialog: (dialog: OpenDialog) => void;
-}) {
+}): JSX.Element {
   const [editing, setEditing] = useState<Editing>(null);
   const mayEdit = release.can?.update === true;
   return (

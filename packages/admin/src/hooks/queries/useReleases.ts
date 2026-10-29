@@ -32,6 +32,8 @@ import {
   useQueries,
   useQuery,
   useQueryClient,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -64,6 +66,7 @@ import {
   type MemberMutationResponse,
   type MemberListResponse,
   type BlockerListResponse,
+  type ReleaseHistoryResponse,
 } from "@admin/services/releaseApi";
 import { singleApi } from "@admin/services/singleApi";
 import {
@@ -83,6 +86,7 @@ import {
   type ScheduleReleasePayload,
   type UpdateReleasePayload,
   type Release,
+  type ReleaseReadiness,
 } from "@admin/types/releases";
 
 export const releaseKeys = {
@@ -109,9 +113,7 @@ export const releaseKeys = {
     ["releases", "readiness", id] as const,
   history: (id: string): readonly ["releases", "history", string] =>
     ["releases", "history", id] as const,
-  created: (
-    id: string
-  ): readonly ["releases", "history", string, "created"] =>
+  created: (id: string): readonly ["releases", "history", string, "created"] =>
     ["releases", "history", id, "created"] as const,
   documents: (
     id: string,
@@ -705,7 +707,10 @@ export function useDeleteRelease(
  * stays on screen while the next one loads. Not asked for a release that has
  * run or been cancelled: it has nothing left to get ready.
  */
-export function useReleaseReadiness(id: string | undefined, enabled = true) {
+export function useReleaseReadiness(
+  id: string | undefined,
+  enabled = true
+): UseQueryResult<ReleaseReadiness, Error> {
   return useQuery({
     queryKey: releaseKeys.readinessOf(id ?? ""),
     queryFn: () => fetchReleaseReadiness(id as string),
@@ -723,7 +728,12 @@ const HISTORY_PAGE = 25;
  * A release's history, newest first, a page at a time: each page asks for
  * the events older than the last one shown.
  */
-export function useReleaseHistory(id: string | undefined) {
+export function useReleaseHistory(
+  id: string | undefined
+): UseInfiniteQueryResult<
+  InfiniteData<ReleaseHistoryResponse, string | undefined>,
+  Error
+> {
   return useInfiniteQuery({
     queryKey: releaseKeys.history(id ?? ""),
     queryFn: ({ pageParam }) =>
@@ -743,7 +753,9 @@ export function useReleaseHistory(id: string | undefined) {
  * The event that created a release, read on its own: the history pages from
  * the newest, and a long history would otherwise keep its owner off screen.
  */
-export function useReleaseCreation(id: string | undefined) {
+export function useReleaseCreation(
+  id: string | undefined
+): UseQueryResult<ReleaseHistoryResponse["items"][number] | null, Error> {
   return useQuery({
     queryKey: releaseKeys.created(id ?? ""),
     queryFn: async () =>
@@ -917,7 +929,9 @@ export function useReleaseDocumentNames(
  * for their titles. Shares the detail read's cache, so a release already read
  * is not read again.
  */
-export function useReleaseTitles(ids: readonly string[]) {
+export function useReleaseTitles(
+  ids: readonly string[]
+): (id: string) => string | undefined {
   const results = useQueries({
     queries: ids.map(id => ({
       queryKey: releaseKeys.detail(id),
@@ -932,7 +946,14 @@ export function useReleaseTitles(ids: readonly string[]) {
   return (id: string) => titles.get(id);
 }
 
-export function useUpdateRelease(id: string) {
+export function useUpdateRelease(
+  id: string
+): UseMutationResult<
+  ReleaseMutationResponse,
+  Error,
+  UpdateReleasePayload,
+  unknown
+> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,
@@ -944,7 +965,14 @@ export function useUpdateRelease(id: string) {
   });
 }
 
-export function useChangeReleaseMemberAction(releaseId: string) {
+export function useChangeReleaseMemberAction(
+  releaseId: string
+): UseMutationResult<
+  MemberMutationResponse,
+  Error,
+  { memberId: string; action: ReleaseMemberAction },
+  unknown
+> {
   const refresh = useRefreshRelease();
   return useMutation({
     ...NO_RETRY,

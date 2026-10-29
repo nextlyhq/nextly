@@ -12,7 +12,7 @@
  * @module components/features/releases/ReleaseDocuments
  */
 
-import { useState } from "react";
+import { useState, type JSX } from "react";
 
 import {
   AlertCircle,
@@ -157,7 +157,7 @@ function documentsView({
   };
 }
 
-export function ReleaseDocuments(props: ReleaseDocumentsProps) {
+export function ReleaseDocuments(props: ReleaseDocumentsProps): JSX.Element {
   const { release, readiness } = props;
   const view = documentsView(props);
   return (
