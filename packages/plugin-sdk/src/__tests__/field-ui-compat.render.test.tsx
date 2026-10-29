@@ -13,12 +13,25 @@
  * plain literals, nothing derived from the admin's types. Each part is
  * rendered outside any admin provider, as a plugin's own tests render it.
  *
+ * What each part DOES (its callbacks, its branches by type, a surface's
+ * narrowed operators, the options editor's import and reorder) is tested where
+ * it is written, by the admin's own suites (`packages/admin/src/components/
+ * field-ui/`: `field-ui.test.tsx`, `ConditionRow.test.tsx`,
+ * `FieldOptionsEditor.test.tsx`, `__tests__/ValidationNumberField.test.tsx`,
+ * `__tests__/ValidationRulesEditor.test.tsx`). This file holds the entry to
+ * that code: each export here IS the admin's own export, the very object those
+ * suites exercise, so an entry that kept the names but pointed at another
+ * implementation fails here, and one whose implementation changed fails there.
+ * The hook's reading of installed plugins is tested by neither; it is noted
+ * at its case below.
+ *
  * The built entry is there because `turbo.json` makes this package's tests
  * depend on its own build; `vitest.global-setup.ts` stops a run that bypasses
  * that edge before it reaches a missing entry.
  *
  * This stays until the release that removes these parts.
  */
+import * as admin from "@nextlyhq/admin";
 import * as entry from "@nextlyhq/plugin-sdk/admin";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -234,8 +247,18 @@ const CASES = {
 
   withOptionIds: () => {
     const { withOptionIds } = entry;
-    expect(withOptionIds([{ label: "Small", value: "s" }], "size")).toEqual([
+    // Two options, so ids that repeat, or follow another order, are seen.
+    expect(
+      withOptionIds(
+        [
+          { label: "Small", value: "s" },
+          { label: "Large", value: "l" },
+        ],
+        "size"
+      )
+    ).toEqual([
       { id: "size_seed_0", label: "Small", value: "s" },
+      { id: "size_seed_1", label: "Large", value: "l" },
     ]);
     expect(withOptionIds([{ label: "Small", value: "s" }])[0].id).toBe(
       "opt_seed_0"
@@ -251,9 +274,12 @@ const CASES = {
     }
     render(<Probe />);
     // Outside the admin's providers no plugin is installed, so none of their
-    // types is offered. This pins the hook's call shape and its answer; that
-    // installed plugins' types reach the list is the projection's job, tested
-    // in `packages/admin/src/lib/builder/plugin-field-type-entries.test.ts`.
+    // types is offered. This pins the hook's call shape and its answer when
+    // nothing is installed. How installed plugins' types become rows is tested
+    // in `packages/admin/src/lib/builder/plugin-field-type-entries.test.ts`;
+    // that the hook reads the installed plugins at all is tested nowhere yet,
+    // since doing it here needs the admin's data providers, which a plugin's
+    // package does not carry.
     expect(entries).toEqual([]);
   },
 
@@ -300,15 +326,62 @@ const CASES = {
 
   operatorsForType: () => {
     const { operatorsForType } = entry;
+    // One type from each family, each told apart from the equality fallback.
     expect(operatorsForType("checkbox")).toEqual(["isTrue", "isNotTrue"]);
-    expect(operatorsForType("number")).toContain("between");
+    expect(operatorsForType("text")).toEqual([
+      "equals",
+      "notEquals",
+      "contains",
+      "notContains",
+      "startsWith",
+      "endsWith",
+      "isEmpty",
+      "isNotEmpty",
+    ]);
+    expect(operatorsForType("number")).toEqual([
+      "equals",
+      "notEquals",
+      "greaterThan",
+      "lessThan",
+      "greaterThanOrEqual",
+      "lessThanOrEqual",
+      "between",
+    ]);
+    expect(operatorsForType("date")).toEqual([
+      "equals",
+      "notEquals",
+      "before",
+      "after",
+      "between",
+    ]);
     expect(operatorsForType(undefined)).toEqual(["equals", "notEquals"]);
   },
 
   operatorTakesValue: () => {
     const { operatorTakesValue } = entry;
-    expect(operatorTakesValue("equals")).toBe(true);
-    expect(operatorTakesValue("isEmpty")).toBe(false);
+    // Every operator, so a set that misses one of the valueless four is seen.
+    const takeAValue = [
+      "equals",
+      "notEquals",
+      "contains",
+      "notContains",
+      "startsWith",
+      "endsWith",
+      "greaterThan",
+      "lessThan",
+      "greaterThanOrEqual",
+      "lessThanOrEqual",
+      "between",
+      "before",
+      "after",
+    ] as const;
+    const valueless = ["isEmpty", "isNotEmpty", "isTrue", "isNotTrue"] as const;
+    for (const operator of takeAValue) {
+      expect(operatorTakesValue(operator), operator).toBe(true);
+    }
+    for (const operator of valueless) {
+      expect(operatorTakesValue(operator), operator).toBe(false);
+    }
   },
 
   ValidationNumberField: () => {
@@ -378,6 +451,9 @@ const CASES = {
     const { drawsAnyValidationRule } = entry;
     expect(drawsAnyValidationRule(["required"])).toBe(false);
     expect(drawsAnyValidationRule(["required", "pattern"])).toBe(true);
+    // A numeric bound alone, with no pattern, still draws the editor.
+    expect(drawsAnyValidationRule(["required", "min"])).toBe(true);
+    expect(drawsAnyValidationRule(["maxLength"])).toBe(true);
   },
 
   EDITABLE_VALIDATION_RULES: () => {
@@ -398,12 +474,14 @@ const CASES = {
 } satisfies Record<TodayFieldUiExport, () => void>;
 
 describe("renders each field-UI export with today's props", () => {
-  it("covers exactly today's field-UI exports, each defined in the entry", () => {
+  it("covers exactly today's field-UI exports, each the admin's own", () => {
     expect(Object.keys(CASES).sort()).toEqual(
       [...TODAY_FIELD_UI_EXPORTS].sort()
     );
     for (const name of TODAY_FIELD_UI_EXPORTS) {
       expect(entry[name], name).toBeDefined();
+      // The same object, not a lookalike: the admin's suites test this one.
+      expect(entry[name], name).toBe(admin[name]);
     }
   });
 

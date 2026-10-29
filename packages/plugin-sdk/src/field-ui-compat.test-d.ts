@@ -20,19 +20,14 @@
  * the exported prop types: a consumer derived from the current types changes
  * along with them, and would pass against any break. Every published shape (each
  * component's props, each exported prop and data type, each function, the hook
- * and the constant) is then held, in one table at the end, to three checks,
- * because each catches a break the others cannot:
- * - today's values are still accepted where a consumer passes them, and what is
- *   handed back still fits where it reads them, which fails on a new required
- *   prop, a prop narrowed, a callback handed something wider than today's
- *   handlers take, or a result wider than today's;
- * - every member a consumer sets or reads today is still declared (`keyof`),
- *   which fails on one removed or renamed, since an object with one key too
- *   many is still assignable to the type without it;
- * - the shape is not `any`, which would pass both.
+ * and the constant) is then pinned EXACTLY to its frozen copy, in one table at
+ * the end: a prop added, removed, renamed, narrowed or widened, a callback's
+ * parameter changed, or a member at any depth that became `any`, `never` or
+ * `unknown` each make the two types differ.
  *
  * This stays until the release that removes these parts. Changing a frozen
- * shape to make this pass is changing what plugins are promised.
+ * shape to make this pass is changing what plugins are promised: only a
+ * deliberate, compatible addition may update it, in the same change.
  */
 import { expectTypeOf } from "vitest";
 
@@ -264,116 +259,31 @@ interface TodayValidationRulesEditorProps {
 }
 
 // ---------------------------------------------------------------------------
-// Every published shape, held to today's in one table.
+// Every published shape, pinned exactly to today's in one table.
 //
-// Each shape gets the same checks, so none can be held to fewer than the rest:
-// a list written shape by shape is how a data type came to have no `keyof`
-// check and a function no `any` check. Each verdict is `true` or says what
-// broke, and the table's expected value is derived from its own keys, so a
-// shape added to it is checked by construction.
+// Exactly, not merely "still accepts today's values": a check of
+// assignability passes a member that degraded to `any`, `never` or `unknown`,
+// a callback whose parameter widened, or a list whose items lost their type,
+// at any depth, because each stays assignable one way or the other. Equality
+// has no such gap, at any depth, so no case of it has to be thought of one by
+// one. The price is that a compatible addition fails here too; that is
+// deliberate for parts being replaced, which should not change at all, and a
+// deliberate addition updates the frozen copy above in the same change.
+//
+// Each verdict is `true` or "differs from today's", the table's expected value
+// is derived from its own keys, and a failure names the shapes that changed.
 
 /**
- * Why a type would check nothing, or `false`. `any` passes every assignability
- * check one way and `never` the other, and `keyof never` holds every key, so a
- * shape, an item of a list or a member typed as either would pass the checks
- * below while a consumer could no longer use it.
+ * `true` when the two types are the same type, compared as the checker
+ * compares them rather than by assignability: `any`, `unknown` and `never`
+ * equal only themselves, and so does every member, at every depth.
  */
-type Degenerate<T> = 0 extends 1 & T
-  ? "resolved to any"
-  : [T] extends [never]
-    ? "resolved to never"
-    : false;
-
-/** A list's item, so a list is held to what each item carries. */
-type Item<T> = T extends readonly (infer Element)[] ? Element : T;
-
-/**
- * Each member today's consumer uses that resolved to `any` or `never`, named,
- * or `never` when there is none.
- */
-type DegenerateMembers<Now, Today> = Extract<
-  {
-    [Key in keyof Item<Today> & keyof Item<Now>]: Degenerate<
-      Item<Now>[Key]
-    > extends string
-      ? `${Key & string} ${Degenerate<Item<Now>[Key]>}`
-      : false;
-  }[keyof Item<Today> & keyof Item<Now>],
-  string
->;
-
-/** The degenerate-type verdict for a shape, its items and its members. */
-type Usable<Now, Today> =
-  Degenerate<Now> extends string
-    ? Degenerate<Now>
-    : Degenerate<Item<Now>> extends string
-      ? `its items ${Degenerate<Item<Now>>}`
-      : [DegenerateMembers<Now, Today>] extends [never]
-        ? true
-        : DegenerateMembers<Now, Today>;
-
-/**
- * A shape a consumer of today's PASSES values into: usable, today's values
- * still accepted, and every member today's consumer may set still declared.
- */
-type Accepts<Today, Now> =
-  Usable<Now, Today> extends true
-    ? [Today] extends [Now]
-      ? [keyof Item<Today>] extends [keyof Item<Now>]
-        ? true
-        : "drops or renames a member today's consumer sets"
-      : "refuses a value today's consumer passes"
-    : Usable<Now, Today>;
-
-/**
- * A shape a consumer of today's READS: usable, what it hands back still fits
- * where today's consumer reads it, and every member that consumer reads still
- * there.
- */
-type ReadsAs<Now, Today> =
-  Usable<Now, Today> extends true
-    ? [Now] extends [Today]
-      ? [keyof Item<Today>] extends [keyof Item<Now>]
-        ? true
-        : "drops or renames a member today's consumer reads"
-      : "hands back a value today's consumer cannot read"
-    : Usable<Now, Today>;
-
-/**
- * Each argument of a function held as a shape today's consumer passes values
- * into, so an argument typed `any` or `never` is caught as a prop would be:
- * the argument list as a whole stays assignable either way.
- */
-type ArgumentVerdicts<
-  TodayArgs extends readonly unknown[],
-  Args extends readonly unknown[],
-> = {
-  [Index in keyof TodayArgs]: Index extends keyof Args
-    ? Accepts<TodayArgs[Index], Args[Index]>
-    : "drops an argument today's consumer passes";
-};
-
-/**
- * A function as today's consumer calls it: each of today's arguments still
- * accepted, and its result held as a shape that consumer reads. Checked
- * through the arguments and the result rather than the function type, because
- * a function declared to return `never` is assignable to any signature with
- * the same parameters, and one taking `any` to any signature at all.
- */
-type Calls<Now, TodayArgs extends readonly unknown[], TodayResult> =
-  Degenerate<Now> extends string
-    ? Degenerate<Now>
-    : Now extends (...args: infer Args) => infer Result
-      ? [TodayArgs] extends [Args]
-        ? [Extract<ArgumentVerdicts<TodayArgs, Args>[number], string>] extends [
-            never,
-          ]
-          ? ReadsAs<Result, TodayResult> extends true
-            ? true
-            : `its result ${ReadsAs<Result, TodayResult> & string}`
-          : `an argument ${Extract<ArgumentVerdicts<TodayArgs, Args>[number], string>}`
-        : "refuses arguments today's consumer passes"
-      : "is no longer callable";
+type Exactly<Today, Now> =
+  (<Probe>() => Probe extends Today ? 1 : 2) extends <
+    Probe,
+  >() => Probe extends Now ? 1 : 2
+    ? true
+    : "differs from today's";
 
 /** Two built-in types a surface passes as `types`, the admin's own way. */
 type BuiltInPick = "text" | "number";
@@ -386,142 +296,116 @@ type PropsOf<Component extends (props: never) => unknown> =
 
 type FieldUiVerdicts = {
   // The components, by the props they are rendered with.
-  "FieldTypePicker, by types": Accepts<
+  "FieldTypePicker, by types": Exactly<
     TodayFieldTypePickerProps<BuiltInPick>,
     PropsOf<typeof FieldTypePicker<BuiltInPick>>
   >;
-  "FieldTypePicker, by entries": Accepts<
+  "FieldTypePicker, by entries": Exactly<
     TodayFieldTypePickerProps<OwnPick>,
     PropsOf<typeof FieldTypePicker<OwnPick>>
   >;
-  "FieldTypePicker, by any type": Accepts<
-    TodayFieldTypePickerProps<string>,
-    PropsOf<typeof FieldTypePicker<string>>
-  >;
-  FieldDefaultValueInput: Accepts<
+  FieldDefaultValueInput: Exactly<
     TodayFieldDefaultValueInputProps,
     PropsOf<typeof FieldDefaultValueInput>
   >;
-  FieldOptionsEditor: Accepts<
+  FieldOptionsEditor: Exactly<
     TodayFieldOptionsEditorProps,
     PropsOf<typeof FieldOptionsEditor>
   >;
-  ConditionRow: Accepts<TodayConditionRowProps, PropsOf<typeof ConditionRow>>;
-  ValidationNumberField: Accepts<
+  ConditionRow: Exactly<TodayConditionRowProps, PropsOf<typeof ConditionRow>>;
+  ValidationNumberField: Exactly<
     TodayValidationNumberFieldProps,
     PropsOf<typeof ValidationNumberField>
   >;
-  ValidationRulesEditor: Accepts<
+  ValidationRulesEditor: Exactly<
     TodayValidationRulesEditorProps,
     PropsOf<typeof ValidationRulesEditor>
   >;
 
   // The exported prop types, for a plugin that names them
   // (`const props: FieldOptionsEditorProps = …`).
-  FieldTypePickerProps: Accepts<
-    TodayFieldTypePickerProps<string>,
-    FieldTypePickerProps<string>
+  FieldTypePickerProps: Exactly<
+    TodayFieldTypePickerProps<OwnPick>,
+    FieldTypePickerProps<OwnPick>
   >;
-  FieldDefaultValueInputProps: Accepts<
+  FieldDefaultValueInputProps: Exactly<
     TodayFieldDefaultValueInputProps,
     FieldDefaultValueInputProps
   >;
-  FieldOptionsEditorProps: Accepts<
+  FieldOptionsEditorProps: Exactly<
     TodayFieldOptionsEditorProps,
     FieldOptionsEditorProps
   >;
-  ConditionRowProps: Accepts<TodayConditionRowProps, ConditionRowProps>;
-  ValidationNumberFieldProps: Accepts<
+  ConditionRowProps: Exactly<TodayConditionRowProps, ConditionRowProps>;
+  ValidationNumberFieldProps: Exactly<
     TodayValidationNumberFieldProps,
     ValidationNumberFieldProps
   >;
-  ValidationRulesEditorProps: Accepts<
+  ValidationRulesEditorProps: Exactly<
     TodayValidationRulesEditorProps,
     ValidationRulesEditorProps
   >;
 
-  // The data a consumer builds and passes in.
-  FieldDefaultOption: Accepts<TodayDefaultOption, FieldDefaultOption>;
-  FieldOption: Accepts<TodayFieldOption, FieldOption>;
-  ConditionRange: Accepts<TodayConditionRange, ConditionRange>;
-  ConditionSource: Accepts<TodayConditionSource, ConditionSource>;
-  ConditionSourceOption: Accepts<
+  // The exported data types.
+  FieldDefaultOption: Exactly<TodayDefaultOption, FieldDefaultOption>;
+  FieldOption: Exactly<TodayFieldOption, FieldOption>;
+  ConditionOperatorName: Exactly<TodayOperator, ConditionOperatorName>;
+  ConditionRange: Exactly<TodayConditionRange, ConditionRange>;
+  ConditionSource: Exactly<TodayConditionSource, ConditionSource>;
+  ConditionSourceOption: Exactly<
     TodayConditionSourceOption,
     ConditionSourceOption
   >;
-  ConditionValue: Accepts<TodayConditionValue, ConditionValue>;
-  ValidationRuleValues: Accepts<
+  ConditionValue: Exactly<TodayConditionValue, ConditionValue>;
+  ValidationRuleValues: Exactly<
     TodayValidationRuleValues,
     ValidationRuleValues
   >;
 
-  // The data a consumer is handed back: through `onOptionsChange`, a
-  // condition's `onChange` (a range inside its value) and the rules'
-  // `onChange`.
-  "FieldOption, read back": ReadsAs<FieldOption, TodayFieldOption>;
-  "ConditionValue, read back": ReadsAs<ConditionValue, TodayConditionValue>;
-  "ConditionRange, read back": ReadsAs<ConditionRange, TodayConditionRange>;
-  "ValidationRuleValues, read back": ReadsAs<
-    ValidationRuleValues,
-    TodayValidationRuleValues
-  >;
-
-  // The functions, hook and constant, as a consumer calls them: today's
-  // arguments accepted, today's results readable.
-  withOptionIds: Calls<
-    typeof withOptionIds,
-    [
+  // The functions, hook and constant.
+  withOptionIds: Exactly<
+    (
       options: ReadonlyArray<{ label: string; value: string }>,
-      idPrefix?: string,
-    ],
-    TodayFieldOption[]
+      idPrefix?: string
+    ) => TodayFieldOption[],
+    typeof withOptionIds
   >;
-  usePluginFieldTypeEntries: Calls<
-    typeof usePluginFieldTypeEntries,
-    [surface: TodaySurface],
-    TodayCatalogEntry<string>[]
+  usePluginFieldTypeEntries: Exactly<
+    (surface: TodaySurface) => TodayCatalogEntry<string>[],
+    typeof usePluginFieldTypeEntries
   >;
-  operatorsForType: Calls<
-    typeof operatorsForType,
-    [sourceType: string | undefined],
-    TodayOperator[]
+  operatorsForType: Exactly<
+    (sourceType: string | undefined) => TodayOperator[],
+    typeof operatorsForType
   >;
-  operatorTakesValue: Calls<
-    typeof operatorTakesValue,
-    [operator: TodayOperator],
-    boolean
+  operatorTakesValue: Exactly<
+    (operator: TodayOperator) => boolean,
+    typeof operatorTakesValue
   >;
-  drawsAnyValidationRule: Calls<
-    typeof drawsAnyValidationRule,
-    [allowed: readonly TodayValidationRule[]],
-    boolean
+  drawsAnyValidationRule: Exactly<
+    (allowed: readonly TodayValidationRule[]) => boolean,
+    typeof drawsAnyValidationRule
   >;
-  EDITABLE_VALIDATION_RULES: ReadsAs<
-    typeof EDITABLE_VALIDATION_RULES,
-    readonly TodayValidationRule[]
+  EDITABLE_VALIDATION_RULES: Exactly<
+    readonly TodayValidationRule[],
+    typeof EDITABLE_VALIDATION_RULES
   >;
 };
 
 /**
- * Only the shapes that broke, each with what broke. Checked first and on its
- * own because its diagnostic names them: the whole table's elides most of its
- * entries ("... 24 more ...") and so cannot say which shape failed.
+ * Only the shapes that changed. Checked first and on its own because its
+ * diagnostic names them: the whole table's elides most of its entries
+ * ("... 24 more ...") and so cannot say which shape failed.
  */
-type BrokenShapes = {
+type ChangedShapes = {
   [Shape in keyof FieldUiVerdicts as FieldUiVerdicts[Shape] extends true
     ? never
     : Shape]: FieldUiVerdicts[Shape];
 };
-expectTypeOf<BrokenShapes>().toEqualTypeOf<{}>();
+expectTypeOf<ChangedShapes>().toEqualTypeOf<{}>();
 
 // The whole table as well, which a verdict that resolved to `never` (dropped
 // by the projection above) cannot pass.
 expectTypeOf<FieldUiVerdicts>().toEqualTypeOf<{
   [Shape in keyof FieldUiVerdicts]: true;
 }>();
-
-// The operator names are both passed in and handed back, so they are pinned
-// exactly: one added breaks a consumer's exhaustive handling of today's set,
-// one removed refuses a condition it builds. `toEqualTypeOf` also refuses
-// `any`.
-expectTypeOf<ConditionOperatorName>().toEqualTypeOf<TodayOperator>();
