@@ -14,6 +14,7 @@
  * readings in their own section below: the fixture differs, the claim does not.
  */
 import {
+  act,
   render,
   screen,
   within,
@@ -26,15 +27,17 @@ import type {
   WidgetResult,
 } from "@admin/types/dashboard/widgets";
 
+import { sizeChartsInTests } from "../../charts/__tests__/chart-env";
 import { barsBody } from "../bars";
 import { metricBody } from "../metric";
 import { statsBody } from "../stats";
+import { gridBounds } from "../../__tests__/grid-bounds";
 
 const metricWidget = {
   id: "acme/pending",
   title: "Pending edits",
   archetype: "metric",
-  size: "sm",
+  size: gridBounds(3),
   query: { source: "system:versions", op: "count" },
 } as DashboardWidget;
 
@@ -42,7 +45,7 @@ const statsWidget = {
   id: "acme/health",
   title: "Content health",
   archetype: "stats",
-  size: "md",
+  size: gridBounds(4),
   cells: [
     { key: "pending", label: "Pending", query: { source: "s", op: "count" } },
   ],
@@ -103,8 +106,10 @@ describe.each(renderers)("a count drawn by %s", (_name, draw) => {
   });
 });
 
+sizeChartsInTests();
+
 describe("a stats cell that links", () => {
-  /** The generated collection-health cells all declare a link. */
+  /** Collection-health cells that all declare a link. */
   const linked = {
     ...statsWidget,
     cells: [
@@ -150,7 +155,7 @@ describe("a grouped count drawn by bars", () => {
     id: "acme/issues",
     title: "Issues by kind",
     archetype: "bars",
-    size: "md",
+    size: gridBounds(4),
     query: { source: "s", op: "groupBy", groupBy: "kind" },
   } as unknown as DashboardWidget;
 
@@ -167,21 +172,20 @@ describe("a grouped count drawn by bars", () => {
     return render(<>{outcome.node}</>);
   };
 
-  it("marks every bucket's FLOOR for both readers, in their own notation", () => {
+  it("marks every bucket's FLOOR for both readers, in their own notation", async () => {
     drawGrouped(true);
 
-    // Scoped to the drawn graphic: a chart also carries a hidden title, so the first hidden node
-    // on the page is not the count's. Sight reads "2,000+", a screen reader "2,000 or more", from
-    // one formatter.
-    const graphic = screen.getByRole("group", { name: /Use the arrow keys/ });
+    // Sight reads "2,000+" beside the bar, and a screen reader "2,000 or more" where the
+    // keys land on it, from one formatter.
+    const drawing = await screen.findByTestId("chart-drawing");
     expect(
-      [...graphic.querySelectorAll('[aria-hidden="true"]')].map(
-        node => node.textContent
-      )
+      [...drawing.querySelectorAll("text")].map(node => node.textContent)
     ).toContain("2,000+");
-    expect(
-      [...graphic.querySelectorAll(".sr-only")].map(node => node.textContent)
-    ).toContain("2,000 or more");
+    const graphic = screen.getByRole("group", { name: /Use the arrow keys/ });
+    act(() => graphic.focus());
+    expect(screen.getByTestId("chart-live")).toHaveTextContent(
+      "Missing title: 2,000 or more."
+    );
     // The text alternative says the counts are lower bounds and names no group the most.
     expect(graphic).toHaveAccessibleDescription(
       /lower bounds, and groups not counted may exist/

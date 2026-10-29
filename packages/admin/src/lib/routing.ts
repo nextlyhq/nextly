@@ -1,15 +1,22 @@
 import React from "react";
 
 import { NotFoundPage } from "@admin/components/shared/not-found-page";
+import { PluginPageHold } from "@admin/components/shared/plugin-page-hold";
 import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
 import registry, { routeConfig } from "../pages/registry";
-import type { AccessSubject } from "../types/access-subject";
+import type { AccessSubject, EntityAccess } from "../types/access-subject";
 import type { CarriedRouteSection } from "../types/route-section";
 
+import { pluginPageScreen, type ScreenName } from "./navigation/screen-names";
 import { routedDocumentView } from "./plugins/document-view-registry";
-import { matchPluginPage } from "./plugins/plugin-route-registry";
+import {
+  arePluginPagesKnown,
+  isPluginPageAddress,
+  matchPluginPage,
+} from "./plugins/plugin-route-registry";
+import { setRoutePreloader } from "./route-preload";
 import { parseSearchParams } from "./search-params";
 
 /**
@@ -47,6 +54,12 @@ export interface RouteResult {
    * visit can name it. Set beside `requiredPermission` from the same table.
    */
   accessSubject?: AccessSubject;
+  /**
+   * What the route asks of the collection or Single it opens, which the guard
+   * decides from the server's answer. Set beside `requiredPermission` from the
+   * same table.
+   */
+  entityAccess?: EntityAccess;
   /** Route is part of the schema builder, which is disabled in production. */
   requiresBuilder?: boolean;
   /** Set when the route resolves to a plugin-contributed page (D21). */
@@ -57,6 +70,12 @@ export interface RouteResult {
    * matched, which is a genuine 404 rather than a route without a section.
    */
   section?: CarriedRouteSection;
+  /**
+   * What the browser tab calls this screen, as the route declared it. Carried
+   * like `section`, so the title reads the route table's answer rather than
+   * matching the pathname a second time.
+   */
+  screenName?: ScreenName;
 }
 
 type Params = Record<string, string | string[]>;
@@ -110,6 +129,7 @@ function matchDynamicRoute(pathname: string): {
   requiredPermission?: string | string[];
   requiresBuilder?: boolean;
   section?: CarriedRouteSection;
+  screenName?: ScreenName;
   pattern: string;
 } | null {
   for (const [pattern, Component] of Object.entries(registry)) {
@@ -137,6 +157,7 @@ function matchDynamicRoute(pathname: string): {
         requiredPermission: config?.requiredPermission,
         requiresBuilder: config?.requiresBuilder,
         section: config?.type === "private" ? config.section : undefined,
+        screenName: config?.screenName,
         pattern,
       };
     }
@@ -151,36 +172,60 @@ function matchDynamicRoute(pathname: string): {
  */
 const SLUG_ROUTE_ACCESS: Record<
   string,
-  { action: "read" | "create" | "update"; subject: AccessSubject }
+  { action: EntityAccess["action"]; subject: AccessSubject }
 > = {
   [ROUTES.COLLECTION_ENTRIES]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_CREATE]: { action: "create", subject: "collection" },
-  [ROUTES.COLLECTION_ENTRY_EDIT]: { action: "update", subject: "collection" },
+  // An entry opens for a user who may read it, and is editable only for one
+  // who may change it: the editor shows a reader the same page, read-only.
+  [ROUTES.COLLECTION_ENTRY_EDIT]: { action: "read", subject: "collection" },
   // A document view is an editor of the document, so it asks what editing
-  // it asks: the same claim, the same save.
-  [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "update", subject: "collection" },
+  // it asks.
+  [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "read", subject: "collection" },
   [ROUTES.COLLECTION_ENTRY_API]: { action: "read", subject: "collection" },
-  // Reading a document's history is a read of that document, and restoring
+  // A document's history is read in every language, as the server judges
+  // it, so a user who may read only some is not offered the page. Restoring
   // from it goes through the ordinary update path with its own check.
-  [ROUTES.COLLECTION_ENTRY_VERSIONS]: { action: "read", subject: "collection" },
-  [ROUTES.SINGLE_EDIT]: { action: "update", subject: "single" },
-  [ROUTES.SINGLE_VIEW]: { action: "update", subject: "single" },
+  [ROUTES.COLLECTION_ENTRY_VERSIONS]: {
+    action: "readHistory",
+    subject: "collection",
+  },
+  [ROUTES.SINGLE_EDIT]: { action: "read", subject: "single" },
+  [ROUTES.SINGLE_VIEW]: { action: "read", subject: "single" },
   [ROUTES.SINGLE_API]: { action: "read", subject: "single" },
-  [ROUTES.SINGLE_VERSIONS]: { action: "read", subject: "single" },
+  [ROUTES.SINGLE_VERSIONS]: { action: "readHistory", subject: "single" },
+};
+
+/**
+ * The permission a route's request names: its action, and `read` for the
+ * history, which reads the document.
+ */
+const PERMISSION_OF: Record<EntityAccess["action"], string> = {
+  read: "read",
+  create: "create",
+  update: "update",
+  readHistory: "read",
 };
 
 function getSlugRouteAccess(
   pattern: string,
   params: Params
-): { requiredPermission: string; accessSubject: AccessSubject } | undefined {
+):
+  | {
+      requiredPermission: string;
+      accessSubject: AccessSubject;
+      entityAccess: EntityAccess;
+    }
+  | undefined {
   const slug = typeof params.slug === "string" ? params.slug : undefined;
   const access = Object.hasOwn(SLUG_ROUTE_ACCESS, pattern)
     ? SLUG_ROUTE_ACCESS[pattern]
     : undefined;
   if (!access || !slug) return undefined;
   return {
-    requiredPermission: `${access.action}-${slug}`,
+    requiredPermission: `${PERMISSION_OF[access.action]}-${slug}`,
     accessSubject: access.subject,
+    entityAccess: { slug, action: access.action },
   };
 }
 
@@ -204,6 +249,18 @@ function isUndeclaredDocumentView(pattern: string, params: Params): boolean {
 }
 
 // Main route resolution function
+// Fetches the page an admin address leads to, so a link hovered or focused
+// before its click starts the download early. An address outside the admin,
+// or one leading to a page that isn't fetched lazily, does nothing.
+setRoutePreloader(href => {
+  if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return;
+  const [pathname] = href.split(/[?#]/, 1);
+  const { Component } = resolveRoute(pathname, "");
+  if ("preload" in Component && typeof Component.preload === "function") {
+    Component.preload();
+  }
+});
+
 export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
   // Exact match
   if (registry[pathname]) {
@@ -216,6 +273,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission: config?.requiredPermission,
       requiresBuilder: config?.requiresBuilder,
       section: config?.type === "private" ? config.section : undefined,
+      screenName: config?.screenName,
     };
   }
 
@@ -236,6 +294,24 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission: pluginPage.requiredPermission,
       pluginComponentPath: pluginPage.component,
       section: pluginPage.section ?? "plugins",
+      // A plugin declares no name for its page; the host names it from what
+      // it already holds, the plugin's menu label for it or its address.
+      screenName: pluginPageScreen,
+    };
+  }
+
+  // A plugin page's address before plugin pages are known: it may yet be one,
+  // so it is held rather than called missing. Before the dynamic routes, as a
+  // registered plugin page is: a page named like a core one (`settings`) must
+  // not draw the core screen while the registry is unknown. Private, as the page would be,
+  // so the session check and the permissions request start during the hold.
+  if (isPluginPageAddress(pathname) && !arePluginPagesKnown()) {
+    return {
+      Component: () => React.createElement(PluginPageHold),
+      params: {},
+      searchParams: parseSearchParams(rawSearch),
+      routeType: "private",
+      section: "plugins",
     };
   }
 
@@ -251,8 +327,10 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       requiredPermission:
         slugAccess?.requiredPermission ?? dynamic.requiredPermission,
       accessSubject: slugAccess?.accessSubject,
+      entityAccess: slugAccess?.entityAccess,
       requiresBuilder: dynamic.requiresBuilder,
       section: dynamic.section,
+      screenName: dynamic.screenName,
     };
   }
 
@@ -262,5 +340,8 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
     params: {},
     searchParams: {},
     routeType: "private",
+    // No table entry answers this address, so the tab says what the screen
+    // shows instead.
+    screenName: "Page Not Found",
   };
 }

@@ -11,11 +11,8 @@ import * as loggerModule from "../observability/logger";
 import { buildPluginAdminMeta } from "./admin-meta";
 import type { PluginDefinition } from "./plugin-context";
 import { resolvePlugins } from "./resolve";
-import { widthFacts } from "../domains/widgets/canonical";
-
 import {
   assertAdminWidgets,
-  contributedWidgetSummaries,
   resetArchetypeWarnings,
 } from "./validate-admin-widgets";
 
@@ -106,7 +103,7 @@ describe("contributed widgets are validated at boot", () => {
         withWidget({
           id: "acme/revenue",
           component: "@acme/p/admin#Revenue",
-          size: "half",
+          size: { default: { w: 6, h: 4 } },
           query: {
             source: "collection:posts",
             op: "count",
@@ -158,7 +155,7 @@ describe("contributed widgets are validated at boot", () => {
           id: "acme/posts",
           title: "Published posts",
           archetype: "metric",
-          defaultSize: "sm",
+          size: { default: { w: 3, h: 2 } },
           query: { source: "collection:posts", op: "count" },
         }),
       ])
@@ -473,59 +470,42 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
-  it("refuses a chrome this channel cannot honour", () => {
-    // The registry refuses `chrome: "none"` on an archetype core draws, and on
-    // a value outside the vocabulary. This channel accepted both, so the
-    // documented refusal was true of one channel only -- and the admin then
-    // ignored the value rather than reporting it, which is the shape where an
-    // author sees no card frame, no error, and nothing to search for.
-    expect(() =>
-      assertAdminWidgets([
-        withWidget({
-          id: "acme/revenue",
-          archetype: "metric",
-          query: { source: "collection:posts", op: "count" },
-          chrome: "none",
-        }),
-      ])
-    ).toThrow(NextlyError);
-
-    // NOT the vocabulary case. A chrome value this core does not know belongs
-    // to a newer one, and refusing it here would abort the install of a plugin
-    // whose card this admin frames anyway -- the same version boundary the
-    // sizes obey. That check is the registry's.
-    expect(() =>
-      assertAdminWidgets([
-        withWidget({
-          id: "acme/thing",
-          component: "@acme/p/admin#Thing",
-          chrome: "borderless",
-        }),
-      ])
-    ).not.toThrow();
+  it("refuses a widget that names chrome, whatever its value", () => {
+    // Every card is drawn in the dashboard's one frame, so no widget may
+    // decline it. Refused rather than ignored, so a plain-JavaScript author
+    // learns at startup that their card will be framed.
+    // Asserted on `logMessage`, where the detail goes: `.message` is the
+    // generic public one, which any refusal would match.
+    for (const chrome of ["none", "card"]) {
+      let thrown: NextlyError | undefined;
+      try {
+        assertAdminWidgets([
+          withWidget({
+            id: "acme/thing",
+            archetype: "custom",
+            component: "@acme/p/admin#Thing",
+            chrome,
+          }),
+        ]);
+      } catch (error) {
+        thrown = error as NextlyError;
+      }
+      expect(thrown, chrome).toBeInstanceOf(NextlyError);
+      expect(thrown?.logMessage, chrome).toContain(
+        "chrome is not a widget field"
+      );
+    }
   });
 
-  it("accepts chrome where it IS valid", () => {
-    // The control, both arms. A gate refusing every chrome would satisfy the
-    // assertions above while making the field undeclarable.
+  it("accepts the same widget with no chrome", () => {
+    // The control: a gate refusing every custom widget would satisfy the
+    // assertion above.
     expect(() =>
       assertAdminWidgets([
         withWidget({
           id: "acme/thing",
           archetype: "custom",
           component: "@acme/p/admin#Thing",
-          chrome: "none",
-        }),
-      ])
-    ).not.toThrow();
-
-    expect(() =>
-      assertAdminWidgets([
-        withWidget({
-          id: "acme/revenue",
-          archetype: "metric",
-          query: { source: "collection:posts", op: "count" },
-          chrome: "card",
         }),
       ])
     ).not.toThrow();
@@ -637,7 +617,7 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
-  it("accepts a widget declaring no title, archetype or defaultSize", () => {
+  it("accepts a widget declaring no title, archetype or size", () => {
     // The other half of that control. Those three are REQUIRED on a
     // `WidgetDefinition` and OPTIONAL on a `PluginAdminWidget`, so borrowing
     // the definition validator here would reject the shape this file exists to
@@ -675,7 +655,7 @@ describe("the serializer cannot publish what boot refused", () => {
         withWidget({
           id: "acme/revenue",
           component: "@acme/p/admin#Revenue",
-          size: "half",
+          size: { default: { w: 6, h: 4 } },
         }),
       ],
       undefined
@@ -757,37 +737,54 @@ describe("a contributed widget draws the result its archetype can draw", () => {
   });
 });
 
-describe("a contributed widget's sizes in the server's summary", () => {
-  it("carry its smallest and largest, so a card is offered only the widths between", () => {
-    const [summary] = contributedWidgetSummaries([
-      withWidget({
-        id: "acme/half-up",
-        title: "Half and up",
-        component: "@acme/p/admin#HalfUp",
-        defaultSize: "lg",
-        minSize: "lg",
-        maxSize: "full",
-      }),
-    ]);
-    expect(summary).toMatchObject({ minSize: "lg", maxSize: "full" });
-    // Half to full, as the declaration says; not all five widths.
-    expect(widthFacts(summary!).allowedWidths).toEqual([
-      "half",
-      "twoThirds",
-      "full",
-    ]);
+describe("a contributed widget's size, judged at boot", () => {
+  /** The detail a refused contribution's error carries, or `undefined` when it passed. */
+  function refusal(size: unknown): string | undefined {
+    try {
+      assertAdminWidgets([
+        withWidget({ id: "acme/w", component: "@acme/p/admin#W", size }),
+      ]);
+      return undefined;
+    } catch (error) {
+      expect(error).toBeInstanceOf(NextlyError);
+      return (error as NextlyError).logMessage;
+    }
+  }
+
+  it("refuses a default above its own maximum, as the registry does", () => {
+    // 🔴 The same check both channels ask (`sizeDeclarationProblems`), so a
+    // card cannot start at a size its reader may not return it to on one
+    // channel while the other refuses it.
+    expect(refusal({ default: { w: 8, h: 4 }, max: { w: 6, h: 4 } })).toContain(
+      "size.default must not be larger than size.max"
+    );
   });
 
-  it("leave a widget that states no bounds every width", () => {
-    const [summary] = contributedWidgetSummaries([
-      withWidget({
-        id: "acme/any",
-        title: "Any",
-        component: "@acme/p/admin#Any",
-      }),
-    ]);
-    expect(summary).not.toHaveProperty("minSize");
-    expect(summary).not.toHaveProperty("maxSize");
-    expect(widthFacts(summary!).allowedWidths).toHaveLength(5);
+  it("refuses a minimum above its default", () => {
+    expect(refusal({ default: { w: 4, h: 3 }, min: { w: 6, h: 3 } })).toContain(
+      "size.min must not be larger than size.default"
+    );
+  });
+
+  it("refuses a width outside the twelve columns", () => {
+    expect(refusal({ default: { w: 13, h: 4 } })).toContain(
+      "size.default.w must be a whole number from 1 to 12"
+    );
+  });
+
+  it("refuses a named width in place of a size", () => {
+    expect(refusal("full")).toContain(
+      "size must be { default: { w, h }, min?, max? }"
+    );
+  });
+
+  it("accepts a size within its own bounds", () => {
+    expect(
+      refusal({
+        default: { w: 6, h: 4 },
+        min: { w: 4, h: 3 },
+        max: { w: 12, h: 6 },
+      })
+    ).toBeUndefined();
   });
 });

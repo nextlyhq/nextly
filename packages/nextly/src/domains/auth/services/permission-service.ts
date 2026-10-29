@@ -37,8 +37,6 @@ function buildHiddenPermissionConditions(
   const conditions = [
     // Hide the legacy `permissions` resource from assignable/admin permission lists.
     sql`${permissionsTable.resource} <> 'permissions'`,
-    // Hide create/delete actions for `settings` resource.
-    sql`NOT (${permissionsTable.resource} = 'settings' AND ${permissionsTable.action} IN ('create', 'delete'))`,
   ];
 
   if (!options?.includeOrphaned) {
@@ -51,6 +49,45 @@ function buildHiddenPermissionConditions(
   }
 
   return conditions;
+}
+
+/**
+ * Whether a permission is one of the hidden internal ones: the legacy
+ * `permissions` resource, as {@link buildHiddenPermissionConditions} hides it
+ * from lists. It is answered as if absent, so nothing confirms it exists.
+ * Create and delete on `settings` are granted like any other permission, so
+ * they are listed.
+ */
+function isHiddenPermission(permission: { resource: string }): boolean {
+  return permission.resource === "permissions";
+}
+
+/**
+ * Refuse deleting a permission on a system resource, whichever way the delete
+ * names it. A built-in permission is never deleted, and the caller is told
+ * so: a fact about the permission, not about their permissions, which §13.8
+ * keeps generic. A hidden one is refused in the generic words, so the refusal
+ * does not confirm it exists. The detail goes to the log.
+ */
+function refuseDeletingBuiltIn(permission: {
+  id: unknown;
+  action: string;
+  resource: string;
+}): void {
+  if (!isSystemResource(permission.resource)) return;
+  const logContext = {
+    reason: "system-permission-undeletable",
+    permissionId: String(permission.id),
+    resource: permission.resource,
+  };
+  if (isHiddenPermission(permission)) {
+    throw NextlyError.forbidden({ logContext });
+  }
+  throw NextlyError.builtIn({
+    thing: "permission",
+    change: "delete",
+    logContext,
+  });
 }
 
 /**
@@ -399,12 +436,7 @@ export class PermissionService extends BaseService {
   }> {
     const permission = await this.requirePermissionById(permissionId);
 
-    const isHiddenPermission =
-      permission.resource === "permissions" ||
-      (permission.resource === "settings" &&
-        (permission.action === "create" || permission.action === "delete"));
-
-    if (isHiddenPermission) {
+    if (isHiddenPermission(permission)) {
       // Hidden internal permission — surface as NOT_FOUND to avoid leaking
       // the existence of the hidden surface area.
       throw NextlyError.notFound({
@@ -829,6 +861,7 @@ export class PermissionService extends BaseService {
       where: { id: requireFilterValue(permissionId, "permissionId") },
       columns: {
         id: true,
+        action: true,
         resource: true,
       },
     });
@@ -837,18 +870,7 @@ export class PermissionService extends BaseService {
       throw NextlyError.notFound({ logContext: { permissionId } });
     }
 
-    if (isSystemResource(permission.resource)) {
-      // §13.8: forbidden messages must not reveal *why* (the policy / which
-      // resource is system). Generic "You don't have permission..." comes
-      // from the factory; the detail moves to logContext.
-      throw NextlyError.forbidden({
-        logContext: {
-          reason: "system-permission-undeletable",
-          permissionId,
-          resource: permission.resource,
-        },
-      });
-    }
+    refuseDeletingBuiltIn(permission);
 
     const usage = await (
       this.db as RBACDatabaseInstance
@@ -880,6 +902,7 @@ export class PermissionService extends BaseService {
    * @param action - Permission action
    * @param resource - Permission resource
    * @throws NextlyError(NOT_FOUND) when no permission matches.
+   * @throws NextlyError(FORBIDDEN) when the permission is built in.
    * @throws NextlyError(BUSINESS_RULE_VIOLATION) when the permission is in use.
    */
   async deletePermission(action: string, resource: string): Promise<void> {
@@ -887,7 +910,11 @@ export class PermissionService extends BaseService {
     // Case-insensitive matching to align with listPermissions behavior
 
     const permission = await this.db
-      .select({ id: permissions.id })
+      .select({
+        id: permissions.id,
+        action: permissions.action,
+        resource: permissions.resource,
+      })
       .from(permissions)
       .where(
         and(
@@ -904,6 +931,10 @@ export class PermissionService extends BaseService {
       throw NextlyError.notFound({ logContext: { action, resource } });
     }
 
+    // The same guard the delete by id runs, before the row is looked at again.
+    refuseDeletingBuiltIn(
+      permission as { id: unknown; action: string; resource: string }
+    );
     const permissionId = (permission as { id: unknown }).id;
     const usage = await (
       this.db as RBACDatabaseInstance

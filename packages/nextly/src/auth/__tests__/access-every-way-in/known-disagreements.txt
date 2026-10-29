@@ -11,6 +11,11 @@
 # deviations.ts`). The cell must disagree having recorded exactly those, so
 # removing a deviation fails each cell it explained until the cell is taken
 # off.
+#
+# At `population`, a visitor's cell also names the deviations of the read that
+# reaches the relationship: the visitor's read of `refs` itself, which the
+# collection gate admits by the public default, and the media it populates on
+# the way, which a read with no caller keeps.
 
 service visitor read collection none at direct  # visitor-public-default
 service visitor read collection none at website  # visitor-public-default
@@ -18,377 +23,138 @@ service visitor read collection none at service  # visitor-public-default
 service visitor read collection true at direct  # visitor-public-default
 service visitor read collection true at website  # visitor-public-default
 service visitor read collection true at service  # visitor-public-default
-service user-without read collection true at rest
-service user-without read collection true at direct  # rule-alone-for-people
-service user-without read collection true at website  # rule-alone-for-people
-service user-without read collection true at route  # rule-alone-for-people
-service user-without read collection true at can
-service user-without read collection true at service  # rule-alone-for-people
-service user-without read collection true at entity
-service user-without create collection true at rest
-service user-without create collection true at direct  # rule-alone-for-people
-service user-without create collection true at route  # rule-alone-for-people
-service user-without create collection true at can
-service user-without create collection true at service  # rule-alone-for-people
-service user-partial create collection true at rest
-service user-partial create collection true at direct  # rule-alone-for-people
-service user-partial create collection true at route  # rule-alone-for-people
-service user-partial create collection true at can
-service user-partial create collection true at service  # rule-alone-for-people
-service user-without update collection true at rest
-service user-without update collection true at direct  # rule-alone-for-people
-service user-without update collection true at route  # rule-alone-for-people
-service user-without update collection true at can
-service user-without update collection true at service  # rule-alone-for-people
-service user-without delete collection true at rest
-service user-without delete collection true at direct  # rule-alone-for-people
-service user-without delete collection true at route  # rule-alone-for-people
-service user-without delete collection true at can
-service user-without delete collection true at service  # rule-alone-for-people
-service user-partial delete collection true at rest
-service user-partial delete collection true at direct  # rule-alone-for-people
-service user-partial delete collection true at route  # rule-alone-for-people
-service user-partial delete collection true at can
-service user-partial delete collection true at service  # rule-alone-for-people
-service user-without publish collection true at rest
-service user-without publish collection true at direct  # rule-alone-for-people
-service user-without publish collection true at route  # rule-alone-for-people
-service user-without publish collection true at can
-service user-without publish collection true at service  # rule-alone-for-people
-service user-without unpublish collection true at rest
-service user-without unpublish collection true at direct  # rule-alone-for-people
-service user-without unpublish collection true at route  # rule-alone-for-people
-service user-without unpublish collection true at can
-service user-without unpublish collection true at service  # rule-alone-for-people
-service user-partial unpublish collection true at rest
-service user-partial unpublish collection true at direct  # rule-alone-for-people
-service user-partial unpublish collection true at route  # rule-alone-for-people
-service user-partial unpublish collection true at can
-service user-partial unpublish collection true at service  # rule-alone-for-people
-service user-with read collection false at schema
-service custom-role read collection false at schema
-service key-read-only read collection false at schema
-service key-full-access read collection false at schema
-service key-role-based read collection false at schema
-service key-super-admin read collection false at schema
-service user-partial read collection false at schema
-service key-partial read collection false at schema
+service user-with read collection false at schema  # schema-list-ignores-rules
+service custom-role read collection false at schema  # schema-list-ignores-rules
+service key-read-only read collection false at schema  # schema-list-ignores-rules
+service key-full-access read collection false at schema  # schema-list-ignores-rules
+service key-role-based read collection false at schema  # schema-list-ignores-rules
+service key-super-admin read collection false at schema  # schema-list-ignores-rules
+service user-partial read collection false at schema  # schema-list-ignores-rules
+service key-partial read collection false at schema  # schema-list-ignores-rules
 service visitor read collection returns-true at direct  # visitor-public-default
 service visitor read collection returns-true at website  # visitor-public-default
 service visitor read collection returns-true at service  # visitor-public-default
-service user-without read collection returns-true at rest
-service user-without read collection returns-true at direct  # rule-alone-for-people
-service user-without read collection returns-true at website  # rule-alone-for-people
-service user-without read collection returns-true at route  # rule-alone-for-people
-service user-without read collection returns-true at can
-service user-without read collection returns-true at service  # rule-alone-for-people
-service user-without read collection returns-true at entity
-service user-without create collection returns-true at rest
-service user-without create collection returns-true at direct  # rule-alone-for-people
-service user-without create collection returns-true at route  # rule-alone-for-people
-service user-without create collection returns-true at can
-service user-without create collection returns-true at service  # rule-alone-for-people
-service user-partial create collection returns-true at rest
-service user-partial create collection returns-true at direct  # rule-alone-for-people
-service user-partial create collection returns-true at route  # rule-alone-for-people
-service user-partial create collection returns-true at can
-service user-partial create collection returns-true at service  # rule-alone-for-people
-service user-without update collection returns-true at rest
-service user-without update collection returns-true at direct  # rule-alone-for-people
-service user-without update collection returns-true at route  # rule-alone-for-people
-service user-without update collection returns-true at can
-service user-without update collection returns-true at service  # rule-alone-for-people
-service user-without delete collection returns-true at rest
-service user-without delete collection returns-true at direct  # rule-alone-for-people
-service user-without delete collection returns-true at route  # rule-alone-for-people
-service user-without delete collection returns-true at can
-service user-without delete collection returns-true at service  # rule-alone-for-people
-service user-partial delete collection returns-true at rest
-service user-partial delete collection returns-true at direct  # rule-alone-for-people
-service user-partial delete collection returns-true at route  # rule-alone-for-people
-service user-partial delete collection returns-true at can
-service user-partial delete collection returns-true at service  # rule-alone-for-people
-service user-without publish collection returns-true at rest
-service user-without publish collection returns-true at direct  # rule-alone-for-people
-service user-without publish collection returns-true at route  # rule-alone-for-people
-service user-without publish collection returns-true at can
-service user-without publish collection returns-true at service  # rule-alone-for-people
-service user-without unpublish collection returns-true at rest
-service user-without unpublish collection returns-true at direct  # rule-alone-for-people
-service user-without unpublish collection returns-true at route  # rule-alone-for-people
-service user-without unpublish collection returns-true at can
-service user-without unpublish collection returns-true at service  # rule-alone-for-people
-service user-partial unpublish collection returns-true at rest
-service user-partial unpublish collection returns-true at direct  # rule-alone-for-people
-service user-partial unpublish collection returns-true at route  # rule-alone-for-people
-service user-partial unpublish collection returns-true at can
-service user-partial unpublish collection returns-true at service  # rule-alone-for-people
-service user-with read collection returns-false at schema
-service custom-role read collection returns-false at schema
-service key-read-only read collection returns-false at schema
-service key-full-access read collection returns-false at schema
-service key-role-based read collection returns-false at schema
-service key-super-admin read collection returns-false at schema
-service user-partial read collection returns-false at schema
-service key-partial read collection returns-false at schema
-service visitor read collection returns-null at direct  # visitor-public-default
-service visitor read collection returns-null at website  # visitor-public-default
-service visitor read collection returns-null at service  # visitor-public-default
-service user-with read collection returns-null at can
-service user-with read collection returns-null at entity
-service user-with read collection returns-null at schema
-service user-without read collection returns-null at can
-service user-without read collection returns-null at entity
-service custom-role read collection returns-null at can
-service custom-role read collection returns-null at entity
-service custom-role read collection returns-null at schema
-service key-read-only read collection returns-null at schema
-service key-full-access read collection returns-null at schema
-service key-role-based read collection returns-null at schema
-service key-super-admin read collection returns-null at schema
-service user-partial read collection returns-null at can
-service user-partial read collection returns-null at entity
-service user-partial read collection returns-null at schema
-service key-partial read collection returns-null at schema
-service user-with create collection returns-null at can
-service user-without create collection returns-null at can
-service custom-role create collection returns-null at can
-service user-partial create collection returns-null at can
-service user-with update collection returns-null at can
-service user-without update collection returns-null at can
-service custom-role update collection returns-null at can
-service user-partial update collection returns-null at can
-service user-with delete collection returns-null at can
-service user-without delete collection returns-null at can
-service custom-role delete collection returns-null at can
-service user-partial delete collection returns-null at can
-service user-with publish collection returns-null at can
-service user-without publish collection returns-null at can
-service custom-role publish collection returns-null at can
-service user-partial publish collection returns-null at can
-service user-with unpublish collection returns-null at can
-service user-without unpublish collection returns-null at can
-service custom-role unpublish collection returns-null at can
-service user-partial unpublish collection returns-null at can
-service visitor read collection returns-undefined at direct  # visitor-public-default
-service visitor read collection returns-undefined at website  # visitor-public-default
-service visitor read collection returns-undefined at service  # visitor-public-default
-service user-with read collection returns-undefined at can
-service user-with read collection returns-undefined at entity
-service user-with read collection returns-undefined at schema
-service user-without read collection returns-undefined at can
-service user-without read collection returns-undefined at entity
-service custom-role read collection returns-undefined at can
-service custom-role read collection returns-undefined at entity
-service custom-role read collection returns-undefined at schema
-service key-read-only read collection returns-undefined at schema
-service key-full-access read collection returns-undefined at schema
-service key-role-based read collection returns-undefined at schema
-service key-super-admin read collection returns-undefined at schema
-service user-partial read collection returns-undefined at can
-service user-partial read collection returns-undefined at entity
-service user-partial read collection returns-undefined at schema
-service key-partial read collection returns-undefined at schema
-service user-with create collection returns-undefined at can
-service user-without create collection returns-undefined at can
-service custom-role create collection returns-undefined at can
-service user-partial create collection returns-undefined at can
-service user-with update collection returns-undefined at can
-service user-without update collection returns-undefined at can
-service custom-role update collection returns-undefined at can
-service user-partial update collection returns-undefined at can
-service user-with delete collection returns-undefined at can
-service user-without delete collection returns-undefined at can
-service custom-role delete collection returns-undefined at can
-service user-partial delete collection returns-undefined at can
-service user-with publish collection returns-undefined at can
-service user-without publish collection returns-undefined at can
-service custom-role publish collection returns-undefined at can
-service user-partial publish collection returns-undefined at can
-service user-with unpublish collection returns-undefined at can
-service user-without unpublish collection returns-undefined at can
-service custom-role unpublish collection returns-undefined at can
-service user-partial unpublish collection returns-undefined at can
-service user-with read collection throws at schema
-service custom-role read collection throws at schema
-service key-read-only read collection throws at schema
-service key-full-access read collection throws at schema
-service key-role-based read collection throws at schema
-service key-super-admin read collection throws at schema
-service user-partial read collection throws at schema
-service key-partial read collection throws at schema
+service user-with read collection returns-false at schema  # schema-list-ignores-rules
+service user-with read collection permission-spelling at schema  # schema-list-ignores-rules
+service custom-role read collection returns-false at schema  # schema-list-ignores-rules
+service custom-role read collection permission-spelling at schema  # schema-list-ignores-rules
+service key-read-only read collection returns-false at schema  # schema-list-ignores-rules
+service key-read-only read collection permission-spelling at schema  # schema-list-ignores-rules
+service key-full-access read collection returns-false at schema  # schema-list-ignores-rules
+service key-full-access read collection permission-spelling at schema  # schema-list-ignores-rules
+service key-role-based read collection returns-false at schema  # schema-list-ignores-rules
+service key-role-based read collection permission-spelling at schema  # schema-list-ignores-rules
+service key-super-admin read collection returns-false at schema  # schema-list-ignores-rules
+service key-super-admin read collection permission-spelling at schema  # schema-list-ignores-rules
+service user-partial read collection returns-false at schema  # schema-list-ignores-rules
+service user-partial read collection permission-spelling at schema  # schema-list-ignores-rules
+service key-partial read collection returns-false at schema  # schema-list-ignores-rules
+service key-partial read collection permission-spelling at schema  # schema-list-ignores-rules
+service user-with read collection returns-null at schema  # schema-list-ignores-rules
+service user-with read collection returns-string at schema  # schema-list-ignores-rules
+service custom-role read collection returns-null at schema  # schema-list-ignores-rules
+service custom-role read collection returns-string at schema  # schema-list-ignores-rules
+service key-read-only read collection returns-null at schema  # schema-list-ignores-rules
+service key-read-only read collection returns-string at schema  # schema-list-ignores-rules
+service key-full-access read collection returns-null at schema  # schema-list-ignores-rules
+service key-full-access read collection returns-string at schema  # schema-list-ignores-rules
+service key-role-based read collection returns-null at schema  # schema-list-ignores-rules
+service key-role-based read collection returns-string at schema  # schema-list-ignores-rules
+service key-super-admin read collection returns-null at schema  # schema-list-ignores-rules
+service key-super-admin read collection returns-string at schema  # schema-list-ignores-rules
+service user-partial read collection returns-null at schema  # schema-list-ignores-rules
+service user-partial read collection returns-string at schema  # schema-list-ignores-rules
+service key-partial read collection returns-null at schema  # schema-list-ignores-rules
+service key-partial read collection returns-string at schema  # schema-list-ignores-rules
+service user-with read collection returns-undefined at schema  # schema-list-ignores-rules
+service custom-role read collection returns-undefined at schema  # schema-list-ignores-rules
+service key-read-only read collection returns-undefined at schema  # schema-list-ignores-rules
+service key-full-access read collection returns-undefined at schema  # schema-list-ignores-rules
+service key-role-based read collection returns-undefined at schema  # schema-list-ignores-rules
+service key-super-admin read collection returns-undefined at schema  # schema-list-ignores-rules
+service user-partial read collection returns-undefined at schema  # schema-list-ignores-rules
+service key-partial read collection returns-undefined at schema  # schema-list-ignores-rules
+service user-with read collection throws at schema  # schema-list-ignores-rules
+service custom-role read collection throws at schema  # schema-list-ignores-rules
+service key-read-only read collection throws at schema  # schema-list-ignores-rules
+service key-full-access read collection throws at schema  # schema-list-ignores-rules
+service key-role-based read collection throws at schema  # schema-list-ignores-rules
+service key-super-admin read collection throws at schema  # schema-list-ignores-rules
+service user-partial read collection throws at schema  # schema-list-ignores-rules
+service key-partial read collection throws at schema  # schema-list-ignores-rules
 service visitor read collection async-true at direct  # visitor-public-default
 service visitor read collection async-true at website  # visitor-public-default
 service visitor read collection async-true at service  # visitor-public-default
-service user-without read collection async-true at rest
-service user-without read collection async-true at direct  # rule-alone-for-people
-service user-without read collection async-true at website  # rule-alone-for-people
-service user-without read collection async-true at route  # rule-alone-for-people
-service user-without read collection async-true at can
-service user-without read collection async-true at service  # rule-alone-for-people
-service user-without read collection async-true at entity
-service user-without create collection async-true at rest
-service user-without create collection async-true at direct  # rule-alone-for-people
-service user-without create collection async-true at route  # rule-alone-for-people
-service user-without create collection async-true at can
-service user-without create collection async-true at service  # rule-alone-for-people
-service user-partial create collection async-true at rest
-service user-partial create collection async-true at direct  # rule-alone-for-people
-service user-partial create collection async-true at route  # rule-alone-for-people
-service user-partial create collection async-true at can
-service user-partial create collection async-true at service  # rule-alone-for-people
-service user-without update collection async-true at rest
-service user-without update collection async-true at direct  # rule-alone-for-people
-service user-without update collection async-true at route  # rule-alone-for-people
-service user-without update collection async-true at can
-service user-without update collection async-true at service  # rule-alone-for-people
-service user-without delete collection async-true at rest
-service user-without delete collection async-true at direct  # rule-alone-for-people
-service user-without delete collection async-true at route  # rule-alone-for-people
-service user-without delete collection async-true at can
-service user-without delete collection async-true at service  # rule-alone-for-people
-service user-partial delete collection async-true at rest
-service user-partial delete collection async-true at direct  # rule-alone-for-people
-service user-partial delete collection async-true at route  # rule-alone-for-people
-service user-partial delete collection async-true at can
-service user-partial delete collection async-true at service  # rule-alone-for-people
-service user-without publish collection async-true at rest
-service user-without publish collection async-true at direct  # rule-alone-for-people
-service user-without publish collection async-true at route  # rule-alone-for-people
-service user-without publish collection async-true at can
-service user-without publish collection async-true at service  # rule-alone-for-people
-service user-without unpublish collection async-true at rest
-service user-without unpublish collection async-true at direct  # rule-alone-for-people
-service user-without unpublish collection async-true at route  # rule-alone-for-people
-service user-without unpublish collection async-true at can
-service user-without unpublish collection async-true at service  # rule-alone-for-people
-service user-partial unpublish collection async-true at rest
-service user-partial unpublish collection async-true at direct  # rule-alone-for-people
-service user-partial unpublish collection async-true at route  # rule-alone-for-people
-service user-partial unpublish collection async-true at can
-service user-partial unpublish collection async-true at service  # rule-alone-for-people
-service user-with read collection async-false at schema
-service custom-role read collection async-false at schema
-service key-read-only read collection async-false at schema
-service key-full-access read collection async-false at schema
-service key-role-based read collection async-false at schema
-service key-super-admin read collection async-false at schema
-service user-partial read collection async-false at schema
-service key-partial read collection async-false at schema
+service user-with read collection async-false at schema  # schema-list-ignores-rules
+service custom-role read collection async-false at schema  # schema-list-ignores-rules
+service key-read-only read collection async-false at schema  # schema-list-ignores-rules
+service key-full-access read collection async-false at schema  # schema-list-ignores-rules
+service key-role-based read collection async-false at schema  # schema-list-ignores-rules
+service key-super-admin read collection async-false at schema  # schema-list-ignores-rules
+service user-partial read collection async-false at schema  # schema-list-ignores-rules
+service key-partial read collection async-false at schema  # schema-list-ignores-rules
 service visitor read collection other-operation at direct  # visitor-public-default
 service visitor read collection other-operation at website  # visitor-public-default
 service visitor read collection other-operation at service  # visitor-public-default
-service custom-role read collection role-name at schema
-service key-role-based read collection role-name at schema
-service key-super-admin read collection role-name at schema
-service user-partial read collection role-name at schema
-service key-partial read collection role-name at schema
-service user-with read collection principal-kind at schema
-service custom-role read collection principal-kind at schema
-service key-read-only read collection principal-kind at schema
-service key-full-access read collection principal-kind at schema
-service key-role-based read collection principal-kind at schema
-service key-super-admin read collection principal-kind at schema
-service user-partial read collection principal-kind at schema
-service key-partial read collection principal-kind at schema
+service custom-role read collection role-name at schema  # schema-list-ignores-rules
+service key-role-based read collection role-name at schema  # schema-list-ignores-rules
+service key-super-admin read collection role-name at schema  # schema-list-ignores-rules
+service user-partial read collection role-name at schema  # schema-list-ignores-rules
+service key-partial read collection role-name at schema  # schema-list-ignores-rules
+service user-with read collection principal-kind at schema  # schema-list-ignores-rules
+service custom-role read collection principal-kind at schema  # schema-list-ignores-rules
+service key-read-only read collection principal-kind at schema  # schema-list-ignores-rules
+service key-full-access read collection principal-kind at schema  # schema-list-ignores-rules
+service key-role-based read collection principal-kind at schema  # schema-list-ignores-rules
+service key-super-admin read collection principal-kind at schema  # schema-list-ignores-rules
+service user-partial read collection principal-kind at schema  # schema-list-ignores-rules
+service key-partial read collection principal-kind at schema  # schema-list-ignores-rules
 service visitor read single none at direct  # visitor-public-default
 service visitor read single true at direct  # visitor-public-default
-service user-without read single true at rest
-service user-without read single true at direct  # rule-alone-for-people
-service user-without read single true at route  # rule-alone-for-people
-service user-without read single true at can
-service user-without read single true at entity
-service user-without update single true at rest
-service user-without update single true at direct  # rule-alone-for-people
-service user-without update single true at route  # rule-alone-for-people
-service user-without update single true at can
 service visitor read single returns-true at direct  # visitor-public-default
-service user-without read single returns-true at rest
-service user-without read single returns-true at direct  # rule-alone-for-people
-service user-without read single returns-true at route  # rule-alone-for-people
-service user-without read single returns-true at can
-service user-without read single returns-true at entity
-service user-without update single returns-true at rest
-service user-without update single returns-true at direct  # rule-alone-for-people
-service user-without update single returns-true at route  # rule-alone-for-people
-service user-without update single returns-true at can
-service visitor read single returns-null at direct  # visitor-public-default
-service user-with read single returns-null at can
-service user-with read single returns-null at entity
-service user-without read single returns-null at can
-service user-without read single returns-null at entity
-service custom-role read single returns-null at can
-service custom-role read single returns-null at entity
-service user-partial read single returns-null at can
-service user-partial read single returns-null at entity
-service user-with update single returns-null at can
-service user-without update single returns-null at can
-service custom-role update single returns-null at can
-service user-partial update single returns-null at can
-service visitor read single returns-undefined at direct  # visitor-public-default
-service user-with read single returns-undefined at can
-service user-with read single returns-undefined at entity
-service user-without read single returns-undefined at can
-service user-without read single returns-undefined at entity
-service custom-role read single returns-undefined at can
-service custom-role read single returns-undefined at entity
-service user-partial read single returns-undefined at can
-service user-partial read single returns-undefined at entity
-service user-with update single returns-undefined at can
-service user-without update single returns-undefined at can
-service custom-role update single returns-undefined at can
-service user-partial update single returns-undefined at can
 service visitor read single async-true at direct  # visitor-public-default
-service user-without read single async-true at rest
-service user-without read single async-true at direct  # rule-alone-for-people
-service user-without read single async-true at route  # rule-alone-for-people
-service user-without read single async-true at can
-service user-without read single async-true at entity
-service user-without update single async-true at rest
-service user-without update single async-true at direct  # rule-alone-for-people
-service user-without update single async-true at route  # rule-alone-for-people
-service user-without update single async-true at can
 service visitor read single other-operation at direct  # visitor-public-default
-service visitor read related none at population
-service visitor read related true at population
-service user-without read related true at population
-service visitor read related returns-true at population
-service user-without read related returns-true at population
-service visitor read related returns-null at population
-service visitor read related returns-undefined at population
-service visitor read related async-true at population
-service user-without read related async-true at population
-service visitor read related other-operation at population
-service visitor read media none at population
-service principal read media none at population
-service principal-other read media none at population
+service visitor read related none at population  # visitor-public-default, visitor-keeps-media
+service visitor read related true at population  # visitor-public-default, visitor-keeps-media
+service visitor read related returns-true at population  # visitor-public-default, visitor-keeps-media
+service visitor read related async-true at population  # visitor-public-default, visitor-keeps-media
+service visitor read related other-operation at population  # visitor-public-default, visitor-keeps-media
+service visitor read related returns-filter at population  # visitor-public-default, visitor-keeps-media
+service visitor read related async-filter at population  # visitor-public-default, visitor-keeps-media
+service visitor read media none at population  # visitor-public-default, visitor-keeps-media
+service principal read media none at population  # visitor-keeps-media
+service principal-other read media none at population  # visitor-keeps-media
 no-service visitor read collection none at direct  # visitor-public-default
-no-service user-with read collection none at can
-no-service user-with read collection none at entity
+no-service user-with read collection none at can  # can-no-service-refuses-people
+no-service user-with read collection none at entity  # no-service
+no-service user-with read collection none at capabilities  # no-service
 no-service visitor read collection returns-true at direct  # visitor-public-default
-no-service user-with read collection returns-true at can
-no-service user-with read collection returns-true at entity
+no-service user-with read collection returns-true at can  # can-no-service-refuses-people
+no-service user-with read collection returns-true at entity  # no-service
+no-service user-with read collection returns-true at capabilities  # no-service
 no-service visitor read collection returns-false at direct  # visitor-public-default
 no-service user-with read collection returns-false at rest
 no-service user-with read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at rest
 no-service key-role-based read collection returns-false at direct  # no-service
-no-service key-role-based read collection returns-false at can
-no-service key-role-based read collection returns-false at entity
+no-service key-role-based read collection returns-false at can  # no-service
+no-service key-role-based read collection returns-false at entity  # no-service
 no-service visitor read collection returns-null at direct  # visitor-public-default
 no-service user-with read collection returns-null at rest
 no-service user-with read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at rest
 no-service key-role-based read collection returns-null at direct  # no-service
-no-service key-role-based read collection returns-null at can
-no-service key-role-based read collection returns-null at entity
+no-service key-role-based read collection returns-null at can  # no-service
+no-service key-role-based read collection returns-null at entity  # no-service
 no-service visitor read single none at direct  # visitor-public-default
-no-service user-with read single none at can
-no-service user-with read single none at entity
+no-service user-with read single none at can  # can-no-service-refuses-people
+no-service user-with read single none at entity  # no-service
+no-service user-with read single none at capabilities  # no-service
 no-service user-without read single none at direct  # no-service
 no-service visitor read single returns-true at direct  # visitor-public-default
-no-service user-with read single returns-true at can
-no-service user-with read single returns-true at entity
+no-service user-with read single returns-true at can  # can-no-service-refuses-people
+no-service user-with read single returns-true at entity  # no-service
+no-service user-with read single returns-true at capabilities  # no-service
 no-service user-without read single returns-true at direct  # no-service
 no-service visitor read single returns-false at direct  # visitor-public-default
 no-service user-with read single returns-false at rest
@@ -396,181 +162,55 @@ no-service user-with read single returns-false at direct  # no-service
 no-service user-without read single returns-false at direct  # no-service
 no-service key-role-based read single returns-false at rest
 no-service key-role-based read single returns-false at direct  # no-service
-no-service key-role-based read single returns-false at can
-no-service key-role-based read single returns-false at entity
+no-service key-role-based read single returns-false at can  # no-service
+no-service key-role-based read single returns-false at entity  # no-service
 no-service visitor read single returns-null at direct  # visitor-public-default
 no-service user-with read single returns-null at rest
 no-service user-with read single returns-null at direct  # no-service
 no-service user-without read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at rest
 no-service key-role-based read single returns-null at direct  # no-service
-no-service key-role-based read single returns-null at can
-no-service key-role-based read single returns-null at entity
-no-service visitor read related none at population
-no-service visitor read related returns-true at population
-no-service visitor read related returns-false at population
-no-service user-with read related returns-false at population
-no-service key-role-based read related returns-false at population
-no-service visitor read related returns-null at population
-no-service user-with read related returns-null at population
-no-service key-role-based read related returns-null at population
-service user-with read collection async-throws at schema
-service custom-role read collection async-throws at schema
-service key-read-only read collection async-throws at schema
-service key-full-access read collection async-throws at schema
-service key-role-based read collection async-throws at schema
-service key-super-admin read collection async-throws at schema
-service user-partial read collection async-throws at schema
-service key-partial read collection async-throws at schema
-service user-with publish collection other-operation at route  # lifecycle-judged-alone
-service user-with publish collection other-operation at can
-service custom-role publish collection other-operation at route  # lifecycle-judged-alone
-service custom-role publish collection other-operation at can
-service key-full-access publish collection other-operation at route  # lifecycle-judged-alone
-service key-full-access publish collection other-operation at can
-service key-role-based publish collection other-operation at route  # lifecycle-judged-alone
-service key-role-based publish collection other-operation at can
-service key-super-admin publish collection other-operation at route  # lifecycle-judged-alone
-service key-super-admin publish collection other-operation at can
-service user-partial publish collection other-operation at route  # lifecycle-judged-alone
-service user-partial publish collection other-operation at can
-service key-partial publish collection other-operation at route  # lifecycle-judged-alone
-service key-partial publish collection other-operation at can
-service user-with unpublish collection other-operation at route  # lifecycle-judged-alone
-service user-with unpublish collection other-operation at can
-service custom-role unpublish collection other-operation at route  # lifecycle-judged-alone
-service custom-role unpublish collection other-operation at can
-service key-full-access unpublish collection other-operation at route  # lifecycle-judged-alone
-service key-full-access unpublish collection other-operation at can
-service key-role-based unpublish collection other-operation at route  # lifecycle-judged-alone
-service key-role-based unpublish collection other-operation at can
-service key-super-admin unpublish collection other-operation at route  # lifecycle-judged-alone
-service key-super-admin unpublish collection other-operation at can
+no-service key-role-based read single returns-null at can  # no-service
+no-service key-role-based read single returns-null at entity  # no-service
+no-service visitor read related none at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service visitor read related returns-true at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service visitor read related returns-false at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service user-with read related returns-false at population  # no-service
+no-service key-role-based read related returns-false at population  # no-service
+no-service visitor read related returns-null at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service user-with read related returns-null at population  # no-service
+no-service key-role-based read related returns-null at population  # no-service
+service user-with read collection async-throws at schema  # schema-list-ignores-rules
+service custom-role read collection async-throws at schema  # schema-list-ignores-rules
+service key-read-only read collection async-throws at schema  # schema-list-ignores-rules
+service key-full-access read collection async-throws at schema  # schema-list-ignores-rules
+service key-role-based read collection async-throws at schema  # schema-list-ignores-rules
+service key-super-admin read collection async-throws at schema  # schema-list-ignores-rules
+service user-partial read collection async-throws at schema  # schema-list-ignores-rules
+service key-partial read collection async-throws at schema  # schema-list-ignores-rules
 service visitor list collection none at direct  # visitor-public-default
 service visitor list collection none at service  # visitor-public-default
 service visitor count collection none at direct  # visitor-public-default
 service visitor count collection none at service  # visitor-public-default
 service visitor list collection true at direct  # visitor-public-default
 service visitor list collection true at service  # visitor-public-default
-service user-without list collection true at rest
-service user-without list collection true at direct  # rule-alone-for-people
-service user-without list collection true at service  # rule-alone-for-people
 service visitor count collection true at direct  # visitor-public-default
 service visitor count collection true at service  # visitor-public-default
-service user-without count collection true at rest
-service user-without count collection true at direct  # rule-alone-for-people
-service user-without count collection true at service  # rule-alone-for-people
 service visitor list collection returns-true at direct  # visitor-public-default
 service visitor list collection returns-true at service  # visitor-public-default
-service user-without list collection returns-true at rest
-service user-without list collection returns-true at direct  # rule-alone-for-people
-service user-without list collection returns-true at service  # rule-alone-for-people
 service visitor count collection returns-true at direct  # visitor-public-default
 service visitor count collection returns-true at service  # visitor-public-default
-service user-without count collection returns-true at rest
-service user-without count collection returns-true at direct  # rule-alone-for-people
-service user-without count collection returns-true at service  # rule-alone-for-people
-service visitor list collection returns-null at direct  # visitor-public-default
-service visitor list collection returns-null at service  # visitor-public-default
-service visitor count collection returns-null at direct  # visitor-public-default
-service visitor count collection returns-null at service  # visitor-public-default
-service visitor list collection returns-undefined at direct  # visitor-public-default
-service visitor list collection returns-undefined at service  # visitor-public-default
-service visitor count collection returns-undefined at direct  # visitor-public-default
-service visitor count collection returns-undefined at service  # visitor-public-default
 service visitor list collection async-true at direct  # visitor-public-default
 service visitor list collection async-true at service  # visitor-public-default
-service user-without list collection async-true at rest
-service user-without list collection async-true at direct  # rule-alone-for-people
-service user-without list collection async-true at service  # rule-alone-for-people
 service visitor count collection async-true at direct  # visitor-public-default
 service visitor count collection async-true at service  # visitor-public-default
-service user-without count collection async-true at rest
-service user-without count collection async-true at direct  # rule-alone-for-people
-service user-without count collection async-true at service  # rule-alone-for-people
 service visitor list collection other-operation at direct  # visitor-public-default
 service visitor list collection other-operation at service  # visitor-public-default
 service visitor count collection other-operation at direct  # visitor-public-default
 service visitor count collection other-operation at service  # visitor-public-default
-service user-without publish single-pub true at rest
-service user-without publish single-pub true at direct  # rule-alone-for-people
-service user-without publish single-pub true at route  # rule-alone-for-people
-service user-without publish single-pub true at can
-service user-without unpublish single-pub true at rest
-service user-without unpublish single-pub true at direct  # rule-alone-for-people
-service user-without unpublish single-pub true at route  # rule-alone-for-people
-service user-without unpublish single-pub true at can
-service user-partial unpublish single-pub true at rest
-service user-partial unpublish single-pub true at direct  # rule-alone-for-people
-service user-partial unpublish single-pub true at route  # rule-alone-for-people
-service user-partial unpublish single-pub true at can
-service user-without publish single-pub returns-true at rest
-service user-without publish single-pub returns-true at direct  # rule-alone-for-people
-service user-without publish single-pub returns-true at route  # rule-alone-for-people
-service user-without publish single-pub returns-true at can
-service user-without unpublish single-pub returns-true at rest
-service user-without unpublish single-pub returns-true at direct  # rule-alone-for-people
-service user-without unpublish single-pub returns-true at route  # rule-alone-for-people
-service user-without unpublish single-pub returns-true at can
-service user-partial unpublish single-pub returns-true at rest
-service user-partial unpublish single-pub returns-true at direct  # rule-alone-for-people
-service user-partial unpublish single-pub returns-true at route  # rule-alone-for-people
-service user-partial unpublish single-pub returns-true at can
-service user-with publish single-pub returns-null at can
-service user-without publish single-pub returns-null at can
-service custom-role publish single-pub returns-null at can
-service user-partial publish single-pub returns-null at can
-service user-with unpublish single-pub returns-null at can
-service user-without unpublish single-pub returns-null at can
-service custom-role unpublish single-pub returns-null at can
-service user-partial unpublish single-pub returns-null at can
-service user-with publish single-pub returns-undefined at can
-service user-without publish single-pub returns-undefined at can
-service custom-role publish single-pub returns-undefined at can
-service user-partial publish single-pub returns-undefined at can
-service user-with unpublish single-pub returns-undefined at can
-service user-without unpublish single-pub returns-undefined at can
-service custom-role unpublish single-pub returns-undefined at can
-service user-partial unpublish single-pub returns-undefined at can
-service user-without publish single-pub async-true at rest
-service user-without publish single-pub async-true at direct  # rule-alone-for-people
-service user-without publish single-pub async-true at route  # rule-alone-for-people
-service user-without publish single-pub async-true at can
-service user-without unpublish single-pub async-true at rest
-service user-without unpublish single-pub async-true at direct  # rule-alone-for-people
-service user-without unpublish single-pub async-true at route  # rule-alone-for-people
-service user-without unpublish single-pub async-true at can
-service user-partial unpublish single-pub async-true at rest
-service user-partial unpublish single-pub async-true at direct  # rule-alone-for-people
-service user-partial unpublish single-pub async-true at route  # rule-alone-for-people
-service user-partial unpublish single-pub async-true at can
-service user-with publish single-pub other-operation at route  # lifecycle-judged-alone
-service user-with publish single-pub other-operation at can
-service custom-role publish single-pub other-operation at route  # lifecycle-judged-alone
-service custom-role publish single-pub other-operation at can
-service key-full-access publish single-pub other-operation at route  # lifecycle-judged-alone
-service key-full-access publish single-pub other-operation at can
-service key-role-based publish single-pub other-operation at route  # lifecycle-judged-alone
-service key-role-based publish single-pub other-operation at can
-service key-super-admin publish single-pub other-operation at route  # lifecycle-judged-alone
-service key-super-admin publish single-pub other-operation at can
-service user-partial publish single-pub other-operation at route  # lifecycle-judged-alone
-service user-partial publish single-pub other-operation at can
-service key-partial publish single-pub other-operation at route  # lifecycle-judged-alone
-service key-partial publish single-pub other-operation at can
-service user-with unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service user-with unpublish single-pub other-operation at can
-service custom-role unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service custom-role unpublish single-pub other-operation at can
-service key-full-access unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service key-full-access unpublish single-pub other-operation at can
-service key-role-based unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service key-role-based unpublish single-pub other-operation at can
-service key-super-admin unpublish single-pub other-operation at route  # lifecycle-judged-alone
-service key-super-admin unpublish single-pub other-operation at can
-service custom-role read collection user-is-key-maker at schema
-service key-super-admin read collection user-is-key-maker at schema
-service user-partial read collection user-is-key-maker at schema
+service custom-role read collection user-is-key-maker at schema  # schema-list-ignores-rules
+service key-super-admin read collection user-is-key-maker at schema  # schema-list-ignores-rules
+service user-partial read collection user-is-key-maker at schema  # schema-list-ignores-rules
 service visitor read collection publish-false at direct  # visitor-public-default
 service visitor read collection publish-false at website  # visitor-public-default
 service visitor read collection publish-false at service  # visitor-public-default
@@ -579,507 +219,780 @@ service visitor list collection publish-false at service  # visitor-public-defau
 service visitor count collection publish-false at direct  # visitor-public-default
 service visitor count collection publish-false at service  # visitor-public-default
 service visitor read single publish-false at direct  # visitor-public-default
-service visitor read related publish-false at population
+service visitor read related publish-false at population  # visitor-public-default, visitor-keeps-media
 
 # Readers handed a caller: a scope without its permission rows, a Direct API
 # user naming a role it does not hold, reads without the service of media
 # and users, and a trusted read bounded to its own collection.
-service key-without-rows read collection permission-spelling at entity
-service key-without-rows read related permission-spelling at population
-service key-without-rows read single permission-spelling at entity
-service user-naming-super-admin read related async-false at population
-service user-naming-super-admin read related async-throws at population
-service user-naming-super-admin read related async-true at population
-service user-naming-super-admin read related false at population
-service user-naming-super-admin read related none at population
-service user-naming-super-admin read related other-operation at population
-service user-naming-super-admin read related permission-spelling at population
-service user-naming-super-admin read related principal-kind at population
-service user-naming-super-admin read related publish-false at population
-service user-naming-super-admin read related returns-false at population
-service user-naming-super-admin read related returns-null at population
-service user-naming-super-admin read related returns-true at population
-service user-naming-super-admin read related returns-undefined at population
-service user-naming-super-admin read related role-name at population
-service user-naming-super-admin read related role-screen-spelling at population
-service user-naming-super-admin read related throws at population
-service user-naming-super-admin read related true at population
-service user-naming-super-admin read related user-is-key-maker at population
-no-service user-with read media none at population
+no-service user-with read media none at population  # no-service
 no-service user-with read media none at system  # no-service
-no-service visitor read media none at population
-bound key-without-rows read related permission-spelling at population
-bound user-naming-super-admin read related async-false at population
-bound user-naming-super-admin read related async-throws at population
-bound user-naming-super-admin read related async-true at population
-bound user-naming-super-admin read related false at population
-bound user-naming-super-admin read related none at population
-bound user-naming-super-admin read related other-operation at population
-bound user-naming-super-admin read related permission-spelling at population
-bound user-naming-super-admin read related principal-kind at population
-bound user-naming-super-admin read related publish-false at population
-bound user-naming-super-admin read related returns-false at population
-bound user-naming-super-admin read related returns-null at population
-bound user-naming-super-admin read related returns-true at population
-bound user-naming-super-admin read related returns-undefined at population
-bound user-naming-super-admin read related role-name at population
-bound user-naming-super-admin read related role-screen-spelling at population
-bound user-naming-super-admin read related throws at population
-bound user-naming-super-admin read related true at population
-bound user-naming-super-admin read related user-is-key-maker at population
-bound user-without read related async-true at population
-bound user-without read related returns-true at population
-bound user-without read related true at population
-bound visitor read related async-true at population
-bound visitor read related none at population
-bound visitor read related other-operation at population
-bound visitor read related publish-false at population
-bound visitor read related returns-null at population
-bound visitor read related returns-true at population
-bound visitor read related returns-undefined at population
-bound visitor read related true at population
-service key-super-admin update providers none at route  # manage-not-counted
-service key-super-admin update providers none at can
-service key-super-admin update providers none at widget
-service user-without read collection true at widget
-service user-without create collection true at widget
-service user-partial create collection true at widget
-service user-without update collection true at widget
-service user-without update collection true at lock  # rule-alone-for-people
-service user-without delete collection true at widget
-service user-partial delete collection true at widget
-service user-without publish collection true at widget
-service user-without unpublish collection true at widget
-service user-partial unpublish collection true at widget
-service key-read-only read collection false at widget
-service key-full-access read collection false at widget
-service key-role-based read collection false at widget
-service key-super-admin read collection false at widget
-service key-partial read collection false at widget
-service key-full-access create collection false at widget
-service key-role-based create collection false at widget
-service key-super-admin create collection false at widget
-service key-full-access update collection false at widget
-service key-role-based update collection false at widget
-service key-super-admin update collection false at widget
-service key-partial update collection false at widget
-service key-full-access delete collection false at widget
-service key-role-based delete collection false at widget
-service key-super-admin delete collection false at widget
-service key-full-access publish collection false at widget
-service key-role-based publish collection false at widget
-service key-super-admin publish collection false at widget
-service key-partial publish collection false at widget
-service key-full-access unpublish collection false at widget
-service key-role-based unpublish collection false at widget
-service key-super-admin unpublish collection false at widget
-service user-without read collection returns-true at widget
-service user-without create collection returns-true at widget
-service user-partial create collection returns-true at widget
-service user-without update collection returns-true at widget
-service user-without update collection returns-true at lock  # rule-alone-for-people
-service user-without delete collection returns-true at widget
-service user-partial delete collection returns-true at widget
-service user-without publish collection returns-true at widget
-service user-without unpublish collection returns-true at widget
-service user-partial unpublish collection returns-true at widget
-service key-read-only read collection returns-false at widget
-service key-full-access read collection returns-false at widget
-service key-role-based read collection returns-false at widget
-service key-super-admin read collection returns-false at widget
-service key-partial read collection returns-false at widget
-service key-full-access create collection returns-false at widget
-service key-role-based create collection returns-false at widget
-service key-super-admin create collection returns-false at widget
-service key-full-access update collection returns-false at widget
-service key-role-based update collection returns-false at widget
-service key-super-admin update collection returns-false at widget
-service key-partial update collection returns-false at widget
-service key-full-access delete collection returns-false at widget
-service key-role-based delete collection returns-false at widget
-service key-super-admin delete collection returns-false at widget
-service key-full-access publish collection returns-false at widget
-service key-role-based publish collection returns-false at widget
-service key-super-admin publish collection returns-false at widget
-service key-partial publish collection returns-false at widget
-service key-full-access unpublish collection returns-false at widget
-service key-role-based unpublish collection returns-false at widget
-service key-super-admin unpublish collection returns-false at widget
-service key-read-only read collection returns-null at widget
-service key-full-access read collection returns-null at widget
-service key-role-based read collection returns-null at widget
-service key-super-admin read collection returns-null at widget
-service key-partial read collection returns-null at widget
-service key-full-access create collection returns-null at widget
-service key-role-based create collection returns-null at widget
-service key-super-admin create collection returns-null at widget
-service key-full-access update collection returns-null at widget
-service key-role-based update collection returns-null at widget
-service key-super-admin update collection returns-null at widget
-service key-partial update collection returns-null at widget
-service key-full-access delete collection returns-null at widget
-service key-role-based delete collection returns-null at widget
-service key-super-admin delete collection returns-null at widget
-service key-full-access publish collection returns-null at widget
-service key-role-based publish collection returns-null at widget
-service key-super-admin publish collection returns-null at widget
-service key-partial publish collection returns-null at widget
-service key-full-access unpublish collection returns-null at widget
-service key-role-based unpublish collection returns-null at widget
-service key-super-admin unpublish collection returns-null at widget
-service key-read-only read collection returns-undefined at widget
-service key-full-access read collection returns-undefined at widget
-service key-role-based read collection returns-undefined at widget
-service key-super-admin read collection returns-undefined at widget
-service key-partial read collection returns-undefined at widget
-service key-full-access create collection returns-undefined at widget
-service key-role-based create collection returns-undefined at widget
-service key-super-admin create collection returns-undefined at widget
-service key-full-access update collection returns-undefined at widget
-service key-role-based update collection returns-undefined at widget
-service key-super-admin update collection returns-undefined at widget
-service key-partial update collection returns-undefined at widget
-service key-full-access delete collection returns-undefined at widget
-service key-role-based delete collection returns-undefined at widget
-service key-super-admin delete collection returns-undefined at widget
-service key-full-access publish collection returns-undefined at widget
-service key-role-based publish collection returns-undefined at widget
-service key-super-admin publish collection returns-undefined at widget
-service key-partial publish collection returns-undefined at widget
-service key-full-access unpublish collection returns-undefined at widget
-service key-role-based unpublish collection returns-undefined at widget
-service key-super-admin unpublish collection returns-undefined at widget
-service key-read-only read collection throws at widget
-service key-full-access read collection throws at widget
-service key-role-based read collection throws at widget
-service key-super-admin read collection throws at widget
-service key-partial read collection throws at widget
-service key-full-access create collection throws at widget
-service key-role-based create collection throws at widget
-service key-super-admin create collection throws at widget
-service key-full-access update collection throws at widget
-service key-role-based update collection throws at widget
-service key-super-admin update collection throws at widget
-service key-partial update collection throws at widget
-service key-full-access delete collection throws at widget
-service key-role-based delete collection throws at widget
-service key-super-admin delete collection throws at widget
-service key-full-access publish collection throws at widget
-service key-role-based publish collection throws at widget
-service key-super-admin publish collection throws at widget
-service key-partial publish collection throws at widget
-service key-full-access unpublish collection throws at widget
-service key-role-based unpublish collection throws at widget
-service key-super-admin unpublish collection throws at widget
-service user-without read collection async-true at widget
-service user-without create collection async-true at widget
-service user-partial create collection async-true at widget
-service user-without update collection async-true at widget
-service user-without update collection async-true at lock  # rule-alone-for-people
-service user-without delete collection async-true at widget
-service user-partial delete collection async-true at widget
-service user-without publish collection async-true at widget
-service user-without unpublish collection async-true at widget
-service user-partial unpublish collection async-true at widget
-service key-read-only read collection async-false at widget
-service key-full-access read collection async-false at widget
-service key-role-based read collection async-false at widget
-service key-super-admin read collection async-false at widget
-service key-partial read collection async-false at widget
-service key-full-access create collection async-false at widget
-service key-role-based create collection async-false at widget
-service key-super-admin create collection async-false at widget
-service key-full-access update collection async-false at widget
-service key-role-based update collection async-false at widget
-service key-super-admin update collection async-false at widget
-service key-partial update collection async-false at widget
-service key-full-access delete collection async-false at widget
-service key-role-based delete collection async-false at widget
-service key-super-admin delete collection async-false at widget
-service key-full-access publish collection async-false at widget
-service key-role-based publish collection async-false at widget
-service key-super-admin publish collection async-false at widget
-service key-partial publish collection async-false at widget
-service key-full-access unpublish collection async-false at widget
-service key-role-based unpublish collection async-false at widget
-service key-super-admin unpublish collection async-false at widget
-service key-read-only read collection async-throws at widget
-service key-full-access read collection async-throws at widget
-service key-role-based read collection async-throws at widget
-service key-super-admin read collection async-throws at widget
-service key-partial read collection async-throws at widget
-service key-full-access create collection async-throws at widget
-service key-role-based create collection async-throws at widget
-service key-super-admin create collection async-throws at widget
-service key-full-access update collection async-throws at widget
-service key-role-based update collection async-throws at widget
-service key-super-admin update collection async-throws at widget
-service key-partial update collection async-throws at widget
-service key-full-access delete collection async-throws at widget
-service key-role-based delete collection async-throws at widget
-service key-super-admin delete collection async-throws at widget
-service key-full-access publish collection async-throws at widget
-service key-role-based publish collection async-throws at widget
-service key-super-admin publish collection async-throws at widget
-service key-partial publish collection async-throws at widget
-service key-full-access unpublish collection async-throws at widget
-service key-role-based unpublish collection async-throws at widget
-service key-super-admin unpublish collection async-throws at widget
-service key-full-access update collection other-operation at widget
-service key-role-based update collection other-operation at widget
-service key-super-admin update collection other-operation at widget
-service key-partial update collection other-operation at widget
-service user-with publish collection other-operation at widget
-service custom-role publish collection other-operation at widget
-service key-full-access publish collection other-operation at widget
-service key-role-based publish collection other-operation at widget
-service key-super-admin publish collection other-operation at widget
-service user-partial publish collection other-operation at widget
-service key-partial publish collection other-operation at widget
-service user-with unpublish collection other-operation at widget
-service custom-role unpublish collection other-operation at widget
-service key-full-access unpublish collection other-operation at widget
-service key-role-based unpublish collection other-operation at widget
-service key-super-admin unpublish collection other-operation at widget
-service key-role-based read collection role-name at widget
-service key-super-admin read collection role-name at widget
-service key-partial read collection role-name at widget
-service key-role-based create collection role-name at widget
-service key-super-admin create collection role-name at widget
-service key-role-based update collection role-name at widget
-service key-super-admin update collection role-name at widget
-service key-partial update collection role-name at widget
-service key-role-based delete collection role-name at widget
-service key-super-admin delete collection role-name at widget
-service key-role-based publish collection role-name at widget
-service key-super-admin publish collection role-name at widget
-service key-partial publish collection role-name at widget
-service key-role-based unpublish collection role-name at widget
-service key-super-admin unpublish collection role-name at widget
-service key-read-only read collection principal-kind at widget
-service key-full-access read collection principal-kind at widget
-service key-role-based read collection principal-kind at widget
-service key-super-admin read collection principal-kind at widget
-service key-partial read collection principal-kind at widget
-service key-full-access create collection principal-kind at widget
-service key-role-based create collection principal-kind at widget
-service key-super-admin create collection principal-kind at widget
-service key-full-access update collection principal-kind at widget
-service key-role-based update collection principal-kind at widget
-service key-super-admin update collection principal-kind at widget
-service key-partial update collection principal-kind at widget
-service key-full-access delete collection principal-kind at widget
-service key-role-based delete collection principal-kind at widget
-service key-super-admin delete collection principal-kind at widget
-service key-full-access publish collection principal-kind at widget
-service key-role-based publish collection principal-kind at widget
-service key-super-admin publish collection principal-kind at widget
-service key-partial publish collection principal-kind at widget
-service key-full-access unpublish collection principal-kind at widget
-service key-role-based unpublish collection principal-kind at widget
-service key-super-admin unpublish collection principal-kind at widget
-service key-super-admin read collection user-is-key-maker at widget
-service key-super-admin create collection user-is-key-maker at widget
-service key-super-admin update collection user-is-key-maker at widget
-service key-super-admin delete collection user-is-key-maker at widget
-service key-super-admin publish collection user-is-key-maker at widget
-service key-super-admin unpublish collection user-is-key-maker at widget
-service key-full-access publish collection publish-false at widget
-service key-role-based publish collection publish-false at widget
-service key-super-admin publish collection publish-false at widget
-service key-partial publish collection publish-false at widget
-service key-full-access unpublish collection publish-false at widget
-service key-role-based unpublish collection publish-false at widget
-service key-super-admin unpublish collection publish-false at widget
-service user-without read single true at widget
-service user-without update single true at widget
-service user-without update single true at lock  # rule-alone-for-people
-service key-read-only read single false at widget
-service key-full-access read single false at widget
-service key-role-based read single false at widget
-service key-super-admin read single false at widget
-service key-partial read single false at widget
-service key-full-access update single false at widget
-service key-role-based update single false at widget
-service key-super-admin update single false at widget
-service key-partial update single false at widget
-service user-without read single returns-true at widget
-service user-without update single returns-true at widget
-service user-without update single returns-true at lock  # rule-alone-for-people
-service key-read-only read single returns-false at widget
-service key-full-access read single returns-false at widget
-service key-role-based read single returns-false at widget
-service key-super-admin read single returns-false at widget
-service key-partial read single returns-false at widget
-service key-full-access update single returns-false at widget
-service key-role-based update single returns-false at widget
-service key-super-admin update single returns-false at widget
-service key-partial update single returns-false at widget
-service key-read-only read single returns-null at widget
-service key-full-access read single returns-null at widget
-service key-role-based read single returns-null at widget
-service key-super-admin read single returns-null at widget
-service key-partial read single returns-null at widget
-service key-full-access update single returns-null at widget
-service key-role-based update single returns-null at widget
-service key-super-admin update single returns-null at widget
-service key-partial update single returns-null at widget
-service key-read-only read single returns-undefined at widget
-service key-full-access read single returns-undefined at widget
-service key-role-based read single returns-undefined at widget
-service key-super-admin read single returns-undefined at widget
-service key-partial read single returns-undefined at widget
-service key-full-access update single returns-undefined at widget
-service key-role-based update single returns-undefined at widget
-service key-super-admin update single returns-undefined at widget
-service key-partial update single returns-undefined at widget
-service key-read-only read single throws at widget
-service key-full-access read single throws at widget
-service key-role-based read single throws at widget
-service key-super-admin read single throws at widget
-service key-partial read single throws at widget
-service key-full-access update single throws at widget
-service key-role-based update single throws at widget
-service key-super-admin update single throws at widget
-service key-partial update single throws at widget
-service user-without read single async-true at widget
-service user-without update single async-true at widget
-service user-without update single async-true at lock  # rule-alone-for-people
-service key-read-only read single async-false at widget
-service key-full-access read single async-false at widget
-service key-role-based read single async-false at widget
-service key-super-admin read single async-false at widget
-service key-partial read single async-false at widget
-service key-full-access update single async-false at widget
-service key-role-based update single async-false at widget
-service key-super-admin update single async-false at widget
-service key-partial update single async-false at widget
-service key-read-only read single async-throws at widget
-service key-full-access read single async-throws at widget
-service key-role-based read single async-throws at widget
-service key-super-admin read single async-throws at widget
-service key-partial read single async-throws at widget
-service key-full-access update single async-throws at widget
-service key-role-based update single async-throws at widget
-service key-super-admin update single async-throws at widget
-service key-partial update single async-throws at widget
-service key-full-access update single other-operation at widget
-service key-role-based update single other-operation at widget
-service key-super-admin update single other-operation at widget
-service key-partial update single other-operation at widget
-service key-role-based read single role-name at widget
-service key-super-admin read single role-name at widget
-service key-partial read single role-name at widget
-service key-role-based update single role-name at widget
-service key-super-admin update single role-name at widget
-service key-partial update single role-name at widget
-service key-read-only read single principal-kind at widget
-service key-full-access read single principal-kind at widget
-service key-role-based read single principal-kind at widget
-service key-super-admin read single principal-kind at widget
-service key-partial read single principal-kind at widget
-service key-full-access update single principal-kind at widget
-service key-role-based update single principal-kind at widget
-service key-super-admin update single principal-kind at widget
-service key-partial update single principal-kind at widget
-service key-super-admin read single user-is-key-maker at widget
-service key-super-admin update single user-is-key-maker at widget
-service user-without publish single-pub true at widget
-service user-without unpublish single-pub true at widget
-service user-partial unpublish single-pub true at widget
-service key-full-access publish single-pub false at widget
-service key-role-based publish single-pub false at widget
-service key-super-admin publish single-pub false at widget
-service key-partial publish single-pub false at widget
-service key-full-access unpublish single-pub false at widget
-service key-role-based unpublish single-pub false at widget
-service key-super-admin unpublish single-pub false at widget
-service user-without publish single-pub returns-true at widget
-service user-without unpublish single-pub returns-true at widget
-service user-partial unpublish single-pub returns-true at widget
-service key-full-access publish single-pub returns-false at widget
-service key-role-based publish single-pub returns-false at widget
-service key-super-admin publish single-pub returns-false at widget
-service key-partial publish single-pub returns-false at widget
-service key-full-access unpublish single-pub returns-false at widget
-service key-role-based unpublish single-pub returns-false at widget
-service key-super-admin unpublish single-pub returns-false at widget
-service key-full-access publish single-pub returns-null at widget
-service key-role-based publish single-pub returns-null at widget
-service key-super-admin publish single-pub returns-null at widget
-service key-partial publish single-pub returns-null at widget
-service key-full-access unpublish single-pub returns-null at widget
-service key-role-based unpublish single-pub returns-null at widget
-service key-super-admin unpublish single-pub returns-null at widget
-service key-full-access publish single-pub returns-undefined at widget
-service key-role-based publish single-pub returns-undefined at widget
-service key-super-admin publish single-pub returns-undefined at widget
-service key-partial publish single-pub returns-undefined at widget
-service key-full-access unpublish single-pub returns-undefined at widget
-service key-role-based unpublish single-pub returns-undefined at widget
-service key-super-admin unpublish single-pub returns-undefined at widget
-service key-full-access publish single-pub throws at widget
-service key-role-based publish single-pub throws at widget
-service key-super-admin publish single-pub throws at widget
-service key-partial publish single-pub throws at widget
-service key-full-access unpublish single-pub throws at widget
-service key-role-based unpublish single-pub throws at widget
-service key-super-admin unpublish single-pub throws at widget
-service user-without publish single-pub async-true at widget
-service user-without unpublish single-pub async-true at widget
-service user-partial unpublish single-pub async-true at widget
-service key-full-access publish single-pub async-false at widget
-service key-role-based publish single-pub async-false at widget
-service key-super-admin publish single-pub async-false at widget
-service key-partial publish single-pub async-false at widget
-service key-full-access unpublish single-pub async-false at widget
-service key-role-based unpublish single-pub async-false at widget
-service key-super-admin unpublish single-pub async-false at widget
-service key-full-access publish single-pub async-throws at widget
-service key-role-based publish single-pub async-throws at widget
-service key-super-admin publish single-pub async-throws at widget
-service key-partial publish single-pub async-throws at widget
-service key-full-access unpublish single-pub async-throws at widget
-service key-role-based unpublish single-pub async-throws at widget
-service key-super-admin unpublish single-pub async-throws at widget
-service user-with publish single-pub other-operation at widget
-service custom-role publish single-pub other-operation at widget
-service key-full-access publish single-pub other-operation at widget
-service key-role-based publish single-pub other-operation at widget
-service key-super-admin publish single-pub other-operation at widget
-service user-partial publish single-pub other-operation at widget
-service key-partial publish single-pub other-operation at widget
-service user-with unpublish single-pub other-operation at widget
-service custom-role unpublish single-pub other-operation at widget
-service key-full-access unpublish single-pub other-operation at widget
-service key-role-based unpublish single-pub other-operation at widget
-service key-super-admin unpublish single-pub other-operation at widget
-service key-role-based publish single-pub role-name at widget
-service key-super-admin publish single-pub role-name at widget
-service key-partial publish single-pub role-name at widget
-service key-role-based unpublish single-pub role-name at widget
-service key-super-admin unpublish single-pub role-name at widget
-service key-full-access publish single-pub principal-kind at widget
-service key-role-based publish single-pub principal-kind at widget
-service key-super-admin publish single-pub principal-kind at widget
-service key-partial publish single-pub principal-kind at widget
-service key-full-access unpublish single-pub principal-kind at widget
-service key-role-based unpublish single-pub principal-kind at widget
-service key-super-admin unpublish single-pub principal-kind at widget
-service key-super-admin publish single-pub user-is-key-maker at widget
-service key-super-admin unpublish single-pub user-is-key-maker at widget
-service key-full-access publish single-pub publish-false at widget
-service key-role-based publish single-pub publish-false at widget
-service key-super-admin publish single-pub publish-false at widget
-service key-partial publish single-pub publish-false at widget
-service key-full-access unpublish single-pub publish-false at widget
-service key-role-based unpublish single-pub publish-false at widget
-service key-super-admin unpublish single-pub publish-false at widget
-no-service user-with read collection none at widget
-no-service user-with read collection returns-true at widget
-no-service key-role-based read collection returns-false at widget
-no-service key-role-based read collection returns-null at widget
-no-service user-with read single none at widget
-no-service user-with read single returns-true at widget
-no-service key-role-based read single returns-false at widget
-no-service key-role-based read single returns-null at widget
+no-service visitor read media none at population  # visitor-public-default, no-service, visitor-keeps-media
+bound visitor read related async-true at population  # visitor-public-default
+bound visitor read related none at population  # visitor-public-default
+bound visitor read related other-operation at population  # visitor-public-default
+bound visitor read related publish-false at population  # visitor-public-default
+bound visitor read related returns-true at population  # visitor-public-default
+bound visitor read related returns-filter at population  # visitor-public-default
+bound visitor read related async-filter at population  # visitor-public-default
+bound visitor read related true at population  # visitor-public-default
+service key-read-only read collection false at widget  # holds-permission-key-skips-rules
+service key-full-access read collection false at widget  # holds-permission-key-skips-rules
+service key-role-based read collection false at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection false at widget  # holds-permission-key-skips-rules
+service key-partial read collection false at widget  # holds-permission-key-skips-rules
+service key-full-access create collection false at widget  # holds-permission-key-skips-rules
+service key-role-based create collection false at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection false at widget  # holds-permission-key-skips-rules
+service key-full-access update collection false at widget  # holds-permission-key-skips-rules
+service key-role-based update collection false at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection false at widget  # holds-permission-key-skips-rules
+service key-partial update collection false at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection false at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection false at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection false at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection false at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection false at widget  # holds-permission-key-skips-rules
+service key-partial publish collection false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection false at widget  # holds-permission-key-skips-rules
+service key-read-only read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-read-only read collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access read collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based read collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-partial read collection returns-false at widget  # holds-permission-key-skips-rules
+service key-partial read collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access create collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access create collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based create collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based create collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access update collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access update collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based update collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based update collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-partial update collection returns-false at widget  # holds-permission-key-skips-rules
+service key-partial update collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-partial publish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-partial publish collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection permission-spelling at widget  # holds-permission-key-skips-rules
+service key-read-only read collection returns-null at widget  # holds-permission-key-skips-rules
+service key-read-only read collection returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access read collection returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access read collection returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based read collection returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based read collection returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection returns-string at widget  # holds-permission-key-skips-rules
+service key-partial read collection returns-null at widget  # holds-permission-key-skips-rules
+service key-partial read collection returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access create collection returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access create collection returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based create collection returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based create collection returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access update collection returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access update collection returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based update collection returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based update collection returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection returns-string at widget  # holds-permission-key-skips-rules
+service key-partial update collection returns-null at widget  # holds-permission-key-skips-rules
+service key-partial update collection returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection returns-string at widget  # holds-permission-key-skips-rules
+service key-partial publish collection returns-null at widget  # holds-permission-key-skips-rules
+service key-partial publish collection returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection returns-string at widget  # holds-permission-key-skips-rules
+service key-read-only read collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access read collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based read collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-partial read collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access create collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based create collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access update collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based update collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-partial update collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-partial publish collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection returns-undefined at widget  # holds-permission-key-skips-rules
+service key-read-only read collection throws at widget  # holds-permission-key-skips-rules
+service key-full-access read collection throws at widget  # holds-permission-key-skips-rules
+service key-role-based read collection throws at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection throws at widget  # holds-permission-key-skips-rules
+service key-partial read collection throws at widget  # holds-permission-key-skips-rules
+service key-full-access create collection throws at widget  # holds-permission-key-skips-rules
+service key-role-based create collection throws at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection throws at widget  # holds-permission-key-skips-rules
+service key-full-access update collection throws at widget  # holds-permission-key-skips-rules
+service key-role-based update collection throws at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection throws at widget  # holds-permission-key-skips-rules
+service key-partial update collection throws at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection throws at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection throws at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection throws at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection throws at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection throws at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection throws at widget  # holds-permission-key-skips-rules
+service key-partial publish collection throws at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection throws at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection throws at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection throws at widget  # holds-permission-key-skips-rules
+service key-read-only read collection async-false at widget  # holds-permission-key-skips-rules
+service key-full-access read collection async-false at widget  # holds-permission-key-skips-rules
+service key-role-based read collection async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection async-false at widget  # holds-permission-key-skips-rules
+service key-partial read collection async-false at widget  # holds-permission-key-skips-rules
+service key-full-access create collection async-false at widget  # holds-permission-key-skips-rules
+service key-role-based create collection async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection async-false at widget  # holds-permission-key-skips-rules
+service key-full-access update collection async-false at widget  # holds-permission-key-skips-rules
+service key-role-based update collection async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection async-false at widget  # holds-permission-key-skips-rules
+service key-partial update collection async-false at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection async-false at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection async-false at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection async-false at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection async-false at widget  # holds-permission-key-skips-rules
+service key-partial publish collection async-false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection async-false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection async-false at widget  # holds-permission-key-skips-rules
+service key-read-only read collection async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access read collection async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based read collection async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection async-throws at widget  # holds-permission-key-skips-rules
+service key-partial read collection async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access create collection async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based create collection async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access update collection async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based update collection async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection async-throws at widget  # holds-permission-key-skips-rules
+service key-partial update collection async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection async-throws at widget  # holds-permission-key-skips-rules
+service key-partial publish collection async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access update collection other-operation at widget  # holds-permission-key-skips-rules
+service key-role-based update collection other-operation at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection other-operation at widget  # holds-permission-key-skips-rules
+service key-partial update collection other-operation at widget  # holds-permission-key-skips-rules
+service key-role-based read collection role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection role-name at widget  # holds-permission-key-skips-rules
+service key-partial read collection role-name at widget  # holds-permission-key-skips-rules
+service key-role-based create collection role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection role-name at widget  # holds-permission-key-skips-rules
+service key-role-based update collection role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection role-name at widget  # holds-permission-key-skips-rules
+service key-partial update collection role-name at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection role-name at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection role-name at widget  # holds-permission-key-skips-rules
+service key-partial publish collection role-name at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection role-name at widget  # holds-permission-key-skips-rules
+service key-read-only read collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access read collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based read collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-partial read collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access create collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based create collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access update collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based update collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-partial update collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-partial publish collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection publish-false at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection publish-false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection publish-false at widget  # holds-permission-key-skips-rules
+service key-partial publish collection publish-false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection publish-false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection publish-false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection publish-false at widget  # holds-permission-key-skips-rules
+service key-read-only read single false at widget  # holds-permission-key-skips-rules
+service key-full-access read single false at widget  # holds-permission-key-skips-rules
+service key-role-based read single false at widget  # holds-permission-key-skips-rules
+service key-super-admin read single false at widget  # holds-permission-key-skips-rules
+service key-partial read single false at widget  # holds-permission-key-skips-rules
+service key-full-access update single false at widget  # holds-permission-key-skips-rules
+service key-role-based update single false at widget  # holds-permission-key-skips-rules
+service key-super-admin update single false at widget  # holds-permission-key-skips-rules
+service key-partial update single false at widget  # holds-permission-key-skips-rules
+service key-read-only read single returns-false at widget  # holds-permission-key-skips-rules
+service key-read-only read single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access read single returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access read single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based read single returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based read single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin read single returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin read single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-partial read single returns-false at widget  # holds-permission-key-skips-rules
+service key-partial read single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access update single returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access update single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based update single returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based update single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin update single returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin update single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-partial update single returns-false at widget  # holds-permission-key-skips-rules
+service key-partial update single permission-spelling at widget  # holds-permission-key-skips-rules
+service key-read-only read single returns-null at widget  # holds-permission-key-skips-rules
+service key-read-only read single returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access read single returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access read single returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based read single returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based read single returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin read single returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin read single returns-string at widget  # holds-permission-key-skips-rules
+service key-partial read single returns-null at widget  # holds-permission-key-skips-rules
+service key-partial read single returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access update single returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access update single returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based update single returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based update single returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin update single returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin update single returns-string at widget  # holds-permission-key-skips-rules
+service key-partial update single returns-null at widget  # holds-permission-key-skips-rules
+service key-partial update single returns-string at widget  # holds-permission-key-skips-rules
+service key-read-only read single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access read single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based read single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin read single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-partial read single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access update single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based update single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin update single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-partial update single returns-undefined at widget  # holds-permission-key-skips-rules
+service key-read-only read single throws at widget  # holds-permission-key-skips-rules
+service key-full-access read single throws at widget  # holds-permission-key-skips-rules
+service key-role-based read single throws at widget  # holds-permission-key-skips-rules
+service key-super-admin read single throws at widget  # holds-permission-key-skips-rules
+service key-partial read single throws at widget  # holds-permission-key-skips-rules
+service key-full-access update single throws at widget  # holds-permission-key-skips-rules
+service key-role-based update single throws at widget  # holds-permission-key-skips-rules
+service key-super-admin update single throws at widget  # holds-permission-key-skips-rules
+service key-partial update single throws at widget  # holds-permission-key-skips-rules
+service key-read-only read single async-false at widget  # holds-permission-key-skips-rules
+service key-full-access read single async-false at widget  # holds-permission-key-skips-rules
+service key-role-based read single async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin read single async-false at widget  # holds-permission-key-skips-rules
+service key-partial read single async-false at widget  # holds-permission-key-skips-rules
+service key-full-access update single async-false at widget  # holds-permission-key-skips-rules
+service key-role-based update single async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin update single async-false at widget  # holds-permission-key-skips-rules
+service key-partial update single async-false at widget  # holds-permission-key-skips-rules
+service key-read-only read single async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access read single async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based read single async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin read single async-throws at widget  # holds-permission-key-skips-rules
+service key-partial read single async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access update single async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based update single async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin update single async-throws at widget  # holds-permission-key-skips-rules
+service key-partial update single async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access update single other-operation at widget  # holds-permission-key-skips-rules
+service key-role-based update single other-operation at widget  # holds-permission-key-skips-rules
+service key-super-admin update single other-operation at widget  # holds-permission-key-skips-rules
+service key-partial update single other-operation at widget  # holds-permission-key-skips-rules
+service key-role-based read single role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin read single role-name at widget  # holds-permission-key-skips-rules
+service key-partial read single role-name at widget  # holds-permission-key-skips-rules
+service key-role-based update single role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin update single role-name at widget  # holds-permission-key-skips-rules
+service key-partial update single role-name at widget  # holds-permission-key-skips-rules
+service key-read-only read single principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access read single principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based read single principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin read single principal-kind at widget  # holds-permission-key-skips-rules
+service key-partial read single principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access update single principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based update single principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin update single principal-kind at widget  # holds-permission-key-skips-rules
+service key-partial update single principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin read single user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-super-admin update single user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub false at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub false at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub false at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub returns-false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub permission-spelling at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub returns-string at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub returns-null at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub returns-null at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub returns-string at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub returns-null at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub returns-string at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub returns-null at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub returns-string at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub returns-undefined at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub returns-undefined at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub returns-undefined at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub returns-undefined at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub throws at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub throws at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub throws at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub throws at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub throws at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub throws at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub throws at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub async-false at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub async-false at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub async-false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub async-false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub async-false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub async-false at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub async-throws at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub async-throws at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub async-throws at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub role-name at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub role-name at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub role-name at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub role-name at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub principal-kind at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub principal-kind at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub principal-kind at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub principal-kind at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub user-is-key-maker at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub publish-false at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub publish-false at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub publish-false at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub publish-false at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub publish-false at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub publish-false at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub publish-false at widget  # holds-permission-key-skips-rules
+no-service user-with read collection none at widget  # can-no-service-refuses-people
+no-service user-with read collection returns-true at widget  # can-no-service-refuses-people
+no-service key-role-based read collection returns-false at widget  # holds-permission-key-skips-rules
+no-service key-role-based read collection returns-false at capabilities  # no-service
+no-service key-role-based read collection returns-null at widget  # holds-permission-key-skips-rules
+no-service key-role-based read collection returns-null at capabilities  # no-service
+no-service user-with read single none at widget  # can-no-service-refuses-people
+no-service user-with read single returns-true at widget  # can-no-service-refuses-people
+no-service key-role-based read single returns-false at widget  # holds-permission-key-skips-rules
+no-service key-role-based read single returns-false at capabilities  # no-service
+no-service key-role-based read single returns-null at widget  # holds-permission-key-skips-rules
+no-service key-role-based read single returns-null at capabilities  # no-service
+
+# A visitor's write, allowed only by a rule that answers `true`: with no
+# rule naming the write, the visitor is refused, as the one decision refuses
+# it, so only the rules that say `true` remain here.
+service visitor create collection true at direct  # visitor-write-by-rule
+service visitor create collection true at service  # visitor-write-by-rule
+service visitor update collection true at direct  # visitor-write-by-rule
+service visitor update collection true at service  # visitor-write-by-rule
+service visitor delete collection true at direct  # visitor-write-by-rule
+service visitor delete collection true at service  # visitor-write-by-rule
+service visitor update single true at direct  # visitor-write-by-rule
+service visitor create collection returns-true at direct  # visitor-write-by-rule
+service visitor create collection returns-true at service  # visitor-write-by-rule
+service visitor update collection returns-true at direct  # visitor-write-by-rule
+service visitor update collection returns-true at service  # visitor-write-by-rule
+service visitor delete collection returns-true at direct  # visitor-write-by-rule
+service visitor delete collection returns-true at service  # visitor-write-by-rule
+service visitor update single returns-true at direct  # visitor-write-by-rule
+service visitor create collection async-true at direct  # visitor-write-by-rule
+service visitor create collection async-true at service  # visitor-write-by-rule
+service visitor update collection async-true at direct  # visitor-write-by-rule
+service visitor update collection async-true at service  # visitor-write-by-rule
+service visitor delete collection async-true at direct  # visitor-write-by-rule
+service visitor delete collection async-true at service  # visitor-write-by-rule
+service visitor update single async-true at direct  # visitor-write-by-rule
+
+# A rule that answers with a filter, where its one answer is a refusal as
+# `returns-string`'s is (any write, and any filter that is not well formed),
+# disagrees where that rule does: only at the doors that ignore a rule's
+# answer.
+service key-full-access create collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based create collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access update collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based update collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-partial update collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-partial publish collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection returns-filter at widget  # holds-permission-key-skips-rules
+service key-read-only read single returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access read single returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based read single returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin read single returns-filter at widget  # holds-permission-key-skips-rules
+service key-partial read single returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access update single returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based update single returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin update single returns-filter at widget  # holds-permission-key-skips-rules
+service key-partial update single returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub returns-filter at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub returns-filter at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub returns-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub returns-filter at widget  # holds-permission-key-skips-rules
+service key-full-access create collection async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based create collection async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection async-filter at widget  # holds-permission-key-skips-rules
+service key-full-access update collection async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based update collection async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection async-filter at widget  # holds-permission-key-skips-rules
+service key-partial update collection async-filter at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection async-filter at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection async-filter at widget  # holds-permission-key-skips-rules
+service key-partial publish collection async-filter at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection async-filter at widget  # holds-permission-key-skips-rules
+service key-read-only read single async-filter at widget  # holds-permission-key-skips-rules
+service key-full-access read single async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based read single async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin read single async-filter at widget  # holds-permission-key-skips-rules
+service key-partial read single async-filter at widget  # holds-permission-key-skips-rules
+service key-full-access update single async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based update single async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin update single async-filter at widget  # holds-permission-key-skips-rules
+service key-partial update single async-filter at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub async-filter at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub async-filter at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub async-filter at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub async-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub async-filter at widget  # holds-permission-key-skips-rules
+service user-with read collection returns-empty-in at schema  # schema-list-ignores-rules
+service custom-role read collection returns-empty-in at schema  # schema-list-ignores-rules
+service key-read-only read collection returns-empty-in at schema  # schema-list-ignores-rules
+service key-full-access read collection returns-empty-in at schema  # schema-list-ignores-rules
+service key-role-based read collection returns-empty-in at schema  # schema-list-ignores-rules
+service key-super-admin read collection returns-empty-in at schema  # schema-list-ignores-rules
+service user-partial read collection returns-empty-in at schema  # schema-list-ignores-rules
+service key-partial read collection returns-empty-in at schema  # schema-list-ignores-rules
+service key-read-only read collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access read collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based read collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-partial read collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access create collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based create collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access update collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based update collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-partial update collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-partial publish collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-read-only read single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access read single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based read single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin read single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-partial read single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access update single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based update single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin update single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-partial update single returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub returns-empty-in at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub returns-empty-in at widget  # holds-permission-key-skips-rules
+service user-with read collection malformed-filter at schema  # schema-list-ignores-rules
+service custom-role read collection malformed-filter at schema  # schema-list-ignores-rules
+service key-read-only read collection malformed-filter at schema  # schema-list-ignores-rules
+service key-full-access read collection malformed-filter at schema  # schema-list-ignores-rules
+service key-role-based read collection malformed-filter at schema  # schema-list-ignores-rules
+service key-super-admin read collection malformed-filter at schema  # schema-list-ignores-rules
+service user-partial read collection malformed-filter at schema  # schema-list-ignores-rules
+service key-partial read collection malformed-filter at schema  # schema-list-ignores-rules
+service key-read-only read collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access read collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based read collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin read collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-partial read collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access create collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based create collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin create collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access update collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based update collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin update collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-partial update collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access delete collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based delete collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin delete collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access publish collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based publish collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin publish collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-partial publish collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish collection malformed-filter at widget  # holds-permission-key-skips-rules
+service key-read-only read single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access read single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based read single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin read single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-partial read single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access update single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based update single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin update single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-partial update single malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access publish single-pub malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based publish single-pub malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin publish single-pub malformed-filter at widget  # holds-permission-key-skips-rules
+service key-partial publish single-pub malformed-filter at widget  # holds-permission-key-skips-rules
+service key-full-access unpublish single-pub malformed-filter at widget  # holds-permission-key-skips-rules
+service key-role-based unpublish single-pub malformed-filter at widget  # holds-permission-key-skips-rules
+service key-super-admin unpublish single-pub malformed-filter at widget  # holds-permission-key-skips-rules
+
+# With no access-control service, a filter's cells are the same as
+# `returns-false`'s: the fallbacks that read no rule disagree there.
+no-service visitor read collection returns-filter at direct  # visitor-public-default
+no-service visitor read single returns-filter at direct  # visitor-public-default
+no-service user-with read single returns-filter at rest
+no-service user-with read single returns-filter at direct  # no-service
+no-service user-without read single returns-filter at direct  # no-service
+no-service key-role-based read single returns-filter at rest
+no-service key-role-based read single returns-filter at direct  # no-service
+no-service key-role-based read single returns-filter at can  # no-service
+no-service key-role-based read single returns-filter at entity  # no-service
+no-service visitor read related returns-filter at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service key-role-based read single returns-filter at widget  # holds-permission-key-skips-rules
+no-service key-role-based read single returns-filter at capabilities  # no-service
+no-service visitor read collection async-filter at direct  # visitor-public-default
+no-service visitor read single async-filter at direct  # visitor-public-default
+no-service user-with read single async-filter at rest
+no-service user-with read single async-filter at direct  # no-service
+no-service user-without read single async-filter at direct  # no-service
+no-service key-role-based read single async-filter at rest
+no-service key-role-based read single async-filter at direct  # no-service
+no-service key-role-based read single async-filter at can  # no-service
+no-service key-role-based read single async-filter at entity  # no-service
+no-service visitor read related async-filter at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service key-role-based read single async-filter at widget  # holds-permission-key-skips-rules
+no-service key-role-based read single async-filter at capabilities  # no-service
+no-service visitor read collection returns-empty-in at direct  # visitor-public-default
+no-service user-with read collection returns-empty-in at rest
+no-service user-with read collection returns-empty-in at direct  # no-service
+no-service key-role-based read collection returns-empty-in at rest
+no-service key-role-based read collection returns-empty-in at direct  # no-service
+no-service key-role-based read collection returns-empty-in at can  # no-service
+no-service key-role-based read collection returns-empty-in at entity  # no-service
+no-service visitor read single returns-empty-in at direct  # visitor-public-default
+no-service user-with read single returns-empty-in at rest
+no-service user-with read single returns-empty-in at direct  # no-service
+no-service user-without read single returns-empty-in at direct  # no-service
+no-service key-role-based read single returns-empty-in at rest
+no-service key-role-based read single returns-empty-in at direct  # no-service
+no-service key-role-based read single returns-empty-in at can  # no-service
+no-service key-role-based read single returns-empty-in at entity  # no-service
+no-service visitor read related returns-empty-in at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service user-with read related returns-empty-in at population  # no-service
+no-service key-role-based read related returns-empty-in at population  # no-service
+no-service key-role-based read collection returns-empty-in at widget  # holds-permission-key-skips-rules
+no-service key-role-based read collection returns-empty-in at capabilities  # no-service
+no-service key-role-based read single returns-empty-in at widget  # holds-permission-key-skips-rules
+no-service key-role-based read single returns-empty-in at capabilities  # no-service
+no-service visitor read collection malformed-filter at direct  # visitor-public-default
+no-service user-with read collection malformed-filter at rest
+no-service user-with read collection malformed-filter at direct  # no-service
+no-service key-role-based read collection malformed-filter at rest
+no-service key-role-based read collection malformed-filter at direct  # no-service
+no-service key-role-based read collection malformed-filter at can  # no-service
+no-service key-role-based read collection malformed-filter at entity  # no-service
+no-service visitor read single malformed-filter at direct  # visitor-public-default
+no-service user-with read single malformed-filter at rest
+no-service user-with read single malformed-filter at direct  # no-service
+no-service user-without read single malformed-filter at direct  # no-service
+no-service key-role-based read single malformed-filter at rest
+no-service key-role-based read single malformed-filter at direct  # no-service
+no-service key-role-based read single malformed-filter at can  # no-service
+no-service key-role-based read single malformed-filter at entity  # no-service
+no-service visitor read related malformed-filter at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service user-with read related malformed-filter at population  # no-service
+no-service key-role-based read related malformed-filter at population  # no-service
+no-service key-role-based read collection malformed-filter at widget  # holds-permission-key-skips-rules
+no-service key-role-based read collection malformed-filter at capabilities  # no-service
+no-service key-role-based read single malformed-filter at widget  # holds-permission-key-skips-rules
+no-service key-role-based read single malformed-filter at capabilities  # no-service
+
+# A collection's read rule that answers a well-formed filter allows the
+# entries it matches. Each door below refuses it still, as no read there
+# applies a rule's filter yet.
+bound key-without-rows read related async-filter at population  # key-slug-string-match, filter-not-applied
+bound key-without-rows read related returns-filter at population  # key-slug-string-match, filter-not-applied
+no-service user-with read collection async-filter at can  # can-no-service-refuses-people
+no-service user-with read collection async-filter at capabilities  # no-service
+no-service user-with read collection async-filter at entity  # no-service
+no-service user-with read collection async-filter at widget  # can-no-service-refuses-people
+no-service user-with read collection returns-filter at can  # can-no-service-refuses-people
+no-service user-with read collection returns-filter at capabilities  # no-service
+no-service user-with read collection returns-filter at entity  # no-service
+no-service user-with read collection returns-filter at widget  # can-no-service-refuses-people
+service custom-role read collection async-filter at route  # filter-not-applied
+service custom-role read collection returns-filter at route  # filter-not-applied
+service key-full-access read collection async-filter at route  # filter-not-applied
+service key-full-access read collection returns-filter at route  # filter-not-applied
+service key-partial read collection async-filter at route  # filter-not-applied
+service key-partial read collection returns-filter at route  # filter-not-applied
+service key-read-only read collection async-filter at route  # filter-not-applied
+service key-read-only read collection returns-filter at route  # filter-not-applied
+service key-role-based read collection async-filter at route  # filter-not-applied
+service key-role-based read collection returns-filter at route  # filter-not-applied
+service key-super-admin read collection async-filter at route  # filter-not-applied
+service key-super-admin read collection returns-filter at route  # filter-not-applied
+service key-without-rows read collection async-filter at entity  # key-slug-string-match, filter-not-applied
+service key-without-rows read collection returns-filter at entity  # key-slug-string-match, filter-not-applied
+service key-without-rows read related async-filter at population  # key-slug-string-match, filter-not-applied
+service key-without-rows read related returns-filter at population  # key-slug-string-match, filter-not-applied
+service user-partial read collection async-filter at route  # filter-not-applied
+service user-partial read collection returns-filter at route  # filter-not-applied
+service user-with read collection async-filter at route  # filter-not-applied
+service user-with read collection returns-filter at route  # filter-not-applied
+
+# A visitor whose collection read rule answers a well-formed filter is shown
+# the entries it matches, as the public default shows every entry to a rule
+# answering `true`.
+service visitor count collection async-filter at direct  # visitor-public-default
+service visitor count collection async-filter at service  # visitor-public-default
+service visitor count collection returns-filter at direct  # visitor-public-default
+service visitor count collection returns-filter at service  # visitor-public-default
+service visitor list collection async-filter at direct  # visitor-public-default
+service visitor list collection async-filter at service  # visitor-public-default
+service visitor list collection returns-filter at direct  # visitor-public-default
+service visitor list collection returns-filter at service  # visitor-public-default
+service visitor read collection async-filter at website  # visitor-public-default
+service visitor read collection returns-filter at website  # visitor-public-default
+service visitor read collection async-filter at direct  # visitor-public-default
+service visitor read collection async-filter at service  # visitor-public-default
+service visitor read collection returns-filter at direct  # visitor-public-default
+service visitor read collection returns-filter at service  # visitor-public-default

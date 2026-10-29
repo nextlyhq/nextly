@@ -22,6 +22,13 @@ import type { DatabaseConfig } from "../types";
 import type { GeneratedFiles } from "./generated-files";
 
 /**
+ * Where Nextly explains why Cache Components is off and when it will be
+ * supported: the same page `nextly` links from the error it stops with.
+ */
+export const CACHE_COMPONENTS_DOCS_URL =
+  "https://nextlyhq.com/docs/getting-started/installation#cache-components";
+
+/**
  * Packages that are always externalized by the scaffolded Next.js config.
  *
  * These packages are used by Nextly at runtime and should stay out of the
@@ -69,12 +76,22 @@ function packageListLiteral(database: DatabaseConfig): string {
 }
 
 /**
+ * The setting every config this writes carries, with its reason in the file:
+ * the developer who finds it is the one deciding whether to change it.
+ */
+const CACHE_COMPONENTS_OFF = `  // Nextly does not support Cache Components yet: it caches with
+  // unstable_cache, and Cache Components refuses \`runtime\` route exports.
+  // ${CACHE_COMPONENTS_DOCS_URL}
+  cacheComponents: false,`;
+
+/**
  * Render a complete next.config.ts file for the selected database.
  */
 export function buildNextConfigTemplate(database: DatabaseConfig): string {
   return `import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+${CACHE_COMPONENTS_OFF}
   serverExternalPackages: ${packageListLiteral(database)},
 };
 
@@ -86,6 +103,7 @@ export default nextConfig;
 function buildNextConfigModule(database: DatabaseConfig): string {
   return `/** @type {import("next").NextConfig} */
 const nextConfig = {
+${CACHE_COMPONENTS_OFF}
   serverExternalPackages: ${packageListLiteral(database)},
 };
 
@@ -110,18 +128,6 @@ export type NextConfigPatch =
       file: string;
       reason: string;
       packages: string[];
-      /**
-       * Which spelling of the option to print: Next.js 14 reads
-       * `experimental.serverComponentsExternalPackages`, and "either" gives
-       * both when the app's version could not be read. Absent, the
-       * top-level `serverExternalPackages` of Next.js 15 and later.
-       */
-      spelling?: "legacy" | "either";
-      /**
-       * The app has no Next config yet, so `file` is the one to create and
-       * the advice is a whole file rather than a key to add.
-       */
-      create?: true;
     };
 
 /**
@@ -136,10 +142,21 @@ const CONFIG_FILES = [
   "next.config.mts",
 ];
 
-/** The first Next.js major whose option is the top-level `serverExternalPackages`. */
-const FIRST_TOP_LEVEL_MAJOR = 15;
-
 const PROPERTY = "serverExternalPackages";
+
+/**
+ * The deprecated spelling of the list, under `experimental`. Supported
+ * releases still read it, by copying it over the top-level list, so an app
+ * that has it would lose the packages this adds there.
+ */
+const LEGACY_PROPERTY = "serverComponentsExternalPackages";
+
+/**
+ * Why a config with the deprecated list is left alone. Named, so the advice
+ * printed for it can say what to do with that list rather than the advice
+ * for every other refusal, which says to keep the experimental keys there.
+ */
+const LEGACY_LIST_REASON = `it lists packages under experimental.${LEGACY_PROPERTY}, which Next.js copies over ${PROPERTY}, replacing the packages added there`;
 
 /** A text insertion at an offset of the original source, replacing `remove` characters. */
 type Edit = { at: number; remove: number; text: string };
@@ -439,10 +456,7 @@ function mayHide(property: Node, names: readonly string[]): boolean {
  * `experimental`: the list itself, and the lists Next.js checks it against.
  */
 const TOP_LEVEL_SETTINGS = [PROPERTY, "transpilePackages", "experimental"];
-const EXPERIMENTAL_SETTINGS = [
-  "optimizePackageImports",
-  "serverComponentsExternalPackages",
-];
+const EXPERIMENTAL_SETTINGS = ["optimizePackageImports", LEGACY_PROPERTY];
 
 /** Why an object might set one of `names` where this cannot read it, or null. */
 function hiddenSettings(
@@ -688,8 +702,8 @@ function experimentalConflict(
   experimental: ObjectExpression,
   required: string[]
 ): string | null {
-  if (propertyValue(experimental, "serverComponentsExternalPackages")) {
-    return `it lists packages under experimental.serverComponentsExternalPackages, which Next.js moves to ${PROPERTY}; keep a single list there`;
+  if (propertyValue(experimental, LEGACY_PROPERTY)) {
+    return LEGACY_LIST_REASON;
   }
   return (
     clashReason("transpilePackages", object, "transpilePackages", required) ??
@@ -792,76 +806,6 @@ function editConfig(
   return { text, added: plan.added };
 }
 
-/** The string at `keys` inside a parsed JSON file, or null. */
-function stringAt(json: unknown, keys: readonly string[]): string | null {
-  let value = json;
-  for (const key of keys) {
-    if (typeof value !== "object" || value === null || !(key in value))
-      return null;
-    value = (value as Record<string, unknown>)[key];
-  }
-  return typeof value === "string" ? value : null;
-}
-
-/** A JSON file of the app's, or null when it is missing or does not parse. */
-async function readJsonOrNull(file: string): Promise<unknown> {
-  try {
-    return (await fs.readJson(file)) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * A version range that admits one major only, such as `^15.1.0`, `~16.0`,
- * `15.x` or `16.0.0-canary.3`, with the major it admits. A range such as
- * `>=14`, `14 || 15` or `latest` admits several, or names none.
- */
-const SINGLE_MAJOR = /^[\^~]?(\d+)(?:\.(?:\d+|[xX*])){0,2}(?:-[\w.]+)?$/;
-
-/**
- * The major version of the app's Next.js: the installed one, read from its
- * own `node_modules`, or else the one its package.json range admits when
- * that range admits a single major. Null when neither tells, as when
- * dependencies are not installed yet and the range is `latest`.
- */
-export async function nextMajor(cwd: string): Promise<number | null> {
-  const installed = stringAt(
-    await readJsonOrNull(
-      path.join(cwd, "node_modules", "next", "package.json")
-    ),
-    ["version"]
-  );
-  const manifest = await readJsonOrNull(path.join(cwd, "package.json"));
-  const range =
-    stringAt(manifest, ["dependencies", "next"]) ??
-    stringAt(manifest, ["devDependencies", "next"]);
-  const match = SINGLE_MAJOR.exec((installed ?? range ?? "").trim());
-  return match ? Number(match[1]) : null;
-}
-
-/**
- * Why the option cannot be written for the app's Next.js, and which spelling
- * to print instead, or null when it can. Next.js 14 reads the list under
- * another name, and an unknown version may be 14: writing the top-level list
- * there would report success and externalise nothing.
- */
-function versionBlock(
-  major: number | null
-): { reason: string; spelling: "legacy" | "either" } | null {
-  if (major === null)
-    return {
-      reason: "the version of Next.js the app uses could not be read",
-      spelling: "either",
-    };
-  return major < FIRST_TOP_LEVEL_MAJOR
-    ? {
-        reason: `the app runs Next.js ${major}, which reads the list as experimental.serverComponentsExternalPackages and runs instrumentation.ts only with experimental.instrumentationHook`,
-        spelling: "legacy",
-      }
-    : null;
-}
-
 /**
  * The Next config file any advice about the app's config names: the one it
  * has, or, when it has none, the one to create. `.mjs` is ESM whatever the
@@ -922,19 +866,6 @@ export async function patchNextConfig(
 ): Promise<NextConfigPatch> {
   const file = await findConfigFile(cwd);
   const required = getServerExternalPackages(database);
-  // A version that reads the list under another name, or one that cannot be
-  // told, gets the exact option to add rather than a config that may do
-  // nothing.
-  const blocked = versionBlock(await nextMajor(cwd));
-  if (blocked) {
-    return {
-      kind: "manual",
-      file: file ?? (await nextConfigFileToChange(cwd)),
-      packages: required,
-      ...blocked,
-      ...(file ? {} : { create: true as const }),
-    };
-  }
   if (!file) return createNextConfig(cwd, database);
   const source = await fs.readFile(path.join(cwd, file), "utf-8");
   const edited = editConfig(source, file, required);
@@ -945,38 +876,182 @@ export async function patchNextConfig(
   return { kind: "written", file, added: edited.added };
 }
 
+/** The setting Nextly needs off, and the one Next.js accepts only with it on. */
+const CACHE_COMPONENTS = "cacheComponents";
+const PARTIAL_PREFETCHING = "partialPrefetching";
+
 /**
- * What to add by hand, in the spelling the app's Next.js reads.
+ * What turning Cache Components off in an existing app's config did.
  *
- * On Next.js 14 the package list and the instrumentation opt-in are keys of
- * one `experimental` object, so they are given as one: two `experimental`
- * properties, pasted as given, leave only the second. The instrumentation
- * hook Nextly starts from needs the opt-in there, and no other step says so.
- * `wrap` turns each spelling into what to paste: the key itself, or a whole
- * config file when the app has none.
+ * - `turned-off`: `cacheComponents: true` became `false`, and the settings in
+ *   `removed`, which Next.js accepts only with it on, were taken out.
+ * - `unchanged`: it was already off, or the app has no config, which leaves
+ *   Next.js's default, off.
+ * - `manual`: the setting could not be read or changed safely, so the file was
+ *   left as it was.
  */
-function optionText(
-  packages: string[],
-  spelling: "legacy" | "either" | undefined,
-  wrap: (option: string) => string = option => option
-): string {
-  const list = packages.map(name => JSON.stringify(name)).join(", ");
-  const current = wrap(`  ${PROPERTY}: [${list}],`);
-  const legacy = wrap(
-    `  experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${list}] },`
+export type CacheComponentsPatch =
+  | { kind: "turned-off"; file: string; removed: string[] }
+  | { kind: "unchanged" }
+  | { kind: "manual"; file: string; reason: string };
+
+/**
+ * Remove a property with the comma that separates it: the whole line when it
+ * has one of its own, else the property and the comma after it, or before it
+ * when it is the last one.
+ */
+function removeProperty(source: string, property: ObjectProperty): Edit {
+  const start = property.start ?? 0;
+  const end = property.end ?? 0;
+  const ownLine = /^\s*$/.test(source.slice(lineStart(source, start), start));
+  const rest = /^[ \t]*,?[ \t]*\n/.exec(source.slice(end));
+  if (ownLine && rest) {
+    const from = lineStart(source, start);
+    return { at: from, remove: end + rest[0].length - from, text: "" };
+  }
+  const after = /^\s*,\s*/.exec(source.slice(end));
+  if (after)
+    return { at: start, remove: end - start + after[0].length, text: "" };
+  const before = /,\s*$/.exec(source.slice(0, start));
+  const from = before ? start - before[0].length : start;
+  return { at: from, remove: end - from, text: "" };
+}
+
+/** The exported config object, when both settings in it can be read; else why not. */
+function cacheComponentsObject(
+  source: string,
+  file: string
+): ObjectExpression | string {
+  const body = parseBody(source, file);
+  if (!body) return "it could not be parsed";
+  // Not through a wrapper call: Next.js receives what the wrapper returns, which
+  // may set the option again, so the literal passed in says nothing final.
+  const object = exportedConfig(body, false);
+  if (typeof object === "string") return object;
+  return (
+    hiddenSettings(object, [CACHE_COMPONENTS, PARTIAL_PREFETCHING], "it") ??
+    object
   );
-  if (spelling === "legacy") return legacy;
-  return spelling === "either"
-    ? `On Next.js 15 or later:\n\n${current}\n\nOn Next.js 14:\n\n${legacy}`
-    : current;
+}
+
+/** The `true` to flip, null when Cache Components is off or unset, or why the value cannot be read. */
+function enabledValue(object: ObjectExpression): Node | null | string {
+  const value = propertyValue(object, CACHE_COMPONENTS);
+  if (!value) return null;
+  if (value.type !== "BooleanLiteral") {
+    return `its ${CACHE_COMPONENTS} is not true or false written in place`;
+  }
+  return value.value ? value : null;
+}
+
+/** The edits that turn Cache Components off in a config, none when it is off, or why it cannot be changed. */
+function cacheComponentsPlan(
+  source: string,
+  file: string
+): { edits: Edit[]; removed: string[] } | { reason: string } {
+  const object = cacheComponentsObject(source, file);
+  if (typeof object === "string") return { reason: object };
+  const value = enabledValue(object);
+  if (typeof value === "string") return { reason: value };
+  if (!value) return { edits: [], removed: [] };
+  const flip: Edit = {
+    at: value.start ?? 0,
+    remove: (value.end ?? 0) - (value.start ?? 0),
+    text: "false",
+  };
+  // Every definition, under any spelling of its key: the last one wins at run
+  // time, so removing only the first can leave the one Next.js reads.
+  const prefetching = object.properties.filter(
+    (property): property is ObjectProperty =>
+      isPropertyNamed(property, PARTIAL_PREFETCHING)
+  );
+  return {
+    edits: [
+      flip,
+      ...prefetching.map(property => removeProperty(source, property)),
+    ],
+    removed: prefetching.length > 0 ? [PARTIAL_PREFETCHING] : [],
+  };
+}
+
+/** Whether a config, read as code, still defines `partialPrefetching` anywhere in its exported object. */
+function definesPartialPrefetching(source: string, file: string): boolean {
+  const object = cacheComponentsObject(source, file);
+  return (
+    typeof object !== "string" &&
+    object.properties.some(property =>
+      isPropertyNamed(property, PARTIAL_PREFETCHING)
+    )
+  );
 }
 
 /**
- * A whole config holding `option`, for an app that has none. ESM in `.mjs`,
- * which loads whatever the package's own "type" says.
+ * Turn Next.js Cache Components off in an existing app's config, which
+ * Nextly does not support yet; `create-next-app` 16.4 turns it on by default.
+ *
+ * Only `cacheComponents: true` written in place is changed, and
+ * `partialPrefetching` goes with it, since Next.js refuses that option once
+ * Cache Components is off. The edit is trusted only once the result parses
+ * and reads as off; anything else is left as it was, with what to change.
  */
-function wholeConfig(option: string): string {
-  return `/** @type {import('next').NextConfig} */\nexport default {\n${option}\n};\n`;
+export async function turnOffCacheComponents(
+  cwd: string
+): Promise<CacheComponentsPatch> {
+  const file = await findConfigFile(cwd);
+  if (!file) return { kind: "unchanged" };
+  const source = await fs.readFile(path.join(cwd, file), "utf-8");
+  // Read structurally even when the file never names the setting: a spread or
+  // a wrapper can still turn it on, and only the parser can say it cannot tell.
+  const plan = cacheComponentsPlan(source, file);
+  if ("reason" in plan) return { kind: "manual", file, reason: plan.reason };
+  if (plan.edits.length === 0) return { kind: "unchanged" };
+  const text = applyEdits(source, plan.edits);
+  const recheck = cacheComponentsPlan(text, file);
+  if (
+    "reason" in recheck ||
+    recheck.edits.length > 0 ||
+    definesPartialPrefetching(text, file)
+  ) {
+    return { kind: "manual", file, reason: "the edit could not be confirmed" };
+  }
+  await fs.writeFile(path.join(cwd, file), text, "utf-8");
+  return { kind: "turned-off", file, removed: plan.removed };
+}
+
+/**
+ * What turning Cache Components off did, for the run's report: the change and
+ * a notice saying why, or, for a config it could not change, what to change.
+ */
+export function cacheComponentsFiles(
+  patch: CacheComponentsPatch
+): GeneratedFiles {
+  const files: GeneratedFiles = { written: [], changed: [], skipped: [] };
+  if (patch.kind === "turned-off") {
+    files.changed.push({
+      path: patch.file,
+      added: [`${CACHE_COMPONENTS}: false`],
+    });
+    const removed = patch.removed.length
+      ? `, and removed ${patch.removed.join(", ")}, which Next.js accepts only with it on`
+      : "";
+    files.notices = [
+      `Turned Cache Components off in ${patch.file}: Nextly does not support it yet${removed}. ` +
+        `Why, and the plan to support it: ${CACHE_COMPONENTS_DOCS_URL}`,
+    ];
+  } else if (patch.kind === "manual") {
+    files.skipped.push({
+      path: patch.file,
+      why: `Nextly could not confirm Cache Components is off: ${patch.reason}. Nextly does not support it yet (${CACHE_COMPONENTS_DOCS_URL}); make sure the config Next.js receives leaves it unset or sets it to false, with no ${PARTIAL_PREFETCHING}`,
+      toAdd: `  ${CACHE_COMPONENTS}: false,`,
+    });
+  }
+  return files;
+}
+
+/** What to add by hand: the list, as the config's top-level option. */
+function optionText(packages: string[]): string {
+  const list = packages.map(name => JSON.stringify(name)).join(", ");
+  return `  ${PROPERTY}: [${list}],`;
 }
 
 /**
@@ -999,19 +1074,14 @@ export function nextConfigFiles(patch: NextConfigPatch): GeneratedFiles {
     case "unchanged":
       break;
     case "manual":
-      files.skipped.push(
-        patch.create
-          ? {
-              path: patch.file,
-              why: `Nextly's packages were not added: ${patch.reason}, and the app has no Next.js config. Create ${patch.file} with:`,
-              toAdd: optionText(patch.packages, patch.spelling, wholeConfig),
-            }
-          : {
-              path: patch.file,
-              why: `Nextly's packages were not added: ${patch.reason}. Add them to the config object it exports, keeping any packages and experimental keys already there`,
-              toAdd: optionText(patch.packages, patch.spelling),
-            }
-      );
+      files.skipped.push({
+        path: patch.file,
+        why:
+          patch.reason === LEGACY_LIST_REASON
+            ? `Nextly's packages were not added: ${patch.reason}. Move the packages under experimental.${LEGACY_PROPERTY} into a top-level ${PROPERTY} list, add Nextly's to it, and delete experimental.${LEGACY_PROPERTY}, keeping the config's other experimental keys`
+            : `Nextly's packages were not added: ${patch.reason}. Add them to the config object it exports, keeping any packages and experimental keys already there`,
+        toAdd: optionText(patch.packages),
+      });
   }
   return files;
 }

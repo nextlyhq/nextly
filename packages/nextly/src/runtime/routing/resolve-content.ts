@@ -19,7 +19,7 @@ import { cachedFind } from "../cache/cached-find";
 import { nextlyTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
-import { markDynamic } from "./mark-dynamic";
+import { deferToRequest } from "./defer-to-request";
 
 /** A resolved content entry (loose by design — shape is the app's collection). */
 export type ContentEntry = Record<string, unknown>;
@@ -590,17 +590,17 @@ export async function resolveContent(
   // option names the related collections a populated read depends on.
   //
   // Per-request rendering is not available as an alternative here anyway. The
-  // only escape from caching in this module is `markDynamic()`, and the one
-  // factory that reaches this path, `createPublicContentRoute`, exports
-  // `generateStaticParams` — so marking its render dynamic would contradict
-  // what the route has already told Next, exactly as `draft` would.
+  // only escape from caching in this module is `deferToRequest()`, and the
+  // one factory that reaches this path, `createPublicContentRoute`, exports
+  // `generateStaticParams` — so deferring its render to the request would
+  // contradict what the route has already told Next, exactly as `draft` would.
   const cacheable = overrideAccess && !user && !draft;
   if (!cacheable) {
     // Bypassing `unstable_cache` alone does not opt out of Next's Full Route
     // Cache, so a page rendered while a policy was public could stay statically
-    // cached after it tightens. Mark the render dynamic so an enforced read
-    // genuinely runs fresh per request.
-    markDynamic();
+    // cached after it tightens. Wait for the request, so an enforced read
+    // genuinely runs fresh per request and takes its clock after it.
+    await deferToRequest();
     return read();
   }
 

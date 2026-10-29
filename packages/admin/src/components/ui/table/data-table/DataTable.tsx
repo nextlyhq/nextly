@@ -15,7 +15,7 @@
 import { TableSearch, Button } from "@nextlyhq/ui";
 import type { DataFetcher, PaginationConfig } from "@nextlyhq/ui";
 import { X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type JSX } from "react";
 
 import { useServerTable } from "@admin/hooks/useServerTable";
 
@@ -128,7 +128,7 @@ export function DataTable<Row extends object>({
   itemLabel = "item",
   emptyMessage,
   registryKey,
-}: DataTableProps<Row>) {
+}: DataTableProps<Row>): JSX.Element {
   const effectiveFetcher = useMemo<DataFetcher<Row>>(
     () => fetcher ?? makeStaticFetcher(data ?? []),
     [fetcher, data]

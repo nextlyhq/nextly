@@ -187,7 +187,7 @@ function contentEntries(inner: Record<string, unknown>): [string, unknown][] {
  * JSON with object keys sorted at every depth, and component rows' timestamps
  * left out, so equal content is equal text.
  */
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, inner: unknown) =>
     inner !== null && typeof inner === "object" && !Array.isArray(inner)
       ? Object.fromEntries(

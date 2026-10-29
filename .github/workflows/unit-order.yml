@@ -1,0 +1,95 @@
+name: Unit test order
+
+# nextly's unit files mostly share a worker's modules (`isolate: false` in
+# `packages/nextly/vitest.config.ts`), so a value one file leaves set at module
+# level is the next file's starting state. That makes a leak depend on which
+# files share a worker and in what order, and an ordinary run, which keeps the
+# same order push after push, can carry one for weeks without showing it.
+#
+# So the shared project runs here in a shuffled order whose seed changes every
+# day: once on two workers, and once on one, where every file shares one
+# worker. A red run names its seed; the command it prints replays that order.
+#
+# Scheduled and advisory, like the other nightly checks: a leak found here is
+# real but not caused by whatever was pushed last, so it belongs to whoever
+# picks it up rather than to the next pull request.
+
+on:
+  schedule:
+    # Daily, in a gap between the nightly runs already scheduled.
+    - cron: "13 5 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "Shuffle seed to replay (empty: today's)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-order
+  cancel-in-progress: false
+
+jobs:
+  shuffled:
+    name: nextly unit files in a shuffled order
+    if: github.repository == 'nextlyhq/nextly'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The suites import the built entries of the packages nextly depends on.
+      - name: Build nextly's dependencies
+        run: pnpm turbo build --filter='nextly^...'
+
+      # The seed is today's date unless a run was dispatched with one, and it
+      # is passed through the environment rather than spliced into the script.
+      - name: Choose the seed
+        id: seed
+        env:
+          REQUESTED: ${{ inputs.seed }}
+        run: |
+          seed="${REQUESTED:-$(date -u +%Y%m%d)}"
+          case "$seed" in ''|*[!0-9]*) echo "seed must be digits: $seed" >&2; exit 1;; esac
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "Shuffle seed: $seed. Replay with:"
+          echo "  pnpm --filter nextly exec vitest run --project nextly --sequence.shuffle.files --sequence.seed=$seed --maxWorkers=<1 or 2>"
+
+      - name: Two workers
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+        run: >
+          pnpm --filter nextly exec vitest run --project nextly
+          --sequence.shuffle.files --sequence.seed="$SEED" --maxWorkers=2
+
+      # `!cancelled()`, so a leak the first order shows does not hide one only
+      # this order shows.
+      - name: One worker
+        if: ${{ !cancelled() }}
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+        run: >
+          pnpm --filter nextly exec vitest run --project nextly
+          --sequence.shuffle.files --sequence.seed="$SEED" --maxWorkers=1

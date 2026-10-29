@@ -1,4 +1,3 @@
-import type { CSSProperties, HTMLAttributes } from "react";
 import {
   createContext,
   forwardRef,
@@ -6,6 +5,11 @@ import {
   useContext,
   useEffect,
   useRef,
+  type CSSProperties,
+  type HTMLAttributes,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
 } from "react";
 
 import { devWarnOnce, isDevelopmentRuntime } from "../lib/dev-warn";
@@ -147,7 +151,9 @@ export const SHELL_MEASURE: Record<
  * "how far is content from the panel's edge".
  * @experimental
  */
-export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
+export const PageShell: ForwardRefExoticComponent<
+  PropsWithoutRef<PageShellProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, PageShellProps>(
   ({ width = "form", className, children, style, ...props }, ref) => {
     // The shell's own handle on its node, kept alongside whatever ref the
     // caller passed so the development check below can read the rendered DOM
@@ -156,11 +162,9 @@ export const PageShell = forwardRef<HTMLDivElement, PageShellProps>(
     const attachRef = useCallback(
       (node: HTMLDivElement | null) => {
         shellRef.current = node;
-        // A callback ref's RETURN is the caller's cleanup under React 19, and
-        // React runs it instead of calling the ref again with null. Discarding
-        // it here would silently drop, say, an observer's disconnect. Passing it
-        // straight through is also correct under the React 18 half of this
-        // package's peer range, where such a ref returns nothing.
+        // A callback ref's RETURN is the caller's cleanup, and React runs it
+        // instead of calling the ref again with null. Discarding it here would
+        // silently drop, say, an observer's disconnect.
         if (typeof ref === "function") return ref(node);
         if (ref) ref.current = node;
       },
@@ -284,7 +288,9 @@ export type BleedProps = HTMLAttributes<HTMLDivElement>;
  * precisely what makes it stop working.
  * @experimental
  */
-export const Bleed = forwardRef<HTMLDivElement, BleedProps>(
+export const Bleed: ForwardRefExoticComponent<
+  PropsWithoutRef<BleedProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, BleedProps>(
   ({ className, children, ...props }, ref) => (
     <div
       ref={ref}

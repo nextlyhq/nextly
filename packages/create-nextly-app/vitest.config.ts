@@ -3,8 +3,34 @@ import { fileURLToPath } from "node:url";
 import tsconfigPaths from "vite-tsconfig-paths";
 import { defineConfig } from "vitest/config";
 
+// The supported ranges, as the build inlines them.
+import { frameworkRanges } from "../../scripts/framework-ranges.mjs";
+
+const BLOG_LIB = fileURLToPath(
+  new URL("../../templates/blog/src/lib/", import.meta.url)
+);
+const BASE_SITE_URL = fileURLToPath(
+  new URL("../../templates/base/src/lib/site-url.ts", import.meta.url)
+);
+
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  plugins: [
+    tsconfigPaths(),
+    // A scaffolded blog gets `lib/site-url` from the base template, laid over
+    // the blog's own `lib`, so blog code imports it from beside itself; the
+    // blog's source does not carry it. Resolved here as the scaffold lays it.
+    {
+      name: "blog-lib-from-base",
+      resolveId(source, importer) {
+        return source === "./site-url" && importer?.startsWith(BLOG_LIB)
+          ? BASE_SITE_URL
+          : null;
+      },
+    },
+  ],
+  define: {
+    __NEXTLY_FRAMEWORK_RANGES__: JSON.stringify(frameworkRanges()),
+  },
   // Template components are written for Next.js, which compiles JSX with the
   // automatic runtime and never imports React for it.
   esbuild: { jsx: "automatic" },
@@ -46,6 +72,9 @@ export default defineConfig({
     ],
   },
   test: {
+    // What each file loaded on its last run, so `--changed` and `related` pick
+    // tests from real dependencies rather than a static import graph.
+    experimental: { recordDependencies: true },
     name: "create-nextly-app",
     globals: true,
     environment: "node",

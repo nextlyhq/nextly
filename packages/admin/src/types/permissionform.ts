@@ -10,15 +10,24 @@ export interface PermissionFormProps {
   };
 }
 
-export function getPermissionFormSchema(_isEdit: boolean) {
+export function getPermissionFormSchema(_isEdit: boolean): z.ZodObject<{
+  name: z.ZodString;
+  slug: z.ZodString;
+}> {
   return z.object({
     name: z.string().trim().min(1, "Name is required"),
     slug: z.string().trim().min(1, "Slug is required"),
   });
 }
 
-export const createPermissionFormSchema = getPermissionFormSchema(false);
-export const editPermissionFormSchema = getPermissionFormSchema(true);
+export const createPermissionFormSchema: z.ZodObject<{
+  name: z.ZodString;
+  slug: z.ZodString;
+}> = getPermissionFormSchema(false);
+export const editPermissionFormSchema: z.ZodObject<{
+  name: z.ZodString;
+  slug: z.ZodString;
+}> = getPermissionFormSchema(true);
 
 export type CreatePermissionFormValues = z.infer<
   typeof createPermissionFormSchema

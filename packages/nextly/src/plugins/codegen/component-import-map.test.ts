@@ -2,8 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
+
+import { listedFiles } from "../../../../../scripts/tsc-cli.mjs";
 
 import { buildPluginAdminMeta, type PluginAdminMeta } from "../admin-meta";
 import type { PluginDefinition } from "../plugin-context";
@@ -141,6 +142,54 @@ describe("the map's check against the site's config", () => {
     expect(code).not.toMatch(/^import (?!type)[^\n]*nextly\.config/m);
   });
 
+  it("names a widget entry's widget and owner on its own line, where a props error is reported", () => {
+    const withWidget = {
+      name: "@acme/shop",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        admin: {
+          pages: [{ path: "reports", component: "@acme/shop/admin#Reports" }],
+        },
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/revenue",
+              view: { component: "@acme/shop/admin#Revenue" },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+    const code = buildComponentImportMap([withWidget], "../../nextly.config");
+    expect(code).toContain(
+      '"@acme/shop/admin#Revenue": _p0.Revenue, // widget "acme/revenue" of plugin "@acme/shop"\n'
+    );
+    // A page's entry names nothing beside it.
+    expect(code).toContain('"@acme/shop/admin#Reports": _p0.Reports,\n');
+  });
+
+  it("keeps a widget note on its line whatever the plugin is called", () => {
+    const named = {
+      name: "@acme/shop\nconst injected = 1;",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/revenue",
+              view: { component: "@acme/shop/admin#Revenue" },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+    const code = buildComponentImportMap([named], "../../nextly.config");
+    expect(code).not.toMatch(/^const injected = 1;/m);
+    expect(code).toContain('of plugin "@acme/shop const injected = 1;"');
+  });
+
   it("writes the map unchecked, as before, where there is no config file", () => {
     const code = buildComponentImportMap([shop]);
     expect(code).not.toContain("siteConfig");
@@ -179,9 +228,10 @@ describe("the map's check against the site's config", () => {
   });
 });
 
-// What the string is for: the site's compiler resolving it to the config. Checked with TypeScript's
-// own resolver under the Bundler resolution a Next.js site uses, against real files, since a
-// specifier only reads right if it also resolves.
+// What the string is for: the site's compiler resolving it to the config. Checked with the
+// TypeScript command line under the Bundler resolution a Next.js site uses, against real files,
+// since a specifier only reads right if it also resolves: the config is in the program a file
+// importing it loads only if the specifier reached it.
 describe("the config specifier, as the site's compiler resolves it", () => {
   it.each(["nextly.config.mts", "nextly.config.mjs", "nextly.config.ts"])(
     "resolves %s from the generated map's directory",
@@ -191,19 +241,28 @@ describe("the config specifier, as the site's compiler resolves it", () => {
         const mapDir = join(root, "src", "types", "generated");
         mkdirSync(mapDir, { recursive: true });
         writeFileSync(join(root, file), "export default {};\n");
-        const resolved = ts.resolveModuleName(
-          configImportSpecifier(mapDir, join(root, file)),
+        const specifier = configImportSpecifier(mapDir, join(root, file));
+        writeFileSync(
           join(mapDir, "nextly-component-map.ts"),
-          {
-            module: ts.ModuleKind.ESNext,
-            moduleResolution: ts.ModuleResolutionKind.Bundler,
-            allowJs: true,
-          },
-          ts.sys
-        ).resolvedModule;
-        // TypeScript's resolver reports paths with forward slashes on every platform, while
-        // `join` uses the platform separator, so both sides compare in the forward-slash form.
-        expect(resolved?.resolvedFileName).toBe(
+          `import config from ${JSON.stringify(specifier)};\nexport const read = config;\n`
+        );
+        const config = join(root, "tsconfig.json");
+        writeFileSync(
+          config,
+          JSON.stringify({
+            compilerOptions: {
+              module: "esnext",
+              moduleResolution: "bundler",
+              allowJs: true,
+              noEmit: true,
+              types: [],
+            },
+            files: ["src/types/generated/nextly-component-map.ts"],
+          })
+        );
+        // The listed paths have forward slashes on every platform, while `join` uses the
+        // platform separator, so both sides compare in the forward-slash form.
+        expect(listedFiles(config)).toContain(
           join(root, file).replaceAll("\\", "/")
         );
       } finally {
@@ -352,6 +411,72 @@ describe("block editor components", () => {
         declaringBlocks("nope" as unknown as unknown[]),
       ])
     ).toEqual([]);
+  });
+});
+
+describe("block editor entries", () => {
+  /** A plugin declaring blocks and naming the module that exports them. */
+  function declaringEntry(
+    editorEntry: unknown,
+    enabled?: boolean
+  ): PluginDefinition {
+    return {
+      name: "@acme/blocks",
+      version: "1.0.0",
+      nextly: "*",
+      enabled,
+      contributes: {
+        declarations: {
+          "@nextlyhq/plugin-page-builder": {
+            blocks: [{ name: "acme/hero", version: 1 }],
+            editorEntry,
+          },
+        },
+      },
+    } as unknown as PluginDefinition;
+  }
+
+  const ENTRY = "@acme/blocks/editor#editorBlocks";
+
+  it("lists the entry while the page builder is active, and hands it to the page builder", () => {
+    const plugins = [pageBuilder(), declaringEntry(ENTRY)];
+
+    expect(componentImportMapPaths(plugins)).toContain(ENTRY);
+    const code = buildComponentImportMap(plugins);
+    expect(code).toContain(
+      'import { registerBlockEditorModules } from "@nextlyhq/plugin-page-builder/admin";'
+    );
+    expect(code).toContain(`"${ENTRY}": _p0.editorBlocks`);
+    // Definitions are not a component: the component registry never sees it.
+    expect(code).not.toContain("registerComponents(");
+  });
+
+  it("lists no entry while the page builder is absent or disabled", () => {
+    for (const plugins of [
+      [declaringEntry(ENTRY)],
+      [pageBuilder(false), declaringEntry(ENTRY)],
+    ]) {
+      expect(componentImportMapPaths(plugins)).not.toContain(ENTRY);
+      expect(buildComponentImportMap(plugins)).not.toContain(
+        "registerBlockEditorModules"
+      );
+    }
+  });
+
+  it("skips a malformed entry rather than failing generation", () => {
+    // The page builder refuses it at boot, naming the plugin.
+    for (const malformed of [42, "", "   "]) {
+      expect(
+        componentImportMapPaths([pageBuilder(), declaringEntry(malformed)])
+      ).toEqual([]);
+    }
+  });
+
+  it("leaves a map with no block modules exactly as before", () => {
+    // Every committed map of a site with no contributed blocks is unchanged.
+    expect(buildComponentImportMap([pageBuilder()])).not.toContain(
+      "blockEditorEntries"
+    );
   });
 });
 
@@ -727,10 +852,10 @@ describe("widgets declared under contributes.dashboard", () => {
     const shop = declaring([
       {
         id: "acme/revenue",
-        display: { component: "@acme/shop/admin#Revenue" },
+        view: { component: "@acme/shop/admin#Revenue" },
       },
-      // A core display ships no component, so it contributes no path.
-      { id: "acme/orders", display: "list" },
+      // A core view ships no component, so it contributes no path.
+      { id: "acme/orders", view: "list" },
     ]);
     expect(collectAdminComponentPaths(shop)).toEqual([
       "@acme/shop/admin#Revenue",
@@ -744,7 +869,7 @@ describe("widgets declared under contributes.dashboard", () => {
     expect(
       collectAdminComponentPaths(
         declaring(
-          [{ id: "a/b", display: { component: "@acme/shop/admin#Revenue" } }],
+          [{ id: "a/b", view: { component: "@acme/shop/admin#Revenue" } }],
           false
         )
       )
@@ -754,13 +879,68 @@ describe("widgets declared under contributes.dashboard", () => {
       collectAdminComponentPaths(
         declaring([
           null,
-          { display: { component: "" } },
-          { display: { component: 3 } },
-          { display: null },
+          { view: { component: "" } },
+          { view: { component: 3 } },
+          { view: null },
+          // The field a declaration named its component under before `view`:
+          // startup refuses it by name, and the map does not read it.
+          { id: "a/old", display: { component: "@acme/shop/admin#Old" } },
         ])
       )
     ).toEqual([]);
     expect(collectAdminComponentPaths(declaring("not a list"))).toEqual([]);
+  });
+});
+
+describe("the site config's own widgets", () => {
+  const site = {
+    widgets: [
+      {
+        id: "site/revenue",
+        view: { component: "./dashboard/revenue#Revenue" },
+      },
+      { id: "site/cards", view: { component: "@acme/cards/admin#Cards" } },
+      { id: "site/list", view: "list" },
+    ],
+  };
+
+  it("are listed as the site config's, beside the plugins'", () => {
+    expect(componentImportMapEntries([], site)).toEqual([
+      {
+        path: "./dashboard/revenue#Revenue",
+        owner: "the site config",
+        use: "widget",
+        widget: "site/revenue",
+        fromConfig: true,
+      },
+      {
+        path: "@acme/cards/admin#Cards",
+        owner: "the site config",
+        use: "widget",
+        widget: "site/cards",
+      },
+    ]);
+    expect(componentImportMapPaths([], site)).toEqual([
+      "./dashboard/revenue#Revenue",
+      "@acme/cards/admin#Cards",
+    ]);
+  });
+
+  it("are imported from the map's folder, a relative one through where the config file is", () => {
+    // The map sits three folders below the config file, so it imports the config as
+    // `../../../nextly.config`, and the site's `./dashboard/revenue` from beside it.
+    const map = buildComponentImportMap([], "../../../nextly.config", site);
+    expect(map).toContain('import * as _p0 from "../../../dashboard/revenue";');
+    expect(map).toContain('import * as _p1 from "@acme/cards/admin";');
+    // Registered under the path as the site declared it, which the admin looks it up by.
+    expect(map).toContain('"./dashboard/revenue#Revenue": _p0.Revenue,');
+    expect(map).toContain('"@acme/cards/admin#Cards": _p1.Cards,');
+  });
+
+  it("are imported from beside the map when the config file is there too", () => {
+    expect(buildComponentImportMap([], "./nextly.config", site)).toContain(
+      'import * as _p0 from "./dashboard/revenue";'
+    );
   });
 });
 
@@ -811,7 +991,7 @@ describe("the map's entries: each component with who declared it and what it is 
           widgets: [
             {
               id: "acme/revenue",
-              display: { component: "@acme/shop/admin#Revenue" },
+              view: { component: "@acme/shop/admin#Revenue" },
             },
           ],
         },
@@ -883,7 +1063,7 @@ describe("the map's entries: each component with who declared it and what it is 
           widgets: [
             {
               id: "acme/shared",
-              display: { component: "@acme/shop/admin#Shared" },
+              view: { component: "@acme/shop/admin#Shared" },
             },
           ],
         },

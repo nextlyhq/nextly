@@ -25,6 +25,8 @@ import type {
   DynamicTableLoadResult,
   loadDynamicTables,
 } from "../di/load-dynamic-tables";
+import { clearCollectionRowCache } from "../domains/dynamic-collections/services/collection-row-cache";
+import { declaredSlugsOf } from "../domains/dynamic-collections/services/removed-from-code";
 import { consoleLogger } from "../shared/types";
 
 /**
@@ -91,6 +93,13 @@ interface ReloadDeps {
    */
   registry: SchemaRegistry;
   dialect: "postgresql" | "mysql" | "sqlite";
+  /**
+   * The slugs the running configuration declares, by kind, so an entity
+   * removed from code is registered only while its tables stand (see
+   * `DynamicTableLoadOptions`). Absent when the container holds no
+   * configuration, in which case every row registers as before.
+   */
+  declared?: { collections: Set<string>; singles: Set<string> };
 }
 
 /**
@@ -109,6 +118,9 @@ interface ReloadDeps {
  * would leave that gate closed — hanging every consumer waiting on it.
  */
 async function runReload(label: string): Promise<void> {
+  // A reload follows a change to the registry made outside the registry
+  // services (a migration, a schema apply), so the cached rows go first.
+  clearCollectionRowCache();
   try {
     const deps = await resolveDeps(label);
     if (!deps) return;
@@ -233,10 +245,32 @@ async function resolveDeps(label: string): Promise<ReloadDeps | undefined> {
     getCapabilities: () => { dialect: "postgresql" | "mysql" | "sqlite" };
   };
 
+  // Read like the two above, and tolerated when absent: the container's `get`
+  // throws for a name it does not hold.
+  let config:
+    | {
+        collections?: ReadonlyArray<{ slug?: string }>;
+        singles?: ReadonlyArray<{ slug?: string }>;
+      }
+    | undefined;
+  try {
+    config = container.get("config");
+  } catch {
+    config = undefined;
+  }
+
   return {
     adapter: adapter as ReloadDeps["adapter"],
     registry: schemaRegistry as SchemaRegistry,
     dialect: getCapabilities.call(adapter).dialect,
+    ...(config
+      ? {
+          declared: {
+            collections: declaredSlugsOf(config.collections),
+            singles: declaredSlugsOf(config.singles),
+          },
+        }
+      : {}),
   };
 }
 
@@ -286,6 +320,14 @@ async function loadInto(
         localized,
         builderOwned,
       });
-    }
+    },
+    deps.declared
+      ? {
+          declaredSlugs:
+            kind === "collection"
+              ? deps.declared.collections
+              : deps.declared.singles,
+        }
+      : {}
   );
 }

@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, Input } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { z } from "zod";
@@ -32,7 +33,7 @@ const formSchema = z.object({
     .trim(),
 });
 
-export function ForgotPassword() {
+export function ForgotPassword(): JSX.Element {
   const [isLoading, setIsLoading] = useState(false);
   // A refused submission is shown in the form, where it stays while the
   // person acts on it; a toast is kept for every other failure.

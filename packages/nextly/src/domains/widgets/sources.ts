@@ -88,6 +88,13 @@ export interface WidgetSourceField {
    */
   groupable?: false;
   /**
+   * `false` when a row cannot print this field's value: a structured or
+   * multi-value field, or a type whose value is no name or number, as the
+   * printable-title rule decides. A card's Fields setting offers only fields
+   * a row can show. Only the refusal is stated.
+   */
+  presentable?: false;
+  /**
    * What a human calls this field, when the source knows.
    *
    * A widget that draws a TABLE needs a column heading, and the only honest
@@ -176,7 +183,25 @@ export interface WidgetSource {
   supports: readonly WidgetOp[];
   /** The only field names a query may reference. */
   fields: readonly WidgetSourceField[];
+  /**
+   * The card settings this source narrows its answer by, rather than being
+   * replaced by: a source reading across collections takes a Collection
+   * setting as a filter, where a card over one collection takes it as its
+   * source. Each one named here is a key of the query's `where` the source
+   * reads, and the only keys it takes there.
+   *
+   * @experimental
+   */
+  filters?: readonly WidgetSourceFilter[];
 }
+
+/**
+ * A card setting a source may narrow its answer by: the Collection a row
+ * belongs to, or Only mine, the reader's own.
+ *
+ * @experimental
+ */
+export type WidgetSourceFilter = "collection" | "onlyMine";
 
 // A malformed widget source is a plugin/core author's mistake, not end-user
 // input, so this uses `invalidInput` (developer-facing, safe to surface
@@ -204,10 +229,10 @@ function validateSourceLabel(s: Partial<WidgetSource>): void {
 /**
  * Confirms `titleField`, when given, names a field this source declares.
  *
- * 🔴 The value becomes a `select` entry on a generated card, and `select` is
- * checked against this source's own field allowlist when the query runs — so a
- * source naming a field it does not declare produces a card whose every request
- * is refused, with the refusal arriving per reader rather than at the point the
+ * 🔴 The value becomes a `select` entry on a card that lists the source's
+ * entries, and `select` is checked against this source's own field allowlist
+ * when the query runs — so a source naming a field it does not declare
+ * produces a card whose every request is refused, with the refusal arriving per reader rather than at the point the
  * source was registered. A plugin registering its own source is the caller this
  * protects: core's own derivation takes the name FROM `fields`, so it cannot
  * disagree with itself.
@@ -220,6 +245,39 @@ function validateSourceTitleField(s: Partial<WidgetSource>): void {
   const declared = (s.fields ?? []).some(field => field.name === s.titleField);
   if (!declared) {
     fail(`${s.id}: titleField "${s.titleField}" is not one of its fields`);
+  }
+}
+
+/** The card settings a source may narrow by, as `WidgetSource.filters` names them. */
+const SOURCE_FILTERS: ReadonlySet<string> = new Set<WidgetSourceFilter>([
+  "collection",
+  "onlyMine",
+]);
+
+/**
+ * A source's filters, when given: a list of the settings a source may narrow
+ * by, each once, on a SYSTEM source alone. A collection's own source never
+ * takes them: a Collection setting on a card over one collection is that
+ * card's source. A plugin's source registers once its plugin's context exists,
+ * after the widgets naming it are admitted, so the settings a filter would
+ * admit could not be judged against it.
+ */
+function validateSourceFilters(s: Partial<WidgetSource>): void {
+  if (s.filters === undefined) return;
+  if (!Array.isArray(s.filters)) {
+    fail(`${s.id}: filters, when given, must be a list`);
+  }
+  const unknown = s.filters.filter(filter => !SOURCE_FILTERS.has(filter));
+  if (unknown.length > 0) {
+    fail(
+      `${s.id}: filters names what no setting narrows by: ${unknown.join(", ")}`
+    );
+  }
+  if (new Set(s.filters).size !== s.filters.length) {
+    fail(`${s.id}: filters names a setting twice`);
+  }
+  if (s.kind !== "system") {
+    fail(`${s.id}: only a system source takes filters, not a ${s.kind} source`);
   }
 }
 
@@ -291,8 +349,8 @@ function validateSourceKind(s: Partial<WidgetSource>): void {
  * Confirms `lifecycleStatus`, when given, is actually a boolean.
  *
  * The consumer tests `=== true`, so a source registered with `"true"` from
- * JavaScript or decoded JSON is read as NOT having a lifecycle -- and the card
- * that fact exists to enable is silently never generated. A truthiness test
+ * JavaScript or decoded JSON is read as NOT having a lifecycle -- and every
+ * status-bounded read that fact exists to enable is silently refused. A truthiness test
  * would accept the string and be wrong in the other direction; the field is
  * refused instead, where the mistake was made.
  */
@@ -462,6 +520,7 @@ export function validateWidgetSource(
   validateSourceFields(s);
   // AFTER the fields, because it is checked against them.
   validateSourceTitleField(s);
+  validateSourceFilters(s);
 }
 
 const globalForSources = globalThis as unknown as {

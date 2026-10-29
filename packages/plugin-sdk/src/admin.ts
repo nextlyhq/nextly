@@ -360,6 +360,54 @@ export type {
 } from "@nextlyhq/admin";
 
 /**
+ * @experimental The widget kit: the parts core's own dashboard cards are drawn
+ * from, for a widget's own component (`defineWidget` with
+ * `view: { component }`). The host always draws the card's frame and every
+ * state; these are the body-level parts, reading the card's size tier and the
+ * admin's theme tokens, so a plugin card matches core's beside it in light and
+ * dark.
+ *
+ * - `FrameState`: what a component returns when its own data says the card is
+ *   not ready (empty, not available, an error, or still loading), which the
+ *   frame then draws in its place, as on every other card.
+ * - `Widget`: the parts of a card's body core's own cards are drawn with.
+ *   `Widget.Figure` (one number, written for the card's tier), `Widget.List`
+ *   (rows with one action each), `Widget.Table` (rows across named columns, a
+ *   table on a wide card), `Widget.BarChart` and `Widget.SeriesChart` (charts
+ *   that take plain data, drawn in the shared chart colours, with an optional
+ *   `unit` for their tooltips), and `Widget.FooterLink` (one link drawn in the
+ *   card's own footer, where core's cards draw "View all").
+ *
+ * The number and change formatters and the chart colour accessor are exported
+ * from this package's root, not here: every module of the admin is a client
+ * module, and the root is server-safe, so a Server Component can call them.
+ *
+ * Import them from here, never from `@nextlyhq/admin` directly: the admin is the
+ * host's single copy, and a plugin that bundled its own would draw its parts
+ * outside the card it sits in.
+ */
+export { FrameState, Widget } from "@nextlyhq/admin";
+export type {
+  CardEmptyContent,
+  CardState,
+  SkeletonShape,
+  WidgetBarChartGroup,
+  WidgetBarChartProps,
+  WidgetChartUnit,
+  WidgetFigureProps,
+  WidgetListProps,
+  WidgetListTotal,
+  WidgetRenderSize,
+  WidgetRowAction,
+  WidgetSeries,
+  WidgetSeriesChartProps,
+  WidgetSeriesInterval,
+  WidgetSeriesPoint,
+  WidgetTableColumn,
+  WidgetTableProps,
+} from "@nextlyhq/admin";
+
+/**
  * The controls a form is built from (@experimental).
  *
  * Layout primitives alone left an author with a `Card` and a `Grid` and nothing
@@ -376,9 +424,10 @@ export type {
  * a smaller event than a name withdrawn.
  *
  * Routed through `@nextlyhq/admin` rather than `@nextlyhq/ui`, as every block
- * in this file is. That is not a formality — `plugin-sdk` peers on `admin` and
- * does not depend on `ui` at all, and `ui`'s root barrel carries a
- * `"use client"` banner that the layering guard admits only by subpath.
+ * in this file is. That is not a formality — `plugin-sdk` peers on `admin`, and
+ * takes from `ui` only its server-safe subpaths, for its root; `ui`'s root
+ * barrel carries a `"use client"` banner that the layering guard admits only
+ * by subpath.
  */
 export {
   Button,

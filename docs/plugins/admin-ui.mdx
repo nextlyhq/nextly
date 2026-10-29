@@ -5,9 +5,9 @@ description: Contribute admin menu items, pages, settings, and collection-view o
 
 A plugin can extend the Nextly admin in two complementary ways:
 
-- **`contributes.admin`.** The *declarative* surface: menu entries, custom pages,
+- **`contributes.admin`.** The _declarative_ surface: menu entries, custom pages,
   a settings panel, and per-collection view overrides (D19–D23).
-- **`admin`** (on the plugin definition) — *placement & appearance*: where the
+- **`admin`** (on the plugin definition) — _placement & appearance_: where the
   plugin's items sit in the sidebar and how they look (D20).
 
 Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are rendered
@@ -47,18 +47,29 @@ types (D60):
 
 The app commits both. `nextly generate:types` writes them, and `next dev` rewrites them when
 they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, for a read-only
-checkout or CI. A production build whose map lacks a dashboard widget's component does not serve
-the admin: its server log names the plugin, the widget and the command that fixes it, and the
-public site keeps serving. Other components missing from the map are logged.
+checkout or a test run, and the server log then names each missing component and the switch.
+
+Check the committed map in CI with `nextly generate:types --check`. It writes nothing, and
+exits 1 naming each missing component and each path no longer declared, or 2 when it cannot
+load the config:
+
+```bash
+npx nextly generate:types --check
+```
+
+Production never reads, checks or writes the map. A dashboard widget whose component is missing
+from it draws its own card's error state, and every other card and page draws as usual. In
+development the error names the widget, its owner and the missing path; in production it says
+only that the card could not be drawn. Other components missing from the map draw empty.
 
 After a map change in development, the request that finds the map out of date is already
 being served when the map is rewritten, so that one render can still draw the new widget's
-card empty. The rewritten map is what the next render loads.
+card in its error state. The rewritten map is what the next render loads.
 
-**The check runs once the admin layout calls it.** New apps import the map in their admin
-page; the layout's call is two lines to add. An app made from an older template has neither,
-and keeps drawing a missing component as an empty card, with a console warning, until it adds
-them:
+**`next dev` keeps the map current once the admin layout calls the check.** New apps import the
+map in their admin page; the layout's call is two lines to add. An app made from an older
+template has neither, so a plugin's components are not registered: its widget cards draw their
+error state, and its other components draw empty, until it adds them:
 
 ```tsx
 // src/app/admin/[[...params]]/page.tsx: with the other imports
@@ -165,12 +176,20 @@ means your styles do not depend on the host's build at all.
 
 ```jsonc
 // package.json
-{ "scripts": { "build:css": "nextly-build-admin-css src/admin.css dist/admin.css" } }
+{
+  "scripts": {
+    "build:css": "nextly-build-admin-css src/admin.css dist/admin.css",
+  },
+}
 ```
 
 ```ts
 // your plugin definition
-contributes: { admin: { styles: "@acme/plugin/dist/admin.css" } }
+contributes: {
+  admin: {
+    styles: "@acme/plugin/dist/admin.css";
+  }
+}
 ```
 
 Then side-effect-import the built file from your admin entry so the host app's bundler
@@ -282,14 +301,14 @@ build any of it yourself:
 Your component replaces the form's body and receives `DocumentViewProps` from
 `@nextlyhq/plugin-sdk/admin`:
 
-| Prop | What it is |
-|---|---|
-| `collectionSlug`, `entryId` | The collection entry being shown. |
-| `singleSlug` | The Single being shown, instead of the two above. |
-| `control` | The document form's react-hook-form `control`. Write to the fields through it. |
-| `readOnly` | `true` while someone else holds the document. Don't offer edits then. |
-| `exit` | Goes back to the document's edit form. Commit any state you hold into the form first. |
-| `field` | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
+| Prop                        | What it is                                                                                                                                                                                                                                                                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collectionSlug`, `entryId` | The collection entry being shown.                                                                                                                                                                                                                                                                                      |
+| `singleSlug`                | The Single being shown, instead of the two above.                                                                                                                                                                                                                                                                      |
+| `control`                   | The document form's react-hook-form `control`. Write to the fields through it.                                                                                                                                                                                                                                         |
+| `readOnly`                  | `true` while someone else holds the document. Don't offer edits then.                                                                                                                                                                                                                                                  |
+| `exit`                      | Goes back to the document's edit form. Commit any state you hold into the form first.                                                                                                                                                                                                                                  |
+| `field`                     | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
 
 Opening that address requires the same permission as editing the document.
 A field-type view also opens only for a field the edit form would let the
@@ -346,7 +365,7 @@ runs the query for the signed-in user and renders the card.
 >   id: "acme/shortcuts",
 >   title: "Shortcuts",
 >   archetype: "actions",
->   defaultSize: "sm",
+>   size: { default: { w: 3, h: 3 } },
 >   actions: [
 >     { label: "New post", href: "/admin/collections/posts/create" },
 >     { label: "Invite user", href: "/admin/users/create", requiredPermission: "create-users" },
@@ -369,10 +388,10 @@ contributes: {
         id: "reports-summary",
         title: "Published reports",
         archetype: "metric",                 // metric | list | table | stats | bars | timeseries | actions | text
-        defaultSize: "sm",                   // sm | md | lg | xl | full
+        size: { default: { w: 3, h: 2 } },   // 12-column grid units: w 1–12, h 2–12
         query: { source: "collection:reports", op: "count" },
         requiredPermission: "read-reports",  // client-gated
-        defaultOrder: 40,                    // optional; lower sits higher
+        defaultOrder: 40,                    // optional; orders the suggested cards
       },
     ],
   },
@@ -387,54 +406,120 @@ each with its own count query and an optional link:
 
 ### Where a card sits
 
-`defaultOrder` is optional and sorts ascending; a widget that omits it goes after every
-widget that states one. Leave it off unless you mean it — without it your card keeps its
-declaration order, which is what nearly every widget wants.
+Someone who has never arranged their dashboard sees the **default dashboard**, and there is
+one: the site's `admin.dashboard.defaultLayout`, or core's own when the site gives none.
+Everyone gets the same default, less the cards they may not see: a widget whose permission or
+`access` refuses them, or whose `shows` answers no.
 
-It exists because position would otherwise depend on **how** a widget reached the
-dashboard rather than on anything it said: contributions resolve before registrations, so
-the same card moved across the grid when its author switched channels. Core's own
-dashboard cards state one, which is how they stay above contributed widgets.
+A plugin asks for a place on it with `suggest`, naming its own widgets. Core places them after
+the default's own cards, in the order the site lists its plugins, unless the site turns
+suggestions off:
 
-Numbers, not indexes — core spaces its own ten apart so a card can be placed between two
-without renumbering anything.
+```ts
+contributes: {
+  dashboard: {
+    widgets: [ordersByState, revenue],
+    suggest: ["acme/orders-by-state"],
+  },
+}
+```
 
-A reader's saved layout, once they have arranged their dashboard, wins over this. Think
-of it as where the card starts, not where it stays.
+A suggestion never reaches a dashboard someone has saved: there, the add panel offers the
+widget instead. A widget nobody suggests is offered and never placed.
+
+A site writes its own default as widget ids, or as cards with a size in grid units and
+starting settings. An entry marked `optional` is left out where its widget is not installed,
+such as a plugin's on a site without that plugin, and takes none of the dashboard's room; any
+other entry must name a widget the install has, or startup refuses it. A widget that allows
+several cards may be listed more than once: each further card names an `id` of its own, which
+no other card and no widget has, and keeps its own settings under it:
+
+```ts
+admin: {
+  dashboard: {
+    defaultLayout: [
+      "core/needs-attention",
+      { widget: "acme/orders-by-state", w: 6, h: 4, optional: true },
+      "core/recently-edited",
+      { widget: "core/count", settings: { collection: "posts" } },
+      { widget: "core/count", id: "pages-count", settings: { collection: "pages" } },
+    ],
+    suggestions: false,
+  },
+}
+```
+
+A widget contributed in the older shape (`contributes.admin.widgets`) is suggested by being
+declared, as it was placed before suggestions existed. These widgets go after the named
+suggestions, ascending by `defaultOrder`, and one that omits it comes after every one that
+states it.
+
+A reader's saved layout, once they have arranged their dashboard, wins over all of this.
+Think of the default as where a card starts, not where it stays.
+
+### Hiding, replacing and overriding widgets
+
+The site config can change any widget, built-in or a plugin's, for everyone:
+
+```ts
+admin: {
+  dashboard: {
+    hide: ["core/team"],
+    replace: { "core/recently-edited": "acme/recent-orders" },
+    overrides: {
+      "core/recent-activity": {
+        title: "Latest changes",
+        size: { max: { w: 6, h: 6 } },
+        settings: { limit: 5 },
+      },
+    },
+  },
+}
+```
+
+- **`hide`**: nobody is offered a hidden widget and no card of it is drawn. Cards already saved
+  are kept, and come back where they were once the widget is no longer hidden.
+- **`replace`**: a plugin offers an alternative to a built-in in `contributes.dashboard.alternatives`,
+  and the site puts it in the built-in's place. The default places the alternative where the
+  built-in was, at the alternative's own starting size. The built-in is then kept off the
+  dashboard like a hidden widget, and an alternative no `replace` names is never offered.
+- **`overrides`**: a new title, description, starting settings, or sizes narrowed within the
+  widget's own. An override never widens a widget's sizes; startup refuses one that would.
+
+Each holds on every door at once: the add panel, the default, the cards a dashboard draws and
+the card data the server answers.
 
 ### The card frame and its states
 
-Every card draws in one frame: its title, an optional line under it, the body, at most one footer
-link, and when its data last arrived. The frame also owns the states, so a card never draws its
-own: a skeleton while data has never arrived, the last value marked busy while it refreshes, an
-empty state, one "Not available to you" state for a source the reader cannot see (forbidden,
-missing and hidden all read the same), and an error that keeps the title and offers Retry for
-that card only. Figures go through `formatCount` from `@nextlyhq/ui/format`, so a number reads the
-same on every card.
+Every card draws in one frame: a header of one fixed height, the body, and at most one footer
+link. The header shows the card's subject as its title (a collection card set to Posts reads
+"Posts"), with the widget's own name beneath it when the two differ ("Count"), then the card's
+one quick control and its menu, in the same place on every card. A card does not say when its
+data arrived.
 
-### Widgets that draw their own surface
+The frame also owns the states, so a card never draws its own: a skeleton while data has never
+arrived, the last value marked busy while it refreshes, an empty state, one "Not available to
+you" state for a source the reader cannot see (forbidden, missing and hidden all read the same),
+and an error that keeps the title and offers Retry for that card only. Figures go through
+`formatCount` from `@nextlyhq/ui/format`, so a number reads the same on every card.
 
-A `custom` widget may set `chrome: "none"` to decline the card frame entirely, and is
-then responsible for everything the card would have provided — its heading, its loading
-and error states, its own visual boundary.
+A component whose own data says the card is not ready (the answer holds nothing it can show, or
+something it cannot read) returns `FrameState` from `@nextlyhq/plugin-sdk/admin` with that state,
+and the frame draws it in the body's place: for an empty answer, for example,
+`<FrameState state={{ kind: "empty", empty: { title: "No orders yet" } }} />`.
 
-Reach for it only when your component **is** already a designed surface, such as a
-titled section with its own rules. Framing one of those draws a second heading above its
-own. If your component draws a body and expects a title around it, leave `chrome` alone.
+A widget that should leave the dashboard while it has nothing to show, rather than say so,
+declares `hidesWhenEmpty: true`. A card that failed, or whose source the reader cannot see, is
+never hidden, and customise mode still shows it, marked "Hidden while empty".
 
-It is refused on every other archetype, because core composes those bodies **into** the
-card — the card owns the title, the footer and the busy state — so an unframed one would
-render with no heading and nothing reporting that it was loading.
-
-One consequence worth knowing: an unframed component that renders nothing costs no space
-at all. The grid collapses a cell whose widget drew nothing, so a card that hides itself
-when it has nothing to say leaves no gap behind.
+Every card is framed: there is no way to decline the frame, and a widget that names `chrome` is
+refused at startup.
 
 <Callout type="info">
-  `core#` is reserved. Core's own dashboard cards resolve their components under that
-  prefix, and the admin refuses to let anything else register or unregister one — a
-  plugin claiming the path would replace the body drawn for a card the registry still
-  attributes to core.
+  `core#` is reserved. Core's own dashboard cards resolve their components under
+  that prefix, and the admin refuses to let anything else register or unregister
+  one — a plugin claiming the path would replace the body drawn for a card the
+  registry still attributes to core.
 </Callout>
 
 ### Draw it yourself
@@ -449,7 +534,7 @@ contributes: {
       {
         id: "reports-chart",
         component: "@acme/nextly-plugin-reports/admin#ChartWidget",
-        size: "half",                        // "full" | "half"
+        size: { default: { w: 6, h: 4 } },   // 12-column grid units: w 1–12, h 2–12
         requiredPermission: "read-reports",  // client-gated
       },
     ],
@@ -475,13 +560,13 @@ export function ChartWidget({ slot, isFetching }: WidgetComponentProps) {
 }
 ```
 
-| Prop | Type | What it is |
-|---|---|---|
-| `widgetId` | `string` | The id you registered the widget under. |
-| `placementId` | `string` | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card — its settings and its answer — is keyed by this, not by `widgetId`. |
-| `settings` | `Record<string, unknown>` | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else. |
-| `slot` | `WidgetSlot \| undefined` | This card's answer. `undefined` means either that the first request is still in flight **or** that the widget declared no query — see below. |
-| `isFetching` | `boolean` | Whether this card's query is in flight, the first request included. Always `false` for a widget with no query. |
+| Prop          | Type                      | What it is                                                                                                                                                          |
+| ------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `widgetId`    | `string`                  | The id you registered the widget under.                                                                                                                             |
+| `placementId` | `string`                  | The **card's** id. One widget may sit on a dashboard twice, and everything belonging to a card — its settings and its answer — is keyed by this, not by `widgetId`. |
+| `settings`    | `Record<string, unknown>` | This card's settings, already resolved: the reader's stored values where they are usable, your declared defaults everywhere else.                                   |
+| `slot`        | `WidgetSlot \| undefined` | This card's answer. `undefined` means either that the first request is still in flight **or** that the widget declared no query — see below.                        |
+| `isFetching`  | `boolean`                 | Whether this card's query is in flight, the first request included. Always `false` for a widget with no query.                                                      |
 
 An absent `slot` has two causes and they need different UI: `isFetching` is `true` only
 for a card whose query is in the batch, so `slot === undefined && isFetching` is the

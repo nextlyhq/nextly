@@ -22,7 +22,10 @@ import {
   apiKeyViewer,
   type ApiKeyMeta,
 } from "../../domains/auth/services/api-key-service";
-import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   CheckAccessArgs,
@@ -55,6 +58,7 @@ import {
   authorizeChecked,
   checkedCaller,
   checkedRoleChange,
+  checkRead,
   checkWrite,
   mapPermission,
   mapRole,
@@ -81,6 +85,8 @@ export interface RolesNamespace {
 export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
   return {
     async find(args: FindRolesArgs = {}): Promise<ListResult<Role>> {
+      // Checked as REST's role list is, before anything is read.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.roles.read);
       // PR 4 (unified-error-system): listRoles returns `{ data, meta }`
       // directly and throws NextlyError on failure.
       const result = await ctx.rbacRoleService.listRoles({
@@ -89,18 +95,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
         limit: args.limit ?? 10,
       });
 
-      // The query selects `slug` at runtime but the RoleQueryService return
-      // type doesn't declare it (type gap in the service layer); widen the
-      // runtime shape to the full Role record the mapper expects.
-      const data = result.data as Array<{
-        id: string;
-        name: string;
-        slug: string;
-        description: string | null;
-        level: number;
-        isSystem: boolean;
-      }>;
-      const items = data.map(r => mapRole(r));
+      const items = result.data.map(r => mapRole(r));
       const total = result.meta?.total ?? items.length;
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
@@ -122,6 +117,7 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async findByID(args: FindRoleByIDArgs): Promise<Role> {
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.roles.read);
       // PR 4: getRoleById returns the role directly, throws NOT_FOUND.
       const role = await ctx.rbacRoleService.getRoleById(args.id);
       return mapRole(role);
@@ -200,6 +196,11 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async getPermissions(args: GetRolePermissionsArgs): Promise<Permission[]> {
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.roles.readPermissions
+      );
       const rolePerms = await ctx.rbacRolePermissionService.listRolePermissions(
         args.id
       );
@@ -277,6 +278,13 @@ export function createPermissionsNamespace(
     async find(
       args: FindPermissionsArgs = {}
     ): Promise<ListResult<Permission>> {
+      // REST lists permissions to whoever may read roles: the role form needs
+      // them to show what a role can grant.
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.permissions.list
+      );
       const limit = args.limit ?? 10;
       const page = args.page ?? 1;
 
@@ -310,6 +318,13 @@ export function createPermissionsNamespace(
     },
 
     async findByID(args: FindPermissionByIDArgs): Promise<Permission | null> {
+      // Refused before the lookup, so `disableErrors` answers a refusal as a
+      // refusal, never as a missing permission.
+      await checkRead(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_READ_POLICY.permissions.read
+      );
       try {
         // PR 4: getPermissionById returns the permission directly and
         // throws NextlyError(NOT_FOUND) on missing rows.
@@ -455,7 +470,8 @@ async function authorizeKeyOperation(
 ): Promise<void> {
   await authorizeChecked(caller, { anyOf: apiKeyPermissionsFor(operation) });
   if (operation !== "read" && caller.authMethod !== "session") {
-    throw NextlyError.forbidden({
+    throw NextlyError.personOnly({
+      doing: "manage API keys",
       logContext: { reason: "session-only", action: operation },
     });
   }

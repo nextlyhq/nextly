@@ -14,6 +14,7 @@ import {
   type SavedPattern,
 } from "@nextlyhq/builder";
 import {
+  type UseBuilderChecklistResult,
   ClassManagerPanel,
   InsertPanel,
   LayersPanel,
@@ -25,7 +26,14 @@ import {
   useDocumentIdentity,
   useEntryFieldsPanel,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useMemo, useState } from "react";
+import {
+  useCallback,
+  useMemo,
+  useState,
+  type SetStateAction,
+  type ReactNode,
+  type Dispatch,
+} from "react";
 
 import type { ComponentLibraryRead } from "../component-library-client";
 import {
@@ -75,10 +83,10 @@ const AVAILABLE_PANELS = [
  * broken control rather than an absent feature. So the list and the renderer
  * move together by construction, and the rail cannot disagree with the body.
  */
-const AVAILABLE_PANELS_WITH_SETTINGS = [
-  ...AVAILABLE_PANELS,
+const AVAILABLE_PANELS_WITH_SETTINGS: readonly [
+  ...typeof AVAILABLE_PANELS,
   "settings",
-] as const;
+] = [...AVAILABLE_PANELS, "settings"] as const;
 
 /**
  * The insert panel, with this site's saved patterns.
@@ -173,6 +181,14 @@ function tierStateOf(read: {
   return read.truncated ? "cut" : "ready";
 }
 
+/** What `useOfferedLibrary` returns. */
+type OfferedLibrary = {
+  offered: ComponentLibraryRead;
+  offerablePatterns: (
+    patterns: readonly SavedPattern[]
+  ) => readonly SavedPattern[];
+};
+
 /** The library the insert panel may offer, for the field being edited. */
 function useOfferedLibrary({
   componentLibrary,
@@ -181,7 +197,7 @@ function useOfferedLibrary({
 }: Pick<
   EditorMount,
   "componentLibrary" | "documentLimits" | "initialDocument"
->) {
+>): OfferedLibrary {
   /*
    * The rows the panel may OFFER: the library without the definition this very
    * field is editing, when it is editing one. The MAP stays whole — the
@@ -223,7 +239,7 @@ function useOfferedLibrary({
    * panel is open — so the RULE comes down and the rows stay there.
    */
   const offerablePatterns = useCallback(
-    (patterns: readonly SavedPattern[]) =>
+    (patterns: readonly SavedPattern[]): readonly SavedPattern[] =>
       withoutSelfPatterns(patterns, initialDocument, identity, componentGraph),
     [initialDocument, identity, componentGraph]
   );
@@ -231,8 +247,17 @@ function useOfferedLibrary({
   return { offered, offerablePatterns };
 }
 
+/** What `usePanelRequests` returns. */
+type PanelRequests = {
+  openPanelRequest: { panel: LeftPanel; count: number } | undefined;
+  requestPanel: (panel: LeftPanel) => void;
+  openInsertPanel: () => void;
+  showEmptyElements: boolean;
+  setShowEmptyElements: Dispatch<SetStateAction<boolean>>;
+};
+
 /** Requests to open a panel from the canvas, and the empty-chrome switch. */
-function usePanelRequests() {
+function usePanelRequests(): PanelRequests {
   /*
    * Opens the insert panel from the canvas itself, for the empty-container
    * appender: pressing its "+" must select the container AND show the panel
@@ -253,13 +278,13 @@ function usePanelRequests() {
   const [openPanelRequest, setOpenPanelRequest] = useState<
     { panel: LeftPanel; count: number } | undefined
   >(undefined);
-  const requestPanel = useCallback((panel: LeftPanel) => {
+  const requestPanel = useCallback((panel: LeftPanel): void => {
     setOpenPanelRequest(current => ({
       panel,
       count: (current?.count ?? 0) + 1,
     }));
   }, []);
-  const openInsertPanel = useCallback(() => {
+  const openInsertPanel = useCallback((): void => {
     requestPanel("insert");
   }, [requestPanel]);
 
@@ -291,7 +316,10 @@ function usePanelRequests() {
  * The panels' side of the editor: what the rail offers, the entry's own
  * fields, the getting-started card, the offered library and the requests.
  */
-export function useEditorPanels(mount: EditorMount, name: string) {
+export function useEditorPanels(
+  mount: EditorMount,
+  name: string
+): EditorPanels {
   const { editor, clientConfig } = mount;
   /*
    * The entry's other fields, ALREADY DRAWN, or null when there are none.
@@ -330,8 +358,20 @@ export function useEditorPanels(mount: EditorMount, name: string) {
   };
 }
 
-/** The panels' side of the editor, as `useEditorPanels` reads it. */
-export type EditorPanels = ReturnType<typeof useEditorPanels>;
+/**
+ * The panels' side of the editor, as `useEditorPanels` reads it: the offered
+ * library's and the panel requests' own results, so a value either adds
+ * reaches this type without being listed again, beside the members this hook
+ * computes itself.
+ */
+export type EditorPanels = OfferedLibrary &
+  PanelRequests & {
+    entryFields: ReactNode;
+    checklist: UseBuilderChecklistResult;
+    availablePanels:
+      | typeof AVAILABLE_PANELS
+      | typeof AVAILABLE_PANELS_WITH_SETTINGS;
+  };
 
 /**
  * What the shell renders into the open panel.

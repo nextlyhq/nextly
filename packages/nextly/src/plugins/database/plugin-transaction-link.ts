@@ -46,6 +46,19 @@ export interface LinkedTransaction {
    * usable after a failed statement), `work` runs as `run` runs it.
    */
   runContained<R>(work: (tx: TransactionContext) => Promise<R>): Promise<R>;
+  /**
+   * Run `effect` once the plugin's transaction has committed: after the
+   * commit, before `ctx.db.transaction` resolves, in the order registered.
+   * Never run when the transaction rolls back. One that throws or rejects is
+   * logged and does not fail the transaction, which has already committed.
+   * Refused, like `run`, once the transaction has finished.
+   *
+   * For work outside the database that must not happen for a change that was
+   * rolled back, and must see the change once it happens: a queued email's
+   * first attempt reads the rows the transaction wrote, which on PostgreSQL
+   * and MySQL no other connection sees before the commit.
+   */
+  afterCommit(effect: () => unknown): void;
 }
 
 /** What `ctx.db.transaction` knows about the transaction it opened. */
@@ -70,7 +83,9 @@ let savepointSequence = 0;
 export function linkPluginTransaction(
   surface: object,
   tx: TransactionContext,
-  scope: TransactionScopeView
+  scope: TransactionScopeView,
+  /** Holds an effect until the transaction commits; see `afterCommit`. */
+  onCommit: (effect: () => unknown) => void
 ): void {
   // The contained run before which the next one waits.
   let lastContained: Promise<unknown> = Promise.resolve();
@@ -90,6 +105,10 @@ export function linkPluginTransaction(
       const turn = lastContained.then(() => runUnderSavepoint(tx, scope, work));
       lastContained = turn.catch(() => undefined);
       return scope.track(turn, "contained");
+    },
+    afterCommit(effect: () => unknown): void {
+      scope.assertOpen();
+      onCommit(effect);
     },
   });
 }

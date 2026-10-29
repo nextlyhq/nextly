@@ -77,6 +77,8 @@ import type {
   PoolStats,
   TransactionContext,
   TransactionOptions,
+  SessionOptions,
+  StatementSession,
   SqlParam,
   InsertOptions,
   DatabaseError,
@@ -534,6 +536,58 @@ export class PostgresAdapter extends DrizzleAdapter {
    */
   override isConnected(): boolean {
     return this.connected && this.pool !== null;
+  }
+
+  /**
+   * Runs `work` on one client taken from the pool, outside a transaction,
+   * each statement committing as it runs, so connection-scoped state a
+   * statement sets (a temporary table, a session setting, an advisory lock)
+   * is still there for the next. The client is closed afterwards, whether
+   * `work` finished or threw, never handed back to the pool: that state ends
+   * with it instead of reaching a later caller. No `SessionOptions` field
+   * changes anything on PostgreSQL: strict mode is MySQL's, and PostgreSQL
+   * refuses an overlong value already.
+   */
+  override async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    _options?: SessionOptions
+  ): Promise<T> {
+    // A precondition: before any connection is taken.
+    this.refuseSessionInTransaction();
+    const pool = this.ensurePool();
+    // A checkout, taken from the pool like `executeQuery`'s queries are.
+    this.notePoolAccess();
+    let client: PoolClient;
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      throw this.classifyError(error);
+    }
+    try {
+      return await work({
+        execute: async <R = unknown>(
+          statement: string,
+          params: SqlParam[] = []
+        ): Promise<R[]> => {
+          const startTime = Date.now();
+          try {
+            const result = await client.query(statement, params as unknown[]);
+            if (this.config.logger?.query) {
+              this.config.logger.query(
+                statement,
+                params,
+                Date.now() - startTime
+              );
+            }
+            return result.rows as R[];
+          } catch (error) {
+            throw this.classifyError(error, statement);
+          }
+        },
+      });
+    } finally {
+      client.release(true);
+    }
   }
 
   /**

@@ -12,6 +12,10 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  grantTo,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -20,7 +24,7 @@ import {
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
 import { conditionProbe } from "../condition-probe";
-import { onboardingIsIncomplete, onboardingSteps } from "../onboarding";
+import { onboardingIsIncomplete, onboardingProgress } from "../onboarding";
 
 const NOTES = "notes";
 /** A collection whose rows the reader under test may NOT read. */
@@ -102,6 +106,10 @@ async function boot(): Promise<TestNextly> {
     ],
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read and
+  // create on both collections and the rules decide which they may use.
+  await userWhoMay(t, admin.user.id, "read", [SECRETS, NOTES]);
+  await grantTo(t, admin.user.id, "create", [SECRETS, NOTES]);
   // The same call `POST /api/dashboard/query` makes before resolving anything:
   // publish the collection sources from the LIVE registry. Boot does not, and
   // the steps read that registry to know which collections exist.
@@ -131,13 +139,17 @@ async function bootReadOnly(mayCreate: boolean): Promise<TestNextly> {
     ],
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read and
+  // create on the archive and its create rule alone decides the create.
+  await userWhoMay(t, admin.user.id, "read", [ARCHIVE]);
+  await grantTo(t, admin.user.id, "create", [ARCHIVE]);
   await refreshCollectionSources();
   return t;
 }
 
 /** The steps as a map, so a case names the step it is about. */
 async function stepsFor(caller: ReadCaller): Promise<Record<string, boolean>> {
-  const steps = await onboardingSteps(conditionProbe(caller));
+  const { steps } = await onboardingProgress(conditionProbe(caller));
   return Object.fromEntries(steps.map(step => [step.id, step.complete]));
 }
 
@@ -467,7 +479,7 @@ describe("onboarding steps against a real instance", () => {
   });
 
   // No case asserts that the condition agrees with the steps it reports.
-  // `onboardingIsIncomplete` CALLS `onboardingSteps`, so the two cannot
+  // `onboardingIsIncomplete` CALLS `onboardingProgress`, so the two cannot
   // disagree and any such test would pass on every implementation, including a
   // broken one -- it would compare one derivation against itself. The agreement
   // is structural rather than observable, which is the reason for deriving the

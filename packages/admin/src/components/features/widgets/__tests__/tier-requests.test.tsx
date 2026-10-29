@@ -1,11 +1,11 @@
 /**
- * The dashboard's requests follow each card's tier, and a resize asks again only for a card
+ * The dashboard's requests follow each card's size, and a change asks again only for a card
  * that now draws more.
  *
- * Every card's first query is sized for the tier its card will be drawn at, so no request
- * leaves before the dashboard has a width. Afterwards a resize is not a new question for the
- * batch: a card that rose into a tier drawing more rows asks again on its own, and a card that
- * shrank keeps the answer it has.
+ * Every card's first query is sized for the card it will be drawn as, so no request leaves
+ * before the dashboard has a width. A list's rows are counted from the card's height, so a
+ * change of width asks nothing, and a card made taller asks again on its own; a card made
+ * shorter keeps the answer it has.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -47,20 +47,34 @@ vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
   ).streamOverPost()
 );
 
-/** A list card asking eight rows of a collection, declared at `size`. */
-function listCard(id: string, source: string, size: string) {
+/** A list card asking `limit` rows of a collection, declared `w` columns wide and `h` rows tall. */
+function listCard(id: string, source: string, w: number, limit: number, h = 4) {
   return {
     id,
     title: id,
     archetype: "list",
-    defaultSize: size,
-    query: { source, op: "list", select: ["title"], limit: 8 },
+    size: { default: { w, h } },
+    query: { source, op: "list", select: ["title"], limit },
   };
 }
 
-// `lg` is drawn at a half, `full` at full width.
-const HALF = listCard("acme/half", "collection:posts", "lg");
-const FULL = listCard("acme/full", "collection:pages", "full");
+// Six columns is drawn at a half, twelve at full width. Four rows tall, each body holds four
+// rows: the half asks eight and draws four; the full card asks five and draws four.
+const HALF = listCard("acme/half", "collection:posts", 6, 8);
+const FULL = listCard("acme/full", "collection:pages", 12, 5);
+
+/** The dashboard with the half drawn `h` rows tall, as a change of its size makes it. */
+function halfAt(h: number): AdminBranding {
+  return {
+    plugins: [
+      {
+        name: "@acme",
+        collections: [],
+        widgets: [listCard("acme/half", "collection:posts", 6, 8, h), FULL],
+      },
+    ],
+  } as unknown as AdminBranding;
+}
 
 /** The widget queries each batch request sent, in order. */
 function sentQueries(): Array<Array<{ source: string; limit?: number }>> {
@@ -80,7 +94,15 @@ function renderGrid() {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return render(<WidgetGrid />, { wrapper: Wrapper });
+  const drawn = render(<WidgetGrid />, { wrapper: Wrapper });
+  return {
+    ...drawn,
+    /** Draws the half `h` rows tall. */
+    resizeHalf(h: number) {
+      mockBranding = halfAt(h);
+      drawn.rerender(<WidgetGrid />);
+    },
+  };
 }
 
 beforeEach(() => {
@@ -117,19 +139,29 @@ describe("the requests a dashboard sends as it is sized", () => {
     await waitFor(() => expect(sentQueries()).toHaveLength(1));
   });
 
-  it("sizes each card's first query for the tier it is drawn at", async () => {
-    // On 680 px the half spans six tracks and is 328 px wide: small, three rows asked as four.
-    // The full card is 680 px wide: medium, eight rows asked as nine.
+  it("sizes each card's first query for the rows its height holds", async () => {
+    // Four rows tall, each body holds four rows, asked as five, whatever its width: the half is
+    // small on 680 px and the full card medium.
     stubDashboardWidth(680);
     renderGrid();
     await waitFor(() => expect(sentQueries()).toHaveLength(1));
     const [first] = sentQueries();
-    expect(first.find(q => q.source === "collection:posts")?.limit).toBe(4);
-    expect(first.find(q => q.source === "collection:pages")?.limit).toBe(9);
+    expect(first.find(q => q.source === "collection:posts")?.limit).toBe(5);
+    expect(first.find(q => q.source === "collection:pages")?.limit).toBe(5);
+  });
+
+  it("asks nothing when the dashboard widens, since a card's rows follow its height", async () => {
+    stubDashboardWidth(680);
+    renderGrid();
+    await waitFor(() => expect(sentQueries()).toHaveLength(1));
+    // 1,200 px: both cards are wider, at another tier, and four rows tall still.
+    resizeDashboard(1200);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(sentQueries()).toHaveLength(1);
   });
 
   it("keeps the answer it has when the larger one fails, and does not ask for it again", async () => {
-    // The batch answers both cards; the half's own re-ask, once it rises, is refused.
+    // The batch answers both cards; the half's own re-ask, once it is taller, is refused.
     vi.mocked(protectedApi.post).mockImplementation((_url, body) => {
       const queries = (body as { queries: unknown[] }).queries;
       return Promise.resolve({
@@ -141,20 +173,20 @@ describe("the requests a dashboard sends as it is sized", () => {
       });
     });
     stubDashboardWidth(680);
-    renderGrid();
+    const grid = renderGrid();
     await waitFor(() => expect(screen.getAllByText("Kept")).toHaveLength(2));
 
-    resizeDashboard(720);
+    grid.resizeHalf(6);
     await waitFor(() => expect(sentQueries()).toHaveLength(2));
     // Long enough for the refusal to land, and for a repeat to have left if one were going to.
     await new Promise(resolve => setTimeout(resolve, 100));
     // 🔴 The smaller answer is still drawn: a resize during a failure is not an error.
     expect(screen.getAllByText("Kept")).toHaveLength(2);
-    // And the failed tier is not asked again on its own, round after round.
+    // And the failed size is not asked again on its own, round after round.
     expect(sentQueries()).toHaveLength(2);
   });
 
-  it("marks the card busy while it is asked again for its new tier", async () => {
+  it("marks the card busy while it is asked again for its new size", async () => {
     // The half's own re-ask is held open; the card keeps its answer on screen meanwhile, and
     // says it is reading again, as it would for any refetch.
     let release: () => void = () => {};
@@ -170,10 +202,10 @@ describe("the requests a dashboard sends as it is sized", () => {
       return new Promise(resolve => (release = () => resolve(answer)));
     });
     stubDashboardWidth(680);
-    renderGrid();
+    const grid = renderGrid();
     await waitFor(() => expect(screen.getAllByText("Kept")).toHaveLength(2));
 
-    resizeDashboard(720);
+    grid.resizeHalf(6);
     await waitFor(() => expect(sentQueries()).toHaveLength(2));
     const body = () =>
       document.querySelector(
@@ -187,10 +219,10 @@ describe("the requests a dashboard sends as it is sized", () => {
     );
   });
 
-  it("draws a kept smaller answer at its own tier after the card grew", async () => {
-    // The half is fetched at small, three rows and the one more; its re-ask for medium is
-    // refused. It keeps the small answer, and counts it at small: three rows and More exist,
-    // never the extra row drawn as a fourth item.
+  it("draws a kept smaller answer at its own size after the card grew", async () => {
+    // The half is fetched four rows tall, four rows and the one more; its re-ask at six rows
+    // tall is refused. It keeps the smaller answer, and counts it at its own size: four rows and
+    // a footer saying more exist, never the extra row drawn as a fifth item.
     vi.mocked(protectedApi.post).mockImplementation((_url, body) => {
       const queries = (
         body as { queries: Array<{ source: string; limit?: number }> }
@@ -212,20 +244,22 @@ describe("the requests a dashboard sends as it is sized", () => {
       });
     });
     stubDashboardWidth(680);
-    renderGrid();
+    const grid = renderGrid();
     const half = () =>
       document.querySelector<HTMLElement>('[data-card-id="acme/half"]');
     await waitFor(() =>
-      expect(half()?.textContent).toContain("collection:posts 3")
+      expect(half()?.textContent).toContain("collection:posts 4")
     );
 
-    resizeDashboard(720);
+    grid.resizeHalf(6);
     await waitFor(() => expect(sentQueries()).toHaveLength(2));
     await new Promise(resolve => setTimeout(resolve, 100));
+    expect(half()?.querySelectorAll('[data-testid="entity-row"]')).toHaveLength(
+      4
+    );
     expect(
-      half()?.querySelectorAll('[data-testid="widget-list-row"]')
-    ).toHaveLength(3);
-    expect(half()?.textContent).toContain("More exist");
+      half()?.querySelector('[data-testid="list-card-footer"]')
+    ).toHaveTextContent("View all (5+)");
   });
 
   it("asks a custom widget's query as declared, at any tier", async () => {
@@ -242,7 +276,7 @@ describe("the requests a dashboard sends as it is sized", () => {
               title: "acme/custom",
               archetype: "custom",
               component: "@acme/admin#Custom",
-              defaultSize: "lg",
+              size: { default: { w: 6, h: 4 } },
               query: {
                 source: "collection:posts",
                 op: "list",
@@ -262,23 +296,58 @@ describe("the requests a dashboard sends as it is sized", () => {
     ]);
   });
 
-  it("asks again for the card that rose, alone, and for nothing when it shrinks", async () => {
+  it("sizes a custom widget's list query when it asks to be, as core's lists are sized", async () => {
+    // The opt-in: a component that draws by the card's size is asked the rows it draws and
+    // the one more that says more exist, where an unsized custom card above gets exactly 8.
+    // Four rows tall, its body holds four rows, and one more.
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme",
+          collections: [],
+          widgets: [
+            {
+              id: "acme/sized",
+              title: "acme/sized",
+              archetype: "custom",
+              component: "@acme/admin#Sized",
+              size: { default: { w: 6, h: 4 } },
+              sizedQuery: true,
+              query: {
+                source: "collection:posts",
+                op: "list",
+                select: ["title"],
+                limit: 8,
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as AdminBranding;
     stubDashboardWidth(680);
     renderGrid();
     await waitFor(() => expect(sentQueries()).toHaveLength(1));
+    expect(sentQueries()[0]).toEqual([
+      expect.objectContaining({ source: "collection:posts", limit: 5 }),
+    ]);
+  });
 
-    // 720 px: the half is 348 px wide and medium now, drawing eight rows where four were
-    // fetched. The full card stays medium.
-    resizeDashboard(720);
+  it("asks again for the card made taller at the same width, alone, and for nothing when it shrinks", async () => {
+    stubDashboardWidth(680);
+    const grid = renderGrid();
+    await waitFor(() => expect(sentQueries()).toHaveLength(1));
+
+    // Six rows tall, the half's body holds seven rows where four were fetched.
+    grid.resizeHalf(6);
     await waitFor(() => expect(sentQueries()).toHaveLength(2));
-    // 🔴 One card's question, not the dashboard's: a batch that re-keyed on the tier would
-    // send both cards again here.
+    // 🔴 One card's question, not the dashboard's: a batch that re-keyed on the size would
+    // send both cards again here. Seven rows of its eight, and the one more.
     expect(sentQueries()[1]).toEqual([
-      expect.objectContaining({ source: "collection:posts", limit: 9 }),
+      expect.objectContaining({ source: "collection:posts", limit: 8 }),
     ]);
 
-    // Back to 680 px: the half shrinks to small and draws a prefix of what it holds.
-    resizeDashboard(680);
+    // Back to four rows tall: the half draws a prefix of what it holds.
+    grid.resizeHalf(4);
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(sentQueries()).toHaveLength(2);
   });

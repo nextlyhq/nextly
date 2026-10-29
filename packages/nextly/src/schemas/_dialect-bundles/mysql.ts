@@ -9,6 +9,9 @@
  * @module schemas/_dialect-bundles/mysql
  * @since v0.0.3-alpha (Plan A Task 17 — replaces database/schema/mysql.ts)
  */
+// Every dialect's bundle exports its own tables under the same names, by
+// design: one is chosen by dialect at runtime.
+// fallow-ignore-file duplicate-export
 
 export { users } from "../users/mysql";
 
@@ -16,6 +19,9 @@ export { users } from "../users/mysql";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/mysql";
+// The one schema lock every schema change takes; the field-group lock above is held beside it
+// for processes of an earlier version.
+export { nextlySchemaLock } from "../field-group-lock/mysql";
 export { nextlyDocumentLock } from "../document-lock/mysql";
 export { nextlyRbacEpoch } from "../rbac-epoch/mysql";
 export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
@@ -42,7 +48,6 @@ export {
   rolePermissions,
   userRoles,
   roleInherits,
-  userPermissionCache,
 } from "../rbac/mysql";
 
 export { apiKeys } from "../api-keys/mysql";
@@ -62,6 +67,8 @@ export { userFieldDefinitionsMysql as userFieldDefinitions } from "../user-field
 export { emailProvidersMysql as emailProviders } from "../email-providers/mysql";
 export { emailDeliveriesMysql as emailDeliveries } from "../email-deliveries/mysql";
 export { emailSendClaimsMysql as emailSendClaims } from "../email-send-claims/mysql";
+export { emailQueueMysql as emailQueue } from "../email-queue/mysql";
+export { emailQueueRecipientsMysql as emailQueueRecipients } from "../email-queue-recipients/mysql";
 export { emailTemplatesMysql as emailTemplates } from "../email-templates/mysql";
 
 export { nextlySchemaEventsMysql as nextlySchemaEvents } from "../schema-events/mysql";
@@ -103,6 +110,11 @@ export { nextlyJobsMysql as nextlyJobs } from "../jobs/mysql";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";
+// Each reader's pinned entries and dashboard preferences; in the bundle for
+// the reason the releases note above gives — this map is what the push
+// creates.
+export { nextlyDashboardPinsMysql as nextlyDashboardPins } from "../dashboard-pins/mysql";
+export { nextlyDashboardPreferencesMysql as nextlyDashboardPreferences } from "../dashboard-preferences/mysql";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.
@@ -120,3 +132,4 @@ export {
 // Recorded preview links; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyPreviewLinksMysql as nextlyPreviewLinks } from "../preview-links/mysql";
+export { nextlyLanguagesMysql as nextlyLanguages } from "../languages/mysql";

@@ -9,6 +9,7 @@
  */
 
 import { ChevronDown, ChevronUp } from "lucide-react";
+import type { JSX } from "react";
 
 import { Button } from "@admin/components/ui";
 
@@ -20,7 +21,7 @@ export function UnchangedFieldsToggle({
   count: number;
   shown: boolean;
   onToggle: () => void;
-}) {
+}): JSX.Element | null {
   // Nothing to fold, so nothing to offer.
   if (count === 0) return null;
   return (

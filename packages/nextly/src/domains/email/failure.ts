@@ -22,6 +22,12 @@ export interface EmailFailure {
   status?: number;
   /** A short sentence saying what went wrong, for a log or a person. */
   reason: string;
+  /**
+   * @experimental Whether the email was delivered cannot be known: the request
+   * may have reached the provider, but no definite answer came back. Absent
+   * otherwise, a provider that could not be reached at all included.
+   */
+  unknown?: true;
 }
 
 /**
@@ -40,6 +46,12 @@ export const UNCLASSIFIED_REASON = "The email provider failed.";
 /** The reason given when the provider could not be reached. */
 const UNREACHABLE_REASON = "The email provider could not be reached.";
 
+/** The reason given when a request was sent and its answer was lost. */
+const LOST_ANSWER_REASON = "The email provider's answer was lost.";
+
+/** The reason given when a call has not answered by its deadline. */
+const NO_ANSWER_REASON = "The email provider did not answer in time.";
+
 /**
  * Whether `reason` is core's own sentence for this classification.
  *
@@ -56,14 +68,14 @@ const UNREACHABLE_REASON = "The email provider could not be reached.";
 function isCoreReason(
   reason: string,
   retryable: boolean,
-  status: number | undefined
+  status: number | undefined,
+  unknown: boolean
 ): boolean {
   if (reason === describeClass(retryable, status)) return true;
-  return (
-    retryable &&
-    status === undefined &&
-    (reason === UNCLASSIFIED_REASON || reason === UNREACHABLE_REASON)
-  );
+  if (!retryable || status !== undefined) return false;
+  return unknown
+    ? reason === LOST_ANSWER_REASON || reason === NO_ANSWER_REASON
+    : reason === UNCLASSIFIED_REASON || reason === UNREACHABLE_REASON;
 }
 
 /**
@@ -90,17 +102,27 @@ export function failureOf(error: unknown): EmailFailure | undefined {
   if (error === null || typeof error !== "object") return undefined;
   const candidate = (error as { emailFailure?: unknown }).emailFailure;
   if (candidate === null || typeof candidate !== "object") return undefined;
-  const { retryable, status, reason } = candidate as Record<string, unknown>;
+  const { retryable, status, reason, unknown } = candidate as Record<
+    string,
+    unknown
+  >;
   if (typeof retryable !== "boolean") return undefined;
   const usableStatus = isProviderStatus(status) ? status : undefined;
+  // Unknown only for a retryable failure with no status: an answer with a
+  // status is a definite one.
+  const isUnknown = unknown === true && retryable && usableStatus === undefined;
   const usableReason =
-    typeof reason === "string" && isCoreReason(reason, retryable, usableStatus)
+    typeof reason === "string" &&
+    isCoreReason(reason, retryable, usableStatus, isUnknown)
       ? reason
       : undefined;
   return {
     retryable,
     ...(usableStatus !== undefined ? { status: usableStatus } : {}),
-    reason: usableReason ?? describeClass(retryable, usableStatus),
+    reason:
+      usableReason ??
+      (isUnknown ? LOST_ANSWER_REASON : describeClass(retryable, usableStatus)),
+    ...(isUnknown ? { unknown: true as const } : {}),
   };
 }
 
@@ -134,9 +156,57 @@ export function unclassifiedFailure(): EmailFailure {
   return { retryable: true, reason: UNCLASSIFIED_REASON };
 }
 
-/** The provider could not be reached, or did not answer: worth trying again. */
+/** The provider could not be reached: nothing was sent, and a retry may be. */
 export function networkFailure(): EmailFailure {
   return { retryable: true, reason: UNREACHABLE_REASON };
+}
+
+/**
+ * A request that may have reached the provider, whose answer was lost: a
+ * connection reset or a timeout after it was sent. Retryable, and unknown.
+ */
+export function lostAnswerFailure(): EmailFailure {
+  return { retryable: true, reason: LOST_ANSWER_REASON, unknown: true };
+}
+
+/** A call that had not answered by its deadline: retryable, and unknown. */
+export function noAnswerFailure(): EmailFailure {
+  return { retryable: true, reason: NO_ANSWER_REASON, unknown: true };
+}
+
+/**
+ * The codes a failed `fetch` carries, on its cause, when the request may
+ * already have been sent: the connection was reset or closed mid-request, or
+ * the answer did not arrive in time. A connection that never opened (refused,
+ * a name that did not resolve) carries none of these.
+ */
+const LOST_ANSWER_CODES = new Set([
+  "ECONNRESET",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+/**
+ * What a `fetch` that threw before an answer says about the send: unknown
+ * when the request may have been sent (its cause's code, or the call's own
+ * cancellation at its deadline), else a provider that could not be reached.
+ */
+export function fetchFailure(error: unknown): EmailFailure {
+  return answerLost(error) ? lostAnswerFailure() : networkFailure();
+}
+
+/**
+ * Whether `error` is a request stopped or cut off after it may have been
+ * sent: the call's own cancellation, a timeout, or a connection lost
+ * mid-request. Before an answer, or while its body is still arriving.
+ */
+function answerLost(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  if (name === "AbortError" || name === "TimeoutError") return true;
+  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return typeof code === "string" && LOST_ANSWER_CODES.has(code);
 }
 
 /**
@@ -180,6 +250,10 @@ export function smtpFailure(code: number): EmailFailure {
  * message (`fallback` when what was thrown was not an error), carrying the
  * original's classification, or, when it had none, a network failure if the
  * provider never answered and an unclassified one if it did.
+ *
+ * A request cancelled or cut off while its answer's body was still arriving
+ * is unknown, as one cut off before the answer is: the provider may have
+ * accepted it, and a retry through a provider without keys would send it again.
  */
 export function providerFailure(
   text: { prefix: string; fallback: string },
@@ -190,6 +264,9 @@ export function providerFailure(
   const prefix = text.prefix;
   return withEmailFailure(
     new Error(`${prefix}: ${message}`),
-    failureOf(error) ?? (answered ? unclassifiedFailure() : networkFailure())
+    failureOf(error) ??
+      (answered && !answerLost(error)
+        ? unclassifiedFailure()
+        : fetchFailure(error))
   );
 }

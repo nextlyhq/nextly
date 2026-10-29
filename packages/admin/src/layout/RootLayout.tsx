@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
 
+import { AdminPending } from "../components/guards/AdminPending";
 import { BuilderGuard } from "../components/guards/BuilderGuard";
 import { PermissionGuard } from "../components/guards/PermissionGuard";
 import { PrivateRoute } from "../components/guards/PrivateRoute";
@@ -14,6 +15,7 @@ import { PublicRoute } from "../components/guards/PublicRoute";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
+import { DocumentTitleProvider } from "../context/providers/DocumentTitleProvider";
 import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSync";
 import {
   ThemePaintScript,
@@ -21,7 +23,7 @@ import {
   useTheme,
 } from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
-import { fieldGroupKeys } from "../hooks/queries";
+import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
 
@@ -39,7 +41,7 @@ const RestartOverlay = lazy(() =>
  * Handles theme synchronization via React state instead of manual DOM manipulation.
  */
 function AdminAppContent({ nonce }: RootLayoutProps) {
-  const { route, isHydrated } = useRouter();
+  const { route, isHydrated, pathname } = useRouter();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
@@ -50,13 +52,7 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
   useEffect(() => {
     const handler = () => {
       toast.info("Schema updated externally, refreshing...");
-      // void: the cache invalidations are fire-and-forget; downstream
-      // queries refetch on their own when they observe the new key state.
-      void queryClient.invalidateQueries({ queryKey: ["collections"] });
-      void queryClient.invalidateQueries({ queryKey: ["entries"] });
-      void queryClient.invalidateQueries({ queryKey: ["singles"] });
-      void queryClient.invalidateQueries({ queryKey: ["single-documents"] });
-      void queryClient.invalidateQueries({ queryKey: fieldGroupKeys.all() });
+      invalidateContentCaches(queryClient);
     };
     window.addEventListener("nextly:schema-updated", handler);
     return () => window.removeEventListener("nextly:schema-updated", handler);
@@ -78,6 +74,9 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         suppressHydrationWarning
       >
         <ThemePaintScript nonce={nonce} />
+        {/* Painted with the server's HTML, so the first thing a visitor sees
+            says the admin is loading, while its code downloads. */}
+        <AdminPending />
       </div>
     );
   }
@@ -89,6 +88,7 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
     routeType,
     requiredPermission,
     accessSubject,
+    entityAccess,
     requiresBuilder,
   } = route;
 
@@ -115,6 +115,7 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         <PermissionGuard
           requiredPermission={requiredPermission}
           subject={accessSubject}
+          entity={entityAccess}
         >
           {componentElement}
         </PermissionGuard>
@@ -185,7 +186,14 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
                 rather than around it, for the load-bearing reasons recorded
                 on GeneralSettingsSync itself. */}
           {routeType !== "public" && <GeneralSettingsSync />}
-          {content}
+          {/* Names the browser tab after the routed screen and the site. Inside
+              branding, which supplies the site's name, and around the screen,
+              whose detail pages add the name of the item they show. Rendered
+              only once a route is resolved, so the host's own title stands
+              until the admin knows which screen it is on. */}
+          <DocumentTitleProvider route={route} pathname={pathname}>
+            {content}
+          </DocumentTitleProvider>
         </BrandingProvider>
       </PortalProvider>
     </div>

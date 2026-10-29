@@ -14,10 +14,14 @@
  * wants the width back, and the layout above only drops the whole sidebar
  * COLUMN when the primary rail is surrendered too.
  */
+
+import type { JSX } from "react";
+
 import { cn } from "@admin/lib/utils";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
+import { isContentSection } from "./lib/content-rail";
 import { isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import { subSidebarBorderClass } from "./lib/sub-sidebar-classes";
 import { SubSidebarContent } from "./SubSidebarContent";
@@ -27,6 +31,8 @@ function panelTitle(selectedMain: string, standaloneLabel: string): string {
   if (selectedMain.startsWith("standalone-")) return standaloneLabel;
   if (selectedMain === "media") return "Media Library";
   if (selectedMain === "builders") return "Builders";
+  // Both content sections show in the one Content panel.
+  if (isContentSection(selectedMain)) return "Content";
   return selectedMain;
 }
 
@@ -45,7 +51,7 @@ export function SubSidebarPanel({
   standaloneLabel: string;
   /** Everything `SubSidebarContent` needs, passed through unread. */
   content: React.ComponentProps<typeof SubSidebarContent>;
-}) {
+}): JSX.Element {
   const hasSubSidebar = isSubSidebarOpen(
     selectedMain,
     visibleMenuItemIds,

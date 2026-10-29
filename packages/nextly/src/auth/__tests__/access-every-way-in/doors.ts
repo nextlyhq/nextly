@@ -27,18 +27,33 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
 import { recordingDeviations, type Deviation } from "../../access/deviations";
+import { runWithAccessMemo } from "../../access/request-memo";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
+import {
+  beginCell,
+  noteError,
+  noteMissing,
+  noteMissingError,
+  noteMissingRefusal,
+  noteRefusal,
+  noteResponse,
+  noteUncaught,
+  refusalOf,
+  takeRefusal,
+  type Refusal,
+} from "./refusals";
 import { rowKey, type Answer, type Door, type Row } from "./table";
 import {
   MEDIA_MARKER,
   ORIGIN,
-  PROBE_WHERE,
+  PROBES_WHERE,
   USER_MARKER,
   collectionOf,
   ownKey,
   personRoute,
+  probesRead,
   pubSingleOf,
   relationOf,
   singleOf,
@@ -65,10 +80,13 @@ function fromError(error: unknown): Answer {
   return typeof status === "number" ? String(status) : "E";
 }
 
-async function settle(work: () => Promise<Answer>): Promise<Answer> {
+async function settle(
+  work: () => Promise<Answer | Attributed>
+): Promise<Answer | Attributed> {
   try {
     return await work();
   } catch (error) {
+    noteUncaught(error);
     return fromError(error);
   }
 }
@@ -122,6 +140,11 @@ const COLLECTION_REQUESTS: Record<
 > = {
   read: { method: "GET", byId: true },
   create: { method: "POST", byId: false, body: { title: "made" } },
+  "new-pub": {
+    method: "POST",
+    byId: false,
+    body: { title: "made", status: "published" },
+  },
   update: { method: "PATCH", byId: true, body: { title: "changed" } },
   delete: { method: "DELETE", byId: true },
   publish: { method: "PATCH", byId: true, body: { status: "published" } },
@@ -136,6 +159,7 @@ async function restMedia(headers: Record<string, string>) {
     }),
     { params: Promise.resolve({ path: [] }) }
   );
+  await noteResponse(res);
   return fromStatus(res.status);
 }
 
@@ -186,7 +210,9 @@ async function restResource(row: Row, headers: Record<string, string>) {
   if (!path || !asked)
     throw new Error(`no resource request for ${rowKey(row)}`);
   const segments = asked.byId ? [path, ABSENT_ID] : [path];
-  const { status } = await request(asked.method, segments, headers, asked.body);
+  const res = await request(asked.method, segments, headers, asked.body);
+  const { status } = res;
+  await noteResponse(res);
   if (status === 401 || status === 403 || status === 429 || status >= 500) {
     return String(status);
   }
@@ -204,9 +230,10 @@ function restSystem(
 ): Promise<Answer> | undefined {
   if (row.target === "media") return restMedia(headers);
   if (row.target === "users" && row.action === "read") {
-    return request("GET", ["users"], headers).then(res =>
-      fromStatus(res.status)
-    );
+    return request("GET", ["users"], headers).then(async res => {
+      await noteResponse(res);
+      return fromStatus(res.status);
+    });
   }
   if (RESOURCE_PATHS[row.target]) return restResource(row, headers);
   return undefined;
@@ -218,7 +245,9 @@ async function rest(world: World, row: Row, who: CallerHandle) {
   if (system) return system;
   const { slug, id } = addressOf(world, row, "rest");
   if (row.target === "single" || row.target === "single-pub") {
-    return fromStatus((await restSingle(row, slug, h)).status);
+    const res = await restSingle(row, slug, h);
+    await noteResponse(res);
+    return fromStatus(res.status);
   }
   if (row.action === "list" || row.action === "count") {
     return restRead(slug, row.action, h);
@@ -226,12 +255,21 @@ async function rest(world: World, row: Row, who: CallerHandle) {
   const { method, byId, body } = COLLECTION_REQUESTS[row.action];
   const entries = ["collections", slug, "entries"];
   const res = await request(method, byId ? [...entries, id] : entries, h, body);
+  await noteResponse(res);
+  // A refused request naming one entry is compared with the same request for
+  // an entry that does not exist, so a refusal that tells the two apart shows.
+  if (byId && res.status >= 400) {
+    await noteMissing(
+      res,
+      await request(method, [...entries, ABSENT_ID], h, body)
+    );
+  }
   return fromStatus(res.status);
 }
 
 /**
- * A REST list or count of the entries `PROBE_WHERE` matches: allowed when the
- * probe row is among what was returned, refused when it was left out.
+ * A REST list or count of the entries `PROBES_WHERE` matches, answered by
+ * which of the two probe rows came back (`probesRead`).
  */
 async function restRead(
   slug: string,
@@ -244,25 +282,27 @@ async function restRead(
     action === "count" ? [...path, "count"] : path,
     headers,
     undefined,
-    "?where[slug][equals]=probe"
+    "?where[slug][in]=probe,probe-other"
   );
-  if (res.status !== 200) return fromStatus(res.status);
+  if (res.status !== 200) {
+    await noteResponse(res);
+    return fromStatus(res.status);
+  }
   const body = (await res.json()) as {
     items?: { slug?: unknown }[];
     total?: unknown;
   };
   if (action === "list") {
-    return body.items?.some(item => item.slug === "probe") ? "A" : "R";
+    return probesRead(body.items?.map(item => item.slug) ?? []);
   }
   // `total` is the count route's answer; any other shape is recorded as is.
   const total = body.total;
   if (typeof total !== "number") return `=${JSON.stringify(body)}`;
-  return total > 0 ? "A" : "R";
+  return probesRead(total);
 }
 
-/** The caller as a Direct API call names it. */
-function directCaller(who: CallerHandle) {
-  if (who.principal) return { principal: who.principal };
+/** The caller as a checked Direct API call names a person, a key or nobody. */
+function checkedCallerOf(who: CallerHandle) {
   return {
     overrideAccess: false as const,
     ...(who.user ? { user: who.user } : {}),
@@ -270,8 +310,15 @@ function directCaller(who: CallerHandle) {
   };
 }
 
+/** The caller as a Direct API call names it. */
+function directCaller(who: CallerHandle) {
+  if (who.principal) return { principal: who.principal };
+  return checkedCallerOf(who);
+}
+
 type Nextly = World["t"]["nextly"];
 type DirectCaller = ReturnType<typeof directCaller>;
+type CheckedCaller = ReturnType<typeof checkedCallerOf>;
 
 /** The Direct API call each collection action is, on `collection` and `id`. */
 const DIRECT_CALLS: Record<
@@ -286,6 +333,12 @@ const DIRECT_CALLS: Record<
   read: (n, collection, id, as) => n.findByID({ collection, id, ...as }),
   create: (n, collection, _id, as) =>
     n.create({ collection, data: { title: "made" }, ...as }),
+  "new-pub": (n, collection, _id, as) =>
+    n.create({
+      collection,
+      data: { title: "made", status: "published" },
+      ...as,
+    }),
   update: (n, collection, id, as) =>
     n.update({ collection, id, data: { title: "changed" }, ...as }),
   delete: (n, collection, id, as) => n.delete({ collection, id, ...as }),
@@ -293,18 +346,40 @@ const DIRECT_CALLS: Record<
     n.update({ collection, id, data: { status: "published" }, ...as }),
   unpublish: (n, collection, id, as) =>
     n.update({ collection, id, data: { status: "draft" }, ...as }),
-  // A list and a count answer whether the probe row was among what they read.
+  // A list and a count answer which probe rows were among what they read.
   list: async (n, collection, _id, as) =>
-    (await n.find({ collection, where: PROBE_WHERE, ...as })).items.some(
-      item => (item as { slug?: unknown }).slug === "probe"
+    probesRead(
+      (await n.find({ collection, where: PROBES_WHERE, ...as })).items.map(
+        item => (item as { slug?: unknown }).slug
+      )
     ),
   count: async (n, collection, _id, as) =>
-    (await n.count({ collection, where: PROBE_WHERE, ...as })).total > 0,
+    probesRead(
+      (await n.count({ collection, where: PROBES_WHERE, ...as })).total
+    ),
+};
+
+/**
+ * The Direct API read of a target that is not an entry: a list of media, of
+ * users or of roles, as the REST door asks each.
+ */
+const DIRECT_SYSTEM_READS: Partial<
+  Record<Row["target"], (n: Nextly, as: CheckedCaller) => Promise<unknown>>
+> = {
+  media: (n, as) => n.media.find(as),
+  users: (n, as) => n.users.find(as),
+  roles: (n, as) => n.roles.find(as),
 };
 
 async function direct(world: World, row: Row, who: CallerHandle) {
   const nextly = world.t.nextly;
   const as = directCaller(who);
+  const systemRead = DIRECT_SYSTEM_READS[row.target];
+  if (systemRead) {
+    // Never a principal: the table asks these reads of the callers REST names.
+    await systemRead(nextly, checkedCallerOf(who));
+    return "A";
+  }
   const { slug, id } = addressOf(world, row, "direct");
   if (row.target === "single") {
     if (row.action === "read") await nextly.findSingle({ slug, ...as });
@@ -316,8 +391,53 @@ async function direct(world: World, row: Row, who: CallerHandle) {
     await nextly.updateSingle({ slug, data: { status }, ...as });
     return "A";
   }
-  const found = await DIRECT_CALLS[row.action](nextly, slug, id, as);
-  return found === false ? "R" : "A";
+  const call = DIRECT_CALLS[row.action];
+  let found: unknown;
+  try {
+    found = await call(nextly, slug, id, as);
+  } catch (error) {
+    noteError(error);
+    // As at REST: a refused call naming one entry is compared with the same
+    // call for an entry that does not exist.
+    if (BY_ID.has(row.action)) await noteDirectMissing(call, nextly, slug, as);
+    throw error;
+  }
+  // A list or a count answers in its own words; any other call that
+  // returned allowed.
+  return typeof found === "string" ? found : "A";
+}
+
+/** The same call made for an entry that does not exist, noted against it. */
+async function noteDirectMissing(
+  call: (typeof DIRECT_CALLS)[Row["action"]],
+  nextly: Nextly,
+  slug: string,
+  as: DirectCaller
+): Promise<void> {
+  try {
+    await call(nextly, slug, ABSENT_ID, as);
+    noteMissingError(undefined);
+  } catch (missing) {
+    noteMissingError(missing);
+  }
+}
+
+/** The actions that name one entry. */
+const BY_ID: ReadonlySet<Row["action"]> = new Set([
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+]);
+
+/**
+ * A refusal the gate itself returned, which no caller reads: its status alone
+ * is recorded, with no code or message to stand for one a caller would see.
+ */
+function gateRefusal(status: number): Answer {
+  noteRefusal({ status, code: "-", shape: "other", message: "" });
+  return fromStatus(status);
 }
 
 /**
@@ -339,7 +459,7 @@ async function directWithoutService(world: World, row: Row, who: CallerHandle) {
       authenticatedScope: who.actor,
       logger: silentLogger,
     });
-    return refused ? fromStatus(refused.statusCode ?? 500) : "A";
+    return refused ? gateRefusal(refused.statusCode ?? 500) : "A";
   }
   const refused = await new CollectionAccessService(
     world.t.adapter,
@@ -351,7 +471,7 @@ async function directWithoutService(world: World, row: Row, who: CallerHandle) {
     overrideAccess: false,
     authenticatedScope: who.actor,
   });
-  return refused ? fromStatus(refused.statusCode ?? 500) : "A";
+  return refused ? gateRefusal(refused.statusCode ?? 500) : "A";
 }
 
 async function website(world: World, row: Row, who: CallerHandle) {
@@ -378,10 +498,11 @@ async function route(world: World, row: Row, who: CallerHandle) {
     ["probe", "gate", slug, row.action],
     who.headers
   );
+  await noteResponse(res);
   return fromStatus(res.status);
 }
 
-function targetSlug(row: Row): string {
+export function targetSlug(row: Row): string {
   if (row.target === "collection") return collectionOf(row.rule);
   if (row.target === "single") return singleOf(row.rule);
   if (row.target === "single-pub") return pubSingleOf(row.rule);
@@ -393,22 +514,26 @@ async function can(_world: World, row: Row, who: CallerHandle) {
     ["probe", "can", targetSlug(row), row.action],
     who.headers
   );
-  if (res.status !== 200) return String(res.status);
+  if (res.status !== 200) {
+    await noteResponse(res);
+    return String(res.status);
+  }
   const { may } = (await res.json()) as { may: unknown };
   return fromBoolean(may);
 }
 
-async function service(world: World, row: Row, who: CallerHandle) {
-  const { slug, id } = addressOf(world, row, "service");
+/** The service probe's route, asked to make the row's call on entry `id`. */
+function serviceProbe(
+  row: Row,
+  who: CallerHandle,
+  slug: string,
+  id: string
+): Promise<Response> {
   const search = `?id=${encodeURIComponent(id)}`;
   const person = personRoute(row.caller);
-  const res = person
-    ? await runPersonRoute(
-        `${person}/${slug}/${row.action}`,
-        search,
-        who.headers
-      )
-    : await pluginRequest(
+  return person
+    ? runPersonRoute(`${person}/${slug}/${row.action}`, search, who.headers)
+    : pluginRequest(
         [
           "probe",
           row.caller === "visitor" ? "public-service" : "service",
@@ -418,14 +543,54 @@ async function service(world: World, row: Row, who: CallerHandle) {
         who.headers,
         search
       );
-  if (res.status !== 200) return String(res.status);
-  const body = (await res.json()) as {
-    ok: boolean;
-    status: number | null;
-    found?: boolean;
-  };
-  if (body.ok) return body.found === false ? "R" : "A";
-  return body.status === null ? "E" : String(body.status);
+}
+
+async function service(world: World, row: Row, who: CallerHandle) {
+  const { slug, id } = addressOf(world, row, "service");
+  const res = await serviceProbe(row, who, slug, id);
+  if (res.status !== 200) {
+    await noteResponse(res);
+    return String(res.status);
+  }
+  const reply = (await res.json()) as ProbeReply;
+  const answer = fromProbeReply(reply);
+  // As at REST and the Direct API: a refused call naming one entry is
+  // compared with the same call for an entry that does not exist.
+  if (!reply.ok && BY_ID.has(row.action)) {
+    await noteServiceMissing(row, who, slug);
+  }
+  return answer;
+}
+
+/** Notes how the service answers the same call for an entry that does not exist. */
+async function noteServiceMissing(
+  row: Row,
+  who: CallerHandle,
+  slug: string
+): Promise<void> {
+  const res = await serviceProbe(row, who, slug, ABSENT_ID);
+  if (res.status !== 200) {
+    noteMissingRefusal(await refusalOf(res));
+    return;
+  }
+  const reply = (await res.json()) as ProbeReply;
+  noteMissingRefusal(reply.ok ? undefined : reply.refusal);
+}
+
+/**
+ * What the service probe hands back: its call's result, or the refusal it
+ * threw, read by `refusalFromError` as every door reads one.
+ */
+type ProbeReply = { ok: true; read?: string } | { ok: false; refusal: Refusal };
+
+/** The probe's reply as an answer, noting the refusal it reports. */
+function fromProbeReply(body: ProbeReply): Answer {
+  // A list or a count says which probe rows it read; any other call that
+  // returned allowed.
+  if (body.ok) return body.read ?? "A";
+  noteRefusal(body.refusal);
+  // A thrown value that carried no status is a failure, not a refusal.
+  return body.refusal.status === 0 ? "E" : String(body.refusal.status);
 }
 
 /** A person's route, run as the dispatcher runs one for its person. */
@@ -448,16 +613,56 @@ async function entity(_world: World, row: Row, who: CallerHandle) {
     user: who.user,
     ...(who.actor ? { authenticatedScope: who.actor } : {}),
   });
-  return fromBoolean(await canReadEntity(targetSlug(row), caller));
+  // Asked inside a request, as every reader behind it is (a route, the
+  // Direct API, a plugin service): a read rule's filter is kept for the
+  // request there, and outside one the reader refuses it.
+  return fromBoolean(
+    await runWithAccessMemo(() => canReadEntity(targetSlug(row), caller))
+  );
 }
+
+/**
+ * What a door's one call for a caller answered, with the deviations recorded
+ * in deciding each subject of it (a collection, a permission).
+ */
+interface Observed<T> {
+  readonly answer: T;
+  readonly bySubject: ReadonlyMap<string, Deviation[]>;
+}
+
+/** A row's answer and the deviations its door recorded in deciding it. */
+interface Attributed {
+  readonly answer: Answer;
+  readonly deviations: readonly Deviation[];
+}
+
+/** Runs one call for many subjects, keeping what deviated for each. */
+async function observing<T>(work: () => Promise<T>): Promise<Observed<T>> {
+  const { result, bySubject } = await recordingDeviations(work);
+  return { answer: result, bySubject };
+}
+
+/**
+ * What the schema list answered one caller: the slugs it listed, or the
+ * status it refused them with and the refusal as that response carried it.
+ */
+type SchemaList = string[] | { refused: Answer; refusal: Refusal | undefined };
 
 const schemaLists = new WeakMap<
   World,
-  Map<string, Promise<Answer | string[]>>
+  Map<string, Promise<Observed<SchemaList>>>
 >();
 
-/** The collections the schema builder lists for a caller, asked once. */
-async function schema(world: World, row: Row, who: CallerHandle) {
+/**
+ * Whether the schema builder lists the row's collection to the caller. The
+ * list is asked once per caller, as the builder asks it, and the row's
+ * deviations are the ones that request recorded in deciding its collection.
+ */
+async function schema(
+  world: World,
+  row: Row,
+  who: CallerHandle
+): Promise<Attributed | Answer> {
   let cache = schemaLists.get(world);
   if (!cache) {
     cache = new Map();
@@ -465,21 +670,32 @@ async function schema(world: World, row: Row, who: CallerHandle) {
   }
   let listed = cache.get(row.caller);
   if (!listed) {
-    listed = (async () => {
+    listed = observing(async (): Promise<SchemaList> => {
       const res = await listCollectionsSchema(
         new Request(`${ORIGIN}/api/collections/schema?limit=500`, {
           headers: who.headers,
         })
       );
-      if (res.status !== 200) return String(res.status);
+      if (res.status !== 200) {
+        return { refused: String(res.status), refusal: await refusalOf(res) };
+      }
       const body = (await res.json()) as { items: { slug: string }[] };
       return body.items.map(item => item.slug);
-    })();
+    });
     cache.set(row.caller, listed);
   }
-  const answer = await listed;
-  if (typeof answer === "string") return answer;
-  return answer.includes(collectionOf(row.rule)) ? "A" : "R";
+  const { answer, bySubject } = await listed;
+  if (!Array.isArray(answer)) {
+    // The list is asked once per caller, so every row it answers carries the
+    // one refusal that request was answered with.
+    if (answer.refusal) noteRefusal(answer.refusal);
+    return answer.refused;
+  }
+  const slug = collectionOf(row.rule);
+  return {
+    answer: answer.includes(slug) ? "A" : "R",
+    deviations: bySubject.get(slug) ?? [],
+  };
 }
 
 /**
@@ -535,7 +751,7 @@ async function system(_world: World, row: Row, who: CallerHandle) {
 
 const audiences = new WeakMap<
   World,
-  Map<string, Promise<ReadonlySet<string>>>
+  Map<string, Promise<Observed<ReadonlySet<string>>>>
 >();
 
 /**
@@ -543,7 +759,11 @@ const audiences = new WeakMap<
  * permission. What a caller is offered is worked out once per caller and
  * setup, as the layout endpoint works it out once per request.
  */
-async function widget(world: World, row: Row, who: CallerHandle) {
+async function widget(
+  world: World,
+  row: Row,
+  who: CallerHandle
+): Promise<Attributed> {
   if (!who.user) throw new Error(`${row.caller} has no user to ask about`);
   let cache = audiences.get(world);
   if (!cache) {
@@ -551,19 +771,80 @@ async function widget(world: World, row: Row, who: CallerHandle) {
     audiences.set(world, cache);
   }
   const key = `${row.setup} ${row.caller}`;
+  const caller = readAccessCaller({
+    user: who.user,
+    ...(who.actor ? { authenticatedScope: who.actor } : {}),
+  });
   let offered = cache.get(key);
   if (!offered) {
-    const caller = readAccessCaller({
-      user: who.user,
-      ...(who.actor ? { authenticatedScope: who.actor } : {}),
-    });
-    offered = widgetAudience(caller).then(
-      ({ visible }) => new Set(visible.map(card => card.id))
+    // Every widget is decided at once, as the dashboard decides them, and
+    // each permission's deviations are kept apart.
+    offered = observing(() =>
+      widgetAudience(caller).then(
+        ({ visible }) => new Set(visible.map(card => card.id))
+      )
     );
     cache.set(key, offered);
   }
-  const id = widgetFor(targetSlug(row), row.action);
-  return (await offered).has(id) ? "A" : "R";
+  const slug = targetSlug(row);
+  const { answer, bySubject } = await offered;
+  return {
+    answer: answer.has(widgetFor(slug, row.action)) ? "A" : "R",
+    deviations: bySubject.get(`${row.action}-${slug}`) ?? [],
+  };
+}
+
+const capabilityAnswers = new WeakMap<
+  World,
+  Map<string, Promise<Observed<Answer | CapabilitiesBody>>>
+>();
+
+/** What `GET /me/capabilities` answers, as the admin reads it. */
+interface CapabilitiesBody {
+  entities: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * What the admin is told this caller may do with the row's target, from one
+ * `GET /me/capabilities`. The endpoint answers about every entity at once, as the admin asks it once per sign-in, so it is asked
+ * once per caller and setup and each row reads its own cell; the row's
+ * deviations are the ones that request recorded in deciding that cell.
+ *
+ * A target the answer never names is `=absent` rather than `R`. The answer
+ * leaves out what the caller may not read, so absence is how it refuses
+ * every action on such a target, and the verdict counts it as a refusal; the
+ * file keeps it apart from a named `false`, so a change in which entities are
+ * named shows in the diff as itself.
+ */
+async function capabilities(
+  world: World,
+  row: Row,
+  who: CallerHandle
+): Promise<Attributed | Answer> {
+  let cache = capabilityAnswers.get(world);
+  if (!cache) {
+    cache = new Map();
+    capabilityAnswers.set(world, cache);
+  }
+  const key = `${row.setup} ${row.caller}`;
+  let asked = cache.get(key);
+  if (!asked) {
+    asked = observing(async (): Promise<Answer | CapabilitiesBody> => {
+      const res = await request("GET", ["me", "capabilities"], who.headers);
+      if (res.status !== 200) return String(res.status);
+      return (await res.json()) as CapabilitiesBody;
+    });
+    cache.set(key, asked);
+  }
+  const { answer, bySubject } = await asked;
+  if (typeof answer === "string") return answer;
+  const slug = targetSlug(row);
+  const cell = answer.entities[slug];
+  const deviations = bySubject.get(`${row.action}-${slug}`) ?? [];
+  if (cell === undefined || !(row.action in cell)) {
+    return { answer: "=absent", deviations };
+  }
+  return { answer: fromBoolean(cell[row.action]), deviations };
 }
 
 /** The id of a Single's one document, made by the reads that came before. */
@@ -587,6 +868,27 @@ async function singleDocumentId(world: World, slug: string): Promise<string> {
  * grant to release with, and a claim it left behind would answer every caller
  * after it `held`.
  */
+/**
+ * Notes how a refused claim compares with the same claim on `absent`. A claim
+ * that one is granted is given straight back, as every acquired claim is.
+ */
+async function noteLockMissing(
+  refused: Response,
+  absent: DocumentRef,
+  who: CallerHandle
+): Promise<void> {
+  const res = await request("POST", ["document-lock"], who.headers, absent);
+  await noteMissing(refused, res);
+  if (res.status !== 200) return;
+  const body = (await res.json()) as { item?: { claimToken?: unknown } };
+  const claimToken = body.item?.claimToken;
+  if (typeof claimToken === "string") {
+    await container
+      .get<DocumentLockService>("documentLockService")
+      .release(absent, claimToken);
+  }
+}
+
 async function lock(world: World, row: Row, who: CallerHandle) {
   const ref: DocumentRef =
     row.target === "single"
@@ -601,7 +903,13 @@ async function lock(world: World, row: Row, who: CallerHandle) {
           entryId: addressOf(world, row, "lock").id,
         };
   const res = await request("POST", ["document-lock"], who.headers, ref);
-  if (res.status !== 200) return fromStatus(res.status);
+  if (res.status !== 200) {
+    await noteResponse(res);
+    // A claim names one document, so a refused one is compared with the same
+    // claim on a document that does not exist.
+    await noteLockMissing(res, { ...ref, entryId: ABSENT_ID }, who);
+    return fromStatus(res.status);
+  }
   const body = (await res.json()) as {
     item?: { status?: unknown; claimToken?: unknown };
   };
@@ -616,7 +924,7 @@ async function lock(world: World, row: Row, who: CallerHandle) {
 
 const ADAPTERS: Record<
   Door,
-  (world: World, row: Row, who: CallerHandle) => Promise<Answer>
+  (world: World, row: Row, who: CallerHandle) => Promise<Answer | Attributed>
 > = {
   rest,
   direct,
@@ -630,6 +938,7 @@ const ADAPTERS: Record<
   system,
   widget,
   lock,
+  capabilities,
 };
 
 /**
@@ -658,7 +967,11 @@ async function answer(
   world: World,
   row: Row,
   door: Door
-): Promise<{ answer: Answer; deviations: Deviation[] }> {
+): Promise<{
+  answer: Answer;
+  deviations: Deviation[];
+  refusal?: Refusal;
+}> {
   const who = world.callers.get(row.caller);
   if (!who) throw new Error(`no caller ${row.caller}`);
   const adapter =
@@ -666,10 +979,16 @@ async function answer(
       ? directWithoutService
       : ADAPTERS[door];
   const asked = () => settle(() => adapter(world, row, who));
+  beginCell();
   const { result, deviations } = await recordingDeviations(() =>
     row.setup === "no-service" ? withoutService(asked) : asked()
   );
-  return { answer: result, deviations };
+  const refusal = takeRefusal();
+  // A door that decides many subjects in one call hands back the deviations
+  // that call recorded for this row's subject.
+  return typeof result === "string"
+    ? { answer: result, deviations, refusal }
+    : { answer: result.answer, deviations: [...result.deviations], refusal };
 }
 
 /**
@@ -765,6 +1084,17 @@ async function setPubStatus(world: World, row: Row): Promise<void> {
   }
 }
 
+/** Whether `after` holds a row `before` did not, stored as published. */
+function addedPublished(
+  before: readonly Record<string, unknown>[],
+  after: readonly Record<string, unknown>[]
+): boolean {
+  const existing = new Set(before.map(stored => String(stored.id)));
+  return after.some(
+    stored => !existing.has(String(stored.id)) && stored.status === "published"
+  );
+}
+
 /** The status a Single's publish or unpublish leaves it in. */
 const statusAfter = (row: Row) =>
   row.action === "publish" ? "published" : "draft";
@@ -781,21 +1111,25 @@ export async function ask(
 ): Promise<{
   answer: Answer;
   deviations: Deviation[];
+  refusal?: Refusal;
   landed?: boolean;
   done?: boolean;
 }> {
   if (!writes(row, door)) return answer(world, row, door);
   await markUpdated(world, row);
   const before = await storedTable(world, row);
-  const { answer: given, deviations } = await answer(world, row, door);
+  const { answer: given, deviations, refusal } = await answer(world, row, door);
   const after = await storedTable(world, row);
   const landed = !isDeepStrictEqual(before, after);
-  // A Single's publish or unpublish is done only when its status moved: a
-  // save that bumps the row's timestamps but drops the status changes the
-  // table without doing what was asked.
+  // A Single's publish or unpublish is done only when its status moved, and
+  // a create sent as published only when the row it added is published: a
+  // write that drops the status changes the table without doing what was
+  // asked.
   const done =
     row.target === "single-pub"
       ? after[0]?.status === statusAfter(row)
-      : landed;
-  return { answer: given, deviations, landed, done };
+      : row.action === "new-pub"
+        ? addedPublished(before, after)
+        : landed;
+  return { answer: given, deviations, refusal, landed, done };
 }

@@ -1,7 +1,33 @@
 import { cva, type VariantProps } from "class-variance-authority";
-import { forwardRef, type HTMLAttributes } from "react";
+import {
+  forwardRef,
+  type HTMLAttributes,
+  type ForwardRefExoticComponent,
+  type PropsWithoutRef,
+  type RefAttributes,
+} from "react";
 
 import { cn } from "../lib/utils";
+import type { VariantsFn } from "../lib/variants";
+
+/** The arms `alertVariants` is built from. Its type is read from them: {@link VariantsFn}. */
+export const ALERT_VARIANT_MAP = {
+  variant: {
+    // text-primary is mode-correct (dark ink on light in light mode, light
+    // ink on dark in dark mode); the previous dark text override rendered
+    // dark slate on the dark tint at about 1:1.
+    info: "bg-primary/5 text-primary",
+    // dark:border-l-* re-asserts the strong base accent on the left after
+    // the dark:border-*-900 all-sides rule, so the meaningful accent stays
+    // visible in dark mode instead of collapsing to the faint -900 shade.
+    success:
+      "border-success-200 bg-success-50 text-success-900 border-l-4 border-l-success dark:border-success-900 dark:border-l-success dark:bg-success-950 dark:text-success-100",
+    warning:
+      "border-warning-200 bg-warning-50 text-warning-900 border-l-4 border-l-warning dark:border-warning-900 dark:border-l-warning dark:bg-warning-950 dark:text-warning-100",
+    destructive:
+      "border-destructive-200 bg-destructive-50 text-destructive-900 border-l-4 border-l-destructive dark:border-destructive-900 dark:border-l-destructive dark:bg-destructive-950 dark:text-destructive-100",
+  },
+};
 
 /**
  * Alert Component - Design System Specification
@@ -72,26 +98,10 @@ import { cn } from "../lib/utils";
  * - Destructive: <XCircle className="h-4 w-4" />
  * @experimental
  */
-const alertVariants = cva(
+const alertVariants: VariantsFn<typeof ALERT_VARIANT_MAP> = cva(
   "relative flex items-start gap-3 rounded-md  border border-border p-4 text-sm   transition-colors duration-150",
   {
-    variants: {
-      variant: {
-        // text-primary is mode-correct (dark ink on light in light mode, light
-        // ink on dark in dark mode); the previous dark text override rendered
-        // dark slate on the dark tint at about 1:1.
-        info: "bg-primary/5 text-primary",
-        // dark:border-l-* re-asserts the strong base accent on the left after
-        // the dark:border-*-900 all-sides rule, so the meaningful accent stays
-        // visible in dark mode instead of collapsing to the faint -900 shade.
-        success:
-          "border-success-200 bg-success-50 text-success-900 border-l-4 border-l-success dark:border-success-900 dark:border-l-success dark:bg-success-950 dark:text-success-100",
-        warning:
-          "border-warning-200 bg-warning-50 text-warning-900 border-l-4 border-l-warning dark:border-warning-900 dark:border-l-warning dark:bg-warning-950 dark:text-warning-100",
-        destructive:
-          "border-destructive-200 bg-destructive-50 text-destructive-900 border-l-4 border-l-destructive dark:border-destructive-900 dark:border-l-destructive dark:bg-destructive-950 dark:text-destructive-100",
-      },
-    },
+    variants: ALERT_VARIANT_MAP,
     defaultVariants: {
       variant: "info",
     },
@@ -115,7 +125,9 @@ export type AlertProps = HTMLAttributes<HTMLDivElement> &
  * </Alert>
  * @experimental
  */
-const Alert = forwardRef<HTMLDivElement, AlertProps>(
+const Alert: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, AlertProps>(
   ({ className, variant = "info", role = "alert", ...props }, ref) => {
     return (
       <div
@@ -143,7 +155,9 @@ export type AlertTitleProps = HTMLAttributes<HTMLHeadingElement>;
  * <AlertTitle>Payment Successful</AlertTitle>
  * @experimental
  */
-const AlertTitle = forwardRef<HTMLHeadingElement, AlertTitleProps>(
+const AlertTitle: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertTitleProps> & RefAttributes<HTMLHeadingElement>
+> = forwardRef<HTMLHeadingElement, AlertTitleProps>(
   ({ className, ...props }, ref) => {
     return (
       <h5
@@ -175,7 +189,9 @@ export type AlertDescriptionProps = HTMLAttributes<HTMLDivElement>;
  * </AlertDescription>
  * @experimental
  */
-const AlertDescription = forwardRef<HTMLDivElement, AlertDescriptionProps>(
+const AlertDescription: ForwardRefExoticComponent<
+  PropsWithoutRef<AlertDescriptionProps> & RefAttributes<HTMLDivElement>
+> = forwardRef<HTMLDivElement, AlertDescriptionProps>(
   ({ className, ...props }, ref) => {
     return (
       <div

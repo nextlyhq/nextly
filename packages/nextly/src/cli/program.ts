@@ -68,7 +68,7 @@ export {
  *
  * `getCoreVersion` is the same question the plugin resolver asks to validate a
  * plugin's `nextly` range, and it already reads the build-time constant the
- * tsup and vitest `define` blocks inject from `package.json`, with a runtime
+ * tsdown and vitest `define` blocks inject from `package.json`, with a runtime
  * read as a fallback.
  */
 export const CLI_VERSION = getCoreVersion();

@@ -19,30 +19,23 @@
  * @since 1.0.0
  */
 
-import { readableEntities } from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
-import { refreshContentSources } from "../domains/widgets/collection-widgets";
 import { conditionProbe } from "../domains/widgets/condition-probe";
-import { onboardingSteps } from "../domains/widgets/onboarding";
+import { refreshContentSources } from "../domains/widgets/content-sources";
+import { onboardingProgress } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
-import { readActivitySingles } from "../services/dashboard/activity-singles";
+import { readActivitySubjects } from "../services/dashboard/activity-subjects";
 import {
   apiKeyCountScope,
   readableAdminCounts,
 } from "../services/dashboard/admin-counts";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
-import {
-  someResources,
-  type ReadableResources,
-  type ReadCaller,
-} from "../services/dashboard/readable-resources";
-import { registeredContentSlugs } from "../services/lib/registered-content-slugs";
+import { resolveReadableResources } from "../services/dashboard/resolve-readable-resources";
 
-import { readAccessCaller, readCaller } from "./authenticated-read";
+import { readCaller } from "./authenticated-read";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -59,74 +52,6 @@ async function getDashboardService(): Promise<DashboardService> {
 async function getActivityLogService(): Promise<ActivityLogService> {
   await getCachedNextly();
   return container.get<ActivityLogService>("activityLogService");
-}
-
-/**
- * Every name the dashboard can describe, offered for a read decision.
- *
- * Three sources, and the third is the one that is easy to miss.
- * {@link registeredContentSlugs} gives the collections and singles, so the set
- * being authorized is the set that would be counted -- it is shared with the
- * `system:versions` widget source, which bounds its cross-document read by the
- * same candidates. But the scope also bounds `/activity` and
- * `recentChanges24h`, which filter `activity_log.collection` -- and that column
- * is a FREE STRING whose namespace is deliberately wider than the registries.
- * `recordSettingsActivity` files settings mutations under names that are
- * neither a collection nor a single, so enumerating from the registries alone
- * removed every such row from the feed for every caller, super-admin included.
- * Rotating SMTP credentials is one of those rows. See
- * {@link SETTINGS_ACTIVITY_NAMESPACES}.
- *
- * Widening the CANDIDATES is not widening the answer: each name still goes to
- * `canReadEntity`, and each settings namespace has a real verdict there because
- * its `read-{name}` permission is seeded and already authorizes the
- * corresponding settings route.
- *
- * The per-collection COUNTS are unaffected by the third source.
- * `getRegisteredCollections` filters the registry list BY this scope, and
- * `filterByResource` can only ever narrow it -- a name that is not in the
- * registry cannot be added to it by appearing in the scope.
- */
-async function registeredEntitySlugs(): Promise<string[]> {
-  return [...SETTINGS_ACTIVITY_NAMESPACES, ...(await registeredContentSlugs())];
-}
-
-/**
- * Resolve what this caller may read, by ASKING the access layer.
- *
- * The decision is `canReadEntity`'s, taken once per registered entity, because
- * that is the only answer that agrees with what a row read will give. This used
- * to derive the set from permission SLUGS -- filtering `read-{slug}` for a key
- * and `{slug}:read` for a session -- and that is a second implementation of a
- * decision `checkAccess` already makes, which was more permissive than the
- * original in one direction and less in the other:
- *
- * - A collection whose `access.read` REFUSES the caller still has the
- *   `{slug}:read` row a slug filter admits it on, so `/stats` disclosed its
- *   count and `/activity` its entry titles, user names and emails, while
- *   `GET /api/collections/{slug}` correctly answered 403.
- * - A collection authorized ENTIRELY in code has no permission row to find, so
- *   a slug filter dropped a collection the caller can actually open.
- *
- * Asking removes both, and with them the two hand-rolled parsers and their
- * subtleties: there is no prefix to strip by length so that `read-site-settings`
- * keeps naming `site-settings`, because nothing is parsed. There is no
- * super-admin branch either -- `checkAccess` short-circuits on `isSuperAdmin`
- * before it reads any rule, so the bypass arrives through the same call as
- * everything else.
- *
- * One consequence is deliberate and worth naming: a super-admin's scope is now
- * the ENUMERATED set of registered entities rather than the unbounded `all`, so
- * an `activity_log` row naming a collection that is no longer registered is
- * filtered out. An unregistered slug has no rule and no registry entry to
- * decide against, and admitting what cannot be judged is the inversion this
- * whole endpoint was fixed to remove.
- */
-async function resolveReadableResources(
-  caller: ReadCaller
-): Promise<ReadableResources> {
-  const slugs = await registeredEntitySlugs();
-  return someResources(await readableEntities(slugs, readAccessCaller(caller)));
 }
 
 /**
@@ -173,7 +98,8 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
 /**
  * GET /api/dashboard/onboarding
  *
- * Which setup steps this reader has finished. The same answer the
+ * Which setup steps this reader has finished, and whether setup could be
+ * checked at all. The same answer the
  * `onboarding:incomplete` widget condition is derived from, so the card and the
  * rule that decides whether to offer it cannot disagree.
  *
@@ -185,6 +111,11 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
  *
  * Caching: `private, no-store`. The answer is per reader, and a shared cache
  * serving one reader's progress to another would leak which collections exist.
+ *
+ * @deprecated The Get started steps travel in the layout read
+ * (`GET /api/dashboard/layout`, `getStarted`), from the computation that
+ * decides whether the card is drawn. Kept for one release for a client still
+ * reading this one; it answers from the same step answer.
  */
 export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
@@ -194,10 +125,12 @@ export const getDashboardOnboarding = withErrorHandler(async (req: Request) => {
   const caller = await readCaller(auth);
   // The same probe the layout read builds, so this endpoint and the condition
   // that decides whether the card is offered resolve the reader's collections
-  // by one path rather than two.
-  const steps = await onboardingSteps(conditionProbe(caller));
+  // by one path rather than two. `unknown` travels with the steps, because the
+  // condition holds the card while setup cannot be checked and the rows alone
+  // would then read as finished.
+  const { steps, unknown } = await onboardingProgress(conditionProbe(caller));
 
-  return respondData({ steps }, { headers: PRIVATE_NO_STORE_HEADERS });
+  return respondData({ steps, unknown }, { headers: PRIVATE_NO_STORE_HEADERS });
 });
 
 /**
@@ -243,6 +176,19 @@ export const getDashboardRecentEntries = withErrorHandler(
 );
 
 /**
+ * The row limit a request's `?limit` asked for, or none.
+ *
+ * Handed on as asked: the service clamps it, for this endpoint and for the
+ * Recent activity card's widget source alike, so the two cannot disagree. Only
+ * a number other than zero is a limit here: `?limit=0` and a value that is not
+ * a number have always meant "the default", and still do.
+ */
+function askedLimit(req: Request): { limit?: number } {
+  const asked = Number(new URL(req.url).searchParams.get("limit") ?? "");
+  return asked ? { limit: asked } : {};
+}
+
+/**
  * GET /api/dashboard/activity?limit=5
  *
  * Returns recent activity log entries (create/update/delete actions).
@@ -263,12 +209,6 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  const { searchParams } = new URL(req.url);
-  const limitParam = searchParams.get("limit");
-  const limit = limitParam
-    ? Math.min(Math.max(Number(limitParam) || 5, 1), 50)
-    : 5;
-
   const service = await getActivityLogService();
   // The caller WHOLE, and resolved ONCE. Both consumers read it: the scope
   // decides which collections are in reach, and the feed then authorizes each
@@ -277,17 +217,21 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
   // caller cannot open.
   const caller = await readCaller(auth);
   const scope = await resolveReadableResources(caller);
-  const singles = await readActivitySingles();
+  // The Singles and the kept-off collections, read once and handed on whole, as the card's
+  // source hands them: the two doors leave out the same rows.
   const result = await service.getRecentActivity({
-    limit,
+    ...askedLimit(req),
     scope,
     caller,
-    singles,
+    ...(await readActivitySubjects()),
   });
 
   // Cursor-shaped read: `hasMore` sits beside `activities`, with no `total` --
-  // see `ActivityLogResult` for why a count is not published here.
-  // Spread into a fresh literal so the response-shape generic accepts the
-  // named `ActivityLogResult` interface (no implicit index signature).
-  return respondData({ ...result }, { headers: PRIVATE_NO_STORE_HEADERS });
+  // see `ActivityLogResult` for why a count is not published here. Named field
+  // by field: the service's `next` position is for a caller that can pass it
+  // back, and this endpoint takes no position to resume from.
+  return respondData(
+    { activities: result.activities, hasMore: result.hasMore },
+    { headers: PRIVATE_NO_STORE_HEADERS }
+  );
 });

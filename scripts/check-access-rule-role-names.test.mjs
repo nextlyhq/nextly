@@ -55,6 +55,43 @@ describe("check-access-rule-role-names", () => {
     ).toEqual(["templates/t/src/users.ts:3 read"]);
   });
 
+  it("reports a role read by bracket, which a dotted-only reader walks past", () => {
+    expect(
+      scan({
+        "packages/plugin-x/src/pages.ts": [
+          "export const Pages = defineCollection({",
+          '  slug: "pages",',
+          '  access: { delete: ctx => ctx["roles"].includes("admin") },',
+          "});",
+        ].join("\n"),
+      })
+    ).toEqual(["packages/plugin-x/src/pages.ts:3 delete"]);
+  });
+
+  it("reports a role bound through a computed key written as a string", () => {
+    expect(
+      scan({
+        "packages/plugin-x/src/notes.ts": [
+          "export const Notes = defineCollection({",
+          '  access: { read: ({ ["role"]: who }) => who === "admin" },',
+          "});",
+        ].join("\n"),
+      })
+    ).toEqual(["packages/plugin-x/src/notes.ts:2 read"]);
+  });
+
+  it("reads an access map written under a computed key that is a string", () => {
+    expect(
+      scan({
+        "packages/plugin-x/src/files.ts": [
+          "export const Files = defineCollection({",
+          '  ["access"]: { read: ({ roles }) => roles.includes("admin") },',
+          "});",
+        ].join("\n"),
+      })
+    ).toEqual(["packages/plugin-x/src/files.ts:2 read"]);
+  });
+
   it("follows an untyped rule imported into a collection's access", () => {
     expect(
       scan({
@@ -120,7 +157,7 @@ describe("check-access-rule-role-names", () => {
         "templates/t/src/collections/Posts.ts": collection,
         "templates/t/src/collections/access.ts": [
           "export default {",
-          '  update: ({ permissions }) => permissions.includes("posts:update"),',
+          '  update: ({ permissions }) => permissions.includes("update-posts"),',
           "};",
         ].join("\n"),
       })
@@ -197,7 +234,7 @@ describe("check-access-rule-role-names", () => {
           "  permissions,",
           "  collection,",
           "  operation,",
-          "}) => permissions.includes(`${collection}:${operation}`);",
+          "}) => permissions.includes(`${operation}-${collection}`);",
         ].join("\n"),
         "templates/t/src/collections/Posts.ts": [
           'import { hasPermission } from "../access/has-permission";',

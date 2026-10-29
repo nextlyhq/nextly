@@ -13,6 +13,8 @@ import userEvent from "@testing-library/user-event";
 import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { DashboardWidget } from "@admin/types/dashboard/widgets";
+
 import { WidgetSettingsSheet } from "../WidgetSettingsSheet";
 
 const mockBranding = vi.hoisted(() => ({
@@ -32,6 +34,7 @@ const sources: PublishedContentSource[] = [
   {
     collection: "posts",
     label: "Posts",
+    lifecycle: false,
     fields: [
       { name: "title", type: "string", label: "Title" },
       { name: "updatedAt", type: "date", label: "Updated" },
@@ -51,6 +54,7 @@ const sources: PublishedContentSource[] = [
   {
     collection: "pages",
     label: "Pages",
+    lifecycle: false,
     fields: [{ name: "title", type: "string", label: "Title" }],
   },
 ];
@@ -73,7 +77,7 @@ function open(
       title="Recent posts"
       settings={declared}
       config={config}
-      onSave={onSave}
+      onDone={onSave}
     />
   );
   return onSave;
@@ -104,16 +108,162 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Group by was reset: secret is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     // The stale value is not saved back: the card follows its default.
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0]?.[0]).not.toHaveProperty("by");
+  });
+
+  it("opens a Fields choice naming a field no longer offered without it, and says so", async () => {
+    const withFields: AnyWidgetSetting[] = [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ];
+    const onSave = open(
+      { collection: "posts", shown: ["headline", "salary"] },
+      withFields
+    );
+    expect(
+      screen.getByText("Fields was reset: salary is no longer available")
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    // 🔴 The field the reader may not see is not saved back for the card to ask for.
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(JSON.stringify(saved(onSave))).not.toContain("salary");
+  });
+
+  it("names a chosen field by its readable name, not its key, where the source gives no label", () => {
+    // 🔴 A field the source publishes without a label read as its key (`publishedAt`), while
+    // the card's own column heading for it reads "Published At".
+    mockBranding.value = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Posts",
+          lifecycle: false,
+          fields: [
+            { name: "title", type: "string", label: "Title" },
+            { name: "publishedAt", type: "date" },
+          ],
+        },
+      ],
+    };
+    open({ collection: "posts", shown: ["publishedAt"] }, [
+      { name: "collection", type: "collection", label: "Collection" },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ]);
+    expect(screen.getByText("Published At")).toBeTruthy();
+    expect(screen.queryByText("publishedAt")).toBeNull();
+  });
+
+  it("offers Fields a row can print, never the title, and stops at the most a row shows", async () => {
+    mockBranding.value = {
+      widgetSources: [
+        {
+          collection: "posts",
+          label: "Posts",
+          lifecycle: false,
+          titleField: "title",
+          fields: [
+            { name: "title", type: "string", label: "Title" },
+            { name: "category", type: "string", label: "Category" },
+            { name: "summary", type: "string", label: "Summary" },
+            { name: "author", type: "string", label: "Author" },
+            { name: "rank", type: "number", label: "Rank" },
+            { name: "tags", type: "string", label: "Tags", presentable: false },
+          ],
+        },
+      ],
+    };
+    const withFields: AnyWidgetSetting[] = [
+      {
+        name: "collection",
+        type: "collection",
+        label: "Collection",
+        rows: "titled",
+      },
+      { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    ];
+    const { unmount } = render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Recent posts"
+        settings={withFields}
+        config={{ collection: "posts", shown: ["category"] }}
+        onDone={vi.fn()}
+      />
+    );
+    // 🔴 The sheet says how many it takes, and offers neither the title nor
+    // a field a row cannot print.
+    expect(screen.getByText(/Up to 3 fields/)).toBeTruthy();
+    await userEvent.click(screen.getAllByRole("combobox").at(-1)!);
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Summary", "Author", "Rank"]);
+    unmount();
+    // At the most a row shows, nothing more is offered.
+    render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Recent posts"
+        settings={withFields}
+        config={{
+          collection: "posts",
+          shown: ["category", "summary", "author"],
+        }}
+        onDone={vi.fn()}
+      />
+    );
+    expect(screen.getByText("Author")).toBeTruthy();
+    expect(screen.queryByText("Select...")).toBeNull();
   });
 
   it("says nothing while the sources have not arrived", () => {
     mockBranding.value = {};
     open({ collection: "posts", by: "secret" });
     expect(screen.queryByText(/is no longer available/)).toBeNull();
+  });
+
+  it("offers a widget's card only the collections it can be asked of", async () => {
+    // A Breakdown divides by a choice field where there is no lifecycle:
+    // Posts has one (State), Pages has none.
+    const grouping: AnyWidgetSetting[] = [
+      { name: "collection", type: "collection", label: "Collection" },
+      {
+        name: "by",
+        type: "groupBy",
+        of: "collection",
+        label: "Group by",
+        defaultFrom: "collection",
+      },
+    ];
+    render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Breakdown"
+        settings={grouping}
+        widget={
+          {
+            id: "core/breakdown",
+            title: "Breakdown",
+            archetype: "bars",
+            settings: grouping,
+            query: { op: "groupBy", status: "all" },
+          } as unknown as DashboardWidget
+        }
+        config={{ collection: "posts" }}
+        onDone={vi.fn()}
+      />
+    );
+    await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
+    // 🔴 Offered every collection, Pages would set the card to one it asks
+    // nothing of.
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Posts"]);
   });
 
   it("offers only the collections the server sent, and resets what depends on one when it changes", async () => {
@@ -124,7 +274,7 @@ describe("the settings sheet with content settings", () => {
       .map(option => option.textContent);
     expect(offered).toEqual(["Posts", "Pages"]);
     await userEvent.click(screen.getByRole("option", { name: "Pages" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Group by named a field of Posts; with Pages chosen it goes back to its
     // default rather than naming a field of the other collection.
@@ -156,7 +306,7 @@ describe("the settings sheet with content settings", () => {
       screen.getByRole("textbox", { name: "Condition value" }),
       "Hello"
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     const where = saved(onSave).where as Record<
       string,
@@ -178,7 +328,7 @@ describe("the settings sheet with content settings", () => {
       screen.queryByRole("combobox", { name: "Condition field" })
     ).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Clear filter" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "posts" });
   });
@@ -193,7 +343,7 @@ describe("the settings sheet with content settings", () => {
         title="Recent posts"
         settings={settings}
         config={{ collection: "posts", by: "secret" }}
-        onSave={onSave}
+        onDone={onSave}
       />
     );
     const { rerender } = render(sheet(false));
@@ -203,7 +353,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Group by was reset: secret is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).not.toHaveProperty("by");
   });
@@ -215,7 +365,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Reset to defaults" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "pages" });
   });
@@ -225,7 +375,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Clear selection" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Only Group by went; the other preference stayed.
     expect(saved(onSave)).toEqual({ collection: "posts", items: 9 });
@@ -255,7 +405,7 @@ describe("the settings sheet with content settings", () => {
     expect(
       screen.getByText("Collection was reset: gone is no longer available")
     ).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({});
   });
@@ -277,7 +427,7 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(screen.getByRole("option", { name: "Posts" }));
     await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
     await userEvent.click(screen.getByRole("option", { name: "Default" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     // Back at the default, so nothing is stored.
     expect(saved(onSave)).toEqual({});
@@ -296,7 +446,7 @@ describe("the settings sheet with content settings", () => {
     // field Pages does not have. Started afresh, it has no value to take.
     const value = screen.queryByLabelText("Condition value");
     if (value !== null) await userEvent.type(value, "2026-01-01");
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "pages" });
   });
@@ -306,8 +456,88 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Reset to defaults" })
     );
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls[0]?.[0]).toEqual({ collection: "posts" });
+  });
+});
+
+describe("the settings sheet with a note", () => {
+  const note: AnyWidgetSetting[] = [
+    { name: "text", type: "textarea", label: "Note", maxLength: 5 },
+  ];
+
+  it("refuses a note over its bound on Done, saying how long it may be", async () => {
+    const onSave = open({ text: "hello!" }, note);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(await screen.findByText("At most 5 characters.")).toBeTruthy();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("keeps a note of five characters that take ten UTF-16 units", async () => {
+    // 🔴 The must-differ case: a bound counted by `length`, or by the
+    // textarea's native attribute, refuses this.
+    const onSave = open({ text: "😀😀😀😀😀" }, note);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(saved(onSave)).toMatchObject({ text: "😀😀😀😀😀" });
+  });
+});
+
+describe("the settings sheet drawn from a widget's settings", () => {
+  // One setting of every type a widget can declare, as the builders write them.
+  const every: AnyWidgetSetting[] = [
+    { name: "collection", type: "collection", label: "Collection" },
+    { name: "column", type: "field", of: "collection", label: "Column" },
+    { name: "where", type: "filter", of: "collection", label: "Filter" },
+    { name: "order", type: "sort", of: "collection", label: "Sort" },
+    { name: "by", type: "groupBy", of: "collection", label: "Group by" },
+    { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    { name: "heading", type: "text", label: "Heading" },
+    { name: "body", type: "textarea", label: "Body" },
+    { name: "items", type: "number", label: "Rows", defaultValue: 5, max: 10 },
+    { name: "mine", type: "checkbox", label: "Only mine" },
+    {
+      name: "tone",
+      type: "select",
+      label: "Tone",
+      defaultValue: "calm",
+      options: [
+        { label: "Calm", value: "calm" },
+        { label: "Loud", value: "loud" },
+      ],
+    },
+    { name: "since", type: "date", label: "Since" },
+  ];
+
+  it("draws a control for every setting, each named by its label", () => {
+    open({ collection: "posts" }, every);
+    for (const setting of every) {
+      expect(
+        screen.getAllByText(setting.label ?? "").length,
+        setting.type
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("offers a Field setting every field its collection offers the reader", async () => {
+    open({ collection: "posts" }, every);
+    await userEvent.click(screen.getByRole("combobox", { name: /Column/ }));
+    const offered = screen
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    // A field the read will not group by is still a field a card may read.
+    expect(offered).toEqual(
+      expect.arrayContaining(["Title", "Updated", "Headline", "State"])
+    );
+  });
+
+  it("opens a stored value its setting no longer accepts at the default, and saves nothing for it", async () => {
+    // 🔴 Twenty rows past a bound of ten: opened at the stored value, the
+    // sheet showed a number the card was not using and Done wrote it back.
+    const onSave = open({ collection: "posts", items: 20 }, every);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(saved(onSave)).not.toHaveProperty("items");
   });
 });

@@ -16,7 +16,7 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
   },
 }));
 
-import { useRecentActivity } from "./useRecentActivity";
+import { activityHref, useRecentActivity } from "./useRecentActivity";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
@@ -89,5 +89,62 @@ describe("a feed row's heading", () => {
       entryTitle: "Hello",
       collectionLabel: "posts",
     });
+  });
+});
+
+describe("a feed row's count", () => {
+  async function counted(entry: Record<string, unknown>) {
+    answer.activities = [{ ...row, collection: "posts", ...entry }];
+    const { result } = renderHook(() => useRecentActivity(5), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const activity = result.current.data?.activities[0];
+    return [activity?.count, activity?.countAtLeast];
+  }
+
+  it("carries how many saves the row stands for, and whether that is a floor", async () => {
+    expect(await counted({ count: 12, countAtLeast: false })).toEqual([
+      12,
+      false,
+    ]);
+    expect(await counted({ count: 1000, countAtLeast: true })).toEqual([
+      1000,
+      true,
+    ]);
+  });
+
+  it("reads a row from a server that sends no count as one save", async () => {
+    expect(await counted({})).toEqual([1, false]);
+  });
+});
+
+describe("where a feed row leads", () => {
+  const row = {
+    collection: "posts",
+    entryId: "42",
+    action: "update",
+    subjectKind: "collection",
+  };
+
+  it("opens the entry a change was made to", () => {
+    expect(activityHref(row)).toBe("/admin/collections/posts/42");
+  });
+
+  it("opens the Single a change was made to, by its slug", () => {
+    expect(
+      activityHref({
+        ...row,
+        collection: "site-settings",
+        subjectKind: "single",
+      })
+    ).toBe("/admin/singles/site-settings");
+  });
+
+  it("leads nowhere for a deletion, whose subject is gone", () => {
+    expect(activityHref({ ...row, action: "delete" })).toBeUndefined();
+  });
+
+  it("leads nowhere for a change to settings, or a row naming no entry", () => {
+    expect(activityHref({ ...row, subjectKind: "settings" })).toBeUndefined();
+    expect(activityHref({ ...row, entryId: null })).toBeUndefined();
   });
 });

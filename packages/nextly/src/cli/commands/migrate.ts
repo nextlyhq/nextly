@@ -37,6 +37,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
+import { countPasswordsStoredAsGiven } from "../../domains/field-groups/stored-plain-passwords";
 import {
   isLocalizationIntentRefusal,
   LOCALIZATION_INTENT_HEADER,
@@ -76,6 +77,10 @@ import {
   type PluginMigrationSet,
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
 import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
+import {
+  findRegistryDisagreements,
+  registryDisagreementLines,
+} from "../../domains/schema/migrate/registry-consistency";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
 import {
   assertRunnableStatements,
@@ -133,7 +138,9 @@ import {
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
+  builderMigrationRemedy,
   discoverMigrationGroups,
+  isBuilderWrittenMigration,
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
@@ -143,6 +150,11 @@ import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
+import {
+  storedPasswordsNotice,
+  storedPasswordsOn,
+  storedPasswordTotal,
+} from "./upgrade-steps/stored-passwords";
 
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
@@ -391,7 +403,12 @@ export async function runMigrate(
         migrationsDir: appMigrationsDir,
         logger,
         ...(await pluginMigrationArgs(configResult.config.plugins ?? [])),
-        lockMode: "fail-fast",
+        // A run that finds the schema lock held waits about a minute for it, then stops naming
+        // what holds it.
+        lockMode: "wait",
+        // The command's interrupt ends the process, so the lock is released first rather than
+        // left for the next run to wait out.
+        lockReleaseOnInterrupt: true,
         ttlSeconds: configResult.config.db.migrateLockTtlSeconds,
         // A custom `options.junctionTable` name cannot be inferred from any
         // convention, and such a table is in no snapshot — so the drift check
@@ -399,6 +416,9 @@ export async function runMigrate(
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
+        // A file the Builder wrote with no snapshot is replaced by the one
+        // `migrate:create` writes, never applied as written here.
+        refuseBuilderFilesWithoutSnapshot: true,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
@@ -493,6 +513,28 @@ export async function runMigrate(
       process.exit(1);
     }
 
+    // Read-only, once the run has done its own work: name every registry row
+    // whose table or recorded field's column does not exist, and every
+    // declared entity with no row. A production start compares none of this,
+    // so this is where a deploy hears of it. A comparison that cannot run
+    // never fails a migrate that succeeded.
+    try {
+      for (const line of registryDisagreementLines(
+        await findRegistryDisagreements({
+          adapter: adapter as unknown as DrizzleAdapter,
+          dialect,
+          declared: resolvedSchema.entities,
+          logger,
+        })
+      )) {
+        logger.warn(line);
+      }
+    } catch (err) {
+      logger.warn(
+        `Could not compare the registry with the tables: ${describeError(err)}`
+      );
+    }
+
     // Read-only: accounts an earlier release left holding a password as given
     // are counted, and the command that clears them is named. Migrate changes
     // no credential, and a count it cannot read never fails a migrate that
@@ -505,6 +547,23 @@ export async function runMigrate(
     } catch (err) {
       logger.warn(
         `Could not check for passwords stored as given: ${describeError(err)}`
+      );
+    }
+
+    // Read-only too: passwords an earlier release kept as given inside a
+    // container are counted, and `nextly upgrade`, which hashes them, is named.
+    try {
+      const notice = storedPasswordsNotice(
+        storedPasswordTotal(
+          await countPasswordsStoredAsGiven(
+            storedPasswordsOn(adapter as unknown as DrizzleAdapter)
+          )
+        )
+      );
+      if (notice) logger.warn(notice);
+    } catch (err) {
+      logger.warn(
+        `Could not check for passwords stored before this release: ${describeError(err)}`
       );
     }
 
@@ -597,8 +656,26 @@ export interface MigrateCoreDeps {
   adapter: CLIDatabaseAdapter;
   migrationsDir: string;
   logger: CommandContext["logger"];
+  /**
+   * What a held schema lock does to this run: `wait` (the default) waits about a minute and then
+   * stops naming the holder; `fail-fast` stops at once.
+   */
   lockMode?: "fail-fast" | "wait";
+  /** The schema lock's lease, in seconds (`db.migrateLockTtlSeconds`). */
   ttlSeconds?: number;
+  /** How long `wait` waits for a held lock, in milliseconds. Default about a minute. */
+  lockWaitMs?: number;
+  /**
+   * What holds the lock while this runs, as the refusal another run prints names it. Default
+   * `nextly migrate`; the boot migrate step names itself.
+   */
+  lockCommand?: string;
+  /**
+   * Release the lock on an interrupt. Asked for by the command, whose interrupt ends the process.
+   * Off by default, for the boot migrate step, production or development: it runs inside a server
+   * whose shutdown may let the work run on, so it leaves the lock to lapse instead.
+   */
+  lockReleaseOnInterrupt?: boolean;
   isSettled?: () => Promise<boolean>;
   allowDestructive?: boolean;
   /** NEXTLY_DROP_RETIRED_AUTH_TABLES=1: drop the retired auth tables. */
@@ -625,6 +702,17 @@ export interface MigrateCoreDeps {
    * against the database.
    */
   syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
+  /**
+   * Refuse, before anything changes, a pending migration file the Schema
+   * Builder wrote with no snapshot beside it (`isBuilderWrittenMigration`),
+   * rather than apply it as written.
+   *
+   * `nextly migrate` passes it. Off by default because the development boot
+   * runs this core too, over the files the Builder writes into the project as
+   * it saves: there the Builder has already applied the change, and refusing
+   * would stop every later migration of a development server.
+   */
+  refuseBuilderFilesWithoutSnapshot?: boolean;
 }
 
 export interface MigrateCoreResult {
@@ -732,7 +820,14 @@ export async function previewMigrate(args: {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
   }
-  for (const m of pendingFiles) previewPendingFile(m, dialect, logger);
+  for (const m of pendingFiles) {
+    previewPendingFile(m, dialect, logger);
+    if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
+      logger.info(
+        `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
+      );
+    }
+  }
 }
 
 /**
@@ -1346,6 +1441,12 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
+  // Before the lock as well: taking it creates the lock's own table on a
+  // database that has none, and a refused run leaves the schema as it was. A
+  // file another run records meanwhile is only refused once more.
+  if (deps.refuseBuilderFilesWithoutSnapshot === true) {
+    await assertNoBuilderFilesWithoutSnapshot(deps);
+  }
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -1366,7 +1467,7 @@ export async function migrateCore(
   };
 
   const outcome = await lock(
-    deps.db,
+    deps.adapter as unknown as DrizzleAdapter,
     deps.dialect,
     async () => {
       // Before anything changes the database, the core reconcile included:
@@ -1503,8 +1604,13 @@ export async function migrateCore(
       }
     },
     {
-      mode: deps.lockMode ?? "fail-fast",
+      command: deps.lockCommand ?? "nextly migrate",
+      mode: deps.lockMode ?? "wait",
       ttlSeconds: deps.ttlSeconds,
+      waitMs: deps.lockWaitMs,
+      // Off unless the caller asks: a boot, production or development, runs inside a server whose
+      // shutdown may let the migration run on, and the lock must not be freed under it.
+      releaseOnInterrupt: deps.lockReleaseOnInterrupt === true,
       isSettled: deps.isSettled,
       logger: {
         warn: m => deps.logger.warn(m),
@@ -1560,6 +1666,63 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
   }
 }
 
+/**
+ * Refuse a pending app migration file the Schema Builder wrote with no snapshot
+ * beside it, naming each and the file to commit instead.
+ *
+ * Applied as written, such a file runs without the drift check a snapshot
+ * gives — so on a database that is not where the Builder's own was, it either
+ * fails part-way or changes a table into a shape nothing recorded — and it
+ * leaves the next `migrate:create` comparing against a snapshot that never saw
+ * the change. `migrate:create` writes the same change with its snapshot.
+ *
+ * Read before the lock and the core reconcile, so the run is refused with the
+ * schema, the ledger and the registry as it found them. A missing ledger reads
+ * as every file pending, as it does for the files phase.
+ */
+async function assertNoBuilderFilesWithoutSnapshot(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  // The pending files as the dry run and the run's report find them, so all
+  // three agree on which files are still to run.
+  const pending = await findPendingFiles(
+    deps.adapter,
+    deps.db,
+    deps.dialect,
+    deps.migrationsDir,
+    deps.logger
+  );
+  const refused: string[] = [];
+  for (const m of pending) {
+    if (await isRefusedWithoutSnapshot(m, deps.migrationsDir)) {
+      refused.push(`${m.name}.sql`);
+    }
+  }
+  if (refused.length === 0) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
+    publicMessage:
+      `nextly migrate does not apply a Schema Builder migration file with no snapshot. ` +
+      refused.map(builderMigrationRemedy).join(" "),
+    logContext: { files: refused },
+  });
+}
+
+/**
+ * Whether `nextly migrate` refuses this file for want of a snapshot: one the
+ * Schema Builder wrote, with none beside it. The one answer the run and
+ * `--dry-run` both ask.
+ */
+async function isRefusedWithoutSnapshot(
+  m: ParsedMigration,
+  migrationsDir: string
+): Promise<boolean> {
+  return (
+    isBuilderWrittenMigration(m.name) &&
+    (await loadTargetSnapshot(resolve(migrationsDir, "meta"), m.name)) === null
+  );
+}
+
 /** Load a migration's paired target snapshot, or null if absent. */
 async function loadTargetSnapshot(
   metaDir: string,
@@ -1603,6 +1766,49 @@ async function loadTargetSnapshot(
   // `contributions` say which parts of a foreign table the drift check may
   // judge.
   return parseSnapshotFile(content, file);
+}
+
+/**
+ * Refuses a `unique` companion file whose per-language unique index cannot hold
+ * (`refuseTranslatedUniqueMigrationThatCannotHold`), and returns the UP it should run here: the
+ * file's own, less any index this database already carries.
+ *
+ * A companion file is snapshotless and runs verbatim, so one generated from a pre-feature
+ * snapshot still creates an index that `db:sync` or a Schema Builder save may already have
+ * installed on this database. PostgreSQL and SQLite adopt it through `IF NOT EXISTS`; MySQL has
+ * no such spelling and would fail on the duplicate name. Any other file passes untouched.
+ */
+async function refuseUniqueFileThatCannotHold(
+  adapter: DrizzleAdapter,
+  localization: LocalizationMigrationIntent | undefined,
+  filename: string,
+  upSql: string
+): Promise<string> {
+  if (localization?.kind !== "unique") return upSql;
+  const {
+    installedTranslatedUniqueIndexes,
+    refuseTranslatedUniqueMigrationThatCannotHold,
+    withoutAlreadyInstalledIndexes,
+  } = await import(
+    "../../domains/i18n/migration/translated-unique-preconditions"
+  );
+  const installed = await installedTranslatedUniqueIndexes(
+    adapter,
+    localization.spec.companionTable
+  );
+  await refuseTranslatedUniqueMigrationThatCannotHold(
+    adapter,
+    localization.spec,
+    filename,
+    installed
+  );
+  const statements = splitSqlStatements(upSql, adapter.dialect);
+  const keep = withoutAlreadyInstalledIndexes(statements, installed);
+  return keep.length === statements.length
+    ? upSql
+    : keep
+        .map(statement => `${statement};`)
+        .join("\n--> statement-breakpoint\n");
 }
 
 /**
@@ -1711,6 +1917,15 @@ export async function runFileMigrations(args: {
       transaction: m.transaction,
       unit: "file",
     });
+    // A file adding per-language unique indexes is refused here, before the ledger records an
+    // attempt and before any statement, where one cannot hold. It also answers with the UP to
+    // run on THIS database, which leaves out an index already installed here.
+    m.upSql = await refuseUniqueFileThatCannotHold(
+      dz,
+      m.localization,
+      filename,
+      m.upSql
+    );
 
     if (!target) {
       // No paired snapshot (hand-written migration): run verbatim + record.

@@ -23,7 +23,8 @@ import type { GridAnnouncer } from "../useGridAnnouncer";
  */
 export interface ArrangementAnnouncer {
   moved: (title: string, from: number, to: number, count: number) => void;
-  width: (title: string, widthName: string) => void;
+  /** A card was resized, by its size's name ("6 columns by 4 rows"). */
+  size: (title: string, sizeName: string) => void;
   removed: (title: string) => void;
   restored: (title: string) => void;
   reset: () => void;
@@ -38,7 +39,12 @@ export interface ArrangementAnnouncer {
   /** A save failed; the draft is kept. */
   saveFailed: () => void;
   /** One of a card's settings changed outside customise mode, and the card shows it. */
-  settingChanged: (title: string, setting: string, value: string) => void;
+  settingChanged: (
+    title: string,
+    setting: string,
+    value: string,
+    shown: boolean
+  ) => void;
   /** One step of a drag, in the drag's own words. */
   drag: (sentence: string) => void;
 }
@@ -70,8 +76,8 @@ export function useAnnouncerRelay(): AnnouncerRelay {
     () => ({
       moved: (title, from, to, count) =>
         announcer.current?.announceMoved(title, from, to, count),
-      width: (title, widthName) =>
-        announcer.current?.announceWidth(title, widthName),
+      size: (title, sizeName) =>
+        announcer.current?.announceSize(title, sizeName),
       removed: title => announcer.current?.announceRemoved(title),
       restored: title => announcer.current?.announceRestored(title),
       reset: () => announcer.current?.announceReset(),
@@ -80,8 +86,8 @@ export function useAnnouncerRelay(): AnnouncerRelay {
       saved: () => announcer.current?.announceSaved(),
       refused: () => announcer.current?.announceRefused(),
       saveFailed: () => announcer.current?.announceSaveFailed(),
-      settingChanged: (title, setting, value) =>
-        announcer.current?.announceSettingChanged(title, setting, value),
+      settingChanged: (title, setting, value, shown) =>
+        announcer.current?.announceSettingChanged(title, setting, value, shown),
       drag: sentence => announcer.current?.announceDrag(sentence),
     }),
     []

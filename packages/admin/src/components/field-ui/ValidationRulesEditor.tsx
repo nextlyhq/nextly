@@ -33,7 +33,7 @@
 
 import { Input, Label } from "@nextlyhq/ui";
 import type { FieldValidationRule } from "nextly/field-catalog";
-import { useId } from "react";
+import { useId, type JSX } from "react";
 
 import { ValidationNumberField } from "./ValidationNumberField";
 
@@ -165,7 +165,7 @@ export function ValidationRulesEditor({
   onChange,
   disabled = false,
   messageDescribes = "validation",
-}: ValidationRulesEditorProps) {
+}: ValidationRulesEditorProps): JSX.Element {
   const permits = new Set<FieldValidationRule>(allowed);
 
   return (

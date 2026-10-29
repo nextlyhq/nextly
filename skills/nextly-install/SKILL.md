@@ -8,7 +8,7 @@ description: >-
   Nextly install shows no collections, fails to load nextly.config.ts, or its
   admin panel misbehaves after setup.
 metadata:
-  nextly-version: 0.0.2-alpha.69
+  nextly-version: 0.0.2-alpha.72
 ---
 
 # Install Nextly into an existing Next.js app
@@ -23,11 +23,11 @@ Checked against `nextly` 0.0.2-alpha.67 with Next.js 16.4. Run
 
 ## Before you start
 
-- Next.js 14, 15 or 16 with the App Router (`app/` or `src/app/`). On
-  Next.js 14 the generator leaves the Next config alone and prints the
-  `experimental` block to add instead (`serverComponentsExternalPackages` and
-  `instrumentationHook`).
-- Node.js `^20.19.0 || ^22.12.0 || >=24.0.0`. Node 23 is not supported.
+- Next.js `^16.4.1` and React `^19.3.0` (16.4.1 or later within 16.x, 19.3.0
+  or later within 19.x), with the App Router (`app/` or `src/app/`). The
+  [supported versions](https://nextlyhq.com/docs/getting-started/installation#requirements)
+  are kept current there.
+- Node.js `^22.12.0 || >=24.0.0`. Node 20 and Node 23 are not supported.
 - A clean git working tree, so every change below is visible in one diff.
 
 ## 1. Run the generator in the project root
@@ -82,7 +82,7 @@ Without a `src/` folder the same files go under `app/`, and `instrumentation.ts`
 sits at the project root.
 
 If it reports that it left the Next config alone (a config it cannot change
-safely, or Next.js 14), add what it prints. The list it needs holds `nextly`,
+safely), add what it prints. The list it needs holds `nextly`,
 `@nextlyhq/adapter-drizzle`, `drizzle-orm`, `drizzle-kit`, `bcryptjs`,
 `sharp`, `esbuild`, and your adapter and driver: `@nextlyhq/adapter-sqlite`
 and `better-sqlite3`, `@nextlyhq/adapter-postgres` and `pg`, or

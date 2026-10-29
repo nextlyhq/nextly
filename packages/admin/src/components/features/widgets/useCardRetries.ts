@@ -16,13 +16,14 @@
  * @module components/features/widgets/useCardRetries
  */
 
-import type { SizeTier } from "@nextlyhq/ui/format";
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 
 import {
   appliedKey,
   useWidgetQueries,
   type CellSlots,
+  type CellsApplied,
+  type SizedAt,
   type UseWidgetQueriesResult,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
@@ -35,10 +36,12 @@ interface SettledRetry {
   slot?: WidgetSlot;
   cells?: Record<string, WidgetSlot>;
   at: Date | null;
-  /** The tier the answer was fetched at, which a later rise is judged against. */
-  tier?: SizeTier;
+  /** The size the answer was fetched at, which a later rise is judged against. */
+  size?: SizedAt;
   /** What the answer was asked with (`appliedKey`), which a change of settings is judged against. */
   applied?: string;
+  /** What each of a cells card's answers was asked with, by cell key. */
+  cellsApplied?: CellsApplied;
 }
 
 interface RetryState {
@@ -68,14 +71,18 @@ type RetryAction =
       placementId: string;
       /** The query as the card's settings ask it, before sizing. */
       query: WidgetQueryRequest["query"];
-      /** The tier the card is drawn at, for a sized card. */
-      tier?: SizeTier;
+      /** The size the card is drawn at, for a sized card. */
+      size?: SizedAt;
       /** What the card asks with now (`appliedKey`). */
       applied: string;
-      /** The tier the batch's answer for the card was fetched at. */
-      batchFetchedAt: SizeTier | undefined;
+      /** The size the batch's answer for the card was fetched at. */
+      batchFetchedAt: SizedAt | undefined;
       /** What the batch's answer for the card was asked with. */
       batchApplied: string | undefined;
+      /** For a cells card: what each cell its tier draws asks with now, by cell key. */
+      cellsApplied?: CellsApplied;
+      /** For a cells card: what each cell the batch answered was asked with. */
+      batchCellsApplied?: CellsApplied;
     }
   | {
       type: "arrived";
@@ -131,9 +138,9 @@ function pressed(state: RetryState, placementId: string): RetryState {
   };
 }
 
-/** What a quiet re-ask asks, as one comparable value: the tier and the settings together. */
-function askingKey(tier: SizeTier | undefined, applied: string): string {
-  return `${tier ?? ""}\u0000${applied}`;
+/** What a quiet re-ask asks, as one comparable value: the size and the settings together. */
+function askingKey(size: SizedAt | undefined, applied: string): string {
+  return `${size === undefined ? "" : JSON.stringify(size)}\u0000${applied}`;
 }
 
 /**
@@ -152,7 +159,7 @@ function grown(
 ): RetryState {
   const { placementId } = action;
   if (state.inFlight.has(placementId)) return state;
-  const asking = askingKey(action.tier, action.applied);
+  const asking = askingKey(action.size, action.applied);
   if (state.stalled.get(placementId) === asking) return state;
   const settled = state.settled.get(placementId);
   if (!grewPast(settled, action) && !settingsChanged(settled, action)) {
@@ -176,11 +183,14 @@ function grewPast(
   settled: SettledRetry | undefined,
   action: Extract<RetryAction, { type: "grow" }>
 ): boolean {
-  const fetchedAt = settled ? settled.tier : action.batchFetchedAt;
+  const fetchedAt = settled ? settled.size : action.batchFetchedAt;
+  // A card asked for by id or with its settings is never sized, so it has no
+  // tier and no query to grow past; only a sized query can.
   return (
-    action.tier !== undefined &&
+    action.size !== undefined &&
+    action.query !== undefined &&
     fetchedAt !== undefined &&
-    asksAgainAt(action.query, fetchedAt, action.tier)
+    asksAgainAt(action.query, fetchedAt, action.size)
   );
 }
 
@@ -193,8 +203,30 @@ function settingsChanged(
   settled: SettledRetry | undefined,
   action: Extract<RetryAction, { type: "grow" }>
 ): boolean {
+  if (action.cellsApplied !== undefined) {
+    return cellsAskOther(
+      settled ? settled.cellsApplied : action.batchCellsApplied,
+      action.cellsApplied
+    );
+  }
   const fetchedWith = settled ? settled.applied : action.batchApplied;
   return fetchedWith !== undefined && fetchedWith !== action.applied;
+}
+
+/**
+ * Whether a cells card now asks other than its answers were asked with, cell by cell, over the
+ * cells its tier draws now: a cell asked otherwise, or one with no answer at all, which the card
+ * widened to draw. A cell its answers hold and its tier no longer draws asks nothing, as a list
+ * that shrinks draws a prefix of what it holds.
+ */
+function cellsAskOther(
+  fetchedWith: CellsApplied | undefined,
+  asking: CellsApplied
+): boolean {
+  if (fetchedWith === undefined) return false;
+  return Object.keys(asking).some(
+    key => !Object.hasOwn(fetchedWith, key) || fetchedWith[key] !== asking[key]
+  );
 }
 
 /**
@@ -251,8 +283,9 @@ function arrivals(
       slot,
       cells,
       at: seenAt,
-      tier: retried.fetchedTierFor(placementId),
+      size: retried.fetchedSizeFor(placementId),
       applied: retried.fetchedAppliedFor(placementId),
+      cellsApplied: retried.fetchedCellsAppliedFor(placementId),
     });
   }
   return { answers, refused };
@@ -265,15 +298,18 @@ export interface CardRetries {
   retry: (placementId: string) => void;
   /** When the answer this card shows arrived: its retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
-  /** Ask one card again if it now asks more, or other, than its answer was fetched for; see `grown`. */
-  grow: (request: WidgetQueryRequest) => void;
+  /**
+   * Ask one card again if it now asks more, or other, than its answer was fetched for; see
+   * `grown`. Handed the card's requests: its one, or one per cell.
+   */
+  grow: (requests: readonly WidgetQueryRequest[]) => void;
   /**
    * The cards being asked again, by Retry or because they grew. A quiet re-ask keeps the answer
    * on screen, so without this a card refreshing for its new tier would not say it is reading.
    */
   fetchingPlacementIds: ReadonlySet<string>;
-  /** The tier the answer this card shows was fetched at: its own re-ask's, or the batch's. */
-  fetchedTierFor: (placementId: string) => SizeTier | undefined;
+  /** The size the answer this card shows was fetched at: its own re-ask's, or the batch's. */
+  fetchedSizeFor: (placementId: string) => SizedAt | undefined;
 }
 
 export function useCardRetries(
@@ -282,8 +318,10 @@ export function useCardRetries(
     slots: Record<string, WidgetSlot>;
     cellSlots: CellSlots;
     updatedAt: Date | null;
-    fetchedTierFor: (placementId: string) => SizeTier | undefined;
+    fetchedSizeFor: (placementId: string) => SizedAt | undefined;
     fetchedAppliedFor: (placementId: string) => string | undefined;
+    fetchedCellsAppliedFor: (placementId: string) => CellsApplied | undefined;
+    fetchingPlacementIds: ReadonlySet<string>;
   }
 ): CardRetries {
   const [state, dispatch] = useReducer(reduce, EMPTY);
@@ -327,23 +365,43 @@ export function useCardRetries(
     (placementId: string) => dispatch({ type: "press", placementId }),
     []
   );
-  const batchTierFor = batch.fetchedTierFor;
+  const batchSizeFor = batch.fetchedSizeFor;
   const batchAppliedFor = batch.fetchedAppliedFor;
+  const batchCellsAppliedFor = batch.fetchedCellsAppliedFor;
+  const batchFetching = batch.fetchingPlacementIds;
   const grow = useCallback(
-    (request: WidgetQueryRequest) => {
-      // A `stats` card's cells ask as declared whatever its settings, and a cell is not a card.
-      if (request.cellKey !== undefined) return;
+    (requests: readonly WidgetQueryRequest[]) => {
+      const [request] = requests;
+      if (request === undefined) return;
+      const { placementId } = request;
+      if (request.cellKey === undefined) {
+        dispatch({
+          type: "grow",
+          placementId,
+          query: request.applied ?? request.query,
+          ...(request.sized ? { size: sizeOf(request.sized) } : {}),
+          applied: appliedKey(request),
+          batchFetchedAt: batchSizeFor(placementId),
+          batchApplied: batchAppliedFor(placementId),
+        });
+        return;
+      }
+      // A cells card the batch is still answering is not judged: the cells answered so far are
+      // not all it asked, and a cell not yet in would read as one the card widened to draw.
+      if (batchFetching.has(placementId)) return;
+      const cellsApplied = cellsAsking(requests);
       dispatch({
         type: "grow",
-        placementId: request.placementId,
-        query: request.applied ?? request.query,
-        ...(request.sized ? { tier: request.sized.tier } : {}),
-        applied: appliedKey(request),
-        batchFetchedAt: batchTierFor(request.placementId),
-        batchApplied: batchAppliedFor(request.placementId),
+        placementId,
+        query: undefined,
+        applied: JSON.stringify(cellsApplied),
+        batchFetchedAt: undefined,
+        batchApplied: undefined,
+        cellsApplied,
+        batchCellsApplied: batchCellsAppliedFor(placementId),
       });
     },
-    [batchTierFor, batchAppliedFor]
+    [batchSizeFor, batchAppliedFor, batchCellsAppliedFor, batchFetching]
   );
 
   const { slots, cellSlots } = useMemo(
@@ -366,14 +424,14 @@ export function useCardRetries(
     [state.inFlight]
   );
 
-  // A settled re-ask's answer is shown in place of the batch's, so its tier is the one shown; a
+  // A settled re-ask's answer is shown in place of the batch's, so its size is the one shown; a
   // quiet re-ask still in flight shows the answer it had.
-  const fetchedTierFor = useCallback(
+  const fetchedSizeFor = useCallback(
     (placementId: string) => {
       const settled = state.settled.get(placementId);
-      return settled ? settled.tier : batchTierFor(placementId);
+      return settled ? settled.size : batchSizeFor(placementId);
     },
-    [state.settled, batchTierFor]
+    [state.settled, batchSizeFor]
   );
 
   return {
@@ -383,8 +441,19 @@ export function useCardRetries(
     updatedAtFor,
     grow,
     fetchingPlacementIds,
-    fetchedTierFor,
+    fetchedSizeFor,
   };
+}
+
+/** What each cell a cells card's tier draws asks with now, by cell key; see `appliedKey`. */
+function cellsAsking(requests: readonly WidgetQueryRequest[]): CellsApplied {
+  const asking: Record<string, string> = Object.create(null);
+  for (const request of requests) {
+    if (request.cellKey !== undefined && request.undrawn !== true) {
+      asking[request.cellKey] = appliedKey(request);
+    }
+  }
+  return asking;
 }
 
 /**
@@ -435,4 +504,14 @@ function putAnswer(
   }
   if (answer.slot) merged.slots[placementId] = answer.slot;
   if (answer.cells) merged.cellSlots[placementId] = answer.cells;
+}
+
+/** The size a sized request was asked at, without the query it was asked with. */
+function sizeOf(sized: NonNullable<WidgetQueryRequest["sized"]>): SizedAt {
+  const { tier, h, density } = sized;
+  return {
+    tier,
+    ...(h === undefined ? {} : { h }),
+    ...(density === undefined ? {} : { density }),
+  };
 }

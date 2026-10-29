@@ -32,9 +32,16 @@ import { transformRichTextFields } from "@nextly/lib/field-transform";
 import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import type { RuleFilter } from "../../../auth/access/rule-answer";
+import {
+  currentRuleLanguage,
+  withRuleLanguage,
+  writeLanguagesFor,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
+import { container } from "../../../di/container";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
@@ -50,7 +57,6 @@ import {
   type StatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type {
   CollectionFileManager,
   CompanionSchema,
@@ -66,18 +72,17 @@ import {
   sortByDistance,
 } from "../../../services/collections/geo-utils";
 import {
-  buildWhereClause,
   extractGeoFilters,
-  extractComponentFieldConditions,
   componentFilterTargets,
 } from "../../../services/collections/query-operators";
 import type {
   WhereFilter,
-  ComponentFieldFilter,
+  buildWhereClause,
 } from "../../../services/collections/query-operators";
 import {
   readExpansionCaches,
   type ReadExpansionCaches,
+  type RelatedRowReadContext,
 } from "../../../services/collections/related-row-read-context";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
@@ -95,10 +100,12 @@ import {
 } from "../../../shared/lib/case-conversion";
 import {
   applyFieldReadAccess,
+  callerAccessGrants,
   type ReadAccessRedactions,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
 import {
+  assertFieldGroupPathsFilterable,
   assertFilterableFields,
   assertGroupableField,
   assertNoHiddenColumnFilter,
@@ -108,9 +115,10 @@ import {
   refuseHiddenColumnFilter,
 } from "../../../shared/lib/filterable-fields";
 import {
-  hasPasswordField,
+  type FieldGroupReach,
   hiddenColumnMatcher,
   isPasswordFieldName,
+  reachesPasswordField,
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
@@ -122,9 +130,14 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  liveFieldGroupReadPass,
+  withFieldGroupEvidence,
+} from "../../field-groups/live-read-access";
+import { passwordReachOf } from "../../field-groups/password-reach";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
-import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   buildCompanionExists,
@@ -139,11 +152,16 @@ import {
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_TRANSLATION } from "../../i18n/locale-selector";
+import {
+  type LocalizationSource,
+  localizationNow,
+} from "../../i18n/localization-source";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { inReleaseCondition } from "../../releases/in-release-condition";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -152,6 +170,7 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
+import type { ReleasesService } from "../../releases/services/releases-service";
 import {
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
@@ -165,6 +184,7 @@ import {
   resolveDraftOverlay,
   type DraftDocumentConfig,
 } from "../../versions/draft-overlay";
+import { pendingChangeCondition } from "../../versions/pending-change-condition";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -173,6 +193,18 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import {
+  componentTableNamesFor,
+  localizedFilterContext,
+  prepareFilterCondition,
+  ruleFilterCondition,
+  type FilterConditionSources,
+} from "../query/filter-condition";
+import {
+  isPlainObject,
+  refuseFilterProblems,
+  unknownFieldProblem,
+} from "../query/filter-shape";
 import { groupKeyDeclarationProblem } from "../query/group-key-declaration";
 import {
   timeseriesBoundOperand,
@@ -186,6 +218,12 @@ import {
   isTimeseriesInterval,
   type TimeseriesInterval,
 } from "../query/timeseries-interval";
+import {
+  extractWorkflowFilter,
+  IN_RELEASE_KEY,
+  PENDING_CHANGE_KEY,
+  type WorkflowFilter,
+} from "../query/workflow-filter";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -197,90 +235,6 @@ import {
   getMinSearchLength,
   decodeJsonFieldValues,
 } from "./collection-utils";
-
-/**
- * One component-field predicate, as raw SQL against a named column.
- *
- * Extracted from the filter loop so it can be built once per component TABLE
- * rather than once per filter: a `_componentType` filter over a dynamic zone
- * spans several tables, and the storage migration can have moved the
- * discriminator on some of them and not others.
- */
-function buildComponentValueCondition(
-  filter: ComponentFieldFilter,
-  dbColumnName: string
-): ReturnType<typeof sql> | undefined {
-  let valueCondition: ReturnType<typeof sql>;
-
-  switch (filter.operator) {
-    case "equals":
-      valueCondition = sql`${sql.identifier(dbColumnName)} = ${filter.value}`;
-      break;
-    case "not_equals":
-      valueCondition = sql`${sql.identifier(dbColumnName)} != ${filter.value}`;
-      break;
-    case "greater_than":
-      valueCondition = sql`${sql.identifier(dbColumnName)} > ${filter.value}`;
-      break;
-    case "greater_than_equal":
-      valueCondition = sql`${sql.identifier(dbColumnName)} >= ${filter.value}`;
-      break;
-    case "less_than":
-      valueCondition = sql`${sql.identifier(dbColumnName)} < ${filter.value}`;
-      break;
-    case "less_than_equal":
-      valueCondition = sql`${sql.identifier(dbColumnName)} <= ${filter.value}`;
-      break;
-    case "like":
-      valueCondition = sql`${sql.identifier(dbColumnName)} LIKE ${`%${String(filter.value)}%`}`;
-      break;
-    case "contains":
-    case "search":
-      // The same rule as every other case-insensitive search: whatever the collation, and with
-      // the text matched as typed.
-      valueCondition = caseInsensitiveContains(
-        sql`${sql.identifier(dbColumnName)}`,
-        String(filter.value)
-      );
-      break;
-    case "in": {
-      const inValues = Array.isArray(filter.value)
-        ? filter.value
-        : [filter.value];
-      if (inValues.length === 0) return undefined;
-      const inPlaceholders = sql.join(
-        inValues.map(v => sql`${v}`),
-        sql`, `
-      );
-      valueCondition = sql`${sql.identifier(dbColumnName)} IN (${inPlaceholders})`;
-      break;
-    }
-    case "not_in": {
-      const notInValues = Array.isArray(filter.value)
-        ? filter.value
-        : [filter.value];
-      if (notInValues.length === 0) return undefined;
-      const notInPlaceholders = sql.join(
-        notInValues.map(v => sql`${v}`),
-        sql`, `
-      );
-      valueCondition = sql`${sql.identifier(dbColumnName)} NOT IN (${notInPlaceholders})`;
-      break;
-    }
-    case "exists":
-      if (filter.value === true || filter.value === "true") {
-        valueCondition = sql`${sql.identifier(dbColumnName)} IS NOT NULL`;
-      } else {
-        valueCondition = sql`${sql.identifier(dbColumnName)} IS NULL`;
-      }
-      break;
-    default:
-      // An operator this builder does not implement contributes no condition.
-      return undefined;
-  }
-
-  return valueCondition;
-}
 
 /**
  * A collection's declared top-level fields.
@@ -592,6 +546,36 @@ interface GroupedRows {
 }
 
 /**
+ * A read's access, settled once: allowed, with the filter a read rule
+ * answered where it answered one.
+ */
+type SettledRead = { readonly denied: null; readonly filter?: RuleFilter };
+
+/**
+ * The key a list's settled access is handed to its own count under. Private to
+ * this module, so no other caller can make a count skip judging access: an
+ * object without it carries nothing a count reads.
+ */
+const SETTLED_ACCESS = Symbol("settled read access");
+
+/** A list's settled access, as only this module can hand it to a count. */
+interface SettledAccessToken {
+  readonly [SETTLED_ACCESS]: SettledRead;
+}
+
+const settledAccess = (read: SettledRead): SettledAccessToken =>
+  Object.freeze({ [SETTLED_ACCESS]: read });
+
+/** The settled access a token carries, or none for anything else. */
+function settledReadIn(token: unknown): SettledRead | undefined {
+  if (token === null || typeof token !== "object") return undefined;
+  if (!Object.prototype.hasOwnProperty.call(token, SETTLED_ACCESS)) {
+    return undefined;
+  }
+  return (token as SettledAccessToken)[SETTLED_ACCESS];
+}
+
+/**
  * Everything a filtered read needs to settle the row set a caller is allowed
  * to see.
  *
@@ -716,6 +700,12 @@ interface FilteredReadParams {
    * would over-count.
    */
   translationFilter?: TranslationStatusFilter;
+  /**
+   * Workflow conditions (`_pendingChange`, `_inRelease`), already extracted by
+   * the caller (listEntries), which strips them from the `where` it forwards
+   * exactly as it strips `_translated`.
+   */
+  workflowFilter?: WorkflowFilter;
   /**
    * Component table names and discriminator columns, already resolved by the
    * caller (listEntries) for this same request.
@@ -975,7 +965,27 @@ function toBuckets(
  */
 type DynamicSchema = Record<string, SQLWrapper | undefined>;
 
+/**
+ * Whether the field rules refuse a caller the promotion of an entry's working
+ * draft: `CollectionMutationService.workingDraftPromotionRefused`, handed in by
+ * the service that holds both, so a read asks the write's own judgement.
+ */
+export type DraftPromotionRefused = (args: {
+  collectionName: string;
+  entryId: string;
+  snapshot: unknown;
+  draftLocale: string | null;
+  locale: string | undefined;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}) => Promise<boolean>;
+
 export class CollectionQueryService extends BaseService {
+  /** The site's languages as they are now: the source may be the language registry. */
+  private get localization(): SanitizedLocalizationConfig | undefined {
+    return localizationNow(this.localizationSource);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -990,14 +1000,21 @@ export class CollectionQueryService extends BaseService {
      * reads resolve translatable fields from the companion `_locales` table for the
      * requested locale with fallback. Absent → non-localized behavior (unchanged).
      */
-    private readonly localization?: SanitizedLocalizationConfig,
+    private readonly localizationSource?: LocalizationSource,
     /**
      * What a due release makes visible on this read.
      *
      * A null object by default, so a runtime with no releases wired needs no
      * special case here and cannot silently narrow a read by forgetting one.
      */
-    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY,
+    /**
+     * Whether the field rules refuse a caller the promotion of a working
+     * draft, from the service that writes it. A read shows a pending change to
+     * a caller who may publish and not update only where this says no; absent,
+     * it shows them none.
+     */
+    private readonly draftPromotionRefused?: DraftPromotionRefused
   ) {
     super(adapter, logger);
   }
@@ -1211,6 +1228,11 @@ export class CollectionQueryService extends BaseService {
     fieldAccessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<void> {
+    // A caller's release condition is judged first, before any read hook
+    // runs: a hook may write an audit entry or spend a rate-limit budget, and
+    // a refusal after it would come after those effects. The condition is
+    // judged again where it is built, for one a trusted hook adds.
+    await this.assertReleaseFilterReadable(params);
     // The settled filter a list forwards to its own count already passed this
     // check as the caller's, and what a read hook added to it is trusted
     // server code, which may scope by the column its own plugin contributed.
@@ -1243,6 +1265,11 @@ export class CollectionQueryService extends BaseService {
       params.where,
       opts
     );
+    await this.assertFieldGroupFilterable(
+      params.collectionName,
+      params.where,
+      opts
+    );
     await assertSortableField(
       "collection",
       params.collectionName,
@@ -1265,6 +1292,29 @@ export class CollectionQueryService extends BaseService {
       params.collectionName,
       params.groupBy,
       { overrideAccess: opts.overrideAccess, caller: opts.caller }
+    );
+  }
+
+  /**
+   * Refuse a filter on a field-group field the caller may not read, judged by
+   * the field group's own rules: a dotted key whose head is a field-group
+   * field addresses that field group's table, whose rules the collection's
+   * registration does not carry. Only a dotted key can, so a filter with none
+   * reads nothing.
+   */
+  private async assertFieldGroupFilterable(
+    collectionName: string,
+    where: WhereFilter | undefined,
+    opts: NonNullable<Parameters<typeof assertFieldGroupPathsFilterable>[1]>
+  ): Promise<void> {
+    if (opts.overrideAccess || opts.frameworkFilter || !where) return;
+    const keys = [...filterKeys(where)].filter(key => key.includes("."));
+    if (keys.length === 0) return;
+    const collection =
+      await this.collectionService.getCollection(collectionName);
+    await assertFieldGroupPathsFilterable(
+      componentFilterTargets(keys, collectionFieldsFor(collection)),
+      opts
     );
   }
 
@@ -1653,30 +1703,6 @@ export class CollectionQueryService extends BaseService {
     );
   }
 
-  private buildLocalizedQueryContext(
-    companion: CompanionSchema | null,
-    localeChain: string[] | null,
-    schema: DynamicSchema,
-    statusFilterValues?: readonly string[] | null
-  ): LocalizedQueryContext | null {
-    if (!companion || !localeChain || localeChain.length === 0) return null;
-    // The caller resolves the Draft/Published filter before building the context and
-    // passes it as `statusFilterValues`, so per-locale where/search/order subqueries
-    // constrain by the resolved status too (a public read never matches a draft).
-    return {
-      companionTableName: companion.companionTableName,
-      localizedFields: companion.localizedFields,
-      mainIdColumn: schema.id,
-      locale: localeChain[0],
-      // Only constrain by status when the collection has per-locale status and the
-      // read resolved to a single status; otherwise leave it unfiltered.
-      statusValues:
-        companion.hasStatus && statusFilterValues
-          ? statusFilterValues
-          : undefined,
-    };
-  }
-
   /**
    * The coarse collection-level read gate, asked once for every read verb.
    *
@@ -1687,7 +1713,10 @@ export class CollectionQueryService extends BaseService {
   private denyCollectionRead<T>(params: {
     collectionName: string;
     accessUser?: UserContext;
-    /** Present only on the by-id path, which names the row it is judging. */
+    /**
+     * Present only on the by-id path, which names the row it is judging, so
+     * a refusal names that one entry.
+     */
     entryId?: string;
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
@@ -1697,11 +1726,46 @@ export class CollectionQueryService extends BaseService {
       collectionName: params.collectionName,
       operation: "read",
       user: params.accessUser,
+      entryId: params.entryId,
       overrideAccess: params.overrideAccess,
       routeAuthorized: params.routeAuthorized,
       // A scoped API key is judged on its own read grant, so the session
       // super-admin bypass does not apply to a super-admin-owned key here.
       authenticatedScope: params.authenticatedScope,
+    });
+  }
+
+  /**
+   * The coarse collection-level read gate for a read that applies a read
+   * rule's filter: a listing, and the counts and aggregates built on the same
+   * conditions. As {@link denyCollectionRead}, but a rule's filter is handed
+   * back to limit the read to the entries it matches, where that gate
+   * refuses it.
+   */
+  private filteredCollectionRead<T>(params: {
+    collectionName: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+    /**
+     * The one entry a read by id names, so a refusal is about that entry and
+     * a caller who may not read it is answered as if it were missing.
+     */
+    entryId?: string;
+  }): Promise<
+    | { readonly denied: CollectionServiceResult<T> }
+    | { readonly denied: null; readonly filter?: RuleFilter }
+  > {
+    return this.accessService.checkCollectionRead<T>({
+      collectionName: params.collectionName,
+      // A trusted read is judged for nobody, whoever it names.
+      user: params.overrideAccess ? undefined : params.user,
+      overrideAccess: params.overrideAccess,
+      routeAuthorized: params.routeAuthorized,
+      // A scoped API key is judged on its own read grant, as for every read.
+      authenticatedScope: params.authenticatedScope,
+      entryId: params.entryId,
     });
   }
 
@@ -1803,15 +1867,6 @@ export class CollectionQueryService extends BaseService {
    * used: the list path resolves them here and hands them to its own count, so
    * one request costs one registry lookup rather than two.
    */
-  // Flagged on CRAP only (cyclomatic 12, cognitive 10 are both under their
-  // thresholds); CRAP multiplies complexity by MISSING coverage, and the
-  // coverage term here is estimated rather than measured. It is covered: the
-  // where-clause, component-filter and search tests in collection-query.test.ts
-  // all run through here, and removing the access predicate this method's
-  // sibling adds turns four tests red. The logic itself is not new — it was
-  // inlined in `listEntries` (cyclomatic 87) and `countEntries` (44), both
-  // critical, and lifting it out is what let those drop to 46 and 14.
-  // fallow-ignore-next-line complexity
   private async resolveFilterConditions(params: {
     collectionName: string;
     /** The filter with the language and geo keys already removed. */
@@ -1825,70 +1880,38 @@ export class CollectionQueryService extends BaseService {
     componentTables: Map<string, string>;
     componentTypeColumns: Map<string, string>;
   }> {
-    const conditions: SQLWrapper[] = [];
-    if (!params.where) {
-      return {
-        conditions,
-        componentTables: params.resolvedComponentTables ?? new Map(),
-        componentTypeColumns: params.resolvedComponentTypeColumns ?? new Map(),
-      };
-    }
-
-    const collection = await this.collectionService.getCollection(
-      params.collectionName
+    // Built by the one filter builder every reader of a collection's entries
+    // shares, so this filter matches here the rows it matches anywhere else.
+    const prepared = await prepareFilterCondition(
+      {
+        collectionName: params.collectionName,
+        filter: params.where,
+        resolvedComponentTables: params.resolvedComponentTables,
+        resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
+      },
+      this.filterSources()
     );
-    const fields = ((
-      (collection as Record<string, unknown>).schemaDefinition as
-        | Record<string, unknown>
-        | undefined
-    )?.fields ||
-      (collection as Record<string, unknown>).fields ||
-      []) as Array<{
-      name: string;
-      type: string;
-      component?: string;
-      components?: string[];
-    }>;
+    const condition = prepared.condition(params.schema, params.localizedCtx);
+    return {
+      conditions: condition ? [condition] : [],
+      componentTables: prepared.componentTables,
+      componentTypeColumns: prepared.componentTypeColumns,
+    };
+  }
 
-    const { componentFilters, cleanedWhere } = extractComponentFieldConditions(
-      params.where,
-      fields
-    );
-
-    const componentTables =
-      params.resolvedComponentTables ??
-      (await this.resolveComponentTableNames(componentFilters));
-    const componentTypeColumns =
-      params.resolvedComponentTypeColumns ??
-      (await this.resolveComponentTypeColumns(
-        componentFilters,
-        componentTables.values()
-      ));
-
-    const componentCondition = this.buildComponentFieldConditions(
-      componentFilters,
-      // Components record their parent under the physical table the write
-      // resolved, so the filter must name the same one for a `dbName`
-      // collection or it matches no component row.
-      collectionTableName(collection, params.collectionName),
-      params.schema.id,
-      componentTables,
-      componentTypeColumns
-    );
-    if (componentCondition) conditions.push(componentCondition);
-
-    // What remains once the language, geo and component keys have each been
-    // taken by the machinery that can express them.
-    if (cleanedWhere) {
-      const whereCondition = this.buildDrizzleCondition(
-        buildWhereClause(cleanedWhere),
-        params.schema,
-        params.localizedCtx
-      );
-      if (whereCondition) conditions.push(whereCondition);
-    }
-
-    return { conditions, componentTables, componentTypeColumns };
+  /** Where the filter builder reads its facts about a collection. */
+  private filterSources(): FilterConditionSources {
+    const fieldGroups = this.fieldGroupDataService;
+    return {
+      getCollection: name => this.collectionService.getCollection(name),
+      adapter: this.adapter,
+      ...(fieldGroups
+        ? {
+            getComponentTableName: slug =>
+              fieldGroups.getComponentTableName(slug),
+          }
+        : {}),
+    };
   }
 
   /**
@@ -1966,9 +1989,23 @@ export class CollectionQueryService extends BaseService {
      * the filter it forwarded. Otherwise it is taken from `where` here.
      */
     translationFilter?: TranslationStatusFilter;
+    /**
+     * The workflow conditions, when the caller already stripped
+     * `_pendingChange` and `_inRelease` from the filter it forwarded, as
+     * `translationFilter` is. Otherwise they are taken from `where` here.
+     */
+    workflowFilter?: WorkflowFilter;
     /** Component resolutions already made for this same request. */
     resolvedComponentTables?: Map<string, string>;
     resolvedComponentTypeColumns?: Map<string, string>;
+    /**
+     * The filter the caller's read rule answered, which limits the read to
+     * the entries it matches. A condition of its own, added after the read
+     * hooks settled `where`, so no hook can drop it, and not judged by the
+     * hidden-field check: it is the rule author's predicate, not the
+     * caller's.
+     */
+    ruleFilter?: RuleFilter;
   }): Promise<{
     /** The accumulated WHERE terms, in the order they were added. */
     conditions: SQLWrapper[];
@@ -1981,6 +2018,8 @@ export class CollectionQueryService extends BaseService {
     componentTables: Map<string, string>;
     componentTypeColumns: Map<string, string>;
     translationFilter: TranslationStatusFilter | null;
+    /** The workflow conditions in effect, for a caller that forwards them. */
+    workflowFilter: WorkflowFilter | null;
   }> {
     const conditions: SQLWrapper[] = [];
     const { schema, companion, localeChain } = params;
@@ -2011,7 +2050,7 @@ export class CollectionQueryService extends BaseService {
     // AFTER the status filter, so localized where/search EXISTS checks
     // constrain by the per-locale status too — a published read must not match
     // a draft translation.
-    const localizedCtx = this.buildLocalizedQueryContext(
+    const localizedCtx = localizedFilterContext(
       companion,
       localeChain,
       schema,
@@ -2051,11 +2090,36 @@ export class CollectionQueryService extends BaseService {
       if (translationCondition) conditions.push(translationCondition);
     }
 
+    // The workflow keys (`_pendingChange`, `_inRelease`) come out next, for the
+    // language filter's reason: each is a condition on another table, and the
+    // extractors below would drop or refuse a key they do not recognize. A
+    // value that cannot be read is refused rather than dropped, which would
+    // answer a wider question than the caller asked.
+    const workflowRead = extractWorkflowFilter(extracted.cleanedWhere);
+    refuseFilterProblems(workflowRead.problems);
+    const whereAfterWorkflow = workflowRead.cleanedWhere as
+      | WhereFilter
+      | undefined;
+    const workflowFilter = params.workflowFilter ?? workflowRead.filter;
+    if (workflowFilter) {
+      conditions.push(
+        ...(await this.workflowConditions({
+          collectionName: params.collectionName,
+          filter: workflowFilter,
+          idColumn: schema.id,
+          now: params.releaseNow,
+          overrideAccess: params.overrideAccess,
+          accessUser: params.accessUser,
+          authenticatedScope: params.authenticatedScope,
+        }))
+      );
+    }
+
     // Geo operators cannot be translated to SQL across dialects, so a path with
     // rows lifts them out and applies them in memory.
     const { geoFilters, cleanedWhere: whereAfterGeo } = params.extractGeo
-      ? extractGeoFilters(extracted.cleanedWhere)
-      : { geoFilters: [], cleanedWhere: extracted.cleanedWhere };
+      ? extractGeoFilters(whereAfterWorkflow)
+      : { geoFilters: [], cleanedWhere: whereAfterWorkflow };
 
     const filter = await this.resolveFilterConditions({
       collectionName: params.collectionName,
@@ -2067,6 +2131,19 @@ export class CollectionQueryService extends BaseService {
     });
     conditions.push(...filter.conditions);
     const { componentTables, componentTypeColumns } = filter;
+    if (params.ruleFilter) {
+      const limited = await ruleFilterCondition(
+        {
+          collectionName: params.collectionName,
+          filter: params.ruleFilter,
+          schema,
+          localizedCtx,
+        },
+        this.filterSources(),
+        this.logger
+      );
+      if (limited) conditions.push(limited);
+    }
 
     return {
       conditions,
@@ -2077,7 +2154,189 @@ export class CollectionQueryService extends BaseService {
       componentTables,
       componentTypeColumns,
       translationFilter: translationFilter ?? null,
+      workflowFilter: workflowFilter ?? null,
     };
+  }
+
+  /**
+   * The conditions a workflow filter adds to a read of one collection.
+   *
+   * `_inRelease` is refused, in exactly the words an unknown condition is, to
+   * a caller who may not read releases: the rows it keeps say which documents a
+   * release will publish and, with a bound, when, and refusing it any other way
+   * would tell that caller something the release list withholds from them.
+   * Judged before any condition is built, on every read that carries it,
+   * whatever the read's other rights.
+   */
+  private async workflowConditions(params: {
+    collectionName: string;
+    filter: WorkflowFilter;
+    idColumn: SQLWrapper | undefined;
+    now: Date;
+    overrideAccess?: boolean;
+    accessUser?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<SQL[]> {
+    const { filter, idColumn } = params;
+    if (filter.inRelease !== null) {
+      await this.refuseReleaseFilterUnlessReadable(params);
+    }
+    if (idColumn === undefined) {
+      // Every collection table has an id; one without could not be correlated
+      // with, and a condition that ignored it would keep every row.
+      throw NextlyError.internal({
+        logContext: {
+          reason: "workflow-filter-without-id-column",
+          collectionName: params.collectionName,
+        },
+      });
+    }
+    const dialect = this.groupDialect();
+    // The languages this read's access rules were judged for: the language it
+    // reads and its fallback chain, or every language where it reads them all.
+    // A draft or release member in any other language is withheld from this
+    // read, so it must not keep a row either. A trusted read judged nobody, and
+    // a site with no languages has only unlocalized rows, so both consider
+    // every language.
+    const ruleLocales = currentRuleLanguage().locales;
+    const locales =
+      params.overrideAccess === true || ruleLocales.length === 0
+        ? null
+        : ruleLocales;
+    const conditions: SQL[] = [];
+    if (filter.pendingChange) {
+      conditions.push(
+        pendingChangeCondition({
+          dialect,
+          collectionName: params.collectionName,
+          entryId: idColumn,
+          locales,
+        })
+      );
+    }
+    if (filter.inRelease !== null) {
+      conditions.push(
+        inReleaseCondition({
+          dialect,
+          collectionName: params.collectionName,
+          entryId: idColumn,
+          now: params.now,
+          scheduledBefore: filter.inRelease.scheduledBefore,
+          locales,
+        })
+      );
+    }
+    return conditions;
+  }
+
+  /**
+   * Refuse a caller's filter carrying `_inRelease`, in exactly the words an
+   * unknown condition gets, unless the caller may read releases.
+   *
+   * A precondition, judged on what the CALLER sent, before any read or write
+   * that filter selects for: a list and a count judge it before their read
+   * hooks, and a bulk write by query judges it before its trusted enumeration.
+   * One method for every door, so a filter refused on a list is refused on a
+   * bulk write by the same decision.
+   */
+  async assertReleaseFilterReadable(params: {
+    where?: unknown;
+    overrideAccess?: boolean;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<void> {
+    if (
+      !isPlainObject(params.where) ||
+      !Object.prototype.hasOwnProperty.call(params.where, IN_RELEASE_KEY)
+    ) {
+      return;
+    }
+    await this.refuseReleaseFilterUnlessReadable({
+      overrideAccess: params.overrideAccess,
+      accessUser: params.overrideAccess ? undefined : params.user,
+      authenticatedScope: params.authenticatedScope,
+    });
+  }
+
+  /**
+   * Refuse a by-query WRITE's workflow conditions from a caller who may not
+   * read this collection, then judge `_inRelease` as every read does.
+   *
+   * A write by query finds its rows with a trusted read, so nothing on that
+   * path asks whether the caller may read them. A field condition is held to
+   * the caller's field rules beside this; a workflow condition reads another
+   * table instead: which entries hold unpublished drafts, which documents a
+   * release holds. A caller allowed to update or delete but not to read would
+   * otherwise select exactly those entries and learn them from the rows the
+   * write reached. Both facts are readable only to someone who may read the
+   * documents, so the decision is the collection's own read gate, the one a
+   * list asks, refused in the words an unknown condition gets.
+   */
+  async assertWorkflowFilterReadable(params: {
+    collectionName: string;
+    where?: unknown;
+    overrideAccess?: boolean;
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<void> {
+    if (!isPlainObject(params.where)) return;
+    const where = params.where;
+    const used = [PENDING_CHANGE_KEY, IN_RELEASE_KEY].find(key =>
+      Object.prototype.hasOwnProperty.call(where, key)
+    );
+    if (used === undefined) return;
+    const denied = await this.denyCollectionRead({
+      collectionName: params.collectionName,
+      accessUser: params.overrideAccess ? undefined : params.user,
+      overrideAccess: params.overrideAccess,
+      authenticatedScope: params.authenticatedScope,
+    });
+    if (denied !== null) {
+      refuseFilterProblems([unknownFieldProblem(`where.${used}`, used)]);
+    }
+    await this.assertReleaseFilterReadable(params);
+  }
+
+  /**
+   * Refuse a release condition, in exactly the words an unknown condition
+   * gets, unless this read's caller may read releases.
+   */
+  private async refuseReleaseFilterUnlessReadable(caller: {
+    overrideAccess?: boolean;
+    accessUser?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<void> {
+    if (await this.mayReadReleases(caller)) return;
+    refuseFilterProblems([
+      unknownFieldProblem(`where.${IN_RELEASE_KEY}`, IN_RELEASE_KEY),
+    ]);
+  }
+
+  /**
+   * Whether this read's caller may read releases, asked of the releases
+   * service, which owns that decision.
+   *
+   * A trusted read has already decided who is asking. Without the releases
+   * service there is no one to ask, and the answer is no: a filter on release
+   * contents is refused rather than run unjudged.
+   */
+  private async mayReadReleases(params: {
+    overrideAccess?: boolean;
+    accessUser?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<boolean> {
+    if (params.overrideAccess === true) return true;
+    if (!container.has("releasesService")) return false;
+    const user = params.accessUser;
+    return container.get<ReleasesService>("releasesService").mayRead({
+      userId: user?.id ?? null,
+      // Forwarded so a code-defined rule judges the real person, as every
+      // other constructor of a release actor does.
+      ...(user?.roles !== undefined && { userRoles: user.roles }),
+      ...(params.authenticatedScope !== undefined && {
+        authenticatedScope: params.authenticatedScope,
+      }),
+    });
   }
 
   /**
@@ -2095,11 +2354,13 @@ export class CollectionQueryService extends BaseService {
     rows: Record<string, unknown>[],
     fields: FieldDefinition[],
     /** The SQL table the rows came from, for its contributed columns. */
-    tableName: string
+    tableName: string,
+    /** Where the password strip follows field groups held inline. */
+    reach: FieldGroupReach
   ): void {
-    const clearsPasswords = hasPasswordField(fields);
+    const clearsPasswords = reachesPasswordField(fields, reach);
     for (const row of rows) {
-      if (clearsPasswords) stripPasswordFieldValues(row, fields);
+      if (clearsPasswords) stripPasswordFieldValues(row, fields, reach);
       stripServerOnlyColumns(row, tableName);
     }
   }
@@ -2189,12 +2450,28 @@ export class CollectionQueryService extends BaseService {
     locale?: string;
   }): Promise<Record<string, unknown>[]> {
     const { rows, collectionName, tableName, fields } = params;
+    // The field groups held inline in this collection's containers, whose
+    // passwords sit in those containers' values: resolved once for the read.
+    // A read of every translation returns each translated field keyed by
+    // language, the fields `decodeJsonFieldValues` decodes that way.
+    const inline = await passwordReachOf(fields, this.fieldGroupDataService);
+    const reach: FieldGroupReach =
+      params.locale === EVERY_TRANSLATION
+        ? {
+            ...inline,
+            keyedByLanguage: field =>
+              isFieldLocalized(
+                field as Parameters<typeof isFieldLocalized>[0],
+                true
+              ),
+          }
+        : inline;
 
     // (1) Before any afterRead hook — collection, stored, or field-level — so a
     // hook receiving the hash cannot copy it into an allowed property the later
     // redaction does not look at. The final strip below stays as defense in
     // depth.
-    this.redactServerOnlyFields(rows, fields, tableName);
+    this.redactServerOnlyFields(rows, fields, tableName, reach);
 
     // (2) On SQLite these columns come back as strings, and a hook is
     // documented against the configured value.
@@ -2303,7 +2580,7 @@ export class CollectionQueryService extends BaseService {
     // path already did both here while the list path did only the password —
     // the stricter of the two is kept, so a field-level hook below cannot
     // observe an owner id on either path.
-    this.redactServerOnlyFields(finalData, fields, tableName);
+    this.redactServerOnlyFields(finalData, fields, tableName, reach);
 
     // A stored hook may likewise have reintroduced a denied related field;
     // sanitize before the field-level hooks read the assembled document.
@@ -2321,6 +2598,24 @@ export class CollectionQueryService extends BaseService {
     // they cannot drift apart.
     const skipFieldRules =
       params.enforceFieldAccess === true ? false : params.overrideAccess;
+    // The rules on fields inside field groups, which the collection's own pass
+    // does not reach: resolved once for the whole read. Both passes, over
+    // every row, judge with one grants resolver, so the caller's roles are
+    // read once and every rule is handed one authority.
+    const fieldGroupPass = skipFieldRules
+      ? undefined
+      : await liveFieldGroupReadPass(
+          fields as FieldConfig[],
+          this.fieldGroupDataService
+        );
+    const fieldGroupCaller = {
+      user: params.fieldAccessUser ?? params.user,
+      authenticatedScope: params.authenticatedScope,
+      grants: callerAccessGrants(
+        params.fieldAccessUser ?? params.user,
+        params.authenticatedScope
+      ),
+    };
     for (const row of finalData) {
       const sourceRedactions: ReadAccessRedactions = new WeakMap();
       const target = {
@@ -2329,8 +2624,20 @@ export class CollectionQueryService extends BaseService {
         entry: row,
         user: params.fieldAccessUser ?? params.user,
         overrideAccess: skipFieldRules,
+        grants: fieldGroupCaller.grants,
       };
       await applyFieldReadAccess(target, sourceRedactions);
+      // The field-group pass runs before the field-level hooks, so a hook on
+      // an allowed field cannot copy a denied field-group value onto its own,
+      // and again after them, so one a hook put back is caught. Its store is
+      // its own, so the second run restores what the first removed as
+      // evidence, and the collection's second pass can be shown it too.
+      const fieldGroupRedactions: ReadAccessRedactions = new WeakMap();
+      const rowFieldGroupCaller = {
+        ...fieldGroupCaller,
+        redactions: fieldGroupRedactions,
+      };
+      await fieldGroupPass?.(row, rowFieldGroupCaller);
       await runFieldHooks({
         kind: "collection",
         slug: collectionName,
@@ -2339,7 +2646,12 @@ export class CollectionQueryService extends BaseService {
         operation: "read",
         user: params.user,
       });
-      await applyFieldReadAccess(target, sourceRedactions);
+      // Judged against the stored field groups, not the instances the first
+      // field-group pass cut: a collection rule may read a value inside one.
+      await withFieldGroupEvidence(row, fieldGroupRedactions, () =>
+        applyFieldReadAccess(target, sourceRedactions)
+      );
+      await fieldGroupPass?.(row, rowFieldGroupCaller);
     }
 
     // Authoritative related-row sanitization over the assembled response, after
@@ -2422,6 +2734,55 @@ export class CollectionQueryService extends BaseService {
       // The language a target collection's read rule is evaluated in when its
       // predicate names a localized field.
       locale: localeChain?.[0],
+      localeChain: localeChain ?? undefined,
+      // Only "read everything" propagates, and only when the caller actually
+      // asked for it. Deriving this from the parent having resolved to no
+      // filter would unfilter every target behind a status-less collection.
+      status: expansionStatusScope({
+        status: params.status,
+        overrideAccess: params.overrideAccess,
+        bounded: narrows(params.trusted),
+      }),
+    };
+  }
+
+  /**
+   * The caller a list's or a detail read's components carry to the rows
+   * their relationships populate. A component's relationship copies whole
+   * rows out of the target collection, which this collection's field rules
+   * say nothing about, so the caller travels down to reach the related row's
+   * own rules, exactly as it does for direct relationships. Built once for
+   * both reads, as {@link buildDetailExpansionOptions} is: an option one of
+   * them dropped would widen that read's components without failing.
+   */
+  private buildComponentReadAccess(
+    params: {
+      fieldAccessUser?: UserContext;
+      user?: UserContext;
+      overrideAccess?: boolean;
+      trusted?: TrustBound;
+      authenticatedScope?: AuthenticatedScope;
+      status?: StatusOption;
+    },
+    localeChain: string[] | null,
+    caches: ReadExpansionCaches
+  ): RelatedRowReadContext {
+    return {
+      enforceFieldAccess: true,
+      fieldAccessUser: params.fieldAccessUser,
+      user: params.user,
+      overrideAccess: params.overrideAccess,
+      // Narrows that bypass per RELATED collection. Absent means unchanged;
+      // dropping it here would silently restore the full bypass.
+      trusted: assumedBound(params.trusted),
+      authenticatedScope: params.authenticatedScope,
+      // The read's caches, so every component row pointing at a target the
+      // read already judged resolves its policy and verdict once.
+      ...caches,
+      // A relationship inside a component points at a collection whose read
+      // rule may filter on one of its own localized fields.
+      locale: localeChain?.[0],
+      localeChain: localeChain ?? undefined,
       // Only "read everything" propagates, and only when the caller actually
       // asked for it. Deriving this from the parent having resolved to no
       // filter would unfilter every target behind a status-less collection.
@@ -2671,18 +3032,12 @@ export class CollectionQueryService extends BaseService {
       // When overrideAccess is true, skip all access checks even if user is provided
       const accessUser = params.overrideAccess ? undefined : params.user;
 
-      // 1. Check collection-level access FIRST
-      const accessDenied = await this.denyCollectionRead<
-        PaginatedResponse<unknown>
-      >({
-        collectionName: params.collectionName,
-        accessUser,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (accessDenied) {
-        return accessDenied;
+      // 1. Check collection-level access FIRST. A read rule that answered a
+      // filter limits the page to the entries it matches.
+      const access =
+        await this.filteredCollectionRead<PaginatedResponse<unknown>>(params);
+      if (access.denied) {
+        return access.denied;
       }
 
       const schema = await this.fileManager.loadDynamicSchema(
@@ -2771,6 +3126,7 @@ export class CollectionQueryService extends BaseService {
         componentTables,
         componentTypeColumns,
         translationFilter,
+        workflowFilter,
       } = await this.resolveReadConditions({
         collectionName: params.collectionName,
         releaseNow: readNow,
@@ -2787,6 +3143,7 @@ export class CollectionQueryService extends BaseService {
         localeChain,
         // This path has rows to evaluate them over.
         extractGeo: true,
+        ruleFilter: access.filter,
       });
       const hasGeoFilters = geoFilters.length > 0;
 
@@ -2906,71 +3263,80 @@ export class CollectionQueryService extends BaseService {
         // We call countEntries separately to get total (it handles same filters)
         const [fetchedEntries, countResult] = await Promise.all([
           query,
-          this.countEntries({
-            collectionName: params.collectionName,
-            user: params.user,
-            // Its search is narrowed by the same identity the page's was.
-            fieldAccessUser: params.fieldAccessUser,
-            search: params.search,
-            // This count is part of THIS read, so it resolves releases against
-            // the same instant the rows did.
-            releaseNow: readNow,
-            // Resolved once for this request; see the parameter's own note.
-            resolvedComponentTables: componentTables,
-            resolvedComponentTypeColumns: componentTypeColumns,
-            // Geo operators removed (the count cannot apply them), but component
-            // predicates kept: `cleanedWhere` has BOTH stripped, and the count
-            // builds its own EXISTS conditions from the ones it is given. Sending
-            // the component-stripped filter counts rows the page excluded, so a
-            // read filtered on `seo.metaTitle` reported a total describing rows
-            // it had correctly withheld.
-            where: whereAfterGeo,
-            // The read hooks already ran for this request and `cleanedWhere`
-            // is what they settled on. Running them again here would fire every
-            // side effect twice -- an audit entry, a rate-limit tick -- for one
-            // list call.
-            readHooksAlreadyRan: true,
-            // The `_translated` language filter was stripped from `cleanedWhere` for
-            // the list query; pass it explicitly so the count applies the same filter.
-            // Without it the count ignores the filter and over-counts
-            // totalDocs/totalPages when a language filter is active.
-            translationFilter: translationFilter ?? undefined,
-            // Forward locale so count mirrors any locale-scoped filter (M4b parity).
-            locale: params.locale,
-            fallbackLocale: params.fallbackLocale,
-            // The count has to answer the same question as the rows beside it.
-            // Both resolve the Draft/Published filter from these two, so
-            // leaving them out counts published-only for every caller: a
-            // trusted reader gets its drafts listed but not counted, and
-            // totalPages then hides the tail of its own result set.
-            status: params.status,
-            overrideAccess: params.overrideAccess,
-            // Forwarded for the same reason `overrideAccess` is: the total has
-            // to answer under the field trust the page answered under, or the
-            // count matches on searchable fields the rows were narrowed by.
-            enforceFieldAccess: params.enforceFieldAccess,
-            frameworkFilter: true,
-            // Not a caller, and not a second boundary. This count is THIS
-            // read's own continuation: the caller's filter was judged at the
-            // top of `listEntries`, and what arrives here is the settled
-            // predicate, which legitimately carries whatever a trusted
-            // `beforeRead` hook narrowed it by. Re-judging it would reject a
-            // list that was already allowed -- and the rejection is swallowed
-            // into `totalDocs = 0`, so the page would come back correct with a
-            // total that quietly said there was nothing.
+          this.countEntries(
+            {
+              collectionName: params.collectionName,
+              user: params.user,
+              // Its search is narrowed by the same identity the page's was.
+              fieldAccessUser: params.fieldAccessUser,
+              search: params.search,
+              // This count is part of THIS read, so it resolves releases against
+              // the same instant the rows did.
+              releaseNow: readNow,
+              // Resolved once for this request; see the parameter's own note.
+              resolvedComponentTables: componentTables,
+              resolvedComponentTypeColumns: componentTypeColumns,
+              // Geo operators removed (the count cannot apply them), but component
+              // predicates kept: `cleanedWhere` has BOTH stripped, and the count
+              // builds its own EXISTS conditions from the ones it is given. Sending
+              // the component-stripped filter counts rows the page excluded, so a
+              // read filtered on `seo.metaTitle` reported a total describing rows
+              // it had correctly withheld.
+              where: whereAfterGeo,
+              // The read hooks already ran for this request and `cleanedWhere`
+              // is what they settled on. Running them again here would fire every
+              // side effect twice -- an audit entry, a rate-limit tick -- for one
+              // list call.
+              readHooksAlreadyRan: true,
+              // The `_translated` language filter was stripped from `cleanedWhere` for
+              // the list query; pass it explicitly so the count applies the same filter.
+              // Without it the count ignores the filter and over-counts
+              // totalDocs/totalPages when a language filter is active.
+              translationFilter: translationFilter ?? undefined,
+              // The workflow keys were stripped with it, and for the same reason
+              // are passed explicitly: without them the total would count every
+              // entry beside a page of the few the filter keeps.
+              workflowFilter: workflowFilter ?? undefined,
+              // Forward locale so count mirrors any locale-scoped filter (M4b parity).
+              locale: params.locale,
+              fallbackLocale: params.fallbackLocale,
+              // The count has to answer the same question as the rows beside it.
+              // Both resolve the Draft/Published filter from these two, so
+              // leaving them out counts published-only for every caller: a
+              // trusted reader gets its drafts listed but not counted, and
+              // totalPages then hides the tail of its own result set.
+              status: params.status,
+              overrideAccess: params.overrideAccess,
+              // Forwarded for the same reason `overrideAccess` is: the total has
+              // to answer under the field trust the page answered under, or the
+              // count matches on searchable fields the rows were narrowed by.
+              enforceFieldAccess: params.enforceFieldAccess,
+              frameworkFilter: true,
+              // Not a caller, and not a second boundary. This count is THIS
+              // read's own continuation: the caller's filter was judged at the
+              // top of `listEntries`, and what arrives here is the settled
+              // predicate, which legitimately carries whatever a trusted
+              // `beforeRead` hook narrowed it by. Re-judging it would reject a
+              // list that was already allowed -- and the rejection is swallowed
+              // into `totalDocs = 0`, so the page would come back correct with a
+              // total that quietly said there was nothing.
 
-            // The count must answer the same access question as the rows, or a
-            // route-authorized update/delete-only caller gets its read gate
-            // denied here and totalDocs silently falls back to 0 — breaking the
-            // bulk-by-query limit guard and pagination.
-            routeAuthorized: params.routeAuthorized,
-            // The scope has to travel with it for the same reason. The rows
-            // above are filtered by the key's own grant, so a count taken
-            // without the scope takes the owner's super-admin bypass instead
-            // and reports the unscoped total beside correctly filtered rows —
-            // disclosing how many rows exist outside the grant.
-            authenticatedScope: params.authenticatedScope,
-          }),
+              // The count must answer the same access question as the rows, or a
+              // route-authorized update/delete-only caller gets its read gate
+              // denied here and totalDocs silently falls back to 0 — breaking the
+              // bulk-by-query limit guard and pagination.
+              routeAuthorized: params.routeAuthorized,
+              // The scope has to travel with it for the same reason. The rows
+              // above are filtered by the key's own grant, so a count taken
+              // without the scope takes the owner's super-admin bypass instead
+              // and reports the unscoped total beside correctly filtered rows —
+              // disclosing how many rows exist outside the grant.
+              authenticatedScope: params.authenticatedScope,
+              // The page's own access: the total counts the entries the page's
+              // filter matched, not those of a second answer of the rule.
+            },
+            settledAccess({ denied: null, filter: access.filter })
+          ),
         ]);
 
         entries = fetchedEntries;
@@ -3065,6 +3431,7 @@ export class CollectionQueryService extends BaseService {
             // read rule filters on a localized field can have that filter
             // applied against the right companion rows instead of withholding.
             locale: localeChain?.[0],
+            localeChain: localeChain ?? undefined,
             // Only "read everything" propagates, and only when the caller
             // actually asked for it. Deriving this from the parent having
             // resolved to no filter would unfilter every target behind a
@@ -3106,36 +3473,7 @@ export class CollectionQueryService extends BaseService {
             // untranslated embedded field blank instead of showing default text.
             locale: params.locale,
             fallbackLocale: params.fallbackLocale,
-            // A component's relationship fields copy whole rows out of the
-            // target collection, which this collection's field rules say nothing
-            // about — so the caller travels down to reach the related row's own
-            // rules, exactly as it does for direct relationships.
-            access: {
-              enforceFieldAccess: true,
-              fieldAccessUser: params.fieldAccessUser,
-              user: params.user,
-              overrideAccess: params.overrideAccess,
-              // Narrows that bypass per RELATED collection. Absent means unchanged;
-              // dropping it here would silently restore the full bypass.
-              trusted: assumedBound(params.trusted),
-              authenticatedScope: params.authenticatedScope,
-              // Shared across every component row this listing expands, and
-              // with the listing's own relationships, so rows pointing at the
-              // same target resolve its policy and verdict once.
-              ...caches,
-              // A relationship inside a component points at a collection whose
-              // read rule may filter on one of its own localized fields.
-              locale: localeChain?.[0],
-              // Only "read everything" propagates, and only when the caller
-              // actually asked for it. Deriving this from the parent having
-              // resolved to no filter would unfilter every target behind a
-              // status-less collection.
-              status: expansionStatusScope({
-                status: params.status,
-                overrideAccess: params.overrideAccess,
-                bounded: narrows(params.trusted),
-              }),
-            },
+            access: this.buildComponentReadAccess(params, localeChain, caches),
           });
       }
 
@@ -3479,7 +3817,16 @@ export class CollectionQueryService extends BaseService {
     return { localeChain, companion };
   }
 
-  private async resolveReadPlan<TData>(params: FilteredReadParams) {
+  private async resolveReadPlan<TData>(
+    params: FilteredReadParams,
+    /**
+     * The access the enclosing read already settled, when this plan is that
+     * read's own continuation: a list's total, counted under the filter its
+     * page was read with rather than under a second answer of the rule.
+     * Never taken from a caller's params.
+     */
+    settled?: SettledRead
+  ) {
     const accessUser = params.overrideAccess ? undefined : params.user;
 
     // 1. Check collection-level access FIRST, through the same member the
@@ -3489,17 +3836,12 @@ export class CollectionQueryService extends BaseService {
     // and a count that authorized differently from the list it summarises is
     // exactly the disagreement this service is being shaped to make
     // impossible. No entry id, because an aggregate names no single row.
-    const accessDenied = await this.denyCollectionRead<TData>({
-      collectionName: params.collectionName,
-      accessUser,
-      overrideAccess: params.overrideAccess,
-      routeAuthorized: params.routeAuthorized,
-      // Same scope judgement as listEntries, so a read cannot describe rows
-      // the key itself is not allowed to list.
-      authenticatedScope: params.authenticatedScope,
-    });
-    if (accessDenied) {
-      return { allowed: false as const, denied: accessDenied };
+    // Same caller, scope and route judgement as listEntries, so a read cannot
+    // describe rows the caller itself is not allowed to list.
+    const access =
+      settled ?? (await this.filteredCollectionRead<TData>(params));
+    if (access.denied) {
+      return { allowed: false as const, denied: access.denied };
     }
 
     // A count is a cleaner oracle than a listing, not a lesser one: "how many
@@ -3575,9 +3917,13 @@ export class CollectionQueryService extends BaseService {
       // Stripped from the `where` `listEntries` forwards, so it is passed
       // separately or the aggregate would find nothing and over-count.
       translationFilter: params.translationFilter,
+      // Stripped with it, and passed separately for the same reason.
+      workflowFilter: params.workflowFilter,
       // Resolved once for this request by the caller; see the parameters.
       resolvedComponentTables: params.resolvedComponentTables,
       resolvedComponentTypeColumns: params.resolvedComponentTypeColumns,
+      // The read rule's filter, so an aggregate counts what the page lists.
+      ruleFilter: access.filter,
     });
 
     return {
@@ -3590,27 +3936,28 @@ export class CollectionQueryService extends BaseService {
   }
 
   async countEntries(
-    params: FilteredReadParams
+    params: FilteredReadParams,
+    /**
+     * The access a list already settled for the page this count totals, so
+     * the total is counted under the filter the page was read with. Only
+     * this module can make one; anything else passed here is ignored, and
+     * the count judges access itself (see {@link resolveReadPlan}).
+     */
+    settled?: SettledAccessToken
   ): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     try {
-      const plan = await this.resolveReadPlan<{ totalDocs: number }>(params);
+      const plan = await this.resolveReadPlan<{ totalDocs: number }>(
+        params,
+        settledReadIn(settled)
+      );
       if (!plan.allowed) return plan.denied;
       const { schema, whereConditions } = plan;
 
-      // Build the count query
-      let query = this.db.select({ count: sql<number>`count(*)` }).from(schema);
-
-      // Apply combined where conditions
-      if (whereConditions.length > 0) {
-        query = query.where(
-          whereConditions.length === 1
-            ? whereConditions[0]
-            : and(...whereConditions)
-        );
-      }
-
-      // Execute count query
-      const result = await query;
+      const result = await this.db
+        .select({ count: sql<number>`count(*)` })
+        .from(schema)
+        // `and` of none is no filter, and of one is that condition alone.
+        .where(and(...whereConditions));
       const totalDocs = Number(result[0]?.count || 0);
 
       return {
@@ -3620,23 +3967,86 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
-      const message =
-        error instanceof Error ? error.message : "Failed to count entries";
-      this.logger.error("Error counting entries", {
-        collectionName: params.collectionName,
-        error: message,
-      });
+      return this.countFailed(params.collectionName, error);
+    }
+  }
+
+  /**
+   * A count that failed, as both counts report it: logged, and returned with
+   * the error's own status and code.
+   */
+  private countFailed(
+    collectionName: string,
+    error: unknown
+  ): CollectionServiceResult<never> {
+    const message =
+      error instanceof Error ? error.message : "Failed to count entries";
+    this.logger.error("Error counting entries", {
+      collectionName,
+      error: message,
+    });
+    return {
+      success: false,
+      // Mirrors listEntries: a refusal is a 403, not a server fault, and the
+      // count must report it the same way.
+      statusCode: NextlyError.is(error) ? error.statusCode : 500,
+      message,
+      data: null,
+      // Same reason as listEntries: without the code the boundary rebuilds a
+      // typed refusal as a generic internal error.
+      ...errorEnvelopeFields(error),
+    };
+  }
+
+  /**
+   * How many rows a `countEntries` with the same request would count, read no
+   * further than `cap`: the exact number up to the cap, or the cap with
+   * `atLeast` once there are more.
+   *
+   * The same plan as the count, so the same access, read rules, hooks and
+   * workflow conditions decide the rows; only the read differs. It selects ids
+   * and stops one row past the cap rather than counting the whole set, so a
+   * caller that shows "99+" never pays for counting a large table, and "there
+   * are more" is observed rather than assumed.
+   *
+   * @experimental
+   */
+  async countEntriesUpTo(
+    params: FilteredReadParams & { cap: number }
+  ): Promise<CollectionServiceResult<{ count: number; atLeast: boolean }>> {
+    try {
+      // A cap that is not a positive integer would reach the query builder as
+      // `.limit(NaN)` or a fraction, and fail the read rather than bound it.
+      if (!Number.isSafeInteger(params.cap) || params.cap < 1) {
+        throw NextlyError.internal({
+          logContext: { reason: "count-cap-not-a-positive-integer" },
+        });
+      }
+      const plan = await this.resolveReadPlan<{
+        count: number;
+        atLeast: boolean;
+      }>(params);
+      if (!plan.allowed) return plan.denied;
+      const { schema, whereConditions } = plan;
+
+      const rows = await this.db
+        .select({ id: schema.id })
+        .from(schema)
+        .where(and(...whereConditions))
+        .limit(params.cap + 1);
+
       return {
-        success: false,
-        // Mirrors listEntries: a refusal is a 403, not a server fault, and the
-        // count must report it the same way.
-        statusCode: NextlyError.is(error) ? error.statusCode : 500,
-        message,
-        data: null,
-        // Same reason as listEntries: without the code the boundary rebuilds a
-        // typed refusal as a generic internal error.
-        ...errorEnvelopeFields(error),
+        success: true,
+        statusCode: 200,
+        message: "Count retrieved successfully",
+        data: {
+          count: Math.min(rows.length, params.cap),
+          atLeast: rows.length > params.cap,
+        },
       };
+    } catch (error: unknown) {
+      // Reported as `countEntries` reports it, so a refusal stays a typed 403.
+      return this.countFailed(params.collectionName, error);
     }
   }
 
@@ -4041,20 +4451,21 @@ export class CollectionQueryService extends BaseService {
     includeWorkingDraft?: boolean;
   }): Promise<CollectionServiceResult> {
     try {
-      const accessUser = params.overrideAccess ? undefined : params.user;
-
-      // 1. Check collection-level access FIRST
-      const accessDenied = await this.denyCollectionRead({
-        collectionName: params.collectionName,
-        accessUser,
+      // 1. Check collection-level access FIRST. A read rule that answered a
+      // filter limits the read to an entry it matches; one outside it is
+      // answered below exactly as a missing entry is.
+      const access = await this.filteredCollectionRead<unknown>({
+        ...params,
         entryId: params.entryId,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
       });
-      if (accessDenied) {
-        return accessDenied;
+      if (access.denied) {
+        return access.denied;
       }
+      // A working draft is shown only where no read rule's filter is in force:
+      // the filter is judged against the live row, and the draft's content,
+      // which it never saw, could lie outside it.
+      const includeWorkingDraft =
+        params.includeWorkingDraft === true && access.filter === undefined;
 
       const schema = await this.fileManager.loadDynamicSchema(
         params.collectionName
@@ -4119,7 +4530,7 @@ export class CollectionQueryService extends BaseService {
         ...draftDocumentFacts(collectionForStatus as DraftDocumentConfig),
         fields: collectionFieldsFor(collectionForStatus) as FieldConfig[],
         componentSchemas: null,
-        includeWorkingDraft: params.includeWorkingDraft === true,
+        includeWorkingDraft,
         requestedStatus: params.status,
         // The capability is probed against the loaded row further down; this
         // asks only whether the document and the request allow an overlay.
@@ -4152,7 +4563,31 @@ export class CollectionQueryService extends BaseService {
               readNow
             ),
           });
-      const whereParts = [idCondition, lifecycleCondition].filter(
+      // The read rule's filter, in the language this read resolves through,
+      // so an entry it does not match is not found: the same `404` a missing
+      // entry gets, and nothing that tells the two apart.
+      const ruleCondition = access.filter
+        ? await ruleFilterCondition(
+            {
+              collectionName: params.collectionName,
+              filter: access.filter,
+              schema,
+              localizedCtx: localizedFilterContext(
+                companion,
+                localeChain,
+                schema,
+                statusFilter?.values
+              ),
+            },
+            this.filterSources(),
+            this.logger
+          )
+        : undefined;
+      const whereParts = [
+        idCondition,
+        lifecycleCondition,
+        ruleCondition,
+      ].filter(
         (c): c is NonNullable<typeof c> => c !== null && c !== undefined
       );
       const whereCondition =
@@ -4276,33 +4711,9 @@ export class CollectionQueryService extends BaseService {
           // fields blank rather than showing default-language text.
           locale: params.locale,
           fallbackLocale: params.fallbackLocale,
-          // Same reasoning as the list path: a related row reached through a
-          // component is judged by its own collection's field rules.
-          access: {
-            enforceFieldAccess: true,
-            fieldAccessUser: params.fieldAccessUser,
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            // Narrows that bypass per RELATED collection. Absent means
-            // unchanged; dropping it restores the full bypass silently.
-            trusted: assumedBound(params.trusted),
-            authenticatedScope: params.authenticatedScope,
-            // The parent's caches, so every component instance relating to a
-            // target the parent already judged asks nothing more.
-            ...caches,
-            // As on the list path: a component's relationship reaches a
-            // collection that may scope reads by a localized field.
-            locale: localeChain?.[0],
-            // Only "read everything" propagates, and only when the caller
-            // actually asked for it. Deriving this from the parent having
-            // resolved to no filter would unfilter every target behind a
-            // status-less collection.
-            status: expansionStatusScope({
-              status: params.status,
-              overrideAccess: params.overrideAccess,
-              bounded: narrows(params.trusted),
-            }),
-          },
+          // As on the list path: a related row reached through a component
+          // is judged by its own collection's field rules.
+          access: this.buildComponentReadAccess(params, localeChain, caches),
         });
       }
 
@@ -4330,7 +4741,7 @@ export class CollectionQueryService extends BaseService {
         }),
         fields: fields as FieldConfig[],
         componentSchemas: null,
-        includeWorkingDraft: params.includeWorkingDraft === true,
+        includeWorkingDraft,
         requestedStatus: params.status,
         // The capability is probed below against the loaded row; this half asks
         // only whether the document and the request allow an overlay at all.
@@ -4339,14 +4750,20 @@ export class CollectionQueryService extends BaseService {
         defaultLocale: this.localization?.defaultLocale ?? null,
       }).overlay;
       // Even with the opt-in, a pending draft is surfaced only to a caller
-      // trusted to EDIT the document. `overrideAccess` attests that directly.
+      // trusted to EDIT the document, or to PUT IT LIVE: one who may publish it
+      // sees nothing they could not already make public. `overrideAccess`
+      // attests that directly.
       // `routeAuthorized` is NOT trusted: on this read path the REST dispatcher
       // sets it from `!!user` after authorizing the READ, so it attests read, not
       // update — trusting it would leak drafts to a read-only authenticated
       // caller. Every non-override authenticated caller is instead judged by an
-      // actual update-capability check, so a reader the collection's update
-      // rule refuses is not treated as an editor.
+      // actual update-capability check, then a publish-capability one, so a
+      // reader the collection's update and publish rules refuse is shown the
+      // live document.
       let draftView = false;
+      // Set where the caller is shown a pending change on publish alone. The
+      // change is then shown only where they could put it live, below.
+      let publishOnly = false;
       // Set once a working draft is actually surfaced. When the draft predicate
       // was suppressed but nothing is overlaid, the loaded row is the published
       // one, which an explicit draft filter must not return (see the 404 below).
@@ -4355,20 +4772,42 @@ export class CollectionQueryService extends BaseService {
         if (params.overrideAccess === true) {
           draftView = true;
         } else if (params.user !== undefined) {
-          const updateDenied = await this.accessService.checkCollectionAccess({
-            collectionName: params.collectionName,
-            operation: "update",
-            user: params.user,
-            overrideAccess: params.overrideAccess,
-            // The route attested a read, never an update, so the update grant is
-            // checked rather than assumed from `routeAuthorized`.
-            routeAuthorized: false,
-            authenticatedScope: params.authenticatedScope,
-          });
-          draftView = !updateDenied;
+          const { user } = params;
+          // The route attested a read, never a write, so each grant is checked
+          // rather than assumed from `routeAuthorized`.
+          const denied = (operation: "update" | "publish") =>
+            this.accessService.checkCollectionAccess({
+              collectionName: params.collectionName,
+              operation,
+              user,
+              overrideAccess: params.overrideAccess,
+              routeAuthorized: false,
+              authenticatedScope: params.authenticatedScope,
+            });
+          const mayUpdate = !(await denied("update"));
+          // Asked as the status write that would put the change live asks it:
+          // in that write's language, not every language this read involves.
+          publishOnly =
+            !mayUpdate &&
+            !(await withRuleLanguage(
+              writeLanguagesFor(this.localization, params.locale),
+              () => denied("publish")
+            ));
+          draftView = mayUpdate || publishOnly;
         }
       }
       if (draftView) {
+        // The same key the store, the promote and the discard derive, from
+        // the same function: an unlocalized document under the `locale IS
+        // NULL` slot, a localized one under the language being read. A read
+        // that looked elsewhere would report no pending change and serve the
+        // published content as though the author had never saved.
+        const draftLocale = workingDraftLocale({
+          documentLocalized:
+            (collection as { localized?: boolean }).localized === true,
+          requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
         const workingDraft = await new VersionsRepository(
           this.adapter
         ).findWorkingDraft(
@@ -4377,17 +4816,7 @@ export class CollectionQueryService extends BaseService {
             scopeSlug: params.collectionName,
             entryId,
           },
-          // The same key the store, the promote and the discard derive, from
-          // the same function: an unlocalized document under the `locale IS
-          // NULL` slot, a localized one under the language being read. A read
-          // that looked elsewhere would report no pending change and serve the
-          // published content as though the author had never saved.
-          workingDraftLocale({
-            documentLocalized:
-              (collection as { localized?: boolean }).localized === true,
-            requestLocale: params.locale ?? null,
-            defaultLocale: this.localization?.defaultLocale ?? null,
-          })
+          draftLocale
         );
         // Mirror the write gate's eligibility check before overlaying: a
         // component that turned localized or unresolvable after this draft was
@@ -4420,7 +4849,25 @@ export class CollectionQueryService extends BaseService {
             requestLocale: params.locale ?? null,
             defaultLocale: this.localization?.defaultLocale ?? null,
           }).overlay;
-        if (workingDraft && draftShowable) {
+        // Shown on publish alone only where the field rules let this caller
+        // put it live, so no pending value they could never publish reaches
+        // them.
+        const shownToCaller =
+          !publishOnly ||
+          (workingDraft !== undefined &&
+            workingDraft !== null &&
+            params.user !== undefined &&
+            this.draftPromotionRefused !== undefined &&
+            !(await this.draftPromotionRefused({
+              collectionName: params.collectionName,
+              entryId,
+              snapshot: workingDraft.snapshot,
+              draftLocale,
+              locale: params.locale,
+              user: params.user,
+              authenticatedScope: params.authenticatedScope,
+            })));
+        if (workingDraft && draftShowable && shownToCaller) {
           const rawSnapshot = workingDraft.snapshot as Record<string, unknown>;
           // Shape the snapshot to the current schema before exposing it. A field
           // removed or renamed while the draft was pending leaves a key the
@@ -4787,165 +5234,14 @@ export class CollectionQueryService extends BaseService {
     );
   }
 
-  private async resolveComponentTableNames(
-    componentFilters: ComponentFieldFilter[]
-  ): Promise<Map<string, string>> {
-    if (componentFilters.length === 0) return new Map();
-
-    // Mirror the condition builder's own narrowing: a _componentType filter
-    // pinned to one type queries only that table, so resolving the whole zone
-    // would cost a round trip per unused component choice.
-    const slugs = new Set(
-      componentFilters.flatMap(f =>
-        f.isComponentTypeFilter && typeof f.value === "string"
-          ? [f.value]
-          : f.componentSlugs
-      )
-    );
-    return this.componentTableNamesFor(slugs);
-  }
-
   /**
    * The physical table name of each component slug the registry knows; a
    * slug it does not know is left out, for the caller's canonical fallback.
    */
-  private async componentTableNamesFor(
+  private componentTableNamesFor(
     slugs: Iterable<string>
   ): Promise<Map<string, string>> {
-    const resolved = new Map<string, string>();
-    if (!this.fieldGroupDataService) return resolved;
-    // Resolved together rather than in sequence: these are independent point
-    // lookups, and this runs on every list request carrying a component filter.
-    const lookups = await Promise.all(
-      [...new Set(slugs)].map(async slug => ({
-        slug,
-        tableName:
-          await this.fieldGroupDataService?.getComponentTableName(slug),
-      }))
-    );
-    for (const { slug, tableName } of lookups) {
-      if (tableName) resolved.set(slug, tableName);
-    }
-    return resolved;
-  }
-
-  /**
-   * The physical discriminator column each named component table carries.
-   *
-   * 🔴 This predicate is built as raw SQL rather than through the table object,
-   * so it does not get the runtime schema's stable property key: it emits the
-   * column name it is handed. A `_componentType` filter must therefore be given
-   * the name the table actually has, or it addresses a column the storage
-   * migration has moved and the query fails instead of matching documents.
-   */
-  private async resolveComponentTypeColumns(
-    filters: readonly ComponentFieldFilter[],
-    tableNames: Iterable<string>
-  ): Promise<Map<string, string>> {
-    // Only a `_componentType` filter addresses the discriminator. Every other
-    // component filter names a user column, so introspecting here would spend
-    // per-table catalog queries — column and index reads, or a PRAGMA each on
-    // SQLite — on a value nothing goes on to read.
-    if (!filters.some(filter => filter.isComponentTypeFilter)) return new Map();
-
-    const tables = [...new Set(tableNames)];
-    if (tables.length === 0) return new Map();
-    return resolveTypeColumns(this.adapter, tables);
-  }
-
-  private buildComponentFieldConditions(
-    componentFilters: ComponentFieldFilter[],
-    parentTableName: string,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column reference
-    parentIdColumn: any,
-    componentTableNames: Map<string, string> = new Map(),
-    componentTypeColumns: Map<string, string> = new Map()
-  ): ReturnType<typeof and> | undefined {
-    if (componentFilters.length === 0) {
-      return undefined;
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-    const existsConditions: any[] = [];
-
-    for (const filter of componentFilters) {
-      // Convert component field path to snake_case for database column
-      const columnName = toSnakeCase(filter.componentFieldPath);
-
-      // 🔴 The discriminator's physical name is resolved PER TABLE, so the
-      // condition is built inside the per-table loop below rather than once for
-      // the filter. This predicate is raw SQL and does not go through the
-      // runtime table object, so it emits whatever column name it is handed —
-      // and a dynamic-zone filter can span several tables whose storage the
-      // migration has moved independently.
-
-      // For _componentType filter on dynamic zone, we may need to query multiple tables
-      // But the filter value tells us which specific component type to look for
-      // So we can be smart: if filtering by _componentType, only query that component's table
-      const slugsToQuery =
-        filter.isComponentTypeFilter && typeof filter.value === "string"
-          ? [filter.value] // Only query the specific component type's table
-          : filter.componentSlugs;
-
-      // Generate EXISTS subquery for each component table
-      // For multi-component fields, if entry has matching data in ANY table, it matches
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
-      const tableExistsConditions: any[] = [];
-
-      for (const slug of slugsToQuery) {
-        // The registry records the physical name, which is the only source for
-        // a component with a custom dbName; canonical resolution is the
-        // fallback when the lookup was unavailable.
-        const componentTableName =
-          componentTableNames.get(slug) ?? resolveComponentTableName(slug);
-
-        const dbColumnName = filter.isComponentTypeFilter
-          ? (componentTypeColumns.get(componentTableName) ??
-            STORAGE_FORMAT.columns.type)
-          : columnName;
-        const valueCondition = buildComponentValueCondition(
-          filter,
-          dbColumnName
-        );
-        // An operator with nothing to match — an empty `in` list, or one this
-        // builder does not implement — contributes no condition for this table.
-        if (valueCondition === undefined) continue;
-
-        // Build EXISTS subquery:
-        // EXISTS (SELECT 1 FROM comp_{slug}
-        //         WHERE _parent_id = {parentIdColumn}
-        //         AND _parent_table = {parentTableName}
-        //         AND _parent_field = {fieldName}
-        //         AND {valueCondition})
-        const existsSubquery = sql`
-          EXISTS (
-            SELECT 1 FROM ${sql.identifier(componentTableName)}
-            WHERE ${sql.identifier(STORAGE_FORMAT.columns.parentId)} = ${parentIdColumn}
-            AND ${sql.identifier(STORAGE_FORMAT.columns.parentTable)} = ${parentTableName}
-            AND ${sql.identifier(STORAGE_FORMAT.columns.parentField)} = ${filter.fieldName}
-            AND ${valueCondition}
-          )
-        `;
-
-        tableExistsConditions.push(existsSubquery);
-      }
-
-      // Combine table conditions with OR (match if any table has matching data)
-      if (tableExistsConditions.length === 1) {
-        existsConditions.push(tableExistsConditions[0]);
-      } else if (tableExistsConditions.length > 1) {
-        existsConditions.push(or(...tableExistsConditions));
-      }
-    }
-
-    // Combine all EXISTS conditions with AND
-    if (existsConditions.length === 0) {
-      return undefined;
-    }
-    if (existsConditions.length === 1) {
-      return existsConditions[0];
-    }
-    return and(...existsConditions);
+    return componentTableNamesFor(slugs, this.filterSources());
   }
 
   /**

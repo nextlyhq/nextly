@@ -139,6 +139,20 @@ export function withWorkerCap(argv, workers) {
   return isTurbo(argv[0]) ? afterSeparator(argv, flag) : beforeSeparator(argv, flag);
 }
 
+/**
+ * How many Vitest workers to pass: the machine's cap, or fewer when an
+ * integration run asks for fewer with `NEXTLY_INTEGRATION_WORKERS`. A
+ * `--maxWorkers` on Vitest's command line overrides the integration config's
+ * own, so passing the cap alone would start more workers than the run asked
+ * for, each needing a database of its own. The cap still wins when it is the
+ * smaller.
+ */
+export function workerCount(command, cap, env = process.env) {
+  const asked = Number(env.NEXTLY_INTEGRATION_WORKERS);
+  if (!command.some(arg => arg.includes("test:integration")) || !Number.isInteger(asked) || asked < 1) return cap;
+  return Math.min(cap, asked);
+}
+
 function isTurbo(command) {
   return /(^|[\\/])turbo(\.cmd|\.exe)?$/.test(String(command));
 }
@@ -198,8 +212,8 @@ function procStat(pid) {
 }
 
 /**
- * Every process's parent, state and start time from one `ps` call — the
- * portable way to read them where there is no /proc. `lstart` is a
+ * Every process's parent, group, state and start time from one `ps` call —
+ * the portable way to read them where there is no /proc. `lstart` is a
  * fixed-format date, so it is read as the rest of the line.
  *
  * 🔴 A `ps` that fails answers `undefined` — nothing known — never an empty
@@ -209,7 +223,7 @@ function procStat(pid) {
  */
 export function processTable() {
   try {
-    const out = execFileSync("ps", ["-A", "-o", "pid=,ppid=,state=,lstart="], { encoding: "utf8" });
+    const out = execFileSync("ps", ["-A", "-o", "pid=,ppid=,pgid=,state=,lstart="], { encoding: "utf8" });
     return parseProcessTable(out);
   } catch {
     return undefined;
@@ -219,8 +233,10 @@ export function processTable() {
 export function parseProcessTable(out) {
   const table = new Map();
   for (const line of out.split("\n")) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
-    if (match) table.set(Number(match[1]), { ppid: Number(match[2]), state: match[3][0], start: match[4] });
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
+    if (match) {
+      table.set(Number(match[1]), { ppid: Number(match[2]), pgid: Number(match[3]), state: match[4][0], start: match[5] });
+    }
   }
   return table;
 }
@@ -492,6 +508,27 @@ export function tryAcquire(dir, count, record, now = Date.now()) {
   return { holders };
 }
 
+/**
+ * The runs holding a slot in `dir` right now, read without reclaiming any, so
+ * another tool can ask what heavy job is running where. A record still being
+ * written is returned as one with no `cwd`: a run is starting, and where is
+ * not known yet.
+ */
+export function heldRecords(dir = slotDir()) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  return names
+    .filter(name => /^slot-\d+\.json$/.test(name))
+    .map(name => readRecord(join(dir, name)))
+    .filter(seen => !seen.missing && (seen.record === null || holdsSlot(seen.record)))
+    .map(seen => seen.record ?? { pid: null, cwd: null });
+}
+
 /** Gives a slot back, if it is still this process's. */
 export function release(path, pid = process.pid) {
   const seen = readRecord(path);
@@ -611,8 +648,32 @@ function sendSignal(target, signal) {
   }
 }
 
-function signalGroup(pgid, signal) {
-  sendSignal(-pgid, signal);
+/**
+ * Sends a signal to a process group, ignoring one with nothing left to signal.
+ * macOS answers a group whose only members are zombies — killed, not yet
+ * reaped — with EPERM rather than ESRCH, and the sweep after a leader exits
+ * can meet exactly that group. `kill` and `table` are the system's, passed in
+ * so a test can give any platform macOS's answer.
+ */
+export function signalGroup(pgid, signal, { kill = (target, name) => process.kill(target, name), table = processTable } = {}) {
+  try {
+    kill(-pgid, signal);
+  } catch (error) {
+    if (error.code === "ESRCH") return;
+    // EPERM is not always a permission problem: for a group of zombies only it
+    // is macOS's "nothing to signal", and rethrowing it crashed the runner after
+    // the run had already stopped. A member that is alive but cannot be
+    // signalled, one that changed its credentials, is a real failure, and so is
+    // a group whose members cannot be read.
+    if (error.code === "EPERM" && onlyZombiesIn(pgid, table())) return;
+    throw error;
+  }
+}
+
+/** Whether every process left in a group is a zombie: true when none is left, false when the table cannot be read. */
+function onlyZombiesIn(pgid, table) {
+  if (!(table instanceof Map)) return false;
+  return [...table.values()].every(member => member.pgid !== pgid || member.state === "Z");
 }
 
 /** Runs a command in this process's group and returns its exit code. */
@@ -865,7 +926,9 @@ export function requireBounded(what, env = process.env) {
 }
 
 function boundedCommand(request, limits) {
-  return request.vitestWorkers ? withWorkerCap(request.command, limits.maxWorkers) : request.command;
+  return request.vitestWorkers
+    ? withWorkerCap(request.command, workerCount(request.command, limits.maxWorkers))
+    : request.command;
 }
 
 function boundedEnv(limits) {

@@ -105,7 +105,20 @@ import type { SearchBarProps } from "./types";
  * />
  * ```
  */
-export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
+export const SearchBar: React.ForwardRefExoticComponent<
+  {
+    value?: string;
+    onChange: (value: string) => void;
+    placeholder?: string;
+    debounceDelay?: number;
+    isLoading?: boolean;
+    className?: string;
+  } & Omit<
+    React.InputHTMLAttributes<HTMLInputElement>,
+    "onChange" | "size" | "type" | "value"
+  > &
+    React.RefAttributes<HTMLInputElement>
+> = React.forwardRef<HTMLInputElement, SearchBarProps>(
   (
     {
       value = "",

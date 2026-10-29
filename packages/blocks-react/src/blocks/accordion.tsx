@@ -54,7 +54,7 @@
  *
  * @module blocks/library/accordion
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
@@ -94,47 +94,48 @@ export const ACCORDION_BASE_STYLES = {
   },
 } as const;
 
-export const accordion = defineBlock<ContainerProps, PageContext>({
-  name: ACCORDION_BLOCK,
-  version: 1,
-  description:
-    "A group of disclosure sections. Restricts its slot to core/accordion-item so a stray block cannot render outside every section and stay permanently visible.",
-  // Palette metadata. The category is imported rather than spelled here so
-  // nineteen blocks cannot drift into nineteen headings; keywords are what
-  // let a search for a word the description never uses still find this.
-  editor: {
-    label: "Accordion",
-    icon: "accordion",
-    category: INTERACTIVE,
-    keywords: ["disclosure", "faq", "collapse", "toggle"],
-  },
-  props: {
-    as: { type: "select", options: ["div", "section", "article"] },
-    contained: { type: "checkbox" },
-  },
-  defaultProps: { as: "div", contained: false },
-  example: { props: { as: "div" } },
-  // The parent half of the nesting rule. `block.ts` is explicit that a slot
-  // naming a type does NOT confine that type to this slot; the item states its
-  // own side in `accordion-item.tsx`.
-  slots: {
-    children: {
-      allow: [ACCORDION_ITEM_BLOCK],
-      // One section to start, because an empty accordion is unusable in the
-      // precise sense a row is: this slot admits only `core/accordion-item`,
-      // and that block names this one as its only parent, so the single block
-      // that may go here can be placed nowhere else on the page.
-      //
-      // ONE rather than the row's two, and the difference is the same rule read
-      // the other way. A row of one is a box, and `core/box` already exists, so
-      // one column is a degenerate spelling of a block the author could have
-      // reached for instead. An accordion of one is not a spelling of anything:
-      // a lone `core/accordion-item` cannot stand on a page at all, so a single
-      // disclosure REQUIRES this wrapper and is a finished document.
-      defaultBlock: [{ type: ACCORDION_ITEM_BLOCK }],
+export const accordion: BlockDefinition<ContainerProps, PageContext> =
+  defineBlock({
+    name: ACCORDION_BLOCK,
+    version: 1,
+    description:
+      "A group of disclosure sections. Restricts its slot to core/accordion-item so a stray block cannot render outside every section and stay permanently visible.",
+    // Palette metadata. The category is imported rather than spelled here so
+    // nineteen blocks cannot drift into nineteen headings; keywords are what
+    // let a search for a word the description never uses still find this.
+    editor: {
+      label: "Accordion",
+      icon: "accordion",
+      category: INTERACTIVE,
+      keywords: ["disclosure", "faq", "collapse", "toggle"],
     },
-  },
-  baseStyles: ACCORDION_BASE_STYLES,
-  supports: CONTAINER_SUPPORTS,
-  render: renderContainer,
-});
+    props: {
+      as: { type: "select", options: ["div", "section", "article"] },
+      contained: { type: "checkbox" },
+    },
+    defaultProps: { as: "div", contained: false },
+    example: { props: { as: "div" } },
+    // The parent half of the nesting rule. `block.ts` is explicit that a slot
+    // naming a type does NOT confine that type to this slot; the item states its
+    // own side in `accordion-item.tsx`.
+    slots: {
+      children: {
+        allow: [ACCORDION_ITEM_BLOCK],
+        // One section to start, because an empty accordion is unusable in the
+        // precise sense a row is: this slot admits only `core/accordion-item`,
+        // and that block names this one as its only parent, so the single block
+        // that may go here can be placed nowhere else on the page.
+        //
+        // ONE rather than the row's two, and the difference is the same rule read
+        // the other way. A row of one is a box, and `core/box` already exists, so
+        // one column is a degenerate spelling of a block the author could have
+        // reached for instead. An accordion of one is not a spelling of anything:
+        // a lone `core/accordion-item` cannot stand on a page at all, so a single
+        // disclosure REQUIRES this wrapper and is a finished document.
+        defaultBlock: [{ type: ACCORDION_ITEM_BLOCK }],
+      },
+    },
+    baseStyles: ACCORDION_BASE_STYLES,
+    supports: CONTAINER_SUPPORTS,
+    render: renderContainer,
+  });

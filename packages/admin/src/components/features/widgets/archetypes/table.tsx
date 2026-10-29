@@ -17,8 +17,12 @@
  * @module components/features/widgets/archetypes/table
  */
 
-import { selectsNothing } from "./cell-text";
-import { TieredRows } from "./tiered-rows";
+import {
+  declaredAnswerFields,
+  rowsOrInstead,
+  selectsNothing,
+} from "./cell-text";
+import { answerTotal, TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /** A table is drawn from selected fields, exactly as a list is. */
@@ -28,27 +32,20 @@ export const tableAccepts: ArchetypeAccepts = definition => {
   return selectsNothing(definition.title, "table", "column");
 };
 
-export const tableBody: ArchetypeBody = (result, definition) => {
-  if (result.op !== "list") {
-    return {
-      ok: false,
-      message: `"${definition.title}" expected a table of rows, but the query returned a ${result.op}.`,
-    };
-  }
+export const tableBody: ArchetypeBody = (answer, definition) => {
+  const result = rowsOrInstead(answer, definition.title, {
+    expected: "a table of rows",
+    rows: "Rows",
+  });
+  if (!("op" in result)) return result;
 
-  if (result.items.length === 0) {
-    // The frame's one empty state, worded for a table. Source-neutral: the card may read any
-    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
-    return {
-      ok: true,
-      empty: {
-        title: "Nothing here yet",
-        detail: "Rows appear here once something matches this card.",
-      },
-    };
-  }
-
-  const columns = result.fields ?? [];
+  // A card core answered on the server describes its own rows: the rows are its
+  // data function's own answer, so they are not ones a query heading could
+  // misname (`declaredAnswerFields`).
+  const columns =
+    definition.serverData === true
+      ? declaredAnswerFields(result)
+      : (result.fields ?? []);
   if (columns.length === 0) {
     // Rows arrived and nothing described them. A declaration with no `select`
     // never reaches here -- `tableAccepts` refuses it before the query runs --
@@ -72,8 +69,8 @@ export const tableBody: ArchetypeBody = (result, definition) => {
         items={result.items}
         columns={columns}
         labelField={columns[0].name}
-        detailField={columns[1]?.name}
         query={definition.query}
+        total={answerTotal(result)}
       />
     ),
   };

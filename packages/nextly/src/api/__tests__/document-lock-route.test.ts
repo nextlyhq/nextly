@@ -34,8 +34,11 @@ const canReadEntity = vi.fn();
 const callerHoldsPermission = vi.fn();
 vi.mock("../../auth/entity-read-access", () => ({
   readAccessCaller: (caller: { user: unknown }) => caller.user,
-  canReadEntity: (slug: string, caller: unknown) =>
-    canReadEntity(slug, caller) as unknown,
+  // The entity reader's answer, every entry or none; a filter's answer is
+  // the integration test's to judge, against a real document.
+  entityReadFor: async (slug: string, caller: unknown) => ({
+    allowed: (await canReadEntity(slug, caller)) as boolean,
+  }),
   callerHoldsPermission: (slug: string, caller: unknown) =>
     callerHoldsPermission(slug, caller) as unknown,
 }));
@@ -269,6 +272,32 @@ describe("document lock route", () => {
     expect(service.release).not.toHaveBeenCalled();
   });
 
+  it("refuses a claim in the update gate's own words", async () => {
+    // The gate names what was refused; the lock route passes it on rather
+    // than answering a sentence of its own.
+    authorizeCaller.mockResolvedValue({
+      success: false,
+      statusCode: 403,
+      message: "Forbidden",
+      error: "You can't edit posts.",
+      data: null,
+    });
+
+    const res = await acquireLock(post(ref));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: { code: "FORBIDDEN", message: "You can't edit posts." },
+    });
+    // Asked as a refusal of the one document the claim names.
+    expect(authorizeCaller).toHaveBeenCalledWith(
+      auth,
+      "update",
+      "posts",
+      "one"
+    );
+    expect(service.acquire).not.toHaveBeenCalled();
+  });
+
   it("lets a holder release on the grant alone, whatever the update rule now says", async () => {
     // The claim token fences a release, and a rule that changed while the
     // claim was held must not strand it until its lease lapses.
@@ -294,7 +323,12 @@ describe("document lock route", () => {
 
     await acquireLock(post({ ...ref, slug: "invoices" }));
 
-    expect(authorizeCaller).toHaveBeenCalledWith(auth, "update", "invoices");
+    expect(authorizeCaller).toHaveBeenCalledWith(
+      auth,
+      "update",
+      "invoices",
+      "one"
+    );
   });
 
   it("keeps a lock read out of every cache", async () => {

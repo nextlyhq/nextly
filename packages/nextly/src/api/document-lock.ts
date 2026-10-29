@@ -21,9 +21,10 @@
  * @module api/document-lock
  */
 
+import type { ReadAccessCaller } from "../auth/code-access";
 import {
   callerHoldsPermission,
-  canReadEntity,
+  entityReadFor,
   readAccessCaller,
 } from "../auth/entity-read-access";
 import {
@@ -45,7 +46,10 @@ import { getCachedNextly } from "../init";
 
 import { PRIVATE_NO_STORE_HEADERS, readCaller } from "./authenticated-read";
 import { respondData, respondMutation } from "./response-shapes";
-import { assertDocumentUpdatable } from "./versions-access";
+import {
+  assertDocumentUpdatable,
+  assertVersionDocumentReadable,
+} from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 
 async function getDocumentLockService(): Promise<DocumentLockService> {
@@ -140,12 +144,23 @@ async function authorize(
 ): Promise<void> {
   const authenticated = await readCaller(auth);
   const caller = readAccessCaller(authenticated);
+  if (intent === "claim") {
+    // The update gate's own refusal, in the words it names the thing with:
+    // the one document the claim names, as "this post". It names only what
+    // the request already named, so it does not answer whether it exists.
+    const decision = await authorizeCaller(
+      auth,
+      "update",
+      ref.slug,
+      ref.entryId ? "one" : "all"
+    );
+    if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
+  }
   const allowed =
     intent === "read"
-      ? await canReadEntity(ref.slug, caller)
-      : intent === "claim"
-        ? !isErrorResponse(await authorizeCaller(auth, "update", ref.slug))
-        : await callerHoldsPermission(`update-${ref.slug}`, caller);
+      ? await mayReadDocument(ref, caller, authenticated)
+      : intent === "claim" ||
+        (await callerHoldsPermission(`update-${ref.slug}`, caller));
 
   if (!allowed) {
     // The same refusal either way. Distinguishing "no such document" from "not
@@ -165,6 +180,37 @@ async function authorize(
       authenticated.user,
       authenticated.authenticatedScope
     );
+  }
+}
+
+/**
+ * Whether the caller may read the document the lock names. A caller whose
+ * read rule allows only the entries a filter matches may read this lock only
+ * where the document is one of them, asked of the document by id; every
+ * other caller is judged by the collection, as before.
+ */
+async function mayReadDocument(
+  ref: DocumentRef,
+  caller: ReadAccessCaller,
+  authenticated: Awaited<ReturnType<typeof readCaller>>
+): Promise<boolean> {
+  const read = await entityReadFor(ref.slug, caller);
+  if (read.allowed) return true;
+  if (read.filter === undefined) return false;
+  try {
+    // The document read the entity reader's answer lets run, which applies
+    // the filter it kept for the request.
+    await assertVersionDocumentReadable(
+      ref.scopeKind,
+      ref.slug,
+      ref.entryId,
+      authenticated.user,
+      authenticated.authenticatedScope
+    );
+    return true;
+  } catch (error) {
+    if (NextlyError.isNotFound(error)) return false;
+    throw error;
   }
 }
 

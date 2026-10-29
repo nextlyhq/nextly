@@ -62,10 +62,57 @@ export type ReleaseProblemsPublicData = {
   problems: Array<{ memberId: string | null; code: string }>;
 };
 
+/**
+ * Why a publish was refused over the fields every language shares:
+ *
+ * - `shared-fields-out-of-date`: someone else published newer values for
+ *   these fields after the change began. Taking the live values brings the
+ *   change up to date.
+ * - `shared-edits-unordered`: publishing every language at once, two
+ *   languages changed these fields and which changed them last can no longer
+ *   be confirmed. Publishing one language at a time settles it.
+ * - `shared-edits-unmergeable`: publishing every language at once, these
+ *   components are kept per language and hold shared parts a change edited,
+ *   which each language's copy would write over the others'. Publishing one
+ *   language at a time settles it.
+ *
+ * @experimental
+ */
+export type SharedFieldsConflictReason =
+  | "shared-fields-out-of-date"
+  | "shared-edits-unordered"
+  | "shared-edits-unmergeable";
+
+/**
+ * Why a publish of a language's pending change was refused over the fields
+ * every language shares, and which fields: the names the caller may read, and
+ * a count of the others, so a refusal never reveals that a protected field
+ * exists. Names only, never values.
+ *
+ * @experimental
+ */
+export type SharedFieldsConflictPublicData = {
+  reason: SharedFieldsConflictReason;
+  fields: string[];
+  hiddenCount?: number;
+};
+
+/**
+ * Which entity an `ENTITY_REMOVED_FROM_CODE` refusal is about: its kind and
+ * the slug the caller named. Enough for a client to mark the entity and say
+ * what to do, and nothing the caller did not already send.
+ */
+export type RemovedFromCodePublicData = {
+  kind: "collection" | "single";
+  slug: string;
+};
+
 export type PublicData =
   | ValidationPublicData
+  | RemovedFromCodePublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
   | SingleAbsentPublicData
   | ReleaseProblemsPublicData
+  | SharedFieldsConflictPublicData
   | undefined;

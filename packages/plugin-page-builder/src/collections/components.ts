@@ -25,7 +25,13 @@
  *
  * @module collections/components
  */
-import { defineCollection, select, text, textarea } from "nextly/config";
+import {
+  defineCollection,
+  select,
+  text,
+  textarea,
+  type CollectionConfig,
+} from "nextly/config";
 
 import { blocks } from "../fields/blocksHelper";
 
@@ -41,7 +47,7 @@ export const COMPONENTS_SLUG = "components";
  * served at an address of its own. It reaches a visitor only inside a page or
  * a Layout, so it has no preview path and nothing for a host to configure.
  */
-export function componentsCollection() {
+export function componentsCollection(): CollectionConfig {
   return defineCollection({
     slug: COMPONENTS_SLUG,
     labels: { singular: "Component", plural: "Components" },

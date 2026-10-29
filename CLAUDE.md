@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (ec9f9b7eee8a8066). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (3b6006ecbf626f1b). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -21,10 +21,9 @@ Procedures live in `.agents/skills/` rather than here, because a procedure
 needed once per task should not occupy context in every session. Codex reads
 them there; Claude Code reads `.claude/skills/`, a generated copy that
 `pnpm skills:sync` rewrites and `pnpm check:agent-contract` holds identical —
-edit the skills, never the copy. This table is the router: an agent selects a
-skill from its description, and the table is what survives a description that
-underperforms. Load the skill BEFORE the act, not
-after it goes wrong.
+edit the skills, never the copy. This table is the router, for when a skill's
+description underperforms. Load the skill BEFORE the act, not after it goes
+wrong.
 
 | Load this                     | When you are about to                                    |
 | ----------------------------- | -------------------------------------------------------- |
@@ -41,6 +40,7 @@ after it goes wrong.
 | `running-builds-and-tests`    | build, typecheck, lint or run tests, or size a local run |
 | `working-in-worktrees`        | create, work in or remove a worktree                     |
 | `running-the-fallow-gate`     | commit, push, or act on a fallow or code-hygiene finding |
+| `visual-check`                | change how an admin screen looks, before its PR          |
 
 A rule both tools must hold in every session lives in this file, since only it
 reaches both: the whole-file write rule below. `.claude/rules/` keeps the rule
@@ -76,7 +76,7 @@ Claude Code loads by path, `.claude/rules/integration-tests.md` for
   `/templates` (`base`, `blank`, `blog`, `plugin`).
 - `packages/ui` - shared React components and the design-token theme.
 - `packages/admin-css`, `packages/eslint-plugin`, `packages/module-specifiers`,
-  `packages/eslint-config`, `packages/prettier-config`, `packages/tsconfig`,
+  `packages/eslint-config` (empty), `packages/prettier-config`, `packages/tsconfig`,
   `packages/telemetry` - shared tooling and support packages.
 - `apps/playground` - contributor dev harness (not published).
 - `e2e/` - Playwright suite. `docs/` - user docs (MDX, deployed to
@@ -96,16 +96,16 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 
 ## Setup and dev loop
 
-- Requirements: Node `^20.19.0 || ^22.12.0 || >=24.0.0`, pnpm 12.5.1
+- Requirements: Node `^22.12.0 || >=24.0.0`, pnpm 12.5.1
   (`packageManager` is pinned in `package.json`; Corepack enforces the exact
   version). The ranges are disjoint deliberately, mirroring what the test
-  environment supports: 20.6-20.18 and the whole 23.x line are excluded, not
-  merely untested.
+  environment supports: the whole 23.x line is excluded, not merely untested,
+  and Node 20 is not supported.
 - Two different facts, deliberately not one: `engines.node` above is the
-  CONTRACT the published packages make, and `.nvmrc` (24.21.0) is the version
+  CONTRACT the published packages make, and `.nvmrc` (24.22.1) is the version
   contributors, CI and the release job actually run. Every workflow reads
   `.nvmrc`, so the toolchain moves by editing that file; narrowing `engines`
-  would drop Node 20/22 for users and is a separate decision. `package-smoke`
+  drops a Node line for users and is a separate decision. `package-smoke`
   derives its Node legs FROM `engines.node`, so the floors stay tested.
 - pnpm settings live in `pnpm-workspace.yaml`, not `.npmrc` and not a `pnpm`
   block in `package.json` — pnpm reads only auth and registry settings from
@@ -143,7 +143,8 @@ slot left RESERVED: the `working-in-worktrees` skill.
   self-skip when the dialect's URL is unset. Their databases are the
   containers in `docker-compose.test.yml`, which neither `pnpm docker:test`
   nor `pnpm docker:up` starts. NEVER point a TEST\_\* URL at a database you did
-  not create for the run, and never re-enable integration parallelism.
+  not create for the run; parallel integration files need a database per
+  worker.
 - E2E: the root `e2e/` package (Playwright) boots its own playground on :3100
   with a fresh SQLite database per run.
 - Some unit suites have a known pre-existing failing baseline. NEVER add to
@@ -203,8 +204,8 @@ budget, the overrides and each operating system's caveats: the
 - Every code change includes a comment explaining what and why. Comments
   describe the code only: never reference tasks, plans, conversations, or
   review findings.
-- No `as any`, `@ts-expect-error`, or eslint-disable to silence type or lint
-  errors. Fix the cause with real types, guards, or generics.
+- No `as any`, `@ts-expect-error`, or a lint-disable comment to silence type or
+  lint errors. Fix the cause with real types, guards, or generics.
 - API responses use the canonical envelopes in
   `packages/nextly/src/api/response-shapes.ts` (`{ items, meta }` for lists,
   `{ message, item }` for mutations). Never invent a new response shape.
@@ -390,9 +391,8 @@ already in hand may move; preconditions may not.
 `overrideAccess: false` is judged by a single gate. Flag a second place that
 decides whether a caller may read or write, a hand-assembled caller literal
 instead of `readAccessCaller`, or a rule handed permissions not spelled as
-stored (`read-posts`); the earlier `posts:read` also rides along, warned, for
-one release. Two doors that answer one key differently is a defect this
-repository has already had.
+stored (`read-posts`), such as the earlier `posts:read`. Two doors that answer
+one key differently is a defect this repository has already had.
 
 ### One question has one implementation
 

@@ -25,7 +25,10 @@ import {
   useQuery,
   useQueryClient,
   type UseQueryOptions,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
+import type { RenderedTemplate } from "nextly/api/email-template-preview-types";
 
 import {
   listTemplates,
@@ -60,9 +63,12 @@ import {
 
 export const emailTemplateKeys = {
   all: () => ["emailTemplates"] as const,
-  lists: () => [...emailTemplateKeys.all(), "list"] as const,
-  details: () => [...emailTemplateKeys.all(), "detail"] as const,
-  detail: (id: string) => [...emailTemplateKeys.details(), id] as const,
+  lists: (): readonly ["emailTemplates", "list"] =>
+    [...emailTemplateKeys.all(), "list"] as const,
+  details: (): readonly ["emailTemplates", "detail"] =>
+    [...emailTemplateKeys.all(), "detail"] as const,
+  detail: (id: string): readonly ["emailTemplates", "detail", string] =>
+    [...emailTemplateKeys.details(), id] as const,
   /**
    * A rendered draft, keyed by everything the render reads.
    *
@@ -74,7 +80,22 @@ export const emailTemplateKeys = {
   draftPreview: (
     template: DraftPreviewTemplate,
     data: Record<string, unknown>
-  ) => [...emailTemplateKeys.all(), "draftPreview", template, data] as const,
+  ): readonly [
+    "emailTemplates",
+    "draftPreview",
+    {
+      subject: string;
+      htmlContent: string;
+      useLayout: boolean;
+      kind: "template" | "layout" | "partial";
+      plainTextContent?: string | null | undefined;
+      preheader?: string | null | undefined;
+      layoutId?: string | null | undefined;
+      id?: string | undefined;
+      legacy?: boolean | undefined;
+    },
+    Record<string, unknown>,
+  ] => [...emailTemplateKeys.all(), "draftPreview", template, data] as const,
 };
 
 // ============================================================
@@ -90,7 +111,7 @@ export function useEmailTemplates(
     UseQueryOptions<EmailTemplateRecord[], Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<EmailTemplateRecord[], Error> {
   return useQuery<EmailTemplateRecord[], Error>({
     queryKey: emailTemplateKeys.lists(),
     queryFn: () => listTemplates(),
@@ -108,7 +129,7 @@ export function useEmailTemplate(
     UseQueryOptions<EmailTemplateRecord, Error>,
     "queryKey" | "queryFn" | "enabled"
   >
-) {
+): UseQueryResult<EmailTemplateRecord, Error> {
   return useQuery<EmailTemplateRecord, Error>({
     queryKey: emailTemplateKeys.detail(id!),
     queryFn: () => {
@@ -128,7 +149,12 @@ export function useEmailTemplate(
  * useCreateEmailTemplate — Create a new email template.
  * Invalidates all template queries on success.
  */
-export function useCreateEmailTemplate() {
+export function useCreateEmailTemplate(): UseMutationResult<
+  EmailTemplateRecord,
+  Error,
+  CreateEmailTemplatePayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<EmailTemplateRecord, Error, CreateEmailTemplatePayload>({
@@ -145,7 +171,15 @@ export function useCreateEmailTemplate() {
  * useUpdateEmailTemplate — Update an existing email template.
  * Invalidates all template queries on success.
  */
-export function useUpdateEmailTemplate() {
+export function useUpdateEmailTemplate(): UseMutationResult<
+  EmailTemplateRecord,
+  Error,
+  {
+    id: string;
+    data: UpdateEmailTemplatePayload;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -166,7 +200,14 @@ export function useUpdateEmailTemplate() {
  * useDeleteEmailTemplate — Delete an email template.
  * Uses optimistic updates to immediately remove the template from the UI.
  */
-export function useDeleteEmailTemplate() {
+export function useDeleteEmailTemplate(): UseMutationResult<
+  void,
+  Error,
+  string,
+  {
+    previousTemplates?: EmailTemplateRecord[];
+  }
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -218,7 +259,15 @@ export function useDeleteEmailTemplate() {
 /**
  * usePreviewEmailTemplate — Preview a template with sample data.
  */
-export function usePreviewEmailTemplate() {
+export function usePreviewEmailTemplate(): UseMutationResult<
+  EmailTemplatePreviewResult,
+  Error,
+  {
+    id: string;
+    sampleData: Record<string, unknown>;
+  },
+  unknown
+> {
   return useMutation<
     EmailTemplatePreviewResult,
     Error,
@@ -229,15 +278,25 @@ export function usePreviewEmailTemplate() {
 }
 
 /**
- * useSendTestEmailTemplate — send a real test email from a saved template.
+ * useSendTestEmailTemplate — send a real test email from a saved template to
+ * the signed-in user's own address.
  */
-export function useSendTestEmailTemplate() {
+export function useSendTestEmailTemplate(): UseMutationResult<
+  SendTestEmailResult,
+  Error,
+  {
+    templateId: string;
+    variables: Record<string, unknown>;
+  },
+  unknown
+> {
   return useMutation<
     SendTestEmailResult,
     Error,
-    { slug: string; to: string; variables: Record<string, unknown> }
+    { templateId: string; variables: Record<string, unknown> }
   >({
-    mutationFn: ({ slug, to, variables }) => sendTestEmail(slug, to, variables),
+    mutationFn: ({ templateId, variables }) =>
+      sendTestEmail(templateId, variables),
   });
 }
 
@@ -260,7 +319,7 @@ export function useDraftEmailTemplatePreview(
   template: DraftPreviewTemplate,
   data: Record<string, unknown>,
   options?: { enabled?: boolean }
-) {
+): UseQueryResult<RenderedTemplate, Error> {
   return useQuery<DraftPreviewResult, Error>({
     queryKey: emailTemplateKeys.draftPreview(template, data),
     queryFn: () => previewDraft(template, data),
@@ -305,7 +364,15 @@ function useSettleOwnership() {
  * Make an owned template the site's, starting from the owner's version, or
  * from `version` where given.
  */
-export function useOverrideEmailTemplate() {
+export function useOverrideEmailTemplate(): UseMutationResult<
+  EmailTemplateRecord,
+  Error,
+  {
+    id: string;
+    version?: EmailTemplateVersion;
+  },
+  unknown
+> {
   const settle = useSettleOwnership();
   return useMutation<
     EmailTemplateRecord,
@@ -318,7 +385,12 @@ export function useOverrideEmailTemplate() {
 }
 
 /** Return an overridden template to its owner's current version. */
-export function useResetEmailTemplate() {
+export function useResetEmailTemplate(): UseMutationResult<
+  EmailTemplateRecord,
+  Error,
+  string,
+  unknown
+> {
   const settle = useSettleOwnership();
   return useMutation<EmailTemplateRecord, Error, string>({
     mutationFn: id => resetTemplate(id),
@@ -331,7 +403,10 @@ export function useResetEmailTemplate() {
  * review opens and never served from cache: a review made on a stale
  * comparison is refused by the server anyway.
  */
-export function useEmailTemplateComparison(id: string, enabled: boolean) {
+export function useEmailTemplateComparison(
+  id: string,
+  enabled: boolean
+): UseQueryResult<EmailTemplateComparison, Error> {
   return useQuery<EmailTemplateComparison, Error>({
     queryKey: [...emailTemplateKeys.detail(id), "compare"],
     queryFn: () => compareTemplate(id),
@@ -347,7 +422,19 @@ export function useEmailTemplateComparison(id: string, enabled: boolean) {
 }
 
 /** Apply a review of the owner's update; returns what Undo needs. */
-export function useApplyOwnerUpdate() {
+export function useApplyOwnerUpdate(): UseMutationResult<
+  {
+    item: EmailTemplateRecord;
+    undo: OwnerUpdateUndo;
+  },
+  Error,
+  {
+    id: string;
+    choices: Record<string, OwnerChangeChoice>;
+    review: string;
+  },
+  unknown
+> {
   const settle = useSettleOwnership();
   return useMutation<
     { item: EmailTemplateRecord; undo: OwnerUpdateUndo },
@@ -365,7 +452,15 @@ export function useApplyOwnerUpdate() {
 }
 
 /** Undo an applied review. */
-export function useUndoOwnerUpdate() {
+export function useUndoOwnerUpdate(): UseMutationResult<
+  EmailTemplateRecord,
+  Error,
+  {
+    id: string;
+    undo: OwnerUpdateUndo;
+  },
+  unknown
+> {
   const settle = useSettleOwnership();
   return useMutation<
     EmailTemplateRecord,

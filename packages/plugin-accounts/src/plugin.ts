@@ -1,4 +1,8 @@
-import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  type PluginContext,
+  type PluginDefinition,
+} from "@nextlyhq/plugin-sdk";
 
 import { version as PLUGIN_VERSION } from "../package.json";
 
@@ -51,7 +55,7 @@ import {
  *   every helper the plugin is built on, and in production
  *   `ACCOUNTS_LIMITS_NOT_SHARED` on limit counts each instance keeps apart
  */
-export function accounts(options: AccountsOptions) {
+export function accounts(options: AccountsOptions): PluginDefinition {
   return buildAccounts(options, readAccountsCore);
 }
 
@@ -67,7 +71,7 @@ export function buildAccounts(
   databaseFor: (ctx: PluginContext) => PluginContext["db"] = ctx => ctx.db,
   /** Whether the site runs in production, as core judges it. */
   production: () => boolean = () => process.env.NODE_ENV === "production"
-) {
+): PluginDefinition {
   // Checked when the site's configuration is read, so a site never boots on
   // a number it did not choose.
   const settings = resolveAccountsSettings(options);

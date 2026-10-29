@@ -5,18 +5,13 @@
  * Extracted from routeHandler.ts for better separation of concerns.
  */
 
-import { ServiceDispatcher } from "@nextly/services/dispatcher";
-
 import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
 import { setSessionStandingBoot } from "../auth/session/session-standing";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
-import {
-  isServicesRegistered,
-  registerServices,
-  getService,
-  shutdownServices,
-} from "../di";
+import { isServicesRegistered, getService } from "../di";
+// Only the type: the registry itself is loaded by `initializeServicesOnce`,
+// the one place here that registers or shuts the services down.
 import type { NextlyServiceConfig } from "../di/register";
 import {
   localizationKey,
@@ -31,6 +26,8 @@ import {
   seedPermissionsAndRolePresets,
 } from "../init/seed-permissions";
 import { ensureHmrListener } from "../runtime/hmr-listener";
+// Only the type: the class is loaded by `getDispatcherInstance`.
+import type { ServiceDispatcher } from "../services/dispatcher";
 import { consoleLogger } from "../shared/types";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -182,6 +179,23 @@ function bootView(): SanitizedNextlyConfig | null {
     _bootViewInputs = { config, booted };
   }
   return _bootView;
+}
+
+/**
+ * The plugins the running runtime booted with, read without the route's own
+ * config.
+ *
+ * {@link getHandlerConfig} answers only for a route created with a config. An
+ * app whose route was created without one, and whose instrumentation hook
+ * booted the runtime, still has a booted plugin list, and a reader that needs
+ * only the plugins reads it here. Falls back to the route's declared list when
+ * nothing has booted, and to none when there is neither.
+ */
+export function bootedPlugins(): NonNullable<SanitizedNextlyConfig["plugins"]> {
+  const booted = isServicesRegistered()
+    ? globalForBoot.__nextly_bootConfig
+    : undefined;
+  return booted?.plugins ?? _storedConfig?.plugins ?? [];
 }
 
 /**
@@ -412,6 +426,12 @@ let _initInFlight: Promise<void> | null = null;
 setSessionStandingBoot(ensureServicesInitialized);
 
 async function initializeServicesOnce(): Promise<void> {
+  // The registry imports every service registration, so it is loaded on the
+  // first boot, not by importing the route handler. Loaded first, so the
+  // registered check and the registration below run with nothing awaited
+  // between them, as they did with a static import.
+  const { registerServices, shutdownServices } = await import("../di/register");
+
   // Dev-only staleness recovery: services register ONCE per process, but
   // editing nextly.config.ts re-evaluates the route module, which stores the
   // NEW config here without re-registering anything. For most blocks that is
@@ -566,6 +586,11 @@ async function initializeServicesOnce(): Promise<void> {
 async function getDispatcherInstance(): Promise<ServiceDispatcher> {
   // Ensure DI container is initialized before creating dispatcher
   await ensureServicesInitialized();
+
+  // The dispatcher reaches the route handler and every REST handler, so it is
+  // loaded when the first request needs one, not by importing this module.
+  // Loaded before the check, so checking and creating it stay one step.
+  const { ServiceDispatcher } = await import("../services/dispatcher");
 
   if (!_dispatcher) {
     _dispatcher = new ServiceDispatcher();

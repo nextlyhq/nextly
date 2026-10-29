@@ -10,7 +10,13 @@
  * the calling page reads their result via an `onSuccess` at the call site.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 
 import { webhookApi } from "@admin/services/webhookApi";
 import type {
@@ -24,8 +30,10 @@ import type {
 
 export const webhookKeys = {
   all: () => ["webhooks"] as const,
-  lists: () => [...webhookKeys.all(), "list"] as const,
-  detail: (id: string) => [...webhookKeys.all(), "detail", id] as const,
+  lists: (): readonly ["webhooks", "list"] =>
+    [...webhookKeys.all(), "list"] as const,
+  detail: (id: string): readonly ["webhooks", "detail", string] =>
+    [...webhookKeys.all(), "detail", id] as const,
 };
 
 /**
@@ -33,7 +41,9 @@ export const webhookKeys = {
  * `enabled` lets a caller skip the fetch when the user can't read the list
  * (e.g. a create-only role that would otherwise get a 403).
  */
-export function useWebhooks(options?: { enabled?: boolean }) {
+export function useWebhooks(options?: {
+  enabled?: boolean;
+}): UseQueryResult<WebhookEndpointSummary[], Error> {
   return useQuery<WebhookEndpointSummary[], Error>({
     queryKey: webhookKeys.lists(),
     queryFn: () => webhookApi.listWebhooks(),
@@ -42,12 +52,19 @@ export function useWebhooks(options?: { enabled?: boolean }) {
   });
 }
 
-/** One endpoint, for the edit page. */
-export function useWebhook(id: string) {
+/**
+ * One endpoint, for the edit page. `enabled: false` lets a caller read an
+ * endpoint another page already loaded without asking for it, as the browser
+ * tab's title does on a delivery's page.
+ */
+export function useWebhook(
+  id: string,
+  options?: { enabled?: boolean }
+): UseQueryResult<WebhookEndpointSummary, Error> {
   return useQuery<WebhookEndpointSummary, Error>({
     queryKey: webhookKeys.detail(id),
     queryFn: () => webhookApi.getWebhook(id),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && (options?.enabled ?? true),
   });
 }
 
@@ -55,7 +72,12 @@ export function useWebhook(id: string) {
  * Create an endpoint. The result carries the one-time signing secret; the page
  * captures it in `onSuccess` and shows the reveal modal — it is gone after.
  */
-export function useCreateWebhook() {
+export function useCreateWebhook(): UseMutationResult<
+  CreatedWebhook,
+  Error,
+  CreateWebhookInput,
+  unknown
+> {
   const queryClient = useQueryClient();
   return useMutation<CreatedWebhook, Error, CreateWebhookInput>({
     mutationFn: input => webhookApi.createWebhook(input),
@@ -66,7 +88,15 @@ export function useCreateWebhook() {
 }
 
 /** Patch an endpoint (also enable/disable via `{ enabled }`). */
-export function useUpdateWebhook() {
+export function useUpdateWebhook(): UseMutationResult<
+  WebhookEndpointSummary,
+  Error,
+  {
+    id: string;
+    input: UpdateWebhookInput;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
   return useMutation<
     WebhookEndpointSummary,
@@ -81,7 +111,12 @@ export function useUpdateWebhook() {
 }
 
 /** Soft-delete an endpoint. */
-export function useDeleteWebhook() {
+export function useDeleteWebhook(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
   return useMutation<void, Error, string>({
     mutationFn: id => webhookApi.deleteWebhook(id),
@@ -96,7 +131,15 @@ export function useDeleteWebhook() {
  * lifecycle (primary + any overlapping secret) refetches; the page captures the
  * one-time new secret from the result in `onSuccess`.
  */
-export function useRotateSecret() {
+export function useRotateSecret(): UseMutationResult<
+  CreatedWebhook,
+  Error,
+  {
+    id: string;
+    input: RotateWebhookInput;
+  },
+  unknown
+> {
   const queryClient = useQueryClient();
   return useMutation<
     CreatedWebhook,
@@ -111,7 +154,12 @@ export function useRotateSecret() {
 }
 
 /** Retire overlapping secrets now; refetch so the lifecycle reflects it. */
-export function useExpireOldSecrets() {
+export function useExpireOldSecrets(): UseMutationResult<
+  WebhookEndpointSummary,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
   return useMutation<WebhookEndpointSummary, Error, string>({
     mutationFn: id => webhookApi.expireOldSecrets(id),
@@ -122,14 +170,24 @@ export function useExpireOldSecrets() {
 }
 
 /** Reveal the signing secret(s) on demand (an action, not a cache mutation). */
-export function useRevealSecret() {
+export function useRevealSecret(): UseMutationResult<
+  string[],
+  Error,
+  string,
+  unknown
+> {
   return useMutation<string[], Error, string>({
     mutationFn: id => webhookApi.revealSecret(id),
   });
 }
 
 /** Send a test ping and return its outcome. */
-export function useTestEndpoint() {
+export function useTestEndpoint(): UseMutationResult<
+  WebhookTestResult,
+  Error,
+  string,
+  unknown
+> {
   return useMutation<WebhookTestResult, Error, string>({
     mutationFn: id => webhookApi.testEndpoint(id),
   });

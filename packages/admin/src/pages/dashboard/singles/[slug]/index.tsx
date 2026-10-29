@@ -17,9 +17,12 @@
  */
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
+import { useQueryClient } from "@tanstack/react-query";
 import type { FieldConfig } from "nextly/config";
 import type React from "react";
+import { useCallback } from "react";
 
+import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
@@ -39,14 +42,18 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useSingleEditorDocument } from "@admin/hooks/queries/useSingleEditorDocument";
 import {
+  singleDocumentKeys,
   useSingleSchema,
   useUpdateSingleDocument,
 } from "@admin/hooks/queries/useSingles";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useSharedFieldsRecovery } from "@admin/hooks/useSharedFieldsRecovery";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
+import { singleApi } from "@admin/services/singleApi";
 
 // ============================================================================
 // Types
@@ -232,6 +239,10 @@ export default function SingleEditPage({
    * produces is only read once those guards pass; while the schema or the
    * document is still loading it reports no action, which is correct.
    */
+  // The reader's own pin of this Single, offered beside "Add to release".
+  const pin = usePinAction(
+    document && slug ? { targetType: "single", targetSlug: slug } : null
+  );
   const release = useAddToReleaseAction({
     scopeKind: "single",
     scopeSlug: slug,
@@ -243,6 +254,14 @@ export default function SingleEditPage({
   // Update mutation — routes the save to the active language's companion row.
   const { mutateAsync: updateDocument, isPending: isUpdating } =
     useUpdateSingleDocument(slug || "", locale);
+
+  // Above the page's returns, as a hook.
+  const reportSaveFailure = useSingleSaveFailure({
+    slug,
+    document,
+    locale,
+    schema,
+  });
 
   const isLoading = isLoadingSchema || isLoadingDocument;
   const error = schemaError || documentError;
@@ -289,9 +308,10 @@ export default function SingleEditPage({
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
         <Alert variant="destructive">
+          {/* The server's message as it is: it already says what went wrong
+              ("Not found.", "You can't see Home."). */}
           <AlertDescription>
-            Failed to load Single:{" "}
-            {error instanceof Error ? error.message : "Unknown error"}
+            {apiErrorMessage(error, "The Single couldn't be loaded.")}
           </AlertDescription>
         </Alert>
         <div className="mt-6">
@@ -350,9 +370,7 @@ export default function SingleEditPage({
       toast.success(`${singleLabel} has been updated successfully.`);
       return stored;
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to save changes"
-      );
+      reportSaveFailure(err, data);
       throw err; // Re-throw to prevent form from marking as clean
     }
   };
@@ -373,17 +391,24 @@ export default function SingleEditPage({
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
         <MeasuredPageFrame>
-          {/* Full width and first, for the reason the entry editor gives. */}
-          <ScheduledReleaseBanner
-            document={
-              slug
-                ? { scopeKind: "single", scopeSlug: slug, entryId: document.id }
-                : undefined
-            }
-            onDefaultLocale={!isNonDefaultLocale}
-          />
           {release.dialog}
           <SingleForm
+            /* Under the editor's header, for the reason the entry editor
+             gives. */
+            documentBanner={
+              <ScheduledReleaseBanner
+                document={
+                  slug
+                    ? {
+                        scopeKind: "single",
+                        scopeSlug: slug,
+                        entryId: document.id,
+                      }
+                    : undefined
+                }
+                onDefaultLocale={!isNonDefaultLocale}
+              />
+            }
             // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
             // expects FieldConfig[] (discriminated). The runtime payload is the
             // same; widening here until the schema layer unifies on FieldConfig.
@@ -394,9 +419,10 @@ export default function SingleEditPage({
              omitting this control here would leave the Single half reachable
              only through the API. With the form's own actions, matching the
              collection editor. */
-            documentActions={
-              release.contributed === null ? [] : [release.contributed]
-            }
+            documentActions={[
+              ...(release.contributed === null ? [] : [release.contributed]),
+              ...(pin === null ? [] : [pin]),
+            ]}
             onSubmit={handleSubmit}
             isSubmitting={isUpdating}
             onCancel={handleCancel}
@@ -438,3 +464,49 @@ function singleDocumentView(
     slug === undefined ? undefined : buildRoute(ROUTES.SINGLE_EDIT, { slug })
   );
 }
+
+/**
+ * Reports a failed save of a Single. A publish refused over shared values
+ * someone else published since offers to take them, and the reload that
+ * follows shows the change brought up to date; saving the refused values
+ * without their status keeps them as the pending change first. Any other
+ * failure is reported as it always was.
+ */
+function useSingleSaveFailure(args: {
+  slug?: string;
+  document?: { id?: string } | null;
+  locale?: string;
+  /** The Single's schema, for the labels a refusal names its fields by. */
+  schema?: { fields?: readonly { name?: string; label?: unknown }[] } | null;
+}): (error: unknown, refused: Record<string, unknown>) => void {
+  const slug = args.slug ?? "";
+  const documentId = args.document?.id;
+  const { locale } = args;
+  const queryClient = useQueryClient();
+  const recover = useSharedFieldsRecovery({
+    scope: slug && documentId ? { kind: "single", slug, documentId } : null,
+    locale,
+    fields: args.schema?.fields ?? NO_FIELDS,
+    onTaken: useCallback(() => {
+      void queryClient.invalidateQueries({
+        queryKey: singleDocumentKeys.detail(slug),
+      });
+    }, [queryClient, slug]),
+  });
+  return useCallback(
+    (error: unknown, refused: Record<string, unknown>) => {
+      const recovered = recover(error, () => {
+        const { status: _status, ...values } = refused;
+        return singleApi.updateDocument(slug, values, { locale });
+      });
+      if (!recovered) {
+        toast.error(
+          error instanceof Error ? error.message : "Failed to save changes"
+        );
+      }
+    },
+    [recover, slug, locale]
+  );
+}
+
+const NO_FIELDS: readonly { name?: string }[] = [];

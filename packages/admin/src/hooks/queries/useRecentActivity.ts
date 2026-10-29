@@ -7,8 +7,10 @@
  * @module hooks/queries/useRecentActivity
  */
 
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 
+import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { describeActivityActor } from "@admin/lib/dashboard";
 import type {
@@ -47,6 +49,13 @@ interface ActivityLogEntry {
   subjectKind?: "collection" | "single" | "settings" | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+  /**
+   * How many saves the row stands for. Optional because a server older than
+   * this admin does not send it, and every row it sends is one save.
+   */
+  count?: number;
+  /** Whether `count` is a floor. Absent from an older server. */
+  countAtLeast?: boolean;
   /** When this row's identity was erased; null while the actor exists. */
   identityErasedAt: string | null;
 }
@@ -113,7 +122,104 @@ function shared(
     action: ACTION_LABELS[entry.action] ?? entry.action,
     category: ACTION_CATEGORIES[entry.action] ?? "info",
     timestamp: entry.createdAt,
+    count: entry.count ?? 1,
+    countAtLeast: entry.countAtLeast === true,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A widget answer's rows
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ACTIONS: ReadonlySet<string> = new Set(["create", "update", "delete"]);
+const ACTOR_TYPES: ReadonlySet<string> = new Set(["user", "apiKey", "system"]);
+const SUBJECT_KINDS: ReadonlySet<string> = new Set([
+  "collection",
+  "single",
+  "settings",
+]);
+
+/** `value` when it is a string, or `null`, so a driver's number or an absent key cannot pass. */
+function textOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** `value` when it is one of `allowed`, so an unknown spelling is read as absent. */
+function oneOf<T extends string>(
+  value: unknown,
+  allowed: ReadonlySet<string>
+): T | undefined {
+  return typeof value === "string" && allowed.has(value)
+    ? (value as T)
+    : undefined;
+}
+
+/**
+ * One row of the Recent activity card's answer, from `system:activity`, as the
+ * card draws it, or `undefined` for a row this build cannot read.
+ *
+ * Read at the boundary, field by field, because a widget answer is JSON and its
+ * type says nothing at runtime. Then drawn through `mapEntry`, the mapping the
+ * activity endpoint's answer goes through, so the card and this hook cannot
+ * come to head one row two ways.
+ */
+export function activityFromRow(
+  row: Record<string, unknown>
+): Activity | undefined {
+  const id = textOrNull(row.id);
+  const userId = textOrNull(row.userId);
+  const collection = textOrNull(row.collection);
+  const createdAt = textOrNull(row.createdAt);
+  const action = oneOf<ActivityLogEntry["action"]>(row.action, ACTIONS);
+  if (!id || !userId || !collection || !createdAt || !action) return undefined;
+  const actorType = oneOf<NonNullable<ActivityLogEntry["actorType"]>>(
+    row.actorType,
+    ACTOR_TYPES
+  );
+  const subjectKind = oneOf<NonNullable<ActivityLogEntry["subjectKind"]>>(
+    row.subjectKind,
+    SUBJECT_KINDS
+  );
+  return mapEntry({
+    id,
+    userId,
+    action,
+    collection,
+    createdAt,
+    ...(actorType ? { actorType } : {}),
+    userName: textOrNull(row.userName),
+    userEmail: textOrNull(row.userEmail),
+    entryId: textOrNull(row.entryId),
+    entryTitle: textOrNull(row.entryTitle),
+    subjectKind: subjectKind ?? null,
+    metadata: null,
+    identityErasedAt: textOrNull(row.identityErasedAt),
+    ...(typeof row.count === "number" ? { count: row.count } : {}),
+    ...(typeof row.countAtLeast === "boolean"
+      ? { countAtLeast: row.countAtLeast }
+      : {}),
+  });
+}
+
+/**
+ * Where an activity row leads: the entry it is about, or the Single. Nothing for a deletion,
+ * whose subject is gone, for a change to settings, or for a row naming no entry. The feed holds
+ * only events about what the reader may read, so the link opens something they may open.
+ */
+export function activityHref(row: Record<string, unknown>): string | undefined {
+  const collection = textOrNull(row.collection);
+  if (!collection || row.action === "delete") return undefined;
+  if (row.subjectKind === "single") {
+    return buildRoute(ROUTES.SINGLE_EDIT, { slug: collection });
+  }
+  if (row.subjectKind === "settings") return undefined;
+  const entryId = textOrNull(row.entryId);
+  return entryId
+    ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+        slug: collection,
+        id: entryId,
+      })
+    : undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,6 +231,10 @@ function shared(
  *
  * Fetches and caches recent activity feed using TanStack Query.
  *
+ * @deprecated The dashboard's Recent activity card is answered by the
+ * `system:activity` widget source through the dashboard's batch; this hook
+ * reads the older `GET /api/dashboard/activity`, kept for compatibility.
+ *
  * **Query Configuration**:
  * - `queryKey`: `["dashboard", "activity", limit]`
  * - `staleTime`: 5 minutes
@@ -135,7 +245,9 @@ function shared(
  * @param limit - Maximum number of activities to fetch (default: 10)
  * @returns TanStack Query result with recent activity data
  */
-export function useRecentActivity(limit = 10) {
+export function useRecentActivity(
+  limit = 10
+): UseQueryResult<RecentActivityResponse, Error> {
   return useQuery<RecentActivityResponse, Error>({
     queryKey: ["dashboard", "activity", limit],
     queryFn: async () => {

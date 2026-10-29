@@ -9,6 +9,7 @@
 // that is genuinely this surface's: resolving the allowed set from the plugin
 // registry, and mapping the builder's own storage.
 import { validationRulesForFieldType } from "nextly/field-catalog";
+import type { JSX } from "react";
 
 import { ValidationRulesEditor } from "@admin/components/field-ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
@@ -22,7 +23,11 @@ type Props = {
   onChange: (next: BuilderField) => void;
 };
 
-export function ValidationTab({ field, readOnly = false, onChange }: Props) {
+export function ValidationTab({
+  field,
+  readOnly = false,
+  onChange,
+}: Props): JSX.Element {
   const branding = useBranding();
   const validation = field.validation ?? {};
 

@@ -34,7 +34,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
+import { parseSource } from "@nextlyhq/module-specifiers/parse-source";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -76,7 +76,7 @@ function stripComments(source: string): string {
 
 function sourceOf(file: string): string {
   // Resolved from the PACKAGE ROOT, because these paths are the ones the build config consumes
-  // and tsup entry paths are package-relative. Reading them from `src` instead would need a
+  // and tsdown entry paths are package-relative. Reading them from `src` instead would need a
   // second spelling of the same path, which is what having one map is meant to prevent.
   return stripComments(readFileSync(path.join(PKG_ROOT, file), "utf8"));
 }
@@ -376,7 +376,7 @@ describe("ui release tags reach the published types", () => {
       // A doc block, the tag inside it, then the declaration it belongs to.
       // Anchored on `/**` so the capture cannot start mid-comment and pick up
       // a tag belonging to something further up the file.
-      /\/\*\*(?:(?!\*\/)[\s\S])*?@(public|experimental)(?:(?!\*\/)[\s\S])*\*\/\s*(?:declare\s+)?(?:const|function|interface|type|class)\s+([A-Za-z0-9_$]+)/g
+      /\/\*\*(?:(?!\*\/)[\s\S])*?@(public|experimental)(?:(?!\*\/)[\s\S])*\*\/\s*(?:export\s+)?(?:declare\s+)?(?:const|function|interface|type|class)\s+([A-Za-z0-9_$]+)/g
     )) {
       byName.set(m[2], m[1]);
     }
@@ -524,14 +524,30 @@ describe("ui release tags do not shadow the documentation", () => {
    */
   function shadowed(file: string): string[] {
     const text = readFileSync(file, "utf8");
-    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const { program, comments } = parseSource(text, file);
     const found: string[] = [];
-    for (const stmt of sf.statements) {
-      const blocks = (
-        ts.getLeadingCommentRanges(text, stmt.getFullStart()) ?? []
-      )
-        .filter(r => text.slice(r.pos, r.pos + 3) === "/**")
-        .map(r => text.slice(r.pos, r.end));
+    let previousEnd = 0;
+    for (const stmt of program.body) {
+      // A statement's leading doc blocks, as the compiler attaches them: the
+      // comments between the previous statement and this one, from the first
+      // line break on, since a comment on the previous statement's own line
+      // trails that statement rather than leading this one.
+      const lineBreak = text.indexOf("\n", previousEnd);
+      const from =
+        previousEnd === 0
+          ? 0
+          : lineBreak === -1
+            ? Number.POSITIVE_INFINITY
+            : lineBreak;
+      const blocks = comments
+        .filter(
+          c =>
+            c.start >= from &&
+            c.end <= stmt.start &&
+            text.startsWith("/**", c.start)
+        )
+        .map(c => text.slice(c.start, c.end));
+      previousEnd = stmt.end;
       if (blocks.length < 2) continue;
 
       // Only the last block reaches the symbol, so the defect is a last block
@@ -547,7 +563,7 @@ describe("ui release tags do not shadow the documentation", () => {
       if (prose(blocks[blocks.length - 1]!) !== "") continue;
       if (!blocks.slice(0, -1).some(b => prose(b) !== "")) continue;
 
-      const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
+      const line = text.slice(0, stmt.start).split("\n").length;
       found.push(`${path.relative(SRC, file)}:${line}`);
     }
     return found;
@@ -637,7 +653,7 @@ describe("what the freshness check watches", () => {
 
   it("watches the workspace lockfile, because the toolchain is an input", () => {
     /*
-     * A dependency-only upgrade changes the installed TypeScript or tsup
+     * A dependency-only upgrade changes the installed TypeScript or tsdown
      * without touching a byte in this package. The declarations it produced
      * are then the previous compiler's work, and every other path watched here
      * still looks current.

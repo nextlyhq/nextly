@@ -15,7 +15,12 @@
  */
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
-import type { CacheRevalidator } from "../../revalidation/types";
+import { readRevalidateConfig } from "../../revalidation/intent-builders";
+import type {
+  CacheRevalidator,
+  RevalidateConfig,
+  RevalidationIntent,
+} from "../../revalidation/types";
 import { releasesTables } from "../../schemas/releases";
 import {
   RELEASE_CANCELLABLE_FROM,
@@ -635,6 +640,16 @@ async function markMemberApplied(
   );
 }
 
+/** A release flush that failed: never thrown, since the write it follows is committed. */
+function logReleaseFlushFailure(error: unknown): void {
+  getNextlyLogger().warn({
+    kind: "release-cache-flush-failed",
+    message:
+      "A release changed its documents, but their cached reads could not be expired",
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 /** An instant as an event payload keeps it, whatever the driver returned. */
 function isoOf(value: Date | string | number): string {
   return (value instanceof Date ? value : new Date(value)).toISOString();
@@ -1075,7 +1090,15 @@ export class ReleasesRepository {
 
   constructor(
     private readonly db: ReleasesDbApi,
-    private readonly revalidator?: CacheRevalidator
+    private readonly revalidator?: CacheRevalidator,
+    // Every collection's and Single's `revalidate` config, read once per
+    // flush, so a release's flush skips what opts out and names its extra
+    // tags, as any other write does. Without it every member is flushed with
+    // its derived tags alone.
+    private readonly revalidateConfigs?: () => Promise<{
+      collections: ReadonlyArray<{ slug: string; revalidate?: unknown }>;
+      singles: ReadonlyArray<{ slug: string; revalidate?: unknown }>;
+    }>
   ) {
     this.lockServer = rowLockServer(db, db.dialect);
     this.notices = new NoticesService({
@@ -1119,12 +1142,14 @@ export class ReleasesRepository {
 
     if (this.revalidator === undefined) return;
     try {
-      const intent = releaseRevalidationIntent(
+      const intent = await this.revalidationIntentFor(
         await this.listMembers(releaseId)
       );
       if (intent !== null) await this.revalidator.flush([intent]);
-    } catch {
-      // Deliberately swallowed; see the note above.
+    } catch (error) {
+      // Not thrown, for the reason above; logged, so a release whose pages stay
+      // stale says why.
+      logReleaseFlushFailure(error);
     }
   }
 
@@ -1729,11 +1754,45 @@ export class ReleasesRepository {
     invalidateTransitionCacheFor(this.db);
     if (members.length === 0 || this.revalidator === undefined) return;
     try {
-      const intent = releaseRevalidationIntent(members);
+      const intent = await this.revalidationIntentFor(members);
       if (intent !== null) await this.revalidator.flush([intent]);
-    } catch {
-      // Best-effort, as everywhere else this flushes.
+    } catch (error) {
+      // Best-effort, as everywhere else this flushes, and logged.
+      logReleaseFlushFailure(error);
     }
+  }
+
+  /**
+   * The intent a release's members flush, with every scope's `revalidate`
+   * config read in one query per registry, however many collections and
+   * Singles the release spans.
+   */
+  private async revalidationIntentFor(
+    members: readonly ReleaseMemberRow[]
+  ): Promise<RevalidationIntent | null> {
+    if (members.length === 0 || this.revalidateConfigs === undefined) {
+      return releaseRevalidationIntent(members);
+    }
+    let loaded: Awaited<ReturnType<NonNullable<typeof this.revalidateConfigs>>>;
+    try {
+      loaded = await this.revalidateConfigs();
+    } catch (error) {
+      // The settings could not be read: flush the members' own tags anyway,
+      // which over-expires an opted-out scope rather than leaving a page stale.
+      logReleaseFlushFailure(error);
+      return releaseRevalidationIntent(members);
+    }
+    const { collections, singles } = loaded;
+    const configs = new Map<string, RevalidateConfig | undefined>();
+    for (const record of collections) {
+      configs.set(`collection:${record.slug}`, readRevalidateConfig(record));
+    }
+    for (const record of singles) {
+      configs.set(`single:${record.slug}`, readRevalidateConfig(record));
+    }
+    return releaseRevalidationIntent(members, (kind, slug) =>
+      configs.get(`${kind}:${slug}`)
+    );
   }
 
   /**
@@ -1895,6 +1954,30 @@ export class ReleasesRepository {
     const listing = this.listingFor(query);
     if (listing === null) return 0;
     return this.db.count(RELEASES, { where: listing.where });
+  }
+
+  /**
+   * Whether a listing would hold any release at all, reading one id rather
+   * than counting.
+   *
+   * The question a dashboard asks before offering a releases card on every
+   * load. The same where clause {@link findReleasePage} reads, built by the
+   * same {@link listingFor}, so it can never say "yes" where the list would
+   * be empty; only the projection and the bound differ.
+   *
+   * @experimental
+   */
+  async anyRelease(
+    query: Omit<ReleasePageQuery, "offset" | "limit">
+  ): Promise<boolean> {
+    const listing = this.listingFor(query);
+    if (listing === null) return false;
+    const rows = await this.db.select<Pick<ReleaseRow, "id">>(RELEASES, {
+      where: listing.where,
+      columns: ["id"],
+      limit: 1,
+    });
+    return rows.length > 0;
   }
 
   /**

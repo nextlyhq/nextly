@@ -8,13 +8,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  Input,
 } from "@nextlyhq/ui";
-import { useEffect, useState } from "react";
+import type { JSX } from "react";
 
 import { Loader2, Send } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
 import { useSendTestEmailTemplate } from "@admin/hooks/queries/useEmailTemplates";
+import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 
 // ============================================================
 // Send-test dialog
@@ -23,40 +23,36 @@ import { useSendTestEmailTemplate } from "@admin/hooks/queries/useEmailTemplates
 export function SendTestDialog({
   open,
   onOpenChange,
+  templateId,
   templateName,
-  slug,
   sampleData,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  templateId: string;
   templateName: string;
-  slug: string;
+  /** The template's slug; kept for callers, the test is sent by id. */
+  slug?: string;
   sampleData: Record<string, unknown>;
-}) {
-  const [email, setEmail] = useState("");
+}): JSX.Element {
   const { mutate: doSend, isPending } = useSendTestEmailTemplate();
-
-  useEffect(() => {
-    if (open) setEmail("");
-  }, [open]);
+  // A test goes to the signed-in user's own address, and only there: the
+  // server picks it, so the dialog only says where it will arrive.
+  const { user } = useDashboardUser();
+  const address = user?.email;
 
   const handleSubmit = () => {
-    // Block duplicate sends while a request is in flight (Enter can re-fire), and
-    // validate the address since the manual Enter path bypasses native
-    // `type="email"` validation.
-    if (isPending) return;
-    const to = email.trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
-      toast.error("Enter a valid email address");
-      return;
-    }
+    // Block duplicate sends while a request is in flight.
+    if (isPending || !templateId) return;
     doSend(
-      { slug, to, variables: sampleData },
+      { templateId, variables: sampleData },
       {
         onSuccess: res => {
           if (res.success) {
             toast.success("Test email sent", {
-              description: `Check ${to} for the test email.`,
+              description: address
+                ? `Check ${address} for the test email.`
+                : "Check your inbox for the test email.",
             });
             onOpenChange(false);
           } else {
@@ -84,32 +80,16 @@ export function SendTestDialog({
         <DialogHeader>
           <DialogTitle>Send test email</DialogTitle>
           <DialogDescription>
-            Send <strong>{templateName || "this template"}</strong> to an
+            Send <strong>{templateName || "this template"}</strong> to your own
             address using the current sample data. This sends the saved
             template, not unsaved edits.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          <div className="space-y-2">
-            <label htmlFor="send-test-email" className="text-sm font-medium">
-              Recipient email
-            </label>
-            <Input
-              id="send-test-email"
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  handleSubmit();
-                }
-              }}
-              autoFocus
-              required
-            />
-          </div>
+          <p className="text-sm" data-testid="send-test-recipient">
+            It will be sent to{" "}
+            <strong>{address ?? "your account's email address"}</strong>.
+          </p>
           <DialogFooter>
             <Button
               type="button"
@@ -122,7 +102,7 @@ export function SendTestDialog({
             <Button
               type="button"
               onClick={handleSubmit}
-              disabled={isPending || !email.trim()}
+              disabled={isPending || !templateId}
             >
               {isPending ? (
                 <>

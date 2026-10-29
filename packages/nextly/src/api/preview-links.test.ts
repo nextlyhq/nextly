@@ -11,7 +11,7 @@ import { NextlyError } from "../errors/nextly-error";
 
 vi.mock("./route-auth", () => ({
   requireRouteCollectionAccess: vi.fn(),
-  requireRoutePermission: vi.fn(),
+  requireRouteAnyPermission: vi.fn(),
 }));
 
 const {
@@ -136,10 +136,11 @@ vi.mock("../lib/env", () => ({
 
 import { verifyPreviewToken } from "../auth/preview/preview-token";
 import { container } from "../di";
+import { EVERY_TRANSLATION } from "../domains/i18n/locale-selector";
 
 import {
   requireRouteCollectionAccess,
-  requireRoutePermission,
+  requireRouteAnyPermission,
 } from "./route-auth";
 
 import { mintPreviewLink, revokePreviewLinks } from "./preview-links";
@@ -194,7 +195,7 @@ beforeEach(() => {
     // question than the caller's own read would.
     claims: { tenant: "acme", tier: "restricted" },
   });
-  (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+  (requireRouteAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValue({
     userId: "admin-1",
     permissions: [],
     roles: [],
@@ -323,9 +324,10 @@ describe("mintPreviewLink for a Single", () => {
       );
     });
 
-    // The token names one translation; the probe must judge that one. A custom
-    // read rule can allow the default document and deny the requested locale,
-    // and authorizing the default while signing the other authorizes nothing
+    // The token names one translation; the probe must judge that one. A rule
+    // told the language may allow one and refuse another, and a localized
+    // Single is a different document in each language, with a lifecycle of its
+    // own, so authorizing the default while signing another authorizes nothing
     // about what the bearer receives.
     it("authorizes the translation the token will name", async () => {
       await mintPreviewLink(post({ single: "homepage", locale: "fr" }));
@@ -1122,6 +1124,9 @@ describe("mintPreviewLink", () => {
     // 403 exactly, not merely >= 400: an unrecognised failure renders as 500,
     // and a range assertion cannot tell a refusal from a crash.
     expect(response.status).toBe(403);
+    expect(await response.clone().json()).toMatchObject({
+      error: { message: "Only a signed-in person can manage preview links." },
+    });
     // Refused BEFORE the authorization probe, so a rejected request performs no
     // reads on the caller's behalf — and before any token exists, since a token
     // that was signed and then discarded is still a token.
@@ -1137,6 +1142,21 @@ describe("mintPreviewLink", () => {
 
     expect(getEntry.mock.calls[0][0].authenticatedScope).toBeUndefined();
     expect(canUpdateEntry.mock.calls[0][0].authenticatedScope).toBeUndefined();
+  });
+
+  it("asks the route gate in the language the link names, and in every language for one naming none", async () => {
+    await mintPreviewLink(post({ single: "homepage", locale: "fr" }));
+    expect(requireRouteCollectionAccess).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "update",
+      "homepage",
+      { method: "sharePreviewLink", params: { locale: "fr" } }
+    );
+
+    await mintPreviewLink(post({ single: "homepage" }));
+    expect(
+      (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mock.lastCall
+    ).toHaveLength(3);
   });
 
   it("gates on update for the collection that was named", async () => {
@@ -1377,25 +1397,23 @@ describe("mintPreviewLink", () => {
 });
 
 describe("revokePreviewLinks", () => {
-  it("gates on manage settings, not on a collection", async () => {
+  it("gates on updating settings, not on a collection", async () => {
     // The generation is site-wide, so one editor revoking would otherwise end
     // every other editor's outstanding links.
     await revokePreviewLinks(
       post({}, "http://x/api/nextly/preview-links/revoke")
     );
 
-    expect(requireRoutePermission).toHaveBeenCalledWith(
-      expect.anything(),
-      "manage",
-      "settings"
-    );
+    expect(requireRouteAnyPermission).toHaveBeenCalledWith(expect.anything(), [
+      { action: "update", resource: "settings" },
+    ]);
     expect(requireRouteCollectionAccess).not.toHaveBeenCalled();
   });
 
   it("does not revoke when the gate refuses", async () => {
-    (requireRoutePermission as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      NextlyError.forbidden()
-    );
+    (
+      requireRouteAnyPermission as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(NextlyError.forbidden());
 
     const response = await revokePreviewLinks(
       post({}, "http://x/api/nextly/preview-links/revoke")
@@ -1422,10 +1440,27 @@ describe("revokePreviewLinks", () => {
     expect(response.status).toBe(400);
     expect(revokeAll).not.toHaveBeenCalled();
     expect(records.revokeDocumentLinks).not.toHaveBeenCalled();
-    expect(requireRoutePermission).not.toHaveBeenCalled();
+    expect(requireRouteAnyPermission).not.toHaveBeenCalled();
   });
 
-  it("revokes one document's links behind the sharer's rule, not manage settings", async () => {
+  it("judges revoking a document's links in every language, whatever language the request names", async () => {
+    // Revoking acts on every link to the entry, whatever language each is
+    // to, so a caller allowed English alone must not end the French ones.
+    await revokePreviewLinks(
+      post(
+        { collection: "pages", entryId: "7", locale: "en" },
+        "http://x/api/nextly/preview-links/revoke"
+      )
+    );
+    expect(
+      (requireRouteCollectionAccess as ReturnType<typeof vi.fn>).mock.lastCall
+    ).toEqual([expect.anything(), "update", "pages"]);
+    expect(getEntry).toHaveBeenLastCalledWith(
+      expect.objectContaining({ entryId: "7", locale: EVERY_TRANSLATION })
+    );
+  });
+
+  it("revokes one document's links behind the sharer's rule, not a settings grant", async () => {
     const response = await revokePreviewLinks(
       post(
         { collection: "pages", entryId: "7" },
@@ -1438,7 +1473,7 @@ describe("revokePreviewLinks", () => {
       "update",
       "pages"
     );
-    expect(requireRoutePermission).not.toHaveBeenCalled();
+    expect(requireRouteAnyPermission).not.toHaveBeenCalled();
     expect(revokeAll).not.toHaveBeenCalled();
     expect(records.revokeDocumentLinks).toHaveBeenCalledWith(
       { kind: "entry", collection: "pages", entryId: "7" },
@@ -1606,7 +1641,7 @@ describe("the audit trail a preview link leaves", () => {
    * where the key is what is under suspicion.
    */
   it("names the KEY when an api key revokes, not just its owner", async () => {
-    (requireRoutePermission as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (requireRouteAnyPermission as ReturnType<typeof vi.fn>).mockResolvedValue({
       userId: "owner-1",
       permissions: [],
       roles: [],

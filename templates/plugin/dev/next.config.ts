@@ -6,6 +6,8 @@ import type { NextConfig } from "next";
 // external (Turbopack can't bundle them).
 const nextConfig: NextConfig = {
   typescript: { ignoreBuildErrors: true },
+  // Nextly does not support Cache Components yet; see the installation guide.
+  cacheComponents: false,
   // Transpile the aliased plugin source so HMR fires on src/ edits.
   transpilePackages: ["{{pluginName}}"],
   serverExternalPackages: [
@@ -18,6 +20,17 @@ const nextConfig: NextConfig = {
     "@nextlyhq/adapter-drizzle",
     "@nextlyhq/adapter-sqlite",
   ],
+  experimental: {
+    // Next.js type-checks and loads its config through the project's own
+    // TypeScript CLI rather than TypeScript's library API. That is the 16.4
+    // default, stated here so it cannot change underneath: a TypeScript with no
+    // library API (7.0) works only this way.
+    useTypeScriptCli: true,
+    // Turbopack's garbage collector removes cache entries nothing reaches any
+    // more, so `.next` stops growing across dev sessions and builds. Off by
+    // default in 16.4.
+    turbopackGc: true,
+  },
   turbopack: {
     resolveAlias: {
       // Map the package name to its source so HMR works without a build step.

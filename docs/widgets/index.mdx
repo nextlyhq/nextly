@@ -8,26 +8,26 @@ system runs that query on its behalf, scoped to the permissions of whoever is lo
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | The widget system, the built-in sources and admin rendering all ship |
+|                            |                                                                                                                                   |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Built in                   | The widget system, the built-in sources and admin rendering all ship                                                              |
 | Plugin-contributed widgets | **Experimental.** They render, but the contribution shape is still settling — see the [stability ladder](/docs/plugins/stability) |
-| Permission | A widget's query runs scoped to the viewer, so two people can see the same dashboard and different numbers |
+| Permission                 | A widget's query runs scoped to the viewer, so two people can see the same dashboard and different numbers                        |
 
 ## Archetypes
 
 A widget declares an archetype rather than drawing itself, so dashboards stay visually
 consistent no matter who contributed the widget:
 
-| Archetype | Shows |
-|---|---|
-| `metric` | One number |
-| `stats` | Several labelled, clickable numbers |
-| `table` | Rows and columns |
-| `list` | An ordered list of items |
-| `actions` | Buttons for things to do |
-| `text` | Prose you wrote, as markdown |
-| `custom` | Your own component, when none of the above fit |
+| Archetype | Shows                                          |
+| --------- | ---------------------------------------------- |
+| `metric`  | One number                                     |
+| `stats`   | Several labelled, clickable numbers            |
+| `table`   | Rows and columns                               |
+| `list`    | An ordered list of items                       |
+| `actions` | Buttons for things to do                       |
+| `text`    | Prose you wrote, as markdown                   |
+| `custom`  | Your own component, when none of the above fit |
 
 A `text` widget is its prose. It declares `content` instead of a query, and the host draws
 it: headings, paragraphs, lists, emphasis, inline code, block quotes and links.
@@ -37,7 +37,7 @@ it: headings, paragraphs, lists, emphasis, inline code, block quotes and links.
   id: "acme/release-notes",
   title: "Before you release",
   archetype: "text",
-  defaultSize: "md",
+  size: { default: { w: 4, h: 3 } },
   content: [
     "## Checklist",
     "",
@@ -55,14 +55,16 @@ content is bounded — it travels inside every dashboard load for every reader w
 the card, so it is for notes and a pointer to a runbook, not for the runbook itself. An
 external link opens in a new tab.
 
-Sizes are `sm`, `md`, `lg`, `xl` and `full`; heights are `short` and `tall`. On the dashboard,
-cards sit in one ordered list, filling rows left to right and wrapping, and each card is one of
-five widths: `sm` is a quarter of the row, `md` a third, `lg` a half, `xl` two thirds and `full`
-the whole row. A card starts at the widget's `defaultSize`, and a reader can change its width from
-the card's menu to any size between the widget's `minSize` and `maxSize` (every size, when the
-widget declares neither). Widths follow the dashboard's own width rather than the window's: below
-1,024 pixels a quarter, third or half card is drawn at half width and a wider one at full width,
-and below 640 pixels every card is full width. A reader can arrange the dashboard at every width.
+A widget's size is `{ w, h }` on a grid 12 columns wide, with rows of one fixed height: `w` is
+from 1 to 12 columns and `h` from 2 to 12 rows. It declares the size a card starts at and, if it
+likes, the smallest and largest a reader may resize it to:
+`size: { default: { w: 6, h: 3 }, min: { w: 4, h: 2 }, max: { w: 12, h: 6 } }`. The minimum
+defaults to the default, and the maximum to the full width at the default's height. On the
+dashboard, cards sit in one ordered list, filling rows left to right and wrapping, each spanning
+its `w` columns and `h` rows, and a reader can change a card's width and height from its menu
+within the widget's bounds. Columns follow the dashboard's own width rather than the window's:
+from 640 to 1,023 pixels a card of 6 columns or fewer is drawn at 6 and a wider one at 12, and
+below 640 pixels every card is drawn at the full width. A card keeps its height at every width. A reader can arrange the dashboard at every width.
 Where it shows more than one column, a card is dragged by its handle, with the pointer or the
 keyboard, and a line shows where it will land; below 640 pixels, where every card is full width,
 cards are moved, resized and removed from their menu instead. The arrangement applies at every
@@ -80,11 +82,11 @@ It also means most widgets need no data-fetching code at all.
 
 A query names a source, and the source decides what the query may ask:
 
-| Source | Reads | Supports |
-|---|---|---|
-| `collection:<slug>` | The collection's entries, through the same access-controlled read as the API | `count`, `list`, `groupBy`, and `timeseries` where the collection has a usable date |
-| `single:<slug>` | The single's one document, as a list of one row | `list` only — a single answers a fixed question, so a `where`, a `sort`, a `count` or a bucketing over it is refused rather than answered |
-| `system:…` | A core service — versions, releases, activity and the like — each answering through its own service's rules | Whatever that source declares |
+| Source              | Reads                                                                                                       | Supports                                                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `collection:<slug>` | The collection's entries, through the same access-controlled read as the API                                | `count`, `list`, `groupBy`, and `timeseries` where the collection has a usable date                                                       |
+| `single:<slug>`     | The single's one document, as a list of one row                                                             | `list` only — a single answers a fixed question, so a `where`, a `sort`, a `count` or a bucketing over it is refused rather than answered |
+| `system:…`          | A core service — versions, releases, activity and the like — each answering through its own service's rules | Whatever that source declares                                                                                                             |
 
 Every collection and every single the install has is published as a source, and the dashboard
 offers a card derived from each: a count, a recent list, a table and a health breakdown per
@@ -93,9 +95,87 @@ changed. Offered, never placed — nobody's dashboard gains a card because a col
 created — and only to a reader who may read that collection or single.
 
 <Callout type="warn">
-Contributing a widget from a plugin works today, but `PluginAdminWidget` is marked
-`@experimental` and its shape may change before it settles. Building on it is reasonable;
-depending on it in something you cannot easily update is not.
+  Contributing a widget from a plugin works today, but `PluginAdminWidget` is
+  marked `@experimental` and its shape may change before it settles. Building on
+  it is reasonable; depending on it in something you cannot easily update is
+  not.
+</Callout>
+
+## A site's own widgets
+
+A site declares widgets of its own in its config, with `defineWidget` as a plugin does. They are
+checked, registered and offered in the add panel like a plugin's, and `defaultLayout` may place
+them. A widget drawn by its own component names it relative to the config file, and says when
+its data is empty, since core cannot tell that for a component it does not draw:
+
+```ts
+import { defineWidget } from "nextly";
+import { defineConfig } from "nextly/config";
+
+const notes = defineWidget({
+  id: "site/notes",
+  title: "Notes",
+  description: "The team's notes for this week.",
+  size: { default: { w: 6, h: 3 } },
+  load: async () => ({ notes: ["Ship the release notes"] }),
+  view: { component: "./dashboard/notes#NotesCard" },
+  isEmpty: data => data.notes.length === 0,
+});
+
+export default defineConfig({ admin: { dashboard: { widgets: [notes] } } });
+```
+
+The generated component map imports `./dashboard/notes` from beside the config file, so the same
+spelling works in `next dev`, in `nextly generate:types` and in its `--check` in CI, whatever path
+aliases the app defines. A package name works as it does for a plugin. A path alias such as
+`@/dashboard/notes` is refused at startup, with the relative spelling to write instead, because
+nothing that writes or checks the map resolves it.
+
+## Size-aware loads
+
+A widget declared with `defineWidget` can compute its own data in a `load` function. `load`
+runs on the server for each card, as the person viewing it. It is handed the card's `size`: its
+`w` and `h` in grid units, kept within the widget's size bounds, and its `tier`, which is
+`"small"`, `"medium"` or `"large"`. The tier depends on how wide the card is drawn on that
+reader's screen. Use the size to read only what the card can show:
+
+```ts
+import { defineWidget, rowsThatFit } from "@nextlyhq/plugin-sdk";
+
+export const recentOrders = defineWidget({
+  id: "acme/recent-orders",
+  title: "Recent orders",
+  description: "The newest orders, and how many there are on a large card.",
+  size: { default: { w: 6, h: 4 }, max: { w: 12, h: 8 } },
+  view: "list",
+  load: async ({ size, services }) => {
+    // As many rows as this card's body draws: never more than ten.
+    const limit = rowsThatFit(size, { density: "default" });
+    const { items } = await services.find("orders", {
+      sort: "-createdAt",
+      limit,
+    });
+    if (size.tier !== "large") return { items };
+    // Only a large card shows the total, so only a large card counts the orders.
+    return { items, total: await services.count("orders") };
+  },
+});
+```
+
+`rowsThatFit(size, { density })` counts the list rows that fit in a card of that height. It
+uses the same formula as core's own list cards, so a load reads exactly the rows the card
+draws. `density` is `"default"` or `"compact"`, the values a list card's Density setting takes.
+Compact rows are shorter, so the same card holds more of them.
+
+The size is part of the question a load answers. When a reader resizes a card, or a card
+crosses into another tier, that card's `load` runs again on its own. The other cards keep their
+answers. A widget's `shows` function gets the same `size`.
+
+<Callout type="info">
+  A card is not always asked with a tier. For example, when the server decides
+  which cards of a default dashboard a reader sees, no screen is involved. Then
+  `load` and `shows` are handed the card's stored size, or the widget's default
+  size for a card not yet saved, with the tier `"medium"`.
 </Callout>
 
 ## Related

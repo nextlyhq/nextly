@@ -3,7 +3,7 @@ name: Code hygiene
 # Two jobs, because the two questions have different answers and only one of
 # them can be enforced honestly.
 #
-# ESLint reads one file at a time, so nothing in CI could see an export with no
+# A lint rule reads one file at a time, so nothing in CI could see an export with no
 # consumers, a `vi.mock` pointing at a module that no longer exists, or a
 # package listed in a manifest that no code imports. Fallow reads the whole
 # module graph, which is what makes those visible.
@@ -68,7 +68,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
 
       # Resolution needs the store: an import is only "unresolved" once its
       # package is known to be absent, and workspace-to-workspace imports
@@ -82,7 +84,7 @@ jobs:
       # version are independent, and both are pinned.
       - name: Audit the changed files
         id: audit
-        uses: fallow-rs/fallow@ecf5a314fd3e10974acb4f5a7f867c433030522d # v3.17.0
+        uses: fallow-rs/fallow@1f5a08d9addde37d81aefcf10407600307da393b # v3.35.0
         with:
           command: audit
           config: .fallowrc.jsonc
@@ -375,6 +377,20 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # This workflow is read from the merge commit, but the checkout above is
+      # the branch's head, which can predate a local action the workflow now
+      # uses. The job's local actions come from the workflow's own commit, so
+      # the two always match, whenever the branch was cut.
+      - name: Checkout this workflow's local actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .workflow-actions
+          sparse-checkout: .github/actions/
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Setup pnpm
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
@@ -382,7 +398,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+
+      - name: Restore pnpm store
+        uses: ./.workflow-actions/.github/actions/pnpm-store
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

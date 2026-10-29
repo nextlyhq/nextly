@@ -65,6 +65,10 @@ import {
   type ReleaseKind,
   type ReleaseState,
 } from "../schemas/releases/types";
+import {
+  readIsoInstant,
+  type IsoInstantProblem,
+} from "../shared/lib/iso-instant";
 
 import {
   respondAction,
@@ -284,91 +288,24 @@ function requireInstant(body: Record<string, unknown>, key: string): Date {
   if (typeof raw !== "string") {
     throw badRequest(`\`${key}\` must be an ISO 8601 string.`);
   }
-  // Parseability is NOT the contract. `new Date` accepts "1" as 2001-01-01,
-  // normalises "2026-02-30" to March 2, and reads "09/01/2026" differently by
-  // locale — each of which yields a perfectly valid Date at an instant the
-  // author never chose, and a release publishes at it. The shape is checked
-  // first so only genuine ISO 8601 reaches the parser.
-  // The match is KEPT, not discarded, because the offset it captured is what
-  // the day check below runs on.
-  //
-  // That check used to take the offset itself, from a FIXED INDEX, which broke
-  // on the commonest input there is — `toISOString()` always emits
-  // milliseconds, so `slice(19)` read ".000Z", `Number("Z")` was NaN, and the
-  // route answered 500 for every schedule the admin sent. It also read
-  // ".000+02:00" as a zero offset via `Number("+0")`, which did not throw: it
-  // quietly compared against the wrong calendar day.
-  //
-  // Reading it here, from the pattern that DEFINES the accepted shape, is what
-  // stops that returning in another costume. A private parser in the day check
-  // would be the same defect one step removed: two readings of one format,
-  // agreeing until the format changes and only one is updated.
-  // Capture 1 is the offset: every inner group in the pattern is deliberately
-  // non-capturing so the index cannot drift as the shape gains optional parts.
-  // A NAMED group would read better and is not available here — the playground
-  // compiles this source under a target that predates them, which a
-  // package-local `tsc` does not see and the repo-wide `check-types` does.
-  const shape = ISO_INSTANT.exec(raw);
-  if (shape === null) {
-    throw badRequest(
-      `\`${key}\` must be an ISO 8601 instant, for example 2026-09-01T09:00:00Z.`,
-      { value: raw }
-    );
+  // Read by the one strict ISO 8601 reader, which checks the shape before
+  // parsing and the stated calendar day after: `new Date` alone accepts "1",
+  // normalises "2026-02-30", and reads "09/01/2026" by locale, and a release
+  // would publish at whatever instant that produced.
+  const reading = readIsoInstant(raw);
+  if (!reading.ok) {
+    throw badRequest(INSTANT_PROBLEMS[reading.problem](key), { value: raw });
   }
-  const at = new Date(raw);
-  if (Number.isNaN(at.getTime())) {
-    throw badRequest(`\`${key}\` is not a valid instant.`, { value: raw });
-  }
-  // A well-formed but impossible date — 2026-02-30 — parses and normalises
-  // silently. Caught by re-reading the calendar fields IN THE STATED OFFSET,
-  // never against the UTC rendering: `2026-09-01T00:30:00+02:00` is August 31
-  // in UTC and perfectly valid, so comparing to `toISOString()` would refuse a
-  // legitimate instant for every caller east of Greenwich.
-  if (!statesTheSameDay(raw, at, shape[1] ?? "Z")) {
-    throw badRequest(`\`${key}\` names a date that does not exist.`, {
-      value: raw,
-    });
-  }
-  return at;
+  return reading.at;
 }
 
-/**
- * Whether the parsed instant still names the calendar day the caller wrote.
- *
- * Compared in the offset the STRING states, by shifting the instant by that
- * offset before reading its date parts. An impossible date normalises to a
- * different day and is caught; a real one at an offset boundary is not, because
- * its UTC rendering is irrelevant to what the author wrote.
- *
- * `offset` is HANDED IN, from the same match that validated the shape, rather
- * than found again here. This function previously took it from a fixed index,
- * which broke on every string carrying milliseconds; the repair after that was
- * a second regex, which would have been the same defect one step removed — a
- * private parser of a format declared elsewhere, silently defaulting to UTC
- * whenever the two disagreed.
- */
-function statesTheSameDay(raw: string, at: Date, offset: string): boolean {
-  // `Z` and `±HH:MM` are the only two forms the caller's pattern admits, so
-  // there is nothing else to handle here.
-  const minutes =
-    offset === "Z"
-      ? 0
-      : (offset.startsWith("-") ? -1 : 1) *
-        (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4, 6)));
-  const local = new Date(at.getTime() + minutes * 60_000);
-  return raw.startsWith(local.toISOString().slice(0, 10));
-}
-
-/**
- * ISO 8601 with an explicit offset or `Z`.
- *
- * A local-time string carries no zone, so the server would resolve it in its
- * own — the same request scheduling different instants on two deployments.
- * `timezone` states the author's intent separately and does not make the
- * instant ambiguous.
- */
-const ISO_INSTANT =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+/** What each way an instant can be unreadable is called, for one key. */
+const INSTANT_PROBLEMS: Record<IsoInstantProblem, (key: string) => string> = {
+  shape: key =>
+    `\`${key}\` must be an ISO 8601 instant, for example 2026-09-01T09:00:00Z.`,
+  invalid: key => `\`${key}\` is not a valid instant.`,
+  "no-such-day": key => `\`${key}\` names a date that does not exist.`,
+};
 
 /**
  * A timezone the platform can actually format in.

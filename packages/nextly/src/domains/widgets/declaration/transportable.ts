@@ -49,11 +49,32 @@ export type TransportablePrimitive = string | number | boolean | null;
  */
 export type Transportable<T> = T extends TransportablePrimitive
   ? T
-  : T extends (...args: never[]) => unknown
-    ? never
-    : T extends object
-      ? TransportableFields<T>
-      : never;
+  : KnownTransportable<T> extends true
+    ? T
+    : T extends (...args: never[]) => unknown
+      ? never
+      : T extends object
+        ? TransportableFields<T>
+        : never;
+
+/**
+ * Whether `T` is exactly one of {@link TransportableValue}'s own object members: transportable by
+ * definition, so judged no further.
+ *
+ * 🔴 Stops the recursion, not only the work: a row a read service handed back is typed
+ * `{ readonly [field: string]: TransportableValue }`, and mapping that member's values maps the
+ * same union again, without end. Answering such rows as a list's items failed to compile as an
+ * instantiation "excessively deep", though nothing in them could fail to travel. Exactly, not
+ * assignably: an object with a symbol-keyed property is assignable to the string-keyed member,
+ * and must still be judged key by key.
+ */
+type KnownTransportable<T> =
+  Same<T, { readonly [key: string]: TransportableValue }> extends true
+    ? true
+    : Same<T, readonly TransportableValue[]>;
+
+/** Whether two types are each assignable to the other, undistributed. */
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 /**
  * An object's properties, each mapped by {@link Transportable}, with a
@@ -177,4 +198,17 @@ function childrenOf(value: object): [string, unknown][] {
   return Object.entries(value)
     .filter(([, item]) => item !== undefined)
     .map(([key, item]) => [`.${key}`, item]);
+}
+
+/**
+ * `value` as JSON carries it to the browser: a date as its ISO string, an
+ * absent property left out. What core's own reads answer is sent this way, so
+ * a data function handed rows as they would arrive can answer them unchanged.
+ * Throws as `JSON.stringify` does, on a cycle or a bigint.
+ */
+export function sentAsJson(value: unknown): TransportableValue {
+  const text = JSON.stringify(value);
+  // `undefined` alone is what `JSON.stringify` answers with no text: JSON has
+  // no value for it, so the browser would receive nothing, which is `null`.
+  return text === undefined ? null : (JSON.parse(text) as TransportableValue);
 }

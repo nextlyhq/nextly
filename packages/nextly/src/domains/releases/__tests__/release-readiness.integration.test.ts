@@ -19,7 +19,9 @@ process.env.NEXTLY_SECRET =
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
+import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -208,6 +210,32 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   return current;
 }
 
+/**
+ * The collections and Singles whose rules an author here is judged by. Memos
+ * are left out: taking one down has no rule and is decided by grants alone.
+ */
+const AUTHORED = [
+  "articles",
+  "notices",
+  "dossiers",
+  "briefs",
+  "bulletins",
+  "banner",
+  "flags",
+] as const;
+
+/**
+ * Gives an author what a release's run meets on these documents. A code rule
+ * only narrows the permission, so the author holds read, update, publish and
+ * unpublish on each, and the rules still decide.
+ */
+async function mayRelease(t: TestNextly, author: string): Promise<string> {
+  for (const action of ["read", "update", "publish", "unpublish"]) {
+    await grantTo(t, author, action, AUTHORED);
+  }
+  return author;
+}
+
 /** A document, stored through the ordinary write. */
 async function entry(
   t: TestNextly,
@@ -307,7 +335,7 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("reports a document going live without a required field, then reads it fixed", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const id = await entry(t, "articles");
       await breakTitle(t, id);
       const { releaseId, memberIds } = await releaseOf(t, author, [
@@ -337,7 +365,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("lets an invalid document be taken down: a document coming down is not judged", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       // Live and invalid: the case the rule exists for.
       const live = await entry(t, "articles", "published");
       await breakTitle(t, live);
@@ -361,7 +389,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports an author who may not perform the action, and a document that is gone", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const notice = await entry(t, "notices", "published");
       const article = await entry(t, "articles");
       const { releaseId, memberIds } = await releaseOf(t, author, [
@@ -379,7 +407,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("notes, softly, a document another scheduled release also holds, and which one wins", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const id = await entry(t, "articles");
       const first = await releaseOf(t, author, [
         { collection: "articles", id },
@@ -417,7 +445,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a Single going live without a required field", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       await t.nextly.updateSingle({
         slug: "banner" as never,
         data: { headline: "Fine", status: "draft" } as never,
@@ -456,7 +484,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a collection's pending change to a field the author may not write, as its publish refuses it", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const id = await entry(t, "dossiers", "published");
       // A trusted edit holds a change to the guarded field as pending work.
       await t.nextly.update({
@@ -503,7 +531,7 @@ describe.each(getConfiguredTestDialects())(
     it("reports a status the author may not set, with no pending change, as the write refuses it", async () => {
       const t = await boot(dialect);
       guardStatus();
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const going = await entry(t, "bulletins");
       const coming = await entry(t, "bulletins", "published");
       const { releaseId, memberIds } = await releaseOf(t, author, [
@@ -555,7 +583,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a pending change an unpublish would fold in, to a field the author may not write", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const id = await entry(t, "dossiers", "published");
       // A trusted edit holds a change to the guarded field as pending work.
       await t.nextly.update({
@@ -603,7 +631,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("judges many collection documents' pending changes from batched reads, without a read per document", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const documents: Array<{
         collection: "dossiers" | "briefs";
         id: string;
@@ -638,7 +666,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a pending change to a field the author may not write, and refuses to schedule", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       await t.nextly.updateSingle({
         slug: "flags" as never,
         data: { label: "Live", status: "published" } as never,
@@ -683,7 +711,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a document whose collection no longer has a draft/published lifecycle", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const live = await entry(t, "seasonal", "published");
       const draft = await entry(t, "seasonal");
       const { releaseId, memberIds } = await releaseOf(t, author, [
@@ -695,6 +723,10 @@ describe.each(getConfiguredTestDialects())(
         { status: false },
         { and: [{ column: "slug", op: "=", value: "seasonal" }] }
       );
+      // A raw registry write is a change made outside this process, which
+      // readers see once the cached registry row's second is up; clearing the
+      // cache is that change being seen now, without waiting the second out.
+      clearCollectionRowCache();
       // The write itself now refuses the document-wide move.
       const written = await (
         t.getService("collectionsHandler") as CollectionsHandler
@@ -730,7 +762,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a Single whose document was replaced as gone", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       await t.nextly.updateSingle({
         slug: "banner" as never,
         data: { headline: "First", status: "draft" } as never,
@@ -778,7 +810,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("reports a document whose collection was deleted as gone, without failing the check", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const id = await entry(t, "scratch");
       const { releaseId, memberIds } = await releaseOf(t, author, [
         { collection: "scratch", id },
@@ -814,7 +846,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("checks every document of a large release, and refuses it for a problem in the last one", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const ids: string[] = [];
       for (let i = 0; i < 250; i += 1) ids.push(await entry(t, "articles"));
       await breakTitle(t, ids[249]);
@@ -858,7 +890,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses each door over the Direct API, leaving the release as it was", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const bad = await entry(t, "articles");
       await breakTitle(t, bad);
 
@@ -950,7 +982,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses to switch an action the caller's collection rule denies, though their grants allow it", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const notice = await entry(t, "notices", "published");
       const { releaseId, memberIds } = await releaseOf(t, author, [
         { collection: "notices", id: notice, action: "publish" },
@@ -983,7 +1015,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("switches a permitted action, and the release keeps it", async () => {
       const t = await boot(dialect);
-      const author = await seedPlainAuthor(t);
+      const author = await mayRelease(t, await seedPlainAuthor(t));
       const id = await entry(t, "articles", "published");
       const { releaseId, memberIds } = await releaseOf(t, author, [
         { collection: "articles", id },
@@ -1350,7 +1382,7 @@ describe.each(getConfiguredTestDialects())(
         "update-articles",
         "publish-articles",
       ]);
-      const author = await seedLiveAuthor(t);
+      const author = await mayRelease(t, await seedLiveAuthor(t));
       const id = await entry(t, "articles");
       const { releaseId, memberIds } = await releaseOf(t, author, [
         { collection: "articles", id },
@@ -1414,7 +1446,7 @@ describe.each(getConfiguredTestDialects())(
         "read-content-releases",
         "publish-content-releases",
       ]);
-      const author = await seedLiveAuthor(t);
+      const author = await mayRelease(t, await seedLiveAuthor(t));
       const id = await entry(t, "articles");
       const { releaseId } = await releaseOf(t, author, [
         { collection: "articles", id },

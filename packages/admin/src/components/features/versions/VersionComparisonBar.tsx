@@ -12,9 +12,11 @@
  */
 
 import { ArrowLeft, History } from "lucide-react";
+import type { JSX } from "react";
 
 import { Button } from "@admin/components/ui";
 import { formatDateTime } from "@admin/lib/dates/format";
+import { cn } from "@admin/lib/utils";
 import type { VersionMeta } from "@admin/services/versionApi";
 
 import { ChangeNav } from "./ChangeNav";
@@ -40,6 +42,11 @@ export interface VersionComparisonBarProps {
   onCompareCurrent?: () => void;
   /** The inline or side-by-side toggle, where there are changes to lay out. */
   layoutToggle?: React.ReactNode;
+  /**
+   * Overrides the bar's own card surface, for a host that draws it inside a
+   * band of its own (the editor's banners under its document bar).
+   */
+  className?: string;
 }
 
 /** How a version is named: its own name when it has one, else its number. */
@@ -156,12 +163,16 @@ export function VersionComparisonBar({
   onOpenComparison,
   onCompareCurrent,
   layoutToggle,
-}: VersionComparisonBarProps) {
+  className,
+}: VersionComparisonBarProps): JSX.Element {
   const changed = changes.kind === "ready" ? changes.changed : 0;
   return (
     <section
       aria-label="Comparison"
-      className="mb-6 flex flex-col gap-3 rounded-lg border border-border bg-card p-4 text-sm"
+      className={cn(
+        "mb-6 flex flex-col gap-3 rounded-lg border border-border bg-card p-4 text-sm",
+        className
+      )}
     >
       {onBackToHistory ? (
         // Where the panel stepped aside, the way back to the list leads.

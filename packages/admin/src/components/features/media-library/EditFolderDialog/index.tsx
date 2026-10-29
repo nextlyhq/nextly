@@ -32,7 +32,7 @@ export function EditFolderDialog({
   onOpenChange,
   folderId,
   onSuccess,
-}: EditFolderDialogProps) {
+}: EditFolderDialogProps): React.JSX.Element {
   const { data: folderContents } = useFolderContents(folderId);
   const folder = folderContents?.folder;
 

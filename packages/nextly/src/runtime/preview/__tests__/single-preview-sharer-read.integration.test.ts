@@ -17,6 +17,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { signPreviewToken } from "../../../auth/preview/preview-token";
 import { defineSingle, text } from "../../../config";
 import { singleStoredDocumentReadable } from "../../../domains/singles/services/single-document-access";
@@ -99,6 +100,19 @@ async function account(t: TestNextly, email: string): Promise<string> {
   return String(created.item.id);
 }
 
+/**
+ * An account that shares links. A link is judged as its sharer for read and
+ * update, and a rule only narrows a permission, so the sharer holds both on
+ * each Single and the rules alone decide which of them is refused.
+ */
+async function sharerAccount(t: TestNextly, email: string): Promise<string> {
+  const id = await account(t, email);
+  for (const action of ["read", "update"]) {
+    await grantTo(t, id, action, ["site-settings", "landing"]);
+  }
+  return id;
+}
+
 async function linkFrom(minter: string, single: string): Promise<string> {
   const { token } = await signPreviewToken({ kind: "single", single }, SECRET, {
     generation: GENERATION,
@@ -111,7 +125,7 @@ function gate(token: string) {
   return previewSingleDraftGate({
     secret: SECRET,
     generation: GENERATION,
-    cookies: () => ({
+    cookies: async () => ({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE
           ? { value: encodeURIComponent(token) }
@@ -149,7 +163,7 @@ describe.each(getConfiguredTestDialects())(
     it("serves the draft to a sharer who may read and update the Single", async () => {
       const t = await boot(dialect);
       await seed(t);
-      const editor = await account(t, "editor@example.com");
+      const editor = await sharerAccount(t, "editor@example.com");
 
       expect(await render(t, await linkFrom(editor, "site-settings"))).toBe(
         "Acme (pending)"
@@ -159,7 +173,7 @@ describe.each(getConfiguredTestDialects())(
     it("serves only the published document once the sharer may no longer update it", async () => {
       const t = await boot(dialect);
       await seed(t);
-      const sharer = await account(t, "lost-update@example.com");
+      const sharer = await sharerAccount(t, "lost-update@example.com");
       refused.update = sharer;
 
       expect(await render(t, await linkFrom(sharer, "site-settings"))).toBe(
@@ -170,7 +184,7 @@ describe.each(getConfiguredTestDialects())(
     it("serves only the published document once the sharer may no longer read it", async () => {
       const t = await boot(dialect);
       await seed(t);
-      const sharer = await account(t, "lost-read@example.com");
+      const sharer = await sharerAccount(t, "lost-read@example.com");
       refused.read = sharer;
 
       expect(await render(t, await linkFrom(sharer, "site-settings"))).toBe(
@@ -180,7 +194,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("creates nothing and runs no hook when the Single was never created", async () => {
       const t = await boot(dialect);
-      const editor = await account(t, "editor@example.com");
+      const editor = await sharerAccount(t, "editor@example.com");
       const registry = t.getService("singleRegistryService") as unknown as {
         getSingleBySlug: (slug: string) => Promise<{ tableName?: string }>;
       };

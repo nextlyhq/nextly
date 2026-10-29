@@ -5,7 +5,10 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
+  type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 
 import {
@@ -16,6 +19,7 @@ import {
   updateUser,
   type CreatedUser,
 } from "@admin/services/userApi";
+import type { UseBulkMutationReturn } from "@admin/types/hooks/bulk-mutation";
 import type {
   User,
   UserApiResponse,
@@ -23,6 +27,10 @@ import type {
   UpdateUserPayload,
 } from "@admin/types/user";
 
+import {
+  invalidateCurrentUserAccess,
+  withAccessRefresh,
+} from "../current-user-access";
 import { useBulkMutation } from "../useBulkMutation";
 import { currentUserKey } from "../useDashboardUser";
 
@@ -113,7 +121,7 @@ export function useUsers(
     UseQueryOptions<ListResponse<UserApiResponse>, Error>,
     "queryKey" | "queryFn"
   >
-) {
+): UseQueryResult<ListResponse<UserApiResponse>, Error> {
   return useQuery<ListResponse<UserApiResponse>, Error>({
     queryKey: ["users", params],
     queryFn: async () => {
@@ -163,7 +171,7 @@ export function useUsers(
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useQuery
  */
-export function useUser(userId?: string) {
+export function useUser(userId?: string): UseQueryResult<User, Error> {
   return useQuery<User, Error>({
     queryKey: ["users", userId],
     queryFn: async () => {
@@ -226,7 +234,12 @@ export function useUser(userId?: string) {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useCreateUser() {
+export function useCreateUser(): UseMutationResult<
+  CreatedUser,
+  Error,
+  CreateUserPayload,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<CreatedUser, Error, CreateUserPayload>({
@@ -238,6 +251,20 @@ export function useCreateUser() {
       void queryClient.invalidateQueries({ queryKey: ["users"] });
     },
   });
+}
+
+/**
+ * Whether one of `userIds` may be the signed-in user, whose access only an
+ * edit of themselves can change: an edit of someone else asks nothing again,
+ * since invalidating would cost the admin its answer if that refresh failed.
+ * Unknown until the signed-in user has loaded, and then it may be.
+ */
+function mayBeSignedIn(
+  queryClient: QueryClient,
+  userIds: readonly string[]
+): boolean {
+  const signedIn = queryClient.getQueryData<{ id: string }>(currentUserKey);
+  return signedIn === undefined || userIds.includes(signedIn.id);
 }
 
 /**
@@ -298,7 +325,17 @@ export function useCreateUser() {
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  * @see https://tanstack.com/query/v5/docs/react/guides/optimistic-updates
  */
-export function useUpdateUser() {
+export function useUpdateUser(): UseMutationResult<
+  void,
+  Error,
+  {
+    userId: string;
+    updates: Partial<User>;
+  },
+  {
+    previousUser: unknown;
+  }
+> {
   const queryClient = useQueryClient();
 
   return useMutation<
@@ -330,6 +367,14 @@ export function useUpdateUser() {
       // Rollback to previous value on error
       if (context?.previousUser) {
         queryClient.setQueryData(["users", userId], context.previousUser);
+      }
+    },
+    // What the signed-in user may do is asked again only once the change has
+    // landed: a failed edit changed nothing, and invalidating would leave the
+    // admin without an answer if that refresh then failed too.
+    onSuccess: (_, { userId }) => {
+      if (mayBeSignedIn(queryClient, [userId])) {
+        invalidateCurrentUserAccess(queryClient);
       }
     },
     onSettled: (_, __, { userId }) => {
@@ -393,7 +438,12 @@ export function useUpdateUser() {
  *
  * @see https://tanstack.com/query/v5/docs/react/reference/useMutation
  */
-export function useDeleteUser() {
+export function useDeleteUser(): UseMutationResult<
+  void,
+  Error,
+  string,
+  unknown
+> {
   const queryClient = useQueryClient();
 
   return useMutation<void, Error, string>({
@@ -475,21 +525,30 @@ export function useDeleteUser() {
  * @see {@link useBulkMutation} - Generic bulk mutation hook
  * @see {@link useBulkAssignRole} - Specialized hook for role assignment
  */
-export function useBulkUpdateUsers() {
+export function useBulkUpdateUsers(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  Partial<User>
+> {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, Partial<User>>({
-    mutationFn: async (userId, updates) => {
-      await updateUser(userId, updates);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        // Invalidate users cache after all mutations complete
-        // This triggers a refetch of the users list to show updated data
-        void queryClient.invalidateQueries({ queryKey: ["users"] });
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, Partial<User>>({
+      mutationFn: async (userId, updates) => {
+        await updateUser(userId, updates);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          // Invalidate users cache after all mutations complete
+          // This triggers a refetch of the users list to show updated data
+          void queryClient.invalidateQueries({ queryKey: ["users"] });
+        },
+      },
+    }),
+    queryClient,
+    result => mayBeSignedIn(queryClient, result.succeededIds)
+  );
 }
 
 /**
@@ -581,7 +640,12 @@ export function useBulkUpdateUsers() {
  * @see {@link useBulkMutation} - Generic bulk mutation hook
  * @see {@link useDeleteUser} - Single user deletion hook
  */
-export function useBulkDeleteUsers() {
+export function useBulkDeleteUsers(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  void
+> {
   const queryClient = useQueryClient();
 
   return useBulkMutation<string, void, Error, void>({
@@ -708,22 +772,33 @@ export function useBulkDeleteUsers() {
  * @see {@link useBulkMutation} - Generic bulk mutation hook
  * @see {@link useBulkUpdateUsers} - General-purpose bulk update hook
  */
-export function useBulkAssignRole() {
+export function useBulkAssignRole(): UseBulkMutationReturn<
+  string,
+  void,
+  Error,
+  {
+    roleId: string;
+  }
+> {
   const queryClient = useQueryClient();
 
-  return useBulkMutation<string, void, Error, { roleId: string }>({
-    mutationFn: async (userId, context) => {
-      // Update user with new role (replaces existing roles)
-      // Use UpdateUserPayload which accepts roles as objects with id property
-      await updateUser(userId, {
-        roles: [{ id: context.roleId }],
-      } satisfies UpdateUserPayload);
-    },
-    defaultOptions: {
-      onComplete: () => {
-        // Invalidate users cache after all mutations complete
-        void queryClient.invalidateQueries({ queryKey: ["users"] });
+  return withAccessRefresh(
+    useBulkMutation<string, void, Error, { roleId: string }>({
+      mutationFn: async (userId, context) => {
+        // Update user with new role (replaces existing roles)
+        // Use UpdateUserPayload which accepts roles as objects with id property
+        await updateUser(userId, {
+          roles: [{ id: context.roleId }],
+        } satisfies UpdateUserPayload);
       },
-    },
-  });
+      defaultOptions: {
+        onComplete: () => {
+          // Invalidate users cache after all mutations complete
+          void queryClient.invalidateQueries({ queryKey: ["users"] });
+        },
+      },
+    }),
+    queryClient,
+    result => mayBeSignedIn(queryClient, result.succeededIds)
+  );
 }

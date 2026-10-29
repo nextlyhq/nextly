@@ -11,17 +11,19 @@ import type {
 
 import { UNAVAILABLE_TITLE } from "../frame/states";
 import { WidgetRenderer } from "../WidgetRenderer";
+import { gridBounds } from "./grid-bounds";
 
 const count = (total: number): WidgetSlot => ({
   ok: true,
   result: { op: "count", total },
 });
 
+// A stats card as a plugin declares one; its id is only a name here.
 const card: DashboardWidget = {
-  id: "collection/posts-stats",
+  id: "acme/posts-stats",
   title: "posts health",
   archetype: "stats",
-  size: "md",
+  size: gridBounds(4),
   cells: [
     {
       key: "total",
@@ -129,7 +131,13 @@ describe("a stats card", () => {
         definition={{
           ...card,
           id: "core/a#b",
-          cells: [{ key: "b", label: "B", query: card.cells![0].query }],
+          cells: [
+            {
+              key: "b",
+              label: "B",
+              query: { source: "collection:posts", op: "count", status: "all" },
+            },
+          ],
         }}
         slot={undefined}
         slotFor={key => (key === "b" ? count(7) : undefined)}

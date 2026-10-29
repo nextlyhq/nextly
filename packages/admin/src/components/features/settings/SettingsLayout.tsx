@@ -53,7 +53,7 @@ export function SettingsLayout({
   parentCrumb,
   actions,
   children,
-}: SettingsLayoutProps) {
+}: SettingsLayoutProps): React.JSX.Element {
   return (
     <div>
       <PageHeader

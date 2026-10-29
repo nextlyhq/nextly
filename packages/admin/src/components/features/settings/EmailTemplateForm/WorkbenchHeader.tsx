@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { useForm } from "react-hook-form";
 
 import {
@@ -311,7 +312,7 @@ function MoreMenu({ menu, owner }: { menu: WorkbenchMenu; owner: string }) {
   );
 }
 
-export function WorkbenchHeader(props: WorkbenchHeaderProps) {
+export function WorkbenchHeader(props: WorkbenchHeaderProps): JSX.Element {
   const { tier, record, isEdit, onExit, exitLabel } = props;
   const isPhone = tier === "phone";
   return (
@@ -359,7 +360,7 @@ export function PhoneActions({
 }: Pick<
   WorkbenchHeaderProps,
   "isEdit" | "isPending" | "ownsContent" | "onSendTest" | "onOverride"
->) {
+>): JSX.Element {
   return (
     <>
       {isEdit ? (
@@ -396,7 +397,7 @@ export function SaveButton({
   isEdit: boolean;
   isPending: boolean;
   variant?: "default" | "outline";
-}) {
+}): JSX.Element {
   const idle = isEdit ? "Save" : "Create email";
   const busy = isEdit ? "Saving…" : "Creating…";
   return (

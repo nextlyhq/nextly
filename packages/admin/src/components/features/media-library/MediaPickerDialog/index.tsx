@@ -35,6 +35,7 @@ import {
 } from "@admin/components/icons";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
+import { MEDIA_SORT_OPTIONS } from "@admin/constants/media";
 import {
   useCreateFolder,
   useInfiniteMedia,
@@ -115,7 +116,7 @@ export function MediaPickerDialog({
   allowCreate = true,
   title,
   className,
-}: MediaPickerDialogProps) {
+}: MediaPickerDialogProps): React.JSX.Element {
   const queryClient = useQueryClient();
 
   // Refetch folder/media data when dialog opens to ensure fresh data
@@ -610,15 +611,13 @@ export function MediaPickerDialog({
                   <SelectTrigger className="w-full sm:w-40 hover-unified bg-card text-foreground hover:bg-card/90">
                     <SelectValue placeholder="Sort by..." />
                   </SelectTrigger>
+                  {/* The same list as the library's toolbar. */}
                   <SelectContent>
-                    <SelectItem value="uploadedAt-desc">
-                      Newest First
-                    </SelectItem>
-                    <SelectItem value="uploadedAt-asc">Oldest First</SelectItem>
-                    <SelectItem value="filename-asc">Name A-Z</SelectItem>
-                    <SelectItem value="filename-desc">Name Z-A</SelectItem>
-                    <SelectItem value="size-desc">Largest First</SelectItem>
-                    <SelectItem value="size-asc">Smallest First</SelectItem>
+                    {MEDIA_SORT_OPTIONS.map(option => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

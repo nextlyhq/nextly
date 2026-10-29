@@ -136,6 +136,8 @@ Nextly automatically creates three email templates on first startup:
 
 Templates are stored in the database and edited through the admin UI (**Settings -> Email Templates**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
 
+The editor's **Send test** sends the saved template, with its sample data, to the signed-in user's own address and nowhere else. It needs the `update-email-templates` permission.
+
 ### Template variables
 
 Templates receive context-appropriate variables.
@@ -209,6 +211,10 @@ Resolution order for templates: **database template** (if active) > **code-first
 
 The Direct API exposes `nextly.email.send()` and `nextly.email.sendWithTemplate()`.
 
+There is no REST route for sending email. To send from a browser or another
+service, add a route of your own that checks who may send, and to whom, and then
+calls `nextly.email.send()` or `nextly.email.sendWithTemplate()`.
+
 ### Using a template
 
 ```typescript
@@ -240,8 +246,8 @@ also `failure` and `error` (see [When a send fails](#when-a-send-fails)).
 
 ### Sending to several people
 
-`to` takes one address or a list, on the Direct API, a plugin's `ctx.services.email`
-and both REST send routes. Every address receives the email:
+`to` takes one address or a list, on the Direct API and a plugin's
+`ctx.services.email`. Every address receives the email:
 
 ```typescript
 await nextly.email.sendWithTemplate({
@@ -276,15 +282,10 @@ The `to` list is `@experimental` until the send contract is complete.
 The send's own value wins, then the template's, then the provider's default
 sender. `replyTo` is `@experimental`.
 
-The REST send routes answer `Email sent.` when the provider accepted the message,
-and `Email could not be sent.` when it did not, beside the `success` and
-`messageId` fields they have always returned.
-
 ### When a send fails
 
 A provider's refusal is returned, not thrown: `success` is `false`, and `failure`
-says what happened, on the Direct API, `ctx.services.email` and both REST send
-routes alike:
+says what happened, on the Direct API and `ctx.services.email` alike:
 
 - `failure.retryable`: whether sending again later can succeed. A refusal of the
   message itself (an HTTP 4xx other than 408 and 429, or an SMTP 5xx reply) is
@@ -313,9 +314,9 @@ error: nothing was sent, and the same send would be refused again.
 ### Sending an email once
 
 Give a send an `idempotencyKey` and it goes out once, however often it is
-repeated: on the Direct API's `send` and `sendWithTemplate`, the same two on
-`ctx.services.email`, and both REST send routes. A key is text of up to 256
-characters that names the email, such as an order's confirmation.
+repeated: on the Direct API's `send` and `sendWithTemplate`, and the same two on
+`ctx.services.email`. A key is text of up to 256 characters that names the
+email, such as an order's confirmation.
 
 - Nextly claims the key before contacting the provider. A repeat of a send that
   succeeded returns the first send's result with `repeat: true`, and sends
@@ -324,16 +325,14 @@ characters that names the email, such as an order's confirmation.
   retryable `failure`, saying a send with the key is in progress. Retry it, and
   it returns the result once there is one.
 - A repeat after the first send failed sends again.
-- The same key with a different message is refused with a conflict error (409
-  on the REST routes). The message is everything that reaches the provider:
+- The same key with a different message is refused with a conflict error. The
+  message is everything that reaches the provider:
   every recipient, `from`, `replyTo`, the rendered subject and bodies, the
   attachments and the person. A template edited between two sends with one key
   is a different message.
 - Keys belong to their caller. The site's own code (the Direct API) has one
-  set; each plugin has its own; Nextly's own sends have theirs. On the REST
-  routes, each API key and each signed-in person has its own, so a REST caller
-  can never use up a key the site's code sends with. The same key from two of
-  them names two different emails.
+  set; each plugin has its own; Nextly's own sends have theirs. The same key
+  from two of them names two different emails.
 - A provider that takes a key (Resend) is also handed one derived from yours, so
   the provider itself sends the message once for 24 hours.
 
@@ -346,14 +345,56 @@ key, so a key keeps working across a rotation of `NEXTLY_SECRET`. Erasing a
 person clears the key's digest from every record of the sends they were on, and
 from those sends' claims.
 
-If the process stops while sending, the key is held for 15 minutes, after which
-a later send with it may send again. Through a provider without keys (SMTP,
-SendLayer) that can repeat the email once.
+A send whose recipients fared differently is reported recipient by recipient.
+When some were accepted and the send still did not succeed (a split send whose
+second message failed, or an SMTP server that took one address and refused
+another), the result has `partlyDelivered: true` and `recipients`, each
+recipient's `outcome` (`accepted`, `refused` or `unknown`) by its line and
+position, never by address. A retry with the same key sends only to the
+recipients not yet accepted, whichever provider carries it, and its result
+counts the earlier ones as accepted. A partly delivered send's claim is kept as
+long as a successful one's. A send whose recipients all fared alike has the
+result it always had, with neither field.
+
+A failure with `unknown: true` means delivery cannot be known: the request may
+have reached the provider, but no definite answer came back (a connection lost
+mid-request, a timeout after sending, or the call deadline below). It is
+retryable; through a provider that takes a key, a retry is deduplicated there. A
+keyed send that ends unknown keeps its claim held to the lease limit below,
+however soon the answer was lost, so a repeat with the key in that time is told
+the send is in progress rather than sending it again. A provider that could not
+be reached at all sent nothing, and has no such mark.
+
+Every provider call has a deadline of 2 minutes. A call that has not answered by
+then is reported as `"The email provider did not answer in time."`, unknown and
+retryable, and its adapter is told to stop through the call's `signal`. A keyed
+send's claim stays held while the call is still unsettled, its lease renewed,
+for up to 10 minutes (the lease limit, five times the deadline): a repeat in
+that time is told the send is in progress, and if the call answers, the claim
+records what it answered. Past the lease limit the outcome is recorded as
+unknown and a later send may take the claim over. Through a provider that takes
+a key, the provider still sends the email once. Through one without keys, the
+email can then be delivered twice: stopping the call only stops Nextly waiting,
+and a request that reached the provider may still be delivered.
+
+If the process stops while sending, the key is held for 15 minutes from the
+claim's last renewal, after which a later send with it may send again. Through a
+provider without keys (SMTP, SendLayer) that can repeat the email once: a keyed
+send is delivered at least once, never lost.
+
+A keyed send's delivery records and its outcome are written together, in one
+transaction: a process that stops between the provider's answer and that
+commit leaves neither, and the retry that takes the claim over writes both.
+
+The key protects for as long as the delivery log keeps the send's records. A
+caller whose retries can outlast that keeps its own record of what it sent, or
+accepts a repeat after that horizon.
 
 A keyed send cannot run inside an open database transaction: send before
 opening it or after it has finished.
 
-`idempotencyKey` and `repeat` are `@experimental`.
+`idempotencyKey`, `repeat`, `partlyDelivered`, `recipients` and
+`failure.unknown` are `@experimental`.
 
 ### Changing a send before it goes out
 
@@ -547,8 +588,15 @@ true`. For a send that carried a key, its adapter then receives
 `idempotencyKey`, a key derived from the caller's, the same on every retry of
 that message. Nextly claims the caller's key itself either way.
 
-`maxToPerMessage`, `toList`, `emailFailure`, `refusals`, `acceptsIdempotencyKey`
-and `idempotencyKey` are `@experimental`.
+Every call is handed a `signal`, an `AbortSignal` that fires at the call
+deadline (2 minutes). An adapter should stop sending when it fires: pass it to
+`fetch`, or close its connection. When a request may have reached the provider
+but its answer was lost, throw an error carrying
+`emailFailure: { retryable: true, unknown: true, reason }`; a provider that could
+not be reached at all is not unknown.
+
+`maxToPerMessage`, `toList`, `emailFailure`, `refusals`, `acceptsIdempotencyKey`,
+`idempotencyKey`, `signal` and `emailFailure.unknown` are `@experimental`.
 
 ## Next steps
 

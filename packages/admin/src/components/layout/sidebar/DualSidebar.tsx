@@ -2,7 +2,7 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import type React from "react";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
@@ -12,7 +12,12 @@ import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
-import { useCollections, useSingles } from "@admin/hooks/queries";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  NAV_SINGLES_PARAMS,
+  useCollections,
+  useSingles,
+} from "@admin/hooks/queries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
@@ -28,6 +33,14 @@ import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
+import {
+  CONTENT_RAIL_ID,
+  contentItemHref,
+  contentSectionToOpen,
+  panelSectionIds,
+  railItemOf,
+  sectionShown,
+} from "./lib/content-rail";
 import { hasCollectionsSection as hasCollectionsSectionHelper } from "./lib/has-collections-section";
 import {
   hasPluginsSection,
@@ -44,7 +57,12 @@ import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-hre
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
-import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
+import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
+import type {
+  MainMenuCategory,
+  MainMenuItem,
+  RailItemId,
+} from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
 
@@ -52,7 +70,9 @@ interface DualSidebarProps {
   isMobile?: boolean;
 }
 
-export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
+export function DualSidebar({
+  isMobile,
+}: DualSidebarProps = {}): React.JSX.Element {
   const { pathname, route, isHydrated } = useRouter();
   const { isFolderTreeVisible } = useMediaContext();
   const {
@@ -61,6 +81,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     hasPermission,
     isLoading: isPermissionsLoading,
     error: permissionsError,
+    content,
   } = useCurrentUserPermissions();
   const branding = useBranding();
   const showBuilder = branding?.showBuilder ?? true;
@@ -77,24 +98,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     [branding?.plugins]
   );
 
-  const readableResources = useMemo(() => {
-    const readable = permissions
-      .filter(permission => permission.startsWith("read-"))
-      .map(permission => permission.slice("read-".length));
-    return new Set(readable);
-  }, [permissions]);
-
-  const visibleStandalonePlugins = useMemo(() => {
-    return standalonePlugins.filter(plugin => {
-      const pluginCollections = plugin.collections ?? [];
-      if (pluginCollections.length === 0) {
-        return capabilities.canViewSettings;
-      }
-      return pluginCollections.some(collection =>
-        readableResources.has(collection)
-      );
-    });
-  }, [standalonePlugins, readableResources, capabilities.canViewSettings]);
+  const visibleStandalonePlugins = useMemo(
+    () => standalonePluginsVisibleTo(standalonePlugins, capabilities),
+    [standalonePlugins, capabilities]
+  );
 
   // Standalone plugins take their place in the rail by the anchor they declare.
   // The placement rule lives in `lib/` with the other rail decisions; what stays
@@ -117,25 +124,20 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     });
   }, [baseMenuItems, visibleStandalonePlugins]);
 
-  // Fetch data for automatic navigation
+  // Fetch data for automatic navigation. The shared params keep these on the
+  // cache entries the browser tab's title reads its labels from, so naming a
+  // collection or Single in the tab costs no request of its own.
   const {
     data: collectionsData,
     isLoading: isCollectionsLoading,
     isError: isCollectionsError,
-  } = useCollections({
-    pagination: { page: 0, pageSize: 100 },
-    sorting: [{ field: "name", direction: "asc" }],
-  });
+  } = useCollections(NAV_COLLECTIONS_PARAMS);
 
   const {
     data: singlesData,
     isLoading: isSinglesLoading,
     isError: isSinglesError,
-  } = useSingles({
-    pagination: { page: 0, pageSize: 100 },
-    sorting: [],
-    filters: {},
-  });
+  } = useSingles(NAV_SINGLES_PARAMS);
 
   const pluginMetadata = branding?.plugins;
 
@@ -162,9 +164,13 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     !isHydrated ||
     isPermissionsLoading ||
     (!!permissionsError && permissions.length === 0);
+  // The content sections are decided by the server's answer about collections
+  // and Singles alone, so they wait on that answer and not on the permission
+  // list: a list that failed would otherwise keep them pending for good.
+  const contentAnswerPending = !isHydrated || content.isLoading;
 
   const hasCollectionsSection = hasCollectionsSectionHelper(capabilities, {
-    isPending: hasPermissionDataPending || isCollectionsLoading,
+    isPending: contentAnswerPending || isCollectionsLoading,
     isError: isCollectionsError,
     permittedCollections,
     placementOf: getCollectionPlacement,
@@ -172,7 +178,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
   const hasSinglesSection =
     capabilities.canViewCollections &&
-    (hasPermissionDataPending ||
+    (contentAnswerPending ||
       isSinglesLoading ||
       isSinglesError ||
       permittedSingles.some(single => !single.admin?.hidden));
@@ -182,7 +188,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     // resolve into visible collections, and for a user without
     // `canManageSettings` the panel then has no destination at all, so keeping
     // the rail item would open an empty panel rather than defer a decision.
-    isPending: hasPermissionDataPending || isCollectionsLoading,
+    isPending: contentAnswerPending || isCollectionsLoading,
     hasVisiblePluginCollection: hasVisiblePluginCollection(
       permittedCollections,
       getCollectionPlacement
@@ -224,10 +230,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           if (!needed.some(slug => hasPermission(slug))) return false;
         }
         switch (item.id) {
-          case "collections":
-            return hasCollectionsSection;
-          case "singles":
-            return hasSinglesSection;
+          case CONTENT_RAIL_ID:
+            // Shown while either kind has something to list; the panel shows
+            // only the kinds that do.
+            return hasCollectionsSection || hasSinglesSection;
           case "plugins":
             return pluginsSectionVisible;
           case "media":
@@ -275,15 +281,42 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
 
   const [selectedMain, setSelectedMain] =
     useState<MainMenuCategory>(activeCategory);
+  // Which content kinds the reader can see now, read by every content decision
+  // below so none can answer from a different pair.
+  const contentAvailable = {
+    collections: hasCollectionsSection,
+    singles: hasSinglesSection,
+  };
+  // What the sidebar shows for the selection, which may give way to the other
+  // content kind once the lists settle.
+  const shownMain = sectionShown(selectedMain, contentAvailable);
 
-  const [collectionSearch, setCollectionSearch] = useState("");
-  const [singleSearch, setSingleSearch] = useState("");
+  // One search for both content kinds: it carries over when the Content panel
+  // switches between Collections and Singles.
+  const [contentSearch, setContentSearch] = useState("");
   const [pluginSearch, setPluginSearch] = useState("");
 
-  // Sync selectedMain when activeCategory changes (e.g. on navigation)
-  useEffect(() => {
+  /**
+   * Open a rail item's panel. Content opens on the part already showing, or
+   * on Collections, or on Singles when the reader has no collections to list.
+   */
+  const selectRailItem = (id: RailItemId) => {
+    if (id !== CONTENT_RAIL_ID) {
+      setSelectedMain(id);
+      return;
+    }
+    setSelectedMain(contentSectionToOpen(selectedMain, contentAvailable));
+  };
+
+  // Follows the route: a navigation selects the section it lands in. Adjusted during render
+  // rather than in an effect, since an effect runs after the paint, so the page arrived at was
+  // first drawn beside the previous section's panel, and the whole content area moved as that
+  // panel closed a frame later.
+  const [routedCategory, setRoutedCategory] = useState(activeCategory);
+  if (routedCategory !== activeCategory) {
+    setRoutedCategory(activeCategory);
     setSelectedMain(activeCategory);
-  }, [activeCategory]);
+  }
 
   const { isActive } = useSidebarNavigation(SIDEBAR_NAVIGATION, pathname);
 
@@ -318,7 +351,12 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       item,
       visibleStandalonePlugins,
       settingsHref,
-      capabilities.canManageSettings
+      capabilities.canManageSettings,
+      contentItemHref({
+        panelShown: !suppressedChrome.has("subSidebar"),
+        current: shownMain,
+        available: contentAvailable,
+      })
     );
 
   // Resolve collections for the active standalone plugin section
@@ -376,7 +414,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         <nav className="flex-1 flex flex-col gap-4 w-full px-3">
           {visibleMenuItems.map(item => {
             const Icon = item.icon;
-            const isSelected = selectedMain === item.id;
+            const isSelected = railItemOf(shownMain) === item.id;
             const href = resolveItemHref(item);
             /*
              * On mobile a category normally stays put and opens the panel
@@ -417,17 +455,24 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                   {renderAsLink ? (
                     <Link
                       href={href}
-                      onClick={() => setSelectedMain(item.id)}
+                      onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
+                      // Named for assistive technology: it draws an icon alone, and its tooltip
+                      // is shown on hover and does not name the control.
+                      aria-label={item.label}
                     >
                       {iconContent}
                     </Link>
                   ) : (
                     <button
-                      onClick={() => setSelectedMain(item.id)}
+                      type="button"
+                      onClick={() => selectRailItem(item.id)}
                       className={className}
                       data-active={isSelected}
+                      // Named as the link beside it is: an icon alone, with a tooltip that does
+                      // not name the control.
+                      aria-label={item.label}
                     >
                       {iconContent}
                     </button>
@@ -448,17 +493,20 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       {/* 2. Sub Sidebar (Detail Menu) */}
       <SubSidebarPanel
         isMobile={Boolean(isMobile)}
-        selectedMain={selectedMain}
-        visibleMenuItemIds={visibleMenuItems.map(item => item.id)}
+        selectedMain={shownMain}
+        visibleMenuItemIds={panelSectionIds(
+          visibleMenuItems.map(item => item.id),
+          contentAvailable
+        )}
         isFolderTreeVisible={isFolderTreeVisible}
         standaloneLabel={standaloneLabel}
         content={{
-          selectedMain,
+          selectedMain: shownMain,
           standaloneLabel,
-          collectionSearch,
-          onCollectionSearchChange: setCollectionSearch,
-          singleSearch,
-          onSingleSearchChange: setSingleSearch,
+          contentSearch,
+          onContentSearchChange: setContentSearch,
+          hasCollectionsSection,
+          hasSinglesSection,
           pluginSearch,
           onPluginSearchChange: setPluginSearch,
           isActive,

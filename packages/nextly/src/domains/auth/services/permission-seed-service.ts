@@ -23,6 +23,7 @@ import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
+import { entityPermissionSpelling } from "./entity-permission-spelling";
 import { PermissionService } from "./permission-service";
 import { RolePermissionService } from "./role-permission-service";
 
@@ -199,6 +200,29 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description: "Permission to read system settings",
   },
   {
+    name: "Create Settings",
+    slug: "create-settings",
+    action: "create",
+    resource: "settings",
+    description:
+      "Permission to add settings such as image sizes, user fields and field groups",
+  },
+  {
+    name: "Update Settings",
+    slug: "update-settings",
+    action: "update",
+    resource: "settings",
+    description: "Permission to change system settings",
+  },
+  {
+    name: "Delete Settings",
+    slug: "delete-settings",
+    action: "delete",
+    resource: "settings",
+    description:
+      "Permission to remove settings such as image sizes, user fields and field groups",
+  },
+  {
     name: "Manage Email Providers",
     slug: "manage-email-providers",
     action: "manage",
@@ -218,6 +242,13 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     action: "read",
     resource: "email-providers",
     description: "Permission to read email providers",
+  },
+  {
+    name: "Update Email Providers",
+    slug: "update-email-providers",
+    action: "update",
+    resource: "email-providers",
+    description: "Permission to change email providers",
   },
   {
     name: "Delete Email Providers",
@@ -246,6 +277,13 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     action: "read",
     resource: "email-templates",
     description: "Permission to read email templates",
+  },
+  {
+    name: "Update Email Templates",
+    slug: "update-email-templates",
+    action: "update",
+    resource: "email-templates",
+    description: "Permission to change email templates",
   },
   {
     name: "Delete Email Templates",
@@ -680,14 +718,15 @@ export class PermissionSeedService extends BaseService {
     collectionSlug: string
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const label = this.slugToLabel(collectionSlug);
     const actions = COLLECTION_SEEDED_ACTIONS;
 
     for (const action of actions) {
-      const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
-      const name = `${actionLabel} ${label}`;
-      const slug = permissionSlug(action, collectionSlug);
-      const description = `Permission to ${action} ${label.toLowerCase()}`;
+      // Spelled by the one function a rename also spells them with, so a
+      // renamed entity's permissions read as if it had been created so.
+      const { name, slug, description } = entityPermissionSpelling(
+        action,
+        collectionSlug
+      );
 
       result.total++;
       try {
@@ -731,14 +770,15 @@ export class PermissionSeedService extends BaseService {
     singleSlug: string
   ): Promise<SeedResult> {
     const result = this.emptySeedResult();
-    const label = this.slugToLabel(singleSlug);
     const actions = SINGLE_SEEDED_ACTIONS;
 
     for (const action of actions) {
-      const actionLabel = action.charAt(0).toUpperCase() + action.slice(1);
-      const name = `${actionLabel} ${label}`;
-      const slug = permissionSlug(action, singleSlug);
-      const description = `Permission to ${action} ${label.toLowerCase()}`;
+      // Spelled by the one function a rename also spells them with, so a
+      // renamed entity's permissions read as if it had been created so.
+      const { name, slug, description } = entityPermissionSpelling(
+        action,
+        singleSlug
+      );
 
       result.total++;
       try {
@@ -1463,13 +1503,6 @@ export class PermissionSeedService extends BaseService {
     );
 
     return rows.map(row => String(row.slug));
-  }
-
-  private slugToLabel(slug: string): string {
-    return slug
-      .split("-")
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ");
   }
 
   private emptySeedResult(): SeedResult {

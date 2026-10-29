@@ -264,14 +264,14 @@ describe("buildPluginAdminMeta", () => {
       });
     });
 
-    it("is manage-settings when it names none", () => {
+    it("is update-settings when it names none", () => {
       const meta = buildPluginAdminMeta(
         asPlugins([
           { ...base, contributes: { admin: { settings: settingsPage } } },
         ]),
         undefined
       );
-      expect(meta[0].settings?.permission).toBe("manage-settings");
+      expect(meta[0].settings?.permission).toBe("update-settings");
     });
   });
 
@@ -287,7 +287,7 @@ describe("buildPluginAdminMeta", () => {
                 {
                   id: "stats",
                   component: "@acme/p/admin#Stats",
-                  size: "half",
+                  size: { default: { w: 6, h: 4 } },
                   requiredPermission: "read-stats",
                 },
               ],
@@ -301,7 +301,7 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].widgets?.[0]).toMatchObject({
       id: "stats",
       component: "@acme/p/admin#Stats",
-      size: "half",
+      size: { default: { w: 6, h: 4 } },
       requiredPermission: "read-stats",
     });
   });

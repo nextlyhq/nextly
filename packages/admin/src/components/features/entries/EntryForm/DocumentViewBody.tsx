@@ -24,6 +24,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+import type { JSX, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
@@ -82,6 +83,12 @@ export interface DocumentViewBodyProps {
   viewingVersion: ViewedVersion | null;
   /** The document's top-level fields, from which a field-type view's is chosen. */
   fields?: readonly FieldConfig[];
+  /**
+   * A strip about the whole document, such as its scheduled release, drawn
+   * first among the view's banners: inside the frame that shares the screen
+   * between them and the view, so the view keeps the rest of the height.
+   */
+  banner?: ReactNode;
 }
 
 /**
@@ -224,7 +231,8 @@ export function DocumentViewBody({
   recovery,
   viewingVersion,
   fields,
-}: DocumentViewBodyProps) {
+  banner,
+}: DocumentViewBodyProps): JSX.Element {
   /*
    * The view takes the window, less the primary rail. `canExit` is false
    * because this body renders no way back of its own — the view is handed
@@ -270,6 +278,7 @@ export function DocumentViewBody({
             validation refused is said here too, since none of the fields it
             names are on screen to say it themselves. */}
         <div className="shrink-0">
+          {banner}
           <DocumentLockBanner
             notice={lock.notice}
             onTakeOver={lock.takeOver}

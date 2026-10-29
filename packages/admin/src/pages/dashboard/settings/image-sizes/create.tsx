@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type JSX } from "react";
 
 import { ImageSizeForm } from "@admin/components/features/settings/ImageSizeForm";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
+import { PermissionGuard } from "@admin/components/guards/PermissionGuard";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
@@ -11,9 +12,10 @@ import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
+import { READ_SETTINGS } from "@admin/lib/permissions/system-policy";
 import { createImageSize, type ImageSize } from "@admin/services/imageSizesApi";
 
-export default function CreateImageSizePage() {
+export default function CreateImageSizePage(): JSX.Element {
   const [isPending, setIsPending] = useState(false);
 
   const handleSubmit = useCallback(async (data: Partial<ImageSize>) => {
@@ -36,23 +38,28 @@ export default function CreateImageSizePage() {
     }
   }, []);
 
+  // The route asks `create-settings`; the page also asks `read-settings`,
+  // which the list it is reached from and returns to asks, so a role that may
+  // only create is refused here rather than after its create.
   return (
-    <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="form">
-        <SettingsLayout
-          title="Image Sizes"
-          description="Configure image sizes generated for uploaded images"
-          crumb="Image Sizes"
-        >
-          <ImageSizeForm
-            mode="create"
-            isPending={isPending}
-            onSubmit={data => {
-              void handleSubmit(data);
-            }}
-          />
-        </SettingsLayout>
-      </PageContainer>
-    </QueryErrorBoundary>
+    <PermissionGuard requiredPermission={READ_SETTINGS}>
+      <QueryErrorBoundary fallback={<PageErrorFallback />}>
+        <PageContainer width="form">
+          <SettingsLayout
+            title="Image Sizes"
+            description="Configure image sizes generated for uploaded images"
+            crumb="Image Sizes"
+          >
+            <ImageSizeForm
+              mode="create"
+              isPending={isPending}
+              onSubmit={data => {
+                void handleSubmit(data);
+              }}
+            />
+          </SettingsLayout>
+        </PageContainer>
+      </QueryErrorBoundary>
+    </PermissionGuard>
   );
 }

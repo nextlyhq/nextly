@@ -39,30 +39,72 @@
 
 import { registerReleasesWidgetSource } from "../../domains/releases/releases-widget-source";
 import { registerVersionsWidgetSource } from "../../domains/versions/versions-widget-source";
+import {
+  attentionItemFaults,
+  clearAttentionItems,
+  registerAttentionItems,
+} from "../../domains/widgets/attention/items";
 import { setContributedWidgets } from "../../domains/widgets/canonical";
-import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import {
+  CORE_DECLARATIONS,
+  CORE_WIDGET_IDS,
+  CORE_WIDGETS,
+} from "../../domains/widgets/core-widgets";
 import { setAdminComponentPlugins } from "../../domains/widgets/declaration/component-map-store";
 import {
   clearDeclaredWidgets,
-  registerWidgetDeclarations,
+  CORE_OWNER,
+  NEXTLY_STARTUP_LOGGER,
+  registerDashboardWidgets,
+  type DeclaredWidgetGroup,
+  type StartupLogger,
 } from "../../domains/widgets/declaration/declared-widgets";
-import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
+import {
+  SITE_CONFIG,
+  siteDashboardContext,
+  siteDashboardFaults,
+  siteDashboardRulesOf,
+  siteDashboardSnapshot,
+  siteDefaultLayoutPlan,
+} from "../../domains/widgets/declaration/site-dashboard";
+import { setDefaultLayoutPlan } from "../../domains/widgets/default-layout";
+import { clearWidgets } from "../../domains/widgets/registry";
+import {
+  clearSiteDashboardRules,
+  setSiteDashboardRules,
+} from "../../domains/widgets/site-rules";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
 import {
+  pluginAlternatives,
+  pluginDashboardSnapshots,
   pluginLegacyWidgetIds,
+  pluginSuggestionFaults,
+  pluginSuggestions,
   pluginWidgetDeclarationGroups,
 } from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
+import { registerActivityWidgetSource } from "../../services/dashboard/activity-widget-source";
+import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
+import { registerRecentEditsWidgetSource } from "../../services/dashboard/recent-edits-widget-source";
+import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
 
 export function resetWidgetRegistries(
-  plugins: readonly PluginDefinition[] = []
+  plugins: readonly PluginDefinition[] = [],
+  // The site config's `admin.dashboard`, as given: startup checks it.
+  dashboard?: unknown,
+  // The registration's logger, which every startup warning here goes through.
+  logger: StartupLogger = NEXTLY_STARTUP_LOGGER
 ): void {
   clearWidgets();
   // Cleared with the registry it publishes into, so a reload's declarations
   // are checked against this boot's alone.
   clearDeclaredWidgets();
+  clearAttentionItems();
+  // The previous boot's hide, replace and overrides, before this config is
+  // checked: they would otherwise narrow the widget facts it is checked against.
+  clearSiteDashboardRules();
   clearSources();
   // 🔴 Cleared WITH the source store, never apart from it. The two are halves
   // of one registration and both are pinned to `globalThis`, so a reset that
@@ -95,27 +137,69 @@ export function resetWidgetRegistries(
   // the generated map against the plugins this boot runs.
   setAdminComponentPlugins(plugins);
 
-  for (const definition of CORE_WIDGETS) {
-    registerWidget(definition);
-  }
-
-  // Plugins' widgets declared with `defineWidget()`, after core's own, so an id
-  // that collides with one of core's fails here, by name. Every declaration of
-  // every enabled plugin is checked together and startup stops on any fault,
-  // all of them reported at once; today's shape is passed for the id rules it
-  // still keeps (`declared-widgets.ts`).
-  registerWidgetDeclarations(
-    pluginWidgetDeclarationGroups(plugins),
-    pluginLegacyWidgetIds(plugins)
-  );
-
   // The domains that answer a source of their own publish it here, after the
-  // stores are empty. PUSHED from the composition root rather than pulled by
-  // the widgets domain, which knows nothing about releases and must not have to
-  // import it — that inversion is what would make the widgets package depend on
-  // most of the codebase in order to offer a card.
+  // stores are empty and BEFORE core's widgets: a widget's settings are
+  // admitted against the filters its source declares (`knobSourceFor`), so a
+  // source registered after the widget naming it would refuse its settings.
+  // PUSHED from the composition root rather than pulled by the widgets domain,
+  // which knows nothing about releases and must not have to import it — that
+  // inversion is what would make the widgets package depend on most of the
+  // codebase in order to offer a card.
   registerReleasesWidgetSource();
   registerVersionsWidgetSource();
+  registerActivityWidgetSource();
+  // Needs attention's source, which combines the releases' and versions' reads
+  // with the entry list's counts and so belongs to no one domain.
+  registerAttentionWidgetSource();
+  registerSummaryWidgetSources();
+  registerRecentEditsWidgetSource();
+
+  // Every widget, through the one call: core's own list, the plugins' widgets
+  // declared with `defineWidget()`, and the site's. Each is checked together
+  // with everything that names one (the site config's dashboard, the plugins'
+  // suggestions and alternatives), and startup stops on any fault of any owner,
+  // all of them reported at once, before any widget is kept; today's shape is
+  // passed for the id rules it still keeps (`declared-widgets.ts`). Each
+  // plugin's contribution and the site config are read once, here, and every
+  // check reads the copy. The site's own widgets are checked with the plugins'
+  // but not registered yet. Core's ids are derived ONCE, here, and handed to
+  // every check that asks whether an id is a built-in.
+  const coreIds: ReadonlySet<string> = new Set<string>(CORE_WIDGET_IDS);
+  const dashboards = pluginDashboardSnapshots(plugins);
+  const site = siteDashboardSnapshot(dashboard);
+  registerDashboardWidgets({
+    core: CORE_WIDGETS,
+    // Core's own declarations first, through the same checks as a plugin's,
+    // so a plugin claiming one of their ids is the one named.
+    groups: [
+      { owner: CORE_OWNER, core: true, declarations: CORE_DECLARATIONS },
+      ...pluginWidgetDeclarationGroups(dashboards),
+      // The site's own widgets last, kept and published as a plugin's are.
+      ...siteWidgetGroup(site),
+    ],
+    legacy: pluginLegacyWidgetIds(plugins),
+    references: (declared, groups) => [
+      ...pluginSuggestionFaults(dashboards, groups, coreIds),
+      ...attentionItemFaults(dashboards),
+      ...siteDashboardFaults(
+        site,
+        siteDashboardContext(declared, pluginAlternatives(dashboards), coreIds)
+      ),
+    ],
+    logger,
+  });
+  // Only once the check above found no fault, so every item kept is whole.
+  registerAttentionItems(dashboards);
+  // The one default dashboard, from the copies just checked: the site's
+  // `defaultLayout` or core's, and the plugins' suggestions after it.
+  setDefaultLayoutPlan(
+    siteDefaultLayoutPlan(site, pluginSuggestions(dashboards))
+  );
+  // What the site keeps off the dashboard, replaces and overrides, from the
+  // same checked copies: read wherever a widget is offered, drawn or described.
+  setSiteDashboardRules(
+    siteDashboardRulesOf(site, pluginAlternatives(dashboards))
+  );
 
   // 🔴 A plugin's sources are NOT registered here, and the reason is a hard
   // ordering fact rather than a preference: this runs before any plugin
@@ -129,4 +213,19 @@ export function resetWidgetRegistries(
   // sources HERE, first, so a plugin naming a built-in id is refused by
   // `registerSource` on the PLUGIN's registration -- naming the plugin an
   // operator can act on, rather than dying inside core's own publication.
+}
+
+/**
+ * The site config's own widgets, as one more owner's declarations: checked,
+ * kept and published as a plugin's are, and listed in the admin's component
+ * map beside them.
+ */
+function siteWidgetGroup(dashboard: unknown): DeclaredWidgetGroup[] {
+  const widgets =
+    typeof dashboard === "object" && dashboard !== null
+      ? (dashboard as { widgets?: unknown }).widgets
+      : undefined;
+  return widgets === undefined
+    ? []
+    : [{ owner: SITE_CONFIG, declarations: widgets }];
 }

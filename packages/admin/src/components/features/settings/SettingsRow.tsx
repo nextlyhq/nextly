@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { JSX, ReactNode } from "react";
 
 import { FormDescription, useFormField } from "@admin/components/ui/form";
 import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
@@ -28,7 +28,7 @@ export function SettingsRow({
   label,
   description,
   children,
-}: SettingsRowProps) {
+}: SettingsRowProps): JSX.Element {
   const { formItemId } = useFormField();
 
   useLabelLandingCheck({

@@ -26,13 +26,39 @@ vi.mock("@admin/lib/navigation", () => ({
 
 const mockPermissions = vi.mocked(useCurrentUserPermissions);
 
-/** Only what the guard reads; the hook returns far more. */
-function holding(slugs: string[], isLoading = false) {
+/**
+ * Only what the guard reads; the hook returns far more. The server's answer
+ * about collections agrees with the slugs unless `server` says otherwise.
+ */
+function holding(
+  slugs: string[],
+  isLoading = false,
+  server: {
+    allows?: string[];
+    content?: {
+      isLoading?: boolean;
+      hasAnswer?: boolean;
+      isPlaceholder?: boolean;
+      error?: Error;
+    };
+  } = {}
+) {
+  const allows = server.allows ?? slugs;
   mockPermissions.mockReturnValue({
     hasPermission: (slug: string) => slugs.includes(slug),
+    canAccessCollection: (slug: string, action: string) =>
+      allows.includes(`${action}-${slug}`),
     isLoading,
     hasAnswer: !isLoading,
     error: null,
+    content: {
+      isLoading,
+      hasAnswer: !isLoading,
+      error: null,
+      isPlaceholder: false,
+      ...server.content,
+    },
+    retry: vi.fn(),
   } as unknown as ReturnType<typeof useCurrentUserPermissions>);
 }
 
@@ -258,6 +284,7 @@ describe("PermissionGuard", () => {
         isLoading: false,
         hasAnswer: answered !== null,
         error: new Error("Request failed"),
+        content: { isLoading: false, hasAnswer: false, error: null },
         retry,
       } as unknown as ReturnType<typeof useCurrentUserPermissions>);
       return retry;
@@ -304,6 +331,221 @@ describe("PermissionGuard", () => {
       );
       expect(screen.getByText("the page")).toBeTruthy();
     });
+  });
+
+  describe("on a collection or Single route", () => {
+    const POSTS = { slug: "posts", action: "read" } as const;
+
+    it("refuses what the server refuses, though the role holds the permission", () => {
+      // The collection's code rule refuses the read the role's slug allows.
+      holding(["read-posts"], false, { allows: [] });
+      render(
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      expect(
+        screen.getByRole("heading", {
+          name: "You don't have access to this collection",
+        })
+      ).toBeTruthy();
+      expect(pageRendered).not.toHaveBeenCalled();
+    });
+
+    it("opens what the server allows", () => {
+      holding([], false, { allows: ["read-posts"] });
+      render(
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      expect(screen.getByText("the page")).toBeTruthy();
+    });
+
+    it("opens what the server's answer allows, though the permission list failed", () => {
+      mockPermissions.mockReturnValue({
+        hasPermission: () => false,
+        canAccessCollection: (slug: string, action: string) =>
+          `${action}-${slug}` === "read-posts",
+        isLoading: false,
+        hasAnswer: false,
+        error: new Error("Request failed"),
+        content: { isLoading: false, hasAnswer: true, error: null },
+        retry: vi.fn(),
+      } as unknown as ReturnType<typeof useCurrentUserPermissions>);
+      render(
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      expect(screen.getByText("the page")).toBeTruthy();
+    });
+
+    it("shows the page it opened only once the next language's answer allows it", () => {
+      // The language moved from allowed the page; the new one's answer is not
+      // in yet. The page reads the new language's document, which a cache may
+      // already hold, so it is not shown on the old answer's word: the guard
+      // waits for the new one, as on a first visit.
+      holding([], false, { allows: ["read-posts"] });
+      // A new element each render: React re-renders the guard only for
+      // props that changed, and the same element would leave it as it was.
+      const guarded = () => (
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      const { rerender } = render(guarded());
+      expect(screen.getByText("the page")).toBeTruthy();
+
+      pageRendered.mockClear();
+      holding([], false, {
+        allows: ["read-posts"],
+        content: { hasAnswer: false, isPlaceholder: true },
+      });
+      rerender(guarded());
+      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(pageRendered).not.toHaveBeenCalled();
+
+      // The new language's answer allows the page: it opens again.
+      holding([], false, { allows: ["read-posts"] });
+      rerender(guarded());
+      expect(screen.getByText("the page")).toBeTruthy();
+    });
+
+    it("does not reopen a page a later language refused while the next is asked", () => {
+      // Opened in English, refused in German, then switched on to French:
+      // the page was not open in German, so French's wait shows no page.
+      holding([], false, { allows: ["read-posts"] });
+      // A new element each render: React re-renders the guard only for
+      // props that changed, and the same element would leave it as it was.
+      const guarded = () => (
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      const { rerender } = render(guarded());
+      expect(screen.getByText("the page")).toBeTruthy();
+
+      holding([], false, { allows: [] });
+      rerender(guarded());
+      expect(
+        screen.getByRole("heading", {
+          name: "You don't have access to this collection",
+        })
+      ).toBeTruthy();
+
+      pageRendered.mockClear();
+      holding([], false, {
+        allows: [],
+        content: { hasAnswer: false, isPlaceholder: true },
+      });
+      rerender(guarded());
+      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(pageRendered).not.toHaveBeenCalled();
+    });
+
+    it("does not keep a page open while an access change's answer is asked", () => {
+      // A change to roles or a role's end leaves the answer no longer holding
+      // while it is asked again; that is not a language switch, so the page
+      // it had open waits rather than stays.
+      holding([], false, { allows: ["read-posts"] });
+      const guarded = () => (
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      const { rerender } = render(guarded());
+      expect(screen.getByText("the page")).toBeTruthy();
+
+      holding([], false, {
+        allows: [],
+        content: { isLoading: true, hasAnswer: false },
+      });
+      rerender(guarded());
+      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(screen.queryByText("the page")).toBeNull();
+    });
+
+    it("opens no page on the answer for the language moved from", () => {
+      // A route this guard never opened waits for its own language's answer,
+      // as on a first visit.
+      holding([], false, {
+        allows: [],
+        content: { hasAnswer: false, isPlaceholder: true },
+      });
+      render(
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      expect(screen.getByText("Setting up your workspace")).toBeTruthy();
+      expect(pageRendered).not.toHaveBeenCalled();
+      expect(
+        screen.queryByRole("heading", {
+          name: "You don't have access to this collection",
+        })
+      ).toBeNull();
+    });
+
+    it("claims no refusal while the server's answer is missing", () => {
+      holding(["read-posts"], false, {
+        allows: [],
+        content: { hasAnswer: false, error: new Error("Request failed") },
+      });
+      render(
+        <PermissionGuard
+          requiredPermission="read-posts"
+          subject="collection"
+          entity={POSTS}
+        >
+          <Page />
+        </PermissionGuard>
+      );
+      expect(screen.getByText("Couldn't check your access")).toBeTruthy();
+      expect(pageRendered).not.toHaveBeenCalled();
+    });
+  });
+
+  it("opens a system page while only the answer about collections is missing", () => {
+    // A content-registry failure says nothing about the users page, which
+    // the permission list decides.
+    holding(["read-users"], false, {
+      content: { hasAnswer: false, error: new Error("Request failed") },
+    });
+    render(
+      <PermissionGuard requiredPermission="read-users">
+        <Page />
+      </PermissionGuard>
+    );
+    expect(screen.getByText("the page")).toBeTruthy();
   });
 
   it("shows neither the page nor the refusal while permissions load", () => {

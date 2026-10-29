@@ -1,9 +1,9 @@
 /**
  * A plugin's widgets, written as an author would write them: the server half.
  *
- * One widget of each kind -- a data function behind a core display, a query
- * behind a core display, and a data function and a query each behind a
- * component of the plugin's own -- plus the plugin's dashboard contribution.
+ * A load function behind each kind of view -- core's `bars` and `list`, and
+ * two components of the plugin's own -- plus the plugin's dashboard
+ * contribution.
  * `admin.ts` beside it is the browser half, and reaches these only through
  * `import type`.
  *
@@ -13,57 +13,72 @@
 import type { DashboardContribution } from "../../dashboard";
 import { defineAttentionItem } from "../../dashboard";
 import { defineWidget } from "../../define-widget";
-import { settings } from "../../setting-builders";
+import { option } from "../../../../../collections/fields/helpers";
+import { setting } from "../../setting-builders";
 
-/** A data function behind core's `bars` display. */
+/** A data function behind core's `bars` view. */
 export const ordersByState = defineWidget({
   id: "acme/orders-by-state",
   title: "Orders by state",
   description: "How many orders sit in each state",
   category: "Shop",
-  widths: ["third", "half", "twoThirds"],
-  width: "half",
-  permission: "read-orders",
-  sketch: "bars",
+  size: { default: { w: 6, h: 4 }, min: { w: 4, h: 3 }, max: { w: 8, h: 6 } },
+  access: "read-orders",
   settings: {
-    range: settings.dateRange({ default: "30d" }),
-    top: settings.items({ default: 5 }),
+    range: setting.dateRange({ label: "Date range", defaultValue: "30d" }),
+    top: setting.number({
+      label: "Number of items",
+      defaultValue: 5,
+      min: 1,
+      max: 10,
+    }),
   },
-  data: async ({ settings, services, signal }) => {
+  load: async ({ settings, services, signal }) => {
     const paid = await services.count("orders", {
       where: { state: { equals: "paid" }, placedWithin: settings.range },
       signal,
     });
     return { buckets: [{ value: "paid", count: paid }].slice(0, settings.top) };
   },
-  display: "bars",
-  example: { buckets: [{ value: "paid", count: 12 }] },
+  view: "bars",
+  preview: [
+    { name: "Some paid", data: { buckets: [{ value: "paid", count: 12 }] } },
+  ],
 });
 
-/** A query core runs, behind core's `list` display, written from settings. */
+/** A load function reading rows, behind core's `list` view, from its settings. */
 export const recentOrders = defineWidget({
   id: "acme/recent-orders",
   title: "Recent orders",
   description: "The newest orders",
   category: "Shop",
-  widths: ["half", "full"],
-  width: "full",
+  size: { default: { w: 12, h: 5 }, min: { w: 6, h: 4 }, max: { w: 12, h: 8 } },
   several: true,
   settings: {
-    collection: settings.collection(),
-    sort: settings.sort({ of: "collection", default: "-createdAt" }),
-    items: settings.items({ default: 5 }),
+    collection: setting.collection({ label: "Collection" }),
+    sort: setting.sort({
+      of: "collection",
+      label: "Sort",
+      defaultValue: "-createdAt",
+    }),
+    items: setting.number({
+      label: "Number of items",
+      defaultValue: 5,
+      min: 1,
+      max: 10,
+    }),
   },
-  data: {
-    query: ({ settings }) => ({
-      collection: settings.collection,
-      op: "list",
+  load: async ({ settings, services, signal }) => {
+    const { items } = await services.find(settings.collection, {
       select: ["title"],
       sort: settings.sort,
       limit: settings.items,
-    }),
+      signal,
+    });
+    // The rows as read: typed as transportable already, so answered without restating them.
+    return { items };
   },
-  display: "list",
+  view: "list",
 });
 
 /** A data function behind a component of the plugin's own. */
@@ -72,20 +87,23 @@ export const revenue = defineWidget({
   title: "Revenue",
   description: "Takings per day over the chosen range",
   category: "Shop",
-  widths: ["half", "twoThirds", "full"],
-  width: "twoThirds",
+  size: { default: { w: 8, h: 4 }, min: { w: 6, h: 4 } },
   settings: {
-    range: settings.dateRange({ default: "30d" }),
-    currency: settings.select({ options: ["usd", "eur"], default: "usd" }),
-    net: settings.toggle({ default: false }),
+    range: setting.dateRange({ label: "Date range", defaultValue: "30d" }),
+    currency: setting.select({
+      label: "Currency",
+      options: [option("US dollar", "usd"), option("Euro", "eur")],
+      defaultValue: "usd",
+    }),
+    net: setting.checkbox({ label: "Net", defaultValue: false }),
   },
-  data: async ({ settings }) => ({
+  load: async ({ settings }) => ({
     currency: settings.currency,
     points: [{ day: "2026-10-01", total: settings.net ? 90 : 100 }],
   }),
-  display: { component: "@acme/nextly-plugin-shop/admin#RevenueCard" },
+  view: { component: "@acme/nextly-plugin-shop/admin#RevenueCard" },
+  isEmpty: data => data.points.length === 0,
   empty: {
-    when: data => data.points.length === 0,
     message: "No takings in this range",
     action: {
       label: "Add a product",
@@ -93,22 +111,28 @@ export const revenue = defineWidget({
       permission: "create-products",
     },
   },
-  example: { currency: "eur", points: [{ day: "2026-10-01", total: 12 }] },
+  preview: [
+    {
+      name: "One day",
+      data: { currency: "eur", points: [{ day: "2026-10-01", total: 12 }] },
+      settings: { currency: "eur" },
+    },
+  ],
 });
 
-/** A query core runs, behind a component of the plugin's own. */
+/** A load function counting, behind a component of the plugin's own. */
 export const unpaidCount = defineWidget({
   id: "acme/unpaid-count",
   title: "Unpaid",
   description: "Orders waiting for payment",
   category: "Shop",
-  widths: ["quarter", "third"],
-  width: "quarter",
-  settings: { collection: settings.collection() },
-  data: {
-    query: ({ settings }) => ({ collection: settings.collection, op: "count" }),
-  },
-  display: { component: "@acme/nextly-plugin-shop/admin#UnpaidCard" },
+  size: { default: { w: 3, h: 2 }, max: { w: 4, h: 2 } },
+  settings: { collection: setting.collection({ label: "Collection" }) },
+  load: async ({ settings, services, signal }) => ({
+    total: await services.count(settings.collection, { signal }),
+  }),
+  view: { component: "@acme/nextly-plugin-shop/admin#UnpaidCard" },
+  isEmpty: data => data.total === 0,
 });
 
 /**

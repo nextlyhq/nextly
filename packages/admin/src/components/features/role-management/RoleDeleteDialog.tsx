@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@nextlyhq/ui";
 import { useState, useCallback, useRef } from "react";
+import type { JSX } from "react";
 
 import {
   Loader2,
@@ -29,7 +30,7 @@ export function RoleDeleteDialog({
   role,
   onOpenChange,
   onConfirm,
-}: RoleDeleteDialogProps) {
+}: RoleDeleteDialogProps): JSX.Element | null {
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

@@ -17,7 +17,7 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { FieldConfig } from "../../collections/fields/types";
-import { getService } from "../../di";
+import { getService, type ServiceMap } from "../../di";
 import { NextlyError } from "../../errors";
 import type { ServiceErrorEnvelope } from "../../errors/from-service-envelope";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
@@ -28,7 +28,9 @@ import {
   applyFieldWriteAccess,
   callerAccessGrants,
 } from "../../shared/lib/field-level-registry";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
+import { appLocalization } from "../i18n/configured-locales";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
@@ -38,6 +40,7 @@ import {
   payloadTouchesComponents,
   restoreLocaleIsUnknown,
   schemaStoresPerLocaleContent,
+  type ComponentSchemaInfo,
   type ComponentSchemas,
 } from "./restore-snapshot";
 
@@ -129,6 +132,43 @@ async function describeEntity(
 }
 
 /**
+ * One component's schema as the registry records it, read through `lookup`.
+ * A slug with no record is answered as unresolved; a lookup that throws
+ * propagates.
+ */
+async function readComponentSchema(
+  lookup: ServiceMap["fieldGroupRegistryService"]["getComponentBySlug"],
+  slug: string
+): Promise<ComponentSchemaInfo> {
+  try {
+    const record = await lookup(slug);
+    // The component's OWN localization switch: its values live in its own
+    // tables, so an unlocalized component inside a localized document
+    // stores one copy of each value. A slug with no record behind it is
+    // marked unresolved rather than empty — a component that declares no
+    // fields is legitimate and must stay restorable.
+    return {
+      fields: record?.fields ?? [],
+      localized: (record as { localized?: unknown } | null)?.localized === true,
+      resolved: record !== null && record !== undefined,
+    };
+  } catch (cause) {
+    // A missing component returns null above; a throw here is a lookup
+    // failure (registry or database), not a confirmed absence. Recording
+    // it as unresolved would let a transient error masquerade as a
+    // deleted component, and a caller that drops or publishes an unknown
+    // subtree would then silently discard or expose data. Propagate so
+    // the request fails and can be retried; a typed error is preserved.
+    throw cause instanceof NextlyError
+      ? cause
+      : NextlyError.internal({
+          cause: cause instanceof Error ? cause : undefined,
+          logContext: { component: slug },
+        });
+  }
+}
+
+/**
  * Child fields for every component the schema references, keyed by slug.
  *
  * A component field names its schema rather than carrying it, so the payload
@@ -138,9 +178,24 @@ async function describeEntity(
  * subtree it cannot inspect could overwrite a nested credential. A lookup that
  * throws is the different case: it is not proof the component is gone, so the
  * error propagates rather than being recorded as an absence.
+ *
+ * A caller that holds some definitions itself, such as a configuration not yet
+ * synced to the registry, passes them as `known`: they are used in place of the
+ * registry's, nested references included. With `readRegistry: false` a slug
+ * `known` lacks is left out rather than read.
  */
 export async function resolveComponentSchemas(
-  fields: FieldConfig[]
+  fields: FieldConfig[],
+  /**
+   * The transaction-bound executor, for a caller resolving these while its
+   * transaction holds a connection: the reads then run on it, rather than on a
+   * second pooled connection that cannot see its writes and can stall behind it.
+   */
+  executor?: unknown,
+  options: {
+    known?: ReadonlyMap<string, ComponentSchemaInfo>;
+    readRegistry?: boolean;
+  } = {}
 ): Promise<ComponentSchemas> {
   const slugs = new Set<string>();
 
@@ -163,7 +218,14 @@ export async function resolveComponentSchemas(
   const resolved: ComponentSchemas = new Map();
   if (slugs.size === 0) return resolved;
 
-  const registry = getService("fieldGroupRegistryService");
+  // Read only when a slug needs it, so a caller holding every definition
+  // never reaches the registry.
+  let registry: ServiceMap["fieldGroupRegistryService"] | undefined;
+  const lookup = (slug: string) => {
+    registry ??= getService("fieldGroupRegistryService");
+    return registry.getComponentBySlug(slug, executor);
+  };
+  const leftOut = new Set<string>();
 
   // A component may embed another, so resolving only the entity's own layer
   // would leave the deeper ones opaque — and an opaque subtree is one the
@@ -172,38 +234,20 @@ export async function resolveComponentSchemas(
   // a cycle terminates.
   let pending = [...slugs];
   while (pending.length > 0) {
-    const batch = pending.filter(slug => !resolved.has(slug));
+    const batch = pending.filter(
+      slug => !resolved.has(slug) && !leftOut.has(slug)
+    );
     if (batch.length === 0) break;
 
     await Promise.all(
       batch.map(async slug => {
-        try {
-          const record = await registry.getComponentBySlug(slug);
-          // The component's OWN localization switch: its values live in its own
-          // tables, so an unlocalized component inside a localized document
-          // stores one copy of each value. A slug with no record behind it is
-          // marked unresolved rather than empty — a component that declares no
-          // fields is legitimate and must stay restorable.
-          resolved.set(slug, {
-            fields: record?.fields ?? [],
-            localized:
-              (record as { localized?: unknown } | null)?.localized === true,
-            resolved: record !== null && record !== undefined,
-          });
-        } catch (cause) {
-          // A missing component returns null above; a throw here is a lookup
-          // failure (registry or database), not a confirmed absence. Recording
-          // it as unresolved would let a transient error masquerade as a
-          // deleted component, and a caller that drops or publishes an unknown
-          // subtree would then silently discard or expose data. Propagate so
-          // the request fails and can be retried; a typed error is preserved.
-          throw cause instanceof NextlyError
-            ? cause
-            : NextlyError.internal({
-                cause: cause instanceof Error ? cause : undefined,
-                logContext: { component: slug },
-              });
-        }
+        const schema =
+          options.known?.get(slug) ??
+          (options.readRegistry === false
+            ? undefined
+            : await readComponentSchema(lookup, slug));
+        if (schema === undefined) leftOut.add(slug);
+        else resolved.set(slug, schema);
       })
     );
 
@@ -240,9 +284,11 @@ export async function resolveComponentSchemas(
  */
 function usableLocale(versionLocale: string | null): string | null {
   if (versionLocale === null) return null;
-  const localization = getService("config")?.localization;
-  // Without localization configured there is no locale to validate against, and
-  // nothing reads one either.
+  // The site's languages as they are now, so a site whose languages are stored
+  // rather than declared in its configuration validates against that list too.
+  const localization = appLocalization();
+  // Without languages there is no locale to validate against, and nothing
+  // reads one either.
   if (!localization) return null;
   return isValidLocale(localization, versionLocale) ? versionLocale : null;
 }
@@ -287,6 +333,8 @@ async function dropFieldsTheReaderMayNotRead(
   componentSchemas: ComponentSchemas,
   droppedFields: string[]
 ): Promise<void> {
+  // `args.entryId` is the id as stored: the versions routes refuse a restore
+  // whose id is not exactly the live row's (`assertVersionDocumentReadable`).
   const readProbe: Record<string, unknown> = {
     ...structuredClone(payload),
     id: args.entryId,
@@ -375,6 +423,12 @@ function deepEquals(a: unknown, b: unknown): boolean {
 export async function restoreVersion(
   args: RestoreVersionArgs
 ): Promise<RestoreVersionResult> {
+  // Refused first when the collection or Single is removed from code, before
+  // the version is read or replayed.
+  await refuseHistoryWriteIfRemovedFromCode({
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+  });
   if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
     throw NextlyError.validation({
       errors: [
@@ -516,6 +570,7 @@ export async function restoreVersion(
       operation: "update",
       user: args.user,
       overrideAccess: false,
+      // The id as stored, as the read probe above is told.
       id: args.entryId,
     });
     dropFieldsTheProbeRejected(payload, accessProbe, droppedFields);

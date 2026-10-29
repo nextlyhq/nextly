@@ -11,6 +11,7 @@
  * @module components/features/releases/ReleaseDetail
  */
 
+import type { JSX } from "react";
 import { useState } from "react";
 
 import { CalendarClock, ExternalLink, Trash2 } from "@admin/components/icons";
@@ -36,6 +37,7 @@ import {
   useReleaseMembers,
   useRemoveReleaseMember,
 } from "@admin/hooks/queries/useReleases";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import type {
   Release,
   ReleaseMember,
@@ -326,9 +328,11 @@ function Header({
   );
 }
 
-export function ReleaseDetail({ id }: { id: string }) {
+export function ReleaseDetail({ id }: { id: string }): JSX.Element {
   const release = useRelease(id);
   const members = useReleaseMembers(id);
+  // The tab names the release, as its heading does, once it has arrived.
+  useDocumentTitle(release.data?.title);
 
   if (release.isPending) {
     return (

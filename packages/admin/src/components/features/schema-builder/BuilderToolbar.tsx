@@ -7,6 +7,7 @@
 import { Badge, Button } from "@nextlyhq/ui";
 import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
+import type { JSX } from "react";
 
 import { Lock, Settings } from "@admin/components/icons";
 import { ROUTES } from "@admin/constants/routes";
@@ -53,7 +54,7 @@ export function BuilderToolbar({
   locked = false,
   onOpenSettings,
   onSave,
-}: Props) {
+}: Props): JSX.Element {
   const saveDisabled = unsavedCount === 0 || locked;
   const lockedSaveTitle = locked
     ? `This ${KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`

@@ -33,6 +33,7 @@ import {
   SelectValue,
   Textarea,
 } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -42,6 +43,7 @@ import { Form, FormField } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useRoles } from "@admin/hooks/queries/useRoles";
+import { assignableRoles } from "@admin/lib/roles/assignable";
 
 import { KeySummary } from "./KeySummary";
 
@@ -53,7 +55,22 @@ import { KeySummary } from "./KeySummary";
  * Local schema matching CreateApiKeySchema from @nextly/schemas.
  * Defined locally so admin does not need a direct dependency on nextly.
  */
-const createApiKeySchema = z
+const createApiKeySchema: z.ZodObject<{
+  name: z.ZodString;
+  description: z.ZodOptional<z.ZodString>;
+  tokenType: z.ZodEnum<{
+    "read-only": "read-only";
+    "full-access": "full-access";
+    "role-based": "role-based";
+  }>;
+  roleId: z.ZodOptional<z.ZodString>;
+  expiresIn: z.ZodEnum<{
+    "7d": "7d";
+    "30d": "30d";
+    "90d": "90d";
+    unlimited: "unlimited";
+  }>;
+}> = z
   .object({
     name: z
       .string()
@@ -116,7 +133,7 @@ const TOKEN_TYPE_DESCRIPTORS = {
 export function CreateApiKeyForm({
   onSubmit,
   isPending,
-}: CreateApiKeyFormProps) {
+}: CreateApiKeyFormProps): JSX.Element {
   const form = useForm<CreateApiKeyFormValues>({
     resolver: zodResolver(createApiKeySchema),
     defaultValues: {
@@ -304,7 +321,7 @@ export function CreateApiKeyForm({
                         />
                       </SelectTrigger>
                       <SelectContent>
-                        {rolesData?.items.map(role => (
+                        {assignableRoles(rolesData?.items ?? []).map(role => (
                           <SelectItem key={role.id} value={role.id}>
                             {role.roleName}
                           </SelectItem>

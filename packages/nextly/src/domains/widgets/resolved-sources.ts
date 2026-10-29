@@ -74,6 +74,7 @@ import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WidgetQuery } from "./query";
 import type { WidgetResult } from "./result";
 import { registerSource, type WidgetSource } from "./sources";
+import type { WidgetScope } from "./widget-scope";
 
 /**
  * What the host passes a resolver BESIDE the question it is answering.
@@ -116,22 +117,19 @@ export interface ResolverOptions {
    * @experimental
    */
   scope?: WidgetScope;
+  /**
+   * The batch's one instant: what every read in it measures `since` and
+   * `until` from, so two cards, or two cells of one card, cannot straddle
+   * different moments. Absent, a read takes its own.
+   *
+   * @experimental
+   */
+  now?: Date;
 }
 
-/**
- * Work shared within one batch, for one caller.
- *
- * `getOrCompute` runs `compute` the first time a key is asked for and hands every
- * later asker, concurrent ones included, the same in-flight promise: two cards
- * reading the same scan share one scan. A computation that rejects is not kept,
- * so a later asker runs it again rather than inheriting one failure for the
- * whole batch.
- *
- * @experimental
- */
-export interface WidgetScope {
-  getOrCompute<T>(key: string, compute: () => Promise<T>): Promise<T>;
-}
+// Declared in a module of its own, which imports nothing, so a widget's
+// declaration can name it without its readers compiling the source registry.
+export type { WidgetScope } from "./widget-scope";
 
 /**
  * Answers several of one source's queries in one call, for one caller.

@@ -19,10 +19,9 @@
 
 import { z } from "zod";
 
-import {
-  COLLECTION_DEFINITION_ACTION,
-  COLLECTION_DEFINITION_RESOURCE,
-} from "../auth/collection-definition-policy";
+import { schemaListed } from "../auth/access/route-gate-adapters";
+import { getRBACService } from "../auth/code-access";
+import { COLLECTION_DEFINITION_PERMISSIONS } from "../auth/collection-definition-policy";
 import { getService } from "../di";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import { resolveBuilderVersions } from "../domains/versions/builder-versions";
@@ -31,15 +30,14 @@ import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
-import { hasPermission, isSuperAdmin } from "../services/lib/permissions";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
 
 import { assertValidFieldsPayload } from "./fields-payload";
 import { respondList, respondMutation } from "./response-shapes";
 import {
+  requireRouteAllPermissions,
   requireRouteAuthentication,
-  requireRoutePermission,
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -181,39 +179,15 @@ export const GET = withErrorHandler(async (request: Request) => {
     search,
   });
 
-  // Filter to the collections the caller may read. The authorization
-  // MUST honor the authentication method: an API key carries its own
-  // pre-resolved, possibly-narrowed permission set, so authorizing it via
-  // the owner's session RBAC (`hasPermission`/`isSuperAdmin` by user id)
-  // would let a restricted key list collections outside its scope. This
-  // mirrors how `requirePermission` branches on `authMethod`.
-  let filteredCollections = result.data;
-
-  if (auth.authMethod === "api-key") {
-    // The key's resolved permission set is the source of truth (no
-    // super-admin bypass — that is already reflected in the resolved set).
-    filteredCollections = result.data.filter(collection =>
-      auth.permissions.includes(`read-${collection.slug}`)
-    );
-  } else {
-    // Session auth: super-admins see everything; others need explicit
-    // read-{slug} permission via their RBAC roles.
-    const isAdmin = await isSuperAdmin(auth.userId);
-    if (!isAdmin) {
-      const permittedCollections = [];
-      for (const collection of result.data) {
-        const canRead = await hasPermission(
-          auth.userId,
-          "read",
-          collection.slug
-        );
-        if (canRead) {
-          permittedCollections.push(collection);
-        }
-      }
-      filteredCollections = permittedCollections;
-    }
-  }
+  // Narrowed to the collections the caller may read, judged on how it
+  // authenticated: a key on its own scope, never its owner's grants, so a
+  // restricted key lists nothing outside it. The caller's access is read once
+  // for the whole list.
+  const filteredCollections = await schemaListed(
+    auth,
+    result.data,
+    getRBACService()
+  );
 
   // D63 seam: let plugins transform the admin nav collection list.
   const navItems = await applyAdminNavFilter(filteredCollections, auth.userId);
@@ -253,8 +227,8 @@ function pageOf<T>(all: T[], limit: number, offset: number) {
 /**
  * POST handler for creating a new UI collection.
  *
- * Requires super-admin or `manage-settings` permission. Creates a new
- * collection with `source="ui"` and `locked=false`.
+ * Requires super-admin, or create, update and delete on settings. Creates a
+ * new collection with `source="ui"` and `locked=false`.
  *
  * Response Codes:
  * - 201 Created: Collection created successfully
@@ -272,13 +246,9 @@ export const POST = withErrorHandler(async (request: Request) => {
   // Initialize services (required for permission check via RBAC tables).
   const registry = await getCollectionRegistry();
 
-  // Authorise: only super-admins or users with manage-settings permission
-  // may create new collections (matches the frontend route guard).
-  await requireRoutePermission(
-    request,
-    COLLECTION_DEFINITION_ACTION,
-    COLLECTION_DEFINITION_RESOURCE
-  );
+  // Authorise: a super-admin, or a caller holding every permission a
+  // collection definition change asks (create, update and delete settings).
+  await requireRouteAllPermissions(request, COLLECTION_DEFINITION_PERMISSIONS);
 
   const body = await request.json();
 

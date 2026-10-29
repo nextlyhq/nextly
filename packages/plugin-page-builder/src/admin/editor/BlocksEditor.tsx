@@ -29,9 +29,11 @@ import {
   SpacingOverlay,
 } from "@nextlyhq/builder/shell";
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 import type { Control, FieldValues, Path } from "react-hook-form";
 
 import { siteSheet } from "../../site-style";
+import { contributedInspector } from "../contributed-blocks";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
@@ -296,6 +298,10 @@ function editorInspector(view: EditorView): React.JSX.Element {
       // very document the page is drawn from, and titled from the row
       // the same read returned.
       componentLibrary={componentLibrary}
+      // A contributed block's own inspector, loaded by the app's generated
+      // component map; a block whose inspector did not load keeps its
+      // generated controls.
+      inspectors={contributedInspector}
       styleState={styleStateBinding}
       classLibrary={classes.library}
       classLibraryAbsence={classes.absence}
@@ -536,7 +542,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   onClose: () => void;
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
-}) {
+}): JSX.Element {
   const mount = useEditorMount(initialValue, kinds);
   const { editor, inline } = mount;
 

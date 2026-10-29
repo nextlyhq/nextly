@@ -10,6 +10,8 @@
  * @module pages/dashboard/entries/[slug]/[id]/versions
  */
 
+import type { JSX } from "react";
+
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import {
   readLocaleParam,
@@ -17,9 +19,13 @@ import {
 } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import type { PageProps } from "@admin/lib/routing";
 
-export default function EntryVersionsPage({ params, searchParams }: PageProps) {
+export default function EntryVersionsPage({
+  params,
+  searchParams,
+}: PageProps): JSX.Element {
   const slug = typeof params?.slug === "string" ? params.slug : "";
   const id = typeof params?.id === "string" ? params.id : "";
   // Without this the page announces itself only as "Version history", while the
@@ -33,6 +39,9 @@ export default function EntryVersionsPage({ params, searchParams }: PageProps) {
     { kind: "collection", slug, entryId: id },
     locale
   );
+  // The tab names the entry whose history this is, by the same name the
+  // comparison's heading uses.
+  useDocumentTitle(documentTitle);
 
   return (
     <VersionComparePage

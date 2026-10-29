@@ -55,14 +55,14 @@ async function cookiesFor(
     ttlSeconds: 600,
     minter: "minter-1",
   });
-  return () => ({
+  return async () => ({
     get: (name: string) =>
       name === PREVIEW_SCOPE_COOKIE ? { value: token } : undefined,
   });
 }
 
 /** A request with no preview cookie at all. */
-const noCookies = () => ({ get: () => undefined });
+const noCookies = async () => ({ get: () => undefined });
 
 // `NonNullable`, because the config parameter is optional: the ordinary mount
 // passes nothing and lets every value default. These tests pin all three, which
@@ -256,7 +256,7 @@ describe("previewDraftGate", () => {
           hkdfSync("sha256", SECRET, "", "nextly:preview-token:v1", 32)
         )
       );
-    const cookies = () => ({
+    const cookies = async () => ({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE ? { value: legacy } : undefined,
     });
@@ -272,6 +272,29 @@ describe("previewDraftGate", () => {
   // identity re-evaluates FIELD rules and nothing else, because the read runs
   // with the row checks bypassed, so without this the link kept serving the
   // draft until it expired.
+  it("judges the sharer in the language the link names", async () => {
+    // A link is to one document in one language, so its sharer is asked
+    // about that language at every open, as at the mint.
+    const cookies = await cookiesFor({
+      collection: "pages",
+      entryId: "entry-1",
+      locale: "fr",
+    });
+
+    await gate(cookies)({
+      collection: "pages",
+      slug: "a-propos",
+      locale: "fr",
+    });
+
+    expect(assertEntryPreviewable).toHaveBeenCalledWith(
+      "pages",
+      "entry-1",
+      SHARER,
+      expect.objectContaining({ routeAuthorized: false, locale: "fr" })
+    );
+  });
+
   it("refuses once the sharer may no longer preview the entry", async () => {
     assertEntryPreviewable.mockRejectedValue(new Error("forbidden"));
     const cookies = await cookiesFor({

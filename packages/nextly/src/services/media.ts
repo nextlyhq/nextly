@@ -118,6 +118,79 @@ function sizesColumn(sizes: unknown): string | null {
   return sizes == null ? null : JSON.stringify(sizes);
 }
 
+/** A focus point as the image sizes are cut around it. */
+interface CutPoint {
+  focalX: number;
+  focalY: number;
+}
+
+/** An unset coordinate, which the image processor reads as the middle. */
+const UNSET_FOCAL_COORDINATE = 50;
+
+/**
+ * How many times an update cuts the sizes again when another update moves
+ * the point between its read and its write, before it reports a conflict.
+ */
+const MAX_FOCAL_POINT_ATTEMPTS = 3;
+
+/** The point a row holds, with an unset coordinate read as the middle. */
+function storedFocalPoint(row: Pick<Media, "focalX" | "focalY">): CutPoint {
+  return {
+    focalX: row.focalX ?? UNSET_FOCAL_COORDINATE,
+    focalY: row.focalY ?? UNSET_FOCAL_COORDINATE,
+  };
+}
+
+/**
+ * The point a row holds once `changes` is written over it: a coordinate the
+ * update leaves out keeps the row's.
+ */
+function focalPointAfter(
+  changes: UpdateMediaInput,
+  row: Pick<Media, "focalX" | "focalY">
+): CutPoint {
+  const stored = storedFocalPoint(row);
+  return {
+    focalX: changes.focalX ?? stored.focalX,
+    focalY: changes.focalY ?? stored.focalY,
+  };
+}
+
+const samePoint = (a: CutPoint, b: CutPoint): boolean =>
+  a.focalX === b.focalX && a.focalY === b.focalY;
+
+/**
+ * What an update did about its item's sizes before its write:
+ * - `none`: nothing to keep in step with the point (no new point, not an
+ *   image, or no sizes can be cut here, which is best-effort);
+ * - `unchanged`: the point asked for is the one stored, so the stored sizes
+ *   already show it;
+ * - `cut`: new sizes, at fresh keys, cut around `point`.
+ */
+type FocalRegeneration =
+  | { kind: "none" }
+  | { kind: "unchanged" }
+  | { kind: "cut"; sizes: Record<string, unknown>; point: CutPoint };
+
+const NO_REGENERATION: FocalRegeneration = { kind: "none" };
+
+/**
+ * Whether the item's sizes will show the point its row holds once this
+ * update is written over `locked`, the row as the write transaction locked
+ * it. False when another update moved the point after this one read the row:
+ * the sizes were cut, or kept, for a point the row will no longer hold.
+ */
+function sizesFollowPoint(
+  regeneration: FocalRegeneration,
+  changes: UpdateMediaInput,
+  locked: Media
+): boolean {
+  if (regeneration.kind === "none") return true;
+  const cutAround =
+    regeneration.kind === "cut" ? regeneration.point : storedFocalPoint(locked);
+  return samePoint(focalPointAfter(changes, locked), cutAround);
+}
+
 export class MediaService extends BaseService {
   // Lazy-initialized to avoid capturing a stale MediaStorage singleton
   // before storage plugins are registered via registerServices()
@@ -364,6 +437,7 @@ export class MediaService extends BaseService {
         mimeType,
         uploadedBy,
         folderId,
+        altText,
         contentDisposition,
       } = input;
 
@@ -537,7 +611,9 @@ export class MediaService extends BaseService {
         duration: null,
         url: uploadResult.url,
         thumbnailUrl,
-        altText: null,
+        // The upload's own alt text: writing `null` here dropped what every
+        // caller gave.
+        altText: altText ?? null,
         caption: null,
         tags: null,
         focalX: null,
@@ -648,11 +724,22 @@ export class MediaService extends BaseService {
     media: Media,
     changes: UpdateMediaInput,
     updateData: Record<string, unknown>
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<FocalRegeneration> {
     const focalPointChanged =
       changes.focalX !== undefined || changes.focalY !== undefined;
     if (!focalPointChanged || !isImageMimeType(media.mimeType)) {
-      return null;
+      return NO_REGENERATION;
+    }
+
+    // The whole point the row will hold: a coordinate the update leaves out
+    // keeps its stored value, so the sizes are cut around the same point the
+    // row records rather than the middle on that axis.
+    const point = focalPointAfter(changes, media);
+    // Asked for the point already stored: the stored sizes already show it,
+    // and cutting them again would read the original, upload a new set and
+    // delete the old one for the same pictures.
+    if (samePoint(point, storedFocalPoint(media))) {
+      return { kind: "unchanged" };
     }
 
     const adapter = this.storage.getAdapterForCollection("media");
@@ -661,16 +748,16 @@ export class MediaService extends BaseService {
         `[MediaService] Crop point saved for media ${media.id}. ` +
           `Size regeneration requires local storage or adapter with read support.`
       );
-      return null;
+      return NO_REGENERATION;
     }
 
     try {
       const originalBuffer = await adapter.read(media.filename);
-      if (!originalBuffer) return null;
+      if (!originalBuffer) return NO_REGENERATION;
 
       const imageSizeService = new ImageSizeService(this.adapter, this.logger);
       const sizeConfigs = await imageSizeService.getActiveSizeConfigs();
-      if (sizeConfigs.length === 0) return null;
+      if (sizeConfigs.length === 0) return NO_REGENERATION;
 
       const uploadFn = async (
         buffer: Buffer,
@@ -697,7 +784,7 @@ export class MediaService extends BaseService {
         uniqueBase,
         sizeConfigs,
         uploadFn,
-        { focalX: changes.focalX, focalY: changes.focalY }
+        point
       );
 
       updateData.sizes = newSizes;
@@ -710,13 +797,13 @@ export class MediaService extends BaseService {
       this.logger.info(
         `[MediaService] Regenerated ${Object.keys(newSizes).length} sizes for media ${media.id}`
       );
-      return newSizes;
+      return { kind: "cut", sizes: newSizes, point };
     } catch (error) {
       this.logger.warn("[MediaService] Crop point size regeneration failed", {
         error: errorForLog(error),
       });
       // Continue without regeneration - crop point is still saved.
-      return null;
+      return NO_REGENERATION;
     }
   }
 
@@ -845,13 +932,9 @@ export class MediaService extends BaseService {
       // the row is then committed pointing at the new keys and the superseded old
       // ones are deleted only AFTER the commit. So a rollback or a lost update
       // race never leaves the committed row referencing bytes that were already
-      // deleted — the previous, now-fixed dual-write bug. Returns the new sizes
-      // (or null) so a failed/void write can clean up its own orphaned uploads.
-      const regeneratedSizes = await this.regenerateFocalPointSizes(
-        existing.data!,
-        changes,
-        updateData
-      );
+      // deleted — the previous, now-fixed dual-write bug. It says what it did
+      // about the sizes (FocalRegeneration), so a failed/void write can clean
+      // up its own orphaned uploads.
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. The row is locked and
       // RE-READ inside the transaction (not reused from the pre-transaction
@@ -866,80 +949,136 @@ export class MediaService extends BaseService {
       // from the pre-transaction read, so two concurrent focal edits each delete
       // exactly the paths their own commit replaced rather than one clobbering
       // the other's fresh variants.
+      //
+      // The sizes are cut from a read taken before the lock, so another update
+      // can move the point in between: two updates of one coordinate each
+      // would otherwise leave the row holding both while the sizes show only
+      // the second one's cut. Under the lock, the point the row will hold is
+      // checked against the one the sizes show (sizesFollowPoint); when they
+      // differ nothing is written, the new sizes are dropped, and the sizes
+      // are cut again from the locked row, still outside the lock.
+      let snapshot: Media = existing.data!;
+      let regeneratedSizes: Record<string, unknown> | null = null;
       let replacedSizes: unknown = null;
       // The upload-time thumbnail the regenerated sizes replace, when they
       // bring a `thumbnail` of their own: from then on nothing refers to it.
       let replacedThumbnail: string | undefined;
-      let updatedRow: Media | null;
+      let updatedRow: Media | null = null;
       let recorded = false;
-      try {
-        updatedRow = await this.adapter.transaction<Media | null>(async tx => {
-          await tx.lockRow("media", mediaId);
-          const currentRows = await tx.select<Media>("media", {
-            where: this.whereEq("id", mediaId),
-          });
-          const current = currentRows[0];
-          // Lost an update race: the row was deleted after our first read, so
-          // record nothing and let the not-found result below stand.
-          if (!current) {
-            return null;
-          }
+      for (let attempt = 1; ; attempt++) {
+        // Each attempt cuts its own sizes; none of an earlier one's carry over.
+        delete updateData.sizes;
+        delete updateData.thumbnailUrl;
+        const regeneration = await this.regenerateFocalPointSizes(
+          snapshot,
+          changes,
+          updateData
+        );
+        regeneratedSizes =
+          regeneration.kind === "cut" ? regeneration.sizes : null;
+        replacedSizes = null;
+        replacedThumbnail = undefined;
+        // The locked row, when another update moved the point after `snapshot`
+        // was read. A holder, because the transaction's callback sets it.
+        const moved: { row: Media | null } = { row: null };
+        try {
+          updatedRow = await this.adapter.transaction<Media | null>(
+            async tx => {
+              await tx.lockRow("media", mediaId);
+              const currentRows = await tx.select<Media>("media", {
+                where: this.whereEq("id", mediaId),
+              });
+              const current = currentRows[0];
+              // Lost an update race: the row was deleted after our first read, so
+              // record nothing and let the not-found result below stand.
+              if (!current) {
+                return null;
+              }
+              if (!sizesFollowPoint(regeneration, changes, current)) {
+                moved.row = current;
+                return null;
+              }
 
-          if (regeneratedSizes) {
-            replacedSizes = (current as unknown as Record<string, unknown>)
-              .sizes;
-            replacedThumbnail = this.replacedThumbnailPath(current, updateData);
-          }
+              if (regeneratedSizes) {
+                replacedSizes = (current as unknown as Record<string, unknown>)
+                  .sizes;
+                replacedThumbnail = this.replacedThumbnailPath(
+                  current,
+                  updateData
+                );
+              }
 
-          // Regenerated sizes are serialized as the upload writes them
-          // (`sizesColumn`); `updateData` keeps the object for the event and
-          // the response below.
-          await tx.update(
-            "media",
-            "sizes" in updateData
-              ? { ...updateData, sizes: sizesColumn(updateData.sizes) }
-              : updateData,
-            this.whereEq("id", mediaId)
+              // Regenerated sizes are serialized as the upload writes them
+              // (`sizesColumn`); `updateData` keeps the object for the event and
+              // the response below.
+              await tx.update(
+                "media",
+                "sizes" in updateData
+                  ? { ...updateData, sizes: sizesColumn(updateData.sizes) }
+                  : updateData,
+                this.whereEq("id", mediaId)
+              );
+
+              // The post-update document: the freshly-read committed row overlaid
+              // with ONLY this write's columns (`updateData` holds each supplied
+              // change plus any regenerated sizes/thumbnail and the fresh
+              // updatedAt, keyed in the same camelCase as the read row). Reused as
+              // both the event `data` and the response body so they never drift.
+              const nextRow: Media = { ...current, ...updateData };
+
+              // `previous` is the freshly-read pre-write row; `data` is the new
+              // state. Media has no field schema, so `fields` is empty.
+              recorded = await recordMutationEvent(tx, {
+                type: "media.updated",
+                resource: { kind: "media", id: mediaId },
+                data: nextRow,
+                previous: current,
+                fields: [],
+                actor: actorForWrite(actor, null),
+              });
+
+              return nextRow;
+            }
           );
-
-          // The post-update document: the freshly-read committed row overlaid
-          // with ONLY this write's columns (`updateData` holds each supplied
-          // change plus any regenerated sizes/thumbnail and the fresh
-          // updatedAt, keyed in the same camelCase as the read row). Reused as
-          // both the event `data` and the response body so they never drift.
-          const nextRow: Media = { ...current, ...updateData };
-
-          // `previous` is the freshly-read pre-write row; `data` is the new
-          // state. Media has no field schema, so `fields` is empty.
-          recorded = await recordMutationEvent(tx, {
-            type: "media.updated",
-            resource: { kind: "media", id: mediaId },
-            data: nextRow,
-            previous: current,
-            fields: [],
-            actor: actorForWrite(actor, null),
-          });
-
-          return nextRow;
-        });
-      } catch (error) {
-        // The write failed after new variants were uploaded to fresh keys: those
-        // uploads are orphaned. Delete them — but keep any that the un-updated
-        // row still references (a deterministic adapter can reuse an old path),
-        // so a failed regeneration never removes a live variant. Prefer
-        // `replacedSizes` (read UNDER THE LOCK, so it reflects a variant set a
-        // concurrent update committed after our pre-transaction read); fall back
-        // to the pre-transaction read only when the transaction failed before it
-        // reached the locked row. Then propagate.
+        } catch (error) {
+          // The write failed after new variants were uploaded to fresh keys: those
+          // uploads are orphaned. Delete them — but keep any that the un-updated
+          // row still references (a deterministic adapter can reuse an old path),
+          // so a failed regeneration never removes a live variant. Prefer
+          // `replacedSizes` (read UNDER THE LOCK, so it reflects a variant set a
+          // concurrent update committed after our pre-transaction read); fall back
+          // to the pre-transaction read only when the transaction failed before it
+          // reached the locked row. Then propagate.
+          if (regeneratedSizes) {
+            await this.deleteSupersededVariants(
+              regeneratedSizes,
+              replacedSizes ?? (snapshot as { sizes?: unknown }).sizes,
+              mediaId
+            );
+          }
+          throw error;
+        }
+        if (!moved.row) break;
+        // Nothing was written. The sizes just cut show a point the row won't
+        // hold, so they go, keeping any file the locked row still refers to.
         if (regeneratedSizes) {
           await this.deleteSupersededVariants(
             regeneratedSizes,
-            replacedSizes ??
-              (existing.data as { sizes?: unknown } | null)?.sizes,
+            (moved.row as { sizes?: unknown }).sizes,
             mediaId
           );
         }
-        throw error;
+        if (attempt >= MAX_FOCAL_POINT_ATTEMPTS) {
+          return {
+            success: false,
+            statusCode: 409,
+            code: "CONFLICT",
+            message:
+              "The item's focus point kept changing while it was being saved. Try again.",
+            data: null,
+          };
+        }
+        snapshot = moved.row;
       }
 
       // Ahead of the variant cleanup below for the same reason the delete path
@@ -959,8 +1098,7 @@ export class MediaService extends BaseService {
         if (regeneratedSizes) {
           await this.deleteSupersededVariants(
             regeneratedSizes,
-            replacedSizes ??
-              (existing.data as { sizes?: unknown } | null)?.sizes,
+            replacedSizes ?? (snapshot as { sizes?: unknown }).sizes,
             mediaId
           );
         }

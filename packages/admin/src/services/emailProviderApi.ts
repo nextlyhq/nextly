@@ -337,7 +337,19 @@ export async function testProvider(
   return body.result;
 }
 
-export const emailProviderApi = {
+/** The type of {@link emailProviderApi}. */
+type EmailProviderApiType = {
+  readonly listProviders: typeof listProviders;
+  readonly listProviderTypes: typeof listProviderTypes;
+  readonly getProvider: typeof getProvider;
+  readonly createProvider: typeof createProvider;
+  readonly updateProvider: typeof updateProvider;
+  readonly deleteProvider: typeof deleteProvider;
+  readonly setDefaultProvider: typeof setDefaultProvider;
+  readonly testProvider: typeof testProvider;
+};
+
+export const emailProviderApi: EmailProviderApiType = {
   listProviders,
   listProviderTypes,
   getProvider,

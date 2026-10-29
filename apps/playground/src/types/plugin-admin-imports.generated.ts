@@ -4,19 +4,30 @@
  * without manual host imports. */
 
 import { registerComponents } from "@nextlyhq/admin";
-import * as _p0 from "@nextlyhq/plugin-page-builder/admin";
+import { registerBlockEditorModules } from "@nextlyhq/plugin-page-builder/admin";
+import * as _p0 from "../../src/dashboard/site-notes";
+import * as _p1 from "@/plugins/block-fixture/editor";
+import * as _p2 from "@/plugins/widget-kit-fixture/admin";
+import * as _p3 from "@nextlyhq/plugin-page-builder/admin";
+import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
 import type { DeclaredComponentMap } from "nextly";
-
 import type * as siteConfig from "../../nextly.config";
 
-import { registeredComponentPaths as listed } from "./plugin-admin-components.generated";
-
 const registered = {
-  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p0.BlocksField,
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p0.PageBuilderView,
+  "./src/dashboard/site-notes#SiteNotesCard": _p0.SiteNotesCard, // widget "playground/site-notes" of the site config
+  "@/plugins/block-fixture/editor#FixtureInspector": _p1.FixtureInspector,
+  "@/plugins/widget-kit-fixture/admin#KitCard": _p2.KitCard, // widget "widget-kit-fixture/kit" of plugin "widget-kit-fixture"
+  "@/plugins/widget-kit-fixture/admin#ThrowingCard": _p2.ThrowingCard, // widget "widget-kit-fixture/throws" of plugin "widget-kit-fixture"
+  "@nextlyhq/plugin-page-builder/admin#BlocksField": _p3.BlocksField,
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p3.PageBuilderView,
 } satisfies DeclaredComponentMap<typeof siteConfig>;
 
-type Registered = keyof typeof registered;
+/** The modules exporting each plugin's block definitions, for the page builder's editor. */
+const blockEditorEntries = {
+  "@/plugins/block-fixture/editor#blockFixtureEditor": _p1.blockFixtureEditor,
+};
+
+type Registered = keyof typeof registered | keyof typeof blockEditorEntries;
 type Listed = (typeof listed)[number];
 /** `true` only while this map registers exactly the paths its list names. */
 type Agrees = [Registered] extends [Listed]
@@ -27,8 +38,9 @@ type Agrees = [Registered] extends [Listed]
 export const componentMapAgreesWithList: Agrees = true;
 
 if (
-  JSON.stringify(Object.keys(registered).sort()) !==
-  JSON.stringify([...listed].sort())
+  JSON.stringify(
+    [...Object.keys(registered), ...Object.keys(blockEditorEntries)].sort()
+  ) !== JSON.stringify([...listed].sort())
 ) {
   throw Object.assign(
     new Error(
@@ -39,4 +51,10 @@ if (
 }
 
 registerComponents(registered);
+registerBlockEditorModules({
+  entries: blockEditorEntries,
+  components: {
+    "@/plugins/block-fixture/editor#FixtureInspector": _p1.FixtureInspector,
+  },
+});
 export const registeredComponentPaths = listed;

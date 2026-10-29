@@ -28,6 +28,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { JSX } from "react";
 
 import { Lock } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -59,6 +60,8 @@ const TONE_SURFACE: Record<DocumentLockNotice["tone"], string> = {
   // quietest surface of the four. Dressed as a warning it would read as a
   // demand, which is the one thing a courtesy notice must not do.
   awaited: "border-border bg-muted/50",
+  // Nothing was lost and nothing is asked of the reader: the quiet surface.
+  reader: "border-border bg-muted/50",
 };
 
 export function DocumentLockBanner({
@@ -66,7 +69,7 @@ export function DocumentLockBanner({
   onTakeOver,
   onRequestAccess,
   className,
-}: DocumentLockBannerProps) {
+}: DocumentLockBannerProps): JSX.Element | null {
   // Answered here rather than at each call site: two editors mount this, and a
   // question asked in both is a question that can be answered differently in one.
   if (notice === null) return null;

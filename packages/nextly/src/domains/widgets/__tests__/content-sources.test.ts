@@ -40,6 +40,9 @@ beforeEach(() => {
         // Readable, so offered to filter and sort, but its values live per
         // language, so the read will not group by it.
         { name: "headline", type: "text", localized: true },
+        // Values a row cannot print: many strings, and a boolean.
+        { name: "tags", type: "text", hasMany: true },
+        { name: "done", type: "checkbox" },
       ],
       timestamps: false,
     },
@@ -52,7 +55,7 @@ afterEach(() => {
 });
 
 const offeredFor = (collection: string) =>
-  publishableContentSources([{ generated: true, collection }]);
+  publishableContentSources([collection]);
 
 describe("the content sources a card's settings may offer", () => {
   it("offers a plain field with its label, type and choices", () => {
@@ -79,6 +82,16 @@ describe("the content sources a card's settings may offer", () => {
     expect(byName.get("title")).not.toHaveProperty("groupable");
   });
 
+  it("marks a field no row can print, and only those", () => {
+    // 🔴 Unmarked, a Fields setting offered them, and the row drew an empty place.
+    const [posts] = offeredFor("posts");
+    const byName = new Map(posts?.fields.map(field => [field.name, field]));
+    expect(byName.get("tags")).toMatchObject({ presentable: false });
+    expect(byName.get("done")).toMatchObject({ presentable: false });
+    // The control: a plain text field carries no mark.
+    expect(byName.get("title")).not.toHaveProperty("presentable");
+  });
+
   it("never offers a field a read rule could refuse", () => {
     const [posts] = offeredFor("posts");
     const names = posts?.fields.map(field => field.name);
@@ -94,15 +107,37 @@ describe("the content sources a card's settings may offer", () => {
     expect(names).not.toContain("shout");
   });
 
-  it("offers only collections whose own card the reader may see", () => {
-    // Derived from the visible cards: a declared card and a collection with no
-    // card here are not collections this reader was found able to read.
-    expect(
-      publishableContentSources([
-        { generated: false, collection: "posts" },
-        { generated: true, collection: "absent" },
-      ])
-    ).toEqual([]);
+  it("names the field that titles an entry, so a list can ask each row's name", () => {
+    expect(offeredFor("posts")[0]?.titleField).toBe("title");
+  });
+
+  it("names no title the reader is not offered", () => {
+    // 🔴 Published regardless, a list would ask for a field a read rule may
+    // refuse this reader, and every row would read as untitled or fail.
+    registerFieldFunctions("collection", "notes", [
+      { name: "secret", access: { read: () => true } },
+    ]);
+    registerBuiltInSources([
+      {
+        slug: "notes",
+        useAsTitle: "secret",
+        fields: [
+          { name: "secret", type: "text" },
+          { name: "body", type: "text" },
+        ],
+        timestamps: false,
+      },
+    ]);
+    const [notes] = offeredFor("notes");
+    expect(notes?.collection).toBe("notes");
+    expect(notes).not.toHaveProperty("titleField");
+  });
+
+  it("offers only the readable collections that have a source", () => {
+    // From the audience's readable collections: a slug with no source here is
+    // offered nothing, and only the collections passed are offered.
+    expect(publishableContentSources(["absent"])).toEqual([]);
+    expect(publishableContentSources([])).toEqual([]);
     expect(offeredFor("posts")).toHaveLength(1);
   });
 });

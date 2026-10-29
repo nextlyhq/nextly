@@ -21,6 +21,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -87,6 +88,9 @@ async function boot(readableRows: boolean): Promise<TestNextly> {
     { collectionName: EMPLOYEES, overrideAccess: true },
     { title: "bob", salary: "60000" }
   );
+  // A code rule only narrows the permission, so the editor holds read on
+  // employees and the collection's read rule decides.
+  await userWhoMay(t, editor.user.id, "read", [EMPLOYEES]);
 
   // What `POST /api/dashboard/query` does before resolving any query: publish
   // the collection sources from the LIVE collection registry. Boot does not do
@@ -172,6 +176,37 @@ describe("executeWidgetQuery against a real instance", () => {
     );
 
     expect(result).toEqual({ op: "count", total: 1 });
+  });
+
+  it("answers a list's total as the read counted it, under the card's own filter", async () => {
+    // A card asking for one row of two learns there are two in all, which is what its
+    // "View all (N)" says; filtered to one, the total is one. Both come from the read that
+    // returned the rows, as this caller, so the number is the one the linked list shows.
+    current = await boot(true);
+
+    const all = await executeWidgetQuery(
+      validateWidgetQuery({
+        source: `collection:${EMPLOYEES}`,
+        op: "list",
+        select: ["title"],
+        limit: 1,
+      }),
+      editor
+    );
+    const filtered = await executeWidgetQuery(
+      validateWidgetQuery({
+        source: `collection:${EMPLOYEES}`,
+        op: "list",
+        select: ["title"],
+        where: { title: { equals: "alice" } },
+        limit: 1,
+      }),
+      editor
+    );
+
+    expect(all).toMatchObject({ op: "list", total: 2 });
+    expect((all as { items: unknown[] }).items).toHaveLength(1);
+    expect(filtered).toMatchObject({ op: "list", total: 1 });
   });
 });
 

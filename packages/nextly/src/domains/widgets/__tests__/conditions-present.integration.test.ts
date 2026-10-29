@@ -18,14 +18,15 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { refreshCollectionWidgets } from "../collection-widgets";
 import { evaluateConditions } from "../conditions";
+import { refreshContentSources } from "../content-sources";
 import type { WidgetCondition } from "../lifecycle";
 import { listSources } from "../sources";
 
@@ -60,9 +61,15 @@ async function boot(options: {
     singles: (options.singles ?? []).map(defineSingle),
   });
   current = t;
+  // A code rule only narrows the permission, so the admin holds read on every
+  // collection and single here and the code rules decide which they may read.
+  await userWhoMay(t, admin.user.id, "read", [
+    ...(options.collections ?? []).map(collection => collection.slug),
+    ...(options.singles ?? []).map(single => single.slug),
+  ]);
   // The same call the layout endpoint makes before resolving anything. Boot
   // does not publish the sources, and both halves read them.
-  await refreshCollectionWidgets();
+  await refreshContentSources();
   return t;
 }
 
@@ -112,7 +119,7 @@ describe("collections:present against a real instance", () => {
         updateMigrationStatus: (slug: string, status: string) => Promise<void>;
       }
     ).updateMigrationStatus("notes", "pending");
-    await refreshCollectionWidgets();
+    await refreshContentSources();
     expect(listSources().some(source => source.id === "collection:notes")).toBe(
       false
     );
@@ -184,7 +191,7 @@ describe("singles:present against a real instance", () => {
         updateMigrationStatus: (slug: string, status: string) => Promise<void>;
       }
     ).updateMigrationStatus("homepage", "pending");
-    await refreshCollectionWidgets();
+    await refreshContentSources();
     expect(listSources().some(source => source.id === "single:homepage")).toBe(
       false
     );
@@ -202,5 +209,64 @@ describe("singles:present against a real instance", () => {
       ],
     });
     expect(await holds("singles:present")).toBe(false);
+  });
+});
+
+describe("content:present against a real instance", () => {
+  it("holds for a reader with a Single and no collection, which collections:present misses", async () => {
+    // 🔴 The Content card lists both kinds: gated on collections alone, it was
+    // hidden from a reader whose only content is a Single.
+    await boot({
+      singles: [
+        {
+          slug: "homepage",
+          access: singleReadable,
+          fields: [text({ name: "h" })],
+        },
+      ],
+    });
+    expect(await holds("collections:present")).toBe(false);
+    expect(await holds("content:present")).toBe(true);
+  });
+
+  it("holds for a reader with a collection and no Single", async () => {
+    await boot({
+      collections: [
+        { slug: "notes", access: readable, fields: [text({ name: "title" })] },
+      ],
+    });
+    expect(await holds("content:present")).toBe(true);
+  });
+
+  it("does NOT hold when the reader may read neither", async () => {
+    await boot({
+      collections: [
+        { slug: "secrets", access: refused, fields: [text({ name: "title" })] },
+      ],
+      singles: [
+        {
+          slug: "private",
+          access: singleRefused,
+          fields: [text({ name: "h" })],
+        },
+      ],
+    });
+    expect(await holds("content:present")).toBe(false);
+  });
+
+  it("does NOT hold for a collection hidden from the navigation, as internal ones are", async () => {
+    // The dashboard leaves out what the navigation hides, a super-admin's
+    // included; `internal: true` sets the same flag.
+    await boot({
+      collections: [
+        {
+          slug: "hidden-notes",
+          access: readable,
+          admin: { hidden: true },
+          fields: [text({ name: "title" })],
+        },
+      ],
+    });
+    expect(await holds("content:present")).toBe(false);
   });
 });

@@ -5,12 +5,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const find = vi.fn();
+const count = vi.fn();
 const has = vi.fn();
 
 vi.mock("../../../di/container", () => ({
   container: {
     has: (name: string) => has(name) as boolean,
-    get: () => ({ find }),
+    get: () => ({ find, count }),
   },
 }));
 
@@ -42,6 +43,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   has.mockReturnValue(true);
   find.mockResolvedValue({ rows: [row], total: 1, page: 1, limit: 50 });
+  // One stopped release, none overdue.
+  count.mockImplementation(({ reason }: { reason: string }) =>
+    Promise.resolve(reason === "stopped" ? 1 : 0)
+  );
   clearSources();
   clearSystemResolvers();
   registerReleasesWidgetSource();
@@ -166,6 +171,89 @@ describe("what it answers with", () => {
     ]);
     const [item] = (result as { items: Record<string, unknown>[] }).items;
     expect(Object.keys(item)).toEqual(["title"]);
+  });
+
+  it("answers a release's id when the query selects it, so its row can open it", async () => {
+    const result = await executeWidgetQuery(
+      { source: RELEASES_SOURCE_ID, op: "list", select: ["id", "title"] },
+      caller
+    );
+
+    const [item] = (result as { items: Record<string, unknown>[] }).items;
+    expect(item).toEqual({ id: "r1", title: "Spring launch" });
+  });
+});
+
+describe("the attention rows, asked for by selecting `reason`", () => {
+  const ATTENTION_SELECT = ["kind", "reason", "count", "title", "scheduledAt"];
+  const items = (result: unknown) =>
+    (result as { items: Record<string, unknown>[] }).items;
+
+  it("comes before the upcoming releases, one row per reason holding any, and none for a reason at 0", async () => {
+    const result = await executeWidgetQuery(
+      { source: RELEASES_SOURCE_ID, op: "list", select: ATTENTION_SELECT },
+      caller
+    );
+    expect(items(result)).toEqual([
+      { kind: "attention", reason: "stopped", count: 1 },
+      expect.objectContaining({ kind: "release", title: "Spring launch" }),
+    ]);
+  });
+
+  it("counts each reason by the Releases list's own count, as the caller", async () => {
+    await executeWidgetQuery(
+      { source: RELEASES_SOURCE_ID, op: "list", select: ATTENTION_SELECT },
+      caller
+    );
+    for (const reason of ["stopped", "overdue"]) {
+      expect(count).toHaveBeenCalledWith(
+        { tab: "attention", reason },
+        expect.objectContaining({ userId: "user-1" })
+      );
+    }
+  });
+
+  it.each([
+    ["no select at all", undefined],
+    ["a select without `reason`", ["title", "scheduledAt"]],
+  ])(
+    "is absent for %s, which gets exactly the upcoming releases",
+    async (_, select) => {
+      const result = await executeWidgetQuery(
+        {
+          source: RELEASES_SOURCE_ID,
+          op: "list",
+          ...(select ? { select } : {}),
+        },
+        caller
+      );
+      expect(items(result).every(item => item.kind !== "attention")).toBe(true);
+      expect(items(result)).toHaveLength(1);
+      expect(count).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sizes the upcoming releases alone by the limit", async () => {
+    count.mockResolvedValue(2);
+    const result = await executeWidgetQuery(
+      {
+        source: RELEASES_SOURCE_ID,
+        op: "list",
+        select: ATTENTION_SELECT,
+        limit: 1,
+      },
+      caller
+    );
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 1 }),
+      expect.anything()
+    );
+    // Both reasons and the one release: the limit did not cut the attention rows.
+    expect(items(result).map(item => item.kind)).toEqual([
+      "attention",
+      "attention",
+      "release",
+    ]);
   });
 });
 

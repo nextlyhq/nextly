@@ -126,7 +126,7 @@ export async function authorizeTrigger(
     authResult.authMethod !== "api-key" &&
     !validateOrigin(request, env.NEXTLY_ALLOWED_ORIGINS_PARSED)
   ) {
-    throw NextlyError.forbidden({
+    throw NextlyError.originRefused({
       logContext: { reason: `${options.reason}-origin-mismatch` },
     });
   }
