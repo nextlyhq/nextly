@@ -37,16 +37,19 @@ const MANAGE_COUNTS_AS: ReadonlySet<string> = new Set([
 export const MANAGE_BRIDGED_RESOURCES: readonly string[] = [
   ...MANAGE_COUNTS_ON,
 ];
-const MANAGE_BRIDGED_ACTIONS: readonly string[] = [...MANAGE_COUNTS_AS];
+export const MANAGE_BRIDGED_ACTIONS: readonly string[] = [...MANAGE_COUNTS_AS];
+
+/**
+ * Whether a permission is a retired `manage-` one: `manage-<resource>` on a
+ * resource the bridge names. Stored as, and asked as, the plain four there.
+ */
+export function isRetiredManage(action: string, resource: string): boolean {
+  return action === "manage" && MANAGE_COUNTS_ON.has(resource);
+}
 
 /** Whether a `manage-` permission on `resource` can count for `action`. */
 export function manageCounts(action: string, resource: string): boolean {
   return MANAGE_COUNTS_AS.has(action) && MANAGE_COUNTS_ON.has(resource);
-}
-
-/** Whether a permission is a retired `manage-` one: bridged, and stored as the plain four. */
-export function isRetiredManage(action: string, resource: string): boolean {
-  return action === "manage" && MANAGE_BRIDGED_RESOURCES.includes(resource);
 }
 
 /** Where `storedAsPlain` reads permission rows: an adapter or a transaction. */
