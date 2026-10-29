@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { UNAVAILABLE_TITLE } from "../../frame/states";
+import { GRID_CLASS, GRID_COLUMNS_CLASS } from "../../sizes";
 import type { WidgetPreview } from "../types";
 import { previewSizes, WidgetPreviewSection } from "../WidgetPreviewSection";
 import { NO_PREVIEW_CASE, NOT_REACHED } from "../WidgetPreviewState";
@@ -154,6 +155,27 @@ describe("a widget on the preview page", () => {
       expect(frameStateOf(wrapper)).toBe("error");
     }
     expect(pluginSlot).not.toHaveBeenCalled();
+  });
+
+  it("lays each size's cards on the dashboard's own columns and gaps", () => {
+    render(
+      <WidgetPreviewSection preview={previewOf([])} definition={openOrders} />
+    );
+    const columns = GRID_COLUMNS_CLASS.split(" ");
+    // The columns' classes are the dashboard grid's own, so a card here is as
+    // wide as there and lands in the same tier.
+    for (const name of columns) expect(GRID_CLASS.split(" ")).toContain(name);
+    // Each size's grid, directly inside the container its spans answer to;
+    // the cards' own grids inside them are not this one.
+    const grids = [
+      ...document.querySelectorAll<HTMLElement>(
+        '[class~="@container/dashboard"] > div'
+      ),
+    ];
+    expect(grids.length).toBe(previewSizes(SIZE).length);
+    for (const grid of grids) {
+      for (const name of columns) expect(grid.classList).toContain(name);
+    }
   });
 
   it("says when the admin holds no declaration to draw a listed widget with", () => {

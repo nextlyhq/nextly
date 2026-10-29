@@ -73,6 +73,15 @@ const HALF_GRID = GRID_COLUMNS / 2;
 export const GRID_CLASS =
   "grid grid-flow-row grid-cols-12 auto-rows-[72px] gap-x-[16px] gap-y-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
 
+/**
+ * The grid's columns and the gap across them, without its rows: for a grid that draws cards at
+ * the dashboard's widths but lays its rows out itself (the widget preview page, where each card
+ * sits under a label). The same classes as {@link GRID_CLASS}, which a test holds it to, so a
+ * card drawn there is as wide as on the dashboard and lands in the same tier.
+ */
+export const GRID_COLUMNS_CLASS =
+  "grid-cols-12 gap-x-[16px] @min-[1280px]/dashboard:gap-x-[24px]";
+
 /** The gap across the grid, in pixels, on a dashboard `dashboardWidth` wide. */
 export function columnGapPx(dashboardWidth: number): number {
   return dashboardWidth >= WIDE_GAP_FROM_PX
