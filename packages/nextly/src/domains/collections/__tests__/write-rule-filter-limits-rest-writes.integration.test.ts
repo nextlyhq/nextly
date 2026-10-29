@@ -507,10 +507,13 @@ describe("an editor's write through an entry's versions, in its language and und
 
   it("asks a discard of the held edit again under the entry's lock", async () => {
     const SLUG = "restfilter_discard_locked";
-    // Armed for the discard's read of the live entry, which runs after the
-    // discard was authorized and before its lock: the entry is given to
-    // another there, as a concurrent write would.
+    // Armed for the discard's read of the live entry, the second read of the
+    // request: the first is the route's check that the caller may read it,
+    // before the update is authorized; the second runs after it and before
+    // the discard's lock. The entry is given to another there, as a
+    // concurrent write would.
     let moveOnRead: string | undefined;
+    let readsBeforeMove = 0;
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -523,7 +526,7 @@ describe("an editor's write through an entry's versions, in its language and und
             afterRead: [
               async ({ data }: { data?: unknown }) => {
                 const id = moveOnRead;
-                if (id !== undefined) {
+                if (id !== undefined && readsBeforeMove-- === 0) {
                   moveOnRead = undefined;
                   await current!.adapter.update(
                     `dc_${SLUG}`,
@@ -548,6 +551,7 @@ describe("an editor's write through an entry's versions, in its language and und
       data: { title: "held" },
     } as never);
     moveOnRead = own;
+    readsBeforeMove = 1;
 
     const status = await rest("DELETE", [
       ...entry(SLUG, own),
