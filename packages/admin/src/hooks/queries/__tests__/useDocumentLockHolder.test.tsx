@@ -86,6 +86,21 @@ describe("useDocumentLockHolder", () => {
     expect(result.current).toEqual(other);
   });
 
+  it("is unknown after a read that fails, where the last answer was nobody", async () => {
+    get.mockResolvedValueOnce({ holder: null });
+    const { result } = renderHook(() => useDocumentLockHolder(ref));
+    await waitFor(() => expect(result.current).toBeNull());
+
+    // A colleague may have claimed it since; a failed read cannot say.
+    get.mockRejectedValue(new Error("offline"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS);
+    });
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(result.current).toBeUndefined();
+  });
+
   it("reads nothing while it is off", async () => {
     const { result } = renderHook(() =>
       useDocumentLockHolder({ ...ref, enabled: false })
