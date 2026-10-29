@@ -149,20 +149,15 @@ test("lists a plugin widget drawn from its preview case, beside core's", async (
   await expect(section(page, TEAM)).toBeVisible();
 });
 
-test.fixme(
-  "lists a widget the site config declares",
-  // The site config's own widgets are checked at startup with the plugins'
-  // but not registered yet (`register-widgets.ts`, `checkedOnly`), so no
-  // reader is offered one and the read cannot list one. This test is the
-  // check for when they are: a site widget in the playground's config,
-  // listed here as the plugin's is above.
-  async ({ page }) => {
-    await openPreviews(page);
-    await expect(
-      page.locator('[data-preview-owner="the site config"]').first()
-    ).toBeVisible();
-  }
-);
+test("lists a widget the site config declares", async ({ page }) => {
+  // The playground's config declares `playground/site-notes` itself, so the
+  // read lists it as the site's own: a section for that id, owned by the
+  // site config rather than a plugin.
+  await openPreviews(page);
+  const site = page.locator('[data-preview-section="playground/site-notes"]');
+  await expect(site).toBeVisible();
+  await expect(site).toHaveAttribute("data-preview-owner", "the site config");
+});
 
 test.describe("a reader lacking a widget's permission", () => {
   test.describe.configure({ mode: "serial" });
