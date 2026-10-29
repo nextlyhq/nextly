@@ -13,6 +13,7 @@
  * @packageDocumentation
  */
 
+import { sessionMayPerform } from "../../auth/access/route-gate-adapters";
 import { apiKeyScopeFrom } from "../../auth/authenticated-scope";
 import type { AuthContext } from "../../auth/middleware";
 import {
@@ -29,6 +30,7 @@ import {
   SYSTEM_WRITE_POLICY,
 } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
+import { consoleLogger } from "../../shared/types";
 import type {
   CheckAccessArgs,
   CheckApiKeyArgs,
@@ -395,6 +397,13 @@ export function createPermissionsNamespace(
  * `nextly.access.*` namespace — programmatic access checks + API key validation.
  */
 export interface AccessNamespace {
+  /**
+   * Whether the user may perform `operation` on `resource`, as every route
+   * decides it. For a read, `true` means the user may read some entries:
+   * where a `read` rule answers a filter, only the entries it matches, which
+   * a read made in the user's context (`overrideAccess: false`) applies and a
+   * trusted read does not. A write whose rule answers a filter is `false`.
+   */
   check(args: CheckAccessArgs): Promise<boolean>;
   checkApiKey(args: CheckApiKeyArgs): Promise<CheckApiKeyResult>;
 }
@@ -405,11 +414,31 @@ export interface AccessNamespace {
 export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
   return {
     async check(args: CheckAccessArgs): Promise<boolean> {
-      return await ctx.rbacAccessControlService.checkAccess({
-        userId: args.userId,
-        operation: args.operation,
-        resource: args.resource,
-      });
+      // The question is about a signed-in user, so naming none is refused,
+      // never answered as a visitor's public default.
+      if (!args.userId) return false;
+      try {
+        // The route gate's answer for the user's session, with the rules
+        // registered now. A read a rule's filter limits answers yes, since
+        // the user may read some entries; a read made in the user's context
+        // applies the filter.
+        return await sessionMayPerform(
+          args.userId,
+          args.operation,
+          args.resource,
+          ctx.rbacAccessControlService
+        );
+      } catch (error) {
+        // A lookup the answer needs that fails is refused rather than failed,
+        // since the answer is a boolean: a grant lookup, or a role lookup
+        // wherever a rule would be asked, so a rule is never asked with a role
+        // set that could not be read.
+        consoleLogger.error("[rbac] access.check could not read the user", {
+          userId: args.userId,
+          error,
+        });
+        return false;
+      }
     },
 
     async checkApiKey(args: CheckApiKeyArgs): Promise<CheckApiKeyResult> {

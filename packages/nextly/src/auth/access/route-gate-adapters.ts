@@ -916,6 +916,31 @@ async function sessionAnswer(
   return verdict.allowed;
 }
 
+/**
+ * Whether the signed-in user `userId` may perform `action` on `resource`, as
+ * the route gate decides it for that user's session, with the rules `rules`
+ * holds now: a read a rule's filter limits answers yes, since the user may
+ * read the entries it matches (`nextly.access.check`). A lookup that fails
+ * throws, as the gate's does.
+ */
+export async function sessionMayPerform(
+  userId: string,
+  action: string,
+  resource: string,
+  rules: RouteRules
+): Promise<boolean> {
+  const verdict = await gateVerdict(
+    { userId },
+    action,
+    resource,
+    rules,
+    () => Promise.resolve(false),
+    "some-entries"
+  );
+  if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
+  return verdict.allowed;
+}
+
 /** An empty action or resource, refused whoever asks. */
 function refusedEmpty(
   caller: GateCaller,
