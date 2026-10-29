@@ -485,8 +485,11 @@ Metadata keys are allowlisted per kind, strings longer than 256 characters are
 not stored, and a value with one of these credential shapes is dropped: a JWT,
 a `Bearer` or `Basic` authorization value, a PEM block, Stripe secret,
 restricted and webhook keys (`sk_live_`, `sk_test_`, `rk_live_`, `rk_test_`,
-`whsec_`), GitHub, GitLab, Slack and
-npm tokens, AWS access key ids, and Google OAuth access tokens (`ya29.`). That
+`whsec_`), GitHub tokens, GitLab tokens with any prefix GitLab lists (`glpat-`,
+`gloas-`, `gldt-`, `glrt-`, `glrtr-`, `glcbt-`, `glptt-`, `glft-`, `glimt-`,
+`glagent-`, `glwt-`, `glsoat-`, `glffct-`), Slack tokens (`xoxb-`, `xoxp-`,
+`xapp-`, `xwfp-`, the rotating `xoxe.` forms and the `xoxe-` refresh token), npm
+tokens, AWS access key ids, and Google OAuth access tokens (`ya29.`). That
 is a list of known shapes, not a secret detector: never pass a credential.
 
 The restriction exists because audit rows are retained and some of them
