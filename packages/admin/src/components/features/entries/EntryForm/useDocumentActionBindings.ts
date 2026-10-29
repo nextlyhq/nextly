@@ -688,7 +688,7 @@ function saveFor(host: {
  * The Save the document's state calls for, unless that Save publishes: a
  * drafts-disabled published document's Save re-asserts it live.
  */
-export function saveWithoutPublishing(
+function saveWithoutPublishing(
   runSave: StoringHandler | undefined,
   onSaveChanges: StoringHandler | undefined
 ): StoringHandler | undefined {
