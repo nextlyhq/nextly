@@ -19,6 +19,7 @@ import { and, or, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import {
   FILTER_NAMES_A_COMPONENT_FIELD,
+  FILTER_NAMES_A_STRUCTURED_FIELD,
   reportRuleFilterMisuse,
   type RuleFilter,
 } from "../../../auth/access/rule-answer";
@@ -43,7 +44,10 @@ import {
   type CatalogReadAdapter,
 } from "../../field-groups/storage/resolve-storage-names";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
-import { collectionTableName } from "../services/collection-utils";
+import {
+  collectionTableName,
+  isJsonFieldType,
+} from "../services/collection-utils";
 
 /** A collection's runtime table: its columns, by field name. */
 export type DynamicSchema = Record<string, SQLWrapper | undefined>;
@@ -70,6 +74,12 @@ export interface PreparedFilterCondition {
   readonly componentTypeColumns: Map<string, string>;
   /** Whether the filter names a field inside a component. */
   readonly namesComponentFields: boolean;
+  /**
+   * Whether the filter names a field stored as serialized JSON
+   * (`isJsonFieldType`), whose column an operator would compare as the
+   * document's text.
+   */
+  readonly namesStructuredFields: boolean;
   /**
    * The filter as one SQL condition over `schema`, or `undefined` for a
    * filter that constrains nothing. Pure: it reads nothing, so it may be
@@ -103,6 +113,7 @@ export async function prepareFilterCondition(
       componentTables: params.resolvedComponentTables ?? new Map(),
       componentTypeColumns: params.resolvedComponentTypeColumns ?? new Map(),
       namesComponentFields: false,
+      namesStructuredFields: false,
       condition: () => undefined,
     };
   }
@@ -131,6 +142,7 @@ export async function prepareFilterCondition(
     componentTables,
     componentTypeColumns,
     namesComponentFields: componentFilters.length > 0,
+    namesStructuredFields: namesStructuredField(params.filter, collection),
     condition(schema, localizedCtx) {
       const parts: SQLWrapper[] = [];
       const componentCondition = componentFieldCondition(
@@ -215,6 +227,18 @@ export async function ruleFilterCondition(
     );
     return sql`1 = 0`;
   }
+  // A field stored as serialized JSON, a list or a reference to several
+  // collections, is refused the same way: compared with one value, its
+  // column's text would match entries the rule meant to refuse.
+  if (prepared.namesStructuredFields) {
+    reportRuleFilterMisuse(
+      collectionName,
+      "read",
+      "collection",
+      FILTER_NAMES_A_STRUCTURED_FIELD
+    );
+    return sql`1 = 0`;
+  }
   try {
     // A localized field the read shows from a fallback language is judged
     // on that language's value too, so the read shows nothing the rule
@@ -269,6 +293,8 @@ function declaredFields(collection: unknown): Array<{
   type: string;
   component?: string;
   components?: string[];
+  hasMany?: boolean;
+  relationTo?: unknown;
 }> {
   const record = (collection ?? {}) as Record<string, unknown>;
   const definition = record.schemaDefinition as
@@ -279,7 +305,35 @@ function declaredFields(collection: unknown): Array<{
     type: string;
     component?: string;
     components?: string[];
+    hasMany?: boolean;
+    relationTo?: unknown;
   }>;
+}
+
+/**
+ * Whether `filter` names, by its exact name, a declared field of
+ * `collection` stored as serialized JSON. Its keys are read through `and`
+ * and `or` at every depth. A dotted path into a field is not that field's
+ * own name, so it is left to the builder.
+ */
+function namesStructuredField(
+  filter: WhereFilter,
+  collection: unknown
+): boolean {
+  const structured = new Set(
+    declaredFields(collection)
+      .filter(field => isJsonFieldType(field.type, field))
+      .map(field => field.name)
+  );
+  if (structured.size === 0) return false;
+  const names = (node: unknown): boolean => {
+    if (Array.isArray(node)) return node.some(names);
+    if (node === null || typeof node !== "object") return false;
+    return Object.entries(node).some(([key, value]) =>
+      key === "and" || key === "or" ? names(value) : structured.has(key)
+    );
+  };
+  return names(filter);
 }
 
 /**
