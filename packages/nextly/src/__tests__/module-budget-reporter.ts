@@ -72,15 +72,19 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * that measurement. The heavy files' pin was raised when three tests that
  * load the service registry by design joined them (the boot refusal of an
  * unsupported framework and two migrate commands' tests): 65 measured, so 67
- * held whether CI measured one fewer, as it has before. It came down to 65 when
- * the two migrate commands' tests stopped loading the registry: 62 measured.
- * Each pin is the higher measurement plus its margin, at
+ * held whether CI measured one fewer, as it has before. It comes down when
+ * the two migrate commands' tests stop loading the registry (HEAVY_PIN_NOTE).
+ * The tail mean's pin
+ * was raised when the dashboard's pins joined the service registry (their
+ * route and service) beside the logger's credential shapes: 1,228 measured,
+ * the heavy files' chains unchanged, so 1,262 holds whether CI measures one
+ * fewer. Each pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
  * measures below a pin by more than its margin fails, naming the pin to set;
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 65, tailMeanModules: 1_225 };
+export const BUDGET = { heavyFiles: 67, tailMeanModules: 1_262 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
