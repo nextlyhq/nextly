@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { railEntryDecided, settledRailItems } from "../lib/settled-rail";
+import {
+  railAnswersIn,
+  railAnswersPending,
+  railEntryDecided,
+  settledRailItems,
+} from "../lib/settled-rail";
 import { MAIN_MENU_ITEMS, type MainMenuItem } from "../sidebar-types";
 
 const ANSWERED = { workspace: false, permissions: false, content: false };
@@ -151,5 +156,60 @@ describe("settledRailItems", () => {
     expect(
       ids(settledRailItems(MAIN_MENU_ITEMS, everyShown, ANSWERED))
     ).toEqual(ids(MAIN_MENU_ITEMS));
+  });
+});
+
+describe("railAnswersIn", () => {
+  it("is true only when no answer the rail waits on is pending", () => {
+    expect(
+      railAnswersIn({ workspace: false, permissions: false, content: false })
+    ).toBe(true);
+    for (const pending of [
+      { workspace: true, permissions: false, content: false },
+      { workspace: false, permissions: true, content: false },
+      { workspace: false, permissions: false, content: true },
+    ]) {
+      expect(railAnswersIn(pending)).toBe(false);
+    }
+  });
+});
+
+describe("railAnswersPending", () => {
+  const SETTLED = {
+    workspacePending: false,
+    hydrated: true,
+    permissionsLoading: false,
+    contentAnswerPending: false,
+    collectionsLoading: false,
+    singlesLoading: false,
+  };
+
+  it("reports nothing pending once every query has answered", () => {
+    expect(railAnswersPending(SETTLED)).toEqual({
+      workspace: false,
+      permissions: false,
+      content: false,
+    });
+  });
+
+  it("holds the permissions until hydration, and the content until all three content reads", () => {
+    expect(
+      railAnswersPending({ ...SETTLED, hydrated: false }).permissions
+    ).toBe(true);
+    expect(
+      railAnswersPending({ ...SETTLED, permissionsLoading: true }).permissions
+    ).toBe(true);
+    for (const read of [
+      "contentAnswerPending",
+      "collectionsLoading",
+      "singlesLoading",
+    ] as const) {
+      expect(railAnswersPending({ ...SETTLED, [read]: true }).content).toBe(
+        true
+      );
+    }
+    expect(
+      railAnswersPending({ ...SETTLED, workspacePending: true }).workspace
+    ).toBe(true);
   });
 });

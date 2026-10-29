@@ -40,7 +40,7 @@ export function railEntryDecided(
   if (isStandaloneEntry(item.id)) {
     // Shown by the collections it names (the content answer) or, naming none, by the settings
     // grant (the permission list).
-    return !pending.workspace && !pending.permissions && !pending.content;
+    return railAnswersIn(pending);
   }
   switch (item.id) {
     case CONTENT_RAIL_ID:
@@ -56,6 +56,41 @@ export function railEntryDecided(
     default:
       return true;
   }
+}
+
+/** The loading states the rail reads, as its queries report them. */
+export interface RailAnswerStates {
+  workspacePending: boolean;
+  /** Whether the client has hydrated: before then, nothing about the reader is known. */
+  hydrated: boolean;
+  permissionsLoading: boolean;
+  /** The server's answer about collections and Singles. */
+  contentAnswerPending: boolean;
+  collectionsLoading: boolean;
+  singlesLoading: boolean;
+}
+
+/**
+ * Which of the rail's answers are still out, from its queries' states. Loading counts here, a
+ * failed answer does not: a failure is decided until a retry, and the rail's visibility rule
+ * already says what it shows.
+ */
+export function railAnswersPending(
+  states: RailAnswerStates
+): RailAnswersPending {
+  return {
+    workspace: states.workspacePending,
+    permissions: !states.hydrated || states.permissionsLoading,
+    content:
+      states.contentAnswerPending ||
+      states.collectionsLoading ||
+      states.singlesLoading,
+  };
+}
+
+/** Whether every answer the rail's entries wait on is in, so every entry is decided. */
+export function railAnswersIn(pending: RailAnswersPending): boolean {
+  return !pending.workspace && !pending.permissions && !pending.content;
 }
 
 /**

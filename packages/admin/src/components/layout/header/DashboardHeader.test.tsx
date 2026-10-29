@@ -207,6 +207,26 @@ describe("DashboardHeader while its answers arrive", () => {
     expect(screen.getByRole("button", { name: "Choose theme" })).toBeVisible();
   });
 
+  it("marks the row pending while its answers arrive and settled once they are in", () => {
+    const marker = () =>
+      document
+        .querySelector("[data-shell-answers]")
+        ?.getAttribute("data-shell-answers");
+    mockWorkspacePending = true;
+    const { unmount } = render(<DashboardHeader />);
+    expect(marker()).toBe("pending");
+    unmount();
+    mockWorkspacePending = false;
+    mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
+    mockPermissionsLoading = true;
+    const second = render(<DashboardHeader />);
+    expect(marker()).toBe("pending");
+    second.unmount();
+    mockPermissionsLoading = false;
+    render(<DashboardHeader />);
+    expect(marker()).toBe("settled");
+  });
+
   it("draws the whole row, the menu last, once both answers are in", () => {
     mockBranding = { plugins: [], showBuilder: true } as AdminBranding;
     render(<DashboardHeader />);

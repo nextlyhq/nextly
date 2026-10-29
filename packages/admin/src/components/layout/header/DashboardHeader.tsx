@@ -13,6 +13,7 @@ import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { useLogout } from "@admin/hooks/useLogout";
 import { cn } from "@admin/lib/utils";
 
+import { shellAnswersMarker } from "../lib/shell-answers";
 import { UserProfileDropdown } from "../sidebar/UserProfileDropdown";
 
 import {
@@ -144,7 +145,13 @@ function ControlsRow({
 }): JSX.Element {
   const settled = headerControlsSettled(pending, bellOffered);
   return (
-    <div hidden={!settled} className={settled ? "contents" : undefined}>
+    <div
+      hidden={!settled}
+      className={settled ? "contents" : undefined}
+      // Whether the answers that decide the row are in, so a reader of the
+      // page (the layout-shift browser test) can tell when the row is done.
+      data-shell-answers={shellAnswersMarker(settled)}
+    >
       <HeaderControls {...controls} bellOffered={bellOffered} />
     </div>
   );

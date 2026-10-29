@@ -35,6 +35,7 @@ import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
+import { shellAnswersMarker } from "../lib/shell-answers";
 
 import {
   CONTENT_RAIL_ID,
@@ -63,7 +64,11 @@ import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-hre
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
-import { settledRailItems } from "./lib/settled-rail";
+import {
+  railAnswersIn,
+  railAnswersPending,
+  settledRailItems,
+} from "./lib/settled-rail";
 import { standalonePluginsVisibleTo } from "./lib/standalone-plugins-visible-to";
 import type {
   MainMenuCategory,
@@ -230,7 +235,7 @@ export function DualSidebar({
 
   // Whether an entry shows, with an answer still loading read as "shown" for
   // the entries that say so below. The panel and the routes read this; what the
-  // rail DRAWS is held to the entries already decided (`railItems`).
+  // rail DRAWS is held to the entries already decided (`rail.items`).
   const isMenuItemShown = useCallback(
     (item: MainMenuItem): boolean => {
       // A slug declared on the entry is a hard gate, ahead of the per-section
@@ -291,28 +296,31 @@ export function DualSidebar({
 
   // What the rail draws: the entries shown, up to the first one whose answer
   // has not arrived. An entry arriving later then lands below every entry
-  // already drawn instead of pushing them down. Loading counts here, a failed
-  // answer does not: a failure is decided until a retry, and the visibility
-  // rule above already says what it shows.
-  const railItems = useMemo(
-    () =>
-      settledRailItems(filteredMenuItems, isMenuItemShown, {
-        workspace: isWorkspacePending,
-        permissions: !isHydrated || isPermissionsLoading,
-        content:
-          contentAnswerPending || isCollectionsLoading || isSinglesLoading,
-      }),
-    [
-      filteredMenuItems,
-      isMenuItemShown,
-      isWorkspacePending,
-      isHydrated,
-      isPermissionsLoading,
+  // already drawn instead of pushing them down. And whether every answer is
+  // in, which the rail marks for a reader of the page.
+  const rail = useMemo(() => {
+    const pending = railAnswersPending({
+      workspacePending: isWorkspacePending,
+      hydrated: isHydrated,
+      permissionsLoading: isPermissionsLoading,
       contentAnswerPending,
-      isCollectionsLoading,
-      isSinglesLoading,
-    ]
-  );
+      collectionsLoading: isCollectionsLoading,
+      singlesLoading: isSinglesLoading,
+    });
+    return {
+      items: settledRailItems(filteredMenuItems, isMenuItemShown, pending),
+      settled: railAnswersIn(pending),
+    };
+  }, [
+    filteredMenuItems,
+    isMenuItemShown,
+    isWorkspacePending,
+    isHydrated,
+    isPermissionsLoading,
+    contentAnswerPending,
+    isCollectionsLoading,
+    isSinglesLoading,
+  ]);
 
   const activeCategory = useMemo(
     () =>
@@ -452,6 +460,9 @@ export function DualSidebar({
           "flex flex-col items-center py-4 bg-sidebar  border-r border-border z-50",
           "w-[72px] shrink-0"
         )}
+        // Whether every answer the rail draws from is in, so a reader of the
+        // page (the layout-shift browser test) can tell when the rail is done.
+        data-shell-answers={shellAnswersMarker(rail.settled)}
       >
         {/* Logo */}
         <Link
@@ -467,7 +478,7 @@ export function DualSidebar({
 
         {/* Main Icons */}
         <nav className="flex-1 flex flex-col gap-4 w-full px-3">
-          {railItems.map(item => {
+          {rail.items.map(item => {
             const Icon = item.icon;
             const isSelected = railItemOf(shownMain) === item.id;
             const href = resolveItemHref(item);

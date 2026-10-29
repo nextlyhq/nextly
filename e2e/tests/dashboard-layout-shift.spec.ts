@@ -170,8 +170,15 @@ function report(
 }
 
 /**
- * Every card drawn and none still loading, held for a second: the end of the window. A second
- * of stillness, because a batch can settle and a later one start moments after.
+ * Every card drawn and none still loading, and the shell's own answers in, held for a second: the
+ * end of the window. A second of stillness, because a batch can settle and a later one start
+ * moments after.
+ *
+ * The shell's answers (the workspace, the permissions, the collections and Singles) are waited on
+ * apart from the cards', since nothing ties when they arrive to when the cards settle: one that
+ * arrives later than the second of stillness would otherwise move the shell after the window
+ * closed. The header's controls row and the sidebar's rail each mark themselves
+ * `data-shell-answers="pending"` until the answers they draw from are in.
  */
 async function waitForSettled(page: Page): Promise<void> {
   const cells = page.locator('[data-testid^="widget-cell-"]');
@@ -184,8 +191,16 @@ async function waitForSettled(page: Page): Promise<void> {
     'main [aria-busy="true"], main [data-slot="skeleton"], main [data-testid="widget-grid-loading"]'
   );
   await expect(loading).toHaveCount(0, { timeout: 60_000 });
+  const shellPending = page.locator('[data-shell-answers="pending"]');
+  await expect(shellPending).toHaveCount(0, { timeout: 60_000 });
+  // The positive control: the shell does mark itself, so no pending region means its answers are
+  // in rather than that nothing is marked.
+  await expect(
+    page.locator('[data-shell-answers="settled"]').first()
+  ).toBeAttached();
   await page.waitForTimeout(1_000);
   await expect(loading).toHaveCount(0);
+  await expect(shellPending).toHaveCount(0);
 }
 
 /** Follows the link at `href` the way the app does, without it counting as a reader's input. */

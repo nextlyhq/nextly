@@ -156,4 +156,38 @@ describe("DualSidebar's rail while its answers arrive", () => {
     expect(railLabels()).toEqual(["Dashboard", "Content"]);
     expect(screen.queryByLabelText("Media Library")).not.toBeInTheDocument();
   });
+
+  it("marks the rail settled only once every answer it waits on is in", () => {
+    const marker = () =>
+      document.querySelector("aside")?.getAttribute("data-shell-answers");
+    for (const waiting of [
+      {
+        workspacePending: true,
+        permissionsLoading: false,
+        contentLoading: false,
+      },
+      {
+        workspacePending: false,
+        permissionsLoading: true,
+        contentLoading: false,
+      },
+      {
+        workspacePending: false,
+        permissionsLoading: false,
+        contentLoading: true,
+      },
+    ]) {
+      answers = waiting;
+      const { unmount } = render(<DualSidebar />);
+      expect(marker()).toBe("pending");
+      unmount();
+    }
+    answers = {
+      workspacePending: false,
+      permissionsLoading: false,
+      contentLoading: false,
+    };
+    render(<DualSidebar />);
+    expect(marker()).toBe("settled");
+  });
 });
