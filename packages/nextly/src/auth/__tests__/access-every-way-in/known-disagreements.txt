@@ -834,6 +834,8 @@ no-service key-role-based read single malformed-filter at capabilities  # no-ser
 # entries it matches. Each door below refuses it still, as no read there
 # applies a rule's filter yet.
 bound custom-role read related async-filter at population  # filter-not-applied
+public visitor read related async-filter at population  # filter-not-applied
+public visitor read related returns-filter at population  # filter-not-applied
 bound custom-role read related returns-filter at population  # filter-not-applied
 bound key-full-access read related async-filter at population  # filter-not-applied
 bound key-full-access read related returns-filter at population  # filter-not-applied
@@ -861,157 +863,95 @@ no-service user-with read collection returns-filter at entity  # no-service
 no-service user-with read collection returns-filter at widget  # can-no-service-refuses-people
 service custom-role read collection async-filter at can  # filter-not-applied
 service custom-role read collection async-filter at capabilities  # filter-not-applied
-service custom-role read collection async-filter at direct  # filter-not-applied
 service custom-role read collection async-filter at entity  # filter-not-applied
-service custom-role read collection async-filter at rest
 service custom-role read collection async-filter at route  # filter-not-applied
-service custom-role read collection async-filter at service  # filter-not-applied
 service custom-role read collection async-filter at widget  # filter-not-applied
 service custom-role read collection returns-filter at can  # filter-not-applied
 service custom-role read collection returns-filter at capabilities  # filter-not-applied
-service custom-role read collection returns-filter at direct  # filter-not-applied
 service custom-role read collection returns-filter at entity  # filter-not-applied
-service custom-role read collection returns-filter at rest
 service custom-role read collection returns-filter at route  # filter-not-applied
-service custom-role read collection returns-filter at service  # filter-not-applied
 service custom-role read collection returns-filter at widget  # filter-not-applied
 service custom-role read related async-filter at population  # filter-not-applied
 service custom-role read related returns-filter at population  # filter-not-applied
 service key-full-access read collection async-filter at can  # filter-not-applied
 service key-full-access read collection async-filter at capabilities  # filter-not-applied
-service key-full-access read collection async-filter at direct  # filter-not-applied
 service key-full-access read collection async-filter at entity  # filter-not-applied
-service key-full-access read collection async-filter at rest
 service key-full-access read collection async-filter at route  # filter-not-applied
-service key-full-access read collection async-filter at service  # filter-not-applied
 service key-full-access read collection returns-filter at can  # filter-not-applied
 service key-full-access read collection returns-filter at capabilities  # filter-not-applied
-service key-full-access read collection returns-filter at direct  # filter-not-applied
 service key-full-access read collection returns-filter at entity  # filter-not-applied
-service key-full-access read collection returns-filter at rest
 service key-full-access read collection returns-filter at route  # filter-not-applied
-service key-full-access read collection returns-filter at service  # filter-not-applied
 service key-full-access read related async-filter at population  # filter-not-applied
 service key-full-access read related returns-filter at population  # filter-not-applied
 service key-partial read collection async-filter at can  # filter-not-applied
 service key-partial read collection async-filter at capabilities  # filter-not-applied
-service key-partial read collection async-filter at direct  # filter-not-applied
 service key-partial read collection async-filter at entity  # filter-not-applied
-service key-partial read collection async-filter at rest
 service key-partial read collection async-filter at route  # filter-not-applied
-service key-partial read collection async-filter at service  # filter-not-applied
 service key-partial read collection returns-filter at can  # filter-not-applied
 service key-partial read collection returns-filter at capabilities  # filter-not-applied
-service key-partial read collection returns-filter at direct  # filter-not-applied
 service key-partial read collection returns-filter at entity  # filter-not-applied
-service key-partial read collection returns-filter at rest
 service key-partial read collection returns-filter at route  # filter-not-applied
-service key-partial read collection returns-filter at service  # filter-not-applied
 service key-partial read related async-filter at population  # filter-not-applied
 service key-partial read related returns-filter at population  # filter-not-applied
 service key-read-only read collection async-filter at can  # filter-not-applied
 service key-read-only read collection async-filter at capabilities  # filter-not-applied
-service key-read-only read collection async-filter at direct  # filter-not-applied
 service key-read-only read collection async-filter at entity  # filter-not-applied
-service key-read-only read collection async-filter at rest
 service key-read-only read collection async-filter at route  # filter-not-applied
-service key-read-only read collection async-filter at service  # filter-not-applied
 service key-read-only read collection returns-filter at can  # filter-not-applied
 service key-read-only read collection returns-filter at capabilities  # filter-not-applied
-service key-read-only read collection returns-filter at direct  # filter-not-applied
 service key-read-only read collection returns-filter at entity  # filter-not-applied
-service key-read-only read collection returns-filter at rest
 service key-read-only read collection returns-filter at route  # filter-not-applied
-service key-read-only read collection returns-filter at service  # filter-not-applied
 service key-read-only read related async-filter at population  # filter-not-applied
 service key-read-only read related returns-filter at population  # filter-not-applied
 service key-role-based read collection async-filter at can  # filter-not-applied
 service key-role-based read collection async-filter at capabilities  # filter-not-applied
-service key-role-based read collection async-filter at direct  # filter-not-applied
 service key-role-based read collection async-filter at entity  # filter-not-applied
-service key-role-based read collection async-filter at rest
 service key-role-based read collection async-filter at route  # filter-not-applied
-service key-role-based read collection async-filter at service  # filter-not-applied
 service key-role-based read collection returns-filter at can  # filter-not-applied
 service key-role-based read collection returns-filter at capabilities  # filter-not-applied
-service key-role-based read collection returns-filter at direct  # filter-not-applied
 service key-role-based read collection returns-filter at entity  # filter-not-applied
-service key-role-based read collection returns-filter at rest
 service key-role-based read collection returns-filter at route  # filter-not-applied
-service key-role-based read collection returns-filter at service  # filter-not-applied
 service key-role-based read related async-filter at population  # filter-not-applied
 service key-role-based read related returns-filter at population  # filter-not-applied
 service key-super-admin read collection async-filter at can  # filter-not-applied
 service key-super-admin read collection async-filter at capabilities  # filter-not-applied
-service key-super-admin read collection async-filter at direct  # filter-not-applied
 service key-super-admin read collection async-filter at entity  # filter-not-applied
-service key-super-admin read collection async-filter at rest
 service key-super-admin read collection async-filter at route  # filter-not-applied
-service key-super-admin read collection async-filter at service  # filter-not-applied
 service key-super-admin read collection returns-filter at can  # filter-not-applied
 service key-super-admin read collection returns-filter at capabilities  # filter-not-applied
-service key-super-admin read collection returns-filter at direct  # filter-not-applied
 service key-super-admin read collection returns-filter at entity  # filter-not-applied
-service key-super-admin read collection returns-filter at rest
 service key-super-admin read collection returns-filter at route  # filter-not-applied
-service key-super-admin read collection returns-filter at service  # filter-not-applied
 service key-super-admin read related async-filter at population  # filter-not-applied
 service key-super-admin read related returns-filter at population  # filter-not-applied
 service key-without-rows read collection async-filter at entity  # key-slug-string-match, filter-not-applied
 service key-without-rows read collection returns-filter at entity  # key-slug-string-match, filter-not-applied
 service key-without-rows read related async-filter at population  # key-slug-string-match, filter-not-applied
 service key-without-rows read related returns-filter at population  # key-slug-string-match, filter-not-applied
-service principal read collection async-filter at direct  # filter-not-applied
-service principal read collection async-filter at service  # filter-not-applied
-service principal read collection returns-filter at direct  # filter-not-applied
-service principal read collection returns-filter at service  # filter-not-applied
 service principal read related async-filter at population  # visitor-keeps-media, filter-not-applied
 service principal read related returns-filter at population  # visitor-keeps-media, filter-not-applied
-service principal-other read collection async-filter at direct  # filter-not-applied
-service principal-other read collection async-filter at service  # filter-not-applied
-service principal-other read collection returns-filter at direct  # filter-not-applied
-service principal-other read collection returns-filter at service  # filter-not-applied
 service principal-other read related async-filter at population  # visitor-keeps-media, filter-not-applied
 service principal-other read related returns-filter at population  # visitor-keeps-media, filter-not-applied
 service user-partial read collection async-filter at can  # filter-not-applied
 service user-partial read collection async-filter at capabilities  # filter-not-applied
-service user-partial read collection async-filter at direct  # filter-not-applied
 service user-partial read collection async-filter at entity  # filter-not-applied
-service user-partial read collection async-filter at rest
 service user-partial read collection async-filter at route  # filter-not-applied
-service user-partial read collection async-filter at service  # filter-not-applied
 service user-partial read collection async-filter at widget  # filter-not-applied
 service user-partial read collection returns-filter at can  # filter-not-applied
 service user-partial read collection returns-filter at capabilities  # filter-not-applied
-service user-partial read collection returns-filter at direct  # filter-not-applied
 service user-partial read collection returns-filter at entity  # filter-not-applied
-service user-partial read collection returns-filter at rest
 service user-partial read collection returns-filter at route  # filter-not-applied
-service user-partial read collection returns-filter at service  # filter-not-applied
 service user-partial read collection returns-filter at widget  # filter-not-applied
 service user-partial read related async-filter at population  # filter-not-applied
 service user-partial read related returns-filter at population  # filter-not-applied
 service user-with read collection async-filter at can  # filter-not-applied
 service user-with read collection async-filter at capabilities  # filter-not-applied
-service user-with read collection async-filter at direct  # filter-not-applied
 service user-with read collection async-filter at entity  # filter-not-applied
-service user-with read collection async-filter at rest
 service user-with read collection async-filter at route  # filter-not-applied
-service user-with read collection async-filter at service  # filter-not-applied
 service user-with read collection async-filter at widget  # filter-not-applied
 service user-with read collection returns-filter at can  # filter-not-applied
 service user-with read collection returns-filter at capabilities  # filter-not-applied
-service user-with read collection returns-filter at direct  # filter-not-applied
 service user-with read collection returns-filter at entity  # filter-not-applied
-service user-with read collection returns-filter at rest
-public visitor read collection returns-filter at rest
-public visitor read collection async-filter at rest
 service user-with read collection returns-filter at route  # filter-not-applied
-service user-with read collection returns-filter at service  # filter-not-applied
-public visitor read collection returns-filter at direct  # filter-not-applied
-public visitor read collection returns-filter at service  # filter-not-applied
-public visitor read collection async-filter at direct  # filter-not-applied
-public visitor read collection async-filter at service  # filter-not-applied
 service user-with read collection returns-filter at widget  # filter-not-applied
 service user-with read related async-filter at population  # filter-not-applied
 service user-with read related returns-filter at population  # filter-not-applied

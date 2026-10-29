@@ -4,8 +4,10 @@
  * The properties that separate the reader from a plausible broken one: a key
  * is judged on its stored slug wherever that and its rows answer differently,
  * the answer reads the rules the access-control service holds now rather than
- * ones an earlier registration declared, and a declared read rule is answered
- * by the service without resolving the user's grants.
+ * ones an earlier registration declared, a declared read rule is answered
+ * by the service without resolving the user's grants, and a visitor is
+ * refused a read rule's filter that population cannot apply and, without the
+ * service, is judged by the Public role alone.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +36,7 @@ import { makePrincipal } from "../../plugins/principals/principal";
 
 import { userActor, visitorActor } from "./actor";
 import { clearDeclaredTargets, declareTarget } from "./declared-rules";
+import { recordingDeviations } from "./deviations";
 import { relatedRowReads } from "./population-read";
 
 const checkAccess = vi.fn();
@@ -121,6 +124,40 @@ describe("an API key", () => {
   });
 });
 
+describe("a visitor, with the access-control service", () => {
+  const publicReadsPosts = () =>
+    visitorSpy.mockResolvedValue(
+      visitorActor([{ slug: "read-posts", action: "read", resource: "posts" }])
+    );
+
+  it("is refused where the read rule answers a filter population cannot apply", async () => {
+    // Population fetches the related ids whole, so a rule that allows only
+    // the entries it matches would hand the visitor every one of them.
+    publicReadsPosts();
+    const { result, deviations } = await recordingDeviations(() =>
+      relatedRowReads(
+        "posts",
+        { principal: null },
+        service({ read: () => ({ author: { equals: "u1" } }) })
+      )
+    );
+    expect(result).toBe(false);
+    expect(deviations).toEqual(["filter-not-applied"]);
+  });
+
+  it("is shown the rows where the read rule answers true", async () => {
+    // The control: the same Public role and rule slot, answering every entry.
+    publicReadsPosts();
+    await expect(
+      relatedRowReads(
+        "posts",
+        { principal: null },
+        service({ read: () => true })
+      )
+    ).resolves.toBe(true);
+  });
+});
+
 describe("a visitor, without the access-control service", () => {
   it("is refused where the Public role does not hold the read, as a failed lookup leaves it", async () => {
     // Without the service no rule is read, but the Public role still decides:
@@ -158,6 +195,25 @@ describe("a visitor, without the access-control service", () => {
     await expect(
       relatedRowReads("posts", { principal: null }, undefined)
     ).resolves.toBe(true);
+  });
+
+  it("is judged by the Public role alone, running no rule declared in the process", async () => {
+    // Its direct read without the service reads no rule, so a rule the
+    // process declared for the slug, perhaps for another instance, neither
+    // refuses the populated row nor runs.
+    const rule = vi.fn(() => false);
+    declareTarget({
+      kind: "collection",
+      slug: "posts",
+      access: { read: rule },
+    });
+    visitorSpy.mockResolvedValue(
+      visitorActor([{ slug: "read-posts", action: "read", resource: "posts" }])
+    );
+    await expect(
+      relatedRowReads("posts", { principal: null }, undefined)
+    ).resolves.toBe(true);
+    expect(rule).not.toHaveBeenCalled();
   });
 });
 

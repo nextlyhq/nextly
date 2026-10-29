@@ -53,6 +53,10 @@ export {
   type NextCacheModule,
   type CachedFindOptions,
 } from "./runtime/cache";
+// Whether a value says Cache Components is on, for code an app bundles: it
+// reads `process.env.__NEXT_CACHE_COMPONENTS`, which Next.js inlines there,
+// and asks this the question nextly itself asks of that value.
+export { cacheComponentsEnabled } from "./cache-components";
 
 // SEO bridge — map the plugin's `seo` field group to a Next `Metadata` object.
 // The `next` import is type-only, so this never forces `next` at load.

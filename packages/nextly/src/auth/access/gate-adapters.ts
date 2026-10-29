@@ -223,13 +223,11 @@ export interface GateQuestion {
 export type CollectionQuestion = GateQuestion;
 
 /**
- * What the Single gate is asked. It reads a signed-in user's permission on
- * the pool, and so a visitor's Public role too.
+ * What the Single gate is asked. Without the service it allows a signed-in
+ * user unread, and reads a visitor's Public role as the collection gate does:
+ * on the asking service's own database where it hands one in.
  */
-export type SingleQuestion = Omit<
-  GateQuestion,
-  "permissionWithoutService" | "visitorWithoutService"
->;
+export type SingleQuestion = Omit<GateQuestion, "permissionWithoutService">;
 
 /**
  * The decision's answer, for a deviation to compare today's against: with the
@@ -376,26 +374,25 @@ function readsRouteFilter(
  * the request names it, and nothing it is not told: a signed-in user and a
  * key are each the user id, the roles and the grants' slugs; a plugin person
  * is the whole person, its attributes included, which the rule is told; a
- * visitor is told nothing. So a narrower scope, or a person whose attributes
- * changed, never reuses an earlier answer, and two asks that hand the rule
- * the same context, whichever way they built the actor, share one.
+ * visitor is the Public role's grants' slugs. So a narrower scope, a person
+ * whose attributes changed, or a Public role whose grants changed, never
+ * reuses an earlier answer, and two asks that hand the rule the same context,
+ * whichever way they built the actor, share one.
  * `undefined` for a person no key can name, whose answer is not kept.
  */
 function ruleContextKeyOf(
   actor: Exclude<Actor, { kind: "system" }>
 ): string | undefined {
+  // The slugs of the grants the rule is handed as its `permissions`.
+  const slugs = (held: UserActor | KeyActor | VisitorActor) =>
+    held.permissions.map(grant => grant.slug);
   switch (actor.kind) {
     case "user":
     case "key":
       // In the order the rule is handed them: a rule may read `roles[0]`,
       // so two scopes holding the same roles in another order are told
       // different things.
-      return JSON.stringify([
-        "staff",
-        actor.userId,
-        actor.roles,
-        actor.permissions.map(grant => grant.slug),
-      ]);
+      return JSON.stringify(["staff", actor.userId, actor.roles, slugs(actor)]);
     case "principal": {
       const person = canonicalJson(actor.principal);
       return person === undefined
@@ -403,7 +400,9 @@ function ruleContextKeyOf(
         : JSON.stringify(["principal", person]);
     }
     case "visitor":
-      return "visitor";
+      // A visitor's rule reads the Public role's grants, which another
+      // instance may change within a long request.
+      return JSON.stringify(["visitor", slugs(actor)]);
   }
 }
 

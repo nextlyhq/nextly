@@ -17,8 +17,11 @@ import {
   collectionGateVerdict,
   type GateVerdict,
 } from "../../../auth/access/gate-adapters";
+import {
+  ownDatabaseVisitor,
+  visitorWithoutAccessService,
+} from "../../../auth/access/own-database-visitor";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
-import { actorForVisitor } from "../../../auth/access/resolve-actor";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../../auth/caller-scope";
@@ -34,7 +37,6 @@ import { hasPermission } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import type { VisitorGrantsLoader } from "../../../shared/lib/field-level-registry";
-import { MetaService } from "../../meta/services/meta-service";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 
@@ -77,20 +79,16 @@ export class CollectionAccessService extends BaseService {
   }
 
   /**
-   * The visitor as this service's own database records it: the Public role
-   * read there, its `nextly_meta` through a reader on this service's adapter,
-   * on `executor` when the caller's work holds a transaction. The one loader
-   * this gate, the relationship reads over the same database and the field
-   * rules judged on it share, so none of them reads Public elsewhere.
+   * The visitor as this service's own database records it, built by the one
+   * builder the Single services use too. The loader this gate, the
+   * relationship reads over the same database and the field rules judged on
+   * it share, so none of them reads Public elsewhere.
    */
-  readonly ownDatabaseVisitor: VisitorGrantsLoader = executor =>
-    actorForVisitor({
-      executor: executor ?? this.db,
-      own: {
-        meta: new MetaService(this.adapter, this.logger),
-        dialect: this.dialect,
-      },
-    });
+  readonly ownDatabaseVisitor: VisitorGrantsLoader = ownDatabaseVisitor({
+    adapter: this.adapter,
+    logger: this.logger,
+    db: () => this.db,
+  });
 
   /**
    * Where the field rules of a read or write through this service read a
@@ -99,7 +97,10 @@ export class CollectionAccessService extends BaseService {
    * they read the process's cached copy as the gate then does.
    */
   get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
-    return this.rbacAccessControlService ? undefined : this.ownDatabaseVisitor;
+    return visitorWithoutAccessService(
+      this.rbacAccessControlService,
+      this.ownDatabaseVisitor
+    );
   }
 
   /**
