@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A yes-or-no question of whether a caller may update, delete, publish or unpublish a collection now answers no when that action's rule answers a filter: `ctx.caller.can(...)` in a plugin route, `nextly.access.check(...)`, and a dashboard widget's permission check. Such an answer names no entry and applies no filter. A read under a filter still answers yes, and the admin's capability cells still offer an action whose request applies the filter.
+A plugin's or the API's yes-or-no question of whether a caller may update, delete, publish or unpublish a collection now answers no when that action's rule answers a filter: `ctx.caller.can(...)` in a plugin route and `nextly.access.check(...)`. Such an answer names no entry and applies no filter. A read under a filter still answers yes. The hints are unchanged, a filter counting as the permission held: the admin's capability cells, a dashboard widget's and an attention item's offer, and giving up a document lock.
