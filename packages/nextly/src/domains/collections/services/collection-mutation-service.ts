@@ -11578,15 +11578,16 @@ export class CollectionMutationService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       };
       // A delete that does not apply a filter asks the gate that refuses one.
-      const access =
-        params.appliesFilter === false
-          ? {
-              denied:
-                await this.accessService.checkCollectionAccess(accessParams),
-            }
-          : await this.accessService.checkCollectionWrite(accessParams);
-      if (access.denied) {
-        return access.denied;
+      let access: { filter?: RuleFilter; read?: ReadReach } = {};
+      if (params.appliesFilter === false) {
+        const denied =
+          await this.accessService.checkCollectionAccess(accessParams);
+        if (denied) return denied;
+      } else {
+        const verdict =
+          await this.accessService.checkCollectionWrite(accessParams);
+        if (verdict.denied) return verdict.denied;
+        access = verdict;
       }
       // An entry outside the filter is refused before any hook runs, and asked
       // again under the row lock below, so the entry removed is the one judged.
