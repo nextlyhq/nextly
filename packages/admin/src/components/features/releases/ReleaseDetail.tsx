@@ -123,10 +123,20 @@ function ReleasePage({ release }: { release: Release }) {
   const names = useReleaseDocumentNames(release.id, items);
   const releaseTitleOf = useReleaseTitles(otherReleaseIds(readiness.data));
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
-  const commitBlockedReason = commitBlockedBy(
-    ahead ? readiness : { data: undefined, isPending: false, isError: false },
-    items.length + hiddenTotal(members.data?.meta.hidden)
-  );
+  // The instant is chosen with what ships on screen, so neither Schedule nor
+  // Publish now is offered while the documents are on their way or could not
+  // be read: a failed read is the same as a pending one, since either way the
+  // reader cannot see what they would be committing. Only then do the checks
+  // say whether anything else holds them.
+  const contentsKnown = !members.isPending && !members.isError;
+  const commitBlockedReason = contentsKnown
+    ? commitBlockedBy(
+        ahead
+          ? readiness
+          : { data: undefined, isPending: false, isError: false },
+        items.length + hiddenTotal(members.data?.meta.hidden)
+      )
+    : "Available once the contents have loaded.";
   const status = useReleasePageStatus(release, now);
   const { user: viewer } = useDashboardUser();
   const [dialogOpen, setDialogOpen] = useState(false);

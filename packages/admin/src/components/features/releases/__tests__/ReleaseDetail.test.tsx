@@ -587,6 +587,28 @@ describe("Schedule and Publish now while the checks are read", () => {
     expect(screen.getByText("Checking…")).toBeTruthy();
   });
 
+  it("holds both back, saying why, while its documents load or after they fail to", () => {
+    // The instant is chosen with what ships on screen, so neither commit is
+    // offered while the reader cannot see what they would be committing,
+    // whatever the checks say. Readiness answers ready here, so only the
+    // documents' read can be what holds them.
+    for (const read of [
+      { data: undefined, isPending: true, isError: false },
+      { data: undefined, isPending: false, isError: true },
+    ]) {
+      setUp({ can });
+      mocks.members.mockReturnValue(read);
+      const { unmount } = render(<ReleaseDetail id="r1" />);
+      for (const button of buttons()) {
+        expect(button, JSON.stringify(read)).toHaveProperty("disabled", true);
+      }
+      expect(
+        screen.getByText("Available once the contents have loaded.")
+      ).toBeTruthy();
+      unmount();
+    }
+  });
+
   it("does not lock the reader out when readiness fails, and offers a retry", async () => {
     const user = userEvent.setup();
     const refetch = vi.fn();
