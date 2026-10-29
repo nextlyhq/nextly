@@ -66,17 +66,24 @@ function slugOf(text) {
 
 /**
  * A route as it may be published: its path and its query's keys, with every
- * value hidden and the whole query standing as a short hash, so
+ * value hidden and everything after the path standing as a short hash, so
  * `/admin/x?tab=fields` and `?tab=api` stay apart while a value, which can be
- * a credential such as a reset token, never appears. A capture's name and the
- * findings published with the captures both read it.
+ * a credential such as a reset token, never appears. A fragment is hidden
+ * whole the same way (`#access_token=…` carries one), and a `?` inside it is
+ * the fragment's, not a query. A capture's name and the findings published
+ * with the captures both read it.
  */
 export function publishedRoute(route) {
-  const at = route.indexOf("?");
+  const at = route.search(/[?#]/);
   if (at === -1) return route;
-  const query = route.slice(at + 1);
+  const hash = createHash("sha256")
+    .update(route.slice(at + 1))
+    .digest("hex")
+    .slice(0, 8);
+  if (route[at] === "#") return `${route.slice(0, at)}#${hash}`;
+  const fragment = route.indexOf("#", at);
+  const query = route.slice(at + 1, fragment === -1 ? undefined : fragment);
   const keys = [...new URLSearchParams(query).keys()];
-  const hash = createHash("sha256").update(query).digest("hex").slice(0, 8);
   return `${route.slice(0, at)}?${keys.map(key => `${key}=…`).join("&")}#${hash}`;
 }
 

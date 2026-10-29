@@ -7,6 +7,7 @@ import {
   capturePlan,
   parseOptions,
   prodPort,
+  publishedRoute,
   UsageError,
 } from "./options.mjs";
 
@@ -87,6 +88,37 @@ describe("what the visual check is asked to do", () => {
     );
     expect(captureName("/admin/x?tab=fields", 390, "dark")).not.toBe(
       captureName("/admin/x?tab=api", 390, "dark")
+    );
+  });
+
+  /*
+   * A fragment is published the same way a query would be: an address such as
+   * `#access_token=…` carries a credential there, and a `?` inside a fragment
+   * is still the fragment's, not a query to read keys from. Distinct names
+   * stay the property, so two fragments still name two captures.
+   */
+  it("keeps a fragment's text out of the name, and two fragments apart", () => {
+    // Assembled from pieces, so no credential-shaped text sits in the source.
+    const secret = ["9d1e", "a07c", "44b2f3"].join("");
+    for (const route of [
+      `/admin/plugin#access_token=${secret}`,
+      `/admin/plugin#access_token=${secret}?view=1`,
+      `/admin/plugin?tab=api#access_token=${secret}`,
+    ]) {
+      expect(captureName(route, 390, "light"), route).not.toContain(secret);
+      expect(publishedRoute(route), route).not.toContain(secret);
+    }
+    expect(
+      captureName(`/admin/plugin#access_token=${secret}`, 390, "light")
+    ).toMatch(/^admin-plugin-[0-9a-f]{8}-390-light\.png$/);
+    expect(
+      publishedRoute(`/admin/plugin?tab=api#access_token=${secret}`)
+    ).toMatch(/^\/admin\/plugin\?tab=…#[0-9a-f]{8}$/);
+    expect(captureName("/admin/x#a", 390, "dark")).not.toBe(
+      captureName("/admin/x#b", 390, "dark")
+    );
+    expect(captureName("/admin/x?tab=api", 390, "dark")).not.toBe(
+      captureName("/admin/x?tab=api#more", 390, "dark")
     );
   });
 
