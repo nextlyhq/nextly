@@ -509,10 +509,17 @@ const noSaveWithoutPublishing: RefObject<undefined> = { current: undefined };
  *
  * The recovery reads its gate when it runs, so it starts the form afresh from
  * the defaults of the render then on screen, which carry the reloaded entry.
+ *
+ * Which entry, in which language, is on screen, as a submission asks once it
+ * is about to write: it started in one, and the form may hold another's
+ * values by then.
  */
 function useEntryWriteGate(gate: {
   form: UseFormReturn<Record<string, unknown>>;
   defaultValues: Record<string, unknown>;
+  collection: string;
+  entry: EntryData | null;
+  locale: string | undefined;
   writesHeld: () => boolean;
   saveWithoutPublishing: RefObject<
     (() => Promise<DocumentActionOutcome>) | undefined
@@ -520,7 +527,15 @@ function useEntryWriteGate(gate: {
   onRecovered: (() => void) | undefined;
 }) {
   const submissionLatch = useRef(false);
+  const scope = JSON.stringify([
+    gate.collection,
+    gate.entry?.id ?? null,
+    gate.locale ?? null,
+  ]);
+  const scopeNow = useRef(scope);
+  scopeNow.current = scope;
   const { refusedForm, recovering } = useRefusedForm({
+    scope,
     writesHeld: gate.writesHeld,
     latch: submissionLatch,
     saveWithoutPublishing: gate.saveWithoutPublishing,
@@ -529,7 +544,7 @@ function useEntryWriteGate(gate: {
       gate.onRecovered?.();
     },
   });
-  return { submissionLatch, refusedForm, recovering };
+  return { submissionLatch, scopeNow, refusedForm, recovering };
 }
 
 export function useEntryForm({
@@ -616,13 +631,17 @@ export function useEntryForm({
 
   // The submit guard's synchronous half, and the form as a refused publish's
   // way out reaches it, which takes the same latch.
-  const { submissionLatch, refusedForm, recovering } = useEntryWriteGate({
-    form,
-    defaultValues,
-    writesHeld,
-    saveWithoutPublishing,
-    onRecovered,
-  });
+  const { submissionLatch, scopeNow, refusedForm, recovering } =
+    useEntryWriteGate({
+      form,
+      defaultValues,
+      collection: collection.name,
+      entry,
+      locale,
+      writesHeld,
+      saveWithoutPublishing,
+      onRecovered,
+    });
 
   useEffect(() => {
     if (!entry || mode !== "edit") return;
@@ -720,6 +739,8 @@ export function useEntryForm({
       submissionLatch.current = true;
       // The saved row, for `onSuccess` once the form has taken it in.
       let savedRow: EntryData | undefined;
+      // The entry and language this submission is for.
+      const startedIn = scopeNow.current;
       try {
         const outcome = await submitDocument({
           form,
@@ -727,6 +748,8 @@ export function useEntryForm({
           // Asked again once validation is done, immediately before the
           // write: the document can change hands while it runs.
           mayWrite: () => !writesHeld(),
+          // And the editor can move to another entry or language.
+          stillShown: () => scopeNow.current === startedIn,
           // Why: intent → payload mapping is the core PR-3 bug fix —
           // extracted to mapIntentToPayload above so the contract is
           // unit-testable without renderHook plumbing.
@@ -794,6 +817,7 @@ export function useEntryForm({
       fields,
       writesHeld,
       submissionLatch,
+      scopeNow,
     ]
   );
 

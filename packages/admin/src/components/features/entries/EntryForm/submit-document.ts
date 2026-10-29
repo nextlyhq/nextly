@@ -17,6 +17,7 @@ import {
   submitFailed,
   submitHeld,
   submitInvalid,
+  submitMoved,
   type SubmitOutcome,
 } from "./submit-outcome";
 
@@ -45,8 +46,14 @@ export async function submitDocument(args: {
    * and immediately before the write; a no stores nothing.
    */
   mayWrite?: () => boolean;
+  /**
+   * Whether the editor still shows the document and language the submission
+   * started in, asked with `mayWrite`: after a move the form holds another's
+   * values, so a no stores nothing.
+   */
+  stillShown?: () => boolean;
 }): Promise<SubmitOutcome> {
-  const { form, toPayload, write, onFailure, mayWrite } = args;
+  const { form, toPayload, write, onFailure, mayWrite, stillShown } = args;
   // The values this save is made from, as the form held them, before
   // validation's transforms: what is compared afterwards to find what the
   // author typed while the save was in flight.
@@ -60,6 +67,10 @@ export async function submitDocument(args: {
       // asked with nothing awaited before the write.
       if (mayWrite && !mayWrite()) {
         outcome = submitHeld;
+        return;
+      }
+      if (stillShown && !stillShown()) {
+        outcome = submitMoved;
         return;
       }
       const payload = toPayload(validated);

@@ -173,7 +173,16 @@ export interface DocumentActionBindingsInput {
  */
 export type DocumentActionOutcome =
   | { ok: true; item?: { id: string } }
-  | { ok: false; reason: SubmitRefusal | "cancelled"; message: string };
+  | {
+      ok: false;
+      reason: SubmitRefusal | "cancelled";
+      message: string;
+      /**
+       * Set where the store stopped before any write, readying the editor's
+       * work: no write failed, so nothing but this outcome says why.
+       */
+      beforeWrite?: true;
+    };
 
 /** A confirmation an action asks before it runs. */
 export interface ActionConfirmation {

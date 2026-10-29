@@ -354,4 +354,63 @@ describe("the entry form's save, when the entry changes hands while it validates
       expect(outcome).toMatchObject({ ok: false, reason: "refused" });
     }
   );
+
+  it("holds a submission made while a language switch's answer is on its way, as before", async () => {
+    // The switch has happened, and its answer hasn't come: the editor's
+    // writes are held, so a submission started now is held, not "moved".
+    let held = false;
+    const rendered = render({ writesHeld: () => held });
+    rendered.rerender({ entry: stored, locale: "de" });
+    held = true;
+    act(() => {
+      rendered.result.current.form.setValue("bio", "Mine", {
+        shouldDirty: true,
+      });
+    });
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await rendered.result.current.handleSubmit(
+        undefined,
+        "save-working-draft"
+      );
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "refused",
+      message:
+        "This document can't be saved right now: someone else is editing it, or a past version is on screen.",
+    });
+  });
+
+  it.each(["save-working-draft", "publish"] as const)(
+    "stores nothing on %s once the editor moved to another language while it validated",
+    async intent => {
+      const rendered = render();
+      act(() => {
+        rendered.result.current.form.setValue("bio", "Mine", {
+          shouldDirty: true,
+        });
+      });
+
+      let outcome: unknown;
+      await act(async () => {
+        const saving = rendered.result.current.handleSubmit(undefined, intent);
+        // A switch to a cached language while validation runs: the form
+        // starts afresh from that language's values.
+        rendered.rerender({ entry: stored, locale: "de" });
+        outcome = await saving;
+      });
+
+      expect(update).not.toHaveBeenCalled();
+      expect(outcome).toEqual({
+        ok: false,
+        reason: "refused",
+        message:
+          "You moved to another language or document before this was saved; nothing was stored.",
+      });
+    }
+  );
 });

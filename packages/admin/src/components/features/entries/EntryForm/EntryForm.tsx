@@ -118,6 +118,7 @@ import {
   type EntryFormMode,
 } from "./useEntryForm";
 import {
+  heldLocaleChange,
   heldWhileRecovering,
   offerHeldWhileRecovering,
   quickEditSave,
@@ -410,6 +411,10 @@ export function EntryForm({
   // holds for it too. Only the fields' own `disabled` follows the save alone;
   // the recovery holds them read-only through the lock, so a field keeps focus.
   const isSubmitting = savePending || recovering;
+  // Every switch to another language goes through here, held while a
+  // refused publish's recovery runs, so its Save and take stay on the
+  // language they are for.
+  const switchLocale = heldLocaleChange(onLocaleChange, recovering);
 
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
@@ -465,7 +470,7 @@ export function EntryForm({
     fields: getCollectionFields(collection),
     sourceValues,
     inTranslationMode: translationMode.active,
-    onLocaleChange,
+    onLocaleChange: switchLocale,
     seedFromLocale,
     onSeedHandled,
     onEnterTranslationMode: translationMode.onEnter,
@@ -703,6 +708,8 @@ export function EntryForm({
   const versionWritesHeld = lock.actionsDisabled || updatesHeld || recovering;
   // And the language panel's copies into the form, as it holds the fields.
   const contentHeld = editsHeld || recovering;
+  // And moving to another language, so its Save and take stay on this one.
+  const navigationHeld = writesHeld || recovering;
   // Delete is offered only to a caller who may delete in this collection.
   // The quick-edit and quick-create modals save only with the update or
   // create permission their mode needs: those modals open from a related
@@ -1298,7 +1305,7 @@ export function EntryForm({
                                           | undefined
                                       }
                                       locale={locale}
-                                      onLocaleChange={onLocaleChange}
+                                      onLocaleChange={switchLocale}
                                       hasStatus={hasStatus}
                                       actionsDisabled={contentHeld}
                                       // Publishing every language is a write
@@ -1307,7 +1314,7 @@ export function EntryForm({
                                         publishAllHeld || recovering
                                       }
                                       // A reader may still open the other languages.
-                                      navigationDisabled={writesHeld}
+                                      navigationDisabled={navigationHeld}
                                     />
                                   </div>
                                 )}
@@ -1376,9 +1383,9 @@ export function EntryForm({
                                       {...(locale === undefined
                                         ? {}
                                         : { locale })}
-                                      {...(onLocaleChange === undefined
+                                      {...(switchLocale === undefined
                                         ? {}
-                                        : { onLocaleChange })}
+                                        : { onLocaleChange: switchLocale })}
                                       actionsDisabled={contentHeld}
                                       // Publishing every language is a write
                                       // too, so a recovery holds it as well.
@@ -1386,7 +1393,7 @@ export function EntryForm({
                                         publishAllHeld || recovering
                                       }
                                       // A reader may still open the other languages.
-                                      navigationDisabled={writesHeld}
+                                      navigationDisabled={navigationHeld}
                                     />
                                   </div>
                                 </div>

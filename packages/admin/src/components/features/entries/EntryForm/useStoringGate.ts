@@ -61,6 +61,20 @@ const stillWriting: DocumentActionOutcome = {
   ok: false,
   reason: "busy",
   message: "Changes on this page are still being saved. Try again in a moment.",
+  beforeWrite: true,
+};
+
+/**
+ * A store whose editor moved to another document or language while it
+ * readied: the form now holds that one's values, and the store would write
+ * them into the one it started in, so it writes nothing.
+ */
+const moved: DocumentActionOutcome = {
+  ok: false,
+  reason: "refused",
+  message:
+    "You moved to another language or document before this was saved; nothing was stored.",
+  beforeWrite: true,
 };
 
 export function useStoringGate(scope: string): StoringGate {
@@ -124,6 +138,7 @@ export function useStoringGate(scope: string): StoringGate {
         ok: false,
         reason: "failed",
         message: apiErrorMessage(error, "An open edit couldn't be committed."),
+        beforeWrite: true,
       };
     }
     // Every write registered before the store is awaited, including one
@@ -140,6 +155,7 @@ export function useStoringGate(scope: string): StoringGate {
           ok: false,
           reason: "refused",
           message: `${failure.label} wasn't saved, so this page wasn't either: ${failure.message}`,
+          beforeWrite: true,
         };
   };
 
@@ -185,7 +201,11 @@ export function useStoringGate(scope: string): StoringGate {
       const startedIn = currentScope.current;
       setReadying(n => n + 1);
       try {
-        const outcome = (await readyToStore(action)) ?? (await perform());
+        // Readying awaits the editor's work, and the editor can move to
+        // another document or language meanwhile: asked once it is ready.
+        const outcome =
+          (await readyToStore(action)) ??
+          (currentScope.current === startedIn ? await perform() : moved);
         record(startedIn, action, outcome);
         return outcome;
       } finally {

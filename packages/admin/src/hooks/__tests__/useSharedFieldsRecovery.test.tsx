@@ -316,6 +316,33 @@ describe("useSharedFieldsRecovery", () => {
     }
   );
 
+  it("says why when the Save stopped before its write, which a document view has no Save state to show", async () => {
+    const { recover } = renderRecovery();
+    // A view's open edit failed to commit: the store stopped before writing,
+    // so no write failed and nothing else reports it.
+    const form = formHolding({}, [], () => ({
+      ok: false,
+      reason: "failed",
+      message: "The block couldn't be committed.",
+      beforeWrite: true,
+    }));
+    recover(
+      refusal({
+        reason: "shared-fields-out-of-date",
+        fields: ["articleCount"],
+      }),
+      form
+    );
+
+    actionOf(toast.error.mock.calls[0])();
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "The block couldn't be committed."
+      )
+    );
+    expect(take).not.toHaveBeenCalled();
+  });
+
   it("says why when the Save was refused before it ran, and takes nothing", async () => {
     const { recover } = renderRecovery();
     const form = formHolding({}, [], () => ({

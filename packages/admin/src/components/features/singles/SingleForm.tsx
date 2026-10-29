@@ -87,6 +87,7 @@ import {
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import {
+  heldLocaleChange,
   heldWhileRecovering,
   offerHeldWhileRecovering,
   useRefusedForm,
@@ -317,16 +318,30 @@ function singleFormDefaults(
  * Save lives. So is whether it holds unsaved work, a field's own held work
  * included, read when newer content arrives under the same key.
  */
-function useSingleWriteGate(resetToDocument: () => void) {
+function useSingleWriteGate(
+  shown: { slug: string; documentId: string; locale: string | undefined },
+  resetToDocument: () => void
+) {
   const submissionLatch = useRef(false);
   const writesHeldNow = useRef(false);
   const saveWithoutPublishing = useRef<
     DocumentActionBindings["saveWithoutPublishing"] | undefined
   >(undefined);
   const hasUnsavedWorkNow = useRef(false);
+  // Which Single, in which language, is on screen, as a submission asks once
+  // it is about to write: it started in one, and the form may hold another
+  // language's values by then.
+  const scope = JSON.stringify([
+    shown.slug,
+    shown.documentId,
+    shown.locale ?? null,
+  ]);
+  const scopeNow = useRef(scope);
+  scopeNow.current = scope;
   // Stored with the Single's own Save, run inside its own write gate, then
   // started afresh from the Single that carries the live values it takes.
   const { refusedForm, recovering } = useRefusedForm({
+    scope,
     writesHeld: () => writesHeldNow.current,
     latch: submissionLatch,
     saveWithoutPublishing,
@@ -337,6 +352,7 @@ function useSingleWriteGate(resetToDocument: () => void) {
     writesHeldNow,
     saveWithoutPublishing,
     hasUnsavedWorkNow,
+    scopeNow,
     refusedForm,
     recovering,
   };
@@ -355,18 +371,23 @@ function recoveryHolds(
     editsHeld: boolean;
     publishAllHeld: boolean;
     versionWritesHeld: boolean;
+    writesHeld: boolean;
   }
 ): {
   busy: boolean;
   contentHeld: boolean;
   publishAllDisabled: boolean;
   versionWritesHeld: boolean;
+  navigationHeld: boolean;
 } {
   return {
     busy: own.writePending || recovering,
     contentHeld: own.editsHeld || recovering,
     publishAllDisabled: own.publishAllHeld || recovering,
     versionWritesHeld: own.versionWritesHeld || recovering,
+    // Moving to another language as well, so the recovery's Save and take
+    // stay on the one they are for.
+    navigationHeld: own.writesHeld || recovering,
   };
 }
 
@@ -668,15 +689,19 @@ export function SingleForm({
     writesHeldNow,
     saveWithoutPublishing,
     hasUnsavedWorkNow,
+    scopeNow,
     refusedForm,
     recovering,
-  } = useSingleWriteGate(() => {
-    form.reset(defaultValuesRef.current);
-    // The take rewrote the pending change after its Save had stored it, so
-    // it counts as a save too: the preview pane moves past the values it
-    // replaced, and a recovery point from before it is withdrawn.
-    setSavedCount(n => n + 1);
-  });
+  } = useSingleWriteGate(
+    { slug: schema.slug, documentId: document.id, locale },
+    () => {
+      form.reset(defaultValuesRef.current);
+      // The take rewrote the pending change after its Save had stored it, so
+      // it counts as a save too: the preview pane moves past the values it
+      // replaced, and a recovery point from before it is withdrawn.
+      setSavedCount(n => n + 1);
+    }
+  );
 
   useEffect(() => {
     if (!document) return;
@@ -821,16 +846,24 @@ export function SingleForm({
   // A save or a discard in flight.
   const writePending = isSubmitting || discardMutation.isPending;
   // Each of the Single's holds, and a refused publish's recovery on top.
-  const { busy, contentHeld, publishAllDisabled, versionWritesHeld } =
-    recoveryHolds(recovering, {
-      writePending,
-      editsHeld,
-      publishAllHeld,
-      // A colleague's claim or a reader's page, without the version on
-      // screen: what holds the actions a version's own surfaces offer,
-      // Restore among them.
-      versionWritesHeld: lock.actionsDisabled || updatesHeld,
-    });
+  const {
+    busy,
+    contentHeld,
+    publishAllDisabled,
+    versionWritesHeld,
+    navigationHeld,
+  } = recoveryHolds(recovering, {
+    writePending,
+    editsHeld,
+    publishAllHeld,
+    // A colleague's claim or a reader's page, without the version on
+    // screen: what holds the actions a version's own surfaces offer,
+    // Restore among them.
+    versionWritesHeld: lock.actionsDisabled || updatesHeld,
+    writesHeld,
+  });
+  // Every switch to another language goes through here, held with the rest.
+  const switchLocale = heldLocaleChange(onLocaleChange, recovering);
 
   // A write of the status alone, as a reader's publish or unpublish sends it:
   // it names no field, so the server judges it by that permission alone, and
@@ -885,6 +918,8 @@ export function SingleForm({
       // Save through here, and holds the rest of the editor itself.
       if (writePending || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
+      // The language this submission is for.
+      const startedIn = scopeNow.current;
 
       try {
         return await submitDocument({
@@ -893,6 +928,8 @@ export function SingleForm({
           // Asked again once validation is done, immediately before the
           // write: the Single can change hands while it runs.
           mayWrite: () => !writesHeldNow.current,
+          // And the editor can move to another language.
+          stillShown: () => scopeNow.current === startedIn,
           // Why: shared intent→payload helper mirrors the EntryForm
           // contract (see useEntryForm.mapIntentToPayload). Unpublish
           // strips other dirty fields so a confirm-modal misclick can't
@@ -951,6 +988,7 @@ export function SingleForm({
       locale,
       writesHeldNow,
       submissionLatch,
+      scopeNow,
     ]
   );
 
@@ -1112,7 +1150,7 @@ export function SingleForm({
     fields: schema.fields,
     sourceValues,
     inTranslationMode: translationMode.active,
-    onLocaleChange,
+    onLocaleChange: switchLocale,
     seedFromLocale,
     onSeedHandled,
     onEnterTranslationMode: translationMode.onEnter,
@@ -1453,7 +1491,7 @@ export function SingleForm({
                                   actionsDisabled={contentHeld}
                                   publishAllDisabled={publishAllDisabled}
                                   // A reader may still open the other languages.
-                                  navigationDisabled={writesHeld}
+                                  navigationDisabled={navigationHeld}
                                   enabled={localizationEnabled}
                                   hasStatus={hasStatus}
                                   railCollapsed={railCollapsed}
@@ -1461,9 +1499,9 @@ export function SingleForm({
                                     ? {}
                                     : { translations: singleTranslations })}
                                   {...(locale === undefined ? {} : { locale })}
-                                  {...(onLocaleChange === undefined
+                                  {...(switchLocale === undefined
                                     ? {}
-                                    : { onLocaleChange })}
+                                    : { onLocaleChange: switchLocale })}
                                 />
 
                                 {/* Reading a past version replaces the document rather
@@ -1488,14 +1526,14 @@ export function SingleForm({
                               <SingleFormRail
                                 actionsDisabled={contentHeld}
                                 publishAllDisabled={publishAllDisabled}
-                                navigationDisabled={writesHeld}
+                                navigationDisabled={navigationHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
                                 railCollapsed={railCollapsed}
                                 {...(locale === undefined ? {} : { locale })}
-                                {...(onLocaleChange === undefined
+                                {...(switchLocale === undefined
                                   ? {}
-                                  : { onLocaleChange })}
+                                  : { onLocaleChange: switchLocale })}
                               />
                             </DocumentEditorLayout>
                           </CopyFromLanguageScope>

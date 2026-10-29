@@ -14,6 +14,8 @@ import { RecoverySaveRefused, useRefusedForm } from "../useRefusedForm";
 /** The gate an editor hands the recovery, recording what it was asked. */
 function gate(save?: () => Promise<DocumentActionOutcome>) {
   return {
+    // The document and language on screen, held while a recovery runs.
+    scope: "A",
     writesHeld: vi.fn(() => false),
     latch: { current: false },
     saveWithoutPublishing: { current: save },
@@ -97,6 +99,47 @@ describe("useRefusedForm", () => {
       notifyManager.setScheduler(defaultScheduler);
     }
   });
+
+  it.each([
+    ["stays there", ["B"], false, 0],
+    ["comes back before the take settles", ["B", "A"], true, 1],
+  ] as const)(
+    "frees another document at once when the editor moves to it while the take runs, and holds the refused one where it %s",
+    async (_where, moves, heldAtEnd, resets) => {
+      const taking = deferred<void>();
+      const editor = gate(async () => ({ ok: true }));
+      const { result, rerender } = renderHook(
+        ({ scope }: { scope: string }) => useRefusedForm({ ...editor, scope }),
+        { initialProps: { scope: "A" } }
+      );
+      let takeStarted = false;
+      let running: Promise<void> | undefined;
+      act(() => {
+        running = result.current.refusedForm.recover(async () => {
+          takeStarted = true;
+          await taking.promise;
+        });
+      });
+      await vi.waitFor(() => expect(takeStarted).toBe(true));
+
+      // Another document: editable at once, its saves not held behind the
+      // refused one's request, however long that takes.
+      rerender({ scope: "B" });
+      expect(result.current.recovering).toBe(false);
+      expect(editor.latch.current).toBe(false);
+      for (const scope of moves.slice(1)) rerender({ scope });
+      // Back on the refused document before its take settled: held again.
+      expect(result.current.recovering).toBe(heldAtEnd);
+
+      await act(async () => {
+        taking.resolve();
+        await running;
+      });
+      // Started afresh only where the refused document is on screen.
+      expect(editor.resetToDocument).toHaveBeenCalledTimes(resets);
+      expect(result.current.recovering).toBe(false);
+    }
+  );
 
   it("refuses a second recovery while the first awaits its Save, and leaves the first's hold alone", async () => {
     // The Save waits, as it does on a view's before-action handler or a

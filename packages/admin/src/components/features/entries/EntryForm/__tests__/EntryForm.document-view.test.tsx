@@ -319,6 +319,91 @@ describe("EntryForm with a document view", () => {
     );
   });
 
+  it.each([
+    ["the recovery's Save", true, 0],
+    ["the view's own Save", true, 0],
+    // The control: with no move, the same Save writes.
+    ["the view's own Save", false, 1],
+  ] as const)(
+    "writes nothing into the language %s started in once the editor moved while it waited on the view (moved: %s)",
+    async (which, moves, writes) => {
+      let commit: () => void = () => {};
+      const saved: unknown[] = [];
+      /** A view whose open edit commits when the test says. */
+      function SlowView(): ReactElement {
+        const { run } = useHostedDocumentActions();
+        const { register } = useFormContext();
+        useBeforeDocumentAction(
+          () =>
+            new Promise<void>(resolve => {
+              commit = resolve;
+            })
+        );
+        return (
+          <div>
+            <input aria-label="Title in the view" {...register("title")} />
+            <button
+              type="button"
+              onClick={() => {
+                void run("save").then(outcome => saved.push(outcome));
+              }}
+            >
+              Save from the view
+            </button>
+          </div>
+        );
+      }
+      registerComponent(VIEW, SlowView);
+      const element = (locale?: string) => (
+        <EntryForm
+          collection={collection}
+          entry={entry}
+          mode="edit"
+          onCancel={onCancel}
+          documentView={{ component: VIEW, onExit }}
+          {...withDrafts}
+          {...(locale === undefined ? {} : { locale })}
+        />
+      );
+      const { rerender } = render(element(), { wrapper: Providers });
+      // An edit, so a published entry has a Save to offer.
+      fireEvent.change(
+        screen.getByRole("textbox", { name: "Title in the view" }),
+        {
+          target: { value: "Edited in the view" },
+        }
+      );
+      const take = vi.fn(async () => undefined);
+
+      let running: Promise<unknown> | undefined;
+      act(() => {
+        running =
+          which === "the recovery's Save"
+            ? updateOptions.current?.refusedForm
+                ?.recover(take)
+                .catch((error: unknown) => error)
+            : undefined;
+      });
+      if (which === "the view's own Save") {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Save from the view" })
+        );
+      }
+      // A switch to a language already cached, while the view's edit is still
+      // committing: the form starts afresh from that language's values.
+      if (moves) rerender(element("de"));
+      await act(async () => {
+        commit();
+        await running;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      });
+
+      // Nothing is written into the language the store started in.
+      expect(update).toHaveBeenCalledTimes(writes);
+      if (moves) expect(take).not.toHaveBeenCalled();
+    }
+  );
+
   it("waits for a view's before-action handler, and its Save stores what the view commits", async () => {
     /** A view holding work outside the form, committed when asked. */
     function HoldingView(): ReactElement {
