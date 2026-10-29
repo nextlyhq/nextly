@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { MAX_FIELD_GROUP_SLUG_LENGTH } from "../../domains/field-groups/services/field-group-schema-service";
 import {
@@ -9,6 +9,7 @@ import { resolveSingleTableName } from "../../domains/singles/services/resolve-s
 import {
   type AddressKind,
   addressSnakeForm,
+  assertConfiguredAddresses,
   findSameSnakeCaseAddress,
   judgeAddress,
   judgeAddresses,
@@ -230,5 +231,72 @@ describe("judgeAddresses", () => {
         { kind: "single", address: "team_updates", isNew: false },
       ])
     ).toEqual({ refused: [], existing: [] });
+  });
+});
+
+describe("the snake_case form two addresses are compared by", () => {
+  // A Single's or field group's table collapses runs of separators and drops a trailing one, so
+  // `posts-` and `posts` name one table, as do `team__updates` and `team-updates`.
+  it("collapses runs of separators and drops a trailing one", () => {
+    expect(addressSnakeForm("posts-")).toBe("posts");
+    expect(addressSnakeForm("team__updates")).toBe("team_updates");
+    expect(addressSnakeForm("team-_updates")).toBe("team_updates");
+  });
+
+  it("refuses addresses whose tables would collapse to one", () => {
+    expect(
+      findSameSnakeCaseAddress("single", "posts-", [
+        { kind: "single", address: "posts" },
+      ])?.code
+    ).toBe("SLUG_SAME_SNAKE_CASE");
+    expect(
+      findSameSnakeCaseAddress("fieldGroup", "team__updates", [
+        { kind: "fieldGroup", address: "team-updates" },
+      ])?.code
+    ).toBe("SLUG_SAME_SNAKE_CASE");
+  });
+});
+
+describe("assertConfiguredAddresses", () => {
+  const noRows = { collections: [], singles: [], components: [] };
+
+  it("judges a configured entity no registry row holds and whose table is missing", async () => {
+    await expect(
+      assertConfiguredAddresses(
+        { collections: [{ slug: "cascade" }] },
+        noRows,
+        async () => false
+      )
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ code: "SLUG_SQL_KEYWORD" }] },
+    });
+  });
+
+  it("keeps a configured entity whose table exists, as `nextly migrate` leaves a new environment", async () => {
+    const asked: string[] = [];
+    await expect(
+      assertConfiguredAddresses(
+        {
+          collections: [{ slug: "cascade" }],
+          singles: [{ slug: "a".repeat(49) }],
+        },
+        noRows,
+        async table => {
+          asked.push(table);
+          return true;
+        }
+      )
+    ).resolves.toBeUndefined();
+    expect(asked).toEqual(["dc_cascade", `single_${"a".repeat(49)}`]);
+  });
+
+  it("asks about no table when nothing is refused", async () => {
+    const tableExists = vi.fn(async () => false);
+    await assertConfiguredAddresses(
+      { collections: [{ slug: "posts" }] },
+      noRows,
+      tableExists
+    );
+    expect(tableExists).not.toHaveBeenCalled();
   });
 });

@@ -61,7 +61,10 @@ function refusalMessage(error: unknown): string {
  * Configuration in code: the `define*` check at import, then the start's
  * check of an address no registry row holds yet.
  */
-function configuredRoad(kind: AddressKind, address: string): Verdict {
+async function configuredRoad(
+  kind: AddressKind,
+  address: string
+): Promise<Verdict> {
   const definition = { slug: address, fields: [] };
   const errors =
     kind === "collection"
@@ -77,9 +80,10 @@ function configuredRoad(kind: AddressKind, address: string): Verdict {
     fieldGroup: "fieldGroups",
   }[kind];
   try {
-    assertConfiguredAddresses(
+    await assertConfiguredAddresses(
       { [key]: [{ slug: address }] },
-      { collections: [], singles: [], components: [] }
+      { collections: [], singles: [], components: [] },
+      async () => false
     );
     return null;
   } catch (error) {
@@ -145,9 +149,11 @@ beforeEach(() => {
 });
 
 describe.each(ADDRESS_CASES)("the address '%s'", address => {
-  it("gets the rule's verdict from configuration, for every kind", () => {
+  it("gets the rule's verdict from configuration, for every kind", async () => {
     for (const kind of ["collection", "single", "fieldGroup"] as const) {
-      expect(configuredRoad(kind, address), kind).toBe(rule(kind, address));
+      expect(await configuredRoad(kind, address), kind).toBe(
+        rule(kind, address)
+      );
     }
   });
 
@@ -167,27 +173,24 @@ describe.each(ADDRESS_CASES)("the address '%s'", address => {
 });
 
 describe("configuration at start", () => {
-  it("refuses a new address with the same snake_case form as a registered one", () => {
-    expect(() =>
+  it("refuses a new address with the same snake_case form as a registered one", async () => {
+    await expect(
       assertConfiguredAddresses(
         { singles: [{ slug: "team_updates" }] },
         {
           collections: [{ slug: "team-updates" }],
           singles: [],
           components: [],
-        }
-      )
-    ).toThrow(
-      expect.objectContaining({
-        publicData: {
-          errors: [expect.objectContaining({ code: "SLUG_SAME_SNAKE_CASE" })],
         },
-      })
-    );
+        async () => false
+      )
+    ).rejects.toMatchObject({
+      publicData: { errors: [{ code: "SLUG_SAME_SNAKE_CASE" }] },
+    });
   });
 
-  it("keeps an entity a registry row already holds, whatever the rule says of its address", () => {
-    expect(() =>
+  it("keeps an entity a registry row already holds, whatever the rule says of its address", async () => {
+    await expect(
       assertConfiguredAddresses(
         {
           collections: [{ slug: "cascade" }, { slug: "team-updates" }],
@@ -197,8 +200,9 @@ describe("configuration at start", () => {
           collections: [{ slug: "cascade" }, { slug: "team-updates" }],
           singles: [{ slug: "team_updates" }],
           components: [],
-        }
+        },
+        async () => false
       )
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 });

@@ -14,13 +14,6 @@ const adapter = {
   select: vi.fn(async (table: string) => usedAddresses[table] ?? []),
 };
 
-vi.mock("../../di/container", () => ({
-  container: {
-    has: vi.fn((key: string) => key === "adapter"),
-    get: vi.fn(() => adapter),
-  },
-}));
-
 import { judgeAddress } from "../../shared/address-rule";
 import { ADDRESS_CASES } from "../../shared/__tests__/helpers/address-cases";
 import { CollectionsHandler } from "../collections-handler";
@@ -32,7 +25,7 @@ function handler(): CollectionsHandler {
   const instance = Object.create(
     CollectionsHandler.prototype
   ) as CollectionsHandler;
-  Object.assign(instance, { metadataService: { createCollection } });
+  Object.assign(instance, { metadataService: { createCollection }, adapter });
   return instance;
 }
 

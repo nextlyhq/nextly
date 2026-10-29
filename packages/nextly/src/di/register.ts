@@ -1733,9 +1733,12 @@ async function reconcileBuilderTargets<T>(
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
 
   // The configuration's addresses, judged by the one address rule before the boot writes
-  // anything. Only an address no registry row holds yet is new and judged, against every address
-  // used; an entity a row already holds keeps its address, whatever the rule now says of it.
-  assertConfiguredAddresses(transformedConfig, builderEntities);
+  // anything. Only an address no registry row holds, and whose table does not exist yet, is new
+  // and judged, against every address used; an existing entity keeps its address, whatever the
+  // rule now says of it.
+  await assertConfiguredAddresses(transformedConfig, builderEntities, table =>
+    adapter.tableExists(table)
+  );
 
   // A plugin's settings permission has to be one it owns, which is the
   // collector's answer for the config's entities and the seeder's for the

@@ -61,36 +61,39 @@ async function findSlugOwner(
 }
 
 /**
- * The collections and Singles whose address has the same snake_case form as
- * `slug`, other than the resource being renamed. The snake_case form doubles as
- * the LIKE pattern: each `_` matches one `-` or `_`, so the database narrows
- * the rows and the rule decides among them.
+ * The collections' and Singles' addresses that may share `slug`'s snake_case
+ * form, other than the resource being renamed. The database narrows the rows
+ * with a LIKE pattern every such address matches (the form's words, anything
+ * between and after them) and the rule decides among them.
  */
 async function findSnakeCaseNeighbours(
   adapter: DrizzleAdapter,
   slug: string,
   options: SlugGuardOptions | undefined
 ): Promise<UsedAddress[]> {
-  const neighbours: UsedAddress[] = [];
+  const pattern = `${addressSnakeForm(slug).split("_").join("%")}%`;
   const kinds = [
     ["dynamic_collections", "collection"],
     ["dynamic_singles", "single"],
   ] as const;
-  for (const [table, resourceType] of kinds) {
-    const rows = await adapter.select<{ id: string; slug: string }>(table, {
-      where: {
-        and: [{ column: "slug", op: "LIKE", value: addressSnakeForm(slug) }],
-      },
-      columns: ["id", "slug"],
-    });
-    for (const row of rows) {
-      const isSelf =
-        resourceType === options?.currentResourceType &&
-        row.id === options?.currentResourceId;
-      if (!isSelf) neighbours.push({ kind: resourceType, address: row.slug });
-    }
-  }
-  return neighbours;
+  const found = await Promise.all(
+    kinds.map(async ([table, resourceType]) => {
+      const rows = await adapter.select<{ id: string; slug: string }>(table, {
+        where: { and: [{ column: "slug", op: "LIKE", value: pattern }] },
+        columns: ["id", "slug"],
+      });
+      return rows
+        .filter(
+          row =>
+            !(
+              resourceType === options?.currentResourceType &&
+              row.id === options?.currentResourceId
+            )
+        )
+        .map(row => ({ kind: resourceType, address: row.slug }));
+    })
+  );
+  return found.flat();
 }
 
 export async function assertGlobalResourceSlugAvailable(
@@ -131,10 +134,14 @@ export async function assertGlobalResourceSlugAvailable(
     // another collection's or Single's, since two addresses that differ only
     // by `-` and `_` read as one. Asked only here, so an address a resource
     // already holds keeps working whatever its neighbours are.
+    // The kind names the refusal; a caller that does not say it gets one
+    // naming the address alone, since collections and Singles share it.
+    const kind = options?.addressKind ?? options?.currentResourceType;
     const twin = findSameSnakeCaseAddress(
-      options?.addressKind ?? options?.currentResourceType ?? "collection",
+      kind ?? "collection",
       slug,
-      await findSnakeCaseNeighbours(adapter, slug, options)
+      await findSnakeCaseNeighbours(adapter, slug, options),
+      { kindKnown: kind !== undefined }
     );
     if (twin) throw addressRefusalError(twin, slug);
     return;

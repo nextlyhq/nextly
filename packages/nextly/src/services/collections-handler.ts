@@ -82,6 +82,8 @@ export class CollectionsHandler {
   private readonly collectionService: DynamicCollectionService;
   private readonly fileManager: CollectionFileManager;
   private readonly logger: Logger;
+  /** The database the address check reads the addresses already used from: this handler's own. */
+  private readonly adapter: DrizzleAdapter;
 
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
@@ -125,6 +127,7 @@ export class CollectionsHandler {
     emailRetention?: ResolvedEmailRetentionConfig
   ) {
     this.logger = logger;
+    this.adapter = adapter;
     // i18n: this handler is constructible outside DI and takes the
     // localization config itself, so hand the service that config's own
     // answers rather than letting it consult a container this instance may
@@ -494,13 +497,9 @@ export class CollectionsHandler {
     // behind. The one address rule every road shares, then the addresses already used: one with
     // the same snake_case form as another collection's or Single's is refused.
     assertAddressAllowed("collection", data.name);
-    if (container.has("adapter")) {
-      await assertGlobalResourceSlugAvailable(
-        container.get<DrizzleAdapter>("adapter"),
-        data.name,
-        { addressKind: "collection" }
-      );
-    }
+    await assertGlobalResourceSlugAvailable(this.adapter, data.name, {
+      addressKind: "collection",
+    });
     return this.metadataService.createCollection(data);
   }
 

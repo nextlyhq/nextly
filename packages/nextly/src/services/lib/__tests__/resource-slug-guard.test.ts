@@ -88,6 +88,25 @@ describe("assertGlobalResourceSlugAvailable and the snake_case form", () => {
     });
   });
 
+  it("names the address alone when the caller does not say its kind", async () => {
+    await expect(
+      assertGlobalResourceSlugAvailable(
+        adapterUsing({ dynamic_singles: [{ id: "s1", slug: "team-updates" }] }),
+        "team_updates"
+      )
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            message: expect.stringMatching(
+              /^The address 'team_updates'.*single 'team-updates'/
+            ),
+          },
+        ],
+      },
+    });
+  });
+
   it("lets a resource be renamed to a slug of its own snake_case form", async () => {
     await expect(
       assertGlobalResourceSlugAvailable(

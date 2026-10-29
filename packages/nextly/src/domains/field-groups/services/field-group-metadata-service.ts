@@ -1040,6 +1040,23 @@ export class FieldGroupMetadataService {
   }
 
   /**
+   * Judge a new address by the one rule every road shares (`shared/address-rule`), and against the
+   * other field groups' addresses: one with the same snake_case form names the same table.
+   */
+  private async assertAddressAllowed(slug: string): Promise<void> {
+    assertAddressAllowed("fieldGroup", slug);
+    const twin = findSameSnakeCaseAddress(
+      "fieldGroup",
+      slug,
+      (await this.registry.getAllComponents()).map(existing => ({
+        kind: "fieldGroup" as const,
+        address: existing.slug,
+      }))
+    );
+    if (twin) throw addressRefusalError(twin, slug);
+  }
+
+  /**
    * Refuse a create whose table another field group already owns.
    *
    * Keyed on the TABLE NAME rather than the slug, because the two are not the same key: a slug is
@@ -1058,23 +1075,6 @@ export class FieldGroupMetadataService {
    * Two callers racing can still both pass this check; the registry table declares `table_name`
    * unique, so the second insert is rejected by the database rather than by this.
    */
-  /**
-   * Judge a new address by the one rule every road shares (`shared/address-rule`), and against the
-   * other field groups' addresses: one with the same snake_case form names the same table.
-   */
-  private async assertAddressAllowed(slug: string): Promise<void> {
-    assertAddressAllowed("fieldGroup", slug);
-    const twin = findSameSnakeCaseAddress(
-      "fieldGroup",
-      slug,
-      (await this.registry.getAllComponents()).map(existing => ({
-        kind: "fieldGroup" as const,
-        address: existing.slug,
-      }))
-    );
-    if (twin) throw addressRefusalError(twin, slug);
-  }
-
   private async assertTableUnowned(
     input: CreateFieldGroupInput
   ): Promise<void> {

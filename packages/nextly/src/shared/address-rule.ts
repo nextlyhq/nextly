@@ -27,7 +27,10 @@ import {
   resolveCollectionTableName,
   resolveComponentTableName,
 } from "../domains/schema/utils/resolve-table-name";
-import { resolveSingleTableName } from "../domains/singles/services/resolve-single-table-name";
+import {
+  normalizeIdentifier,
+  resolveSingleTableName,
+} from "../domains/singles/services/resolve-single-table-name";
 import { NextlyError } from "../errors/nextly-error";
 import {
   isReservedResourceSlug,
@@ -254,9 +257,16 @@ export function judgeConfiguredAddress(
   return null;
 }
 
-/** The address's snake_case form, which names its table: each hyphen written as an underscore. */
+/**
+ * The address's snake_case form, which two addresses are compared by: each run
+ * of `-` and `_` written as one underscore, with none at the end. It is the
+ * form a Single's and a field group's table name is derived from
+ * (`normalizeIdentifier`), so two addresses with one form need one table there;
+ * for an address with no repeated or trailing separator it is the address
+ * with each hyphen written as an underscore, which a collection's table uses.
+ */
 export function addressSnakeForm(address: string): string {
-  return address.replace(/-/g, "_");
+  return normalizeIdentifier(address);
 }
 
 /**
@@ -277,9 +287,16 @@ function sharesNamespace(kind: AddressKind, other: AddressKind): boolean {
 export function findSameSnakeCaseAddress(
   kind: AddressKind,
   address: string,
-  used: Iterable<UsedAddress>
+  used: Iterable<UsedAddress>,
+  /**
+   * Whether the refusal may name the kind. A caller that knows only the
+   * namespace (a collection's or Single's) says so, and the refusal names the
+   * address alone.
+   */
+  options: { kindKnown?: boolean } = {}
 ): AddressRefusal | null {
   const form = addressSnakeForm(address);
+  const label = options.kindKnown === false ? "The" : `${LABELS[kind]}`;
   for (const other of used) {
     if (
       other.address !== address &&
@@ -288,7 +305,7 @@ export function findSameSnakeCaseAddress(
     ) {
       return {
         code: "SLUG_SAME_SNAKE_CASE",
-        message: `${LABELS[kind]} address '${address}' has the snake_case form '${form}', which the ${LABELS[other.kind].toLowerCase()} '${other.address}' already has; two addresses that differ only by '-' and '_' would read as one`,
+        message: `${label} address '${address}' has the snake_case form '${form}', which the ${LABELS[other.kind].toLowerCase()} '${other.address}' already has; two addresses that differ only by '-' and '_' would read as one`,
         mayAlreadyExist: false,
       };
     }
@@ -357,41 +374,74 @@ export function assertAddressAllowed(
   if (refusal) throw addressRefusalError(refusal, address);
 }
 
-type Slugged = ReadonlyArray<{ slug: string }>;
+type Slugged = ReadonlyArray<{ slug: string; dbName?: string }>;
+
+/** The table a configured entity is stored in, as each kind's resolver names it. */
+function configuredTable(
+  kind: AddressKind,
+  entity: { slug: string; dbName?: string }
+): string {
+  if (kind === "collection") {
+    return resolveCollectionTableName(entity.slug, entity.dbName);
+  }
+  if (kind === "single") {
+    return resolveSingleTableName({ slug: entity.slug, dbName: entity.dbName });
+  }
+  return resolveComponentTableName(entity.slug);
+}
 
 /**
- * The start's check of configuration in code. An entity no registry row holds
- * yet is new, and is judged by the whole rule and against every address used;
- * one a row holds already exists and keeps its address. Run before the boot
- * writes anything, so a refused configuration leaves the registries and tables
- * as they were.
+ * The start's check of configuration in code, run before the boot writes
+ * anything, so a refused configuration leaves the registries and tables as
+ * they were.
+ *
+ * An entity a registry row holds exists and keeps its address. One no row
+ * holds is new and judged by the whole rule and against every address used,
+ * unless its table already exists: then an earlier start or `nextly migrate`
+ * made it (a new environment migrated before its first start, or a registry
+ * read that answered nothing), and it keeps its address too. The tables are
+ * asked about only for an address the rule would refuse.
  */
-export function assertConfiguredAddresses(
+export async function assertConfiguredAddresses(
   config: {
     collections?: Slugged;
     singles?: Slugged;
     fieldGroups?: Slugged;
   },
-  registered: { collections: Slugged; singles: Slugged; components: Slugged }
-): void {
+  registered: { collections: Slugged; singles: Slugged; components: Slugged },
+  tableExists: (table: string) => Promise<boolean>
+): Promise<void> {
   const configured: Array<[AddressKind, Slugged, Slugged]> = [
     ["collection", config.collections ?? [], registered.collections],
     ["single", config.singles ?? [], registered.singles],
     ["fieldGroup", config.fieldGroups ?? [], registered.components],
   ];
   const entities: AddressedEntity[] = [];
+  const tables = new Map<AddressedEntity, string>();
   const used: UsedAddress[] = [];
   for (const [kind, declared, rows] of configured) {
     const held = new Set(rows.map(row => row.slug));
     const declaredSlugs = new Set(declared.map(entity => entity.slug));
-    for (const { slug } of declared) {
-      entities.push({ kind, address: slug, isNew: !held.has(slug) });
+    for (const entity of declared) {
+      const addressed = {
+        kind,
+        address: entity.slug,
+        isNew: !held.has(entity.slug),
+      };
+      entities.push(addressed);
+      tables.set(addressed, configuredTable(kind, entity));
     }
     for (const { slug } of rows) {
       if (!declaredSlugs.has(slug)) used.push({ kind, address: slug });
     }
   }
-  const { refused } = judgeAddresses(entities, used);
+  const refused: JudgedAddress[] = [];
+  for (const judged of judgeAddresses(entities, used).refused) {
+    const table = tables.get(judged.entity);
+    if (table === undefined || !(await tableExists(table))) {
+      refused.push(judged);
+    }
+  }
   if (refused.length === 0) return;
   throw NextlyError.validation({
     errors: refused.map(({ refusal }) => ({

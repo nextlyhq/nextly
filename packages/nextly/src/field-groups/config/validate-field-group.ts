@@ -430,17 +430,23 @@ export function assertValidFieldGroupConfig(config: FieldGroupConfig): void {
 
 /**
  * Throws if the configuration of a field group that already exists is
- * invalid, judging everything but its address: the address is one the field
- * group already has, and the one address rule judges only a new or changed
- * one, so a field group created under an address the rule now refuses can
- * still be updated.
+ * invalid, judging everything but the rule's verdict on its address: the
+ * address is one the field group already has, and the one address rule judges
+ * only a new or changed one, so a field group created under an address the
+ * rule now refuses can still be updated. A missing or non-string address is
+ * still refused, since no field group can be named by one.
  */
 export function assertValidExistingFieldGroupConfig(
   config: FieldGroupConfig
 ): void {
   throwIfInvalid(
     config,
-    validateFieldGroupConfig(config).errors.filter(err => err.path !== "slug")
+    validateFieldGroupConfig(config).errors.filter(
+      err =>
+        err.path !== "slug" ||
+        err.code === "SLUG_REQUIRED" ||
+        err.code === "SLUG_INVALID_TYPE"
+    )
   );
 }
 
