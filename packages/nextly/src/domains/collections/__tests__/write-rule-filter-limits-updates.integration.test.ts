@@ -27,6 +27,8 @@ import { defineCollection, text } from "../../../config";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -52,6 +54,11 @@ const OTHER = "updfilter-other";
 const ownEntries = ({ user }: { user: { id: string } | null }) =>
   ({ owner: { equals: user?.id ?? "" } }) as unknown as boolean;
 
+// The databases this run reaches. The cases whose answer can differ between
+// them (a write inside the caller's transaction, which locks the row it reads,
+// and a write in another language) run on each; the rest run on SQLite.
+const dialects = getConfiguredTestDialects();
+
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
@@ -59,13 +66,14 @@ afterEach(async () => {
   clearRuleFilterReports();
 });
 
-async function boot(): Promise<TestNextly> {
+async function boot(dialect: TestDialect = "sqlite"): Promise<TestNextly> {
   const writes = {
     update: ownEntries,
     publish: ownEntries,
     unpublish: ownEntries,
   };
   current = await createTestNextly({
+    dialect,
     collections: [
       defineCollection({
         slug: POSTS,
@@ -267,36 +275,40 @@ describe("an update rule that answers a filter", () => {
     expect(await stored(t, OPEN_POSTS, own)).toEqual(before);
   });
 
-  it("limits an update inside the caller's transaction to the matching entries", async () => {
-    const t = await boot();
-    const { own, others } = await seed(t, OPEN_POSTS);
-    const othersBefore = await stored(t, OPEN_POSTS, others);
+  describe.each(dialects)("on %s", dialect => {
+    it("limits an update inside the caller's transaction to the matching entries", async () => {
+      const t = await boot(dialect);
+      const { own, others } = await seed(t, OPEN_POSTS);
+      const othersBefore = await stored(t, OPEN_POSTS, others);
 
-    const changed = await updateInTransaction(t, own, { title: "renamed" });
-    const refused = await updateInTransaction(t, others, { title: "renamed" });
+      const changed = await updateInTransaction(t, own, { title: "renamed" });
+      const refused = await updateInTransaction(t, others, {
+        title: "renamed",
+      });
 
-    expect(changed.result?.success).toBe(true);
-    expect((await stored(t, OPEN_POSTS, own))?.title).toBe("renamed");
-    expect(refused.result?.success ?? false).toBe(false);
-    expect(statusOf(refused)).toBe(403);
-    expect(await stored(t, OPEN_POSTS, others)).toEqual(othersBefore);
-  });
-
-  it("refuses an update inside the caller's transaction that would move the entry out of the filter", async () => {
-    // Matched after the write, inside the same transaction: the author's own
-    // post handed to someone else is refused and the transaction undone.
-    const t = await boot();
-    const { own } = await seed(t, OPEN_POSTS);
-    const before = await stored(t, OPEN_POSTS, own);
-
-    const refused = await updateInTransaction(t, own, {
-      title: "given away",
-      owner: OTHER,
+      expect(changed.result?.success).toBe(true);
+      expect((await stored(t, OPEN_POSTS, own))?.title).toBe("renamed");
+      expect(refused.result?.success ?? false).toBe(false);
+      expect(statusOf(refused)).toBe(403);
+      expect(await stored(t, OPEN_POSTS, others)).toEqual(othersBefore);
     });
 
-    expect(refused.result?.success ?? false).toBe(false);
-    expect(statusOf(refused)).toBe(403);
-    expect(await stored(t, OPEN_POSTS, own)).toEqual(before);
+    it("refuses an update inside the caller's transaction that would move the entry out of the filter", async () => {
+      // Matched after the write, inside the same transaction: the author's own
+      // post handed to someone else is refused and the transaction undone.
+      const t = await boot(dialect);
+      const { own } = await seed(t, OPEN_POSTS);
+      const before = await stored(t, OPEN_POSTS, own);
+
+      const refused = await updateInTransaction(t, own, {
+        title: "given away",
+        owner: OTHER,
+      });
+
+      expect(refused.result?.success ?? false).toBe(false);
+      expect(statusOf(refused)).toBe(403);
+      expect(await stored(t, OPEN_POSTS, own)).toEqual(before);
+    });
   });
 });
 
@@ -318,28 +330,30 @@ describe("a publish a hook turns into an edit", () => {
     expect(await stored(t, HOOKED, others)).toEqual(before);
   });
 
-  it("is allowed on an entry the update filter matches inside the caller's transaction, and refused on another's", async () => {
-    const t = await boot();
-    const { own, others } = await seed(t, HOOKED);
-    const before = await stored(t, HOOKED, others);
+  describe.each(dialects)("on %s", dialect => {
+    it("is allowed on an entry the update filter matches inside the caller's transaction, and refused on another's", async () => {
+      const t = await boot(dialect);
+      const { own, others } = await seed(t, HOOKED);
+      const before = await stored(t, HOOKED, others);
 
-    const written = await updateInTransaction(
-      t,
-      own,
-      { status: "published" },
-      HOOKED
-    );
-    const refused = await updateInTransaction(
-      t,
-      others,
-      { status: "published" },
-      HOOKED
-    );
+      const written = await updateInTransaction(
+        t,
+        own,
+        { status: "published" },
+        HOOKED
+      );
+      const refused = await updateInTransaction(
+        t,
+        others,
+        { status: "published" },
+        HOOKED
+      );
 
-    expect(written.result?.success).toBe(true);
-    expect((await stored(t, HOOKED, own))?.title).toBe(SET_BY_A_HOOK);
-    expect(statusOf(refused)).toBe(403);
-    expect(await stored(t, HOOKED, others)).toEqual(before);
+      expect(written.result?.success).toBe(true);
+      expect((await stored(t, HOOKED, own))?.title).toBe(SET_BY_A_HOOK);
+      expect(statusOf(refused)).toBe(403);
+      expect(await stored(t, HOOKED, others)).toEqual(before);
+    });
   });
 });
 
@@ -351,13 +365,16 @@ describe("an update rule's filter where the read rule hides the entry", () => {
   const HIDDEN = "updfilter_hidden_posts";
   const HIDDEN_DRAFTED = "updfilter_hidden_drafted";
 
-  async function bootHidden(): Promise<TestNextly> {
+  async function bootHidden(
+    dialect: TestDialect = "sqlite"
+  ): Promise<TestNextly> {
     const access = {
       read: () => ({ title: { equals: "visible" } }) as unknown as boolean,
       update: ownEntries,
       publish: ownEntries,
     };
     current = await createTestNextly({
+      dialect,
       collections: [
         defineCollection({
           slug: HIDDEN,
@@ -408,109 +425,122 @@ describe("an update rule's filter where the read rule hides the entry", () => {
     expect(await stored(t, HIDDEN_DRAFTED, own)).toEqual(before);
   });
 
-  it("answers an update moving the entry out inside the caller's transaction as missing", async () => {
-    const t = await bootHidden();
-    const { own } = await seed(t, HIDDEN);
-    const before = await stored(t, HIDDEN, own);
+  describe.each(dialects)("on %s", dialect => {
+    it("answers an update moving the entry out inside the caller's transaction as missing", async () => {
+      const t = await bootHidden(dialect);
+      const { own } = await seed(t, HIDDEN);
+      const before = await stored(t, HIDDEN, own);
 
-    const refused = await updateInTransaction(t, own, { owner: OTHER }, HIDDEN);
+      const refused = await updateInTransaction(
+        t,
+        own,
+        { owner: OTHER },
+        HIDDEN
+      );
 
-    expect(statusOf(refused)).toBe(404);
-    expect(await stored(t, HIDDEN, own)).toEqual(before);
+      expect(statusOf(refused)).toBe(404);
+      expect(await stored(t, HIDDEN, own)).toEqual(before);
+    });
   });
 });
 
 describe("an update rule's filter on a collection with languages", () => {
   const LOCALIZED = "updfilter_localized_posts";
 
-  it("answers an entry outside the filter that a plain read hides as missing, whatever language the update writes", async () => {
-    // Whether the caller may read the entry is a plain read's question, in
-    // the default language. Here the read rule matches the entry's German
-    // title and not its default one, so a plain read hides the entry, and an
-    // update writing German is answered as if the entry were missing.
-    current = await createTestNextly({
-      localization: { locales: ["en", "de"], defaultLocale: "en" },
-      collections: [
-        defineCollection({
-          slug: LOCALIZED,
-          localized: true,
-          access: {
-            read: () => ({ title: { equals: "shown" } }) as unknown as boolean,
-            update: ownEntries,
-          },
-          fields: [
-            text({ name: "title" }),
-            text({ name: "owner", localized: false }),
-          ],
-        }),
-      ],
-    });
-    const t = current;
-    await userWhoMay(t, AUTHOR, "read", [LOCALIZED]);
-    await grantTo(t, AUTHOR, "update", [LOCALIZED]);
-    const created = await t.nextly.create({
-      collection: LOCALIZED,
-      data: { title: "hidden", owner: OTHER },
-    });
-    const others = String(created.item.id);
-    await t.nextly.update({
-      collection: LOCALIZED,
-      id: others,
-      locale: "de",
-      data: { title: "shown" },
-    } as never);
-
-    const refused = await errorOf(() =>
-      t.nextly.update({
+  describe.each(dialects)("on %s", dialect => {
+    it("answers an entry outside the filter that a plain read hides as missing, whatever language the update writes", async () => {
+      // Whether the caller may read the entry is a plain read's question, in
+      // the default language. Here the read rule matches the entry's German
+      // title and not its default one, so a plain read hides the entry, and an
+      // update writing German is answered as if the entry were missing.
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: LOCALIZED,
+            localized: true,
+            access: {
+              read: () =>
+                ({ title: { equals: "shown" } }) as unknown as boolean,
+              update: ownEntries,
+            },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "owner", localized: false }),
+            ],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [LOCALIZED]);
+      await grantTo(t, AUTHOR, "update", [LOCALIZED]);
+      const created = await t.nextly.create({
+        collection: LOCALIZED,
+        data: { title: "hidden", owner: OTHER },
+      });
+      const others = String(created.item.id);
+      await t.nextly.update({
         collection: LOCALIZED,
         id: others,
         locale: "de",
-        data: { title: "renamed" },
-        ...asAuthor,
-      } as never)
-    );
+        data: { title: "shown" },
+      } as never);
 
-    expect(refused.statusCode).toBe(404);
-    expect(refused.code).toBe("NOT_FOUND");
+      const refused = await errorOf(() =>
+        t.nextly.update({
+          collection: LOCALIZED,
+          id: others,
+          locale: "de",
+          data: { title: "renamed" },
+          ...asAuthor,
+        } as never)
+      );
+
+      expect(refused.statusCode).toBe(404);
+      expect(refused.code).toBe("NOT_FOUND");
+    });
   });
 });
 
 describe("a publish or unpublish rule that answers a filter", () => {
-  it("publishes an entry the filter matches inside the caller's transaction, and refuses another's", async () => {
-    // A status-only write, judged by the publish rule alone, as a plugin
-    // service writes it.
-    const t = await boot();
-    const { own, others } = await seed(t, OPEN_POSTS);
-    const othersBefore = await stored(t, OPEN_POSTS, others);
+  describe.each(dialects)("on %s", dialect => {
+    it("publishes an entry the filter matches inside the caller's transaction, and refuses another's", async () => {
+      // A status-only write, judged by the publish rule alone, as a plugin
+      // service writes it.
+      const t = await boot(dialect);
+      const { own, others } = await seed(t, OPEN_POSTS);
+      const othersBefore = await stored(t, OPEN_POSTS, others);
 
-    const published = await updateInTransaction(t, own, {
-      status: "published",
-    });
-    const refused = await updateInTransaction(t, others, {
-      status: "published",
-    });
+      const published = await updateInTransaction(t, own, {
+        status: "published",
+      });
+      const refused = await updateInTransaction(t, others, {
+        status: "published",
+      });
 
-    expect(published.result?.success).toBe(true);
-    expect((await stored(t, OPEN_POSTS, own))?.status).toBe("published");
-    expect(statusOf(refused)).toBe(403);
-    expect(await stored(t, OPEN_POSTS, others)).toEqual(othersBefore);
-  });
-
-  it("publishes an edit of an entry both filters match inside the caller's transaction", async () => {
-    // An edit that also publishes is judged by the update rule and by the
-    // publish rule, each filter matching the author's own post.
-    const t = await boot();
-    const { own } = await seed(t, OPEN_POSTS);
-
-    const written = await updateInTransaction(t, own, {
-      title: "renamed",
-      status: "published",
+      expect(published.result?.success).toBe(true);
+      expect((await stored(t, OPEN_POSTS, own))?.status).toBe("published");
+      expect(statusOf(refused)).toBe(403);
+      expect(await stored(t, OPEN_POSTS, others)).toEqual(othersBefore);
     });
 
-    expect(written.result?.success).toBe(true);
-    const row = await stored(t, OPEN_POSTS, own);
-    expect(row?.title).toBe("renamed");
-    expect(row?.status).toBe("published");
+    it("publishes an edit of an entry both filters match inside the caller's transaction", async () => {
+      // An edit that also publishes is judged by the update rule and by the
+      // publish rule, each filter matching the author's own post.
+      const t = await boot(dialect);
+      const { own } = await seed(t, OPEN_POSTS);
+
+      const written = await updateInTransaction(t, own, {
+        title: "renamed",
+        status: "published",
+      });
+
+      expect(written.result?.success).toBe(true);
+      const row = await stored(t, OPEN_POSTS, own);
+      expect(row?.title).toBe("renamed");
+      expect(row?.status).toBe("published");
+    });
   });
 
   it("publishes an entry the filter matches, and refuses another's, leaving it", async () => {
@@ -594,22 +624,24 @@ describe("a publish or unpublish rule that answers a filter", () => {
     expect(read?.title).toBe("mine");
   });
 
-  it("refuses to hold an edit to a field its update filter names inside the caller's transaction", async () => {
-    const t = await boot();
-    const { own } = await seed(t, DRAFTED, "published");
-    const live = await stored(t, DRAFTED, own);
+  describe.each(dialects)("on %s", dialect => {
+    it("refuses to hold an edit to a field its update filter names inside the caller's transaction", async () => {
+      const t = await boot(dialect);
+      const { own } = await seed(t, DRAFTED, "published");
+      const live = await stored(t, DRAFTED, own);
 
-    const refused = await updateInTransaction(
-      t,
-      own,
-      { owner: OTHER },
-      DRAFTED
-    );
+      const refused = await updateInTransaction(
+        t,
+        own,
+        { owner: OTHER },
+        DRAFTED
+      );
 
-    expect(refused.result?.success ?? false).toBe(false);
-    expect(statusOf(refused)).toBe(403);
-    expect(await stored(t, DRAFTED, own)).toEqual(live);
-    expect((await readWithDraft(t, DRAFTED, own))?.owner).toBe(AUTHOR);
+      expect(refused.result?.success ?? false).toBe(false);
+      expect(statusOf(refused)).toBe(403);
+      expect(await stored(t, DRAFTED, own)).toEqual(live);
+      expect((await readWithDraft(t, DRAFTED, own))?.owner).toBe(AUTHOR);
+    });
   });
 
   it("refuses a publish that would promote a held edit taking the entry out of the filter", async () => {
