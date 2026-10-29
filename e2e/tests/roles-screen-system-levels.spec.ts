@@ -83,9 +83,10 @@ async function unconvertedRole(): Promise<string> {
   const db = new DatabaseSync(E2E_DB);
   db.exec("PRAGMA busy_timeout = 5000");
   try {
+    // created_at is stored as Unix seconds.
     db.prepare(
-      "INSERT INTO role_permissions (id, role_id, permission_id) VALUES (?, ?, ?)"
-    ).run(randomUUID(), roleId, permissionId);
+      "INSERT INTO role_permissions (id, role_id, permission_id, created_at) VALUES (?, ?, ?, ?)"
+    ).run(randomUUID(), roleId, permissionId, Math.floor(Date.now() / 1000));
   } finally {
     db.close();
   }
