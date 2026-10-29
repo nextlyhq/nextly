@@ -522,3 +522,52 @@ describe("NextCacheRevalidator, when the installed hand-off fails", () => {
     error.mockRestore();
   });
 });
+
+/*
+ * A flush also retries what earlier writes handed off. If one of those fails
+ * again, it is handed off and logged once more, but it is not this write's to
+ * report: the outcome, and so the response, names only this write's own tags.
+ */
+describe("NextCacheRevalidator, reporting only this write's tags", () => {
+  it("reports nothing when only an earlier write's tag fails again", async () => {
+    const failing = fakeNextCache();
+    failing.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    await new NextCacheRevalidator(() => failing).flush([
+      { tags: ["nextly:posts:id:old"] },
+    ]);
+
+    const next = fakeNextCache();
+    next.revalidateTag.mockImplementation(tag => {
+      if (tag === "nextly:posts:id:old") throw new Error("still down");
+    });
+    const handoff = { handOff: vi.fn() };
+    const outcome = await new NextCacheRevalidator(
+      () => next,
+      () => handoff
+    ).flush([{ tags: ["nextly:pages"] }]);
+
+    expect(outcome).toBeUndefined();
+    expect(handoff.handOff).toHaveBeenCalledWith(
+      ["nextly:posts:id:old"],
+      "still down"
+    );
+  });
+
+  it("reports this write's own tag alongside, never the earlier one", async () => {
+    const failing = fakeNextCache();
+    failing.revalidateTag.mockImplementation(() => {
+      throw new Error("down");
+    });
+    await new NextCacheRevalidator(() => failing).flush([
+      { tags: ["nextly:posts:id:old"] },
+    ]);
+
+    const outcome = await new NextCacheRevalidator(
+      () => failing,
+      () => ({ handOff: vi.fn() })
+    ).flush([{ tags: ["nextly:pages"] }]);
+    expect(outcome).toEqual({ deferredTags: ["nextly:pages"] });
+  });
+});

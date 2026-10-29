@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A content write that couldn't expire its cached pages no longer fails silently. The expiry is retried, then handed off to finish outside the request. The response carries a notice that the change is saved and may take up to a minute to appear publicly. Server Actions now let the writer read their own write at once. A release's pages follow each collection's and Single's `revalidate` settings, so an opted-out collection is left alone and extra tags are expired too.
+A content write that couldn't expire its cached pages no longer fails silently. The expiry is retried, then handed off to finish outside the request. The response carries a notice that the change is saved and its public pages may show the previous version for a while. Server Actions now let the writer read their own write at once. A release's pages follow each collection's and Single's `revalidate` settings, so an opted-out collection is left alone and extra tags are expired too.

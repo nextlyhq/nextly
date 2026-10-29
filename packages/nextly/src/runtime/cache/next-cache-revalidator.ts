@@ -179,9 +179,12 @@ export const HANDOFF_TIMEOUT_MS = 5_000;
 /** The notice code a response carries when a write's cache expiry was handed off. */
 export const CACHE_EXPIRY_DEFERRED = "CACHE_EXPIRY_DEFERRED";
 
-/** What the response tells the writer: it names nothing they could not see. */
+/**
+ * What the response tells the writer: it names nothing they could not see, and
+ * promises no time. The expiry is retried by a later flush, not on a clock.
+ */
 export const DEFERRED_EXPIRY_NOTICE =
-  "The change is saved. It may take up to a minute to appear publicly.";
+  "The change is saved. Its public pages may show the previous version for a while.";
 
 /**
  * The collections and Singles whose reads a set of tags belongs to, in the
@@ -267,7 +270,7 @@ export class NextCacheRevalidator implements CacheRevalidator {
   private async defer(
     failed: Map<string, string>,
     own: string[]
-  ): Promise<FlushOutcome> {
+  ): Promise<FlushOutcome | void> {
     // The write is committed: what failed twice goes to the out-of-request
     // path, and the outcome lets the response say it may take a moment.
     const deferredTags = [...failed.keys()];
@@ -289,7 +292,10 @@ export class NextCacheRevalidator implements CacheRevalidator {
         message: DEFERRED_EXPIRY_NOTICE,
       });
     }
-    return { deferredTags };
+    // This write's outcome names only its own tags: an earlier write's tag
+    // that failed again is handed off and logged above, but is not this
+    // response's to report.
+    return owned.length > 0 ? { deferredTags: owned } : undefined;
   }
 
   /**
