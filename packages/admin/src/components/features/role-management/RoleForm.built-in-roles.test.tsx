@@ -37,7 +37,6 @@ vi.mock("@admin/hooks/useRoleForm", async () => {
         isEditMode: true,
         isSystemRole: state.screenMode !== "editable",
         screenMode: state.screenMode,
-        copyRole: state.copyRole,
         selectedBaseRoleIds: [],
         setSelectedBaseRoleIds: vi.fn(),
         lockedPermissionIds: [],
@@ -51,6 +50,10 @@ vi.mock("@admin/hooks/useRoleForm", async () => {
     },
   };
 });
+
+vi.mock("@admin/hooks/useRoleCopy", () => ({
+  useRoleCopy: () => state.copyRole,
+}));
 
 vi.mock("./RoleBasicInfo", () => ({ RoleBasicInfo: () => null }));
 vi.mock("./RoleInheritance", () => ({

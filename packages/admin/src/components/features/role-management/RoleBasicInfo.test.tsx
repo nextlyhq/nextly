@@ -156,11 +156,16 @@ describe("RoleBasicInfo", () => {
       expect(slugInput).toBeDisabled();
     });
 
-    it("does not disable description field for system roles", () => {
-      render(<RoleBasicInfoWrapper isSystemRole={true} />);
+    it("disables description field for system roles", () => {
+      // A built-in role saves its permissions alone, so a description typed
+      // here would never be kept.
+      const { unmount } = render(<RoleBasicInfoWrapper isSystemRole={false} />);
+      // CONTROL: a role the admin made keeps its description editable.
+      expect(screen.getByLabelText(/description/i)).not.toBeDisabled();
+      unmount();
 
-      const descInput = screen.getByLabelText(/description/i);
-      expect(descInput).not.toBeDisabled();
+      render(<RoleBasicInfoWrapper isSystemRole={true} />);
+      expect(screen.getByLabelText(/description/i)).toBeDisabled();
     });
 
     // RoleBasicInfo disables the Name and Slug controls for a system role but
@@ -180,7 +185,7 @@ describe("RoleBasicInfo", () => {
       expect(screen.getByLabelText(/description/i)).toBeDisabled();
     });
 
-    it("disables name and slug but not description when loading and system role", () => {
+    it("disables every field when loading and system role", () => {
       render(<RoleBasicInfoWrapper isLoading={true} isSystemRole={true} />);
 
       expect(screen.getByLabelText(/name/i)).toBeDisabled();

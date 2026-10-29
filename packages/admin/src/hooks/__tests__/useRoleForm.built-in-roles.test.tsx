@@ -62,6 +62,7 @@ vi.mock("../../services/roleApi", () => ({
 import { navigateTo } from "@admin/lib/navigation";
 
 import { roleApi } from "../../services/roleApi";
+import { useRoleCopy } from "../useRoleCopy";
 import { useRoleForm } from "../useRoleForm";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -71,10 +72,16 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
+/** The role form, with the copy its screen offers beside it. */
+function useRoleScreen(roleId?: string) {
+  const roleForm = useRoleForm(roleId);
+  return { ...roleForm, copyRole: useRoleCopy(roleId, roleForm.form) };
+}
+
 /** The role form for `role`, loaded. */
 async function editing(role: ReturnType<typeof stored>) {
   vi.mocked(roleApi.getRoleDetails).mockResolvedValue(role as never);
-  const { result } = renderHook(() => useRoleForm("role-1"), { wrapper });
+  const { result } = renderHook(() => useRoleScreen("role-1"), { wrapper });
   await waitFor(() =>
     expect(result.current.form.getValues("name")).toBe(role.role.roleName)
   );
@@ -169,7 +176,7 @@ describe("useRoleForm, for a built-in role", () => {
       "",
       "/admin/security/roles/create?copyFrom=role-1"
     );
-    const { result: created } = renderHook(() => useRoleForm(), { wrapper });
+    const { result: created } = renderHook(() => useRoleScreen(), { wrapper });
     await waitFor(() =>
       expect([...created.current.form.getValues("permissions")].sort()).toEqual(
         ["posts-read", "posts-update"]
