@@ -592,6 +592,11 @@ export function SingleForm({
     resetToDocument: () => form.reset(defaultValuesRef.current),
   });
 
+  // Whether the Single holds unsaved work, a field's own held work included,
+  // as decided below once its fields have reported; read when newer content
+  // arrives under the same key.
+  const hasUnsavedWorkNow = useRef(false);
+
   useEffect(() => {
     if (!document) return;
     const resetKey = singleResetKey(document, locale);
@@ -599,7 +604,9 @@ export function SingleForm({
       // The same key can carry newer content: a pending-change save, or the
       // live values a refused publish's recovery takes, keep it. A form
       // holding nothing unsaved has nothing to lose, so it takes that content.
-      if (!form.formState.isDirty) form.reset(defaultValuesRef.current);
+      // Not while a field holds work the form's values lack, such as an open
+      // page builder: starting afresh would re-seed the field under it.
+      if (!hasUnsavedWorkNow.current) form.reset(defaultValuesRef.current);
       return;
     }
     const place = JSON.stringify([document.id, locale ?? null]);
@@ -832,6 +839,7 @@ export function SingleForm({
    */
   const unsavedWork = useFormUnsavedWork(isDirty);
   const hasUnsavedWork = unsavedWork.hasUnsavedWork;
+  hasUnsavedWorkNow.current = hasUnsavedWork;
 
   // ---------------------------------------------------------------------------
   // Render

@@ -61,6 +61,7 @@ vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
 }));
 
 import { useHostedDocumentActions } from "../../entries/EntryForm/DocumentActionsContext";
+import { useReportUnsavedWork } from "../../entries/EntryForm/UnsavedWorkContext";
 import {
   SingleForm,
   type SingleDocumentData,
@@ -87,9 +88,17 @@ const first = {
   tagline: "Short",
 } as unknown as SingleDocumentData;
 
+/**
+ * Whether the view holds work outside the form, as the page builder does: it
+ * keeps its block document in its own store until it exits, so the form stays
+ * clean all the while.
+ */
+const heldWork = { current: false };
+
 function EditorView(): ReactElement {
   const { register } = useFormContext();
   const { run } = useHostedDocumentActions();
+  useReportUnsavedWork("blocks", heldWork.current);
   return (
     <div>
       <input aria-label="Hero heading" {...register("heroTitle")} />
@@ -147,6 +156,7 @@ function refusedFormOf(
 beforeEach(() => {
   vi.clearAllMocks();
   autosaveOffer.current = null;
+  heldWork.current = false;
   registerComponent(VIEW, EditorView);
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
@@ -265,6 +275,23 @@ describe("a Single's form, for a publish refused over shared values", () => {
     });
 
     expect(heading).toHaveValue("Live");
+  });
+
+  it("leaves the form alone when newer content arrives under the same key while a field holds work outside it", () => {
+    heldWork.current = true;
+    const { rerenderWith } = renderSingle(refusedOnce());
+    const heading = screen.getByLabelText("Hero heading");
+
+    // The form is clean, but the view holds work it hasn't committed to it:
+    // starting the form afresh here would re-seed the field under that work.
+    act(() => {
+      rerenderWith({
+        ...first,
+        heroTitle: "Live",
+      } as unknown as SingleDocumentData);
+    });
+
+    expect(heading).toHaveValue("Welcome");
   });
   it("won't run the recovery once another author holds the Single", async () => {
     const user = userEvent.setup();
