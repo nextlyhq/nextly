@@ -11633,14 +11633,16 @@ export class CollectionMutationService extends BaseService {
     );
     if (!prepared) return null;
     await tx.lockRow(tableName, entryId);
-    return this.refusalOutsideWriteFilter<T>(
-      tx.getDrizzle<typeof this.db>(),
-      prepared.schema,
-      entryId,
-      prepared.match,
-      accessParams,
-      { underLock: true }
-    );
+    return (
+      await this.judgedAgainstWriteFilter<T>(
+        tx.getDrizzle<typeof this.db>(),
+        prepared.schema,
+        entryId,
+        prepared.match,
+        accessParams,
+        { underLock: true }
+      )
+    ).refusal;
   }
 
   /**
@@ -11934,38 +11936,6 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The refusal of a write to `entryId` where the entry is outside the
-   * caller's filter, asked on `db`: the pool before the write's hooks run, and
-   * the write's own transaction under its row lock. `null` where the entry is
-   * inside the filter, or gone, which the write answers as it answers any
-   * missing entry.
-   *
-   * Under the row lock the match is itself a locking read. A plain read there
-   * would answer from the transaction's snapshot, which on MySQL's REPEATABLE
-   * READ is fixed at its first read and can predate a commit that moved the
-   * entry out of the filter; a locking read sees the row the lock holds.
-   */
-  private async refusalOutsideWriteFilter<T>(
-    db: typeof this.db,
-    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
-    entryId: string,
-    match: FilteredWriteMatch,
-    access: Parameters<CollectionAccessService["refusalOutsideFilter"]>[0],
-    options: { underLock?: boolean } = {}
-  ): Promise<CollectionServiceResult<T> | null> {
-    return (
-      await this.judgedAgainstWriteFilter<T>(
-        db,
-        schema,
-        entryId,
-        match,
-        access,
-        options
-      )
-    ).refusal;
-  }
-
-  /**
    * How the stored row of `entryId`, read on `db`, stands against a write's
    * filter: the refusal where it is outside it (`null` where it is inside, or
    * gone), and whether the caller may read it, which answers a refusal later
@@ -12096,13 +12066,15 @@ export class CollectionMutationService extends BaseService {
         access
       );
       if (filtered) {
-        const outside = await this.refusalOutsideWriteFilter(
-          this.db,
-          schema,
-          params.entryId,
-          filtered,
-          accessParams
-        );
+        const outside = (
+          await this.judgedAgainstWriteFilter(
+            this.db,
+            schema,
+            params.entryId,
+            filtered,
+            accessParams
+          )
+        ).refusal;
         if (outside) return outside;
       }
 
@@ -12238,14 +12210,16 @@ export class CollectionMutationService extends BaseService {
           .limit(1);
         if (!currentRow) return; // a concurrent delete won the race.
         if (filtered) {
-          refusedUnderLock = await this.refusalOutsideWriteFilter(
-            tx.getDrizzle<typeof this.db>(),
-            schema,
-            params.entryId,
-            filtered,
-            accessParams,
-            { underLock: true }
-          );
+          refusedUnderLock = (
+            await this.judgedAgainstWriteFilter(
+              tx.getDrizzle<typeof this.db>(),
+              schema,
+              params.entryId,
+              filtered,
+              accessParams,
+              { underLock: true }
+            )
+          ).refusal;
           if (refusedUnderLock) return;
         }
 
