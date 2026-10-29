@@ -78,14 +78,32 @@ describe.each(getConfiguredTestDialects())(
       await seedPermissionsAndRolePresets();
       await current.adapter.executeQuery("DROP TABLE role_permissions");
 
-      const said = await bootWarnings();
+      // A check that fails says so only at debug, so that is kept too.
+      const said: string[] = [];
+      const failed: string[] = [];
+      await warnIfCoreSchemaIsBehind(
+        current.adapter as unknown as Parameters<
+          typeof warnIfCoreSchemaIsBehind
+        >[0],
+        {
+          debug: (message: string) => {
+            failed.push(message);
+          },
+          info: () => undefined,
+          warn: (message: string) => {
+            said.push(message);
+          },
+          error: () => undefined,
+        },
+        60_000
+      );
       const warnings = said.filter(w => w.includes("missing tables"));
 
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("role_permissions");
       // The check ran to its end: none of it failed on the missing table.
       expect(
-        said.filter(w => w.includes("Could not check core schema state"))
+        failed.filter(m => m.includes("Could not check core schema state"))
       ).toEqual([]);
     });
   }
