@@ -45,6 +45,7 @@ import {
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
+import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -383,6 +384,17 @@ export async function runMigrate(
     // crashed prior run), then proceed with the normal migrate.
     await maybeForceUnlock(options, db, dialect);
 
+    // Every entity as the registry records it before any file applies, so the companion pass
+    // after the migrations can tell a field this run newly translates from one translated before.
+    const recordedBefore = await readRecordedEntities(
+      adapter as unknown as DrizzleAdapter,
+      configResult.config,
+      error =>
+        logger.warn(
+          `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+        )
+    );
+
     // Delegate to the non-exiting core (Phase 1 + Phase 2 under the lock). The
     // ledger (`nextly_schema_events`) is bootstrapped out-of-band by
     // `ensureLedger` — AFTER applyCore (so pushSchema doesn't see it as an
@@ -493,6 +505,7 @@ export async function runMigrate(
             // Never by default: an entity with no transition record may be a legacy install or one
             // localized since birth, and nothing distinguishes them. See `repairLocalization`.
             repairUntracked: options.repairLocalization === true,
+            recordedBefore,
           }
         );
         // After the migrations too, and for the same reason: the user fields'

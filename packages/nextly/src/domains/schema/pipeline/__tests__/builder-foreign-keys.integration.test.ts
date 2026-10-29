@@ -294,6 +294,22 @@ const keyTo = (pair: Pair) => ({
   onDelete: "cascade",
 });
 
+/** The posts' column names as the database has them. */
+const postColumns = async (target: Target, pair: Pair) =>
+  (await introspectLiveSnapshot(target.db, target.dialect, [pair.posts])).tables
+    .find(table => table.name === pair.posts)
+    ?.columns.map(column => column.name) ?? [];
+
+/** The posts' author relationship renamed to `writer`, the save answering the rename. */
+const postsWithAuthorRenamed = (pair: Pair) =>
+  recordingPosts(
+    desiredFor(pair, authorFields("text"), [
+      ...postFields(pair, "text", false),
+      { ...authorField(pair), name: "writer" },
+    ]),
+    ["title", "score", "leadAuthor"]
+  );
+
 describe("a Schema Builder collection's foreign keys (sqlite)", () => {
   const pair = pairNamed("bfk");
   let sqlite: Database.Database;
@@ -373,40 +389,47 @@ describe("a Schema Builder collection's foreign keys (sqlite)", () => {
     ).toEqual([{ id: "p1", lead_author: null }]);
   });
 
-  // The change adds the relationship; an earlier apply of it added the column and stopped before
-  // the key. The registry still records the fields from before, so this apply keys the column.
-  it("keys a relationship the change adds whose column an earlier apply left without its key", async () => {
+  // An earlier apply added the relationship's column and stopped before its key. Where the
+  // registry still records the fields from before, the change adds the relationship and this apply
+  // keys it; where it records the relationship, the column is one from before keys were created
+  // this way, and is left without one rather than keyed unasked.
+  it.each([
+    { recorded: ["title", "score"], keyed: true },
+    { recorded: ["title", "score", "leadAuthor"], keyed: false },
+  ])(
+    "keys a keyless relationship column only when the change adds it (recorded: $recorded)",
+    async ({ recorded, keyed }) => {
+      createTables(false);
+      sqlite.exec(authorColumnWithoutKey("sqlite", pair));
+      expect(await postKeys(target, pair)).toEqual([]);
+
+      const result = await save(
+        target,
+        recordingPosts(
+          desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+          recorded
+        )
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(await postKeys(target, pair)).toEqual(keyed ? [keyTo(pair)] : []);
+    }
+  );
+
+  // The keys are planned before the save's renames are answered, so the renamed relationship's
+  // new column reads as added. Its old column had no key, and the rename adds none.
+  it("keeps a renamed relationship without a key when its column had none", async () => {
     createTables(false);
     sqlite.exec(authorColumnWithoutKey("sqlite", pair));
-    expect(await postKeys(target, pair)).toEqual([]);
 
-    const result = await save(
-      target,
-      recordingPosts(
-        desiredFor(pair, authorFields("text"), postFields(pair, "text")),
-        ["title", "score"]
-      )
-    );
+    const result = await save(target, postsWithAuthorRenamed(pair), {
+      confirmRenames: true,
+    });
 
     expect(result.error).toBeUndefined();
-    expect(await postKeys(target, pair)).toEqual([keyTo(pair)]);
-  });
-
-  // The same table, but the registry records the relationship: a column from before keys were
-  // created this way, which is left without one rather than keyed unasked.
-  it("leaves a relationship the registry records without a key as it was", async () => {
-    createTables(false);
-    sqlite.exec(authorColumnWithoutKey("sqlite", pair));
-
-    const result = await save(
-      target,
-      recordingPosts(
-        desiredFor(pair, authorFields("text"), postFields(pair, "text")),
-        ["title", "score", "leadAuthor"]
-      )
-    );
-
-    expect(result.error).toBeUndefined();
+    // The premise: the column was renamed, not dropped and re-added.
+    expect(await postColumns(target, pair)).toContain("writer");
+    expect(await postColumns(target, pair)).not.toContain("lead_author");
     expect(await postKeys(target, pair)).toEqual([]);
   });
 
@@ -863,7 +886,48 @@ for (const server of SERVERS) {
         ).toEqual([]);
       });
 
-      it("keys a relationship the change adds whose column an earlier apply left without its key", async () => {
+      // As on SQLite: keyed only when the registry does not record the relationship yet.
+      it.each([
+        { recorded: ["title", "score"], keyed: true },
+        { recorded: ["title", "score", "leadAuthor"], keyed: false },
+      ])(
+        "keys a keyless relationship column only when the change adds it (recorded: $recorded)",
+        async ({ recorded, keyed }) => {
+          await dropTables();
+          for (const statement of [
+            ...builderStatements(
+              server.dialect,
+              pair.authors,
+              authorFields("text")
+            ),
+            ...builderStatements(
+              server.dialect,
+              pair.posts,
+              postFields(pair, "text", false)
+            ),
+            authorColumnWithoutKey(server.dialect, pair),
+          ]) {
+            await connection.run(statement);
+          }
+          expect(await postKeys(connection.target, pair)).toEqual([]);
+
+          const result = await save(
+            connection.target,
+            recordingPosts(
+              desiredFor(pair, authorFields("text"), postFields(pair, "text")),
+              recorded
+            )
+          );
+
+          expect(result.error).toBeUndefined();
+          expect(await postKeys(connection.target, pair)).toEqual(
+            keyed ? [keyTo(pair)] : []
+          );
+        }
+      );
+
+      // As on SQLite: the rename adds no key its old column never had.
+      it("keeps a renamed relationship without a key when its column had none", async () => {
         await dropTables();
         for (const statement of [
           ...builderStatements(
@@ -880,47 +944,18 @@ for (const server of SERVERS) {
         ]) {
           await connection.run(statement);
         }
-        expect(await postKeys(connection.target, pair)).toEqual([]);
 
         const result = await save(
           connection.target,
-          recordingPosts(
-            desiredFor(pair, authorFields("text"), postFields(pair, "text")),
-            ["title", "score"]
-          )
+          postsWithAuthorRenamed(pair),
+          { confirmRenames: true }
         );
 
         expect(result.error).toBeUndefined();
-        expect(await postKeys(connection.target, pair)).toEqual([keyTo(pair)]);
-      });
-
-      it("leaves a relationship the registry records without a key as it was", async () => {
-        await dropTables();
-        for (const statement of [
-          ...builderStatements(
-            server.dialect,
-            pair.authors,
-            authorFields("text")
-          ),
-          ...builderStatements(
-            server.dialect,
-            pair.posts,
-            postFields(pair, "text", false)
-          ),
-          authorColumnWithoutKey(server.dialect, pair),
-        ]) {
-          await connection.run(statement);
-        }
-
-        const result = await save(
-          connection.target,
-          recordingPosts(
-            desiredFor(pair, authorFields("text"), postFields(pair, "text")),
-            ["title", "score", "leadAuthor"]
-          )
+        expect(await postColumns(connection.target, pair)).toContain("writer");
+        expect(await postColumns(connection.target, pair)).not.toContain(
+          "lead_author"
         );
-
-        expect(result.error).toBeUndefined();
         expect(await postKeys(connection.target, pair)).toEqual([]);
       });
 

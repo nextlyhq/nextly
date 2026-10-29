@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { declaredSize, typesDiffer } from "../declared-size";
+import { columnHolds, declaredSize, typesDiffer } from "../declared-size";
 import type { ColumnSpec } from "../types";
 
 const col = (over: Partial<ColumnSpec> & { type: string }): ColumnSpec => ({
@@ -106,5 +106,93 @@ describe("typesDiffer - changes that are not changes", () => {
 
   it("still sees a real type change", () => {
     expect(typesDiffer(live("numeric", "10,2"), desired("text"))).toBe(true);
+  });
+});
+
+describe("columnHolds", () => {
+  it("holds a declaration it matches, in either spelling of the size", () => {
+    expect(
+      columnHolds(live("numeric", "10,2"), desired("numeric(10, 2)"))
+    ).toBe(true);
+    expect(columnHolds(desired("varchar(255)"), desired("varchar(255)"))).toBe(
+      true
+    );
+  });
+
+  it("holds a shorter length, and not a longer one", () => {
+    expect(columnHolds(live("varchar", "300"), desired("varchar(100)"))).toBe(
+      true
+    );
+    expect(columnHolds(live("varchar", "50"), desired("varchar(100)"))).toBe(
+      false
+    );
+  });
+
+  it("holds a decimal only with as many digits on each side of the point", () => {
+    expect(columnHolds(live("numeric", "12,2"), desired("numeric(10,2)"))).toBe(
+      true
+    );
+    // More digits overall, fewer before the point: 99999999.99 does not fit numeric(10,4).
+    expect(columnHolds(live("numeric", "10,4"), desired("numeric(10,2)"))).toBe(
+      false
+    );
+    expect(columnHolds(live("numeric", "12,1"), desired("numeric(10,2)"))).toBe(
+      false
+    );
+  });
+
+  it("does not hold another type, whatever its size", () => {
+    expect(columnHolds(live("int4"), desired("varchar(100)"))).toBe(false);
+  });
+
+  it("holds a narrower MySQL text type, and JSON in the LONGTEXT MariaDB reports for it", () => {
+    expect(columnHolds(live("longtext"), desired("TEXT"))).toBe(true);
+    expect(columnHolds(live("mediumtext"), desired("text"))).toBe(true);
+    expect(columnHolds(live("longtext"), desired("JSON"))).toBe(true);
+    expect(columnHolds(live("text"), desired("longtext"))).toBe(false);
+    expect(columnHolds(live("text"), desired("JSON"))).toBe(false);
+    expect(columnHolds(live("json"), desired("longtext"))).toBe(false);
+  });
+
+  it("does not hold a value NULL where the column refuses NULL", () => {
+    expect(
+      columnHolds(
+        { ...live("varchar", "300"), nullable: false },
+        desired("varchar(100)")
+      )
+    ).toBe(false);
+  });
+
+  it("lets no size decide where sizes are not enforced", () => {
+    expect(
+      columnHolds(live("numeric", "8,2"), desired("numeric(10,2)"), {
+        sizes: false,
+      })
+    ).toBe(true);
+    expect(
+      columnHolds(live("int4"), desired("varchar(100)"), { sizes: false })
+    ).toBe(false);
+  });
+
+  it("reads MySQL's bare datetime as no fractional seconds", () => {
+    expect(columnHolds(desired("datetime"), desired("DATETIME(3)"))).toBe(
+      false
+    );
+    expect(columnHolds(desired("datetime(3)"), desired("DATETIME(3)"))).toBe(
+      true
+    );
+  });
+
+  it("judges by type alone when either side states no size, as typesDiffer does", () => {
+    expect(columnHolds(live("varchar"), desired("varchar(100)"))).toBe(true);
+  });
+
+  it("holds a size it cannot read as numbers only when the two are the same", () => {
+    expect(columnHolds(live("enum", "'a','b'"), desired("enum('a','b')"))).toBe(
+      true
+    );
+    expect(columnHolds(live("enum", "'a'"), desired("enum('a','b')"))).toBe(
+      false
+    );
   });
 });

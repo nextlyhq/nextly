@@ -398,6 +398,27 @@ interface LiveIndex {
   droppableByName: boolean;
 }
 
+/**
+ * The columns of a PostgreSQL table that carry a collation other than their type's default, by
+ * name. `ALTER COLUMN ... TYPE` sets the new type's default collation unless the statement names
+ * one, so a statement that changes a column's type restates what this reads. Read through
+ * `to_regclass`, so the table resolves on the search path as every other read here does.
+ */
+export async function readPgColumnCollations(
+  db: unknown,
+  tableName: string
+): Promise<Map<string, string>> {
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT a.attname AS column_name, co.collname AS collation_name
+        FROM pg_attribute a
+        JOIN pg_collation co ON co.oid = a.attcollation
+        JOIN pg_type t ON t.oid = a.atttypid
+        WHERE a.attrelid = to_regclass(${tableName}) AND a.attnum > 0
+          AND NOT a.attisdropped AND a.attcollation <> t.typcollation`
+  )) as { rows: { column_name: string; collation_name: string }[] };
+  return new Map(result.rows.map(row => [row.column_name, row.collation_name]));
+}
+
 /** Every index on `tableName`, read once from the catalog of the dialect. */
 async function readIndexes(
   db: unknown,

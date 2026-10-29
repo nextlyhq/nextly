@@ -9,9 +9,17 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import { withBuilderForeignKeys } from "../builder-foreign-keys";
+import {
+  withBuilderForeignKeys,
+  withoutKeysOnKeylessRenames,
+} from "../builder-foreign-keys";
 import { desiredCollectionTable } from "../desired-collection-table";
-import type { ForeignKeySpec, TableSpec } from "../diff/types";
+import type {
+  ForeignKeySpec,
+  NextlySchemaSnapshot,
+  Operation,
+  TableSpec,
+} from "../diff/types";
 import type { DesiredCollection } from "../types";
 
 const TABLE = "dc_posts";
@@ -137,5 +145,70 @@ describe("withBuilderForeignKeys", () => {
   it("leaves a code-first collection's table as it was", () => {
     const desired = collection([author({})], false);
     expect(keysFor(desired, live([author({})], [LIVE_KEY]))).toBeUndefined();
+  });
+});
+
+describe("withoutKeysOnKeylessRenames", () => {
+  const key = (column: string): ForeignKeySpec => ({
+    name: `fk_dc_posts_${column}`,
+    columns: [column],
+    referencesTable: "dc_authors",
+    referencesColumns: ["id"],
+    onDelete: "set null",
+    onUpdate: "no action",
+  });
+  const table = (keys: ForeignKeySpec[]): TableSpec => ({
+    name: TABLE,
+    columns: [],
+    foreignKeys: keys,
+  });
+  const snapshot = (keys: ForeignKeySpec[]): NextlySchemaSnapshot => ({
+    tables: [table(keys)],
+  });
+  const renamed: Operation = {
+    type: "rename_column",
+    tableName: TABLE,
+    fromColumn: "author",
+    toColumn: "writer",
+    fromType: "text",
+    toType: "text",
+  };
+  const added: Operation = {
+    type: "add_foreign_key",
+    tableName: TABLE,
+    foreignKey: key("writer"),
+  };
+
+  it("takes back the key planned on a renamed column whose old column had none", () => {
+    const planned = withoutKeysOnKeylessRenames(
+      [renamed, added],
+      snapshot([key("writer")]),
+      snapshot([]),
+      new Set([TABLE])
+    );
+    expect(planned.operations).toEqual([renamed]);
+    expect(planned.desired.tables[0].foreignKeys).toEqual([]);
+  });
+
+  it("keeps the key when the old column had one", () => {
+    const planned = withoutKeysOnKeylessRenames(
+      [renamed, added],
+      snapshot([key("writer")]),
+      snapshot([key("author")]),
+      new Set([TABLE])
+    );
+    expect(planned.operations).toEqual([renamed, added]);
+    expect(planned.desired.tables[0].foreignKeys).toEqual([key("writer")]);
+  });
+
+  it("keeps a key a table the Builder does not own declares", () => {
+    const planned = withoutKeysOnKeylessRenames(
+      [renamed, added],
+      snapshot([key("writer")]),
+      snapshot([]),
+      new Set()
+    );
+    expect(planned.operations).toEqual([renamed, added]);
+    expect(planned.desired.tables[0].foreignKeys).toEqual([key("writer")]);
   });
 });

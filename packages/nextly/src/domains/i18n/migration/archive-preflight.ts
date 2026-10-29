@@ -16,6 +16,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import {
   readIndexUniqueness,
   uniqueIndexNames,
@@ -24,9 +25,11 @@ import type { ColumnOrigin } from "../../schema/services/field-column-descriptor
 import { isFieldLocalized } from "../classify-fields";
 import {
   companionColumnNames,
+  liveCompanionColumns,
   localizedColumnsOnMain,
 } from "../runtime/companion-io";
 
+import { companionColumnsThatCannotHold } from "./companion-column-holds";
 import {
   isUniqueField,
   type UniqueTranslatedColumn,
@@ -37,10 +40,12 @@ import {
   type LeavingFieldLike,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
+  refusalsForMovedJoinsNarrowed,
   refusalsForTranslatedFieldRenamedAndReshaped,
   refusalsForTranslatedFieldRenamedAsTranslationEnds,
   refusalsForTranslatedFieldsRemovedBesideAdded,
   storageDiffers,
+  storageHolds,
   withoutLeavingConstraints,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
@@ -157,6 +162,19 @@ export async function archiveFieldsLeavingTranslation(args: {
    */
   mainDropsConfirmed?: boolean;
 }): Promise<void> {
+  // The companion's columns, read at most once whichever check below asks first.
+  let companionRead: Promise<readonly ColumnSpec[]> | undefined;
+  const companionColumns = () =>
+    (companionRead ??= liveCompanionColumns(args.adapter, args.tableName));
+  // A translated field renamed in this change: judged under its new name, as the companion
+  // transition will move it.
+  const rename =
+    args.wasLocalized && args.isLocalized
+      ? await renameInChange(args)
+      : undefined;
+  // First, because the checks after it query a translated field's companion column as the field
+  // defines it, and over a column that cannot hold that the database refuses the query outright.
+  await refuseCompanionColumnsThatCannotHold(args, rename, companionColumns);
   await refuseTranslatedUniqueThatCannotHold(args);
   if (!args.wasLocalized) {
     // Turning translation on moves a field's main column to the companion only under a name the
@@ -178,10 +196,8 @@ export async function archiveFieldsLeavingTranslation(args: {
     refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields);
     return;
   }
-  // A translated field renamed in this change is judged under its new name, as the companion
-  // transition will move it: renamed and made shared, it leaves translation, and its archive,
-  // its refusals and its settings are asked for here, before the main table changes.
-  const rename = await renameInChange(args);
+  // Renamed and made shared, a field leaves translation, and its archive, its refusals and its
+  // settings are asked for here, before the main table changes.
   const oldFields = rename
     ? args.oldFields.map(f =>
         f === rename.from ? { ...f, name: rename.to.name } : f
@@ -192,18 +208,14 @@ export async function archiveFieldsLeavingTranslation(args: {
   // Before the early return below: a change that only removes and adds translated fields changes
   // no field's translation, and is exactly the one that would drop a column unasked.
   refuseTranslatedFieldsRemovedBesideAdded(args, oldFields);
-  // Before the early return too: a field added as translated changes no field's translation.
-  await refuseCompanionColumnsOfAnotherDefinition(args, oldFields);
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;
   }
   const dialect = args.adapter.getCapabilities().dialect;
-  // The companion's columns as this database has them, read once: they say where a renamed field's
-  // values are, and which leaving fields an earlier apply already moved.
-  const live = new Set(
-    await companionColumnNames(args.adapter, args.tableName)
-  );
+  // The companion's columns as this database has them: they say where a renamed field's values
+  // are, and which leaving fields an earlier apply already moved.
+  const live = new Set((await companionColumns()).map(c => c.name));
   const renamedFrom = renamedSource(
     live,
     renamedColumn(rename, args.builtBy, dialect)
@@ -212,6 +224,12 @@ export async function archiveFieldsLeavingTranslation(args: {
     leaving,
     oldFields,
     renamedFrom,
+    builtBy: args.builtBy,
+    dialect,
+  });
+  const joined = await movedJoiningFields(args.adapter, args.tableName, live, {
+    joining,
+    newFields: args.newFields,
     builtBy: args.builtBy,
     dialect,
   });
@@ -226,7 +244,21 @@ export async function archiveFieldsLeavingTranslation(args: {
       surface: "builder",
     }),
     ...refusalsForFieldsJoiningTranslation({
-      reshaped: reshapedJoiningFields(joining, { ...args, oldFields }, dialect),
+      // A field whose values an earlier apply already moved has nothing left to copy, so its
+      // storage changing is judged apart, below.
+      reshaped: reshapedJoiningFields(
+        joining.filter(name => !joined.has(name)),
+        { ...args, oldFields },
+        dialect
+      ),
+      surface: "builder",
+    }),
+    ...refusalsForMovedJoinsNarrowed({
+      narrowed: narrowedJoiningFields(
+        [...joined],
+        { ...args, oldFields },
+        dialect
+      ),
       surface: "builder",
     }),
     ...refusalsForTranslatedFieldRenamedAndReshaped({
@@ -287,73 +319,57 @@ export async function archiveFieldsLeavingTranslation(args: {
 }
 
 /**
- * Refuses a field this change makes translated, added or joining, whose companion column is
- * already there with another definition than the field would give it: another type, or NOT NULL,
- * which a translation never is. An apply MySQL refused part-way leaves such a column with the
- * field's own definition, and the companion transition takes it as the field's rather than adding
- * it twice. A column of another definition is not one a save left: taken as the field's, the
- * field would be recorded over storage that cannot hold its values. Compared as the schema diff
- * compares a column with what it should be (`typesDiffer`).
+ * Refuses a field this change makes translated (added as translated, joining translation, or
+ * translated as the entity's translation starts) whose companion column is already there and
+ * cannot hold every value the field allows (`companionColumnsThatCannotHold`), before anything
+ * changes.
  */
-async function refuseCompanionColumnsOfAnotherDefinition(
+async function refuseCompanionColumnsThatCannotHold(
   args: Pick<
     Parameters<typeof archiveFieldsLeavingTranslation>[0],
-    "adapter" | "entity" | "tableName" | "builtBy" | "newFields"
+    | "adapter"
+    | "entity"
+    | "tableName"
+    | "builtBy"
+    | "oldFields"
+    | "newFields"
+    | "wasLocalized"
+    | "isLocalized"
   >,
-  oldFields: readonly LeavingFieldLike[]
+  rename: TranslatedFieldRename | undefined,
+  companionColumns: () => Promise<readonly ColumnSpec[]>
 ): Promise<void> {
+  if (!args.isLocalized) return;
+  // Translated before the change: none when translation starts with it, and a field the change
+  // renames under its new name.
   const translatedBefore = new Set(
-    oldFields.filter(f => isFieldLocalized(f, true)).map(f => f.name)
+    args.wasLocalized
+      ? args.oldFields
+          .filter(f => isFieldLocalized(f, true))
+          .map(f => (f === rename?.from ? rename.to.name : f.name))
+      : []
   );
   const becomingTranslated = args.newFields.filter(
     f => isFieldLocalized(f, true) && !translatedBefore.has(f.name)
   );
   if (becomingTranslated.length === 0) return;
-  const dialect = args.adapter.dialect;
-  const companionTable = `${args.tableName}_locales`;
-  const [{ introspectLiveSnapshot }, { typesDiffer }, { ddlType }] =
-    await Promise.all([
-      import("../../schema/pipeline/diff/introspect-live"),
-      import("../../schema/pipeline/diff/declared-size"),
-      import("./ddl-types"),
-    ]);
-  const companion = (
-    await introspectLiveSnapshot(args.adapter.getDrizzle(), dialect, [
-      companionTable,
-    ])
-  ).tables.find(t => t.name === companionTable);
-  if (companion === undefined) return;
-  const refusals = becomingTranslated.flatMap(field => {
-    const spec = fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
-    const column = spec && companion.columns.find(c => c.name === spec.name);
-    if (!spec || !column) return [];
-    const differs =
-      !column.nullable ||
-      typesDiffer(column, {
-        name: column.name,
-        type: ddlType(spec, dialect),
-        nullable: true,
-      });
-    return differs
-      ? [
-          {
-            path: `fields.${field.name}`,
-            code: "COLUMN_ALREADY_EXISTS",
-            message:
-              `The translations table already has a column "${spec.name}" of another ` +
-              `definition, left from an earlier field. Give ${field.name} another name, or ` +
-              "remove that column first.",
-          },
-        ]
-      : [];
+  const live = await companionColumns();
+  // No companion yet, or none of its columns: nothing is there to take.
+  if (live.length === 0) return;
+  const cannotHold = companionColumnsThatCannotHold({
+    fields: becomingTranslated,
+    live,
+    dialect: args.adapter.getCapabilities().dialect,
+    builtBy: args.builtBy,
+    surface: "builder",
   });
-  if (refusals.length > 0) {
+  if (cannotHold.length > 0) {
     throw NextlyError.validation({
-      errors: refusals,
+      errors: cannotHold.map(c => c.refusal),
       logContext: {
         entity: args.entity,
-        companionTable,
-        fields: refusals.map(r => r.path),
+        companionTable: `${args.tableName}_locales`,
+        columns: cannotHold.map(c => c.columns),
       },
     });
   }
@@ -584,6 +600,49 @@ function renamedSource(
 }
 
 /**
+ * The joining fields whose values an earlier apply of the same change already moved, the mirror of
+ * `movedLeavingFields`: the field's column is among the companion's `live` columns, AND the main
+ * table no longer has its shared column. That apply copied the shared values into the companion
+ * and dropped the main column, then stopped before the registry recorded it. A retry copies
+ * nothing, so the rule against a field's storage changing as it joins, whose values would be copied
+ * into a column of the new shape, has nothing to judge: the column holding them was judged able to
+ * hold the field's values before anything else (`refuseCompanionColumnsThatCannotHold`). The main
+ * table is read only when a joining field's column is on the companion.
+ */
+async function movedJoiningFields(
+  adapter: DrizzleAdapter,
+  tableName: string,
+  live: ReadonlySet<string>,
+  args: {
+    joining: readonly string[];
+    newFields: readonly LeavingFieldLike[];
+    builtBy: ColumnOrigin;
+    dialect: SupportedDialect;
+  }
+): Promise<Set<string>> {
+  const columnOf = (f: LeavingFieldLike) =>
+    fieldToLocalizedColumnSpec(f, args.dialect, args.builtBy)?.name;
+  const onCompanion = args.newFields.filter(f => {
+    const col = args.joining.includes(f.name) ? columnOf(f) : undefined;
+    return col !== undefined && live.has(col);
+  });
+  if (onCompanion.length === 0) return new Set();
+  const onMain = new Set(
+    (await localizedColumnsOnMain(adapter, tableName, onCompanion)).map(
+      c => c.name
+    )
+  );
+  return new Set(
+    onCompanion
+      .filter(f => {
+        const col = columnOf(f);
+        return col !== undefined && !onMain.has(col);
+      })
+      .map(f => f.name)
+  );
+}
+
+/**
  * The leaving fields whose values an earlier apply of the same change already moved: the column
  * they are read from (under its old name for a renamed field, `renamedFrom`) is not among the
  * companion's `live` columns, AND the main table has the field's shared column. That apply copied
@@ -801,6 +860,32 @@ export function fieldsAsFirstPushed<F extends LeavingFieldLike>(args: {
  * The shared fields that become translated in this change while their storage changes, judged
  * against the column each one's value sits in now, which its old definition describes.
  */
+/**
+ * Those of `joining` whose storage the change narrows: stored as the new fields describe them,
+ * they do not hold every value they held before (`storageHolds`).
+ */
+function narrowedJoiningFields(
+  joining: readonly string[],
+  args: {
+    oldFields: readonly LeavingFieldLike[];
+    newFields: readonly LeavingFieldLike[];
+    builtBy: ColumnOrigin;
+  },
+  dialect: SupportedDialect
+): string[] {
+  const columnOf = (field: LeavingFieldLike | undefined) =>
+    field === undefined
+      ? undefined
+      : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
+  const before = new Map(args.oldFields.map(f => [f.name, f]));
+  const after = new Map(args.newFields.map(f => [f.name, f]));
+  return joining.filter(name => {
+    const from = columnOf(before.get(name));
+    const to = columnOf(after.get(name));
+    return from != null && to != null && !storageHolds(to, from);
+  });
+}
+
 function reshapedJoiningFields(
   joining: readonly string[],
   args: {

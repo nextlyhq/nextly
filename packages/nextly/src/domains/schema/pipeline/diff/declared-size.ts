@@ -76,3 +76,67 @@ export function typesDiffer(prev: ColumnSpec, cur: ColumnSpec): boolean {
   if (from === undefined || to === undefined) return false;
   return from !== to;
 }
+
+/**
+ * Whether a column in place holds every value a column declared as `wanted`
+ * can: the same type, NULL allowed wherever `wanted` allows it, and a size at
+ * least as wide.
+ *
+ * The question asked before a column already there is taken as a field's,
+ * where `typesDiffer` asks whether one has to be altered into the other: a
+ * `varchar(300)` needs no alteration to hold what a `varchar(100)` holds,
+ * though it is not that declaration. A length holds any shorter one; a
+ * precision and scale hold another with no more digits on either side of the
+ * point. As in `typesDiffer`, a size counts only when both sides state one,
+ * and sizes that do not read as numbers hold only themselves. With `sizes`
+ * false, as on SQLite, which enforces none, a size never decides.
+ */
+export function columnHolds(
+  live: ColumnSpec,
+  wanted: ColumnSpec,
+  { sizes = true }: { sizes?: boolean } = {}
+): boolean {
+  if (wanted.nullable && !live.nullable) return false;
+  const liveType = normalizeType(live.type);
+  const wantedType = normalizeType(wanted.type);
+  if (liveType !== wantedType) return textHolds(liveType, wantedType);
+  if (!sizes) return true;
+
+  // MySQL reports a DATETIME of no fractional seconds bare (`datetime`, never `datetime(0)`), so
+  // there a missing size is a size of 0, not an unstated one.
+  const have =
+    declaredSize(live) ?? (liveType === "datetime" ? "0" : undefined);
+  const need = declaredSize(wanted);
+  if (have === undefined || need === undefined) return true;
+  const [haveDigits, haveScale = 0] = have.split(",").map(Number);
+  const [needDigits, needScale = 0] = need.split(",").map(Number);
+  const numeric = [haveDigits, haveScale, needDigits, needScale].every(
+    Number.isInteger
+  );
+  if (!numeric || have.includes(",") !== need.includes(",")) {
+    return have === need;
+  }
+  return (
+    haveScale >= needScale && haveDigits - haveScale >= needDigits - needScale
+  );
+}
+
+/** MySQL's text types, narrowest first: they differ only in how much one value may hold. */
+const TEXT_WIDTHS = ["tinytext", "text", "mediumtext", "longtext"];
+
+/**
+ * Whether a text type holds what another type does though the two are spelled
+ * differently: a wider MySQL text type holds a narrower one's values, and
+ * `longtext` holds JSON's, which is how MariaDB stores and reports a JSON
+ * column. Refusing those would refuse a column of the very storage asked for.
+ */
+function textHolds(
+  live: string | undefined,
+  wanted: string | undefined
+): boolean {
+  const have = TEXT_WIDTHS.indexOf(live ?? "");
+  if (have === -1) return false;
+  if (wanted === "json") return live === "longtext";
+  const need = TEXT_WIDTHS.indexOf(wanted ?? "");
+  return need !== -1 && have >= need;
+}
