@@ -10,8 +10,10 @@ import { FormProvider } from "react-hook-form";
 
 import { SettingsSection } from "@admin/components/features/settings";
 import { Loader2, AlertTriangle } from "@admin/components/icons";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
 import { useRoleForm } from "@admin/hooks/useRoleForm";
+import { pluginDisplayName } from "@admin/lib/plugins/plugin-display-name";
 import type { RoleFormProps } from "@admin/types/ui/form";
 
 import { RoleBasicInfo } from "./RoleBasicInfo";
@@ -40,6 +42,7 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
     form,
     role,
     levelRows,
+    pluginGroups,
     otherPermissions,
     baseGrants,
     allRoles,
@@ -57,6 +60,11 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
     handleCancel,
     formRef,
   } = useRoleForm(roleId);
+  // Each plugin as the admin names it everywhere, by its package name.
+  const { plugins } = useBranding();
+  const pluginNames = new Map(
+    (plugins ?? []).map(plugin => [plugin.name, pluginDisplayName(plugin)])
+  );
 
   // The tab names the role being edited by its name as loaded, which is also
   // its name as last saved, not by the name field: a tab that followed the
@@ -155,6 +163,8 @@ export function RoleForm({ roleId }: RoleFormProps): JSX.Element {
                 <RolePermissionsSection
                   form={form}
                   levelRows={levelRows}
+                  pluginGroups={pluginGroups}
+                  pluginNames={pluginNames}
                   otherPermissions={otherPermissions}
                   lockedPermissionIds={lockedPermissionIds}
                   bases={baseGrants}

@@ -22,7 +22,10 @@
  * that asks for the wrong action's permission answers it differently from the
  * others. The read-only and full-access keys are made by `user-with`; the
  * role-based keys carry `reviewer` and `partial`; `key-super-admin` is a
- * full-access key made by the super-admin. `principal` and `principal-other`
+ * full-access key made by the super-admin, and `key-read-only-super-admin` and
+ * `key-role-based-super-admin` are the super-admin's read-only key and a
+ * role-based key of theirs carrying `reviewer`: only the full-access one
+ * carries its maker's super-admin authority. `principal` and `principal-other`
  * are plugin-defined signed-in people of two different kinds.
  *
  * Two callers exist only as a call names them, never as a request presents
@@ -44,6 +47,8 @@ export const CALLERS = [
   "key-full-access",
   "key-role-based",
   "key-super-admin",
+  "key-read-only-super-admin",
+  "key-role-based-super-admin",
   "user-partial",
   "key-partial",
   "principal",
@@ -75,7 +80,16 @@ const KEYS: readonly Caller[] = [
   "key-full-access",
   "key-role-based",
   "key-super-admin",
+  "key-read-only-super-admin",
+  "key-role-based-super-admin",
   "key-partial",
+];
+
+/** The keys the super-admin made. */
+const MADE_BY_SUPER_ADMIN: readonly Caller[] = [
+  "key-super-admin",
+  "key-read-only-super-admin",
+  "key-role-based-super-admin",
 ];
 const STAFF: readonly Caller[] = [...USERS, ...KEYS];
 
@@ -592,7 +606,7 @@ const HOLDS_ROLES: readonly Caller[] = [...STAFF, ...HANDED_ONLY];
  */
 const MADE_BY_USER_WITH: readonly Caller[] = [
   "user-with",
-  ...KEYS.filter(key => key !== "key-super-admin"),
+  ...KEYS.filter(key => !MADE_BY_SUPER_ADMIN.includes(key)),
   "key-without-rows",
 ];
 
@@ -617,6 +631,7 @@ const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
   "custom-role": () => true,
   "key-full-access": () => true,
   "key-role-based": () => true,
+  "key-role-based-super-admin": () => true,
   // The role-based key's own grants, without the rows they came from.
   "key-without-rows": () => true,
   "key-read-only": action => action === "read",
@@ -663,8 +678,10 @@ function holdsPermission(caller: Caller, action: Action, target: Target) {
   if (holdsManage(caller, action, target)) return true;
   if (!(SEEDED[target]?.includes(action) ?? true)) return false;
   // A full-access key carries its maker's live permissions, and a
-  // super-admin's are the whole catalogue, users included.
+  // super-admin's are the whole catalogue, users included; their read-only
+  // key carries the catalogue's reads.
   if (caller === "key-super-admin") return true;
+  if (caller === "key-read-only-super-admin") return action === "read";
   if (target === "users") return false;
   return GRANTS[caller]?.(action) ?? false;
 }
@@ -747,7 +764,9 @@ export function hasOutsideTwin(row: Row): boolean {
  * - a visitor's permissions are the Public role's, and no Public role exists
  *   yet, so it holds none: every row is refused;
  * - a super-admin, held directly or through inheritance, passes every
- *   collection and Single rule. No key carries super-admin authority;
+ *   collection and Single rule, and so does the full-access key a super-admin
+ *   made, which counts as holding every permission. The super-admin's
+ *   read-only and role-based keys keep their types' limits;
  * - a plugin's signed-in person holds no role, so the target's rule decides
  *   alone, and a target that declares none refuses. As today, a person never
  *   publishes or unpublishes, whatever the rule says. A person reads media
@@ -783,11 +802,32 @@ export function oneAnswer(row: Row): Verdict {
     return answerFor(row, rulesLet(rule, action, caller, target));
   }
   if (caller === "visitor") return "refuse";
-  if (caller === "super-admin" || caller === "super-admin-inherited") {
+  if (
+    caller === "super-admin" ||
+    caller === "super-admin-inherited" ||
+    caller === "key-super-admin"
+  ) {
     return "allow";
   }
   if (!holdsPermission(caller, action, target)) return "refuse";
   return answerFor(row, rulesLet(rule, action, caller, target));
+}
+
+/**
+ * The doors that answer yes or no about a collection, not about one entry.
+ * Where the one answer lets the caller act on the entries a filter matches,
+ * theirs is yes: the caller may act on the collection, on those entries.
+ */
+const COLLECTION_DOORS: ReadonlySet<Door> = new Set<Door>([
+  "can",
+  "capabilities",
+  "widget",
+]);
+
+/** The one answer as `door` gives it (see {@link COLLECTION_DOORS}). */
+export function oneAnswerAt(row: Row, door: Door): Verdict {
+  const answer = oneAnswer(row);
+  return answer === "matching" && COLLECTION_DOORS.has(door) ? "allow" : answer;
 }
 
 // ---------------------------------------------------------------------------
