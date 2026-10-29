@@ -26,6 +26,8 @@ import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -44,6 +46,11 @@ const OTHER = "bulkfilter-other";
 const ownEntries = ({ user }: { user: { id: string } | null }) =>
   ({ owner: { equals: user?.id ?? "" } }) as unknown as boolean;
 
+// The databases this run reaches. The cases whose answer can differ between
+// them (a batch in the caller's transaction, which locks each row it reads,
+// and a write matched in another language) run on each; the rest on SQLite.
+const dialects = getConfiguredTestDialects();
+
 let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
@@ -51,9 +58,10 @@ afterEach(async () => {
   clearRuleFilterReports();
 });
 
-async function boot(): Promise<TestNextly> {
+async function boot(dialect: TestDialect = "sqlite"): Promise<TestNextly> {
   const writes = { update: ownEntries, delete: ownEntries };
   current = await createTestNextly({
+    dialect,
     collections: [
       defineCollection({
         slug: POSTS,
@@ -207,9 +215,9 @@ describe("a bulk write by ids", () => {
   });
 });
 
-describe("a batch in one transaction", () => {
+describe.each(dialects)("a batch in one transaction (%s)", dialect => {
   it("updates the entries the filter matches and fails the rest as items", async () => {
-    const t = await boot();
+    const t = await boot(dialect);
     const { own, others } = await seed(t, OPEN_POSTS);
     const result = await entriesOf(t).updateEntries(
       { collectionName: OPEN_POSTS, ...asAuthor } as never,
@@ -225,7 +233,7 @@ describe("a batch in one transaction", () => {
   });
 
   it("refuses the whole batch when a write would move an entry out of the filter", async () => {
-    const t = await boot();
+    const t = await boot(dialect);
     const { own, ownToo } = await seed(t, OPEN_POSTS);
     const result = await entriesOf(t).updateEntries(
       { collectionName: OPEN_POSTS, ...asAuthor } as never,
@@ -242,7 +250,7 @@ describe("a batch in one transaction", () => {
   });
 
   it("deletes the entries the filter matches and fails the rest as items", async () => {
-    const t = await boot();
+    const t = await boot(dialect);
     const { own, others } = await seed(t, OPEN_POSTS);
     const result = await entriesOf(t).deleteEntries(
       { collectionName: OPEN_POSTS, user: { id: AUTHOR } } as never,
@@ -289,7 +297,7 @@ describe("an entry the caller may not read", () => {
   });
 });
 
-describe("on a collection with languages", () => {
+describe.each(dialects)("on a collection with languages (%s)", dialect => {
   const LOCALIZED = "bulkfilter_localized_posts";
 
   /** An entry the filter matches in the default language and not in German, and one the other way round. */
@@ -299,6 +307,7 @@ describe("on a collection with languages", () => {
     german: string;
   }> {
     current = await createTestNextly({
+      dialect,
       localization: { locales: ["en", "de"], defaultLocale: "en" },
       collections: [
         defineCollection({
