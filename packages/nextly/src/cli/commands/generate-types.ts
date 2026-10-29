@@ -162,13 +162,16 @@ async function settleImportMap(
   plugins: Parameters<typeof writeComponentMapFiles>[0],
   typesOutputPath: string,
   cwd: string,
-  configFile: string | undefined
+  configFile: string | undefined,
+  // The site config's `admin.dashboard`, whose own widgets the map lists too.
+  siteDashboard: unknown
 ): Promise<string | undefined> {
   const written = await writeComponentMapFiles(
     plugins,
     typesOutputPath,
     cwd,
-    configFile
+    configFile,
+    siteDashboard
   );
   return written.paths[0];
 }
@@ -268,7 +271,8 @@ export async function runGenerateTypes(
     manifestCwd,
     // The config file it was loaded from, whose type the map imports to check each widget
     // component against its widget. None for a site running on the default config.
-    configResult.configPath
+    configResult.configPath,
+    configResult.config.admin?.dashboard
   );
   if (writtenImportMapPath) {
     logger.debug(`Written plugin admin import map to: ${writtenImportMapPath}`);

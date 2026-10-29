@@ -142,6 +142,39 @@ function readFromAnswer(
  * Holds an in-memory registry of code-defined access configs registered
  * at startup from `defineCollection({ access })` and `defineSingle({ access })`.
  */
+/**
+ * A rule that is not a function, as a read: `true` or `false` answers as it
+ * is, and anything else, an absent rule among them, is no rule at all.
+ */
+function plainRuleRead(rule: unknown): FilteredRead | undefined {
+  return typeof rule === "boolean" ? readOf(rule) : undefined;
+}
+
+/**
+ * What a function rule's answer allows a caller with no staff user. A rule
+ * allows only by answering `true`, or a filter to a caller that applies it.
+ * A visitor was refused before only by `false`, so any other answer that now
+ * refuses one is named once; a plugin's person was already held to `true`.
+ */
+function readFromRuleAnswer(
+  asked: NonNullable<Awaited<ReturnType<typeof askRuleFunction>>>,
+  asking: {
+    resource: string;
+    operation: AccessOperation;
+    target: Parameters<typeof readFromAnswer>[2];
+    principal: Principal | null;
+    appliesFilter: boolean;
+  }
+): FilteredRead {
+  const { answer, meaning } = asked;
+  const { resource, operation, target, principal, appliesFilter } = asking;
+  const read = readFromAnswer(meaning, operation, target, appliesFilter);
+  if (principal === null && !read.allowed && !read.filter && answer !== false) {
+    noticeRuleNoLongerAllows(resource, operation, "visitor", answer, meaning);
+  }
+  return read;
+}
+
 export class RBACAccessControlService {
   private readonly collectionAccessMap = new Map<
     string,
@@ -458,9 +491,7 @@ export class RBACAccessControlService {
         operation as keyof (CollectionAccessControl | SingleAccessControl)
       ];
 
-    if (rule === undefined) return undefined;
-    if (typeof rule === "boolean") return readOf(rule);
-    if (typeof rule !== "function") return undefined;
+    if (typeof rule !== "function") return plainRuleRead(rule);
 
     // Fail-secure, exactly as the authenticated path does: a rule that threw
     // did not allow anything.
@@ -480,21 +511,13 @@ export class RBACAccessControlService {
       appliesFilter
     );
     if (asked === null) return readOf(false);
-    // A rule allows only by answering `true`, or a filter to a caller that
-    // applies it. A visitor was refused before only by `false`, so any other
-    // answer that now refuses one is named once; a plugin's person was
-    // already held to `true`.
-    const { answer, meaning } = asked;
-    const read = readFromAnswer(meaning, operation, target, appliesFilter);
-    if (
-      principal === null &&
-      !read.allowed &&
-      !read.filter &&
-      answer !== false
-    ) {
-      noticeRuleNoLongerAllows(resource, operation, "visitor", answer, meaning);
-    }
-    return read;
+    return readFromRuleAnswer(asked, {
+      resource,
+      operation,
+      target,
+      principal,
+      appliesFilter,
+    });
   }
 
   /**

@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { getTableColumns, inArray, sql, type SQL } from "drizzle-orm";
+import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -407,9 +407,12 @@ function trustsTarget(
 }
 
 /**
- * Options for relationship expansion.
+ * Options for relationship expansion. The match-column cache is carried by a
+ * nested hop as the verdict map is, and declared once, on the context it
+ * belongs to.
  */
-export interface RelationshipExpansionOptions {
+export interface RelationshipExpansionOptions
+  extends Pick<RelatedRowReadContext, "targetRuleMatches" | "localeChain"> {
   /**
    * Maximum depth to expand relationships (0-5).
    * - 0: No expansion, return IDs only
@@ -784,6 +787,7 @@ function relatedRowAccessOf(
     trusted: assumedBound(options.trusted),
     authenticatedScope: options.authenticatedScope,
     locale: options.locale,
+    localeChain: options.localeChain,
     status: options.status,
     withheldByAccess: options.withheldByAccess,
     // One per expansion, so a relationship holding many references reads its
@@ -801,6 +805,8 @@ function relatedRowAccessOf(
     // And the access verdicts, likewise: the caller is the same on every hop,
     // so a target already judged for it is not asked again.
     targetVerdicts: options.targetVerdicts ?? new Map(),
+    // And the match columns, built from those verdicts' filters.
+    targetRuleMatches: options.targetRuleMatches ?? new Map(),
   };
 }
 
@@ -1640,21 +1646,28 @@ export class CollectionRelationshipService extends BaseService {
     // fetch rather than added to its WHERE, so a row the filter does not
     // match is still fetched and recorded below as withheld on purpose, and
     // an id no row has stays unrecorded, as a dangling reference.
+    const filter = read.filter;
     const match =
-      read.filter === undefined
+      filter === undefined
         ? undefined
-        : await this.ruleMatch(
+        : await this.memoizedRuleMatch(
+            access,
             targetCollection,
-            read.filter,
-            schema,
             statusFilter,
-            access
+            () =>
+              this.ruleMatch(
+                targetCollection,
+                filter,
+                schema,
+                statusFilter,
+                access
+              )
           );
     const entries = (await (
       match === undefined
         ? this.db.select().from(schema)
         : this.db
-            .select({ ...getTableColumns(schema), [RULE_MATCH]: match })
+            .select({ ...getColumns(schema), [RULE_MATCH]: match })
             .from(schema)
     ).where(inArray(schema.id, ids))) as Record<string, unknown>[];
 
@@ -1728,7 +1741,10 @@ export class CollectionRelationshipService extends BaseService {
     statusFilter: StatusFilter | null,
     access: RelatedRowAccess
   ): Promise<SQL<number> | undefined> {
-    const localeChain = access.locale ? [access.locale] : null;
+    // Every language the surrounding read falls back through, as a direct
+    // read of the target is judged in; else the one it resolved to.
+    const localeChain =
+      access.localeChain ?? (access.locale ? [access.locale] : null);
     const companion = localeChain
       ? await this.resolveTargetCompanion(targetCollection, access)
       : null;
@@ -1950,6 +1966,30 @@ export class CollectionRelationshipService extends BaseService {
     if (cached) return cached;
     const pending = decide();
     access.targetVerdicts?.set(targetCollection, pending);
+    return pending;
+  }
+
+  /**
+   * The match column this expansion already built for the target, or
+   * `build`'s, kept for the rest of the expansion. The target's filter is its
+   * kept verdict's, fixed for the expansion, so the column depends only on the
+   * target, the status filter and the language it is built under.
+   */
+  private memoizedRuleMatch(
+    access: RelatedRowAccess,
+    targetCollection: string,
+    statusFilter: StatusFilter | null,
+    build: () => Promise<SQL<number> | undefined>
+  ): Promise<SQL<number> | undefined> {
+    const key = JSON.stringify([
+      targetCollection,
+      statusFilter?.values ?? null,
+      access.localeChain ?? access.locale ?? null,
+    ]);
+    const cached = access.targetRuleMatches?.get(key);
+    if (cached) return cached;
+    const pending = build();
+    access.targetRuleMatches?.set(key, pending);
     return pending;
   }
 

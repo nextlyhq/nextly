@@ -46,6 +46,10 @@ import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
 import {
+  languageChangeContentCache,
+  registryRevalidateConfigs,
+} from "./language-change-content-cache";
+import {
   entriesMayAct,
   releaseDocumentChecks,
   singleRowExists,
@@ -78,7 +82,14 @@ export function registerReleaseServices({
           adapter,
           container.has("cacheRevalidator")
             ? container.get<CacheRevalidator>("cacheRevalidator")
-            : undefined
+            : undefined,
+          // The opt-out and extra tags a release's flush must honour, read as a
+          // language change reads them; none where the registered revalidator
+          // flushes nothing (no Next runtime, the CLI), so those read no registry.
+          async () =>
+            languageChangeContentCache().revalidator()
+              ? registryRevalidateConfigs()
+              : { collections: [], singles: [] }
         ),
 
         // The system resource, whose three authorities are seeded by

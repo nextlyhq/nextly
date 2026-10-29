@@ -193,7 +193,9 @@ export const POST = withErrorHandler(async (request: Request) => {
   // not turn a valid caller's first request into a 403/503.
   const metadata = await getFieldGroupMetadataService();
 
-  await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.fieldGroups.create.anyOf]);
+  await requireRouteAnyPermission(request, [
+    ...SYSTEM_WRITE_POLICY.fieldGroups.create.anyOf,
+  ]);
 
   const body = await request.json();
 
