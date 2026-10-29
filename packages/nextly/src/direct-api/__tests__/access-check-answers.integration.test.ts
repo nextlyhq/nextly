@@ -158,7 +158,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("a write whose rule answers a filter is refused", async () => {
-      // A write applies no rule's filter, so a filter does not allow it.
+      // A yes or no names no entry and applies no filter, so a write rule's
+      // filter does not allow it.
       expect(await check("acchk-ruled-writer", "update", RULE_FILTER)).toBe(
         false
       );

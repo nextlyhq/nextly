@@ -826,14 +826,15 @@ export function oneAnswer(row: Row): Verdict {
  * under a filter is no there: the answer names no entry and applies no
  * filter, so a yes would let the caller act past it.
  */
-const YES_OR_NO_DOORS: ReadonlySet<Door> = new Set<Door>(["can", "widget"]);
+const YES_OR_NO_DOORS: ReadonlySet<Door> = new Set<Door>(["can"]);
 
 /**
- * The doors that show a capability cell: a hint of what the caller may try,
- * whose request applies the rule's filter. Where the one answer lets the
- * caller act on the entries a filter matches, for any action, theirs is yes.
+ * The doors that show a hint of what the caller may try, whose request
+ * applies the rule's filter: a capability cell, and a dashboard widget offered
+ * by the permission it requires. Where the one answer lets the caller act on
+ * the entries a filter matches, for any action, theirs is yes.
  */
-const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities"]);
+const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities", "widget"]);
 
 /**
  * The one answer as `door` gives it (see {@link YES_OR_NO_DOORS} and

@@ -3915,10 +3915,10 @@ service returns-filter user-with
   can(,posts):false
   holds(create-posts):false
   holds(read-posts):true
-  holds(update-posts):false
-  holds(delete-posts):false
-  holds(publish-posts):false
-  holds(unpublish-posts):false
+  holds(update-posts):true
+  holds(delete-posts):true
+  holds(publish-posts):true
+  holds(unpublish-posts):true
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
@@ -3977,8 +3977,8 @@ service returns-filter user-partial
   holds(read-posts):true
   holds(update-posts):false
   holds(delete-posts):false
-  holds(publish-posts):false
-  holds(unpublish-posts):false
+  holds(publish-posts):true
+  holds(unpublish-posts):true
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
