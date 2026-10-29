@@ -110,6 +110,7 @@ import {
 import {
   heldWhileRecovering,
   offerHeldWhileRecovering,
+  quickEditSave,
 } from "./useRefusedForm";
 
 // ============================================================================
@@ -367,7 +368,9 @@ export function EntryForm({
     locale,
     readDraft,
     writesHeld: () => writesHeldNow.current,
-    saveWithoutPublishing,
+    // The quick-edit modal renders no document actions, so nothing hands its
+    // Save up: a recovery there refuses and points to the document.
+    saveWithoutPublishing: embedded ? quickEditSave : saveWithoutPublishing,
     onSuccess: data => {
       // Before the caller's handler, which may navigate away: this is the only
       // point that knows a write landed, and a revision that misses one leaves

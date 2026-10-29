@@ -469,6 +469,29 @@ describe("the entry editor's recovery from a refused publish", () => {
     expect(update).not.toHaveBeenCalled();
     expect(take).not.toHaveBeenCalled();
   });
+
+  it("refuses in the quick-edit modal, which has no Save of its own to store the form with, and points to the document", async () => {
+    lockedBy("held-by-me");
+    render(
+      <EntryForm collection={collection} entry={entry} mode="edit" embedded />,
+      { wrapper: Providers }
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Summary" }), {
+      target: { value: "Edited" },
+    });
+    const take = vi.fn(async () => undefined);
+
+    await act(async () => {
+      await expect(
+        updateOptions.current?.refusedForm?.recover(take)
+      ).rejects.toThrow(
+        "Open the document to take the live values: they can't be taken from this quick edit."
+      );
+    });
+    // Never a write of its own in place of the Save it lacks.
+    expect(update).not.toHaveBeenCalled();
+    expect(take).not.toHaveBeenCalled();
+  });
 });
 
 /** The document's Save and Publish controls, wherever they are drawn. */

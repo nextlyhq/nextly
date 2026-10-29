@@ -40,6 +40,24 @@ const NO_SAVE_WITHOUT_PUBLISHING: Exclude<DocumentActionOutcome, { ok: true }> =
       "This document can't be saved without publishing, so the live values can't be taken into it.",
   };
 
+/** What the recovery's save comes to in the quick-edit modal. */
+const NO_SAVE_IN_QUICK_EDIT: Exclude<DocumentActionOutcome, { ok: true }> = {
+  ok: false,
+  reason: "refused",
+  message:
+    "Open the document to take the live values: they can't be taken from this quick edit.",
+};
+
+/**
+ * The Save a recovery in the quick-edit modal is given. The modal has no
+ * document actions, so no Save of its own to store the form with, and a
+ * write of the recovery's own would skip what that Save runs: so it refuses,
+ * writing nothing, and points to the document, whose editor has one.
+ */
+export const quickEditSave: RefObject<() => Promise<DocumentActionOutcome>> = {
+  current: () => Promise.resolve(NO_SAVE_IN_QUICK_EDIT),
+};
+
 /**
  * Answers once what is already on its way to the editor has reached it, a
  * task later. React renders a store change at once, running its effects as
