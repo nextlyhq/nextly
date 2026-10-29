@@ -1514,6 +1514,8 @@ async function applyReloadHolding(
         plugins?: PluginDefinition[];
         /** Read for `db.schema` (app-level hooks) when recompiling below. */
         db?: unknown;
+        /** Read for the site dashboard the component-map check holds the map to. */
+        admin?: { dashboard?: unknown };
       }
     | undefined;
   /**
@@ -1608,6 +1610,7 @@ async function applyReloadHolding(
           webhookAuditEnabled?: boolean;
           plugins?: PluginDefinition[];
           db?: unknown;
+          admin?: { dashboard?: unknown };
         };
       }
     ).config;
@@ -1737,8 +1740,9 @@ async function applyReloadHolding(
       publishPluginDependencies(newConfig.plugins);
       // The plugins the admin's component check compares its map against, as
       // the reloaded config declares them, so a plugin added or changed in
-      // development is rewritten into the map without a restart.
-      setAdminComponentPlugins(newConfig.plugins);
+      // development is rewritten into the map without a restart. The site
+      // dashboard with them, as the loader carries it after every setup().
+      setAdminComponentPlugins(newConfig.plugins, newConfig.admin?.dashboard);
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])

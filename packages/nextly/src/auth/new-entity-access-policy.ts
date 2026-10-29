@@ -59,6 +59,11 @@ export interface NewEntityAccessCaller {
   isApiKey: boolean;
   /** The key's own stamped permission slugs. Empty for a session caller. */
   permissions: readonly string[];
+  /**
+   * Whether the key carries its maker's super-admin authority, as its scope
+   * holds it. Such a key reads every collection, one it creates included.
+   */
+  keyHoldsSuperAdmin?: boolean;
 }
 
 /**
@@ -141,7 +146,10 @@ export async function wouldReadOwnNewCollection(
   caller: NewEntityAccessCaller
 ): Promise<boolean> {
   if (caller.isApiKey) {
-    return caller.permissions.some(namesACreatableCollection);
+    return (
+      caller.keyHoldsSuperAdmin === true ||
+      caller.permissions.some(namesACreatableCollection)
+    );
   }
   const roles = await listRoleSlugsForUser(caller.userId);
   const eligible = rolesThatWouldReadNewCollection();
