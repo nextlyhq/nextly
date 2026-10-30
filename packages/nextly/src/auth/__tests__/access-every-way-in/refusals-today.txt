@@ -37,372 +37,340 @@ no-service visitor read single returns-false at direct  403 - other  |
 no-service visitor read single returns-filter at direct  403 - other  | 
 no-service visitor read single returns-null at direct  403 - other  | 
 public visitor count collection async-false at direct  403 FORBIDDEN thrown  | You can't see pc async falses.
-public visitor count collection async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection async-false at rest  403 FORBIDDEN error  | You can't see pc async falses.
 public visitor count collection async-false at service  403 FORBIDDEN thrown  | You can't see pc async falses.
-public visitor count collection async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection async-throws at direct  403 FORBIDDEN thrown  | You can't see pc async throws.
-public visitor count collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection async-throws at rest  403 FORBIDDEN error  | You can't see pc async throws.
 public visitor count collection async-throws at service  403 FORBIDDEN thrown  | You can't see pc async throws.
-public visitor count collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection false at direct  403 FORBIDDEN thrown  | You can't see pc falses.
-public visitor count collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection false at rest  403 FORBIDDEN error  | You can't see pc falses.
 public visitor count collection false at service  403 FORBIDDEN thrown  | You can't see pc falses.
 public visitor count collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see pc malformed filters.
-public visitor count collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection malformed-filter at rest  403 FORBIDDEN error  | You can't see pc malformed filters.
 public visitor count collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see pc malformed filters.
-public visitor count collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor count collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see pc permission spellings.
-public visitor count collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection permission-spelling at rest  403 FORBIDDEN error  | You can't see pc permission spellings.
 public visitor count collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see pc permission spellings.
 public visitor count collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see pc principal kinds.
-public visitor count collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection principal-kind at rest  403 FORBIDDEN error  | You can't see pc principal kinds.
 public visitor count collection principal-kind at service  403 FORBIDDEN thrown  | You can't see pc principal kinds.
-public visitor count collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't see pc returns empty ins.
-public visitor count collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection returns-empty-in at rest  403 FORBIDDEN error  | You can't see pc returns empty ins.
 public visitor count collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't see pc returns empty ins.
 public visitor count collection returns-false at direct  403 FORBIDDEN thrown  | You can't see pc returns falses.
-public visitor count collection returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection returns-false at rest  403 FORBIDDEN error  | You can't see pc returns falses.
 public visitor count collection returns-false at service  403 FORBIDDEN thrown  | You can't see pc returns falses.
-public visitor count collection returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection returns-null at direct  403 FORBIDDEN thrown  | You can't see pc returns nulls.
-public visitor count collection returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection returns-null at rest  403 FORBIDDEN error  | You can't see pc returns nulls.
 public visitor count collection returns-null at service  403 FORBIDDEN thrown  | You can't see pc returns nulls.
 public visitor count collection returns-string at direct  403 FORBIDDEN thrown  | You can't see pc returns strings.
-public visitor count collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection returns-string at rest  403 FORBIDDEN error  | You can't see pc returns strings.
 public visitor count collection returns-string at service  403 FORBIDDEN thrown  | You can't see pc returns strings.
-public visitor count collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't see pc returns undefineds.
-public visitor count collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection returns-undefined at rest  403 FORBIDDEN error  | You can't see pc returns undefineds.
 public visitor count collection returns-undefined at service  403 FORBIDDEN thrown  | You can't see pc returns undefineds.
 public visitor count collection role-name at direct  403 FORBIDDEN thrown  | You can't see pc role names.
-public visitor count collection role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection role-name at rest  403 FORBIDDEN error  | You can't see pc role names.
 public visitor count collection role-name at service  403 FORBIDDEN thrown  | You can't see pc role names.
-public visitor count collection role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection throws at direct  403 FORBIDDEN thrown  | You can't see pc throws.
-public visitor count collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection throws at rest  403 FORBIDDEN error  | You can't see pc throws.
 public visitor count collection throws at service  403 FORBIDDEN thrown  | You can't see pc throws.
-public visitor count collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor count collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see pc user is key makers.
-public visitor count collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor count collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't see pc user is key makers.
 public visitor count collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see pc user is key makers.
 public visitor create collection async-false at direct  403 FORBIDDEN thrown  | You can't create pc async falses.
-public visitor create collection async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection async-false at rest  403 FORBIDDEN error  | You can't create pc async falses.
 public visitor create collection async-false at service  403 FORBIDDEN thrown  | You can't create pc async falses.
 public visitor create collection async-filter at direct  403 FORBIDDEN thrown  | You can't create pc async filters.
-public visitor create collection async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection async-filter at rest  403 FORBIDDEN error  | You can't create pc async filters.
 public visitor create collection async-filter at service  403 FORBIDDEN thrown  | You can't create pc async filters.
 public visitor create collection async-throws at direct  403 FORBIDDEN thrown  | You can't create pc async throws.
-public visitor create collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection async-throws at rest  403 FORBIDDEN error  | You can't create pc async throws.
 public visitor create collection async-throws at service  403 FORBIDDEN thrown  | You can't create pc async throws.
-public visitor create collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor create collection false at direct  403 FORBIDDEN thrown  | You can't create pc falses.
-public visitor create collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection false at rest  403 FORBIDDEN error  | You can't create pc falses.
 public visitor create collection false at service  403 FORBIDDEN thrown  | You can't create pc falses.
 public visitor create collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create pc malformed filters.
-public visitor create collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection malformed-filter at rest  403 FORBIDDEN error  | You can't create pc malformed filters.
 public visitor create collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create pc malformed filters.
-public visitor create collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor create collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor create collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create pc permission spellings.
-public visitor create collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection permission-spelling at rest  403 FORBIDDEN error  | You can't create pc permission spellings.
 public visitor create collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create pc permission spellings.
 public visitor create collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create pc principal kinds.
-public visitor create collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection principal-kind at rest  403 FORBIDDEN error  | You can't create pc principal kinds.
 public visitor create collection principal-kind at service  403 FORBIDDEN thrown  | You can't create pc principal kinds.
-public visitor create collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor create collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create pc returns empty ins.
-public visitor create collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create pc returns empty ins.
 public visitor create collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create pc returns empty ins.
 public visitor create collection returns-false at direct  403 FORBIDDEN thrown  | You can't create pc returns falses.
-public visitor create collection returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection returns-false at rest  403 FORBIDDEN error  | You can't create pc returns falses.
 public visitor create collection returns-false at service  403 FORBIDDEN thrown  | You can't create pc returns falses.
 public visitor create collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create pc returns filters.
-public visitor create collection returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection returns-filter at rest  403 FORBIDDEN error  | You can't create pc returns filters.
 public visitor create collection returns-filter at service  403 FORBIDDEN thrown  | You can't create pc returns filters.
 public visitor create collection returns-null at direct  403 FORBIDDEN thrown  | You can't create pc returns nulls.
-public visitor create collection returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection returns-null at rest  403 FORBIDDEN error  | You can't create pc returns nulls.
 public visitor create collection returns-null at service  403 FORBIDDEN thrown  | You can't create pc returns nulls.
 public visitor create collection returns-string at direct  403 FORBIDDEN thrown  | You can't create pc returns strings.
-public visitor create collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection returns-string at rest  403 FORBIDDEN error  | You can't create pc returns strings.
 public visitor create collection returns-string at service  403 FORBIDDEN thrown  | You can't create pc returns strings.
-public visitor create collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor create collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create pc returns undefineds.
-public visitor create collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection returns-undefined at rest  403 FORBIDDEN error  | You can't create pc returns undefineds.
 public visitor create collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create pc returns undefineds.
 public visitor create collection role-name at direct  403 FORBIDDEN thrown  | You can't create pc role names.
-public visitor create collection role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection role-name at rest  403 FORBIDDEN error  | You can't create pc role names.
 public visitor create collection role-name at service  403 FORBIDDEN thrown  | You can't create pc role names.
-public visitor create collection role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor create collection throws at direct  403 FORBIDDEN thrown  | You can't create pc throws.
-public visitor create collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection throws at rest  403 FORBIDDEN error  | You can't create pc throws.
 public visitor create collection throws at service  403 FORBIDDEN thrown  | You can't create pc throws.
-public visitor create collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor create collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create pc user is key makers.
-public visitor create collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor create collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create pc user is key makers.
 public visitor create collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create pc user is key makers.
 public visitor create providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor create roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor create users none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor delete collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc async false.
-public visitor delete collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection async-false at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc async false.
 public visitor delete collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc async false.
 public visitor delete collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc async filter.
 public visitor delete collection async-filter at direct outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc async filter.
-public visitor delete collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor delete collection async-filter at rest outside  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection async-filter at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc async filter.
+public visitor delete collection async-filter at rest outside  403 FORBIDDEN error  missing=same  | You can't delete this pc async filter.
 public visitor delete collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc async filter.
 public visitor delete collection async-filter at service outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc async filter.
 public visitor delete collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc async throws.
-public visitor delete collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc async throws.
 public visitor delete collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc async throws.
-public visitor delete collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor delete collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc false.
-public visitor delete collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection false at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc false.
 public visitor delete collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc false.
 public visitor delete collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc malformed filter.
-public visitor delete collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc malformed filter.
 public visitor delete collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc malformed filter.
-public visitor delete collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor delete collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor delete collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc permission spelling.
-public visitor delete collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc permission spelling.
 public visitor delete collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc permission spelling.
 public visitor delete collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc principal kind.
-public visitor delete collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc principal kind.
 public visitor delete collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc principal kind.
-public visitor delete collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor delete collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns empty in.
-public visitor delete collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection returns-empty-in at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc returns empty in.
 public visitor delete collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns empty in.
 public visitor delete collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns false.
-public visitor delete collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection returns-false at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc returns false.
 public visitor delete collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns false.
 public visitor delete collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns filter.
 public visitor delete collection returns-filter at direct outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns filter.
-public visitor delete collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor delete collection returns-filter at rest outside  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection returns-filter at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc returns filter.
+public visitor delete collection returns-filter at rest outside  403 FORBIDDEN error  missing=same  | You can't delete this pc returns filter.
 public visitor delete collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns filter.
 public visitor delete collection returns-filter at service outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns filter.
 public visitor delete collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns null.
-public visitor delete collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection returns-null at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc returns null.
 public visitor delete collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns null.
 public visitor delete collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns string.
-public visitor delete collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc returns string.
 public visitor delete collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns string.
-public visitor delete collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor delete collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns undefined.
-public visitor delete collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc returns undefined.
 public visitor delete collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc returns undefined.
 public visitor delete collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc role name.
-public visitor delete collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection role-name at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc role name.
 public visitor delete collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc role name.
-public visitor delete collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor delete collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc throws.
-public visitor delete collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection throws at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc throws.
 public visitor delete collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc throws.
-public visitor delete collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor delete collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc user is key maker.
-public visitor delete collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor delete collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't delete this pc user is key maker.
 public visitor delete collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't delete this pc user is key maker.
 public visitor delete providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor delete roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor delete users none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection async-false at direct  403 FORBIDDEN thrown  | You can't see pc async falses.
-public visitor list collection async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection async-false at rest  403 FORBIDDEN error  | You can't see pc async falses.
 public visitor list collection async-false at service  403 FORBIDDEN thrown  | You can't see pc async falses.
-public visitor list collection async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection async-throws at direct  403 FORBIDDEN thrown  | You can't see pc async throws.
-public visitor list collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection async-throws at rest  403 FORBIDDEN error  | You can't see pc async throws.
 public visitor list collection async-throws at service  403 FORBIDDEN thrown  | You can't see pc async throws.
-public visitor list collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection false at direct  403 FORBIDDEN thrown  | You can't see pc falses.
-public visitor list collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection false at rest  403 FORBIDDEN error  | You can't see pc falses.
 public visitor list collection false at service  403 FORBIDDEN thrown  | You can't see pc falses.
 public visitor list collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't see pc malformed filters.
-public visitor list collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection malformed-filter at rest  403 FORBIDDEN error  | You can't see pc malformed filters.
 public visitor list collection malformed-filter at service  403 FORBIDDEN thrown  | You can't see pc malformed filters.
-public visitor list collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor list collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't see pc permission spellings.
-public visitor list collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection permission-spelling at rest  403 FORBIDDEN error  | You can't see pc permission spellings.
 public visitor list collection permission-spelling at service  403 FORBIDDEN thrown  | You can't see pc permission spellings.
 public visitor list collection principal-kind at direct  403 FORBIDDEN thrown  | You can't see pc principal kinds.
-public visitor list collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection principal-kind at rest  403 FORBIDDEN error  | You can't see pc principal kinds.
 public visitor list collection principal-kind at service  403 FORBIDDEN thrown  | You can't see pc principal kinds.
-public visitor list collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't see pc returns empty ins.
-public visitor list collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection returns-empty-in at rest  403 FORBIDDEN error  | You can't see pc returns empty ins.
 public visitor list collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't see pc returns empty ins.
 public visitor list collection returns-false at direct  403 FORBIDDEN thrown  | You can't see pc returns falses.
-public visitor list collection returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection returns-false at rest  403 FORBIDDEN error  | You can't see pc returns falses.
 public visitor list collection returns-false at service  403 FORBIDDEN thrown  | You can't see pc returns falses.
-public visitor list collection returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection returns-null at direct  403 FORBIDDEN thrown  | You can't see pc returns nulls.
-public visitor list collection returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection returns-null at rest  403 FORBIDDEN error  | You can't see pc returns nulls.
 public visitor list collection returns-null at service  403 FORBIDDEN thrown  | You can't see pc returns nulls.
 public visitor list collection returns-string at direct  403 FORBIDDEN thrown  | You can't see pc returns strings.
-public visitor list collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection returns-string at rest  403 FORBIDDEN error  | You can't see pc returns strings.
 public visitor list collection returns-string at service  403 FORBIDDEN thrown  | You can't see pc returns strings.
-public visitor list collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't see pc returns undefineds.
-public visitor list collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection returns-undefined at rest  403 FORBIDDEN error  | You can't see pc returns undefineds.
 public visitor list collection returns-undefined at service  403 FORBIDDEN thrown  | You can't see pc returns undefineds.
 public visitor list collection role-name at direct  403 FORBIDDEN thrown  | You can't see pc role names.
-public visitor list collection role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection role-name at rest  403 FORBIDDEN error  | You can't see pc role names.
 public visitor list collection role-name at service  403 FORBIDDEN thrown  | You can't see pc role names.
-public visitor list collection role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection throws at direct  403 FORBIDDEN thrown  | You can't see pc throws.
-public visitor list collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection throws at rest  403 FORBIDDEN error  | You can't see pc throws.
 public visitor list collection throws at service  403 FORBIDDEN thrown  | You can't see pc throws.
-public visitor list collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see pc user is key makers.
-public visitor list collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor list collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't see pc user is key makers.
 public visitor list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see pc user is key makers.
 public visitor new-pub collection async-false at direct  403 FORBIDDEN thrown  | You can't create pc async falses.
-public visitor new-pub collection async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection async-false at rest  403 FORBIDDEN error  | You can't create pc async falses.
 public visitor new-pub collection async-false at service  403 FORBIDDEN thrown  | You can't create pc async falses.
 public visitor new-pub collection async-filter at direct  403 FORBIDDEN thrown  | You can't create pc async filters.
-public visitor new-pub collection async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection async-filter at rest  403 FORBIDDEN error  | You can't create pc async filters.
 public visitor new-pub collection async-filter at service  403 FORBIDDEN thrown  | You can't create pc async filters.
 public visitor new-pub collection async-throws at direct  403 FORBIDDEN thrown  | You can't create pc async throws.
-public visitor new-pub collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection async-throws at rest  403 FORBIDDEN error  | You can't create pc async throws.
 public visitor new-pub collection async-throws at service  403 FORBIDDEN thrown  | You can't create pc async throws.
 public visitor new-pub collection async-true at direct  403 FORBIDDEN thrown  | You can't publish pc async trues.
-public visitor new-pub collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection async-true at rest  403 FORBIDDEN error  | You can't publish pc async trues.
 public visitor new-pub collection async-true at service  403 FORBIDDEN thrown  | You can't publish pc async trues.
 public visitor new-pub collection false at direct  403 FORBIDDEN thrown  | You can't create pc falses.
-public visitor new-pub collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection false at rest  403 FORBIDDEN error  | You can't create pc falses.
 public visitor new-pub collection false at service  403 FORBIDDEN thrown  | You can't create pc falses.
 public visitor new-pub collection malformed-filter at direct  403 FORBIDDEN thrown  | You can't create pc malformed filters.
-public visitor new-pub collection malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection malformed-filter at rest  403 FORBIDDEN error  | You can't create pc malformed filters.
 public visitor new-pub collection malformed-filter at service  403 FORBIDDEN thrown  | You can't create pc malformed filters.
 public visitor new-pub collection none at direct  403 FORBIDDEN thrown  | You can't publish pc nones.
-public visitor new-pub collection none at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection none at rest  403 FORBIDDEN error  | You can't publish pc nones.
 public visitor new-pub collection none at service  403 FORBIDDEN thrown  | You can't publish pc nones.
 public visitor new-pub collection other-operation at direct  403 FORBIDDEN thrown  | You can't publish pc other operations.
-public visitor new-pub collection other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection other-operation at rest  403 FORBIDDEN error  | You can't publish pc other operations.
 public visitor new-pub collection other-operation at service  403 FORBIDDEN thrown  | You can't publish pc other operations.
 public visitor new-pub collection permission-spelling at direct  403 FORBIDDEN thrown  | You can't create pc permission spellings.
-public visitor new-pub collection permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection permission-spelling at rest  403 FORBIDDEN error  | You can't create pc permission spellings.
 public visitor new-pub collection permission-spelling at service  403 FORBIDDEN thrown  | You can't create pc permission spellings.
 public visitor new-pub collection principal-kind at direct  403 FORBIDDEN thrown  | You can't create pc principal kinds.
-public visitor new-pub collection principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection principal-kind at rest  403 FORBIDDEN error  | You can't create pc principal kinds.
 public visitor new-pub collection principal-kind at service  403 FORBIDDEN thrown  | You can't create pc principal kinds.
 public visitor new-pub collection publish-false at direct  403 FORBIDDEN thrown  | You can't publish pc publish falses.
-public visitor new-pub collection publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection publish-false at rest  403 FORBIDDEN error  | You can't publish pc publish falses.
 public visitor new-pub collection publish-false at service  403 FORBIDDEN thrown  | You can't publish pc publish falses.
 public visitor new-pub collection returns-empty-in at direct  403 FORBIDDEN thrown  | You can't create pc returns empty ins.
-public visitor new-pub collection returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection returns-empty-in at rest  403 FORBIDDEN error  | You can't create pc returns empty ins.
 public visitor new-pub collection returns-empty-in at service  403 FORBIDDEN thrown  | You can't create pc returns empty ins.
 public visitor new-pub collection returns-false at direct  403 FORBIDDEN thrown  | You can't create pc returns falses.
-public visitor new-pub collection returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection returns-false at rest  403 FORBIDDEN error  | You can't create pc returns falses.
 public visitor new-pub collection returns-false at service  403 FORBIDDEN thrown  | You can't create pc returns falses.
 public visitor new-pub collection returns-filter at direct  403 FORBIDDEN thrown  | You can't create pc returns filters.
-public visitor new-pub collection returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection returns-filter at rest  403 FORBIDDEN error  | You can't create pc returns filters.
 public visitor new-pub collection returns-filter at service  403 FORBIDDEN thrown  | You can't create pc returns filters.
 public visitor new-pub collection returns-null at direct  403 FORBIDDEN thrown  | You can't create pc returns nulls.
-public visitor new-pub collection returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection returns-null at rest  403 FORBIDDEN error  | You can't create pc returns nulls.
 public visitor new-pub collection returns-null at service  403 FORBIDDEN thrown  | You can't create pc returns nulls.
 public visitor new-pub collection returns-string at direct  403 FORBIDDEN thrown  | You can't create pc returns strings.
-public visitor new-pub collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection returns-string at rest  403 FORBIDDEN error  | You can't create pc returns strings.
 public visitor new-pub collection returns-string at service  403 FORBIDDEN thrown  | You can't create pc returns strings.
 public visitor new-pub collection returns-true at direct  403 FORBIDDEN thrown  | You can't publish pc returns trues.
-public visitor new-pub collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection returns-true at rest  403 FORBIDDEN error  | You can't publish pc returns trues.
 public visitor new-pub collection returns-true at service  403 FORBIDDEN thrown  | You can't publish pc returns trues.
 public visitor new-pub collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't create pc returns undefineds.
-public visitor new-pub collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection returns-undefined at rest  403 FORBIDDEN error  | You can't create pc returns undefineds.
 public visitor new-pub collection returns-undefined at service  403 FORBIDDEN thrown  | You can't create pc returns undefineds.
 public visitor new-pub collection role-name at direct  403 FORBIDDEN thrown  | You can't create pc role names.
-public visitor new-pub collection role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection role-name at rest  403 FORBIDDEN error  | You can't create pc role names.
 public visitor new-pub collection role-name at service  403 FORBIDDEN thrown  | You can't create pc role names.
 public visitor new-pub collection role-screen-spelling at direct  403 FORBIDDEN thrown  | You can't publish pc role screen spellings.
-public visitor new-pub collection role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection role-screen-spelling at rest  403 FORBIDDEN error  | You can't publish pc role screen spellings.
 public visitor new-pub collection role-screen-spelling at service  403 FORBIDDEN thrown  | You can't publish pc role screen spellings.
 public visitor new-pub collection throws at direct  403 FORBIDDEN thrown  | You can't create pc throws.
-public visitor new-pub collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection throws at rest  403 FORBIDDEN error  | You can't create pc throws.
 public visitor new-pub collection throws at service  403 FORBIDDEN thrown  | You can't create pc throws.
 public visitor new-pub collection true at direct  403 FORBIDDEN thrown  | You can't publish pc trues.
-public visitor new-pub collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection true at rest  403 FORBIDDEN error  | You can't publish pc trues.
 public visitor new-pub collection true at service  403 FORBIDDEN thrown  | You can't publish pc trues.
 public visitor new-pub collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't create pc user is key makers.
-public visitor new-pub collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor new-pub collection user-is-key-maker at rest  403 FORBIDDEN error  | You can't create pc user is key makers.
 public visitor new-pub collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't create pc user is key makers.
 public visitor publish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async false.
-public visitor publish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection async-false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async false.
 public visitor publish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async false.
 public visitor publish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async filter.
 public visitor publish collection async-filter at direct outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async filter.
-public visitor publish collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection async-filter at rest outside  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection async-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async filter.
+public visitor publish collection async-filter at rest outside  403 FORBIDDEN error  missing=same  | You can't edit this pc async filter.
 public visitor publish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async filter.
 public visitor publish collection async-filter at service outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async filter.
 public visitor publish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async throws.
-public visitor publish collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async throws.
 public visitor publish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async throws.
 public visitor publish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async true.
-public visitor publish collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection async-true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't publish this pc async true.
 public visitor publish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc async true.
 public visitor publish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc false.
-public visitor publish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc false.
 public visitor publish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc false.
 public visitor publish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc malformed filter.
-public visitor publish collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc malformed filter.
 public visitor publish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc malformed filter.
 public visitor publish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc none.
-public visitor publish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection none at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't publish this pc none.
 public visitor publish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc none.
 public visitor publish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc other operation.
-public visitor publish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc other operation.
 public visitor publish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc other operation.
 public visitor publish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc permission spelling.
-public visitor publish collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc permission spelling.
 public visitor publish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc permission spelling.
 public visitor publish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc principal kind.
-public visitor publish collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc principal kind.
 public visitor publish collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc principal kind.
 public visitor publish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc publish false.
-public visitor publish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection publish-false at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't publish this pc publish false.
 public visitor publish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc publish false.
 public visitor publish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns empty in.
-public visitor publish collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection returns-empty-in at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns empty in.
 public visitor publish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns empty in.
 public visitor publish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns false.
-public visitor publish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection returns-false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns false.
 public visitor publish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns false.
 public visitor publish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns filter.
 public visitor publish collection returns-filter at direct outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns filter.
-public visitor publish collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor publish collection returns-filter at rest outside  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection returns-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns filter.
+public visitor publish collection returns-filter at rest outside  403 FORBIDDEN error  missing=same  | You can't edit this pc returns filter.
 public visitor publish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns filter.
 public visitor publish collection returns-filter at service outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns filter.
 public visitor publish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns null.
-public visitor publish collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection returns-null at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns null.
 public visitor publish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns null.
 public visitor publish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns string.
-public visitor publish collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns string.
 public visitor publish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns string.
 public visitor publish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns true.
-public visitor publish collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection returns-true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't publish this pc returns true.
 public visitor publish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns true.
 public visitor publish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns undefined.
-public visitor publish collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns undefined.
 public visitor publish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc returns undefined.
 public visitor publish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc role name.
-public visitor publish collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection role-name at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc role name.
 public visitor publish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc role name.
 public visitor publish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc role screen spelling.
-public visitor publish collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection role-screen-spelling at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't publish this pc role screen spelling.
 public visitor publish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc role screen spelling.
 public visitor publish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc throws.
-public visitor publish collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc throws.
 public visitor publish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc throws.
 public visitor publish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc true.
-public visitor publish collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't publish this pc true.
 public visitor publish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc true.
 public visitor publish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc user is key maker.
-public visitor publish collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor publish collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc user is key maker.
 public visitor publish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't publish this pc user is key maker.
 public visitor publish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub Async False.
 public visitor publish single-pub async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
@@ -451,175 +419,158 @@ public visitor publish single-pub true at rest  401 AUTH_REQUIRED error  | Authe
 public visitor publish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't publish Ps Pub User Is Key Maker.
 public visitor publish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor read collection async-false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc async false.
-public visitor read collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection async-false at rest  403 FORBIDDEN error  missing=same  | You can't see this pc async false.
 public visitor read collection async-false at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc async false.
-public visitor read collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor read collection async-throws at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc async throws.
-public visitor read collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't see this pc async throws.
 public visitor read collection async-throws at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc async throws.
-public visitor read collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor read collection false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc false.
-public visitor read collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection false at rest  403 FORBIDDEN error  missing=same  | You can't see this pc false.
 public visitor read collection false at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc false.
 public visitor read collection malformed-filter at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc malformed filter.
-public visitor read collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't see this pc malformed filter.
 public visitor read collection malformed-filter at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc malformed filter.
-public visitor read collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor read collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor read collection permission-spelling at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc permission spelling.
-public visitor read collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't see this pc permission spelling.
 public visitor read collection permission-spelling at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc permission spelling.
 public visitor read collection principal-kind at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc principal kind.
-public visitor read collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't see this pc principal kind.
 public visitor read collection principal-kind at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc principal kind.
-public visitor read collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor read collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns empty in.
-public visitor read collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection returns-empty-in at rest  403 FORBIDDEN error  missing=same  | You can't see this pc returns empty in.
 public visitor read collection returns-empty-in at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns empty in.
 public visitor read collection returns-false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns false.
-public visitor read collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection returns-false at rest  403 FORBIDDEN error  missing=same  | You can't see this pc returns false.
 public visitor read collection returns-false at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns false.
-public visitor read collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor read collection returns-null at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns null.
-public visitor read collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection returns-null at rest  403 FORBIDDEN error  missing=same  | You can't see this pc returns null.
 public visitor read collection returns-null at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns null.
 public visitor read collection returns-string at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns string.
-public visitor read collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't see this pc returns string.
 public visitor read collection returns-string at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns string.
-public visitor read collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor read collection returns-undefined at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns undefined.
-public visitor read collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't see this pc returns undefined.
 public visitor read collection returns-undefined at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc returns undefined.
 public visitor read collection role-name at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc role name.
-public visitor read collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection role-name at rest  403 FORBIDDEN error  missing=same  | You can't see this pc role name.
 public visitor read collection role-name at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc role name.
-public visitor read collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor read collection throws at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc throws.
-public visitor read collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection throws at rest  403 FORBIDDEN error  missing=same  | You can't see this pc throws.
 public visitor read collection throws at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc throws.
-public visitor read collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor read collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=same  | You can't see this pc user is key maker.
-public visitor read collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor read collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't see this pc user is key maker.
 public visitor read collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=same  | You can't see this pc user is key maker.
-public visitor read media none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor read providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor read roles none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor read roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor read single async-false at direct  403 FORBIDDEN thrown  | You can't see Ps Async False.
-public visitor read single async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single async-false at rest  403 FORBIDDEN error  | You can't see Ps Async False.
 public visitor read single async-filter at direct  403 FORBIDDEN thrown  | You can't see Ps Async Filter.
-public visitor read single async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single async-filter at rest  403 FORBIDDEN error  | You can't see Ps Async Filter.
 public visitor read single async-throws at direct  403 FORBIDDEN thrown  | You can't see Ps Async Throws.
-public visitor read single async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor read single async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single async-throws at rest  403 FORBIDDEN error  | You can't see Ps Async Throws.
 public visitor read single false at direct  403 FORBIDDEN thrown  | You can't see Ps False.
-public visitor read single false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single false at rest  403 FORBIDDEN error  | You can't see Ps False.
 public visitor read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see Ps Malformed Filter.
-public visitor read single malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor read single none at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor read single other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single malformed-filter at rest  403 FORBIDDEN error  | You can't see Ps Malformed Filter.
 public visitor read single permission-spelling at direct  403 FORBIDDEN thrown  | You can't see Ps Permission Spelling.
-public visitor read single permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single permission-spelling at rest  403 FORBIDDEN error  | You can't see Ps Permission Spelling.
 public visitor read single principal-kind at direct  403 FORBIDDEN thrown  | You can't see Ps Principal Kind.
-public visitor read single principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor read single publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single principal-kind at rest  403 FORBIDDEN error  | You can't see Ps Principal Kind.
 public visitor read single returns-empty-in at direct  403 FORBIDDEN thrown  | You can't see Ps Returns Empty In.
-public visitor read single returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single returns-empty-in at rest  403 FORBIDDEN error  | You can't see Ps Returns Empty In.
 public visitor read single returns-false at direct  403 FORBIDDEN thrown  | You can't see Ps Returns False.
-public visitor read single returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single returns-false at rest  403 FORBIDDEN error  | You can't see Ps Returns False.
 public visitor read single returns-filter at direct  403 FORBIDDEN thrown  | You can't see Ps Returns Filter.
-public visitor read single returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single returns-filter at rest  403 FORBIDDEN error  | You can't see Ps Returns Filter.
 public visitor read single returns-null at direct  403 FORBIDDEN thrown  | You can't see Ps Returns Null.
-public visitor read single returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single returns-null at rest  403 FORBIDDEN error  | You can't see Ps Returns Null.
 public visitor read single returns-string at direct  403 FORBIDDEN thrown  | You can't see Ps Returns String.
-public visitor read single returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor read single returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single returns-string at rest  403 FORBIDDEN error  | You can't see Ps Returns String.
 public visitor read single returns-undefined at direct  403 FORBIDDEN thrown  | You can't see Ps Returns Undefined.
-public visitor read single returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single returns-undefined at rest  403 FORBIDDEN error  | You can't see Ps Returns Undefined.
 public visitor read single role-name at direct  403 FORBIDDEN thrown  | You can't see Ps Role Name.
-public visitor read single role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor read single role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single role-name at rest  403 FORBIDDEN error  | You can't see Ps Role Name.
 public visitor read single throws at direct  403 FORBIDDEN thrown  | You can't see Ps Throws.
-public visitor read single throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor read single true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single throws at rest  403 FORBIDDEN error  | You can't see Ps Throws.
 public visitor read single user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see Ps User Is Key Maker.
-public visitor read single user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor read single user-is-key-maker at rest  403 FORBIDDEN error  | You can't see Ps User Is Key Maker.
 public visitor read users none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 public visitor read users none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor unpublish collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async false.
-public visitor unpublish collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection async-false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async false.
 public visitor unpublish collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async false.
 public visitor unpublish collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async filter.
 public visitor unpublish collection async-filter at direct outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async filter.
-public visitor unpublish collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection async-filter at rest outside  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection async-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async filter.
+public visitor unpublish collection async-filter at rest outside  403 FORBIDDEN error  missing=same  | You can't edit this pc async filter.
 public visitor unpublish collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async filter.
 public visitor unpublish collection async-filter at service outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async filter.
 public visitor unpublish collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async throws.
-public visitor unpublish collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async throws.
 public visitor unpublish collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async throws.
 public visitor unpublish collection async-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async true.
-public visitor unpublish collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection async-true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this pc async true.
 public visitor unpublish collection async-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc async true.
 public visitor unpublish collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc false.
-public visitor unpublish collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc false.
 public visitor unpublish collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc false.
 public visitor unpublish collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc malformed filter.
-public visitor unpublish collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc malformed filter.
 public visitor unpublish collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc malformed filter.
 public visitor unpublish collection none at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc none.
-public visitor unpublish collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection none at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this pc none.
 public visitor unpublish collection none at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc none.
 public visitor unpublish collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc other operation.
-public visitor unpublish collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc other operation.
 public visitor unpublish collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc other operation.
 public visitor unpublish collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc permission spelling.
-public visitor unpublish collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc permission spelling.
 public visitor unpublish collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc permission spelling.
 public visitor unpublish collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc principal kind.
-public visitor unpublish collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc principal kind.
 public visitor unpublish collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc principal kind.
 public visitor unpublish collection publish-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc publish false.
-public visitor unpublish collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection publish-false at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this pc publish false.
 public visitor unpublish collection publish-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc publish false.
 public visitor unpublish collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns empty in.
-public visitor unpublish collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection returns-empty-in at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns empty in.
 public visitor unpublish collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns empty in.
 public visitor unpublish collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns false.
-public visitor unpublish collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection returns-false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns false.
 public visitor unpublish collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns false.
 public visitor unpublish collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns filter.
 public visitor unpublish collection returns-filter at direct outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns filter.
-public visitor unpublish collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor unpublish collection returns-filter at rest outside  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection returns-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns filter.
+public visitor unpublish collection returns-filter at rest outside  403 FORBIDDEN error  missing=same  | You can't edit this pc returns filter.
 public visitor unpublish collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns filter.
 public visitor unpublish collection returns-filter at service outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns filter.
 public visitor unpublish collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns null.
-public visitor unpublish collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection returns-null at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns null.
 public visitor unpublish collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns null.
 public visitor unpublish collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns string.
-public visitor unpublish collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns string.
 public visitor unpublish collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns string.
 public visitor unpublish collection returns-true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns true.
-public visitor unpublish collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection returns-true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this pc returns true.
 public visitor unpublish collection returns-true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns true.
 public visitor unpublish collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns undefined.
-public visitor unpublish collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns undefined.
 public visitor unpublish collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc returns undefined.
 public visitor unpublish collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc role name.
-public visitor unpublish collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection role-name at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc role name.
 public visitor unpublish collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc role name.
 public visitor unpublish collection role-screen-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc role screen spelling.
-public visitor unpublish collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection role-screen-spelling at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this pc role screen spelling.
 public visitor unpublish collection role-screen-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc role screen spelling.
 public visitor unpublish collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc throws.
-public visitor unpublish collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc throws.
 public visitor unpublish collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc throws.
 public visitor unpublish collection true at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc true.
-public visitor unpublish collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection true at rest  403 FORBIDDEN error  missing=404 NOT_FOUND  | You can't unpublish this pc true.
 public visitor unpublish collection true at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc true.
 public visitor unpublish collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc user is key maker.
-public visitor unpublish collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor unpublish collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc user is key maker.
 public visitor unpublish collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't unpublish this pc user is key maker.
 public visitor unpublish single-pub async-false at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub Async False.
 public visitor unpublish single-pub async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
@@ -668,110 +619,98 @@ public visitor unpublish single-pub true at rest  401 AUTH_REQUIRED error  | Aut
 public visitor unpublish single-pub user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't unpublish Ps Pub User Is Key Maker.
 public visitor unpublish single-pub user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor update collection async-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async false.
-public visitor update collection async-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection async-false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async false.
 public visitor update collection async-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async false.
 public visitor update collection async-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async filter.
 public visitor update collection async-filter at direct outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async filter.
-public visitor update collection async-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor update collection async-filter at rest outside  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection async-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async filter.
+public visitor update collection async-filter at rest outside  403 FORBIDDEN error  missing=same  | You can't edit this pc async filter.
 public visitor update collection async-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async filter.
 public visitor update collection async-filter at service outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async filter.
 public visitor update collection async-throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async throws.
-public visitor update collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection async-throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc async throws.
 public visitor update collection async-throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc async throws.
-public visitor update collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor update collection false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc false.
-public visitor update collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc false.
 public visitor update collection false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc false.
 public visitor update collection malformed-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc malformed filter.
-public visitor update collection malformed-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection malformed-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc malformed filter.
 public visitor update collection malformed-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc malformed filter.
-public visitor update collection none at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor update collection other-operation at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc other operation.
-public visitor update collection other-operation at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection other-operation at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc other operation.
 public visitor update collection other-operation at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc other operation.
 public visitor update collection permission-spelling at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc permission spelling.
-public visitor update collection permission-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection permission-spelling at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc permission spelling.
 public visitor update collection permission-spelling at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc permission spelling.
 public visitor update collection principal-kind at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc principal kind.
-public visitor update collection principal-kind at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection principal-kind at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc principal kind.
 public visitor update collection principal-kind at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc principal kind.
-public visitor update collection publish-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor update collection returns-empty-in at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns empty in.
-public visitor update collection returns-empty-in at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection returns-empty-in at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns empty in.
 public visitor update collection returns-empty-in at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns empty in.
 public visitor update collection returns-false at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns false.
-public visitor update collection returns-false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection returns-false at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns false.
 public visitor update collection returns-false at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns false.
 public visitor update collection returns-filter at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns filter.
 public visitor update collection returns-filter at direct outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns filter.
-public visitor update collection returns-filter at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
-public visitor update collection returns-filter at rest outside  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection returns-filter at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns filter.
+public visitor update collection returns-filter at rest outside  403 FORBIDDEN error  missing=same  | You can't edit this pc returns filter.
 public visitor update collection returns-filter at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns filter.
 public visitor update collection returns-filter at service outside  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns filter.
 public visitor update collection returns-null at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns null.
-public visitor update collection returns-null at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection returns-null at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns null.
 public visitor update collection returns-null at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns null.
 public visitor update collection returns-string at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns string.
-public visitor update collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection returns-string at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns string.
 public visitor update collection returns-string at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns string.
-public visitor update collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor update collection returns-undefined at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns undefined.
-public visitor update collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection returns-undefined at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc returns undefined.
 public visitor update collection returns-undefined at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc returns undefined.
 public visitor update collection role-name at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc role name.
-public visitor update collection role-name at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection role-name at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc role name.
 public visitor update collection role-name at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc role name.
-public visitor update collection role-screen-spelling at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor update collection throws at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc throws.
-public visitor update collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection throws at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc throws.
 public visitor update collection throws at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc throws.
-public visitor update collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 public visitor update collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc user is key maker.
-public visitor update collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
+public visitor update collection user-is-key-maker at rest  403 FORBIDDEN error  missing=same  | You can't edit this pc user is key maker.
 public visitor update collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=404 NOT_FOUND  | You can't edit this pc user is key maker.
 public visitor update providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor update roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
 public visitor update single async-false at direct  403 FORBIDDEN thrown  | You can't edit Ps Async False.
-public visitor update single async-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single async-false at rest  403 FORBIDDEN error  | You can't edit Ps Async False.
 public visitor update single async-filter at direct  403 FORBIDDEN thrown  | You can't edit Ps Async Filter.
-public visitor update single async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single async-filter at rest  403 FORBIDDEN error  | You can't edit Ps Async Filter.
 public visitor update single async-throws at direct  403 FORBIDDEN thrown  | You can't edit Ps Async Throws.
-public visitor update single async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor update single async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single async-throws at rest  403 FORBIDDEN error  | You can't edit Ps Async Throws.
 public visitor update single false at direct  403 FORBIDDEN thrown  | You can't edit Ps False.
-public visitor update single false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single false at rest  403 FORBIDDEN error  | You can't edit Ps False.
 public visitor update single malformed-filter at direct  403 FORBIDDEN thrown  | You can't edit Ps Malformed Filter.
-public visitor update single malformed-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor update single none at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single malformed-filter at rest  403 FORBIDDEN error  | You can't edit Ps Malformed Filter.
 public visitor update single other-operation at direct  403 FORBIDDEN thrown  | You can't edit Ps Other Operation.
-public visitor update single other-operation at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single other-operation at rest  403 FORBIDDEN error  | You can't edit Ps Other Operation.
 public visitor update single permission-spelling at direct  403 FORBIDDEN thrown  | You can't edit Ps Permission Spelling.
-public visitor update single permission-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single permission-spelling at rest  403 FORBIDDEN error  | You can't edit Ps Permission Spelling.
 public visitor update single principal-kind at direct  403 FORBIDDEN thrown  | You can't edit Ps Principal Kind.
-public visitor update single principal-kind at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor update single publish-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single principal-kind at rest  403 FORBIDDEN error  | You can't edit Ps Principal Kind.
 public visitor update single returns-empty-in at direct  403 FORBIDDEN thrown  | You can't edit Ps Returns Empty In.
-public visitor update single returns-empty-in at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single returns-empty-in at rest  403 FORBIDDEN error  | You can't edit Ps Returns Empty In.
 public visitor update single returns-false at direct  403 FORBIDDEN thrown  | You can't edit Ps Returns False.
-public visitor update single returns-false at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single returns-false at rest  403 FORBIDDEN error  | You can't edit Ps Returns False.
 public visitor update single returns-filter at direct  403 FORBIDDEN thrown  | You can't edit Ps Returns Filter.
-public visitor update single returns-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single returns-filter at rest  403 FORBIDDEN error  | You can't edit Ps Returns Filter.
 public visitor update single returns-null at direct  403 FORBIDDEN thrown  | You can't edit Ps Returns Null.
-public visitor update single returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single returns-null at rest  403 FORBIDDEN error  | You can't edit Ps Returns Null.
 public visitor update single returns-string at direct  403 FORBIDDEN thrown  | You can't edit Ps Returns String.
-public visitor update single returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor update single returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single returns-string at rest  403 FORBIDDEN error  | You can't edit Ps Returns String.
 public visitor update single returns-undefined at direct  403 FORBIDDEN thrown  | You can't edit Ps Returns Undefined.
-public visitor update single returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single returns-undefined at rest  403 FORBIDDEN error  | You can't edit Ps Returns Undefined.
 public visitor update single role-name at direct  403 FORBIDDEN thrown  | You can't edit Ps Role Name.
-public visitor update single role-name at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor update single role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single role-name at rest  403 FORBIDDEN error  | You can't edit Ps Role Name.
 public visitor update single throws at direct  403 FORBIDDEN thrown  | You can't edit Ps Throws.
-public visitor update single throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-public visitor update single true at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single throws at rest  403 FORBIDDEN error  | You can't edit Ps Throws.
 public visitor update single user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't edit Ps User Is Key Maker.
-public visitor update single user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
+public visitor update single user-is-key-maker at rest  403 FORBIDDEN error  | You can't edit Ps User Is Key Maker.
 public visitor update users none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service custom-role count collection async-false at direct  403 FORBIDDEN thrown  | You can't see c async falses.
 service custom-role count collection async-false at rest  403 FORBIDDEN error  | You can't see c async falses.
@@ -886,7 +825,6 @@ service custom-role delete collection async-false at rest  404 NOT_FOUND error  
 service custom-role delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service custom-role delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service custom-role delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -919,7 +857,6 @@ service custom-role delete collection returns-false at rest  404 NOT_FOUND error
 service custom-role delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service custom-role delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service custom-role delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1047,7 +984,6 @@ service custom-role publish collection async-false at rest  404 NOT_FOUND error 
 service custom-role publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service custom-role publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service custom-role publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1084,7 +1020,6 @@ service custom-role publish collection returns-false at rest  404 NOT_FOUND erro
 service custom-role publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service custom-role publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service custom-role publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1276,7 +1211,6 @@ service custom-role unpublish collection async-false at rest  404 NOT_FOUND erro
 service custom-role unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service custom-role unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service custom-role unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1313,7 +1247,6 @@ service custom-role unpublish collection returns-false at rest  404 NOT_FOUND er
 service custom-role unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service custom-role unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service custom-role unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1399,7 +1332,6 @@ service custom-role update collection async-false at route  403 FORBIDDEN error 
 service custom-role update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service custom-role update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service custom-role update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1445,7 +1377,6 @@ service custom-role update collection returns-false at route  403 FORBIDDEN erro
 service custom-role update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service custom-role update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service custom-role update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1648,7 +1579,6 @@ service key-full-access delete collection async-false at rest  404 NOT_FOUND err
 service key-full-access delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-full-access delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-full-access delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1681,7 +1611,6 @@ service key-full-access delete collection returns-false at rest  404 NOT_FOUND e
 service key-full-access delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-full-access delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-full-access delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1789,7 +1718,6 @@ service key-full-access publish collection async-false at rest  404 NOT_FOUND er
 service key-full-access publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-full-access publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-full-access publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1826,7 +1754,6 @@ service key-full-access publish collection returns-false at rest  404 NOT_FOUND 
 service key-full-access publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-full-access publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-full-access publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1990,7 +1917,6 @@ service key-full-access unpublish collection async-false at rest  404 NOT_FOUND 
 service key-full-access unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service key-full-access unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service key-full-access unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2027,7 +1953,6 @@ service key-full-access unpublish collection returns-false at rest  404 NOT_FOUN
 service key-full-access unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service key-full-access unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service key-full-access unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2099,7 +2024,6 @@ service key-full-access update collection async-false at route  403 FORBIDDEN er
 service key-full-access update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-full-access update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-full-access update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2145,7 +2069,6 @@ service key-full-access update collection returns-false at route  403 FORBIDDEN 
 service key-full-access update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-full-access update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-full-access update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2585,7 +2508,6 @@ service key-partial publish collection async-false at rest  404 NOT_FOUND error 
 service key-partial publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-partial publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-partial publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2622,7 +2544,6 @@ service key-partial publish collection returns-false at rest  404 NOT_FOUND erro
 service key-partial publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-partial publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-partial publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2969,7 +2890,6 @@ service key-partial update collection async-false at route  403 FORBIDDEN error 
 service key-partial update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-partial update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-partial update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -3015,7 +2935,6 @@ service key-partial update collection returns-false at route  403 FORBIDDEN erro
 service key-partial update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-partial update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-partial update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5220,7 +5139,6 @@ service key-role-based delete collection async-false at rest  404 NOT_FOUND erro
 service key-role-based delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-role-based delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-role-based delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5253,7 +5171,6 @@ service key-role-based delete collection returns-false at rest  404 NOT_FOUND er
 service key-role-based delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-role-based delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-role-based delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5371,7 +5288,6 @@ service key-role-based publish collection async-false at rest  404 NOT_FOUND err
 service key-role-based publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-role-based publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-role-based publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5408,7 +5324,6 @@ service key-role-based publish collection returns-false at rest  404 NOT_FOUND e
 service key-role-based publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-role-based publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-role-based publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5586,7 +5501,6 @@ service key-role-based unpublish collection async-false at rest  404 NOT_FOUND e
 service key-role-based unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service key-role-based unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service key-role-based unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5623,7 +5537,6 @@ service key-role-based unpublish collection returns-false at rest  404 NOT_FOUND
 service key-role-based unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service key-role-based unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service key-role-based unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5702,7 +5615,6 @@ service key-role-based update collection async-false at route  403 FORBIDDEN err
 service key-role-based update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-role-based update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5748,7 +5660,6 @@ service key-role-based update collection returns-false at route  403 FORBIDDEN e
 service key-role-based update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-role-based update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5956,7 +5867,6 @@ service key-role-based-super-admin delete collection async-false at rest  404 NO
 service key-role-based-super-admin delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-role-based-super-admin delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-role-based-super-admin delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5989,7 +5899,6 @@ service key-role-based-super-admin delete collection returns-false at rest  404 
 service key-role-based-super-admin delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-role-based-super-admin delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-role-based-super-admin delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6117,7 +6026,6 @@ service key-role-based-super-admin publish collection async-false at rest  404 N
 service key-role-based-super-admin publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-role-based-super-admin publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-role-based-super-admin publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6154,7 +6062,6 @@ service key-role-based-super-admin publish collection returns-false at rest  404
 service key-role-based-super-admin publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-role-based-super-admin publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-role-based-super-admin publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6346,7 +6253,6 @@ service key-role-based-super-admin unpublish collection async-false at rest  404
 service key-role-based-super-admin unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service key-role-based-super-admin unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service key-role-based-super-admin unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6383,7 +6289,6 @@ service key-role-based-super-admin unpublish collection returns-false at rest  4
 service key-role-based-super-admin unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service key-role-based-super-admin unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service key-role-based-super-admin unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6469,7 +6374,6 @@ service key-role-based-super-admin update collection async-false at route  403 F
 service key-role-based-super-admin update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based-super-admin update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-role-based-super-admin update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6515,7 +6419,6 @@ service key-role-based-super-admin update collection returns-false at route  403
 service key-role-based-super-admin update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based-super-admin update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-role-based-super-admin update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -7885,7 +7788,6 @@ service user-partial publish collection async-false at rest  404 NOT_FOUND error
 service user-partial publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service user-partial publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service user-partial publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -7922,7 +7824,6 @@ service user-partial publish collection returns-false at rest  404 NOT_FOUND err
 service user-partial publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service user-partial publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service user-partial publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8283,7 +8184,6 @@ service user-partial update collection async-false at route  403 FORBIDDEN error
 service user-partial update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service user-partial update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service user-partial update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8329,7 +8229,6 @@ service user-partial update collection returns-false at route  403 FORBIDDEN err
 service user-partial update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service user-partial update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service user-partial update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8532,7 +8431,6 @@ service user-with delete collection async-false at rest  404 NOT_FOUND error  mi
 service user-with delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service user-with delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service user-with delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8565,7 +8463,6 @@ service user-with delete collection returns-false at rest  404 NOT_FOUND error  
 service user-with delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service user-with delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service user-with delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8673,7 +8570,6 @@ service user-with publish collection async-false at rest  404 NOT_FOUND error  m
 service user-with publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service user-with publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service user-with publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8710,7 +8606,6 @@ service user-with publish collection returns-false at rest  404 NOT_FOUND error 
 service user-with publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service user-with publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service user-with publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8874,7 +8769,6 @@ service user-with unpublish collection async-false at rest  404 NOT_FOUND error 
 service user-with unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service user-with unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service user-with unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8911,7 +8805,6 @@ service user-with unpublish collection returns-false at rest  404 NOT_FOUND erro
 service user-with unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service user-with unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service user-with unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8983,7 +8876,6 @@ service user-with update collection async-false at route  403 FORBIDDEN error  |
 service user-with update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service user-with update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service user-with update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -9029,7 +8921,6 @@ service user-with update collection returns-false at route  403 FORBIDDEN error 
 service user-with update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service user-with update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service user-with update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -10256,7 +10147,6 @@ service visitor count collection async-filter at service  403 FORBIDDEN thrown  
 service visitor count collection async-throws at direct  403 FORBIDDEN thrown  | You can't see c async throws.
 service visitor count collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection async-throws at service  403 FORBIDDEN thrown  | You can't see c async throws.
-service visitor count collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection false at direct  403 FORBIDDEN thrown  | You can't see c falses.
 service visitor count collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection false at service  403 FORBIDDEN thrown  | You can't see c falses.
@@ -10293,7 +10183,6 @@ service visitor count collection returns-null at service  403 FORBIDDEN thrown  
 service visitor count collection returns-string at direct  403 FORBIDDEN thrown  | You can't see c returns strings.
 service visitor count collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection returns-string at service  403 FORBIDDEN thrown  | You can't see c returns strings.
-service visitor count collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't see c returns undefineds.
 service visitor count collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection returns-undefined at service  403 FORBIDDEN thrown  | You can't see c returns undefineds.
@@ -10306,7 +10195,6 @@ service visitor count collection role-screen-spelling at service  403 FORBIDDEN 
 service visitor count collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service visitor count collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
-service visitor count collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service visitor count collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor count collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
@@ -10469,7 +10357,6 @@ service visitor list collection async-filter at service  403 FORBIDDEN thrown  |
 service visitor list collection async-throws at direct  403 FORBIDDEN thrown  | You can't see c async throws.
 service visitor list collection async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection async-throws at service  403 FORBIDDEN thrown  | You can't see c async throws.
-service visitor list collection async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection false at direct  403 FORBIDDEN thrown  | You can't see c falses.
 service visitor list collection false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection false at service  403 FORBIDDEN thrown  | You can't see c falses.
@@ -10506,7 +10393,6 @@ service visitor list collection returns-null at service  403 FORBIDDEN thrown  |
 service visitor list collection returns-string at direct  403 FORBIDDEN thrown  | You can't see c returns strings.
 service visitor list collection returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection returns-string at service  403 FORBIDDEN thrown  | You can't see c returns strings.
-service visitor list collection returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection returns-undefined at direct  403 FORBIDDEN thrown  | You can't see c returns undefineds.
 service visitor list collection returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection returns-undefined at service  403 FORBIDDEN thrown  | You can't see c returns undefineds.
@@ -10519,7 +10405,6 @@ service visitor list collection role-screen-spelling at service  403 FORBIDDEN t
 service visitor list collection throws at direct  403 FORBIDDEN thrown  | You can't see c throws.
 service visitor list collection throws at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection throws at service  403 FORBIDDEN thrown  | You can't see c throws.
-service visitor list collection true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see c user is key makers.
 service visitor list collection user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor list collection user-is-key-maker at service  403 FORBIDDEN thrown  | You can't see c user is key makers.
@@ -10722,7 +10607,6 @@ service visitor read collection async-filter at service  403 FORBIDDEN thrown  m
 service visitor read collection async-throws at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c async throws.
 service visitor read collection async-throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection async-throws at service  403 FORBIDDEN thrown  missing=same  | You can't see this c async throws.
-service visitor read collection async-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection false at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c false.
 service visitor read collection false at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection false at service  403 FORBIDDEN thrown  missing=same  | You can't see this c false.
@@ -10759,7 +10643,6 @@ service visitor read collection returns-null at service  403 FORBIDDEN thrown  m
 service visitor read collection returns-string at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c returns string.
 service visitor read collection returns-string at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection returns-string at service  403 FORBIDDEN thrown  missing=same  | You can't see this c returns string.
-service visitor read collection returns-true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection returns-undefined at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c returns undefined.
 service visitor read collection returns-undefined at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection returns-undefined at service  403 FORBIDDEN thrown  missing=same  | You can't see this c returns undefined.
@@ -10772,11 +10655,9 @@ service visitor read collection role-screen-spelling at service  403 FORBIDDEN t
 service visitor read collection throws at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c throws.
 service visitor read collection throws at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection throws at service  403 FORBIDDEN thrown  missing=same  | You can't see this c throws.
-service visitor read collection true at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection user-is-key-maker at direct  403 FORBIDDEN thrown  missing=same  | You can't see this c user is key maker.
 service visitor read collection user-is-key-maker at rest  401 AUTH_REQUIRED error  missing=same  | Authentication required.
 service visitor read collection user-is-key-maker at service  403 FORBIDDEN thrown  missing=same  | You can't see this c user is key maker.
-service visitor read media none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read providers none at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read roles none at direct  401 AUTH_REQUIRED thrown  | Authentication required.
 service visitor read roles none at rest  401 AUTH_REQUIRED error  | Authentication required.
@@ -10786,7 +10667,6 @@ service visitor read single async-filter at direct  403 FORBIDDEN thrown  | You 
 service visitor read single async-filter at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single async-throws at direct  403 FORBIDDEN thrown  | You can't see S Async Throws.
 service visitor read single async-throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor read single async-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single false at direct  403 FORBIDDEN thrown  | You can't see S False.
 service visitor read single false at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single malformed-filter at direct  403 FORBIDDEN thrown  | You can't see S Malformed Filter.
@@ -10811,7 +10691,6 @@ service visitor read single returns-null at direct  403 FORBIDDEN thrown  | You 
 service visitor read single returns-null at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single returns-string at direct  403 FORBIDDEN thrown  | You can't see S Returns String.
 service visitor read single returns-string at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor read single returns-true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single returns-undefined at direct  403 FORBIDDEN thrown  | You can't see S Returns Undefined.
 service visitor read single returns-undefined at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single role-name at direct  403 FORBIDDEN thrown  | You can't see S Role Name.
@@ -10820,7 +10699,6 @@ service visitor read single role-screen-spelling at direct  403 FORBIDDEN thrown
 service visitor read single role-screen-spelling at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single throws at direct  403 FORBIDDEN thrown  | You can't see S Throws.
 service visitor read single throws at rest  401 AUTH_REQUIRED error  | Authentication required.
-service visitor read single true at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read single user-is-key-maker at direct  403 FORBIDDEN thrown  | You can't see S User Is Key Maker.
 service visitor read single user-is-key-maker at rest  401 AUTH_REQUIRED error  | Authentication required.
 service visitor read users none at direct  401 AUTH_REQUIRED thrown  | Authentication required.

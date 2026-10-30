@@ -80,9 +80,9 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
   return {
     userId: caller.user.id,
     authMethod: "session",
-    // A session caller carries none here on purpose: its grants are resolved
-    // from the database by `checkAccess`. Handing it the key vocabulary would
-    // answer "denied" for every check.
+    // A session caller carries none here on purpose: the access decision
+    // resolves its grants from the database (`actorForUser`). Handing it the
+    // key vocabulary would answer "denied" for every check.
     permissions: [],
     roles: caller.user.roles ?? [],
   };
@@ -295,9 +295,9 @@ export function authorizationScheduler(
  * The decision is {@link canReadEntity}'s, taken per entity, because that is
  * the only thing that agrees with what a row read will answer. Deriving the set
  * from permission SLUGS instead — filtering `read-{slug}` or `{slug}:read` —
- * looks equivalent and is not: `checkAccess` asks a code-defined `access.read`
- * after the stored grant, and a collection REFUSED in code still has the row
- * that a slug filter would admit it on.
+ * looks equivalent and is not: the access decision asks a code-defined
+ * `access.read` after the stored grant, and a collection REFUSED in code still
+ * has the row that a slug filter would admit it on.
  *
  * Coarse only in WHAT it decides — whether an entity is in reach at all. The
  * per-row rules of whatever query follows still decide which documents come
