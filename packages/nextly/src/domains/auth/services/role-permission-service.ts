@@ -15,7 +15,7 @@ import {
   plainFourOnLocked,
   storedAsPlain,
   storedAsPlainLocked,
-} from "../../../auth/access/manage-bridge";
+} from "../../../auth/access/retired-manage-permissions";
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
