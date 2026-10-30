@@ -396,6 +396,34 @@ export class SingleMutationService extends BaseService {
     return this.queryService.fieldRuleVisitor;
   }
 
+  /**
+   * The grants a refusal over shared fields names the caller's readable
+   * fields by, from inside the write's transaction: those resolved before it
+   * opened where the promotion gate asks, and otherwise read on `tx`. A
+   * trusted write resolves none beforehand, yet a routed one still answers to
+   * the field read rules, and a read on the pool would run outside the
+   * transaction and, for a visitor's Public role, wait on the connection the
+   * transaction holds.
+   */
+  private sharedConflictGrants(
+    tx: TransactionContext,
+    options: {
+      user?: Record<string, unknown>;
+      authenticatedScope?: AuthenticatedScope;
+    },
+    resolved: (() => Promise<CallerGrants>) | undefined
+  ): () => Promise<CallerGrants> {
+    return (
+      resolved ??
+      callerAccessGrants(
+        options.user,
+        options.authenticatedScope,
+        tx.getDrizzle(),
+        this.fieldRuleVisitor
+      )
+    );
+  }
+
   // ============================================================
   // Public API
   // ============================================================
@@ -2868,8 +2896,12 @@ export class SingleMutationService extends BaseService {
                       overrideAccess:
                         options.overrideAccess && !options.routeAuthorized,
                       authenticatedScope: options.authenticatedScope,
-                      // Resolved before the transaction opened.
-                      grants: promoteGrants,
+                      // Resolved before the transaction opened, or read on it.
+                      grants: this.sharedConflictGrants(
+                        tx,
+                        options,
+                        promoteGrants
+                      ),
                     });
                   }
                 }

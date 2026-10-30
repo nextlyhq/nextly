@@ -694,7 +694,6 @@ export { StatsCard } from "./components/features/dashboard/StatsCard";
 export { WelcomeHeader } from "./components/features/dashboard/WelcomeHeader";
 export { ContentStatsGrid } from "./components/features/dashboard/ContentStatsGrid";
 export { ContentStatusWidget } from "./components/features/dashboard/ContentStatusWidget";
-export { CollectionQuickLinks } from "./components/features/dashboard/CollectionQuickLinks";
 export { ProjectStatsGrid } from "./components/features/dashboard/ProjectStatsGrid";
 export {
   StatsGridSkeleton,

@@ -1,5 +1,4 @@
 // Dashboard Feature Components
-export { CollectionQuickLinks } from "./CollectionQuickLinks";
 export { ContentStatsGrid } from "./ContentStatsGrid";
 export { ContentStatusWidget } from "./ContentStatusWidget";
 export { ProjectStatsGrid } from "./ProjectStatsGrid";

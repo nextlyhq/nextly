@@ -10,9 +10,9 @@
  *
  * ## Why the mocks, and what they cost
  *
- * `core-components.ts` cannot be imported directly: it imports `TeamSummary`
- * and `CollectionQuickLinks`, which reach the `@admin/hooks/queries` barrel,
- * which reaches `pages/dashboard/index.tsx`, which imports `WidgetGrid`, which
+ * `core-components.ts` cannot be imported directly: it imports the dashboard's
+ * cards, and a card reaching the `@admin/hooks/queries` barrel reaches
+ * `pages/dashboard/index.tsx`, which imports `WidgetGrid`, which
  * calls `registerCoreWidgetComponents()` at module scope -- re-entering the
  * module being evaluated. Importing it throws before a single case runs, and
  * that cycle is pre-existing rather than introduced by these cards.
@@ -31,9 +31,6 @@ const stub = () => null;
 // test, and mocking it would leave this asserting its own mock.
 vi.mock("@admin/components/features/dashboard/SetupCard", () => ({
   SetupCard: stub,
-}));
-vi.mock("@admin/components/features/dashboard/CollectionQuickLinks", () => ({
-  CollectionQuickLinks: stub,
 }));
 vi.mock("@admin/components/features/dashboard/QuickCreate", () => ({
   QuickCreate: stub,
@@ -74,7 +71,7 @@ describe("core widget components register at runtime", () => {
 
     for (const path of [
       "core#Setup",
-      "core#CollectionQuickLinks",
+      "core#ContentTable",
       "core#QuickCreate",
       "core#TeamSummary",
       "core#TeamActivity",
@@ -82,6 +79,19 @@ describe("core widget components register at runtime", () => {
     ]) {
       expect(hasComponent(path), `${path} is not registered`).toBe(true);
     }
+  });
+
+  it("no longer registers the Content tile card's path, only the table's", async () => {
+    const { hasComponent } = await import(
+      "@admin/lib/plugins/component-registry"
+    );
+    const { registerCoreWidgetComponents } = await import("../core-components");
+
+    registerCoreWidgetComponents();
+
+    // The control: the call ran, so an absence below is the path being gone.
+    expect(hasComponent("core#ContentTable")).toBe(true);
+    expect(hasComponent("core#CollectionQuickLinks")).toBe(false);
   });
 
   it("registers Continue where you left off, and no longer Recently edited", async () => {

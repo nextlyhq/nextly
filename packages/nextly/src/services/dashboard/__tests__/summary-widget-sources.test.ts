@@ -1,21 +1,21 @@
 /**
  * The dashboard's summary sources. `system:team` asks the Team card's own gate
  * before it counts anyone and gives the roles figure only to a reader who may
- * see roles; `system:content` answers the service's per-collection reading
- * within the reader's scope. Both refuse what they cannot answer.
+ * see roles; `system:content` answers the service's Content table within the
+ * reader's scope, with how many rows it could show in all. Both refuse what they
+ * cannot answer.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const countTeamFigure = vi.fn();
-const getContentByCollection = vi.fn();
-const getContentSingles = vi.fn();
+const getContentTable = vi.fn();
 const resolveReadableResources = vi.fn();
 const granted = vi.fn<() => string[]>();
 
 vi.mock("../../../di/container", () => ({
   container: {
     has: () => true,
-    get: () => ({ countTeamFigure, getContentByCollection, getContentSingles }),
+    get: () => ({ countTeamFigure, getContentTable }),
   },
 }));
 vi.mock("../resolve-readable-resources", () => ({
@@ -53,12 +53,24 @@ import { registerSummaryWidgetSources } from "../summary-widget-sources";
 
 const SCOPE = someResources(["posts"]);
 const POSTS = {
+  kind: "collection",
   slug: "posts",
   label: "Posts",
   group: null,
   count: 9,
-  published: 7,
   draft: 2,
+  canCreate: true,
+  updatedAt: "2026-10-29T10:00:00.000Z",
+  userId: "user-2",
+  userName: "Ana",
+  actorType: "user",
+  identityErasedAt: null,
+};
+const HOME = {
+  kind: "single",
+  slug: "home",
+  label: "Home page",
+  group: null,
 };
 
 const caller = { user: { id: "user-1", roles: ["editor"] } };
@@ -73,8 +85,7 @@ beforeEach(() => {
     Promise.resolve(figure === "users" ? 12 : 3)
   );
   resolveReadableResources.mockResolvedValue(SCOPE);
-  getContentByCollection.mockResolvedValue([POSTS]);
-  getContentSingles.mockResolvedValue([]);
+  getContentTable.mockResolvedValue({ rows: [POSTS], total: 1 });
   clearSources();
   clearSystemResolvers();
   registerSummaryWidgetSources();
@@ -127,63 +138,51 @@ describe("the content source", () => {
       caller
     );
 
-  it("asks the service within the scope the access layer gives this reader", async () => {
-    const answer = rows(await askContent());
+  it("asks the service within the scope the access layer gives this reader, and answers its rows and the total of every row it could show", async () => {
+    getContentTable.mockResolvedValue({ rows: [POSTS, HOME], total: 14 });
+    const answer = await askContent();
     expect(resolveReadableResources).toHaveBeenCalledWith(caller);
-    expect(getContentByCollection).toHaveBeenCalledWith(
+    expect(getContentTable).toHaveBeenCalledWith(
       expect.objectContaining({ scope: SCOPE, caller })
     );
-    expect(answer).toEqual([{ kind: "collection", ...POSTS }]);
-  });
-
-  it("answers the Singles after the collections, in the room the collections leave", async () => {
-    getContentSingles.mockResolvedValue([{ slug: "home", label: "Home page" }]);
-    const answer = rows(await askContent({ limit: 3 }));
-    // 🔴 Without them, retiring the Singles card took every Single off the dashboard.
-    expect(getContentSingles).toHaveBeenCalledWith({ scope: SCOPE, limit: 2 });
-    expect(answer).toEqual([
-      { kind: "collection", ...POSTS },
-      { kind: "single", slug: "home", label: "Home page", group: null },
-    ]);
-  });
-
-  it("asks for no Singles when the collections fill the page", async () => {
-    getContentByCollection.mockResolvedValue([
-      POSTS,
-      { ...POSTS, slug: "pages" },
-    ]);
-    await askContent({ limit: 2 });
-    expect(getContentSingles).not.toHaveBeenCalled();
+    // 🔴 Strict: a field the Single's row does not carry stays absent, as the
+    // route's JSON sends it, rather than a key holding `undefined`, which
+    // `toEqual` would not tell apart.
+    expect(rows(answer)).toStrictEqual([POSTS, HOME]);
+    // 🔴 The service's total, every collection and Single the reader may see,
+    // not the rows answered: the list answer's total is the rows matched.
+    expect((answer as { total?: number }).total).toBe(14);
   });
 
   it("hands the query's limit to the service, which counts only that page", async () => {
     await askContent({ limit: 7 });
-    expect(getContentByCollection).toHaveBeenCalledWith(
+    expect(getContentTable).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 7 })
     );
   });
 
   it("answers only the fields a query selected, at most its limit", async () => {
-    getContentByCollection.mockResolvedValue([
-      POSTS,
-      { ...POSTS, slug: "pages", label: "Pages" },
-    ]);
+    getContentTable.mockResolvedValue({
+      rows: [POSTS, { ...POSTS, slug: "pages", label: "Pages" }],
+      total: 2,
+    });
     expect(
       rows(await askContent({ select: ["slug", "draft"], limit: 1 }))
-    ).toEqual([{ slug: "posts", draft: 2, kind: "collection" }]);
+    ).toEqual([{ kind: "collection", slug: "posts", draft: 2 }]);
   });
 
   it("keeps each row's kind whatever was selected, so a Single sharing a collection's slug stays apart", async () => {
     // 🔴 A select without `kind` stripped it, and the two `posts` rows below
     // could not be told apart.
-    getContentSingles.mockResolvedValue([
-      { slug: "posts", label: "Posts page" },
-    ]);
+    getContentTable.mockResolvedValue({
+      rows: [POSTS, { ...HOME, slug: "posts", label: "Posts page" }],
+      total: 2,
+    });
     expect(
       rows(await askContent({ select: ["slug", "label"], limit: 5 }))
     ).toEqual([
-      { slug: "posts", label: "Posts", kind: "collection" },
-      { slug: "posts", label: "Posts page", kind: "single" },
+      { kind: "collection", slug: "posts", label: "Posts" },
+      { kind: "single", slug: "posts", label: "Posts page" },
     ]);
   });
 
@@ -191,6 +190,6 @@ describe("the content source", () => {
     await expect(
       askContent({ where: { slug: { equals: "posts" } } })
     ).rejects.toThrow();
-    expect(getContentByCollection).not.toHaveBeenCalled();
+    expect(getContentTable).not.toHaveBeenCalled();
   });
 });

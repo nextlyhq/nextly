@@ -17,7 +17,7 @@ import type { DefaultLayoutCard } from "../declaration/dashboard";
 /** Each core widget's id, by name. */
 export const CORE_WIDGET_ID = {
   setup: "core/setup",
-  content: "core/content",
+  contentTable: "core/content-table",
   quickCreate: "core/quick-create",
   team: "core/team",
   needsAttention: "core/needs-attention",
@@ -41,7 +41,7 @@ export type CoreWidgetId = (typeof CORE_WIDGET_ID)[keyof typeof CORE_WIDGET_ID];
  */
 export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.setup,
-  CORE_WIDGET_ID.content,
+  CORE_WIDGET_ID.contentTable,
   CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.team,
   CORE_WIDGET_ID.needsAttention,
@@ -86,6 +86,6 @@ export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
   CORE_WIDGET_ID.quickCreate,
   CORE_WIDGET_ID.continue,
   CORE_WIDGET_ID.teamActivity,
-  CORE_WIDGET_ID.content,
+  CORE_WIDGET_ID.contentTable,
   CORE_WIDGET_ID.upcomingReleases,
 ].map(widget => ({ widget }));
