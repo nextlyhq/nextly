@@ -87,6 +87,25 @@ const SHAPES: Record<
     },
     expected: everywhere([]),
   },
+  // A single polymorphic reference is one `{ relationTo, value }` object, not a list, so an index
+  // it asks for is kept where the dialect can index its JSON column.
+  "an indexed polymorphic reference to one entry": {
+    field: {
+      type: "relationship",
+      relationTo: ["users", "posts"],
+      index: true,
+    },
+    expected: { postgresql: [IDX], mysql: [], sqlite: [IDX] },
+  },
+  "an indexed polymorphic hasMany relationship": {
+    field: {
+      type: "relationship",
+      relationTo: ["users", "posts"],
+      hasMany: true,
+      index: true,
+    },
+    expected: everywhere([]),
+  },
   // A reference to one entry is a scalar column, indexable on every dialect.
   "a relationship to one entry": {
     field: { type: "relationship", relationTo: "users" },

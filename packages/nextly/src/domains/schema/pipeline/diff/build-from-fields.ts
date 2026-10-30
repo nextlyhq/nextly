@@ -36,7 +36,6 @@ import {
 } from "../../extension/naming";
 import {
   componentRelationshipHoldsReferenceList,
-  componentRelationshipStoresJson,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
   componentRelationIsSingleReference,
@@ -801,11 +800,11 @@ export function buildDesiredTableFromComponentFields(
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
     ...collectionIndexSpecs(tableName, fields, {
-      // A relation holding a JSON list takes no plain index even when it asks for one, as the
-      // creator writes none: no lookup reads a whole list, and a btree entry over a long one
-      // exceeds PostgreSQL's row size and refuses the save.
+      // A relation holding a list of references takes no plain index even when it asks for one,
+      // as the creator writes none (`componentRelationshipHoldsReferenceList` says why). A single
+      // polymorphic reference is one object and keeps an index it asks for.
       columnIsIndexable: (field, col) =>
-        !componentRelationshipStoresJson(field) &&
+        !componentRelationshipHoldsReferenceList(field) &&
         columnTypeIsIndexable(
           columns.find(c => c.name === col)?.type ?? "",
           dialect

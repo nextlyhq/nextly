@@ -69,6 +69,7 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   componentRelationIsSingleReference,
+  componentRelationshipHoldsReferenceList,
   componentRelationshipStoresJson,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
@@ -294,14 +295,17 @@ export class FieldGroupSchemaService {
     // companion, not the main comp_ table, so they get no main index.
     //
     // A unique column the dialect can key carries its uniqueness as `uq_`
-    // below and gets no plain index besides. A relation holding a JSON list
-    // gets none even when it asks: no lookup reads a whole list, and a btree
-    // entry over a long one exceeds PostgreSQL's row size and refuses the save.
+    // below and gets no plain index besides. A relation holding a list of
+    // references gets none even when it asks
+    // (`componentRelationshipHoldsReferenceList` says why); a single
+    // polymorphic reference is one object and keeps one it asks for.
     // Otherwise a plain index goes only where the dialect can index the
     // column: MySQL cannot index a JSON column, and the index statement would
     // fail after the table was already created.
     const indexed = (field: DataFieldConfig, wanted: boolean): boolean => {
-      if (!wanted || componentRelationshipStoresJson(field)) return false;
+      if (!wanted || componentRelationshipHoldsReferenceList(field)) {
+        return false;
+      }
       const columnType = this.columnTypeFor(field) ?? "";
       if (
         "unique" in field &&

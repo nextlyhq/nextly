@@ -150,14 +150,15 @@ async function liveTable(
 async function pendingOperations(
   t: TestNextly,
   dialect: TestDialect,
-  table: string
+  table: string,
+  fields: unknown[] = [HEADING, RELATED]
 ): Promise<Operation[]> {
   const live = await introspectLiveSnapshot(t.adapter.getDrizzle(), dialect, [
     table,
   ]);
   const desired = buildDesiredTableFromComponentFields(
     table,
-    [HEADING, RELATED] as never,
+    fields as never,
     dialect,
     { builtBy: "fieldGroup" }
   );
@@ -213,10 +214,29 @@ async function storedRows(t: TestNextly, table: string): Promise<string> {
 
 /**
  * Each kind of field that decides a component column's index, and the indexes its `subject` column
- * carries, the same on every dialect: a list gets none, a reference to one entry or an indexed
- * field gets `idx_`, and a unique field gets `uq_` and no plain index besides.
+ * carries: a list gets none, a reference to one entry or an indexed field gets `idx_`, and a unique
+ * field gets `uq_` and no plain index besides. `mysql` overrides where MySQL differs, which is only
+ * where the column is JSON, since MySQL cannot index one.
  */
-const INDEX_MATRIX: Record<string, { field: object; indexes: string[] }> = {
+const INDEX_MATRIX: Record<
+  string,
+  { field: object; indexes: string[]; mysql?: string[] }
+> = {
+  // One `{ relationTo, value }` object, not a list: an index it asks for is kept.
+  "indexed polymorphic single": {
+    field: { type: "relationship", relationTo: ["tags", "users"], index: true },
+    indexes: ["idx"],
+    mysql: [],
+  },
+  "indexed polymorphic hasMany": {
+    field: {
+      type: "relationship",
+      relationTo: ["tags", "users"],
+      hasMany: true,
+      index: true,
+    },
+    indexes: [],
+  },
   "many-to-many": {
     field: {
       type: "relationship",
@@ -279,7 +299,10 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     const prefix = `fg_${dialect.slice(0, 2)}_ix`;
     const expected = Object.fromEntries(
-      Object.entries(INDEX_MATRIX).map(([kind, cell]) => [kind, cell.indexes])
+      Object.entries(INDEX_MATRIX).map(([kind, cell]) => [
+        kind,
+        dialect === "mysql" ? (cell.mysql ?? cell.indexes) : cell.indexes,
+      ])
     );
 
     it("are what the field asks for when the group is created with it", async () => {
@@ -408,6 +431,44 @@ describe.each(getConfiguredTestDialects())(
         // Dropping it touched no data.
         expect(await storedRows(t, tableName)).toEqual(rowsBefore);
         expect(await readIds(t, slug)).toEqual(ids);
+      }
+    );
+
+    // A single polymorphic reference that asked for an index got one from the earlier release, and
+    // it is one object rather than a list, so nothing here is pending to drop it.
+    it.skipIf(dialect === "mysql")(
+      "keeps an existing site's index on an indexed polymorphic reference to one entry",
+      async () => {
+        const t = await boot(dialect);
+        const slug = `${prefix}_poly_site`;
+        const tableName = `comp_${slug}`;
+        const indexName = `idx_${tableName}_subject`;
+        const fields = [
+          HEADING,
+          {
+            name: "subject",
+            type: "relationship",
+            relationTo: ["tags", "users"],
+            index: true,
+          },
+        ];
+
+        expect(await createGroup(t, slug, fields)).toBe("applied");
+        // The statement the earlier release's creating SQL wrote for this column; IF NOT EXISTS
+        // because this release writes the same one.
+        await t.adapter.executeQuery(
+          `CREATE INDEX IF NOT EXISTS "${indexName}" ON "${tableName}"("subject")`
+        );
+
+        const pending = await pendingOperations(t, dialect, tableName, fields);
+        expect(
+          pending.filter(
+            op =>
+              (op.type === "drop_index" || op.type === "add_index") &&
+              op.index.name === indexName
+          )
+        ).toEqual([]);
+        expect(await subjectIndexKinds(t, dialect, tableName)).toEqual(["idx"]);
       }
     );
   }
