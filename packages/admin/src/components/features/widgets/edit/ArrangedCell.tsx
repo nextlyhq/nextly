@@ -27,6 +27,11 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
+import {
+  CardCollapseContext,
+  collapsedRows,
+  type CardCollapse,
+} from "../frame/collapse";
 import { CardGrowContext, grownRows } from "../frame/grow";
 import type { AnswerSize } from "../frame/tier";
 import type { MoveDirection } from "../layout-editor";
@@ -524,7 +529,17 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   // (`frame/grow`), and the rows that holds. Its stored rows in customise mode, where the
   // arrangement is what is being edited.
   const [contentHeight, setContentHeight] = useState<number | undefined>();
-  const rows = isEditing ? size.h : grownRows(size.h, contentHeight);
+  // Whether the card's body has collapsed it to one line (`frame/collapse`): one row at rest,
+  // never in customise mode, where its stored size is what is being edited.
+  const [bodyCollapsed, setBodyCollapsed] = useState(false);
+  const collapsed = bodyCollapsed && !isEditing;
+  const collapse = useMemo<CardCollapse>(
+    () => ({ collapsed, setCollapsed: setBodyCollapsed }),
+    [collapsed]
+  );
+  const rows = isEditing
+    ? size.h
+    : collapsedRows(grownRows(size.h, contentHeight), collapsed);
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
    * config are both in scope. Only DECLARED names are returned, so a component
@@ -581,14 +596,16 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
           focusFirstField={sheet.focusFirstField}
         />
       ) : null}
-      <CardGrowContext.Provider value={setContentHeight}>
-        <CardBody
-          {...{ widget, placement, headerAction, data, isEditing }}
-          subtitle={heading.subtitle}
-          quick={quick.inline}
-          onOpenSettings={sheet.openFromEmpty}
-        />
-      </CardGrowContext.Provider>
+      <CardCollapseContext.Provider value={collapse}>
+        <CardGrowContext.Provider value={setContentHeight}>
+          <CardBody
+            {...{ widget, placement, headerAction, data, isEditing }}
+            subtitle={heading.subtitle}
+            quick={quick.inline}
+            onOpenSettings={sheet.openFromEmpty}
+          />
+        </CardGrowContext.Provider>
+      </CardCollapseContext.Provider>
     </DraggableWidgetCell>
   );
 }

@@ -70,6 +70,7 @@ import {
   type CardState,
   type SkeletonHint,
 } from "./frame/card-state";
+import { COLLAPSED_PADDING_CLASS, useFrameCollapsed } from "./frame/collapse";
 import {
   CARD_FOOTER_LINK_CLASS,
   CardFooterClaimProvider,
@@ -334,6 +335,9 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   // The width the card is drawn at decides how its figures are written; see `frame/tier`.
   const rootRef = useRef<HTMLDivElement>(null);
   const tier = useMeasuredTier(rootRef, props.tier);
+  // Collapsed by its body to one line (`frame/collapse`): the body's line is the whole card, so
+  // the header is kept for assistive technology only, with no gap under it and no footer.
+  const collapsed = useFrameCollapsed() && !customizing;
 
   return (
     <CardTierContext.Provider value={tier}>
@@ -349,12 +353,13 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
               data-card-id={cardId}
               data-tier={tier}
               data-state={stateName(state)}
+              data-collapsed={collapsed ? "" : undefined}
               // Read by the grid cell, which takes a card whose widget hides when empty out of the
               // grid while it is; never in customise mode, where the card must stay reachable.
               data-hidden-empty={flags.hiddenEmpty ? "" : undefined}
               className={cn(
                 "flex h-full flex-col",
-                FRAME_PADDING.className,
+                collapsed ? COLLAPSED_PADDING_CLASS : FRAME_PADDING.className,
                 props.className
               )}
             >
@@ -368,6 +373,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 quick={props.quick}
                 quickInert={flags.quickInert}
                 headerAction={props.headerAction}
+                collapsed={collapsed}
               />
 
               <CardContent
@@ -375,10 +381,13 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 aria-busy={flags.busy}
                 // Customise mode: what the card shows stays visible, but nothing in it can be reached.
                 inert={customizing || undefined}
-                className={bodyClassName(
-                  flags.refreshing,
-                  customizing,
-                  showsBody(state)
+                className={cn(
+                  bodyClassName(
+                    flags.refreshing,
+                    customizing,
+                    showsBody(state)
+                  ),
+                  collapsed && "pt-0"
                 )}
               >
                 <HiddenWhileEmptyNote
@@ -401,11 +410,13 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 ) : null}
               </CardContent>
 
-              <WidgetCardFooter
-                link={ownFooterLink(flags.footer, footer.held, props.link)}
-                inert={customizing}
-                slotRef={setFooterSlot}
-              />
+              {collapsed ? null : (
+                <WidgetCardFooter
+                  link={ownFooterLink(flags.footer, footer.held, props.link)}
+                  inert={customizing}
+                  slotRef={setFooterSlot}
+                />
+              )}
             </Card>
           </CardHeightContext.Provider>
         </AnswerSizeContext.Provider>
@@ -582,6 +593,7 @@ function WidgetCardHeader({
   quick,
   quickInert,
   headerAction,
+  collapsed,
 }: {
   titleId: string;
   subtitleId: string;
@@ -593,6 +605,8 @@ function WidgetCardHeader({
   quick?: ReactNode;
   quickInert: boolean;
   headerAction?: ReactNode;
+  /** Kept for assistive technology only: the body's one line names the card on screen. */
+  collapsed: boolean;
 }) {
   return (
     <CardHeader
@@ -601,7 +615,8 @@ function WidgetCardHeader({
       data-testid="widget-card-header"
       className={cn(
         FRAME_HEADER.className,
-        "shrink-0 flex-row items-center gap-2 space-y-0 p-0"
+        "shrink-0 flex-row items-center gap-2 space-y-0 p-0",
+        collapsed && "sr-only"
       )}
     >
       {leading && <span className="-ml-2 shrink-0">{leading}</span>}
