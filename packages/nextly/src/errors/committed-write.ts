@@ -18,7 +18,8 @@ import { retryAfterSeconds } from "./retry-after";
  * second time. The caller is told instead that the change was saved and the
  * request still failed, with no retry hint; `failure` stays the cause, for the
  * operator. A refusal the caller can act on (any other 4xx with no retry hint)
- * is returned as it is.
+ * is returned as it is, except ENTITY_NOT_MIGRATED: the act it asks for, run
+ * `nextly migrate` and send it again, would make the change a second time.
  */
 export function afterCommittedWrite(
   failure: NextlyError,
@@ -37,7 +38,8 @@ export function afterCommittedWrite(
 /**
  * Whether an error tells its caller the change did not happen: a server
  * failure of any code, a 429 (which says "try later" with or without a hint),
- * or an error carrying a retry hint. Decided by status and hint rather than by
+ * an error carrying a retry hint, or a database not migrated for the entity,
+ * whose remedy is to send it again. Decided by status and hint rather than by
  * a list of retryable codes, which would miss the next transient code to be
  * added. It covers every failure a client may send again on its own, the
  * admin's mutation retry included.
@@ -46,6 +48,7 @@ function readsAsNotSaved(error: NextlyError): boolean {
   return (
     error.statusCode >= NEXTLY_ERROR_STATUS.INTERNAL_ERROR ||
     error.statusCode === NEXTLY_ERROR_STATUS.RATE_LIMITED ||
+    error.code === "ENTITY_NOT_MIGRATED" ||
     retryAfterSeconds(error) !== undefined
   );
 }

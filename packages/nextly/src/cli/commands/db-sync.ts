@@ -65,6 +65,7 @@ import type { Command } from "commander";
 
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
+import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
@@ -76,6 +77,7 @@ import {
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { describeError } from "../../errors/index";
+import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import { exitWithError } from "../errors";
@@ -326,6 +328,15 @@ export async function runDbSync(
       },
       async () =>
         await runWithFieldTypes(configResult.fieldTypes, async () => {
+          // The configuration's new addresses, judged by the one address rule as a start judges
+          // them, before this sync reads or writes any schema.
+          const liveAdapter = adapter as unknown as DrizzleAdapter;
+          await assertConfiguredAddresses(
+            configResult.config,
+            await loadBuilderEntities(liveAdapter),
+            table => liveAdapter.tableExists(table)
+          );
+
           // Step 3.6: Register the runtime schema of every component in the database. The registry
           // built above holds STATIC system tables only, so `comp_` tables are unaddressable by
           // the ORM until this runs — and the orphan cleanup below has to delete rows from them.

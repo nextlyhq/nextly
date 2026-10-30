@@ -4,8 +4,6 @@
   "src/auth/pipeline/challenge.ts": 2,
   "src/cli/commands/dev-server.ts": 3,
   "src/cli/commands/migrate-fresh.ts": 4,
-  "src/cli/commands/migrate-resolve.ts": 1,
-  "src/cli/utils/adapter.ts": 2,
   "src/collections/config/define-config.ts": 9,
   "src/collections/config/validate-config.ts": 1,
   "src/database/factory.ts": 3,

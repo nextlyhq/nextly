@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { migrateDownCore, selectAppliedTargets } from "../migrate-down";
+import { createTestDb } from "../../../__tests__/fixtures/db";
+import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
+import {
+  downDatabaseDeps,
+  migrateDownCore,
+  selectAppliedTargets,
+} from "../migrate-down";
 import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { recordPluginSchemaVersionFromLedger } from "../../../domains/schema/migrate/plugin/plugin-schema-version";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
@@ -26,7 +32,8 @@ function row(
     durationMs: null,
     note: null,
     statementsExecuted: null,
-    supersededEventIds: null,
+    // A rollback retires the applied row it undoes, as `migrate:down` writes it.
+    supersededEventIds: status === "rolled_back" ? ["the-applied-row"] : null,
     supersededBy: null,
   };
 }
@@ -40,6 +47,16 @@ describe("selectAppliedTargets", () => {
       row("c.sql", "applied", 4000),
     ];
     expect(selectAppliedTargets(rows, 2)).toEqual(["c.sql", "a.sql"]);
+  });
+
+  it("keeps an app migration applied when an attempt that is not an outcome follows it", () => {
+    const rows = [
+      row("a.sql", "applied", 1000),
+      row("a.sql", "failed", 2000),
+      row("b.sql", "applied", 3000),
+      row("b.sql", "in_progress", 4000),
+    ];
+    expect(selectAppliedTargets(rows, 2)).toEqual(["b.sql", "a.sql"]);
   });
 
   it("returns [] when nothing is applied", () => {
@@ -491,6 +508,149 @@ describe("migrateDownCore", () => {
     });
     await expect(migrateDownCore(deps)).rejects.toThrow(/boom/);
     expect(failures).toEqual(["a.sql"]);
+  });
+
+  describe("where a DOWN's attempt is recorded", () => {
+    /**
+     * Runs one DOWN through the core, noting each ledger write in order and
+     * whether the first statement ran after the attempt was recorded.
+     */
+    async function runDown(over: {
+      dialect: "postgresql" | "mysql" | "sqlite";
+      transaction: boolean;
+      filename?: string;
+      fail?: boolean;
+      /** The start row's removal fails. */
+      endFails?: boolean;
+    }) {
+      const filename = over.filename ?? "a.sql";
+      const log: string[] = [];
+      const { deps } = baseDeps({
+        dialect: over.dialect,
+        options: {
+          step: 1,
+          allowDataLoss: true,
+          yes: false,
+          dryRun: false,
+          ...(over.filename?.startsWith("plugin:") ? { plugin: "auth" } : {}),
+        },
+        listFileApplies: async () => [row(filename, "applied", 1000)],
+        readDownSql: async () => ({
+          // A statement no guard refuses, whoever owns the table: the
+          // recording is under test, not the drop guard.
+          sql: 'CREATE INDEX "t_c_idx" ON "t" ("c");',
+          transaction: over.transaction,
+        }),
+        execDown: async (
+          statements: readonly string[],
+          _unit: unknown,
+          after: (db: unknown) => Promise<void>
+        ) => {
+          log.push("first statement");
+          if (over.fail) throw new Error("boom");
+          await after(TX_HANDLE);
+          return statements.length;
+        },
+        recordRolledBack: async () => {
+          log.push("rolled back");
+          return true;
+        },
+        recordFailed: async () => {
+          log.push("failed");
+        },
+        recordDownStarted: async (name: string) => {
+          log.push(`started ${name}`);
+          return "attempt-1";
+        },
+        endDownAttempt: async (id: string, db?: unknown) => {
+          log.push(
+            `ended ${id}${db === TX_HANDLE ? " in the DOWN's handle" : ""}`
+          );
+          if (over.endFails) throw new Error("delete failed");
+        },
+      });
+      const run = migrateDownCore(deps);
+      if (over.fail) await expect(run).rejects.toThrow(/boom/);
+      else await run;
+      return log;
+    }
+
+    it.each([
+      ["mysql", true],
+      ["mysql", false],
+      ["postgresql", false],
+      ["sqlite", false],
+    ] as const)(
+      "records an app DOWN's start on %s (transaction: %s) before its first statement, and ends it with the rollback",
+      async (dialect, transaction) => {
+        expect(await runDown({ dialect, transaction })).toEqual([
+          "started a.sql",
+          "first statement",
+          "rolled back",
+          "ended attempt-1 in the DOWN's handle",
+        ]);
+      }
+    );
+
+    it("finishes a DOWN whose start row could not be removed, recording no failure", async () => {
+      // Its statements ran and its rollback is recorded: the start row left
+      // behind is older than that outcome, which resolves it.
+      expect(
+        await runDown({ dialect: "mysql", transaction: true, endFails: true })
+      ).toEqual([
+        "started a.sql",
+        "first statement",
+        "rolled back",
+        "ended attempt-1 in the DOWN's handle",
+      ]);
+    });
+
+    it("keeps the DOWN's own error when its start row could not be removed after it failed", async () => {
+      expect(
+        await runDown({
+          dialect: "mysql",
+          transaction: true,
+          fail: true,
+          endFails: true,
+        })
+      ).toEqual([
+        "started a.sql",
+        "first statement",
+        "failed",
+        "ended attempt-1",
+      ]);
+    });
+
+    it("records the failure, then ends the attempt, when the DOWN fails", async () => {
+      expect(
+        await runDown({ dialect: "mysql", transaction: true, fail: true })
+      ).toEqual([
+        "started a.sql",
+        "first statement",
+        "failed",
+        "ended attempt-1",
+      ]);
+    });
+
+    it.each(["postgresql", "sqlite"] as const)(
+      "records no start for a DOWN in a transaction on %s, which leaves nothing when it stops",
+      async dialect => {
+        expect(await runDown({ dialect, transaction: true })).toEqual([
+          "first statement",
+          "rolled back",
+        ]);
+      }
+    );
+
+    it("records no start for a plugin module's DOWN, whose history keeps its record", async () => {
+      expect(
+        await runDown({
+          dialect: "mysql",
+          transaction: true,
+          filename: "plugin:auth/001_init",
+        })
+      ).toEqual(["first statement", "rolled back"]);
+    });
   });
 
   describe("a DOWN marked to run outside a transaction", () => {
@@ -947,5 +1107,34 @@ describe("migrateDownCore and the tables a DOWN creates", () => {
       },
     });
     expect(executed).toEqual([]);
+  });
+});
+
+describe("downDatabaseDeps: a DOWN's start row", () => {
+  it("is recorded in progress, and removed through the handle it is given", async () => {
+    // Removed through the DOWN's own handle, it commits or rolls back with the
+    // rolled-back row written there. Two databases tell the handles apart: a
+    // removal that ignored its handle would reach this ledger either way.
+    const own = await createTestDb();
+    const other = await createTestDb();
+    const deps = await downDatabaseDeps({
+      adapter: own.adapter as never,
+      dialect: "sqlite",
+    });
+    const ledger = new SchemaEventsRepository(own.db, "sqlite");
+    const id = await deps.recordDownStarted?.("0001_a.sql");
+    expect(id).toBeDefined();
+    const started = await ledger.findById(id as string);
+    expect([started?.eventType, started?.status, started?.filename]).toEqual([
+      "file_rollback",
+      "in_progress",
+      "0001_a.sql",
+    ]);
+
+    await deps.endDownAttempt?.(id as string, other.db);
+    expect((await ledger.findById(id as string))?.status).toBe("in_progress");
+
+    await deps.endDownAttempt?.(id as string, own.db);
+    expect(await ledger.findById(id as string)).toBeUndefined();
   });
 });

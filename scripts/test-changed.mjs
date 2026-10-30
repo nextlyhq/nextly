@@ -25,6 +25,12 @@
  * suite, and an empty selection stands only while Vitest still discovers tests
  * in the package; otherwise the package's own `test` script decides.
  *
+ * The root `scripts/` tests, when the change reaches them, run BEFORE the
+ * packages, and a failure there stops the run without them. They take a few
+ * minutes and the package suites a quarter of an hour, so a push that fails
+ * them learns it before the long leg rather than after it. Nothing is skipped
+ * on a passing run: both legs run, with the verdicts they gave before.
+ *
  * Usage (from the pre-push, after the build):
  *   node scripts/test-changed.mjs [base] [--max-workers=N]   # base defaults to origin/main
  *
@@ -508,8 +514,8 @@ function testScripts(root, paths) {
 
 /**
  * The command line as options. `--scripts-only` is for a run whose packages are
- * already being tested in full, as the pre-push does when the change redefines
- * the workspace graph. `--all` keeps the same scope and runs each package in
+ * tested in full by the caller, after this, as the pre-push does when the
+ * change redefines the workspace graph. `--all` keeps the same scope and runs each package in
  * full, for `NEXTLY_PREPUSH_ALL_TESTS=1`.
  */
 function optionsFrom(argv) {
@@ -521,12 +527,28 @@ function optionsFrom(argv) {
   };
 }
 
+/**
+ * Runs the two legs, the root scripts tests first, and returns the exit status.
+ * Each leg is a function returning how many of its runs failed. A failed
+ * scripts leg returns 1 without calling `packages`: its suites would take a
+ * quarter of an hour to give a verdict the push has already lost.
+ */
+export function runInOrder({ scripts, packages, log = console.error }) {
+  if (scripts() !== 0) {
+    log("test-changed: the root scripts tests failed; not running the package tests, fix these first");
+    return 1;
+  }
+  return packages() === 0 ? 0 : 1;
+}
+
 function main() {
   const { base, scriptsOnly, all, workers } = optionsFrom(process.argv.slice(2));
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]).trim();
   const paths = changedPaths(root, base);
-  const packageFailures = scriptsOnly ? 0 : testTouchedPackages(root, base, paths, workers, all);
-  process.exitCode = packageFailures + testScripts(root, paths) === 0 ? 0 : 1;
+  process.exitCode = runInOrder({
+    scripts: () => testScripts(root, paths),
+    packages: () => (scriptsOnly ? 0 : testTouchedPackages(root, base, paths, workers, all)),
+  });
 }
 
 if (isCliEntry(import.meta.url, process.argv[1])) main();

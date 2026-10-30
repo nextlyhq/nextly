@@ -13,11 +13,12 @@
  *   - it does NOT overwrite the cache (a later pooled check is still the stale
  *     value), proving the executor path skips the cache write too.
  */
-import { createTestNextly, type TestNextly } from "nextly/testing";
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../database/index";
+import { companionReadinessWarmedForTests } from "../../init/warm-companion-readiness";
+import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
 
 import { hasPermission, isSuperAdmin } from "./permissions";
 import { resetEpochForTests } from "./rbac-epoch";
@@ -150,6 +151,10 @@ describe("an executor-backed check and the connection pool", () => {
     // Obtained BEFORE the count starts: this stands in for the executor a
     // caller already holds from its own transaction.
     const executor = harness!.adapter.getDrizzle();
+    // The boot resolves each translation table in the background, on the
+    // pool and outside any caller's transaction; settled first, so the count
+    // is the checks' own and not that warm-up's.
+    await companionReadinessWarmedForTests();
     // The epoch read is rate-limited to one a second, so an unreset module
     // would skip it and the check would take no connection either way.
     resetEpochForTests();

@@ -42,6 +42,10 @@ import {
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  asNotMigrated,
+  collectionNotMigrated,
+} from "../../../database/with-db-errors";
 import { container } from "../../../di/container";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -146,9 +150,11 @@ import {
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
   TRANSLATION_FILTER_STATES,
+  fillCompanionFields,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
+  selectEntryWithCompanion,
   type TranslationStatusFilter,
   type TranslationFilterState,
 } from "../../i18n/companion-join";
@@ -216,10 +222,10 @@ import {
 } from "../query/timeseries-bucket";
 import {
   bucketStartToDbText,
-  intervalAfter,
   intervalWindow,
   isTimeseriesInterval,
   type TimeseriesInterval,
+  windowRowsEnd,
 } from "../query/timeseries-interval";
 import {
   extractWorkflowFilter,
@@ -312,7 +318,7 @@ function namesHiddenColumn(tableName: string, path: string): boolean {
  * single place because three callers agreeing today is not three callers that
  * stay agreed.
  */
-function fieldTrustOf(params: {
+export function fieldTrustOf(params: {
   overrideAccess?: boolean;
   enforceFieldAccess?: boolean;
 }): boolean {
@@ -391,6 +397,44 @@ function countedByBucket(
 }
 
 /**
+ * `counted` with the rows grouped into the interval starting at `foldedStart`
+ * added to the last interval's (`windowRowsEnd`): rows a database stored
+ * rounded across the window's end, which the window's last interval counts.
+ * The same counts when nothing is folded.
+ */
+function foldedIntoLast(
+  counted: Map<string, number>,
+  lastStart: Date,
+  foldedStart: Date | undefined
+): Map<string, number> {
+  if (foldedStart === undefined) return counted;
+  const folded = counted.get(bucketStartToDbText(foldedStart)) ?? 0;
+  if (folded === 0) return counted;
+  const last = bucketStartToDbText(lastStart);
+  const merged = new Map(counted);
+  merged.set(last, (counted.get(last) ?? 0) + folded);
+  return merged;
+}
+
+/**
+ * Refuses a rows end that is not a real instant, as an anchor that is not one
+ * is refused (`assertUsableWindowAnchor`).
+ */
+function assertUsableRowsEnd(rowsEnd: Date | undefined): void {
+  if (rowsEnd === undefined) return;
+  if (rowsEnd instanceof Date && Number.isFinite(rowsEnd.getTime())) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "rowsEnd",
+        code: "TIMESERIES_WINDOW_INVALID",
+        message: "The instant a timeseries' rows end at must be a real date.",
+      },
+    ],
+  });
+}
+
+/**
  * The ends of the window the dialect can actually compare against, or
  * `undefined` when the window cannot contain a storable instant at all.
  *
@@ -412,14 +456,13 @@ function countedByBucket(
  */
 function windowScope(
   window: Date[],
-  interval: TimeseriesInterval,
+  end: Date,
   dialect: SupportedDialect
 ): { from?: Date | SQL; to?: Date | SQL } | undefined {
   const start = window[0];
-  const end = intervalAfter(window[window.length - 1], interval);
   if (!timeseriesWindowIsStorable(start, end, dialect)) return undefined;
   const from = timeseriesBoundOperand(start, dialect);
-  const to = timeseriesBoundOperand(end, dialect);
+  const to = timeseriesBoundOperand(end, dialect, "end");
   return {
     ...(from === undefined ? {} : { from }),
     ...(to === undefined ? {} : { to }),
@@ -1081,13 +1124,13 @@ export class CollectionQueryService extends BaseService {
    * status — a refusal is a 403 — and flattening it would report an
    * authorization decision as a server fault.
    */
-  private async overlayLocalized(
+  private async overlayLocalized<T>(
     collectionName: string,
     reason: string,
-    run: () => Promise<void>
-  ): Promise<void> {
+    run: () => Promise<T>
+  ): Promise<T> {
     try {
-      await run();
+      return await run();
     } catch (error) {
       if (NextlyError.is(error)) throw error;
       throw NextlyError.internal({
@@ -3634,7 +3677,14 @@ export class CollectionQueryService extends BaseService {
         message: "Entries fetched successfully",
         data: paginatedResponse,
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
+      );
       // Determine appropriate status code based on error type
       const message =
         error instanceof Error ? error.message : "Failed to fetch entries";
@@ -4044,7 +4094,7 @@ export class CollectionQueryService extends BaseService {
         data: { totalDocs },
       };
     } catch (error: unknown) {
-      return this.countFailed(params.collectionName, error);
+      return this.countFailed(params.collectionName, error, params);
     }
   }
 
@@ -4052,10 +4102,18 @@ export class CollectionQueryService extends BaseService {
    * A count that failed, as both counts report it: logged, and returned with
    * the error's own status and code.
    */
-  private countFailed(
+  private async countFailed(
     collectionName: string,
-    error: unknown
-  ): CollectionServiceResult<never> {
+    caught: unknown,
+    caller: { overrideAccess?: boolean; enforceFieldAccess?: boolean } = {}
+  ): Promise<CollectionServiceResult<never>> {
+    // A count the database is not migrated for answers as such, not as a 500.
+    const error = await asNotMigrated(
+      caught,
+      collectionNotMigrated(this.collectionService, collectionName, {
+        trusted: fieldTrustOf(caller),
+      })
+    );
     const message =
       error instanceof Error ? error.message : "Failed to count entries";
     this.logger.error("Error counting entries", {
@@ -4123,7 +4181,7 @@ export class CollectionQueryService extends BaseService {
       };
     } catch (error: unknown) {
       // Reported as `countEntries` reports it, so a refusal stays a typed 403.
-      return this.countFailed(params.collectionName, error);
+      return this.countFailed(params.collectionName, error, params);
     }
   }
 
@@ -4213,7 +4271,14 @@ export class CollectionQueryService extends BaseService {
           truncated: rows.length > cap,
         },
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
+      );
       const message =
         error instanceof Error ? error.message : "Failed to group entries";
       this.logger.error("Error grouping entries", {
@@ -4272,10 +4337,17 @@ export class CollectionQueryService extends BaseService {
        * run.
        */
       now?: Date;
+      /**
+       * The exclusive end of the rows the window keeps, where that is past the
+       * end of its last interval (`windowRowsEnd`): a row stored there, rounded
+       * across a boundary, counts in the last interval.
+       */
+      rowsEnd?: Date;
     }
   ): Promise<CollectionServiceResult<TimeseriesPoints>> {
     try {
       const count = boundedIntervalCount(params.intervals);
+      assertUsableRowsEnd(params.rowsEnd);
 
       // ONE clock for the whole read. `releaseScope` takes its own `new Date()`
       // while the plan resolves, and the window used to take a second one
@@ -4311,10 +4383,18 @@ export class CollectionQueryService extends BaseService {
       const window = intervalWindow(anchor, interval, count);
       const dialect = this.groupDialect();
       const bucket = timeseriesBucketExpression(column, interval, dialect);
+      // Where the rows end: the window's own end, or, for a window ending now,
+      // the whole second it is read in, with the interval that sliver falls in
+      // folded into the last (`windowRowsEnd`).
+      const rowsEnd = windowRowsEnd(
+        window[window.length - 1],
+        interval,
+        params.rowsEnd
+      );
 
       // Built here, where the column keeps the type the schema gave it, so the
       // comparison needs no cast the compiler cannot check.
-      const scope = windowScope(window, interval, dialect);
+      const scope = windowScope(window, rowsEnd.end, dialect);
       // `undefined` means the window does not overlap what the column can
       // store, so no row can fall in it and there is nothing to ask.
       if (scope === undefined) return this.emptyTimeseries(window, interval);
@@ -4354,10 +4434,21 @@ export class CollectionQueryService extends BaseService {
         // rows arrive in cannot reach the result.
         .groupBy(bucket);
 
-      const counted = countedByBucket(rows);
+      const counted = foldedIntoLast(
+        countedByBucket(rows),
+        window[window.length - 1],
+        rowsEnd.foldedStart
+      );
 
       return this.timeseriesAnswer(window, interval, counted);
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
+      );
       const message =
         error instanceof Error ? error.message : "Failed to build timeseries";
       this.logger.error("Error building timeseries", {
@@ -4673,11 +4764,55 @@ export class CollectionQueryService extends BaseService {
       const whereCondition =
         whereParts.length === 1 ? whereParts[0] : and(...whereParts);
 
-      const [entry] = await this.db
-        .select()
-        .from(schema)
-        .where(whereCondition)
-        .limit(1);
+      // A translated read takes the entry's translations in the same query as the entry, once its
+      // companion is there to join to: one round trip where reading them after it took two. They
+      // are resolved onto it as the batched fill resolves them. Until the companion is there, the
+      // entry is read alone and its main-table values stand.
+      const joinedLocaleChain =
+        localeChain &&
+        companion &&
+        (await resolveCompanionSchemaReadiness(this.adapter, companion)) ===
+          "ready"
+          ? localeChain
+          : null;
+      let entry: Record<string, unknown> | undefined;
+      if (joinedLocaleChain && companion) {
+        const table = companion.table;
+        // As the translations read it stands for fails: the database's own message, which names
+        // the translations table and its columns, never reaches the answer.
+        const joined = await this.overlayLocalized(
+          params.collectionName,
+          "translation-load-failed",
+          () =>
+            selectEntryWithCompanion({
+              db: this.db,
+              mainTable: schema,
+              where: whereCondition,
+              companionTable: table,
+              localeChain: joinedLocaleChain,
+            })
+        );
+        entry = joined.entry;
+        if (entry) {
+          fillCompanionFields({
+            rows: [entry],
+            companionRows: joined.companionRows,
+            localizedFields: companion.localizedFields,
+            localeChain: joinedLocaleChain,
+            // A read scoped to published content takes only the languages published.
+            statusValues:
+              companion.hasStatus && statusFilter?.values
+                ? statusFilter.values
+                : undefined,
+          });
+        }
+      } else {
+        [entry] = (await this.db
+          .select()
+          .from(schema)
+          .where(whereCondition)
+          .limit(1)) as Record<string, unknown>[];
+      }
 
       if (!entry) {
         return {
@@ -4696,18 +4831,22 @@ export class CollectionQueryService extends BaseService {
       // i18n M4: resolve localized fields from the companion `_locales` table for the
       // requested language (with fallback) BEFORE relationship expansion / hooks, so every
       // downstream consumer sees the translated values. No-op for non-localized collections.
-      await this.overlayLocalized(
-        params.collectionName,
-        "translation-load-failed",
-        () =>
-          this.populateLocalized(
-            params.collectionName,
-            [entry as Record<string, unknown>],
-            localeChain,
-            companion,
-            statusFilter?.values ?? null // i18n M6: per-locale published filter
-          )
-      );
+      // Already done when the translations came with the entry.
+      if (!joinedLocaleChain) {
+        const read = entry;
+        await this.overlayLocalized(
+          params.collectionName,
+          "translation-load-failed",
+          () =>
+            this.populateLocalized(
+              params.collectionName,
+              [read],
+              localeChain,
+              companion,
+              statusFilter?.values ?? null // i18n M6: per-locale published filter
+            )
+        );
+      }
       // `locale=all` → language-keyed values per localized field (admin/export).
       await this.overlayLocalized(
         params.collectionName,
@@ -4715,7 +4854,7 @@ export class CollectionQueryService extends BaseService {
         () =>
           this.populateLocalizedAll(
             params.collectionName,
-            [entry as Record<string, unknown>],
+            [entry],
             params.locale,
             companion,
             statusFilter?.values ?? null // i18n M6: per-locale published filter
@@ -4729,7 +4868,7 @@ export class CollectionQueryService extends BaseService {
           () =>
             this.populateTranslationMeta(
               params.collectionName,
-              [entry as Record<string, unknown>],
+              [entry],
               companion,
               statusFilter?.values ?? null // i18n M6: per-locale published filter
             )
@@ -5126,7 +5265,14 @@ export class CollectionQueryService extends BaseService {
         data: finalData,
         resolvedEntryId,
       };
-    } catch (error: unknown) {
+    } catch (caught: unknown) {
+      // A read the database is not migrated for answers as such, not as a 500.
+      const error = await asNotMigrated(
+        caught,
+        collectionNotMigrated(this.collectionService, params.collectionName, {
+          trusted: fieldTrustOf(params),
+        })
+      );
       return {
         success: false,
         statusCode: 500,

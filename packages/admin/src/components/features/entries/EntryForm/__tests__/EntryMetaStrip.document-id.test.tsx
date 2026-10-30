@@ -35,24 +35,26 @@ afterEach(() => {
 });
 
 describe("EntryMetaStrip — document id", () => {
-  it("offers the id where the expanded panel is not, and only there", () => {
-    // The panel is drawn from `@4xl/content` up, so below that width, a
-    // tablet's as a phone's, the strip is the only place the id is offered.
-    render(<EntryMetaStrip isRailCollapsed={false} documentId={ID} />);
-    const copy = screen.getByRole("button", { name: "Copy ID to clipboard" });
-    expect(copy.parentElement?.className).toContain("@4xl/content:hidden");
+  it("steps aside while the docked panel, which carries the id, is on screen", () => {
+    render(<EntryMetaStrip panelCarriesId documentId={ID} />);
+    expect(
+      screen.queryByRole("button", { name: "Copy ID to clipboard" })
+    ).not.toBeInTheDocument();
   });
 
-  it("offers the id at every width once the panel is collapsed", () => {
-    render(<EntryMetaStrip isRailCollapsed documentId={ID} />);
-    const copy = screen.getByRole("button", { name: "Copy ID to clipboard" });
-    expect(copy.parentElement?.className).not.toContain("@4xl/content:hidden");
+  it("offers the id wherever the docked panel is not on screen", () => {
+    // Folded, floating or a sheet: the panel opens there only when asked
+    // for, so this line is where the id is offered.
+    render(<EntryMetaStrip panelCarriesId={false} documentId={ID} />);
+    expect(
+      screen.getByRole("button", { name: "Copy ID to clipboard" })
+    ).toBeInTheDocument();
   });
 
   it("copies the whole id", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     clipboard({ writeText });
-    render(<EntryMetaStrip isRailCollapsed documentId={ID} />);
+    render(<EntryMetaStrip panelCarriesId={false} documentId={ID} />);
 
     await userEvent.click(
       screen.getByRole("button", { name: "Copy ID to clipboard" })
@@ -69,7 +71,7 @@ describe("EntryMetaStrip — document id", () => {
     clipboard({
       writeText: vi.fn().mockRejectedValue(new Error("NotAllowedError")),
     });
-    render(<EntryMetaStrip isRailCollapsed documentId={ID} />);
+    render(<EntryMetaStrip panelCarriesId={false} documentId={ID} />);
 
     await userEvent.click(
       screen.getByRole("button", { name: "Copy ID to clipboard" })
@@ -88,7 +90,7 @@ describe("EntryMetaStrip — document id", () => {
   it("says the same where the page has no clipboard at all", async () => {
     // An origin that is neither secure nor local has no `navigator.clipboard`.
     clipboard(undefined);
-    render(<EntryMetaStrip isRailCollapsed documentId={ID} />);
+    render(<EntryMetaStrip panelCarriesId={false} documentId={ID} />);
 
     await userEvent.click(
       screen.getByRole("button", { name: "Copy ID to clipboard" })

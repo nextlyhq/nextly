@@ -1,7 +1,6 @@
 import safeRegex from "safe-regex2";
 import { z } from "zod";
 
-import { isReservedResourceSlug } from "@nextly/schemas/_zod/rbac";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 /**
@@ -13,8 +12,16 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
+import { addressSchema } from "../../../shared/address-rule";
+import {
+  BUILDER_RESERVED_COLLECTION_NAMES,
+  BUILDER_SQL_KEYWORDS,
+} from "../../../shared/sql-reserved";
 import { consoleLogger } from "../../../shared/types";
-import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
+import {
+  toSnakeCase,
+  usesJunctionTable,
+} from "../../schema/services/field-column-descriptor";
 
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
@@ -29,76 +36,14 @@ const MAX_REGEX_PATTERN_LENGTH = 200;
  */
 const REGEX_DDL_FORBIDDEN_CHARS = /[;\\\n\r\0]/;
 
-/** SQL keywords that should be blocked as field/collection names. */
-export const SQL_KEYWORDS = [
-  "select",
-  "insert",
-  "update",
-  "delete",
-  "drop",
-  "create",
-  "alter",
-  "table",
-  "from",
-  "where",
-  "join",
-  "union",
-  "order",
-  "group",
-  "having",
-  "limit",
-  "offset",
-  "index",
-  "constraint",
-  "primary",
-  "foreign",
-  "key",
-  "references",
-  "on",
-  "null",
-  "not",
-  "and",
-  "or",
-  "in",
-  "like",
-  "between",
-  "exists",
-  "case",
-  "when",
-  "then",
-  "else",
-  "end",
-  "as",
-  "distinct",
-  "all",
-  "any",
-  "some",
-  "into",
-  "values",
-  "set",
-  "cascade",
-] as const;
-
 /**
- * Reserved names for collections.
- *
- * Separate from `RESERVED_SLUGS`, which the code-first validator uses: a
- * Builder-created collection never passes through that path, so a name has to
- * be refused here as well to be refused at all.
+ * The Schema Builder's SQL keywords and reserved collection names, kept with
+ * the other reserved lists in `shared/sql-reserved` so the one address rule
+ * can read them without importing this service; re-exported under their
+ * earlier names for this module's importers.
  */
-export const RESERVED_COLLECTION_NAMES = [
-  "users",
-  "roles",
-  "permissions",
-  "sessions",
-  "accounts",
-  "dynamic_collections",
-  // Permission identity is action + resource, so a collection named `webhooks`
-  // would share the rows the webhook endpoint routes check: its `read-webhooks`
-  // would expose endpoint configuration and `update-webhooks` the signing
-  // secrets.
-  "webhooks",
-] as const;
+export const SQL_KEYWORDS = BUILDER_SQL_KEYWORDS;
+export const RESERVED_COLLECTION_NAMES = BUILDER_RESERVED_COLLECTION_NAMES;
 
 /** Reserved field names (added automatically). */
 /**
@@ -112,45 +57,43 @@ export const RESERVED_COLLECTION_NAMES = [
 export const RESERVED_FIELD_NAMES: readonly string[] =
   reservedSystemFieldNames("builder");
 
-export const collectionNameSchema = z
-  .string()
-  .min(1, "Collection name cannot be empty")
-  .max(50, "Collection name must be 50 characters or less")
-  .regex(
-    /^[a-z][a-z0-9_]*$/,
-    "Collection name must start with lowercase letter and contain only lowercase letters, numbers, and underscores"
-  )
-  .refine(
-    (name: string) => !RESERVED_COLLECTION_NAMES.includes(name as never),
-    {
-      message: "Collection name is reserved",
-    }
-  )
-  // A name that collides with a system resource's permissions is rejected here,
-  // during name validation inside `generateCollection` — before the migration
-  // and table are built — so the Builder path cannot leave an orphan table when
-  // the registry guard later refuses the same name.
-  .refine((name: string) => !isReservedResourceSlug(name), {
-    message: "Collection name is reserved by Nextly",
-  })
-  .refine(
-    (name: string) => !SQL_KEYWORDS.includes(name.toLowerCase() as never),
-    {
-      message: "Collection name is a reserved SQL keyword",
-    }
-  );
+/**
+ * A Builder-created collection's name, judged by the one address rule every
+ * road shares (`shared/address-rule`), so the Builder refuses exactly what
+ * configuration, the schema endpoints and the migrate commands refuse.
+ */
+export const collectionNameSchema = addressSchema("collection");
 
+/**
+ * The longest identifier every supported database keeps whole: PostgreSQL
+ * truncates past 63 characters, so a longer column name would not be the one
+ * the write path asks for.
+ */
+const MAX_COLUMN_NAME_LENGTH = 63;
+
+// A field keeps the name it is given, camelCase included, as on every other
+// road; its column is `toSnakeCase(name)`. So each rule that protects a column
+// is checked against that column, not only against the name as written.
 export const fieldNameSchema = z
   .string()
   .min(1, "Field name cannot be empty")
   .max(50, "Field name must be 50 characters or less")
   .regex(
-    /^[a-z][a-z0-9_]*$/,
-    "Field name must start with lowercase letter and contain only lowercase letters, numbers, and underscores"
+    /^[a-z][a-zA-Z0-9_]*$/,
+    "Field name must start with a lowercase letter and contain only letters, numbers, and underscores"
   )
-  .refine((name: string) => !RESERVED_FIELD_NAMES.includes(name), {
-    message: "Field name is reserved",
-  })
+  .refine(
+    (name: string) =>
+      !RESERVED_FIELD_NAMES.includes(name) &&
+      !RESERVED_FIELD_NAMES.includes(toSnakeCase(name)),
+    { message: "Field name is reserved" }
+  )
+  .refine(
+    (name: string) => toSnakeCase(name).length <= MAX_COLUMN_NAME_LENGTH,
+    {
+      message: `Field name's column would be longer than ${MAX_COLUMN_NAME_LENGTH} characters`,
+    }
+  )
   .refine(
     (name: string) => !SQL_KEYWORDS.includes(name.toLowerCase() as never),
     {
@@ -196,14 +139,22 @@ export class DynamicCollectionValidationService {
       throw new Error(errorMessage);
     }
 
-    const fieldNames = new Set<string>();
+    // Two names that become one column clash as surely as two equal names:
+    // `metaTitle` and `meta_title` are both stored in `meta_title`.
+    const namesByColumn = new Map<string, string>();
     const duplicates: string[] = [];
 
     for (const field of fields) {
-      if (fieldNames.has(field.name)) {
-        duplicates.push(field.name);
+      const column = toSnakeCase(field.name);
+      const earlier = namesByColumn.get(column);
+      if (earlier !== undefined) {
+        duplicates.push(
+          earlier === field.name
+            ? field.name
+            : `${earlier} and ${field.name} (both column ${column})`
+        );
       }
-      fieldNames.add(field.name);
+      namesByColumn.set(column, field.name);
     }
 
     if (duplicates.length > 0) {

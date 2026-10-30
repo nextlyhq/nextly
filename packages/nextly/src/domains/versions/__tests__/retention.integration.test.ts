@@ -5,6 +5,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, select, text } from "../../../config";
 import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
 import { restoreVersion } from "../restore-version";
@@ -210,12 +211,15 @@ describe("version retention (integration)", () => {
     const surviving = await versionsFor(current, "posts");
     const source = surviving[0].versionNo;
 
+    // Stored, so the update gate the restore asks finds the role: role names
+    // a caller hands in grant nothing.
+    await superAdminUser(current, "u1");
     await restoreVersion({
       scopeKind: "collection",
       slug: "posts",
       entryId: id,
       versionNo: source,
-      user: { id: "u1", roles: ["admin"] },
+      user: { id: "u1" },
     });
 
     const rows = await versionsFor(current, "posts");

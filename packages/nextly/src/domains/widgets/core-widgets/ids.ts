@@ -68,11 +68,14 @@ void everyIdOrdered;
 /**
  * Core's own default dashboard, written as a site writes `defaultLayout`, so
  * there is one path to the default whoever wrote it: the onboarding card, then
- * Needs attention, Create, Recently edited, Recent activity, Content, Upcoming
- * releases and Team, each at its widget's starting size. The cards that share a
- * row share a height, so the default dashboard tiles: Needs attention and
- * Create at 3 rows, the two activity lists at 4, Upcoming releases and Team at
- * 4. A site's own `defaultLayout` takes its place whole.
+ * Needs attention, Create, Recently edited, Recent activity, Content and
+ * Upcoming releases, each at its widget's starting size. The cards that share
+ * a row share a height, so the default dashboard tiles: Needs attention and
+ * Create at 4 rows, the two activity lists at 5. A site's own `defaultLayout`
+ * takes its place whole.
+ *
+ * Team is not on it: the card is for the people who manage the team, who add
+ * it from the add panel.
  *
  * Here, beside the ids and importing no widget, so the site dashboard's check
  * and the default's builder read it without loading every core card.
@@ -85,5 +88,4 @@ export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
   CORE_WIDGET_ID.recentActivity,
   CORE_WIDGET_ID.content,
   CORE_WIDGET_ID.upcomingReleases,
-  CORE_WIDGET_ID.team,
 ].map(widget => ({ widget }));
