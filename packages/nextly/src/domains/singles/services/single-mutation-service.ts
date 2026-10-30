@@ -225,10 +225,7 @@ import {
   promotionIssues,
   type PromoteGateContext,
 } from "./promote-gate";
-import {
-  recordSingleMediaUsage,
-  type SingleMediaUsageDeps,
-} from "./single-media-usage";
+import type { SingleMediaUsageDeps } from "./single-media-usage";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -1349,6 +1346,8 @@ export class SingleMutationService extends BaseService {
         localizedColumns: companion.localizedFields.map(f => f.column),
       });
     }
+    // Loaded when a Single's usage is recorded, not with the service.
+    const { recordSingleMediaUsage } = await import("./single-media-usage");
     await this.adapter.transaction(tx =>
       recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
         slug,
@@ -3908,6 +3907,9 @@ export class SingleMutationService extends BaseService {
             // Which media items the Single uses now, from what this save
             // stored: its row, its translation and its field groups are all
             // written above. A held edit's media count once it is published.
+            const { recordSingleMediaUsage } = await import(
+              "./single-media-usage"
+            );
             await recordSingleMediaUsage(tx, this.mediaUsageDeps(), {
               slug,
               rowId: existingDoc.id,

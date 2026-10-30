@@ -28,9 +28,11 @@ import {
   beginI18nTransition,
   settleI18nTransition,
 } from "../../domains/i18n/migration/transition-state";
-import { mediaUsagePresent } from "../../domains/media/usage/media-usage-store";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
-import { deleteEntityRegistryRow } from "../../domains/versions/entity-teardown";
+import {
+  deleteEntityRegistryRow,
+  mediaUsageTablePresent,
+} from "../../domains/versions/entity-teardown";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import {
@@ -750,7 +752,7 @@ async function handleRemovedSingles(
       // Asked before the transaction opens: see `DashboardTables`.
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(adapter),
-        mediaUsagePresent: await mediaUsagePresent(adapter),
+        mediaUsagePresent: await mediaUsageTablePresent(adapter),
       };
       await adapter.transaction(tx =>
         deleteEntityRegistryRow(tx, "single", slug, tables)

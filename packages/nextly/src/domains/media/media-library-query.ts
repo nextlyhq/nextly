@@ -5,7 +5,9 @@
  * A folder, a search, a type and a view each narrow the items; the list and a
  * folder's contents apply the same narrowing and page it in the database, and
  * the sidebar's counts are of the same views, so a count and the list it
- * stands for cannot disagree.
+ * stands for cannot disagree. The services load it when they read, not when
+ * they are loaded; what a request may ask for is parsed at the boundary by
+ * the schemas in `types/media`.
  *
  * @module domains/media/media-library-query
  */
@@ -18,16 +20,8 @@ import {
   type SQL,
   type Table,
 } from "drizzle-orm";
-import { z } from "zod";
 
-import { MediaTypeSchema } from "../../types/media";
-
-/**
- * The views beside the folders. `missing-alt` is the images with no alt text;
- * `unused` is the items the usage record finds no document using.
- */
-const MEDIA_VIEWS = ["missing-alt", "unused"] as const;
-export type MediaView = (typeof MEDIA_VIEWS)[number];
+import type { MediaView } from "../../types/media";
 
 /** The `media` columns the narrowing reads. */
 export interface MediaQueryColumns {
@@ -105,23 +99,6 @@ export function mediaQueryCondition(
   }
   return conditions.length > 0 ? and(...conditions) : undefined;
 }
-
-/**
- * A page of a folder's items as a request asks for it, parsed at the
- * boundary. Bounds as the list's own: at most 100 items a page.
- */
-export const mediaPageQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().positive().max(100).default(24),
-  search: z.string().trim().min(1).optional(),
-  type: MediaTypeSchema.optional(),
-  sortBy: z.enum(["uploadedAt", "filename", "size"]).default("uploadedAt"),
-  sortOrder: z.enum(["asc", "desc"]).default("desc"),
-});
-export type MediaPageQuery = z.infer<typeof mediaPageQuerySchema>;
-
-/** The views a request may name, parsed at the boundary. */
-export const mediaViewSchema = z.enum(MEDIA_VIEWS);
 
 /** The sidebar's counts. */
 export interface MediaLibraryCounts {

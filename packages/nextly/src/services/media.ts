@@ -40,14 +40,9 @@ import {
 // Actor threading + outbox recording for media writes. Each write records a
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
-import {
-  mediaLibraryCountsOf,
-  missingAltText,
-  mediaQueryCondition,
-  unusedItem,
-  type MediaLibraryCounts,
-  type MediaUsageQueryTable,
-  type MediaView,
+import type {
+  MediaLibraryCounts,
+  MediaUsageQueryTable,
 } from "../domains/media/media-library-query";
 import {
   errorForLog,
@@ -63,10 +58,6 @@ import {
 } from "../domains/media/revalidate-media";
 import { StoredFileSearchReader } from "../domains/media/stored-file-search";
 import { storedFilesOf, variantPaths } from "../domains/media/stored-files";
-import {
-  MEDIA_USAGE_RECORDED_KEY,
-  mediaUsagePresent,
-} from "../domains/media/usage/media-usage-store";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -83,6 +74,7 @@ import type {
   DeleteMediaResponse,
   UploadMediaInput,
   UpdateMediaInput,
+  MediaView,
 } from "../types/media";
 
 import { BaseService } from "./base-service";
@@ -305,6 +297,10 @@ export class MediaService extends BaseService {
    * on the pool: nothing here runs inside a caller's transaction.
    */
   private async usageTable(): Promise<MediaUsageQueryTable | null> {
+    // Loaded when the library is read, not with the service.
+    const { mediaUsagePresent } = await import(
+      "../domains/media/usage/media-usage-store"
+    );
     const present = await mediaUsagePresent(this.adapter, this.logger);
     return present ? this.tables.nextlyMediaUsage : null;
   }
@@ -323,6 +319,14 @@ export class MediaService extends BaseService {
   async countLibrary(): Promise<MediaLibraryCounts> {
     const { media, nextlyMeta } = this.tables;
     const usage = await this.usageTable();
+    // Loaded when the library is read, not with the service.
+    const [
+      { mediaLibraryCountsOf, missingAltText, unusedItem },
+      { MEDIA_USAGE_RECORDED_KEY },
+    ] = await Promise.all([
+      import("../domains/media/media-library-query"),
+      import("../domains/media/usage/media-usage-store"),
+    ]);
     const groups = await this.db
       .select({
         folderId: media.folderId,
@@ -366,7 +370,11 @@ export class MediaService extends BaseService {
 
       const { media } = this.tables;
 
-      // The same narrowing a folder's contents and the sidebar's counts use.
+      // The same narrowing a folder's contents and the sidebar's counts use,
+      // loaded when the library is read, not with the service.
+      const { mediaQueryCondition } = await import(
+        "../domains/media/media-library-query"
+      );
       const whereClause = mediaQueryCondition(
         media,
         view === "unused" ? await this.usageTable() : null,

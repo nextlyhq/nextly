@@ -234,7 +234,6 @@ import {
   isCompanionReady,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import { mediaUsagePresent } from "../../media/usage/media-usage-store";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   sharedComparison,
@@ -246,7 +245,10 @@ import { mergeComponentPatches } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
-import { sweepDeletedDocument } from "../../versions/entity-teardown";
+import {
+  mediaUsageTablePresent,
+  sweepDeletedDocument,
+} from "../../versions/entity-teardown";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
 import {
@@ -1264,7 +1266,7 @@ export class CollectionMutationService extends BaseService {
   ): Promise<void> {
     if (args.heldDraft === true) return;
     try {
-      const present = await mediaUsagePresent(
+      const present = await mediaUsageTablePresent(
         this.adapter,
         this.logger,
         transactionTableProbe(this.adapter, tx)
@@ -13063,7 +13065,7 @@ export class CollectionMutationService extends BaseService {
       // Asked before the transaction opens: see `DashboardTables`.
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
-        mediaUsagePresent: await mediaUsagePresent(this.adapter),
+        mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
       };
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
@@ -15562,7 +15564,7 @@ export class CollectionMutationService extends BaseService {
             undefined,
             transactionTableProbe(this.adapter, tx)
           ),
-          mediaUsagePresent: await mediaUsagePresent(
+          mediaUsagePresent: await mediaUsageTablePresent(
             this.adapter,
             undefined,
             transactionTableProbe(this.adapter, tx)

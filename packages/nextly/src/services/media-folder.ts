@@ -41,11 +41,6 @@ import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
 import { getMediaStorage } from "@nextly/storage";
 
 import {
-  mediaPageQuerySchema,
-  mediaQueryCondition,
-  type MediaPageQuery,
-} from "../domains/media/media-library-query";
-import {
   errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
@@ -64,6 +59,7 @@ import {
 } from "../domains/media/stored-files";
 import type { ServiceErrorCode } from "../errors/error-codes";
 import { consoleLogger } from "../shared/types";
+import { mediaPageQuerySchema, type MediaPageQuery } from "../types/media";
 
 import { BaseService } from "./base-service";
 import type { Logger } from "./shared";
@@ -519,6 +515,10 @@ export class MediaFolderService extends BaseService {
       // every item the narrowing matches.
       const { page, limit, search, type, sortBy, sortOrder } =
         mediaPageQuerySchema.parse(query);
+      // Loaded when a folder is read, not with the service.
+      const { mediaQueryCondition } = await import(
+        "../domains/media/media-library-query"
+      );
       const where = mediaQueryCondition(media, null, {
         ...(folderSchemaAvailable ? { folderId: folderId ?? null } : {}),
         search,

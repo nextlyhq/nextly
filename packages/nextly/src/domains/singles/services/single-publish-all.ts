@@ -133,7 +133,6 @@ import {
   liveStoredDocument,
   promoteCallerFor,
 } from "./promote-gate";
-import { recordSingleMediaUsage } from "./single-media-usage";
 import {
   checkSingleAccess,
   singleGrantRefusal,
@@ -839,7 +838,8 @@ export class SinglePublishAllService extends BaseService {
 
     // Which media items the Single uses now. A publish that promoted held
     // working drafts wrote their content, in any language, so every language
-    // is read again.
+    // is read again. Loaded when it is recorded, not with the service.
+    const { recordSingleMediaUsage } = await import("./single-media-usage");
     await recordSingleMediaUsage(
       tx,
       {

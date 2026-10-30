@@ -18,10 +18,7 @@
 
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { deletePinsOfTarget } from "../dashboard/dashboard-pins";
-import {
-  removeDocumentUsage,
-  removeEntityUsage,
-} from "../media/usage/media-usage-store";
+import type { DashboardLogger, TableProbe } from "../dashboard/table-presence";
 
 import type { VersionsDbApi } from "./db-api";
 import { REGISTRY_TABLES } from "./history-locks";
@@ -41,6 +38,23 @@ import { VersionsRepository, type VersionRef } from "./versions-repository";
 export interface DashboardTables {
   dashboardPinsPresent: boolean;
   mediaUsagePresent: boolean;
+}
+
+/**
+ * Whether the media usage table is there, for {@link DashboardTables} and for
+ * a write about to record what it uses: the record's code is loaded when a
+ * write or a delete asks, not with the services that make them. Asked `via`
+ * the connection of a transaction the caller holds, when given.
+ */
+export async function mediaUsageTablePresent(
+  db: TableProbe,
+  logger?: DashboardLogger,
+  via?: TableProbe
+): Promise<boolean> {
+  const { mediaUsagePresent } = await import(
+    "../media/usage/media-usage-store"
+  );
+  return mediaUsagePresent(db, logger, via);
 }
 
 /**
@@ -82,6 +96,9 @@ export async function deleteEntityRegistryRow(
   // The record of the media its documents used: every entry of a collection,
   // or the Single itself. A page's media is recorded as its collection's.
   if (scopeKind !== "page" && tables.mediaUsagePresent) {
+    const { removeEntityUsage } = await import(
+      "../media/usage/media-usage-store"
+    );
     await removeEntityUsage(tx, { kind: scopeKind, slug: scopeSlug });
   }
   return deleted;
@@ -111,6 +128,9 @@ export async function sweepDeletedDocument(
   }
   // The record of the media the document used: it uses nothing now.
   if (ref.scopeKind !== "page" && tables.mediaUsagePresent) {
+    const { removeDocumentUsage } = await import(
+      "../media/usage/media-usage-store"
+    );
     await removeDocumentUsage(tx, {
       kind: ref.scopeKind,
       slug: ref.scopeSlug,

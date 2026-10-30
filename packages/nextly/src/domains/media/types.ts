@@ -5,9 +5,7 @@
  * These types represent the public API surface for media operations.
  */
 
-import type { ImageSizeVariant } from "../../types/media";
-
-import type { MediaView } from "./media-library-query";
+import type { ImageSizeVariant, MediaView } from "../../types/media";
 
 /**
  * Media file returned from operations

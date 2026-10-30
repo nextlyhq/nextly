@@ -67,11 +67,6 @@ import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
-import {
-  mediaPageQuerySchema,
-  mediaViewSchema,
-  type MediaPageQuery,
-} from "../domains/media/media-library-query";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -81,7 +76,13 @@ import type {
 } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
 import { resolveClaimedMimeType } from "../services/upload-validation/mime";
-import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
+import {
+  mediaPageQuerySchema,
+  mediaViewSchema,
+  UploadMediaInputSchema,
+  UpdateMediaInputSchema,
+  type MediaPageQuery,
+} from "../types/media";
 
 import { executeBulkDelete } from "./media-bulk";
 import { handleServeMediaBytes } from "./media-raw";

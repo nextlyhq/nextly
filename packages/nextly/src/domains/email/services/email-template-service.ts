@@ -44,7 +44,6 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
-import { mediaUsagePresent } from "../../media/usage/media-usage-store";
 import { MetaService } from "../../meta";
 import {
   BRAND_BINDING,
@@ -1308,6 +1307,10 @@ export class EmailTemplateService extends BaseService {
   private async recordsMediaUsage(): Promise<boolean> {
     const probe = this.adapter as { tableExists?: unknown };
     if (typeof probe.tableExists !== "function") return false;
+    // Loaded when a write asks, not with the service.
+    const { mediaUsagePresent } = await import(
+      "../../media/usage/media-usage-store"
+    );
     return mediaUsagePresent(this.adapter, this.logger);
   }
 

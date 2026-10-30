@@ -81,14 +81,12 @@ import {
   isImageMimeType,
   UpdateMediaInputSchema,
   validateFileSize,
+  type MediaPageQuery,
   type MediaParams,
+  type MediaView,
   type Media as LegacyMedia,
 } from "../../../types/media";
-import type {
-  MediaLibraryCounts,
-  MediaPageQuery,
-  MediaView,
-} from "../media-library-query";
+import type { MediaLibraryCounts } from "../media-library-query";
 import { withMediaRevalidationBatch } from "../revalidate-media";
 import type {
   MediaFile,
