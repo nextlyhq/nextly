@@ -60,7 +60,7 @@
 import type { WidgetDefinition } from "../definition";
 
 import { breakdownWidget } from "./breakdown";
-import { contentWidget } from "./content";
+import { contentTableWidget } from "./content-table";
 import { continueWidget } from "./continue";
 import { countWidget } from "./count";
 import { getStartedWidget } from "./get-started";
@@ -91,7 +91,7 @@ export const CORE_DECLARATIONS = [
 /** Core's widgets still written as definitions: every one not declared. */
 const CORE_WIDGET_LITERALS = [
   getStartedWidget,
-  contentWidget,
+  contentTableWidget,
   quickCreateWidget,
   teamWidget,
   continueWidget,
