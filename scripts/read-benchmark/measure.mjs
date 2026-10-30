@@ -23,7 +23,7 @@ import { parseArgs } from "node:util";
 
 import { isCliEntry } from "../cli-entry.mjs";
 
-import { TRANSLATABLE_COLUMNS, articleData, authorData, localesOf, siteFor, storesPerLanguage } from "./fixture.mjs";
+import { articleData, authorData, localesOf, siteFor, storesPerLanguage, translatableColumnsOf } from "./fixture.mjs";
 import { pick, seededRandom, summarize } from "./stats.mjs";
 
 const AUTHORS = 20;
@@ -67,10 +67,15 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Whether an article came back with its translatable fields, its populated author and its card. */
+/**
+ * Whether an article came back with its translatable fields, its populated
+ * author and its card. The author's own name and bio, as well: under `e4` they
+ * are translated too, and a read that lost them would time less than it should.
+ */
 export function isCompleteArticle(item) {
   const { headline, excerpt, body, author, card } = item ?? {};
-  return [typeof headline === "string", typeof excerpt === "string", Boolean(body), isRecord(author), Boolean(card?.heading)].every(Boolean);
+  const authorComplete = isRecord(author) && typeof author.name === "string" && typeof author.bio === "string";
+  return [typeof headline === "string", typeof excerpt === "string", Boolean(body), authorComplete, Boolean(card?.heading)].every(Boolean);
 }
 
 /**
@@ -171,9 +176,9 @@ async function localesStorage(adapter, table) {
  * says it does: a `per-language` run storing its values where `main` does would
  * compare a site with itself.
  */
-export async function storageOf(adapter) {
+export async function storageOf(adapter, mode) {
   const storage = {};
-  for (const table of Object.keys(TRANSLATABLE_COLUMNS)) {
+  for (const table of Object.keys(translatableColumnsOf(mode))) {
     storage[table] = { columns: columnsOf(await adapter.select(table)), locales: await localesStorage(adapter, localesOf(table)) };
   }
   return storage;
@@ -211,13 +216,18 @@ function misplaced(translatable, onMain, onLocales) {
 }
 
 /**
- * Refuses a site whose storage is not the mode's. `e4` is held to what
- * `per-language` stores, so a build that does not store it so is never timed.
+ * Refuses a site whose storage is not the mode's, table by table for every
+ * table the mode translates. `e4` is held to what `per-language` stores, the
+ * authors' table as well, so a build that does not store it so is never timed.
+ * Each translation table holds one row per row of its table: one per article,
+ * for the articles and their cards, and one per author.
  */
 export function checkStorage(mode, docs, storage) {
   const problemOf = storesPerLanguage(mode) ? perLanguageProblem : mainProblem;
-  for (const [table, stored] of Object.entries(storage)) {
-    const problem = problemOf(TRANSLATABLE_COLUMNS[table], docs, stored);
+  for (const [table, translatable] of Object.entries(translatableColumnsOf(mode))) {
+    const stored = storage[table];
+    if (stored === undefined) throw new Error(`${mode} mode: ${table} was not read`);
+    const problem = problemOf(translatable, table === "dc_authors" ? AUTHORS : docs, stored);
     if (problem) throw new Error(`${mode} mode: ${table} ${problem}`);
   }
 }
@@ -332,7 +342,7 @@ async function main(argv) {
   const { handle, cleanup } = await boot(options);
   try {
     const articleIds = await seedSite(handle.nextly, options);
-    const storage = await storageOf(handle.adapter);
+    const storage = await storageOf(handle.adapter, options.mode);
     checkStorage(options.mode, options.docs, storage);
     const { createDynamicHandlers } = await import(new URL("runtime.mjs", NEXTLY_DIST).href);
     const reads = readsFor({ nextly: handle.nextly, handlers: createDynamicHandlers(), keys: await readOnlyKeys(handle), articleIds, options });

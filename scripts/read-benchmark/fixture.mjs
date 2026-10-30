@@ -91,6 +91,16 @@ export function siteFor(mode, config) {
  */
 export const TRANSLATABLE_COLUMNS = { dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] };
 
+/**
+ * The translatable columns a mode's site stores, by table. `e4` stores every
+ * translatable field per language, the site's whole content, so the authors'
+ * name and bio move too; `per-language` marks only the articles and the card
+ * translatable, and `main` moves nothing.
+ */
+export function translatableColumnsOf(mode) {
+  return mode === "e4" ? { ...TRANSLATABLE_COLUMNS, dc_authors: ["name", "bio"] } : TRANSLATABLE_COLUMNS;
+}
+
 /** The table a `per-language` site keeps `table`'s translatable values in. */
 export function localesOf(table) {
   return `${table}_locales`;

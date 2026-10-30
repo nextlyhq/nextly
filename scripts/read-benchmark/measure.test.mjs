@@ -21,7 +21,7 @@ import {
   teardown,
 } from "./measure.mjs";
 
-const article = { headline: "A headline", excerpt: "An excerpt.", body: { root: {} }, author: { id: "a1" }, card: { heading: "Card" } };
+const article = { headline: "A headline", excerpt: "An excerpt.", body: { root: {} }, author: { id: "a1", name: "Ada", bio: "Writes." }, card: { heading: "Card" } };
 
 describe("the checks a measurement makes before it times anything", () => {
   it("reads a create's id from the item or the record", () => {
@@ -39,6 +39,9 @@ describe("the checks a measurement makes before it times anything", () => {
     // A relationship that failed to populate comes back null, which is also an "object".
     expect(isCompleteArticle({ ...article, author: null })).toBe(false);
     expect(isCompleteArticle({ ...article, author: [] })).toBe(false);
+    // The author's own translatable fields, which e4 moves too.
+    expect(isCompleteArticle({ ...article, author: { id: "a1", bio: "Writes." } })).toBe(false);
+    expect(isCompleteArticle({ ...article, author: { id: "a1", name: "Ada" } })).toBe(false);
     expect(isCompleteArticle({ ...article, card: {} })).toBe(false);
   });
 
@@ -78,9 +81,21 @@ describe("the checks a measurement makes before it times anything", () => {
     const moved = articles(asPerLanguage, { locales: { rows: 10, columns: ["_parent", "_locale", "headline", "excerpt", "body", "views"] } });
     expect(() => checkStorage("per-language", 10, moved)).toThrow(/views/);
     // e4 is held to the same storage: a build without its storage option stores it as main does.
-    expect(() => checkStorage("e4", 10, asPerLanguage)).not.toThrow();
-    expect(() => checkStorage("e4", 10, asMain)).toThrow(/^e4 mode: dc_articles has no translation table$/);
-    expect(() => checkStorage("e4", 10, fewer)).toThrow(/9 translation rows, expected 10/);
+    // e4 also moves the authors' name and bio, one translation row per author.
+    const authorsPerLanguage = { columns: ["id"], locales: { rows: 20, columns: ["_parent", "_locale", "name", "bio"] } };
+    const asE4 = { ...asPerLanguage, dc_authors: authorsPerLanguage };
+    expect(() => checkStorage("e4", 10, asE4)).not.toThrow();
+    expect(() => checkStorage("e4", 10, { ...asMain, dc_authors: authorsPerLanguage })).toThrow(/^e4 mode: dc_articles has no translation table$/);
+    expect(() => checkStorage("e4", 10, { ...fewer, dc_authors: authorsPerLanguage })).toThrow(/9 translation rows, expected 10/);
+    expect(() => checkStorage("e4", 10, asPerLanguage)).toThrow(/^e4 mode: dc_authors was not read$/);
+    expect(() => checkStorage("e4", 10, { ...asPerLanguage, dc_authors: { columns: ["id", "name", "bio"], locales: null } })).toThrow(
+      /^e4 mode: dc_authors has no translation table$/
+    );
+    expect(() => checkStorage("e4", 10, { ...asPerLanguage, dc_authors: { ...authorsPerLanguage, locales: { ...authorsPerLanguage.locales, rows: 19 } } })).toThrow(
+      /dc_authors has 19 translation rows, expected 20/
+    );
+    // per-language translates only the articles and the card: its authors are not asked about.
+    expect(() => checkStorage("per-language", 10, asPerLanguage)).not.toThrow();
   });
 
   it("reads each table's columns and its translation table's, and lets any failure through", async () => {
@@ -93,16 +108,20 @@ describe("the checks a measurement makes before it times anything", () => {
       tableExists: async table => table in tables,
       select: async table => tables[table],
     };
-    expect(await storageOf(adapter)).toEqual({
+    expect(await storageOf(adapter, "per-language")).toEqual({
       dc_articles: { columns: ["id", "views"], locales: { rows: 2, columns: ["_parent", "headline"] } },
       comp_card: { columns: ["id"], locales: null },
     });
+    // e4 reads the authors' table too.
+    const withAuthors = { ...tables, dc_authors: [{ id: "a1" }] };
+    const e4Adapter = { tableExists: async table => table in withAuthors, select: async table => withAuthors[table] };
+    expect(Object.keys(await storageOf(e4Adapter, "e4"))).toEqual(["dc_articles", "comp_card", "dc_authors"]);
     // A failed read of a table that exists is not an absent table: it fails the attempt.
     const dropped = { tableExists: async () => true, select: async () => Promise.reject(new Error("connection lost")) };
-    await expect(storageOf(dropped)).rejects.toThrow(/connection lost/);
+    await expect(storageOf(dropped, "per-language")).rejects.toThrow(/connection lost/);
     // Nor is a failed question whether it exists, with the main tables still readable.
     const unasked = { ...adapter, tableExists: async () => Promise.reject(new Error("connection lost")) };
-    await expect(storageOf(unasked)).rejects.toThrow(/connection lost/);
+    await expect(storageOf(unasked, "per-language")).rejects.toThrow(/connection lost/);
   });
 
   it("removes what a boot made when the boot fails, and keeps it when it succeeds", async () => {
