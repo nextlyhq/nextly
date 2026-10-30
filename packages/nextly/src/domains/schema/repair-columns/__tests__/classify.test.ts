@@ -182,7 +182,16 @@ describe("judgeColumn", () => {
       });
       const blocked = await judgeColumn(
         toList,
-        rows('{"a","b"}', '{"a",', "[oops", '"unterminated')
+        rows(
+          '{"a","b"}',
+          '{"a",',
+          "[oops",
+          '"unterminated',
+          // A quote inside an unquoted element, which PostgreSQL refuses, and a nested literal,
+          // which it reads into a list of lists no relation holds.
+          '{a"b}',
+          "{{a},{b}}"
+        )
       );
       expect(blocked.class).toBe("blocked");
       expect(kinds(blocked)).toEqual(["unreadable-reference-list"]);
@@ -190,6 +199,8 @@ describe("judgeColumn", () => {
         "2",
         "3",
         "4",
+        "5",
+        "6",
       ]);
     });
 
