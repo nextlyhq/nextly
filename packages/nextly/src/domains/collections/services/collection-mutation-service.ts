@@ -39,6 +39,7 @@ import { holdsGrant } from "../../../auth/access/gate-adapters";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
 import {
   askEachLanguage,
+  currentRuleLanguage,
   withRuleLanguage,
   writeLanguagesFor,
 } from "../../../auth/access/rule-language";
@@ -6620,8 +6621,13 @@ export class CollectionMutationService extends BaseService {
       // attests no lifecycle gate. A scoped API key is judged on its own
       // `<action>-<slug>` grant. The languages going live read this
       // collection's own translations, whose readiness is resolved above.
+      // Each filter the lifecycle's rule answered, in the language it was
+      // asked in: a publish's in each language going live, an unpublish's
+      // once, matched in the default language. The entry is matched against
+      // each now, again under the row lock, and once it is written.
+      const lifecycleChecks: FilteredWriteCheck[] = [];
       const lifecycleDenied = () =>
-        this.accessService.checkCollectionAccess({
+        this.refusalOfLifecycleInLanguage(lifecycleChecks, schema, {
           collectionName: params.collectionName,
           operation: direction.accessAction,
           entryId: params.entryId,
@@ -6818,9 +6824,19 @@ export class CollectionMutationService extends BaseService {
             }
           }
 
-          // No under-lock re-check: the transition gate judges the caller and
-          // the operation, not the row, so re-reading the row-locked document
-          // could not change its answer.
+          // Each filter the lifecycle's rule answered, matched again on the row
+          // as it is locked, so a change since it was judged above moves
+          // nothing.
+          const outsideUnderLock = await this.refusalOutsideWriteFilters(
+            tx,
+            schema,
+            params.entryId,
+            lifecycleChecks
+          );
+          if (outsideUnderLock) {
+            publishDocDenied = outsideUnderLock;
+            throw new StatusTransitionDeniedError();
+          }
           // Each locale's committed per-locale status BEFORE the bulk companion
           // flip below, so a real draft->published transition can be told from a
           // locale that was already live. Read under the lock and inside the
@@ -7244,6 +7260,19 @@ export class CollectionMutationService extends BaseService {
               from: priorLocaleStatus,
               data: localeData,
             });
+          }
+
+          // The move may not leave the entry outside a filter that judged it,
+          // matched once every language it moved is written.
+          const movedOut = await this.refusalMovedOutOfWriteFilters(
+            tx,
+            schema,
+            params.entryId,
+            lifecycleChecks
+          );
+          if (movedOut) {
+            publishDocDenied = movedOut;
+            throw new StatusTransitionDeniedError();
           }
 
           // One history event for the whole publish, naming the languages it
@@ -8975,7 +9004,7 @@ export class CollectionMutationService extends BaseService {
           entryId: params.entryId,
           languages: askedBeforeHooks,
           ask: () =>
-            this.accessService.checkCollectionAccess({
+            this.refusalOfLifecycleInLanguage(writeFilters, schema, {
               collectionName: params.collectionName,
               operation: "publish",
               entryId: params.entryId,
@@ -9349,21 +9378,6 @@ export class CollectionMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const transitionDenied = () =>
-          this.accessService.checkCollectionAccess({
-            collectionName: params.collectionName,
-            operation: transitionOp,
-            entryId: params.entryId,
-            user: accessUser,
-            overrideAccess: params.overrideAccess,
-            // Never route-authorized: the route authorizes the write as `update`,
-            // never as `publish`/`unpublish`, so the RBAC check must run.
-            routeAuthorized: false,
-            // A scoped API key is judged on its OWN publish/unpublish grant here,
-            // not the key owner's — the route only checked `update` against the
-            // key's scope.
-            authenticatedScope: params.authenticatedScope,
-          });
         if (sweepAllLocales && transitionOp === "publish") {
           // A write to every language that publishes asks the publish rule
           // once for each language it puts live, each time told that language
@@ -9390,7 +9404,20 @@ export class CollectionMutationService extends BaseService {
                     collectionName: params.collectionName,
                     entryId: params.entryId,
                     languages: askedLanguages,
-                    ask: transitionDenied,
+                    // Each language's rule may answer a filter, matched in it.
+                    // Never route-authorized: a route authorizes the write as
+                    // an update, never as a publish. A scoped key is judged on
+                    // its own grant.
+                    ask: () =>
+                      this.refusalOfLifecycleInLanguage(writeFilters, schema, {
+                        collectionName: params.collectionName,
+                        operation: transitionOp,
+                        entryId: params.entryId,
+                        user: accessUser,
+                        overrideAccess: params.overrideAccess,
+                        routeAuthorized: false,
+                        authenticatedScope: params.authenticatedScope,
+                      }),
                   })) ?? null)
                 : null,
             askedLanguages,
@@ -11940,6 +11967,31 @@ export class CollectionMutationService extends BaseService {
         ? await query.for("update")
         : await query;
     return writeMatchOf(row);
+  }
+
+  /**
+   * A publish or unpublish asked in the rule language now, as asking it in
+   * each language a write to every language puts live sets it: the gate's
+   * refusal or, where its rule answers a filter, that of an entry the filter
+   * does not match in that language. An entry it matches has the filter, in
+   * that language, added to `checks`, so the write matches it again under
+   * the row lock and once it is written.
+   */
+  private async refusalOfLifecycleInLanguage(
+    checks: FilteredWriteCheck[],
+    schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper },
+    params: FilteredWriteCheck["params"]
+  ): Promise<CollectionServiceResult | null> {
+    const access = await this.accessService.checkCollectionWrite(params);
+    return (
+      access.denied ??
+      (await this.addWriteFilter(checks, {
+        schema,
+        access,
+        params,
+        locale: currentRuleLanguage().locale,
+      }))
+    );
   }
 
   /**
