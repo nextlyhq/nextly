@@ -698,12 +698,12 @@ type RulesLet = "all" | "matching" | "none";
 
 /**
  * What the target's rules let through. Its own rule, where the target
- * declares one, must answer exactly `true`, or for a collection's read a
- * well-formed filter, which lets through the entries it matches. A filter
- * from any other rule refuses: a write rule's is not applied yet, and a
- * create rule or a Single's rule may not answer one. A publish or an
- * unpublish is judged by its own rule, as any action is, not the update rule
- * as well.
+ * declares one, must answer exactly `true`, or for a collection's read or
+ * delete a well-formed filter, which lets through the entries it matches. A
+ * filter from any other rule refuses: that write's filter is not applied
+ * yet, and a create rule or a Single's rule may not answer one. A publish or
+ * an unpublish is judged by its own rule, as any action is, not the update
+ * rule as well.
  */
 function rulesLet(
   rule: Rule,
@@ -717,7 +717,8 @@ function rulesLet(
     const applied = action === "read" || FILTERED_WRITES.has(action);
     return applied && collection ? "matching" : "none";
   }
-  return says === null || says === true ? "all" : "none";
+  if (says !== null && says !== true) return "none";
+  return "all";
 }
 
 /**
@@ -737,7 +738,12 @@ function answerFor(row: Row, lets: RulesLet): Verdict {
  * entry inside the filter and its twin outside it, so its answer can show
  * that the one was changed and the other refused and left as it was.
  */
-export const FILTERED_WRITES: ReadonlySet<Action> = new Set<Action>(["delete"]);
+export const FILTERED_WRITES: ReadonlySet<Action> = new Set<Action>([
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+]);
 
 /** Whether a rule answers its collection's writes with a filter. */
 export function isFilterRule(rule: Rule): boolean {
@@ -815,19 +821,33 @@ export function oneAnswer(row: Row): Verdict {
 
 /**
  * The doors that answer yes or no about a collection, not about one entry.
- * Where the one answer lets the caller act on the entries a filter matches,
- * theirs is yes: the caller may act on the collection, on those entries.
+ * Where the one answer lets the caller read the entries a filter matches,
+ * theirs is yes: the caller may read the collection, those entries. A write
+ * under a filter is no there: the answer names no entry and applies no
+ * filter, so a yes would let the caller act past it.
  */
-const COLLECTION_DOORS: ReadonlySet<Door> = new Set<Door>([
-  "can",
-  "capabilities",
-  "widget",
-]);
+const YES_OR_NO_DOORS: ReadonlySet<Door> = new Set<Door>(["can"]);
 
-/** The one answer as `door` gives it (see {@link COLLECTION_DOORS}). */
+/**
+ * The doors that show a hint of what the caller may try, whose request
+ * applies the rule's filter: a capability cell, and a dashboard widget offered
+ * by the permission it requires. Where the one answer lets the caller act on
+ * the entries a filter matches, for any action, theirs is yes.
+ */
+const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities", "widget"]);
+
+/**
+ * The one answer as `door` gives it (see {@link YES_OR_NO_DOORS} and
+ * {@link CELL_DOORS}).
+ */
 export function oneAnswerAt(row: Row, door: Door): Verdict {
   const answer = oneAnswer(row);
-  return answer === "matching" && COLLECTION_DOORS.has(door) ? "allow" : answer;
+  if (answer !== "matching") return answer;
+  if (CELL_DOORS.has(door)) return "allow";
+  if (YES_OR_NO_DOORS.has(door)) {
+    return judgedAs(row.action) === "read" ? "allow" : "refuse";
+  }
+  return answer;
 }
 
 // ---------------------------------------------------------------------------

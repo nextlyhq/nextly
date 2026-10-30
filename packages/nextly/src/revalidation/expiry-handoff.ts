@@ -27,6 +27,10 @@ export interface ExpiryHandoff {
  */
 const MAX_PENDING_TAGS = 10_000;
 
+// Whether a drop at the cap was logged already: one line says the cap was
+// reached, and a run of writes past it would repeat it on every one.
+let dropLogged = false;
+
 /**
  * The default: keeps handed-off tags, deduplicated, for an out-of-request path
  * to drain with {@link takePendingExpiries}.
@@ -67,7 +71,8 @@ export class PendingExpiryHandoff implements ExpiryHandoff {
       }
       this.pending.add(tag);
     }
-    if (dropped > 0) {
+    if (dropped > 0 && !dropLogged) {
+      dropLogged = true;
       consoleLogger.error(
         `[nextly] ${MAX_PENDING_TAGS} cache expiries are already waiting; dropped ${dropped} more`
       );

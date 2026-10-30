@@ -153,8 +153,8 @@
       "compiled": 2
     },
     "docs/permissions/index.mdx": {
-      "samples": 4,
-      "compiled": 2
+      "samples": 5,
+      "compiled": 3
     },
     "docs/plugins/admin-ui.mdx": {
       "samples": 19,
@@ -233,7 +233,7 @@
       "compiled": 5
     },
     "docs/releases/index.mdx": {
-      "samples": 5,
+      "samples": 7,
       "compiled": 4
     },
     "docs/versions/index.mdx": {
@@ -245,8 +245,8 @@
       "compiled": 1
     },
     "docs/widgets/index.mdx": {
-      "samples": 3,
-      "compiled": 2
+      "samples": 6,
+      "compiled": 5
     },
     "packages/adapter-mysql/README.md": {
       "samples": 1,
@@ -541,9 +541,9 @@
       "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/releases/index.mdx": {
-      "reader-file #1 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #2 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #3 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #3 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #4 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "packages/admin/README.md": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
@@ -558,6 +558,10 @@
       "reader-name #18 error TS2304: Cannot find name 'Posts'.": 1,
       "reader-name #18 error TS2304: Cannot find name 'Users'.": 1,
       "reader-name #18 error TS2304: Cannot find name 'Media'.": 1
+    },
+    "docs/widgets/index.mdx": {
+      "reader-file #4 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1
     }
   }
 }
