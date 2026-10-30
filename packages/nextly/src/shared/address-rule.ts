@@ -319,16 +319,10 @@ function sharesNamespace(kind: AddressKind, other: AddressKind): boolean {
 export function findSameSnakeCaseAddress(
   kind: AddressKind,
   address: string,
-  used: Iterable<UsedAddress>,
-  /**
-   * Whether the refusal may name the kind. A caller that knows only the
-   * namespace (a collection's or Single's) says so, and the refusal names the
-   * address alone.
-   */
-  options: { kindKnown?: boolean } = {}
+  used: Iterable<UsedAddress>
 ): AddressRefusal | null {
   const form = addressSnakeForm(address);
-  const label = options.kindKnown === false ? "The" : `${LABELS[kind]}`;
+  const label = LABELS[kind];
   for (const other of used) {
     if (
       other.address !== address &&

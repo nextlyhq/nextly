@@ -16,11 +16,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const createFieldGroup = vi.fn();
 const registerCollection = vi.fn();
 
+/** The addresses the registries hold, by registry table, for the same-form check. */
+let usedAddresses: Record<string, Array<{ id: string; slug: string }>> = {};
+const adapter = {
+  selectOne: vi.fn(async () => null),
+  select: vi.fn(async (table: string) => usedAddresses[table] ?? []),
+};
+
 vi.mock("../../di", () => ({
   getService: vi.fn((name: string) =>
     name === "fieldGroupMetadataService"
       ? { createFieldGroup }
-      : { registerCollection }
+      : name === "adapter"
+        ? adapter
+        : { registerCollection }
   ),
   isServicesRegistered: vi.fn(() => true),
 }));
@@ -142,6 +151,7 @@ async function fieldGroupsRoad(address: string): Promise<Verdict> {
 }
 
 beforeEach(() => {
+  usedAddresses = {};
   createFieldGroup.mockReset();
   createFieldGroup.mockResolvedValue({
     record: { id: "fg-1", slug: "x", label: "X", fields: [] },
@@ -172,6 +182,17 @@ describe.each(ADDRESS_CASES)("the address '%s'", address => {
 
   it("gets the rule's verdict from the field-group endpoint", async () => {
     expect(await fieldGroupsRoad(address)).toBe(rule("fieldGroup", address));
+  });
+});
+
+describe("the collection schema endpoint", () => {
+  it("refuses an address with the same snake_case form as a Single's, before registering", async () => {
+    usedAddresses = { dynamic_singles: [{ id: "s1", slug: "team-updates" }] };
+
+    expect(await collectionsSchemaRoad("team_updates")).toMatch(
+      /^Collection address 'team_updates'.*single 'team-updates'/
+    );
+    expect(registerCollection).not.toHaveBeenCalled();
   });
 });
 

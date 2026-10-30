@@ -1808,15 +1808,27 @@ async function applyReloadHolding(
   // new address like one added before a start. A refused reload keeps the previous configuration.
   // `AdapterLike` is a narrow view of the registered adapter, which is a `DrizzleAdapter` at runtime.
   const liveAdapter = adapter as unknown as DrizzleAdapter;
-  const refusedAddresses = await refusedConfiguredAddresses(
-    {
-      collections: (newConfig.collections ?? []).filter(hasSlug),
-      singles: (newConfig.singles ?? []).filter(hasSlug),
-      fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
-    },
-    await loadBuilderEntities(liveAdapter),
-    table => liveAdapter.tableExists(table)
-  );
+  let refusedAddresses: Awaited<ReturnType<typeof refusedConfiguredAddresses>>;
+  try {
+    refusedAddresses = await refusedConfiguredAddresses(
+      {
+        collections: (newConfig.collections ?? []).filter(hasSlug),
+        singles: (newConfig.singles ?? []).filter(hasSlug),
+        fieldGroups: (newConfig.fieldGroups ?? []).filter(hasSlug),
+      },
+      await loadBuilderEntities(liveAdapter),
+      table => liveAdapter.tableExists(table)
+    );
+  } catch (err) {
+    // A check that could not read the database cannot pass the reload: it gives up the way
+    // every refused reload does, putting back what it installed optimistically.
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not check the configuration's addresses: ${msg}. Keeping the previously-loaded config.`
+    );
+    undoOptimisticReloadWork();
+    return;
+  }
   if (refusedAddresses.length > 0) {
     for (const { refusal } of refusedAddresses) {
       logger?.error(

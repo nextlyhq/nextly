@@ -384,6 +384,44 @@ for (const dialect of getConfiguredTestDialects()) {
       });
     });
 
+    describe("a many-to-many from a hyphenated Builder collection", () => {
+      it("writes and reads its links through the junction its table names", async () => {
+        const t = await boot();
+        const build = (name: string, fields: unknown[]) =>
+          inDevelopment(() =>
+            dispatchCollections(
+              {} as ServiceContainer,
+              "createCollection",
+              {},
+              { name, label: name, fields }
+            )
+          );
+        await build("tags", BODY);
+        await build("my-posts", [
+          {
+            name: "tags",
+            type: "relationship",
+            options: { target: "tags", relationType: "manyToMany" },
+          },
+        ]);
+        const tag = await t.nextly.create({
+          collection: "tags",
+          data: { title: "Tag", body: "b" },
+        });
+        const tagId = (tag.item as { id: string }).id;
+        const post = await t.nextly.create({
+          collection: "my-posts",
+          data: { title: "Post", tags: [tagId] },
+        });
+        const read = (await t.nextly.findByID({
+          collection: "my-posts",
+          id: (post.item as { id: string }).id,
+          depth: 0,
+        })) as { tags?: unknown[] } | null;
+        expect(read?.tags).toEqual([tagId]);
+      });
+    });
+
     describe("a Single", () => {
       const create = (slug: string) =>
         dispatchSingles(

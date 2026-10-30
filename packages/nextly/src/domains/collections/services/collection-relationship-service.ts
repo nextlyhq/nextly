@@ -133,6 +133,25 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
 export const MAX_RELATIONSHIP_DEPTH = 5;
 
 /**
+ * The two link columns of a many-to-many junction. Every junction read and
+ * write asks this one place, so the columns the runtime queries are the
+ * columns the DDL made. The DDL names the source column from the source's
+ * TABLE (`dc_my_posts` gives `my_posts_id`), so a hyphen in the source slug is
+ * written as an underscore here too; a hyphen-free slug names the same column
+ * it always did. The DDL takes the target column from the target slug as
+ * written, so that side stays as written.
+ */
+export function junctionLinkColumns(
+  sourceCollectionName: string,
+  targetCollectionName: string
+): { sourceColumn: string; targetColumn: string } {
+  return {
+    sourceColumn: `${sourceCollectionName.replace(/-/g, "_")}_id`,
+    targetColumn: `${targetCollectionName}_id`,
+  };
+}
+
+/**
  * The depth an expansion runs to for the depth a read asked for: absent means
  * the default, and the result is held between 0 and the maximum. At 0 a read
  * populates nothing and gives every relationship as stored.
@@ -4304,8 +4323,12 @@ export class CollectionRelationshipService extends BaseService {
       targetCollectionName,
       field
     );
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-    const targetIdCol = sql.identifier(targetCollectionName + "_id");
+    const { sourceColumn, targetColumn } = junctionLinkColumns(
+      sourceCollectionName,
+      targetCollectionName
+    );
+    const sourceIdCol = sql.identifier(sourceColumn);
+    const targetIdCol = sql.identifier(targetColumn);
     const junctionQuery = sql`
       SELECT ${sourceIdCol} as source_id, ${targetIdCol} as target_id
       FROM ${sql.identifier(junctionTableName)}
@@ -4396,8 +4419,12 @@ export class CollectionRelationshipService extends BaseService {
 
     try {
       // Query junction table to get related IDs using sql tagged template
-      const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-      const targetIdCol = sql.identifier(targetCollectionName + "_id");
+      const { sourceColumn, targetColumn } = junctionLinkColumns(
+        sourceCollectionName,
+        targetCollectionName
+      );
+      const sourceIdCol = sql.identifier(sourceColumn);
+      const targetIdCol = sql.identifier(targetColumn);
 
       const junctionQuery = sql`
         SELECT ${targetIdCol} as target_id
@@ -4533,8 +4560,12 @@ export class CollectionRelationshipService extends BaseService {
       throw error;
     }
 
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-    const targetIdCol = sql.identifier(targetCollectionName + "_id");
+    const { sourceColumn, targetColumn } = junctionLinkColumns(
+      sourceCollectionName,
+      targetCollectionName
+    );
+    const sourceIdCol = sql.identifier(sourceColumn);
+    const targetIdCol = sql.identifier(targetColumn);
 
     // Insert each relationship. A genuine failure (for example a foreign-key
     // violation from a bad target id) is allowed to propagate: junction writes
@@ -4608,7 +4639,10 @@ export class CollectionRelationshipService extends BaseService {
       field
     );
 
-    const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
+    const sourceIdCol = sql.identifier(
+      junctionLinkColumns(sourceCollectionName, targetCollectionName)
+        .sourceColumn
+    );
     const query = sql`
       DELETE FROM ${sql.identifier(junctionTableName)}
       WHERE ${sourceIdCol} = ${sourceEntryId}
@@ -4634,8 +4668,12 @@ export class CollectionRelationshipService extends BaseService {
       return field.options.junctionTable;
     }
 
-    // Auto-generate junction table name (same logic as in dynamic-collections.ts)
-    const sourceTableName = `dc_${sourceCollectionName}`;
+    // Auto-generate the junction name as the DDL does. The DDL names it from
+    // the source's TABLE, where a hyphen in the slug is an underscore, so the
+    // source side resolves through `getTableName`; a hyphen-free slug gives
+    // the same `dc_<slug>` as before. The DDL spells the target as
+    // `dc_<target slug>` as written, so the target side stays as written.
+    const sourceTableName = getTableName(sourceCollectionName);
     const targetTableName = `dc_${targetCollectionName}`;
     const tables = [sourceTableName, targetTableName].sort();
     return `${tables[0]}_${tables[1]}_${field.name}`;

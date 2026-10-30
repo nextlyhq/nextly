@@ -88,25 +88,6 @@ describe("assertGlobalResourceSlugAvailable and the snake_case form", () => {
     });
   });
 
-  it("names the address alone when the caller does not say its kind", async () => {
-    await expect(
-      assertGlobalResourceSlugAvailable(
-        adapterUsing({ dynamic_singles: [{ id: "s1", slug: "team-updates" }] }),
-        "team_updates"
-      )
-    ).rejects.toMatchObject({
-      publicData: {
-        errors: [
-          {
-            message: expect.stringMatching(
-              /^The address 'team_updates'.*single 'team-updates'/
-            ),
-          },
-        ],
-      },
-    });
-  });
-
   it("lets a resource be renamed to a slug of its own snake_case form", async () => {
     await expect(
       assertGlobalResourceSlugAvailable(
@@ -200,5 +181,31 @@ describe("assertGlobalResourceSlugAvailable", () => {
     await expect(
       assertGlobalResourceSlugAvailable(adapterUsing({}), "cascade")
     ).resolves.toBeUndefined();
+  });
+
+  it("leaves a plain registry create's same-form neighbours to the road that judged it", async () => {
+    // A start keeps a configured entity whose table exists even beside a same-form address, and
+    // its sync then registers it with no kind named. Only a road that names the address's kind
+    // (or a rename) asks for the same-form check.
+    await expect(
+      assertGlobalResourceSlugAvailable(
+        adapterUsing({ dynamic_collections: [{ id: "c1", slug: "my_page" }] }),
+        "my-page"
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it("reads the same-form neighbours without regard to case, on every database", async () => {
+    const adapter = adapterUsing({});
+    await assertGlobalResourceSlugAvailable(adapter, "team-updates", {
+      addressKind: "collection",
+    }).catch(() => undefined);
+    const ops = (
+      adapter as unknown as { select: { mock: { calls: unknown[][] } } }
+    ).select.mock.calls.map(
+      ([, options]) =>
+        (options as { where: { and: Array<{ op: string }> } }).where.and[0]?.op
+    );
+    expect(ops).toEqual(["ILIKE", "ILIKE"]);
   });
 });

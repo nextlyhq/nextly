@@ -30,6 +30,7 @@ import { getFilterRegistry, FilterSeams } from "../filters";
 import { getCachedNextly } from "../init";
 import { resolveBuilderRevalidate } from "../revalidation/builder-revalidate";
 import type { CollectionRegistryService } from "../services/collections/collection-registry-service";
+import { assertGlobalResourceSlugAvailable } from "../services/lib/resource-slug-guard";
 import { addressSchema } from "../shared/address-rule";
 import { requireBuilderEnabled } from "../shared/builder-access";
 import { simplePluralize } from "../shared/lib/pluralization";
@@ -265,6 +266,14 @@ export const POST = withErrorHandler(async (request: Request) => {
       validated.labels.plural?.trim() ||
       simplePluralize(validated.labels.singular),
   };
+
+  // A new address beside another collection's or Single's of the same snake_case form is refused
+  // here, before the row is written: the registry's own guard leaves that check to the road.
+  await assertGlobalResourceSlugAvailable(
+    getService("adapter"),
+    validated.slug,
+    { addressKind: "collection" }
+  );
 
   const collection = await registry.registerCollection({
     slug: validated.slug,

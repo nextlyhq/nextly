@@ -399,6 +399,37 @@ describe("reloadNextlyConfig", () => {
     );
   });
 
+  it("keeps the previous config when the address check cannot read the database", async () => {
+    // `cascade` is refused for a new address, so the check asks whether its table exists, and that
+    // read fails after something was published mid-reload. The reload must give up the way every
+    // other refused reload does: the undo puts the previous options back.
+    publishCollectionDbOptions([
+      { slug: "posts", db: { allowIdOnCreate: true } },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: { collections: [{ slug: "cascade", fields: [] }] },
+    });
+    const resolver = buildResolver();
+    const adapter = resolver("adapter") as {
+      tableExists: (name: string) => Promise<boolean>;
+    };
+    const lockTableExists = adapter.tableExists.bind(adapter);
+    // Only the address check's own probe fails; the lock's reads answer as before.
+    adapter.tableExists = async (name: string) => {
+      if (name !== "dc_cascade") return lockTableExists(name);
+      publishCollectionDbOptions([{ slug: "posts", db: { idType: "uuidv7" } }]);
+      throw new Error("connection lost");
+    };
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(collectionDbOptions("posts")).toEqual({ allowIdOnCreate: true });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("connection lost")
+    );
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+  });
+
   it("re-reads the config from disk on every call (clears the loader cache first)", async () => {
     loadConfigSpy.mockResolvedValue({ config: { collections: [] } });
     const { reloadNextlyConfig } = await import("../reload-config");

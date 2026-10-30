@@ -64,7 +64,7 @@ async function findSlugOwner(
 /**
  * The collections' and Singles' addresses that may share `slug`'s snake_case
  * form, other than the resource being renamed. The database narrows the rows
- * with a LIKE pattern every such address matches (the form's words, anything
+ * with a case-insensitive LIKE pattern every such address matches (the form's words, anything
  * between and after them) and the rule decides among them.
  */
 async function findSnakeCaseNeighbours(
@@ -80,7 +80,7 @@ async function findSnakeCaseNeighbours(
   const found = await Promise.all(
     kinds.map(async ([table, resourceType]) => {
       const rows = await adapter.select<{ id: string; slug: string }>(table, {
-        where: { and: [{ column: "slug", op: "LIKE", value: pattern }] },
+        where: { and: [{ column: "slug", op: "ILIKE", value: pattern }] },
         columns: ["id", "slug"],
       });
       return rows
@@ -131,25 +131,25 @@ export async function assertGlobalResourceSlugAvailable(
   }
 
   if (!owner) {
-    // A new address, for this resource: refused when its snake_case form is
-    // another collection's or Single's, since two addresses that differ only
-    // by `-` and `_` read as one. Asked only here, so an address a resource
-    // already holds keeps working whatever its neighbours are.
-    // The kind names the refusal; a caller that does not say it gets one
-    // naming the address alone, since collections and Singles share it.
+    // A new address for this resource. Asked only here, so an address a
+    // resource already holds keeps working whatever its neighbours are.
+    // The kind the address is for, named by a road that judges a new address
+    // or by a rename. A plain registry create names none: its road judged the
+    // address already, and a start may keep an existing entity's address even
+    // beside a same-form one, which this check must not then refuse.
     const kind = options?.addressKind ?? options?.currentResourceType;
+    if (kind === undefined) return;
     // A rename: an existing resource taking an address no row holds. It is a
-    // changed address, so the whole rule judges it. A create is left to the
-    // road that made it, which has judged it already (a start keeping an
-    // existing entity's address among them).
-    if (options?.currentResourceId !== undefined && kind !== undefined) {
+    // changed address, so the whole rule judges it.
+    if (options?.currentResourceId !== undefined) {
       assertAddressAllowed(kind, slug);
     }
+    // Refused when its snake_case form is another collection's or Single's,
+    // since two addresses that differ only by `-` and `_` read as one.
     const twin = findSameSnakeCaseAddress(
-      kind ?? "collection",
+      kind,
       slug,
-      await findSnakeCaseNeighbours(adapter, slug, options),
-      { kindKnown: kind !== undefined }
+      await findSnakeCaseNeighbours(adapter, slug, options)
     );
     if (twin) throw addressRefusalError(twin, slug);
     return;
