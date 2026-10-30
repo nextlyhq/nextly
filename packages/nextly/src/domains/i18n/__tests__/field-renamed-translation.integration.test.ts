@@ -1163,10 +1163,9 @@ describeEachDialect("a translated field that is renamed", dialect => {
   const RENAMED_SHARED_PATHS = [
     {
       path: "the builder saves the collection",
-      // Saved through the schema service's own ALTER, which on SQLite renders no column
-      // modification (`generateAlterTableMigration`), so the NOT NULL a Required setting adds
-      // once the values are shared is not applied there.
-      sqliteSkipsColumnModification: true,
+      // Saved through the schema pipeline's push, as the dialog applies it, which rebuilds a
+      // SQLite table to apply the NOT NULL a Required setting adds once the values are shared.
+      sqliteSkipsColumnModification: false,
       table: "dc_posts",
       seed: seedCollection,
       change: async (fields: unknown[]) => {
