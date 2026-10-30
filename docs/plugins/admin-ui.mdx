@@ -522,6 +522,29 @@ refused at startup.
   registry still attributes to core.
 </Callout>
 
+### Items in Needs your attention
+
+A plugin adds a line to the Needs your attention card, rather than a card of its own, through
+`contributes.dashboard.attention` (**experimental**). Each item has an `id` in your plugin's
+namespace, a one-line `label`, a `count` taken as the person asking, a `link` inside the admin,
+and exactly one of `permission` or `collections` saying who sees it. An optional one-line
+`reason` is drawn under the label, saying why the item is waiting; without one, the row has no
+reason line. Plugin items rank as warnings, after core's critical items.
+
+```ts
+import { defineAttentionItem } from "@nextlyhq/plugin-sdk";
+
+export const unanswered = defineAttentionItem({
+  id: "forms/submissions",
+  label: "Form submissions",
+  reason: "Read and answer them",
+  collections: ["form-submissions"],
+  count: ({ services, signal }) =>
+    services.count("form-submissions", { signal }),
+  link: "collections/form-submissions",
+});
+```
+
 ### Draw it yourself
 
 Ship a `component` and the host gives you the card's frame — header, footer, loading and

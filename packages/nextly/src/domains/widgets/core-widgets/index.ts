@@ -82,6 +82,7 @@ import { upcomingReleasesWidget } from "./upcoming-releases";
 export const CORE_DECLARATIONS = [
   countWidget,
   breakdownWidget,
+  needsAttentionWidget,
   noteWidget,
   recentEntriesWidget,
   overTimeWidget,
@@ -93,7 +94,6 @@ const CORE_WIDGET_LITERALS = [
   contentWidget,
   quickCreateWidget,
   teamWidget,
-  needsAttentionWidget,
   continueWidget,
   upcomingReleasesWidget,
   teamActivityWidget,

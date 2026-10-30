@@ -13,7 +13,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
-import { executeWidgetQuery } from "../domains/widgets/execute";
 import { NextlyError } from "../errors/nextly-error";
 
 import { getDashboardSummary } from "./dashboard-summary";
@@ -37,7 +36,16 @@ vi.mock("../domains/releases/releases-widget-source", () => ({
   callerMayReadReleases: vi.fn(async () => false),
 }));
 vi.mock("../services/dashboard/attention-source", () => ({
-  releasesAttentionLink: (reason: string) => `releases?reason=${reason}`,
+  readAttentionDigest: vi.fn(async () => [
+    {
+      id: "core/overdue-releases",
+      kind: "overdue",
+      label: "Overdue releases",
+      count: 2,
+      severity: "critical",
+      link: "releases?reason=overdue",
+    },
+  ]),
 }));
 vi.mock("./widget-layout", () => ({ askableCards: vi.fn() }));
 vi.mock("./widget-cards", () => ({ cardShownTo: vi.fn() }));
@@ -80,10 +88,6 @@ function request() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(executeWidgetQuery).mockResolvedValue({
-    op: "groupBy",
-    buckets: [{ value: "overdue", count: 2 }],
-  });
   vi.mocked(declaredWidget).mockReturnValue({
     owner: "plugin @acme/forms",
     declaration: {
@@ -118,7 +122,7 @@ describe("GET /api/dashboard/summary, part by part", () => {
       parts: [
         {
           kind: "attention",
-          count: 2,
+          count: 1,
           link: "releases?reason=overdue",
         },
       ],
@@ -215,9 +219,10 @@ describe("GET /api/dashboard/summary, part by part", () => {
 });
 
 describe("GET /api/dashboard/summary, when the dashboard's cards cannot be read", () => {
+  // One item in the digest the stand-in answers, so a count of one.
   const attention = {
     kind: "attention",
-    count: 2,
+    count: 1,
     link: "releases?reason=overdue",
   };
 

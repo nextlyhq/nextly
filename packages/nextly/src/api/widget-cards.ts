@@ -12,6 +12,7 @@
 import { z } from "zod";
 
 import type { AuthContext } from "../auth/middleware";
+import { cardTierAt } from "../domains/widgets/card-geometry";
 import { cardAnswerResult } from "../domains/widgets/declaration/card-answer";
 import {
   hasFieldSettingValue,
@@ -25,7 +26,10 @@ import {
   type DeclaredWidget,
 } from "../domains/widgets/declaration/declared-widgets";
 import type { WidgetLoadSize } from "../domains/widgets/declaration/define-widget";
-import { bindReadServices } from "../domains/widgets/declaration/read-services";
+import {
+  bindReadServices,
+  type ReadAheadSide,
+} from "../domains/widgets/declaration/read-services";
 import { WIDGET_CELL_TIERS } from "../domains/widgets/definition";
 import {
   clampSize,
@@ -41,7 +45,11 @@ import { publishableContentSources } from "../domains/widgets/publish";
 import type { WidgetQuery } from "../domains/widgets/query";
 import { readableOfKind } from "../domains/widgets/reader-content";
 import { getWidget } from "../domains/widgets/registry";
-import { noSettingChosen, type WidgetSlot } from "../domains/widgets/result";
+import {
+  cardAnswerIsEmpty,
+  noSettingChosen,
+  type WidgetSlot,
+} from "../domains/widgets/result";
 import { withSiteOverride } from "../domains/widgets/site-rules";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
@@ -178,6 +186,15 @@ export interface CardBatch {
    */
   check: (raw: unknown) => Promise<WidgetQuery>;
   /**
+   * The dashboard load this batch answers, and on which side of its
+   * read-ahead: the layout read's, ahead of the dashboard's own batch, or
+   * that batch, carrying the token the layout read handed the dashboard. The
+   * read services each card is bound to carry it, with the credential the
+   * batch was asked on (`readAheadFor`).
+   */
+  readAhead?: Omit<ReadAheadSide, "credential">;
+
+  /**
    * The collections the caller may read, and whether the registry could be
    * read at all: what a card's Field settings are judged against. One answer
    * for the whole batch ({@link readableCollectionsOnce}), however many of its
@@ -198,6 +215,31 @@ export function readableCollectionsOnce(
 ): CardBatch["readableCollections"] {
   let read: ReturnType<CardBatch["readableCollections"]> | undefined;
   return () => (read ??= readableOfKind(caller, "collection"));
+}
+
+/**
+ * The side of a dashboard load's read-ahead a card's services are bound on:
+ * the batch's, with the credential its request was authenticated by, so an
+ * answer read ahead is reused only on the credential it was read for
+ * (`ReadAheadSide.credential`). An API key is named by its id, and a key
+ * whose id authentication did not carry by none, so nothing read ahead is
+ * reused for it. A session carries no id or token times past verification;
+ * it is told apart by its verified claims and roles, which the caller holds.
+ */
+function readAheadFor(batch: CardBatch): ReadAheadSide | undefined {
+  const { readAhead, auth } = batch;
+  if (readAhead === undefined) return undefined;
+  const credential =
+    auth.authMethod === "api-key"
+      ? auth.apiKeyId === undefined
+        ? undefined
+        : `api-key:${auth.apiKeyId}`
+      : "session";
+  return {
+    side: readAhead.side,
+    token: readAhead.token,
+    ...(credential === undefined ? {} : { credential }),
+  };
 }
 
 /**
@@ -461,9 +503,10 @@ type CardVerdict =
 /**
  * Which of a card's rules is being judged, kept up to date by `judgeCard` for whoever bounds it:
  * a timeout names the stage that was running, the widget's access (its predicate, or core's own
- * check of the collections it reads) or its `shows`.
+ * check of the collections it reads) or its `shows`; or, for a card answered whole to learn
+ * whether it is empty (`cardAnswersEmpty`), its `load`.
  */
-type JudgingStage = { at: "access" | "shows" };
+type JudgingStage = { at: "access" | "shows" | "load" };
 
 async function judgeCard(
   declared: DeclaredWidget,
@@ -505,6 +548,7 @@ async function judgeCard(
     return { kind: "needs-setting", label: missing.label };
   }
   const { signal, scope, now } = asked;
+  const readAhead = readAheadFor(batch);
   const input = {
     settings,
     user: batch.caller.user,
@@ -520,6 +564,7 @@ async function judgeCard(
       signal,
       now,
       ...(collections === undefined ? {} : { collections }),
+      ...(readAhead === undefined ? {} : { readAhead }),
     }),
   };
   const { shows } = declaration;
@@ -638,6 +683,50 @@ export async function cardShownTo(
     // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
     if (!asked.signal.aborted) logNotJudged(declared, error);
     return "failed";
+  }
+}
+
+/**
+ * Whether this person's card answers empty by its own `isEmpty`, for a widget that hides while
+ * empty: asked by the layout read, so the dashboard is drawn without the card from its first
+ * paint, rather than drawn with it and then taken out, which moves every card after it.
+ *
+ * The card's own answer (`answerCard`, its rules, then its `load`, then its `isEmpty`), within the
+ * card's budget, under `signal` as the batch's. Empty when its `isEmpty` holds, or when the core
+ * display that draws it would find nothing in it (`cardAnswerIsEmpty`, the rule the admin also
+ * reveals a hidden card by); anything else is not empty: refused, a setting missing, not shown, a `load` that throws or does not settle in time.
+ * The card is then placed, and says for itself what it has.
+ *
+ * @param asked as `cardIsShownTo` is handed it: no browser asks, so the card is answered at the
+ * placement's own size (`cardSize`).
+ * @param dashboardWidth the dashboard's width as the admin measured it when it asked for the
+ * layout. The card is answered at the tier it is drawn at on a dashboard that wide
+ * (`cardTierAt`), the rule the admin sizes the card's first query by, so a `load` that reads
+ * its tier is judged on the answer that query gets.
+ */
+export async function cardAnswersEmpty(
+  declared: DeclaredWidget,
+  placement: WidgetPlacement,
+  batch: CardBatch,
+  asked: CardInput,
+  dashboardWidth: number
+): Promise<boolean> {
+  const grid = cardSize(declared, { placement, preview: false });
+  const size = { ...grid, tier: cardTierAt(grid.w, dashboardWidth) };
+  try {
+    const answer = await withinSlotBudget(
+      signal =>
+        answerCard(declared, placement, batch, { ...asked, signal }, size),
+      () => judgingTimedOut(declared, { at: "load" }),
+      asked.signal
+    );
+    // Empty by the widget's own `isEmpty`, or, drawn by a core display, by the
+    // display's own rule, as the card itself would draw it.
+    return "empty" in answer && cardAnswerIsEmpty(answer);
+  } catch (error) {
+    // Given up by whoever asked: nobody is waiting for the answer, so nothing went wrong.
+    if (!asked.signal.aborted) logNotJudged(declared, error);
+    return false;
   }
 }
 

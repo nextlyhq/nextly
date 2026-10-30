@@ -1,88 +1,299 @@
 /**
- * Needs attention's links open exactly what the card counted.
+ * Needs your attention draws the open work waiting for its reader, and only
+ * while something is.
  *
- * A published post is edited without publishing, so it holds unpublished
- * changes. The card's link for posts opens the posts list under the same
- * condition the card counted with, and that list holds the post, with as
- * many entries as the card said.
+ * A stopped and an overdue release are left as the release runner would leave
+ * them. The card then draws a critical row for each, with its reason, and each
+ * Review opens Releases' Needs attention tab narrowed to that row's part. A
+ * reader who may not read releases has nothing waiting, so their dashboard
+ * draws no card at all, rather than one that says all is clear.
  *
- * Other specs leave their own pending changes in the shared database, so the
- * spec reads the card's number back rather than assuming one, and finds its own
- * post by a stamp.
+ * Other specs leave their own stopped and overdue releases in the shared
+ * database, so the spec finds its rows by label and reads no exact count.
  */
-import { expect } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
-import { ok } from "./support/releases-api";
-import { test } from "./support/test";
+import { isLayoutRead } from "./support/dashboard-layout";
+import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
+import {
+  leaveReleasesAsTheRunnerWould,
+  type RunnerOutcome,
+} from "./support/release-states";
+import { cancel, post, release, schedule } from "./support/releases-api";
+import { test } from "./support/test";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
-test.describe.configure({ lock: [LOCK.dashboard] });
+test.describe.configure({ lock: [LOCK.dashboard, LOCK.releases] });
 
-const API = "/admin/api";
 const CARD = "core/needs-attention";
+const DAY = 24 * 60 * 60 * 1000;
 
-test("the card's link opens the posts it counted", async ({ page }) => {
+test("rows for stopped and overdue releases, each with its reason and Review; no card for a reader of no releases", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
   const stamp = Date.now().toString(36);
-  const { item } = await ok<{ item: { id: string } }>(
-    await page.request.post(`${API}/collections/posts/entries`, {
-      data: {
-        title: `Needs attention e2e ${stamp}`,
-        slug: `needs-attention-e2e-${stamp}`,
-        status: "published",
-      },
+  const postId = await post(page, stamp);
+  const seeded: Array<{ id: string; outcome: RunnerOutcome }> = [];
+  for (const outcome of ["overdue", "stopped"] as const) {
+    const id = await release(page, `Attention e2e ${outcome} ${stamp}`, postId);
+    await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+    seeded.push({ id, outcome });
+  }
+  await leaveReleasesAsTheRunnerWould(page, seeded);
+
+  try {
+    await gotoAdmin(page, "");
+    const card = page.getByTestId(`widget-cell-${CARD}`);
+    await expect(card).toBeVisible();
+    const row = (label: string) =>
+      card.getByTestId("needs-attention-item").filter({ hasText: label });
+
+    const stopped = row("Releases that stopped");
+    await expect(stopped).toContainText("A scheduled publish failed.");
+    await expect(stopped.getByTestId("needs-attention-critical")).toBeVisible();
+    const overdue = row("Overdue releases");
+    await expect(overdue).toContainText("Still scheduled after its time.");
+    await expect(overdue.getByTestId("needs-attention-critical")).toBeVisible();
+    // Nothing on the card dismisses an item.
+    await expect(
+      card.getByRole("button", { name: /dismiss|mark/i })
+    ).toHaveCount(0);
+
+    await overdue
+      .getByRole("link", { name: "Review overdue releases" })
+      .click();
+    await expect(page).toHaveURL(
+      /\/admin\/releases\?tab=attention&reason=overdue$/
+    );
+
+    // A reader of posts only: no release kind is theirs, and no plugin item
+    // is declared, so nothing waits for them and the card is not drawn.
+    const reader = await signInAsLimitedUser(
+      browser,
+      page.request,
+      baseURL ?? "",
+      ["read-posts"]
+    );
+    try {
+      const theirs = await reader.context.newPage();
+      await gotoAdmin(theirs, "");
+      // Their dashboard has drawn: a card every reader is shown is there.
+      await expect(
+        theirs.getByTestId("widget-cell-core/continue")
+      ).toBeVisible();
+      await expect(theirs.getByTestId(`widget-cell-${CARD}`)).toBeHidden();
+      await expect(theirs.getByText("All clear")).toHaveCount(0);
+    } finally {
+      await reader.context.close();
+    }
+  } finally {
+    // Left as they were found: a stopped or overdue release of this spec's
+    // would show the card on every later spec's dashboard.
+    for (const { id } of seeded) await cancel(page, id);
+  }
+});
+
+/**
+ * Follows the link at `href` the way the app does, within the page, so the dashboard's cached
+ * layout answer is the one a return is first drawn from.
+ */
+async function followLink(page: Page, href: string): Promise<void> {
+  await page.evaluate(target => {
+    const link = document.querySelector<HTMLAnchorElement>(
+      `a[href="${target}"]`
+    );
+    if (!link) throw new Error(`no link to ${target}`);
+    link.click();
+  }, href);
+}
+
+/**
+ * Passes the layout read through as one that found the card with nothing waiting, so the first
+ * visit is drawn without it whatever the shared database holds.
+ */
+async function readCardAsEmpty(page: Page): Promise<void> {
+  await page.route(isLayoutRead, async (route: Route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    // Aborted rather than thrown when the read is given up: a throw out of the handler prints
+    // the request, session cookie included.
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    const layout = (Array.isArray(body.placements) ? body : body.data) as {
+      placements: Array<{ id: string; widgetId: string }>;
+      hiddenWhileEmpty?: string[];
+    };
+    const card = layout.placements.find(p => p.widgetId === CARD);
+    if (card) {
+      layout.hiddenWhileEmpty = [...(layout.hiddenWhileEmpty ?? []), card.id];
+    }
+    // A read the page gave up while it was answered is already settled: nothing waits for it.
+    await route.fulfill({ response, json: body }).catch(() => {});
+  });
+}
+
+/** A batch answered whole, `{ results }`, or `undefined` for one streamed as lines. */
+function wholeAnswer(text: string): { results: unknown[] } | undefined {
+  try {
+    const body = JSON.parse(text) as { results?: unknown };
+    return Array.isArray(body.results)
+      ? { ...body, results: body.results }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The dashboard's batch of card answers. */
+const isBatchRead = (url: URL) => url.pathname.endsWith("/dashboard/query");
+
+/** The card's answer with no item in it, which its own empty test holds for. */
+const EMPTY_ANSWER = {
+  ok: true,
+  result: { op: "data", data: { items: [] } },
+  empty: true,
+};
+
+/**
+ * Passes the dashboard's batch through as one that found the card with nothing waiting, as
+ * `readCardAsEmpty` does the layout read: a card hidden while empty is shown once its own batch
+ * answer holds something, so the batch must agree with the layout read for the card to stay off.
+ */
+async function answerCardAsEmpty(page: Page): Promise<void> {
+  await page.route(isBatchRead, async (route: Route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const asked =
+      (
+        route.request().postDataJSON() as {
+          queries?: Array<{ widget?: string }>;
+        }
+      ).queries ?? [];
+    const at = asked.findIndex(entry => entry.widget === CARD);
+    // Aborted rather than thrown when the read is given up, as in `readCardAsEmpty`.
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    // A batch the page gave up while it was answered (a newer load asks again) is already
+    // settled: nothing waits for it, and a throw here would fail the test and print the request.
+    const body =
+      at === -1 ? undefined : withCardEmpty(await response.text(), at);
+    await route
+      .fulfill(body === undefined ? { response } : { response, body })
+      .catch(() => {});
+  });
+}
+
+/**
+ * A batch answer with the slot at `at` answered empty: in a whole `{ results }` answer, or in the
+ * `{ index, slot }` line that carries it when the answer is streamed.
+ */
+function withCardEmpty(text: string, at: number): string {
+  const whole = wholeAnswer(text);
+  if (whole !== undefined) {
+    whole.results[at] = EMPTY_ANSWER;
+    return JSON.stringify(whole);
+  }
+  return text
+    .split("\n")
+    .map(line => {
+      if (line.trim() === "") return line;
+      const settled = JSON.parse(line) as { index: number };
+      return settled.index === at
+        ? JSON.stringify({ index: at, slot: EMPTY_ANSWER })
+        : line;
     })
-  );
-  // No status named, on a published post: the edit is held as unpublished
-  // changes and the live post stays as it was.
-  await ok(
-    await page.request.patch(`${API}/collections/posts/entries/${item.id}`, {
-      data: { title: `Needs attention e2e ${stamp} (edited)` },
-    })
-  );
+    .join("\n");
+}
 
-  await gotoAdmin(page, "");
-  const card = page.getByTestId(`widget-cell-${CARD}`);
-  await expect(card).toBeVisible();
+/** An overdue release left as the runner would leave it, for this spec to cancel. */
+async function overdueRelease(page: Page, stamp: string) {
+  const postId = await post(page, stamp);
+  const id = await release(page, `Attention return ${stamp}`, postId);
+  await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+  await leaveReleasesAsTheRunnerWould(page, [{ id, outcome: "overdue" }]);
+  return id;
+}
 
-  // The posts link: the kind's own when posts hold all of it, else the posts
-  // part's. Either way its address names the condition the card counted with.
-  const postsLink = card
-    .getByRole("link")
-    .filter({ hasText: /Posts|Unpublished changes/ })
-    .and(card.locator('a[href*="/admin/collections/posts?"]'))
-    .first();
-  await expect(postsLink).toBeVisible();
-  const href = (await postsLink.getAttribute("href")) ?? "";
-  const where = new URLSearchParams(href.split("?")[1]).get("where");
-  expect(JSON.parse(where ?? "null")).toEqual({ _pendingChange: true });
-  // The number the card showed for that link, as it is spoken: a row link says it in text kept
-  // for assistive technology, a small card's inline link in its label.
-  const spoken =
-    (await postsLink.getAttribute("aria-label")) ??
-    (await postsLink.locator(".sr-only").first().textContent()) ??
-    "";
-  const counted = Number(/:\s*(\d+)/.exec(spoken)?.[1]);
-  expect(counted).toBeGreaterThan(0);
+test("a return that finds new work waiting shows the card, and says so", async ({
+  page,
+}) => {
+  const id = await overdueRelease(page, Date.now().toString(36));
+  try {
+    await readCardAsEmpty(page);
+    await answerCardAsEmpty(page);
+    await gotoAdmin(page, "");
+    // Drawn cards only: a card the page is drawn without keeps a cell it never shows.
+    const card = page
+      .getByTestId(`widget-cell-${CARD}`)
+      .filter({ visible: true });
+    await expect(
+      page.getByTestId("widget-cell-core/continue").filter({ visible: true })
+    ).toBeVisible();
+    // Hidden, not absent: the page keeps the card's cell, undrawn.
+    await expect(card).toBeHidden();
 
-  await postsLink.click();
-  await expect(page).toHaveURL(/\/admin\/collections\/posts\?/);
-  // The post in the list. Visible matches only: the page also holds hidden
-  // copies of each title, which a plain text match finds first.
-  await expect(
-    page
-      .getByText(`Needs attention e2e ${stamp}`, { exact: false })
-      .filter({ visible: true })
-      .first()
-  ).toBeVisible();
+    // Away and back within the session: the return is drawn from the cached answer, which hid
+    // the card, and the read it makes again finds the overdue release.
+    await followLink(page, "/admin/collections/posts");
+    await page.waitForURL(/\/admin\/collections\/posts/);
+    await page.unroute(isLayoutRead);
+    await page.unroute(isBatchRead);
+    await followLink(page, "/admin");
+    await page.waitForURL(/\/admin\/?$/);
 
-  // The list the link opened holds as many entries as the card counted: the
-  // same condition, read as the same person, in the same language.
-  const listed = await ok<{ meta: { total: number } }>(
-    await page.request.get(
-      `${API}/collections/posts/entries?status=all&limit=1&where=${encodeURIComponent(where ?? "")}`
-    )
-  );
-  expect(listed.meta.total).toBe(counted);
+    await expect(card).toBeVisible();
+    await expect(
+      card.getByText(/^\d+ items? needs? your attention$/)
+    ).toBeAttached();
+  } finally {
+    await page.unroute(isLayoutRead).catch(() => {});
+    await page.unroute(isBatchRead).catch(() => {});
+    await cancel(page, id);
+  }
+});
+
+test("a return whose waiting work was done meanwhile keeps the card in place", async ({
+  page,
+}) => {
+  const id = await overdueRelease(page, Date.now().toString(36));
+  let cancelled = false;
+  try {
+    await gotoAdmin(page, "");
+    const card = page
+      .getByTestId(`widget-cell-${CARD}`)
+      .filter({ visible: true });
+    await expect(card).toBeVisible();
+
+    await followLink(page, "/admin/collections/posts");
+    await page.waitForURL(/\/admin\/collections\/posts/);
+    await cancel(page, id);
+    cancelled = true;
+    const reread = page.waitForResponse(
+      response =>
+        response.url().includes("/dashboard/layout") &&
+        response.request().method() === "GET"
+    );
+    await followLink(page, "/admin");
+    await page.waitForURL(/\/admin\/?$/);
+    await reread;
+
+    // Shown when the reader came back, so it stays: what they are looking at does not jump up.
+    // It says nothing is waiting, or shows what other work still is.
+    await expect(card).toBeVisible();
+  } finally {
+    if (!cancelled) await cancel(page, id);
+  }
 });
