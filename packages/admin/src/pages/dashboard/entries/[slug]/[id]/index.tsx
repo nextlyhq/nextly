@@ -27,6 +27,11 @@ import {
 } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
+import {
+  isRemovedFromCode,
+  removedEntityHasNoTable,
+} from "@admin/components/features/entries/removed-from-code-notice";
+import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import { useSchedulePublishAction } from "@admin/components/features/releases/SchedulePublishAction";
@@ -429,10 +434,16 @@ export default function EditEntryPage({
   // answer is on its way the view and the edit slots hold their writes as the
   // editor does, since the answer on screen grants nothing in the new one.
   const customViewAnswer = useUpdateAnswer(slug ?? "");
-  const customViewReader = customViewAnswer === "refused";
-  const customViewWritesHeld = !editsOffered(customViewAnswer);
+  // A collection removed from code refuses every write to its entries, so the
+  // custom view and the edit slots are handed their writes held, as a
+  // reader's are, whoever opens it.
+  const removedFromCode = isRemovedFromCode(collection);
+  const customViewReader = customViewAnswer === "refused" || removedFromCode;
+  const customViewWritesHeld =
+    !editsOffered(customViewAnswer) || removedFromCode;
   const customViewLock = useDocumentLockSurface({
     readOnlyForReader: customViewReader,
+    readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
     scopeKind: "collection",
     slug: slug ?? "",
     entryId: id,
@@ -519,10 +530,39 @@ export default function EditEntryPage({
     return <EditEntryPageSkeleton />;
   }
 
+  // A collection removed from code is named, with its next step, above
+  // whatever else this page has to say; where its table is gone, in place of
+  // the failed read, which says nothing the notice does not.
+  const removedNotice =
+    slug && collection && removedFromCode ? (
+      <RemovedFromCodeNotice
+        entity={{
+          kind: "collection",
+          label: collection.label || collection.name || slug,
+          slug,
+        }}
+        state={collection.removedFromCodeState}
+      />
+    ) : null;
+
+  if (error && removedEntityHasNoTable(collection)) {
+    return (
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
+        {removedNotice}
+        <div className="mt-6">
+          <Link href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug })}>
+            <Button variant="outline">← Back to {slug}</Button>
+          </Link>
+        </div>
+      </PageContainer>
+    );
+  }
+
   // Error state
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
+        {removedNotice ? <div className="mb-6">{removedNotice}</div> : null}
         <Alert variant="destructive">
           {/* The server's message as it is: it already says what went wrong
               ("Not found.", "You can't see posts."). */}
@@ -642,6 +682,7 @@ export default function EditEntryPage({
               release as any other, and omitting the banner here would withhold
               the warning from precisely the documents a project cared enough
               about to build a bespoke editor for. */}
+          {removedNotice}
           <ScheduledReleaseBanner
             document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
             onDefaultLocale={!isNonDefaultLocale}
@@ -737,14 +778,29 @@ export default function EditEntryPage({
              question, and a stale translation inside a scheduled release is
              exactly where an editor needs both. */
             documentBanner={
-              <ScheduledReleaseBanner
-                document={{
-                  scopeKind: "collection",
-                  scopeSlug: slug,
-                  entryId: id,
-                }}
-                onDefaultLocale={!isNonDefaultLocale}
-              />
+              <>
+                {/* First in the banner order: it changes what every control
+                    below means, as nothing here can be changed. */}
+                {removedFromCode ? (
+                  <RemovedFromCodeNotice
+                    entity={{
+                      kind: "collection",
+                      label: collectionLabel,
+                      slug,
+                    }}
+                    state={collection.removedFromCodeState}
+                    variant="strip"
+                  />
+                ) : null}
+                <ScheduledReleaseBanner
+                  document={{
+                    scopeKind: "collection",
+                    scopeSlug: slug,
+                    entryId: id,
+                  }}
+                  onDefaultLocale={!isNonDefaultLocale}
+                />
+              </>
             }
             collection={collection as unknown as EntryFormCollection}
             entry={entry}
@@ -758,12 +814,21 @@ export default function EditEntryPage({
             /* Contributed to the editor's action model, which places both on
              the Publish split's arrow: they decide when this goes live, and
              the toolbar is reserved for the verbs an author reaches for while
-             writing. Schedule first, the one most often reached for. */
-            documentActions={[
-              ...(schedule.contributed === null ? [] : [schedule.contributed]),
-              ...(release.contributed === null ? [] : [release.contributed]),
-              ...(pin === null ? [] : [pin]),
-            ]}
+             writing. Schedule first, the one most often reached for. A
+             document whose collection was removed from code offers none. */
+            documentActions={
+              removedFromCode
+                ? []
+                : [
+                    ...(schedule.contributed === null
+                      ? []
+                      : [schedule.contributed]),
+                    ...(release.contributed === null
+                      ? []
+                      : [release.contributed]),
+                    ...(pin === null ? [] : [pin]),
+                  ]
+            }
             locale={locale}
             onLocaleChange={changeLocale}
             {...(seedFromLocale === undefined ? {} : { seedFromLocale })}

@@ -538,6 +538,65 @@ describe("Recently edited's walk at its bound", () => {
   });
 });
 
+describe("Recently edited narrowed to one subject", () => {
+  const caller = { user: { id: "u1", roles: ["editor"] } };
+  /** Every Single admitted, none kept off: no clause of the feed's own leaves a Single's rows out. */
+  const singles = {
+    labels: new Map([["home", "Home"]]),
+    keptOff: new Set<string>(),
+    complete: true,
+  };
+
+  /** The conditions the first read of the walk was asked with. */
+  async function conditionsFor(narrowing: {
+    single?: string;
+    collection?: string;
+  }): Promise<unknown[]> {
+    const { service, adapter } = makeService();
+    await service.getRecentEdits({
+      limit: 1,
+      scope: someResources(["home"]),
+      caller,
+      singles,
+      ...narrowing,
+    });
+    const call = (adapter.select as ReturnType<typeof vi.fn>).mock.calls[0];
+    return (call[1] as { where: { and: unknown[] } }).where.and;
+  }
+
+  it("reads one Single's saves by its slug AND its kind, never a collection's under that slug", async () => {
+    const where = await conditionsFor({ single: "home" });
+    // 🔴 Both, exactly: the slug alone also matches a collection's saves under
+    // it, and a kind alone every Single's.
+    expect(where).toContainEqual({
+      column: "collection",
+      op: "=",
+      value: "home",
+    });
+    expect(where).toContainEqual({
+      column: "subjectKind",
+      op: "=",
+      value: "single",
+    });
+  });
+
+  it("still reads one collection's saves as a collection's", async () => {
+    // The control: the collection's narrowing is unchanged, and states no
+    // Single's kind.
+    const where = await conditionsFor({ collection: "home" });
+    expect(where).toContainEqual({
+      column: "collection",
+      op: "=",
+      value: "home",
+    });
+    expect(where).not.toContainEqual({
+      column: "subjectKind",
+      op: "=",
+      value: "single",
+    });
+  });
+});
+
 describe("counting the feed's rows for the last day", () => {
   /** `count` install-level rows: no document to authorize, so every one is kept. */
   const settingsRows = (count: number, from = 0) =>

@@ -36,6 +36,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 
+import { dashboardWidthNow } from "@admin/components/features/widgets/useDashboardWidth";
 import {
   ADMIN_WORKSPACE_KEY,
   useSchemaUpdateInvalidation,
@@ -43,6 +44,7 @@ import {
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { AdminBranding } from "@admin/types/branding";
 import type {
+  DashboardLayoutRead,
   DashboardLayoutResponse,
   WidgetPlacement,
 } from "@admin/types/dashboard/widgets";
@@ -58,9 +60,25 @@ const LAYOUT_PATH = "/dashboard/layout";
 /**
  * The layout read: one fetch for every query under {@link DASHBOARD_LAYOUT_KEY}, so a card
  * reading the same answer as the grid shares the grid's request and cache entry.
+ *
+ * Sent the dashboard's width as it measures now (`dashboardWidthNow`), for the server to judge
+ * each card that hides while empty at the tier it is drawn at. Read at the request, never part of
+ * the key, so a resize does not split the cache; asked with no dashboard drawn, it sends none and
+ * the answer judges no card.
+ *
+ * The answer carries the width it was sent (`askedAtWidth`): a cached answer is drawn from on the
+ * next visit, whose dashboard may be another width, and its verdict holds only where every card
+ * is drawn at the tier it was judged at (`useHiddenWhileEmptyAtFirstPaint`).
  */
-export function fetchDashboardLayout(): Promise<DashboardLayoutResponse> {
-  return protectedApi.get<DashboardLayoutResponse>(LAYOUT_PATH);
+export async function fetchDashboardLayout(): Promise<DashboardLayoutRead> {
+  const width = dashboardWidthNow();
+  if (width === undefined) {
+    return protectedApi.get<DashboardLayoutResponse>(LAYOUT_PATH);
+  }
+  const answer = await protectedApi.get<DashboardLayoutResponse>(
+    `${LAYOUT_PATH}?${new URLSearchParams({ width: String(width) })}`
+  );
+  return { ...answer, askedAtWidth: width };
 }
 
 /**
@@ -113,7 +131,7 @@ export interface ResetLayoutInput {
 }
 
 export interface UseDashboardLayoutResult {
-  layout: DashboardLayoutResponse | undefined;
+  layout: DashboardLayoutRead | undefined;
   isPending: boolean;
   /**
    * Whether the arrangement could not be read at all.

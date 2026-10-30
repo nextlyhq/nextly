@@ -31,6 +31,8 @@
  * @module api/widget-layout
  */
 
+import { z } from "zod";
+
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
@@ -488,6 +490,89 @@ function mayWriteLayout(auth: AuthContext): boolean {
 }
 
 /**
+ * The widest dashboard the layout read takes a width for, in pixels: past any
+ * screen a dashboard is drawn on, so a width this read is sent is either one
+ * the admin measured or none.
+ */
+const MAX_DASHBOARD_WIDTH_PX = 16_384;
+
+/**
+ * The `width` the admin sends with the layout read: the dashboard's width in
+ * pixels, as it measured it (`useDashboardWidth`), a number above zero and no
+ * wider than {@link MAX_DASHBOARD_WIDTH_PX}.
+ */
+const DASHBOARD_WIDTH = z
+  .string()
+  .max(32)
+  .transform(Number)
+  .pipe(z.number().positive().max(MAX_DASHBOARD_WIDTH_PX));
+
+/**
+ * The dashboard's width the layout read was asked at, or `undefined` when it
+ * was sent none, or one that is not a width. Outside input, so parsed here and
+ * trusted for one thing only: the tier a card that hides while empty is judged
+ * at (`cardsAnsweredEmpty`), which decides how much its load reads for this
+ * reader, never what they may read. A width that is not one is no width, as a
+ * request from before the admin sent it is: no card is judged ahead, and the
+ * dashboard is drawn with every card, so no read is refused for the shape of a
+ * hint.
+ */
+function dashboardWidthOf(searchParams: URLSearchParams): number | undefined {
+  const parsed = DASHBOARD_WIDTH.safeParse(
+    searchParams.get("width") ?? undefined
+  );
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * What the layout read says of the cards that hide while empty, outside the
+ * scope token: what a card answers changes with the content, and a save must
+ * not conflict because a card emptied.
+ *
+ * - `hiddenWhileEmpty`: the cards judged ahead that are empty for this reader
+ *   now (`cardsAnsweredEmpty`), so the admin draws its first paint without
+ *   them rather than drawing them and taking them out. Judged only at a
+ *   dashboard width the admin sent, at the tier each card is drawn at there;
+ *   with none, absent, which the admin reads as no verdict at all: it hides
+ *   nothing and reveals nothing.
+ * - `hiddenWhenAnswerEmpty`: the widgets whose cards leave the dashboard by
+ *   their own answer, as drawn, since this read cannot answer them.
+ * - `readAheadToken`: this read's own dashboard load. What is read ahead here
+ *   is left for the batch that sends this token back, and for no other load,
+ *   a second tab of the same reader's included. It differs on every read.
+ */
+async function whileEmpty(
+  auth: AuthContext,
+  view: { reader: ReadCaller; widgets: readonly CanonicalWidget[] },
+  placements: readonly WidgetPlacement[],
+  request: { signal: AbortSignal; searchParams: URLSearchParams }
+): Promise<{
+  hiddenWhileEmpty?: readonly string[];
+  hiddenWhenAnswerEmpty: readonly string[];
+  readAheadToken: string;
+}> {
+  const readAheadToken = crypto.randomUUID();
+  const dashboardWidth = dashboardWidthOf(request.searchParams);
+  const { cardsAnsweredEmpty, hiddenWhenAnswerEmpty } = await import(
+    "./cards-answered-empty"
+  );
+  const ownAnswer = hiddenWhenAnswerEmpty(view.widgets);
+  if (dashboardWidth === undefined) {
+    return { hiddenWhenAnswerEmpty: ownAnswer, readAheadToken };
+  }
+  return {
+    hiddenWhileEmpty: await cardsAnsweredEmpty(auth, view.reader, placements, {
+      widgets: view.widgets,
+      dashboardWidth,
+      signal: request.signal,
+      readAheadToken,
+    }),
+    hiddenWhenAnswerEmpty: ownAnswer,
+    readAheadToken,
+  };
+}
+
+/**
  * The version the client must echo back.
  *
  * An unreadable row keeps its real version rather than reporting 0, and so
@@ -521,13 +606,20 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // own settings, which is why this is decided here, after the row is read,
   // and not by a condition before it. `?getStarted=1` asks for the answer of a
   // removed card, which the admin needs as it restores one.
-  const askedForSteps = new URL(req.url).searchParams.get("getStarted") === "1";
+  const searchParams = new URL(req.url).searchParams;
+  const askedForSteps = searchParams.get("getStarted") === "1";
   const getStarted = await getStartedView(
     view.probe,
     getStartedPlacement(arrangement),
     askedForSteps
   );
   const placements = withoutDormantCard(arrangement, () => getStarted.drawn);
+  // Which cards that hide while empty this reader's dashboard is drawn
+  // without, and which leave by their own answer (`whileEmpty`).
+  const emptyCards = await whileEmpty(auth, view, placements, {
+    signal: req.signal,
+    searchParams,
+  });
   // The default as a reader following it would be handed it: their card has
   // no settings yet, so it is drawn from the answer alone. The steps are
   // worked out when this read worked them out, or when the admin asks
@@ -586,6 +678,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // The Get started steps, from the computation that decided whether the
       // card is drawn, so the card and its steps cannot disagree.
       getStarted,
+      ...emptyCards,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );

@@ -1,99 +1,99 @@
 /**
- * The SEO issues source: what it counts, what it refuses to claim, and what it
- * does when it cannot read a collection.
+ * The SEO issues scan: which issues a document has, what a scan counts, and
+ * what it refuses to claim.
  *
- * The service is a stub here so each case can put one shape of data in front of
- * the resolver. It pages the way the real managed service pages -- deriving its
- * window as `(page - 1) * limit` -- because a stub that honoured some friendlier
- * arithmetic would let a paging bug pass here and fail in production.
+ * The read services are a stub here so each case can put one shape of data in
+ * front of the scan. The stub answers `find` the way core answers a widget's
+ * read: rows ordered by id, a `where` on the id honoured, the limit clamped to
+ * the fifty rows core allows, and `total` counted over every row that matched
+ * before any row was dropped. A stub that honoured a friendlier rule would let
+ * a paging bug pass here and fail in production.
  *
- * What the stub cannot prove -- that the real service accepts these arguments,
- * and that boot publishes the source at all -- is covered by
- * `widget-source.integration.test.ts` against a real instance.
+ * What the stub cannot prove -- that core accepts these reads, and that each
+ * runs as the person asking -- is covered by `widget-source.integration.test.ts`
+ * against a real instance.
  */
-import { NextlyError, text, type FieldConfig } from "@nextlyhq/plugin-sdk";
+import { text, type FieldConfig } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import { defaultSeoFields } from "../fields";
 import {
   checksFor,
   ISSUE_SCAN_PAGE_SIZE,
-  ISSUE_FIELD,
   ISSUE_SCAN_ROW_BUDGET,
   issuesFor,
-  SEO_ISSUES_SOURCE_ID,
-  seoIssuesWidgetSource,
+  tallyIssues,
 } from "../widget-source";
-
-const caller = { user: { id: "user-1", roles: ["editor"] } };
-const countQuery = { source: SEO_ISSUES_SOURCE_ID, op: "count" as const };
 
 /** Every default check, which is what a project that overrides nothing gets. */
 const allChecks = checksFor(defaultSeoFields());
 
-/**
- * A collection service holding `rows`, paged the way the managed one pages.
- *
- * 1-indexed by `page`, with the window derived as `(page - 1) * limit` -- the
- * arithmetic the real service uses, and the reason a scan may not narrow its
- * page width partway through.
- */
-/**
- * Whether the stub refuses `slug`'s page `page`, as a read rule or hook would:
- * the whole collection, or every page from a given one on.
- */
-function refuses(
-  options: { denied?: string[]; deniedFromPage?: Record<string, number> },
-  slug: string,
-  page: number
-): boolean {
-  if (options.denied?.includes(slug)) return true;
-  const from = options.deniedFromPage?.[slug];
-  return from !== undefined && page >= from;
+/** The most rows core answers one widget read with, whatever it asks for. */
+const CORE_READ_CAP = 50;
+
+interface FindOptions {
+  where?: { id?: { greater_than?: string } };
+  sort?: string;
+  limit?: number;
+  select?: readonly string[];
+  total?: true;
+  status?: string;
 }
 
+/**
+ * Read services holding `rows` per collection, answering `find` as core does.
+ *
+ * Each row is given an id that sorts as its position does (`r0001`, ...), so
+ * the order by id is the order written.
+ */
 function servicesWith(
   rows: Record<string, Record<string, unknown>[]>,
   options: {
-    lifecycle?: boolean;
-    denied?: string[];
-    /** Collections the caller may read until this page, and is refused from it on. */
-    deniedFromPage?: Record<string, number>;
+    /** Rows a hook or a reader's rule left of each page; `total` still counts them all. */
+    survivingPerPage?: number;
+    /** Collections whose every read fails. */
     broken?: string[];
     /**
-     * Rows an `afterRead` hook left of each page. `hasMore` is still derived
-     * from the DATABASE total, the way core derives it, which is the whole
-     * point: the response no longer says how much was read.
+     * An `afterRead` hook's id for each row it answers. The `where` and the
+     * `total` still read the stored ids, as the database does.
      */
-    survivingPerPage?: number;
+    rewriteId?: (stored: string) => string;
   } = {}
 ) {
-  const listEntries = vi.fn(
-    async (
-      slug: string,
-      query: { pagination?: { limit?: number; page?: number } },
-      _opts: unknown
-    ) => {
-      const page = query.pagination?.page ?? 1;
-      if (refuses(options, slug, page)) throw NextlyError.forbidden();
-      if (options.broken?.includes(slug)) throw new Error(`outage: ${slug}`);
-      const all = rows[slug] ?? [];
-      const limit = query.pagination?.limit ?? 200;
-      const start = (page - 1) * limit;
-      const fetched = all.slice(start, start + limit);
-      const hasMore = start + fetched.length < all.length;
-      const data =
-        options.survivingPerPage === undefined
-          ? fetched
-          : fetched.slice(0, options.survivingPerPage);
-      return { data, pagination: { hasMore } };
-    }
+  const withIds = Object.fromEntries(
+    Object.entries(rows).map(([slug, list]) => [
+      slug,
+      list.map((row, index) => ({
+        id: `r${String(index).padStart(4, "0")}`,
+        ...row,
+      })),
+    ])
   );
-  const getCollection = vi.fn(async (slug: string) => {
-    if (options.denied?.includes(slug)) throw NextlyError.forbidden();
-    return { status: options.lifecycle === true };
+  const find = vi.fn(async (slug: string, opts: FindOptions = {}) => {
+    if (options.broken?.includes(slug)) throw new Error(`outage: ${slug}`);
+    const after = opts.where?.id?.greater_than;
+    const matched = (withIds[slug] ?? []).filter(
+      row => after === undefined || row.id > after
+    );
+    const limit = Math.min(opts.limit ?? 5, CORE_READ_CAP);
+    const fetched = matched.slice(0, limit);
+    const survived =
+      options.survivingPerPage === undefined
+        ? fetched
+        : fetched.slice(0, options.survivingPerPage);
+    const { rewriteId } = options;
+    const items =
+      rewriteId === undefined
+        ? survived
+        : survived.map(row => ({ ...row, id: rewriteId(row.id) }));
+    return {
+      items,
+      ...(opts.total === true ? { total: matched.length } : {}),
+    };
   });
-  return { collections: { getCollection, listEntries } };
+  return { find } as unknown as Parameters<typeof tallyIssues>[0] & {
+    find: typeof find;
+  };
 }
 
 /** A document whose SEO group is filled in completely. */
@@ -110,30 +110,20 @@ const clean = {
 /** A document missing only its title, so it contributes exactly one issue. */
 const untitled = { seo: { ...clean.seo, metaTitle: "" } };
 
-async function countFor(
+/** `n` untitled documents. */
+const untitledRows = (n: number) => Array.from({ length: n }, () => untitled);
+
+/** The tally as a plain object, by issue label. */
+async function tallied(
   services: ReturnType<typeof servicesWith>,
   collections: string[],
-  extra: {
-    signal?: AbortSignal;
-    where?: Record<string, unknown>;
-    installed?: readonly FieldConfig[];
-    status?: "all";
-  } = {}
+  installed: readonly FieldConfig[] = defaultSeoFields()
 ) {
-  const { resolve } = seoIssuesWidgetSource(
-    collections,
-    extra.installed ?? defaultSeoFields()
-  );
-  return resolve(
-    {
-      ...countQuery,
-      ...(extra.where === undefined ? {} : { where: extra.where }),
-      ...(extra.status === undefined ? {} : { status: extra.status }),
-    },
-    caller,
-    { services } as never,
-    extra.signal === undefined ? undefined : { signal: extra.signal }
-  );
+  const tally = await tallyIssues(services, collections, checksFor(installed));
+  return {
+    byIssue: Object.fromEntries(tally.byIssue),
+    bounded: tally.bounded,
+  };
 }
 
 describe("which issues a document has", () => {
@@ -171,191 +161,6 @@ describe("which issues a document has", () => {
   });
 });
 
-describe("counting across collections", () => {
-  it("sums the issues in every configured collection", async () => {
-    const services = servicesWith({
-      pages: [{ seo: {} }, clean],
-      posts: [{ seo: { metaTitle: "T" } }],
-    });
-
-    // 4 from the empty page, 0 from the clean one, 3 from the post.
-    expect(await countFor(services, ["pages", "posts"])).toEqual({
-      op: "count",
-      total: 7,
-    });
-  });
-
-  it("scopes every read to the caller", async () => {
-    // 🔴 The whole authorization story. A count assembled as `system` would be
-    // the same figure for everyone, and would tell an author how much content
-    // exists that they cannot read.
-    const services = servicesWith({ pages: [clean] });
-    await countFor(services, ["pages"]);
-
-    const opts = services.collections.listEntries.mock.calls[0]?.[2];
-    expect(opts).toMatchObject({ as: "user", user: caller.user });
-  });
-
-  it("counts nothing from a collection refused partway through its scan", async () => {
-    // A read rule or hook can refuse a later page after earlier ones were read:
-    // the collection was denied, so none of its pages may reach the count.
-    const services = servicesWith(
-      {
-        pages: Array.from({ length: ISSUE_SCAN_PAGE_SIZE + 1 }, () => untitled),
-        posts: [untitled],
-      },
-      { deniedFromPage: { pages: 2 } }
-    );
-    expect(await countFor(services, ["pages", "posts"])).toEqual({
-      op: "count",
-      total: 1,
-    });
-  });
-
-  it("counts a collection the caller cannot read as zero", async () => {
-    // The managed service THROWS on a full denial rather than returning an
-    // empty page, so an uncaught refusal would blank the whole card over one
-    // unreadable collection.
-    const services = servicesWith(
-      { pages: [{ seo: {} }], secret: [{ seo: {} }] },
-      { denied: ["secret"] }
-    );
-
-    expect(await countFor(services, ["pages", "secret"])).toEqual({
-      op: "count",
-      total: 4,
-    });
-  });
-
-  it("writes no status filter, leaving the decision to core", async () => {
-    // 🔴 `callerReadOptions` reads AS the caller rather than overriding access,
-    // and on that path `resolveStatusFilter` restricts the read to the public
-    // states derived from the collection's WORKFLOW. A `status = "published"`
-    // written here was redundant and narrower: a workflow naming its public
-    // state anything else -- `featured`, say -- lost live content, and the card
-    // undercounted without appearing to.
-    const services = servicesWith({ pages: [clean] }, { lifecycle: true });
-    await countFor(services, ["pages"]);
-
-    expect(
-      services.collections.listEntries.mock.calls[0]?.[1]
-    ).not.toHaveProperty("where");
-  });
-
-  it("does not read the collection lifecycle it no longer decides from", async () => {
-    // The metadata read existed only to build that filter. One fewer service
-    // call per collection, on every scan.
-    const services = servicesWith({ pages: [clean] }, { lifecycle: true });
-    await countFor(services, ["pages"]);
-
-    expect(services.collections.getCollection).not.toHaveBeenCalled();
-  });
-});
-
-describe("the row budget", () => {
-  it("says the total is a floor once it binds", async () => {
-    // One issue per row, so the total is the number of rows read and the bound
-    // is visible in the number as well as in the flag.
-    const rows = Array.from({ length: ISSUE_SCAN_ROW_BUDGET + 50 }, () => ({
-      seo: { ...clean.seo, metaTitle: "" },
-    }));
-
-    expect(await countFor(servicesWith({ pages: rows }), ["pages"])).toEqual({
-      op: "count",
-      total: ISSUE_SCAN_ROW_BUDGET,
-      atLeast: true,
-    });
-  });
-
-  it("claims nothing when the corpus fits inside it", async () => {
-    // The must-differ half: an `atLeast` set unconditionally satisfies the case
-    // above on its own, and would make every exact count read as approximate.
-    const rows = Array.from({ length: 3 }, () => ({
-      seo: { ...clean.seo, metaTitle: "" },
-    }));
-
-    expect(await countFor(servicesWith({ pages: rows }), ["pages"])).toEqual({
-      op: "count",
-      total: 3,
-    });
-  });
-
-  it("bounds the whole answer, not each collection", async () => {
-    // A per-collection budget multiplies by however many collections a project
-    // configures, which is the opposite of a bound.
-    const rows = (n: number) =>
-      Array.from({ length: n }, () => ({
-        seo: { ...clean.seo, metaTitle: "" },
-      }));
-    const services = servicesWith({
-      a: rows(ISSUE_SCAN_ROW_BUDGET),
-      b: rows(ISSUE_SCAN_ROW_BUDGET),
-    });
-
-    const result = await countFor(services, ["a", "b"]);
-    expect(result).toEqual({
-      op: "count",
-      total: ISSUE_SCAN_ROW_BUDGET,
-      atLeast: true,
-    });
-  });
-});
-
-describe("cancellation", () => {
-  it("stops scanning once the host has stopped waiting", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    // Ended rather than reported: a scan is shared by every card of this source
-    // in a batch, so a short tally returned here could reach a card that was
-    // still waiting, as a number that looks whole.
-    await expect(
-      countFor(services, ["pages"], { signal: controller.signal })
-    ).rejects.toThrow(/took too long/);
-
-    expect(services.collections.listEntries).not.toHaveBeenCalled();
-  });
-
-  it("reads normally when the signal is live", async () => {
-    // The must-differ half: a resolver that returned early regardless would
-    // satisfy the case above while answering nothing for anyone.
-    const controller = new AbortController();
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], { signal: controller.signal })
-    ).toEqual({ op: "count", total: 4 });
-  });
-});
-
-describe("the published source", () => {
-  it("declares the plugin namespace and the ops it can answer", () => {
-    const { source } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
-
-    expect(source.id).toBe(SEO_ISSUES_SOURCE_ID);
-    expect(source.id.startsWith("plugin:")).toBe(true);
-    expect(source.kind).toBe("plugin");
-    expect(source.supports).toEqual(["count", "groupBy"]);
-  });
-
-  it("refuses an op it did not publish", async () => {
-    // Validation refuses these before the resolver is reached; the arm exists
-    // so a source that later declares an op it cannot answer fails loudly
-    // rather than returning a count shaped like something else.
-    const { resolve } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
-
-    await expect(
-      resolve(
-        { source: SEO_ISSUES_SOURCE_ID, op: "list" } as never,
-        caller,
-        { services: servicesWith({}) } as never,
-        undefined
-      )
-    ).rejects.toThrow(/answers "count"/);
-  });
-});
-
 describe("the fields a project actually configured", () => {
   it("checks nothing the configured set does not install", async () => {
     // 🔴 `seoPlugin({ fields })` REPLACES the default group. A project that
@@ -365,10 +170,8 @@ describe("the fields a project actually configured", () => {
     const services = servicesWith({ pages: [{ seo: { focusKeyword: "x" } }] });
 
     expect(
-      await countFor(services, ["pages"], {
-        installed: [text({ name: "focusKeyword" })],
-      })
-    ).toEqual({ op: "count", total: 0 });
+      await tallied(services, ["pages"], [text({ name: "focusKeyword" })])
+    ).toEqual({ byIssue: {}, bounded: false });
   });
 
   it("still checks the defaults when nothing is overridden", async () => {
@@ -376,215 +179,33 @@ describe("the fields a project actually configured", () => {
     // the case above while reporting a clean site for everyone.
     const services = servicesWith({ pages: [{ seo: { focusKeyword: "x" } }] });
 
-    expect(await countFor(services, ["pages"])).toEqual({
-      op: "count",
-      total: 4,
-    });
+    expect(
+      Object.keys((await tallied(services, ["pages"])).byIssue)
+    ).toHaveLength(4);
   });
 
   it("checks only the defaults that survive a partial override", async () => {
     const services = servicesWith({ pages: [{ seo: {} }] });
 
     expect(
-      await countFor(services, ["pages"], {
-        installed: [text({ name: "metaTitle" }), text({ name: "canonical" })],
-      })
-    ).toEqual({ op: "count", total: 2 });
-  });
-});
-
-describe("a query that narrows by issue", () => {
-  it("counts only the issue the query named", async () => {
-    // 🔴 The source PUBLISHES `issue`, so validation admits a `where` naming
-    // it. A resolver that accepted the query and counted every issue anyway
-    // would answer a narrower question with a wider number, and nothing
-    // downstream could tell.
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], {
-        where: { [ISSUE_FIELD]: { equals: "Missing meta title" } },
-      })
-    ).toEqual({ op: "count", total: 1 });
-  });
-
-  it("counts every issue when the query names none", async () => {
-    // The must-differ half: a filter that excluded everything satisfies the
-    // case above at a total of zero.
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(await countFor(services, ["pages"])).toEqual({
-      op: "count",
-      total: 4,
+      await tallied(
+        services,
+        ["pages"],
+        [text({ name: "metaTitle" }), text({ name: "canonical" })]
+      )
+    ).toEqual({
+      byIssue: { "Missing meta title": 1, "Missing canonical URL": 1 },
+      bounded: false,
     });
   });
-
-  it("accepts a set of issues", async () => {
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], {
-        where: {
-          [ISSUE_FIELD]: {
-            in: ["Missing meta title", "Missing canonical URL"],
-          },
-        },
-      })
-    ).toEqual({ op: "count", total: 2 });
-  });
-
-  it("refuses an operator it cannot honour, rather than ignoring it", async () => {
-    // `issue` is a closed set of labels, so a substring match has no meaning
-    // over it -- and silently answering the unfiltered total would be worse
-    // than refusing.
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    await expect(
-      countFor(services, ["pages"], {
-        where: { [ISSUE_FIELD]: { contains: "title" } },
-      })
-    ).rejects.toThrow(/cannot filter issues/);
-  });
 });
 
-describe("a failure that is not a denial", () => {
-  it("reaches the card instead of becoming a partial count", async () => {
-    // 🔴 A denial is an ordinary fact about the reader. An outage is not:
-    // folding it into a successful count shows a figure that is quietly too
-    // small, with nothing anywhere to say the scan did not finish.
-    const services = servicesWith(
-      { pages: [{ seo: {} }], broken: [{ seo: {} }] },
-      { broken: ["broken"] }
-    );
-
-    await expect(countFor(services, ["pages", "broken"])).rejects.toThrow(
-      /outage/
-    );
-  });
-});
-
-describe("what the scan reads", () => {
-  it("asks for the SEO group alone, not whole documents", async () => {
-    // Without a projection every page carries each document whole -- rich
-    // text, blocks, every JSON payload -- so the row cap would bound the row
-    // COUNT while the bytes behind it stayed unbounded.
-    const services = servicesWith({ pages: [clean] });
-    await countFor(services, ["pages"]);
-
-    expect(services.collections.listEntries.mock.calls[0]?.[1]).toMatchObject({
-      select: { id: true, seo: true },
-      depth: 0,
-    });
-  });
-
-  it("asks every page for the same width, at ascending pages", async () => {
-    // 🔴 The managed service derives its window as `(page - 1) * limit`, so a
-    // page narrowed to fit a remaining budget moves BACKWARDS -- page 10 at a
-    // limit of 50 starts at row 450, not 1800. Holding the width constant is
-    // what makes the offsets correct by construction, so the invariant is
-    // asserted directly rather than inferred from a total.
-    const rows = Array.from({ length: 1000 }, () => untitled);
-    const services = servicesWith({ pages: rows });
-    await countFor(services, ["pages"]);
-
-    const pagination = services.collections.listEntries.mock.calls.map(
-      call =>
-        (call[1] as { pagination: { limit: number; page: number } }).pagination
-    );
-    expect(pagination.length).toBeGreaterThan(1);
-    expect(new Set(pagination.map(p => p.limit)).size).toBe(1);
-    expect(pagination.map(p => p.page)).toEqual(
-      pagination.map((_unused, index) => index + 1)
-    );
-  });
-
-  it("stops when a hook leaves fewer rows than the page it came from", async () => {
-    // 🔴 `data.length` is what survived the collection's `afterRead` hooks;
-    // `hasMore` is computed from the database total, before them. A budget
-    // charged on rows RETURNED is therefore never spent by a hook that drops
-    // them -- and the scan walks the whole collection, issuing a query and
-    // running hooks for every page of it, while claiming a bounded read.
-    //
-    // Charging the fetch cannot be fooled that way.
-    const rows = Array.from({ length: 100_000 }, () => untitled);
-    const services = servicesWith({ pages: rows }, { survivingPerPage: 0 });
-
-    const result = await countFor(services, ["pages"]);
-
-    expect(services.collections.listEntries).toHaveBeenCalledTimes(
-      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
-    );
-    expect(result).toEqual({ op: "count", total: 0, atLeast: true });
-  });
-});
-
-describe("every where shape a validated query may carry", () => {
-  it("reads a bare scalar as the equality it is shorthand for", async () => {
-    // 🔴 `validateReadWidgetQuery` accepts `where: { issue: "..." }` as the same
-    // request as the `equals` object. Reading only the object form answered the
-    // narrowed question with the unfiltered total -- and nothing downstream
-    // could tell, because the number is a plausible one.
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], {
-        where: { [ISSUE_FIELD]: "Missing meta title" },
-      })
-    ).toEqual({ op: "count", total: 1 });
-  });
-
-  it("combines an `and` of conditions", async () => {
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], {
-        where: {
-          and: [
-            {
-              [ISSUE_FIELD]: {
-                in: ["Missing meta title", "Missing social image"],
-              },
-            },
-            { [ISSUE_FIELD]: { not_equals: "Missing social image" } },
-          ],
-        },
-      })
-    ).toEqual({ op: "count", total: 1 });
-  });
-
-  it("combines an `or` of conditions", async () => {
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], {
-        where: {
-          or: [
-            { [ISSUE_FIELD]: { equals: "Missing meta title" } },
-            { [ISSUE_FIELD]: { equals: "Missing canonical URL" } },
-          ],
-        },
-      })
-    ).toEqual({ op: "count", total: 2 });
-  });
-
-  it("refuses a field it never published", async () => {
-    // Unreachable for a validated query, since the source declares one field --
-    // but ignoring it is what turns a narrowed question into a wider answer, so
-    // it refuses rather than passing everything.
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    await expect(
-      countFor(services, ["pages"], { where: { slug: { equals: "x" } } })
-    ).rejects.toThrow(/cannot filter on that field/);
-  });
-});
-
-describe("a field the caller may not read", () => {
+describe("a field the reader may not read", () => {
   it("is not checked, because redaction is not absence", async () => {
-    // 🔴 A field carrying `access.read` may be stripped from the row before this
-    // source sees it, and a stripped value looks exactly like one nobody filled
-    // in. Checking it would report every document the caller CAN see as missing
-    // a field that is populated and merely hidden from them.
+    // 🔴 A field carrying `access.read` may be stripped from the row before the
+    // scan sees it, and a stripped value looks exactly like one nobody filled
+    // in. Checking it would report every document the reader CAN see as
+    // missing a field that is populated and merely hidden from them.
     const guarded = {
       ...text({ name: "metaTitle" }),
       access: { read: () => false },
@@ -592,271 +213,252 @@ describe("a field the caller may not read", () => {
     const services = servicesWith({ pages: [{ seo: {} }] });
 
     expect(
-      await countFor(services, ["pages"], {
-        installed: [guarded, text({ name: "canonical" })],
-      })
-    ).toEqual({ op: "count", total: 1 });
-  });
-
-  it("is checked when it declares no rule of its own", async () => {
-    // The must-differ half: excluding every field satisfies the case above at a
-    // total of zero, and would report a clean site for everyone.
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], {
-        installed: [text({ name: "metaTitle" }), text({ name: "canonical" })],
-      })
-    ).toEqual({ op: "count", total: 2 });
+      await tallied(services, ["pages"], [guarded, text({ name: "canonical" })])
+    ).toEqual({ byIssue: { "Missing canonical URL": 1 }, bounded: false });
   });
 });
 
-describe("the status a query asks for", () => {
-  it("refuses a selector it cannot deliver", async () => {
-    // 🔴 `assertValidStatus` admits `all` for a source with no lifecycle of its
-    // own, so it reaches this resolver -- but the managed `listEntries` forwards
-    // no lifecycle selector, and the read is not an overriding one, so the rows
-    // are the public ones whatever was asked. Answering that as "all" reports a
-    // published-only number under a name promising every document.
-    const services = servicesWith(
-      { pages: [{ seo: {} }] },
-      { lifecycle: true }
-    );
-
-    await expect(
-      countFor(services, ["pages"], { status: "all" })
-    ).rejects.toThrow(/published content only/);
-  });
-
-  it("answers a query that names no status", async () => {
-    // The must-differ half: refusing every query satisfies the case above while
-    // answering nothing for anyone.
-    const services = servicesWith(
-      { pages: [{ seo: {} }] },
-      { lifecycle: true }
-    );
-
-    expect(await countFor(services, ["pages"])).toEqual({
-      op: "count",
-      total: 4,
-    });
-  });
-});
-
-describe("a membership operand that is not a list", () => {
-  it("reads a bare scalar as one member, the way the compiler does", async () => {
-    // 🔴 `query-operators.ts` wraps a non-array before building the clause, and
-    // widget validation accepts the same shape. Reading it as an EMPTY list made
-    // `in` match nothing and `not_in` match everything -- the two worst answers
-    // available, and both look like ordinary numbers.
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], {
-        where: { [ISSUE_FIELD]: { in: "Missing meta title" } },
-      })
-    ).toEqual({ op: "count", total: 1 });
-  });
-
-  it("negates a bare scalar over the same one member", async () => {
-    const services = servicesWith({ pages: [{ seo: {} }] });
-
-    expect(
-      await countFor(services, ["pages"], {
-        where: { [ISSUE_FIELD]: { not_in: "Missing meta title" } },
-      })
-    ).toEqual({ op: "count", total: 3 });
-  });
-});
-
-describe("one scan for every question in a batch", () => {
-  const LABELS = [
-    "Missing meta title",
-    "Missing canonical URL",
-    "Missing meta description",
-    "Missing social image",
-    "Hidden from search engines",
-  ];
-  /** The five cells the SEO card asks for, one count per kind of issue. */
-  const cells = LABELS.map(label => ({
-    source: SEO_ISSUES_SOURCE_ID,
-    op: "count" as const,
-    where: { [ISSUE_FIELD]: { equals: label } },
-  }));
-  const rows = {
-    pages: [
-      untitled,
-      { seo: { ...clean.seo, canonical: "", noindex: true } },
-      { seo: {} },
-      clean,
-    ],
-  };
-
-  it("answers the five cells from ONE scan, each equal to its own resolve call", async () => {
-    const { resolve, resolveMany } = seoIssuesWidgetSource(
-      ["pages"],
-      defaultSeoFields()
-    );
-    if (!resolveMany) throw new Error("resolveMany is published");
-
-    const together = servicesWith(rows);
-    const many = await resolveMany(
-      cells,
-      caller,
-      { services: together } as never,
-      undefined
-    );
-
-    const alone = await Promise.all(
-      cells.map(cell =>
-        resolve(
-          cell,
-          caller,
-          { services: servicesWith(rows) } as never,
-          undefined
-        )
-      )
-    );
-
-    expect(many).toEqual(alone);
-    // One scan: one page of `pages` read, not five.
-    expect(together.collections.listEntries).toHaveBeenCalledTimes(1);
-  });
-
-  it("shares the scan through the batch's scope when its cards are answered one at a time", async () => {
-    const { resolve } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
-    const services = servicesWith(rows);
-    const kept = new Map<string, Promise<unknown>>();
-    const scope = {
-      getOrCompute: <T>(key: string, compute: () => Promise<T>) => {
-        if (!kept.has(key)) kept.set(key, compute());
-        return kept.get(key) as Promise<T>;
-      },
-    };
-
-    await Promise.all(
-      cells.map(cell => resolve(cell, caller, { services } as never, { scope }))
-    );
-
-    expect(services.collections.listEntries).toHaveBeenCalledTimes(1);
-  });
-
-  it("fails only the query it cannot answer, and answers the rest", async () => {
-    const { resolveMany } = seoIssuesWidgetSource(
-      ["pages"],
-      defaultSeoFields()
-    );
-    if (!resolveMany) throw new Error("resolveMany is published");
-
-    const answers = await resolveMany(
-      [cells[0], { ...cells[1], status: "all" } as never, cells[2]],
-      caller,
-      { services: servicesWith(rows) } as never,
-      undefined
-    );
-
-    expect(answers[0]).toEqual({ op: "count", total: 2 });
-    expect(answers[1]).toBeInstanceOf(Error);
-    expect(answers[2]).toEqual({ op: "count", total: 1 });
-  });
-
-  it("groups the issues by kind, and says the counts are floors past the bound", async () => {
-    const { resolve } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
-    const grouped = {
-      source: SEO_ISSUES_SOURCE_ID,
-      op: "groupBy" as const,
-      groupBy: ISSUE_FIELD,
-    };
-
-    const whole = await resolve(
-      grouped,
-      caller,
-      { services: servicesWith(rows) } as never,
-      undefined
-    );
-    expect(whole).toEqual({
-      op: "groupBy",
-      buckets: expect.arrayContaining([
-        { value: "Missing meta title", count: 2 },
-        { value: "Hidden from search engines", count: 1 },
-      ]),
-    });
-    expect(whole).not.toHaveProperty("atLeast");
-
-    const many = Array.from(
-      { length: ISSUE_SCAN_ROW_BUDGET + 1 },
-      () => untitled
-    );
-    const bounded = await resolve(
-      grouped,
-      caller,
-      { services: servicesWith({ pages: many }) } as never,
-      undefined
-    );
-    expect(bounded).toMatchObject({
-      op: "groupBy",
-      buckets: [{ value: "Missing meta title", count: ISSUE_SCAN_ROW_BUDGET }],
-      atLeast: true,
-    });
-    // Every bucket the scan found is here: a floor, not buckets left out.
-    expect(bounded).not.toHaveProperty("truncated");
-  });
-
-  it("returns at most the query's limit of buckets, largest first, and says when it left some out", async () => {
-    const { resolve } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
-    const undescribed = { seo: { ...clean.seo, metaDescription: "" } };
-    // The smaller bucket is found first, so its place in the tally is ahead.
+describe("counting across collections", () => {
+  it("tallies the issues in every configured collection, by kind", async () => {
     const services = servicesWith({
-      pages: [untitled, undescribed, undescribed, undescribed],
+      pages: [untitled, clean],
+      posts: [untitled, { seo: { noindex: true } }],
     });
-    const grouped = (limit: number) =>
-      resolve(
-        {
-          source: SEO_ISSUES_SOURCE_ID,
-          op: "groupBy" as const,
-          groupBy: ISSUE_FIELD,
-          limit,
-        },
-        caller,
-        { services } as never,
-        undefined
-      );
 
-    expect(await grouped(1)).toEqual({
-      op: "groupBy",
-      buckets: [{ value: "Missing meta description", count: 3 }],
-      truncated: true,
-    });
-    expect(await grouped(10)).toEqual({
-      op: "groupBy",
-      buckets: [
-        { value: "Missing meta description", count: 3 },
-        { value: "Missing meta title", count: 1 },
-      ],
+    expect(await tallied(services, ["pages", "posts"])).toEqual({
+      byIssue: { "Missing meta title": 2, "Hidden from search engines": 1 },
+      bounded: false,
     });
   });
 
-  it("fails only the query its filter refuses late, and answers the rest from the scan", async () => {
-    // `contains` passes the host's validation but not this source's filter,
-    // which refuses it only once the scan is read: that query alone may fail.
-    const { resolveMany } = seoIssuesWidgetSource(
-      ["pages"],
-      defaultSeoFields()
+  it("reads no collection it was not configured with", async () => {
+    const services = servicesWith({ pages: [untitled], other: [untitled] });
+
+    await tallied(services, ["pages"]);
+
+    expect(services.find.mock.calls.map(([slug]) => slug)).toEqual(["pages"]);
+  });
+
+  it("lets a failing read reach the card instead of becoming a partial count", async () => {
+    // 🔴 A database outage or a failing hook folded into a smaller number shows
+    // a figure that is quietly too small, with nothing anywhere to say the scan
+    // did not finish. Core fails the card or the item that threw, alone.
+    const services = servicesWith(
+      { pages: [untitled], posts: [untitled] },
+      { broken: ["posts"] }
     );
-    if (!resolveMany) throw new Error("resolveMany is published");
-    const answers = await resolveMany(
-      [
-        countQuery,
-        {
-          ...countQuery,
-          where: { [ISSUE_FIELD]: { contains: "title" } },
-        } as never,
-      ],
-      caller,
-      { services: servicesWith({ pages: [untitled] }) } as never,
-      undefined
+
+    await expect(tallied(services, ["pages", "posts"])).rejects.toThrow(
+      /outage: posts/
     );
-    expect(answers[0]).toEqual({ op: "count", total: 1 });
-    expect(answers[1]).toBeInstanceOf(Error);
+  });
+});
+
+describe("what the scan reads", () => {
+  it("asks for the SEO group and the id alone, links unexpanded, ordered by id, counting what matched", async () => {
+    const services = servicesWith({ pages: [untitled] });
+
+    await tallied(services, ["pages"]);
+
+    expect(services.find).toHaveBeenCalledWith("pages", {
+      select: ["id", "seo"],
+      sort: "id",
+      limit: ISSUE_SCAN_PAGE_SIZE,
+      total: true,
+      depth: 0,
+    });
+  });
+
+  it("names no status, leaving which rows are public to core", async () => {
+    // Core reads a person's query with no status as the public states the
+    // collection's workflow declares. A `published` written here would drop
+    // live content on a workflow that names its public state otherwise.
+    const services = servicesWith({ pages: [untitled] });
+
+    await tallied(services, ["pages"]);
+
+    for (const [, opts] of services.find.mock.calls) {
+      expect(opts).not.toHaveProperty("status");
+    }
+  });
+
+  it("asks no more rows of a read than core answers one with", () => {
+    // 🔴 Core clamps a read to fifty rows. A page size above it reads every
+    // full page as short, which the paging takes for the last one.
+    expect(ISSUE_SCAN_PAGE_SIZE).toBeLessThanOrEqual(CORE_READ_CAP);
+  });
+
+  it("continues each page from the last row of the one before, and reads every row once", async () => {
+    const rows = ISSUE_SCAN_PAGE_SIZE * 2 + 7;
+    const services = servicesWith({ pages: untitledRows(rows) });
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": rows },
+      bounded: false,
+    });
+    const cursors = services.find.mock.calls.map(
+      ([, opts]) => opts?.where?.id?.greater_than
+    );
+    expect(cursors).toEqual([undefined, "r0049", "r0099"]);
+  });
+
+  it("says its counts are floors when a hook leaves rows of the last page out", async () => {
+    // 🔴 The rows a page answers are what survived the reader's rules and the
+    // collection's hooks; `total` counted every row that matched. Each page
+    // continues from the last row it answered, so a short page is never taken
+    // for the last one: 30 of rows 0-49, 30 of rows 30-79, 30 of rows 60-99.
+    // That last page answered 30 of the 40 it matched, so the ten rows after
+    // it went unread, and an exact 90 would say there are no more.
+    const rows = ISSUE_SCAN_PAGE_SIZE * 2;
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { survivingPerPage: 30 }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": 90 },
+      bounded: true,
+    });
+    expect(services.find).toHaveBeenCalledTimes(3);
+  });
+
+  it("is exact when the last page answers every row it matched, the control", async () => {
+    const rows = ISSUE_SCAN_PAGE_SIZE * 2;
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { survivingPerPage: ISSUE_SCAN_PAGE_SIZE }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": rows },
+      bounded: false,
+    });
+  });
+
+  it("stops, and says its counts are floors, when a page answers no row while more matched", async () => {
+    const services = servicesWith(
+      { pages: untitledRows(ISSUE_SCAN_PAGE_SIZE + 1) },
+      { survivingPerPage: 0 }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: {},
+      bounded: true,
+    });
+    expect(services.find).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a hook that rewrites the ids it answers", () => {
+  // 🔴 The cursor is the id a row came back with, and the next page asks for
+  // the stored ids after it. Rewritten, it can pass every stored id or none.
+  const rows = ISSUE_SCAN_PAGE_SIZE * 2 + 7;
+
+  it("stops with floors when the rewritten cursor passes every stored id", async () => {
+    // "z" sorts after every stored id, so the next page matches nothing: read
+    // as the end, the scan reports the first page as the whole collection.
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { rewriteId: stored => `z${stored}` }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": ISSUE_SCAN_PAGE_SIZE },
+      bounded: true,
+    });
+  });
+
+  it("stops with floors, counting no row twice, when the rewritten cursor passes none", async () => {
+    // "a" sorts before every stored id, so each page would be the first again:
+    // read on, the scan counts the same rows until its budget runs out.
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { rewriteId: stored => `a${stored}` }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": ISSUE_SCAN_PAGE_SIZE },
+      bounded: true,
+    });
+    expect(services.find).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads every row when the hook leaves the ids as stored, the control", async () => {
+    const services = servicesWith(
+      { pages: untitledRows(rows) },
+      { rewriteId: stored => stored }
+    );
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": rows },
+      bounded: false,
+    });
+  });
+});
+
+describe("the row budget", () => {
+  it("says the counts are floors once it binds", async () => {
+    const services = servicesWith({
+      pages: untitledRows(ISSUE_SCAN_ROW_BUDGET + 1),
+    });
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": ISSUE_SCAN_ROW_BUDGET },
+      bounded: true,
+    });
+    expect(services.find).toHaveBeenCalledTimes(
+      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
+    );
+  });
+
+  it("claims nothing when the corpus fits inside it", async () => {
+    const services = servicesWith({
+      pages: untitledRows(ISSUE_SCAN_ROW_BUDGET),
+    });
+
+    expect(await tallied(services, ["pages"])).toEqual({
+      byIssue: { "Missing meta title": ISSUE_SCAN_ROW_BUDGET },
+      bounded: false,
+    });
+  });
+
+  it("bounds the whole answer, not each collection", async () => {
+    // A per-collection budget would multiply by however many collections a
+    // project configures, which is the opposite of a bound.
+    // Each collection three quarters of the budget, so the second is cut
+    // partway: what it may read is what the first left, not a budget of its own.
+    const each = (ISSUE_SCAN_ROW_BUDGET * 3) / 4;
+    const services = servicesWith({
+      pages: untitledRows(each),
+      posts: untitledRows(each),
+      docs: untitledRows(each),
+    });
+
+    expect(await tallied(services, ["pages", "posts", "docs"])).toEqual({
+      byIssue: { "Missing meta title": ISSUE_SCAN_ROW_BUDGET },
+      bounded: true,
+    });
+    expect(services.find).toHaveBeenCalledTimes(
+      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
+    );
+    expect(services.find.mock.calls.map(([slug]) => slug)).not.toContain(
+      "docs"
+    );
+  });
+
+  it("bounds the pages fetched, whatever a hook leaves of them", async () => {
+    // 🔴 A hook that drops rows leaves a row counter untouched while paging
+    // continues; counting fetches cannot be fooled that way.
+    const services = servicesWith(
+      { pages: untitledRows(ISSUE_SCAN_ROW_BUDGET * 3) },
+      { survivingPerPage: 1 }
+    );
+
+    const result = await tallied(services, ["pages"]);
+
+    expect(result.bounded).toBe(true);
+    expect(services.find).toHaveBeenCalledTimes(
+      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
+    );
   });
 });

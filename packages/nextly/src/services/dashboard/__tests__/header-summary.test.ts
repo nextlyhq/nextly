@@ -1,9 +1,11 @@
 /**
  * The dashboard header's summary parts, from what each source answered: the
- * attention total, the releases due within the week, and a widget's count.
+ * attention digest's items, the releases due within the week, and a widget's
+ * count.
  */
 import { describe, expect, it } from "vitest";
 
+import type { AttentionDigestItem } from "../../../domains/widgets/attention/digest-item";
 import {
   attentionPart,
   releasesPart,
@@ -13,57 +15,67 @@ import {
 
 describe("the attention part", () => {
   const OVERDUE = "releases?tab=attention&reason=overdue";
+  const overdue: AttentionDigestItem = {
+    id: "core/overdue-releases",
+    kind: "overdue",
+    label: "Overdue releases",
+    count: 3,
+    severity: "critical",
+    link: OVERDUE,
+  };
+  const stopped: AttentionDigestItem = {
+    id: "core/stopped-releases",
+    kind: "stopped",
+    label: "Releases that stopped",
+    count: 2,
+    severity: "critical",
+    link: "releases?tab=attention&reason=stopped",
+  };
+  const plugin: AttentionDigestItem = {
+    id: "acme/orders",
+    kind: "plugin",
+    label: "Orders to ship",
+    count: 5,
+    severity: "warning",
+    link: "collections/orders",
+  };
 
-  it("counts each kind's total from the card's grouped answer, never its parts as well", () => {
-    expect(
-      attentionPart(
-        [
-          { value: "unpublished", count: 3 },
-          { value: "unpublished:collection:posts", count: 3 },
-          { value: "scheduled", count: 2 },
-          { value: "scheduled:collection:posts", count: 2 },
-        ],
-        OVERDUE
-      )
-    ).toEqual({ kind: "attention", count: 5 });
-    expect(
-      attentionPart(
-        [
-          { value: "unpublished", count: 99, atLeast: true },
-          { value: "overdue", count: 3 },
-        ],
-        OVERDUE
-      )
-    ).toEqual({ kind: "attention", count: 102, atLeast: true, link: OVERDUE });
+  it("counts the digest's items, the number the card's title shows, not their counts", () => {
+    // Holding 3, 2 and 5: a part that summed them would say 10.
+    expect(attentionPart([stopped, overdue, plugin])).toEqual({
+      kind: "attention",
+      count: 3,
+      link: OVERDUE,
+    });
   });
 
-  it("links to the overdue releases only when some are waiting", () => {
+  it("is a floor when an item failed or its count is one", () => {
     expect(
-      attentionPart(
-        [
-          { value: "unpublished", count: 4 },
-          { value: "overdue", count: 1 },
-        ],
-        OVERDUE
-      )
-    ).toEqual({ kind: "attention", count: 5, link: OVERDUE });
-    expect(
-      attentionPart([{ value: "unpublished", count: 4 }], OVERDUE)
-    ).toEqual({ kind: "attention", count: 4 });
+      attentionPart([plugin, { ...stopped, count: 0, failed: true }])
+    ).toEqual({ kind: "attention", count: 2, atLeast: true });
+    expect(attentionPart([{ ...plugin, count: 99, atLeast: true }])).toEqual({
+      kind: "attention",
+      count: 1,
+      atLeast: true,
+    });
   });
 
-  it("fails when nothing was found but some lists went unread, as the card says Not all checked", () => {
-    expect(
-      attentionPart(
-        [{ value: "unpublished", count: 0, atLeast: true }],
-        OVERDUE
-      )
-    ).toBe("failed");
+  it("links to the overdue releases, by that item's own link, only when they were counted", () => {
+    expect(attentionPart([stopped, plugin])).toEqual({
+      kind: "attention",
+      count: 2,
+    });
+    // Its count failed: nothing is known to be overdue, so the line does not
+    // claim it by linking there.
+    expect(attentionPart([{ ...overdue, count: 0, failed: true }])).toEqual({
+      kind: "attention",
+      count: 1,
+      atLeast: true,
+    });
   });
 
-  it("has nothing to say when nothing is waiting", () => {
-    expect(attentionPart([], OVERDUE)).toBeNull();
-    expect(attentionPart([{ value: "overdue", count: 0 }], OVERDUE)).toBeNull();
+  it("has nothing to say when the digest holds no item", () => {
+    expect(attentionPart([])).toBeNull();
   });
 });
 

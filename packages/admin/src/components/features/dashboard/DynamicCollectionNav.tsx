@@ -2,6 +2,12 @@
 import type React from "react";
 import { useMemo, useCallback } from "react";
 
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
+import {
+  RemovedFromCodeDescription,
+  RemovedFromCodeMark,
+  removedFromCodeMarkId,
+} from "@admin/components/features/entries/RemovedFromCodeNotice";
 import * as Icons from "@admin/components/icons";
 import { Bookmark, Loader2, type LucideIcon } from "@admin/components/icons";
 import {
@@ -267,6 +273,18 @@ export function DynamicCollectionNav({
         const IconComponent =
           (Icons as Record<string, React.ElementType>)[iconName] ||
           Icons.Database;
+        // A collection removed from code stays listed, marked, with the step
+        // that retires it as the link's description.
+        const removed = isRemovedFromCode(collection)
+          ? {
+              entity: {
+                kind: "collection" as const,
+                label: displayName,
+                slug: collection.name,
+              },
+              state: collection.removedFromCodeState,
+            }
+          : null;
 
         return (
           <SidebarMenuItem key={collection.id}>
@@ -275,15 +293,24 @@ export function DynamicCollectionNav({
               tooltip={displayName}
               isActive={isActiveItem}
             >
-              <Link href={url}>
+              <Link
+                href={url}
+                aria-describedby={
+                  removed ? removedFromCodeMarkId(removed.entity) : undefined
+                }
+              >
                 <IconComponent className="h-4 w-4 shrink-0" />
                 {!isCollapsed && (
                   <>
-                    <span>{displayName}</span>
+                    {/* Truncated itself: the button truncates only its last
+                        span, which the mark would otherwise be. */}
+                    <span className="min-w-0 truncate">{displayName}</span>
+                    {removed ? <RemovedFromCodeMark {...removed} /> : null}
                   </>
                 )}
               </Link>
             </SidebarMenuButton>
+            {removed ? <RemovedFromCodeDescription {...removed} /> : null}
             {!isCollapsed && (
               <SidebarMenuAction
                 showOnHover={!collectionPinned}

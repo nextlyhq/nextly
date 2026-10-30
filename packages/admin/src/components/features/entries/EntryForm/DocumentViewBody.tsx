@@ -31,6 +31,7 @@ import { FormProvider, type UseFormReturn } from "react-hook-form";
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useRoutedPathname } from "@admin/context/RoutedPathnameContext";
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParam } from "@admin/lib/navigation";
@@ -104,17 +105,27 @@ export interface DocumentViewBodyProps {
  * `?field=` still opens it — the author's intent is unambiguous — and the
  * address is corrected IN PLACE, so a reload or a shared link then reaches
  * exactly what is on screen, and Back does not return to the stale address.
+ *
+ * Only the view's own address is corrected: the one the admin's router drew
+ * this view for, which moves with the router when one view of the document
+ * gives way to another. Under Cache Components a visited page stays mounted
+ * but hidden, and Back shows it again with its effects before its router has
+ * read the address Back went to; the bar then holds that page's address, and
+ * writing the view's field onto it put the reader back on an address that
+ * names the view's field (`?field=`) but not the view.
  */
 function useFieldInAddress(
   editing: ReturnType<typeof resolveViewField>,
   requested: string | string[] | undefined
 ): void {
   const named = editing.kind === "field" ? editing.name : undefined;
+  const routed = useRoutedPathname();
   useEffect(() => {
+    if (routed !== undefined && window.location.pathname !== routed) return;
     if (named !== undefined && named !== requested) {
       setSearchParam("field", named, { replace: true });
     }
-  }, [named, requested]);
+  }, [named, requested, routed]);
 }
 
 /**

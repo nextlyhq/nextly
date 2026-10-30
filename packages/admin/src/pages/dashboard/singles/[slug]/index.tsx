@@ -26,6 +26,11 @@ import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
 import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
+import {
+  isRemovedFromCode,
+  removedEntityHasNoTable,
+} from "@admin/components/features/entries/removed-from-code-notice";
+import { RemovedFromCodeNotice } from "@admin/components/features/entries/RemovedFromCodeNotice";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import { useSchedulePublishAction } from "@admin/components/features/releases/SchedulePublishAction";
@@ -317,10 +322,36 @@ export default function SingleEditPage({
     return <SingleEditPageSkeleton />;
   }
 
+  // A Single removed from code is named, with its next step, above whatever
+  // else this page has to say; where its table is gone, in place of the
+  // failed read, which says nothing the notice does not.
+  const removedFromCode = isRemovedFromCode(schema);
+  const removedNotice =
+    schema && removedFromCode ? (
+      <RemovedFromCodeNotice
+        entity={{ kind: "single", label: schema.label || slug, slug }}
+        state={schema.removedFromCodeState}
+      />
+    ) : null;
+
+  if (error && removedEntityHasNoTable(schema)) {
+    return (
+      <PageContainer width={CONTENT_PAGE_MEASURE}>
+        {removedNotice}
+        <div className="mt-6">
+          <Link href={ROUTES.BUILDER_SINGLES}>
+            <Button variant="outline">← Back to Singles</Button>
+          </Link>
+        </div>
+      </PageContainer>
+    );
+  }
+
   // Error state
   if (error) {
     return (
       <PageContainer width={CONTENT_PAGE_MEASURE}>
+        {removedNotice ? <div className="mb-6">{removedNotice}</div> : null}
         <Alert variant="destructive">
           {/* The server's message as it is: it already says what went wrong
               ("Not found.", "You can't see Home."). */}
@@ -414,18 +445,29 @@ export default function SingleEditPage({
             /* Under the editor's header, for the reason the entry editor
              gives. */
             documentBanner={
-              <ScheduledReleaseBanner
-                document={
-                  slug
-                    ? {
-                        scopeKind: "single",
-                        scopeSlug: slug,
-                        entryId: document.id,
-                      }
-                    : undefined
-                }
-                onDefaultLocale={!isNonDefaultLocale}
-              />
+              <>
+                {/* First in the banner order: it changes what every control
+                    below means, as nothing here can be changed. */}
+                {removedFromCode ? (
+                  <RemovedFromCodeNotice
+                    entity={{ kind: "single", label: singleLabel, slug }}
+                    state={schema.removedFromCodeState}
+                    variant="strip"
+                  />
+                ) : null}
+                <ScheduledReleaseBanner
+                  document={
+                    slug
+                      ? {
+                          scopeKind: "single",
+                          scopeSlug: slug,
+                          entryId: document.id,
+                        }
+                      : undefined
+                  }
+                  onDefaultLocale={!isNonDefaultLocale}
+                />
+              </>
             }
             // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
             // expects FieldConfig[] (discriminated). The runtime payload is the
@@ -437,11 +479,19 @@ export default function SingleEditPage({
              omitting this control here would leave the Single half reachable
              only through the API. With the form's own actions, matching the
              collection editor. */
-            documentActions={[
-              ...(schedule.contributed === null ? [] : [schedule.contributed]),
-              ...(release.contributed === null ? [] : [release.contributed]),
-              ...(pin === null ? [] : [pin]),
-            ]}
+            documentActions={
+              removedFromCode
+                ? []
+                : [
+                    ...(schedule.contributed === null
+                      ? []
+                      : [schedule.contributed]),
+                    ...(release.contributed === null
+                      ? []
+                      : [release.contributed]),
+                    ...(pin === null ? [] : [pin]),
+                  ]
+            }
             onSubmit={handleSubmit}
             isSubmitting={isUpdating}
             onCancel={handleCancel}

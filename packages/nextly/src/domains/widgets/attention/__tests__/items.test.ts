@@ -81,6 +81,9 @@ describe("the startup check", () => {
     ["an id without a namespace", { id: "unread" }, /namespace\/name/],
     ["a label over two lines", { label: "One\ntwo" }, /one-line label/],
     ["an empty label", { label: " " }, /one-line label/],
+    ["a reason over two lines", { reason: "One\ntwo" }, /one-line reason/],
+    ["an empty reason", { reason: "" }, /one-line reason/],
+    ["a reason that is not text", { reason: 3 }, /one-line reason/],
     ["no count function", { count: 3 }, /count function/],
     [
       "a link off the admin",
@@ -233,6 +236,21 @@ describe("what an item's count is handed", () => {
     expect(typeof (input.scope as { getOrCompute: unknown }).getOrCompute).toBe(
       "function"
     );
+  });
+
+  it("carries the item's reason when it gives one, and none when it does not", () => {
+    registerAttentionItems([
+      snapshot([
+        item({ reason: "Submissions not yet answered" }),
+        item({ id: "forms/plain" }),
+      ]),
+    ]);
+    const [given, plain] = pluginItemReaders(
+      { user: { id: "u1" } } as Parameters<typeof pluginItemReaders>[0],
+      new Date()
+    );
+    expect(given?.reason).toBe("Submissions not yet answered");
+    expect(plain).not.toHaveProperty("reason");
   });
 
   it("ranks as a warning whatever the plugin declared, and keeps its own link", async () => {

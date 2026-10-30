@@ -305,6 +305,46 @@ export interface DashboardLayoutResponse {
    * @experimental
    */
   getStarted?: GetStartedLayoutView;
+  /**
+   * The placement ids of the cards that hide while empty and were empty for
+   * this reader when the layout was read, at the tier each is drawn at on a
+   * dashboard as wide as the one the read was sent. The dashboard is drawn
+   * without them from its first paint, and every other card that hides while
+   * empty is placed and stays: neither leaves nor joins the page mid-view.
+   * Absent when the read judged no card (it was sent no dashboard width) and
+   * from a server that predates it: no verdict, which hides nothing and
+   * reveals nothing.
+   */
+  hiddenWhileEmpty?: string[];
+  /**
+   * The widget ids whose cards leave the dashboard while their own answer is
+   * empty, as drawn: widgets that hide while empty and that the layout read
+   * cannot answer ahead (the `registerWidget` and `contributes.admin.widgets`
+   * channels). Absent from a server that predates it, which reads as none.
+   */
+  hiddenWhenAnswerEmpty?: string[];
+  /**
+   * An opaque token for this one read of the layout: the cards in
+   * `hiddenWhileEmpty` were answered ahead under it, and the dashboard's batch
+   * sends it back so a card is handed the answer read for this load and no
+   * other tab's. New on every read, and part of the batch's query key, so a
+   * new layout answer asks the cards again, once, under its token. Absent from
+   * a server that predates it, and the batch then sends none.
+   */
+  readAheadToken?: string;
+}
+
+/**
+ * A layout answer as the admin holds it: the server's answer, with the dashboard width its read
+ * was sent. Set by the admin's own read (`fetchDashboardLayout`), never by the server.
+ */
+export interface DashboardLayoutRead extends DashboardLayoutResponse {
+  /**
+   * The dashboard width the read was sent, which its `hiddenWhileEmpty` was judged at; absent
+   * when it was sent none. The verdict holds only on a dashboard whose width draws every card at
+   * the tier this one does (`tierBandAt`), so an answer held from another width judges no card.
+   */
+  askedAtWidth?: number;
 }
 
 /** What the layout read says of the Get started card. */

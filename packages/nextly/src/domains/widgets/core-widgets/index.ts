@@ -60,7 +60,7 @@
 import type { WidgetDefinition } from "../definition";
 
 import { breakdownWidget } from "./breakdown";
-import { contentWidget } from "./content";
+import { contentTableWidget } from "./content-table";
 import { continueWidget } from "./continue";
 import { countWidget } from "./count";
 import { getStartedWidget } from "./get-started";
@@ -82,6 +82,7 @@ import { upcomingReleasesWidget } from "./upcoming-releases";
 export const CORE_DECLARATIONS = [
   countWidget,
   breakdownWidget,
+  needsAttentionWidget,
   noteWidget,
   recentEntriesWidget,
   overTimeWidget,
@@ -90,10 +91,9 @@ export const CORE_DECLARATIONS = [
 /** Core's widgets still written as definitions: every one not declared. */
 const CORE_WIDGET_LITERALS = [
   getStartedWidget,
-  contentWidget,
+  contentTableWidget,
   quickCreateWidget,
   teamWidget,
-  needsAttentionWidget,
   continueWidget,
   upcomingReleasesWidget,
   teamActivityWidget,
