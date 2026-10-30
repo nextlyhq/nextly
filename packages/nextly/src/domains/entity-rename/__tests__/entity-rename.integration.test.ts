@@ -48,7 +48,12 @@ import { entityPermissionSpelling } from "../../auth/services/entity-permission-
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { recordContentEvent } from "../../content-events/record";
 import { documentLockKey } from "../../document-lock/lock-key";
-import { documentOfReleaseEvent } from "../../releases/release-events";
+import {
+  documentEventPayload,
+  documentOfReleaseEvent,
+  recordReleaseEvent,
+  SYSTEM_RELEASE_EVENT_ACTOR,
+} from "../../releases/release-events";
 import { releaseMemberKey } from "../../releases/release-member-key";
 import { ReleasesRepository } from "../../releases/releases-repository";
 import {
@@ -554,17 +559,43 @@ function failingOn(
   table: string,
   hits: { count: number }
 ): TransactionContext {
+  const fails = (written: unknown) =>
+    written === table ||
+    (is(written, Table) && getTableName(written) === table);
+  const fail = () => {
+    hits.count += 1;
+    throw new Error(`injected: writing ${table} failed`);
+  };
   return new Proxy(tx, {
     get(target, name, receiver) {
       const value: unknown = Reflect.get(target, name, receiver);
       if (typeof value !== "function") return value;
       if (name === "update" || name === "updateCount" || name === "delete") {
         return (written: unknown, ...rest: unknown[]) => {
-          if (written === table) {
-            hits.count += 1;
-            throw new Error(`injected: writing ${table} failed`);
-          }
+          if (fails(written)) fail();
           return Reflect.apply(value, target, [written, ...rest]);
+        };
+      }
+      // A batched write goes through a Drizzle handle the transaction hands
+      // out, so that handle's updates to the table fail too.
+      if (name === "drizzleWithRelations") {
+        return (...args: unknown[]) => {
+          const db: unknown = Reflect.apply(value, target, args);
+          if (typeof db !== "object" || db === null) return db;
+          return new Proxy(db, {
+            get(inner, key, innerReceiver) {
+              const member: unknown = Reflect.get(inner, key, innerReceiver);
+              if (key !== "update" || typeof member !== "function") {
+                return typeof member === "function"
+                  ? member.bind(inner)
+                  : member;
+              }
+              return (written: unknown) => {
+                if (fails(written)) fail();
+                return Reflect.apply(member, inner, [written]);
+              };
+            },
+          });
         };
       }
       return value.bind(target);
@@ -1632,6 +1663,79 @@ describe.each(getConfiguredTestDialects())(
         });
         expect([row.scopeSlug, row.viewKey]).toEqual(["journal", expected]);
       }
+    }, 240_000);
+
+    it("rewrites a release's document history in a bounded number of statements", async () => {
+      await boot(dialect);
+      // More document events than one statement may carry on any dialect: a
+      // long release record of one collection's documents, with an event
+      // about no document beside them.
+      const entries = Array.from({ length: 700 }, () => randomUUID());
+      const release = await new ReleasesRepository(t().adapter).createRelease({
+        title: "Long record",
+      });
+      await t().adapter.transaction(async tx => {
+        for (const entryId of entries) {
+          await recordReleaseEvent(tx, release.id, {
+            kind: "documentAdded",
+            actor: SYSTEM_RELEASE_EVENT_ACTOR,
+            payload: documentEventPayload({
+              scopeKind: "collection",
+              scopeSlug: "notes",
+              entryId,
+              locale: null,
+              action: "publish",
+            }),
+          });
+        }
+        await recordReleaseEvent(tx, release.id, {
+          kind: "renamed",
+          actor: SYSTEM_RELEASE_EVENT_ACTOR,
+          payload: { from: "Long", to: "Long record" },
+        });
+      });
+      const writes = { count: 0 };
+      countWritesTo("nextly_content_events", writes);
+
+      await rename("collection", "notes", "journal");
+
+      vi.restoreAllMocks();
+      expect(writes.count).toBeGreaterThan(0);
+      expect(writes.count).toBeLessThanOrEqual(10);
+      const events = (await rowsOf("nextly_content_events")).filter(
+        row => row.subjectKind === "release" && row.subjectId === release.id
+      );
+      const documents = events
+        .map(row =>
+          documentOfReleaseEvent({
+            kind: String(row.kind),
+            payload: row.payload,
+          })
+        )
+        .filter(document => document !== undefined);
+      expect(documents).toHaveLength(entries.length);
+      expect(new Set(documents.map(document => document?.scopeSlug))).toEqual(
+        new Set(["journal"])
+      );
+      expect(new Set(documents.map(document => document?.entryId))).toEqual(
+        new Set(entries)
+      );
+      // The events about no document keep their payloads as they were
+      // written: JSON text on SQLite, a value elsewhere.
+      const others = events
+        .filter(
+          row =>
+            documentOfReleaseEvent({
+              kind: String(row.kind),
+              payload: row.payload,
+            }) === undefined
+        )
+        .map(row =>
+          typeof row.payload === "string"
+            ? (JSON.parse(row.payload) as unknown)
+            : row.payload
+        );
+      expect(others).toContainEqual({ from: "Long", to: "Long record" });
     }, 240_000);
 
     it("fails the whole rename when any table's move fails, collection or Single", async () => {
