@@ -292,7 +292,7 @@ export default function SingleBuilderEditPage({
   if (!slug) {
     return (
       <BuilderNotFoundScreen
-        title="Single Not Found"
+        title="Single not found"
         description="No Single slug was provided."
       />
     );

@@ -147,7 +147,8 @@ function SaveableChoices({
       <AlertDialogAction
         onClick={onDiscard}
         disabled={saving}
-        className="order-2 border-destructive bg-background text-destructive hover:bg-destructive/10 sm:order-1 sm:mr-auto"
+        // The dialog's confirm fades on hover; this outline keeps its own hover.
+        className="order-2 border-destructive bg-background text-destructive hover:bg-destructive/10 hover:opacity-100 sm:order-1 sm:mr-auto"
       >
         Discard Changes
       </AlertDialogAction>
@@ -364,7 +365,7 @@ export function UnsavedChangesGuard({
                     change against the resting fill. */}
                 <AlertDialogAction
                   onClick={handleConfirm}
-                  className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+                  variant="destructive"
                 >
                   Discard Changes
                 </AlertDialogAction>

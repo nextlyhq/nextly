@@ -6,7 +6,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
@@ -90,6 +90,38 @@ describe("BuilderSchemaChangeDialogs", () => {
   // A rename candidate needs a decision from the user even though nothing is
   // being destroyed, so a "safe" classification alone must not shorten the
   // dialog.
+  // A removal drops its field's column, and the preview's count of the values
+  // in it reads 0 when counting fails, so a preview it calls safe can still be
+  // deleting values. The short confirmation would say it "does not affect
+  // existing data", in the primary colour.
+  it("shows the full dialog, in red, for a safe change that removes a field", () => {
+    renderDialogs(
+      preview({
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "summary",
+              type: "text",
+              rowCount: 0,
+              classification: "safe",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
+    );
+    expect(
+      screen.queryByText(/do not affect existing data/i)
+    ).not.toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog");
+    const buttons = within(dialog).getAllByRole("button");
+    expect(buttons[buttons.length - 1].className).toMatch(
+      /\bbg-destructive-solid\b/
+    );
+  });
+
   it("shows the full dialog for a safe change that carries a rename candidate", () => {
     renderDialogs(
       preview({

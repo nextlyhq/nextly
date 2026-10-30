@@ -216,6 +216,30 @@ describe("each Builder dialog's confirming button is destructive only when it de
 
   // --- Deletes nothing: primary, whatever the overall flag says. ---
 
+  it("is not red for a refused save that removes a field, which applies nothing", () => {
+    // A field that cannot leave translation in one change refuses the whole
+    // save: nothing runs, so its Save stays disabled and is not a deletion.
+    expect(
+      reviewColour({
+        changes: { removed: [removedWithValues] },
+        leavingTranslation: [
+          {
+            name: "metaTitle",
+            column: "meta_title",
+            byLocale: { fr: 2 },
+            total: 2,
+            entriesWithoutDefault: 1,
+            defaultLocale: "en",
+            restoreCommand: "nextly translations restore",
+            refusal: { reason: "An entry has no English value.", steps: [] },
+          },
+        ],
+        hasDestructiveChanges: true,
+        classification: "destructive",
+      })
+    ).toBe("primary");
+  });
+
   it("is primary for added fields", () => {
     expect(
       reviewColour({

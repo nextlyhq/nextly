@@ -22,12 +22,12 @@ describe("BuilderNotFoundScreen", () => {
   it("renders the kind's own heading and body copy", () => {
     render(
       <BuilderNotFoundScreen
-        title="Collection Not Found"
+        title="Collection not found"
         description="No collection slug was provided."
       />
     );
     expect(
-      screen.getByRole("heading", { name: "Collection Not Found" })
+      screen.getByRole("heading", { name: "Collection not found" })
     ).toBeInTheDocument();
     expect(
       screen.getByText("No collection slug was provided.")
@@ -37,12 +37,12 @@ describe("BuilderNotFoundScreen", () => {
   it("is reusable for another builder kind without changing the component", () => {
     render(
       <BuilderNotFoundScreen
-        title="Field Group Not Found"
+        title="Field group not found"
         description="No field group slug was provided."
       />
     );
     expect(
-      screen.getByRole("heading", { name: "Field Group Not Found" })
+      screen.getByRole("heading", { name: "Field group not found" })
     ).toBeInTheDocument();
   });
 });

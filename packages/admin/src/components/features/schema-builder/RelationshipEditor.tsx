@@ -339,7 +339,7 @@ export function RelationshipEditor({
             htmlFor="max-depth"
             className="text-xs font-medium"
             label="Max population depth"
-            description="How deep to populate nested relationships (0-10)"
+            description="How deep to populate linked entries (0-10)"
           />
           <Input
             id="max-depth"

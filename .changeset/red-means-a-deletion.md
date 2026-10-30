@@ -41,9 +41,12 @@ Red now means a deletion, and the Schema Builder speaks one plain language.
   review, a discarded draft, a copy over another language's values, a
   dashboard reset or replace) pass it.
 - **The Schema Builder's save review is red only when the save deletes stored
-  values.** The colour now follows the preview's rows, so a change that only
-  needs an answer, a type change that keeps values, or values moving to the
-  translation archive no longer shows a red save.
+  values.** The colour now follows the preview's rows: a removed field is
+  always red, and a type change is red when the preview classes it as able to
+  lose values (today it classes every type change so). A change that only
+  needs an answer, or values moving to the translation archive, no longer
+  shows a red save. A save that removes a field always opens the full review,
+  not the short confirmation.
 - **Field types have one plain name everywhere:** "Rich text" (was
   "Editor"), "Image or file" (was "Media"), "Link to entries" (was
   "Relationship"), "Repeating rows" (was "Repeater") and "Field group" (was

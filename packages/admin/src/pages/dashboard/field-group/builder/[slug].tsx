@@ -272,7 +272,7 @@ export default function FieldGroupBuilderEditPage({
   if (!slug) {
     return (
       <BuilderNotFoundScreen
-        title="Field Group Not Found"
+        title="Field group not found"
         description="No field group slug was provided."
       />
     );

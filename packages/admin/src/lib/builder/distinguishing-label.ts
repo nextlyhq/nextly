@@ -24,7 +24,10 @@
 
 import type { DiffPathSegment } from "nextly/api/versions-diff";
 
-import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
+import {
+  BUILDER_KIND_NOUN,
+  type BuilderKind,
+} from "@admin/components/features/schema-builder/builder-config";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import {
   fieldNameOf,
@@ -160,14 +163,14 @@ export interface DistinguishedEntity {
 }
 
 /**
- * The word a person reads for each kind. A field group is a "component" only
- * inside the code; the screen never says that word.
+ * The word a person reads for each kind, as a label's first word: derived from
+ * the Builder's one kind noun, so the two cannot name a kind differently. A
+ * field group is a "component" only inside the code; the screen never says it.
  */
-const KIND_WORD: Record<BuilderKind, string> = {
-  collection: "Collection",
-  single: "Single",
-  "field-group": "Field group",
-};
+function kindWord(kind: BuilderKind): string {
+  const noun = BUILDER_KIND_NOUN[kind];
+  return noun.charAt(0).toUpperCase() + noun.slice(1);
+}
 
 /** Each entity with its kind and slug, always shown for the reason fields' names are. */
 export function distinguishEntities(
@@ -176,7 +179,7 @@ export function distinguishEntities(
   return entities.map(entity => {
     // A blank display name would leave the text opening on a bare bracket.
     const label = entity.label.trim() || "Untitled";
-    const kind = KIND_WORD[entity.kind];
+    const kind = kindWord(entity.kind);
     const disambiguator = `${kind}, slug: ${entity.slug}`;
     return {
       entity,

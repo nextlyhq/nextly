@@ -59,6 +59,9 @@ describe("AlertDialogAction", () => {
         .filter(name => /^(hover:)?bg-/.test(name))
         .sort()
     );
+    // Nothing of the primary look is left on the red one: its fade on hover
+    // would drop the red fill's label under the contrast the variant keeps.
+    expect([...deleting.classList]).not.toContain("hover:opacity-90");
     // The two must differ, or the comparison above would pass with one fill
     // for both.
     expect(fill(deleting)).not.toEqual(fill(plain));

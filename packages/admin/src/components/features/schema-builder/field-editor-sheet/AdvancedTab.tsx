@@ -29,7 +29,7 @@ type Props = {
 };
 
 const NESTED_UNIQUE_TOOLTIP =
-  "Unique can't be enforced inside a repeater or repeatable field group. The constraint would apply across the whole table, not per row. For per-row uniqueness, use code-first config.";
+  "Unique can't be enforced inside repeating rows or a repeatable field group. The constraint would apply across the whole table, not per row. For per-row uniqueness, use code-first config.";
 
 // Says "field group", the name the person editing it knows: "component" is
 // only the code's name for the same thing.
