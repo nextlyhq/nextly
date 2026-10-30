@@ -1,13 +1,23 @@
 /**
- * `system:content` against a real database: each collection the reader may see
- * on the dashboard, with its entries and how many are drafts, counted the way
- * `/stats` counts them, and a collection hidden from the navigation left out.
+ * `system:content`, the dashboard's Content table, against a real database on
+ * every dialect: each reader's own rows, counted as that reader, their drafts
+ * by the collection list's own Draft filter, each row's last update from its
+ * own data (a collection's newest entry that reader may read, a Single's
+ * document), who saved it as the trail lets that reader see, and a + only where
+ * they may create. Then the ranking: each row by its own last update, though
+ * one collection's saves fill the trail's window, and a Single's saver named
+ * from past that window. Then the bound: with sixty collections, one load
+ * counts the rows it draws and no others, and reads the newest entry of at most
+ * fifty, every one the trail's window names among them.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
-import { defineCollection, text } from "../../../config";
+import { runWithAccessMemo } from "../../../auth/access/request-memo";
+import { defineCollection, defineSingle, text } from "../../../config";
+import { refreshCollectionSources } from "../../../domains/widgets/collection-sources";
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
+import { MAX_WIDGET_LIMIT } from "../../../domains/widgets/query-limits";
 import { CONTENT_SOURCE_ID } from "../../../domains/widgets/system-source-ids";
 import {
   createTestNextly,
@@ -15,34 +25,71 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { ReadCaller } from "../readable-resources";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run on a reused database.
 const ARTICLES = "cs_articles";
 const TAGS = "cs_tags";
+const EMPTY = "cs_empty";
 const HIDDEN = "cs_hidden";
-const READER = { id: "cs-reader", name: "Reader", email: "reader@cs.test" };
+const HOME = "cs-home";
+const BUSY = "cs_busy";
+const ARCHIVE = "cs_archive";
+const NEWS = "cs_news";
+/** Sixty collections, more than any page of the card. */
+const SIXTY = Array.from(
+  { length: 60 },
+  (_, i) => `cs_m${String(i).padStart(2, "0")}`
+);
+
+const ANA = { id: "cs-ana", name: "Ana", email: "ana@cs.test" };
+const BEN = { id: "cs-ben", name: "Ben", email: "ben@cs.test" };
+
+const T0 = Date.parse("2026-10-23T12:00:00Z");
+/** Long before the trail's window, and before any save it records. */
+const LONG_AGO = new Date("2024-01-05T08:00:00Z");
+/** `minutes` before T0. */
+const at = (minutes: number) => new Date(T0 - minutes * 60_000);
+
+/**
+ * A read rule's answer as the rule's type is written: a rule may answer a
+ * filter, which the declared return type does not spell.
+ */
+const answering = (value: unknown) => value as boolean;
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
-  current = await createTestNextly({
+  const t = await createTestNextly({
     dialect,
     collections: [
-      // Draft/Published, so its entries split.
+      // Draft/Published, read whole by Ana and only its "shared" entries by Ben.
       defineCollection({
         slug: ARTICLES,
         status: true,
+        access: {
+          read: ({ user }: { user?: { id?: string } | null }) =>
+            user?.id === ANA.id
+              ? true
+              : answering({ title: { equals: "shared" } }),
+        },
+        fields: [text({ name: "title" })],
+      }),
+      // No lifecycle, so no drafts to count.
+      defineCollection({
+        slug: TAGS,
         access: { read: () => true },
         fields: [text({ name: "title" })],
       }),
-      // No lifecycle: every entry counts as published.
+      // Readable and holding nothing.
       defineCollection({
-        slug: TAGS,
+        slug: EMPTY,
         access: { read: () => true },
         fields: [text({ name: "title" })],
       }),
@@ -53,52 +100,422 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "title" })],
       }),
     ],
+    singles: [
+      defineSingle({
+        slug: HOME,
+        label: { singular: "Home" },
+        access: { read: () => true },
+        fields: [text({ name: "headline" })],
+      }),
+    ],
   });
-  await current.adapter.insert("users", { ...READER, is_active: true });
-  // A code rule only narrows the permission, so the reader holds read on all
-  // three collections and the rules admit them to each.
-  await grantTo(current, READER.id, "read", [ARTICLES, TAGS, HIDDEN]);
-  return current;
+  current = t;
+  for (const person of [ANA, BEN]) {
+    await t.adapter.insert("users", { ...person, is_active: true });
+    // A code rule only narrows the permission, so each reader holds read on
+    // everything here and the rules decide what they see.
+    await grantTo(t, person.id, "read", [ARTICLES, TAGS, EMPTY, HIDDEN, HOME]);
+  }
+  // Ana may create articles; nobody else may create anything.
+  await grantTo(t, ANA.id, "create", [ARTICLES]);
+  return t;
+}
+
+const as = (person: { id: string }): ReadCaller => ({
+  user: { id: person.id, roles: [] },
+});
+
+/**
+ * A new entry of `collection`, last updated at `updatedAt`: a write stamps its
+ * own instant, so the instant is set on the row, as the case states it.
+ */
+async function entry(
+  t: TestNextly,
+  collection: string,
+  data: Record<string, unknown>,
+  updatedAt: Date
+): Promise<string> {
+  const created = await t.nextly.create({
+    collection: collection as never,
+    data: data as never,
+  });
+  const id = String((created.item as { id: unknown }).id);
+  await t.adapter.update(
+    `dc_${collection}`,
+    { updated_at: updatedAt },
+    { and: [{ column: "id", op: "=", value: id }] }
+  );
+  return id;
+}
+
+/**
+ * The Single's document, made by a first read, last updated at `updatedAt`;
+ * its id, as the trail names it.
+ */
+async function singleUpdatedAt(
+  t: TestNextly,
+  slug: string,
+  updatedAt: Date
+): Promise<string> {
+  await t.nextly.findSingle({ slug: slug as never });
+  const registry = t.getService("singleRegistryService") as unknown as {
+    getSingleBySlug: (slug: string) => Promise<{ tableName: string } | null>;
+  };
+  const single = await registry.getSingleBySlug(slug);
+  if (single === null) throw new Error(`no Single ${slug}`);
+  const row = await t.adapter.selectOne<{ id: string }>(single.tableName, {
+    columns: ["id"],
+  });
+  if (row === null) throw new Error(`no document for ${slug}`);
+  await t.adapter.update(
+    single.tableName,
+    { updated_at: updatedAt },
+    { and: [{ column: "id", op: "=", value: row.id }] }
+  );
+  return String(row.id);
+}
+
+interface TrailRow {
+  id: string;
+}
+
+/** `person` saving `entryId` at `when`, as `savedEach` records it. */
+async function saved(
+  t: TestNextly,
+  person: typeof ANA,
+  collection: string,
+  entryId: string,
+  when: Date
+): Promise<void> {
+  await savedEach(t, person, collection, [entryId], when);
+}
+
+/**
+ * `person` saving each of `entryIds` at `when`, as the trail records a save:
+ * written through the service, then given its instant, so the order is the
+ * case's own. A collection's entries unless `subjectKind` says a Single's.
+ */
+async function savedEach(
+  t: TestNextly,
+  person: typeof ANA,
+  collection: string,
+  entryIds: readonly string[],
+  when: Date,
+  subjectKind: "collection" | "single" = "collection"
+): Promise<void> {
+  const trail = () => t.adapter.select<TrailRow>("activity_log");
+  const before = new Set((await trail()).map(row => row.id));
+  for (const entryId of entryIds) {
+    await t.getService("activityLogService").logActivity({
+      actorType: "user",
+      userId: person.id,
+      action: "update",
+      collection,
+      entryId,
+      entryTitle: "Saved",
+      subjectKind,
+      metadata: { changedFields: ["title"] },
+    });
+  }
+  for (const row of (await trail()).filter(row => !before.has(row.id))) {
+    await t.adapter.update(
+      "activity_log",
+      { created_at: when },
+      { and: [{ column: "id", op: "=", value: row.id }] }
+    );
+  }
+}
+
+/**
+ * The Content card's answer for `caller`, within one request's access memo, as
+ * the dashboard's query route asks it (`routeHandler` runs every request in
+ * `runWithAccessMemo`). A read rule answering a filter admits its collection
+ * only where the request can keep that filter for the reads it lets run;
+ * outside a request it refuses, so the reader's row would be missing for a
+ * reason the dashboard never meets.
+ */
+async function contentTable(
+  caller: ReadCaller,
+  limit = 10
+): Promise<{ items: Record<string, unknown>[]; total?: number }> {
+  const answer = await runWithAccessMemo(() =>
+    executeWidgetQuery({ source: CONTENT_SOURCE_ID, op: "list", limit }, caller)
+  );
+  if (answer.op !== "list") throw new Error(`answered ${answer.op}`);
+  return answer;
 }
 
 describe.each(getConfiguredTestDialects())(
-  "the Content card's source (integration, %s)",
+  "the Content table's source (integration, %s)",
   dialect => {
-    it("answers each collection's entries and drafts as the reader, and leaves a hidden one out", async () => {
+    async function seeded(): Promise<TestNextly> {
       const t = await boot(dialect);
-      for (const status of ["published", "draft", "draft"]) {
-        await t.nextly.create({
-          collection: ARTICLES as never,
-          data: { title: status, status } as never,
-        });
-      }
-      await t.nextly.create({
-        collection: TAGS as never,
-        data: { title: "tag" } as never,
-      });
-      await t.nextly.create({
-        collection: HIDDEN as never,
-        data: { title: "hidden" } as never,
-      });
+      const sharedDraft = await entry(
+        t,
+        ARTICLES,
+        { title: "shared", status: "draft" },
+        at(30)
+      );
+      await entry(
+        t,
+        ARTICLES,
+        { title: "shared", status: "published" },
+        at(40)
+      );
+      // The newest article, which Ben may not read.
+      const privateDraft = await entry(
+        t,
+        ARTICLES,
+        { title: "private", status: "draft" },
+        at(10)
+      );
+      await entry(t, ARTICLES, { title: "private", status: "draft" }, at(50));
+      const tag = await entry(t, TAGS, { title: "tag" }, at(20));
+      // Home last updated long before any save the trail holds.
+      await singleUpdatedAt(t, HOME, LONG_AGO);
+      await saved(t, BEN, ARTICLES, sharedDraft, at(30));
+      await saved(t, ANA, TAGS, tag, at(20));
+      // The newest save of all, of an entry Ben may not read.
+      await saved(t, ANA, ARTICLES, privateDraft, at(10));
+      // The record of which collections turn creating off, as every dashboard
+      // request refreshes it before a widget query.
+      await refreshCollectionSources();
+      return t;
+    }
 
-      const answer = (await executeWidgetQuery(
-        { source: CONTENT_SOURCE_ID, op: "list" },
-        { user: { id: READER.id, roles: [] } }
-      )) as { items: Record<string, unknown>[] };
-      const bySlug = new Map(answer.items.map(row => [row.slug, row]));
+    it("answers each reader their own counts, drafts, last save and create button, and leaves a hidden one out", async () => {
+      await seeded();
 
-      expect(bySlug.get(ARTICLES)).toMatchObject({
-        count: 3,
-        published: 1,
-        draft: 2,
+      const ana = await contentTable(as(ANA));
+      expect(ana.items.map(row => `${row.kind}:${row.slug}`)).toEqual([
+        `collection:${ARTICLES}`,
+        `collection:${TAGS}`,
+        `single:${HOME}`,
+        // Holding nothing: last, whatever its label.
+        `collection:${EMPTY}`,
+      ]);
+      expect(ana.items[0]).toMatchObject({
+        count: 4,
+        draft: 3,
+        canCreate: true,
+        updatedAt: at(10).toISOString(),
+        userName: ANA.name,
       });
-      expect(bySlug.get(TAGS)).toMatchObject({
+      expect(ana.items[1]).toMatchObject({
         count: 1,
-        published: 1,
-        draft: 0,
+        draft: null,
+        canCreate: false,
+        updatedAt: at(20).toISOString(),
       });
+      expect(ana.items[3]).toMatchObject({ count: 0 });
       // Kept off the dashboard for every reader, though readable to this one.
-      expect(bySlug.has(HIDDEN)).toBe(false);
+      expect(ana.items.some(row => row.slug === HIDDEN)).toBe(false);
+      // 🔴 Every row the table could show Ana, Home's included: the list
+      // answer's total is the rows it matched.
+      expect(ana.total).toBe(4);
+
+      const ben = await contentTable(as(BEN));
+      const benArticles = ben.items.find(row => row.slug === ARTICLES);
+      // 🔴 Ben's own: the two entries his rule lets him read, one a draft, the
+      // newer of them, and his save of it. Ana's later entry and save, which
+      // he may not read, neither date his row nor name her.
+      expect(benArticles).toMatchObject({
+        count: 2,
+        draft: 1,
+        canCreate: false,
+        updatedAt: at(30).toISOString(),
+        userName: BEN.name,
+      });
+      // Ordered by what Ben may see: the tag is newer than the newest article he may read.
+      expect(ben.items.map(row => row.slug).slice(0, 2)).toEqual([
+        TAGS,
+        ARTICLES,
+      ]);
+      expect(ben.items.some(row => row.slug === HIDDEN)).toBe(false);
+    });
+
+    it("dates a Single by its own document, last saved long before anything the trail holds", async () => {
+      await seeded();
+      const home = (await contentTable(as(ANA))).items.find(
+        row => row.slug === HOME
+      );
+      // 🔴 Its date, not "—": the trail holds no save of it.
+      expect(home).toMatchObject({
+        kind: "single",
+        updatedAt: LONG_AGO.toISOString(),
+      });
+      expect(home).not.toHaveProperty("userName");
+    });
+
+    it("counts each reader's drafts as the collection list's Draft filter finds them", async () => {
+      const t = await seeded();
+      for (const person of [ANA, BEN]) {
+        const row = (await contentTable(as(person))).items.find(
+          item => item.slug === ARTICLES
+        );
+        // The list's own read: every entry, narrowed by `where`, as the reader.
+        const list = await t.nextly.find({
+          collection: ARTICLES as never,
+          overrideAccess: false,
+          user: as(person).user,
+          status: "all",
+          where: { status: { equals: "draft" } },
+          limit: 1,
+        });
+        expect(row?.draft, person.id).toBe(list.meta.total);
+      }
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "the Content table's ranking (integration, %s)",
+  dialect => {
+    it("ranks each collection by its own last update, though one collection's saves fill the trail's window", async () => {
+      const slugs = [BUSY, ARCHIVE, NEWS];
+      const t = await createTestNextly({
+        dialect,
+        collections: slugs.map(slug =>
+          defineCollection({
+            slug,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          })
+        ),
+      });
+      current = t;
+      await t.adapter.insert("users", { ...ANA, is_active: true });
+      await grantTo(t, ANA.id, "read", slugs);
+      // First by label, and untouched for years.
+      await entry(t, ARCHIVE, { title: "old" }, LONG_AGO);
+      const news = await entry(t, NEWS, { title: "news" }, at(30));
+      await saved(t, ANA, NEWS, news, at(30));
+      // More entries of busy, each saved since, than the trail's window holds,
+      // so news's latest save lies past the window.
+      const busy: string[] = [];
+      for (let i = 0; i <= MAX_WIDGET_LIMIT; i++) {
+        busy.push(await entry(t, BUSY, { title: `busy ${i}` }, at(5)));
+      }
+      await savedEach(t, ANA, BUSY, busy, at(5));
+
+      const answer = await contentTable(as(ANA), 2);
+
+      // 🔴 News is drawn, after busy and in place of the older archive.
+      expect(answer.items.map(row => row.slug)).toEqual([BUSY, NEWS]);
+      expect(answer.items[1]).toMatchObject({
+        updatedAt: at(30).toISOString(),
+        userName: ANA.name,
+      });
+      expect(answer.total).toBe(3);
+    });
+
+    it("names who saved a Single from past the trail's window, by the Single's own save", async () => {
+      const t = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: BUSY,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: HOME,
+            label: { singular: "Home" },
+            access: { read: () => true },
+            fields: [text({ name: "headline" })],
+          }),
+        ],
+      });
+      current = t;
+      await t.adapter.insert("users", { ...ANA, is_active: true });
+      await grantTo(t, ANA.id, "read", [BUSY, HOME]);
+      // Home's document, saved by Ben before any of busy's saves.
+      const home = await singleUpdatedAt(t, HOME, at(1));
+      await savedEach(t, BEN, HOME, [home], at(30), "single");
+      // More entries of busy, each saved since, than the trail's window holds,
+      // so Home's save lies past the window.
+      const busy: string[] = [];
+      for (let i = 0; i <= MAX_WIDGET_LIMIT; i++) {
+        busy.push(await entry(t, BUSY, { title: `busy ${i}` }, at(5)));
+      }
+      await savedEach(t, ANA, BUSY, busy, at(5));
+
+      const answer = await contentTable(as(ANA), 2);
+
+      // 🔴 Dated by its document and naming Ben, though the window holds only
+      // busy's saves.
+      expect(answer.items[0]).toMatchObject({
+        kind: "single",
+        slug: HOME,
+        updatedAt: at(1).toISOString(),
+        userName: BEN.name,
+      });
+      expect(answer.total).toBe(2);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "the Content table's bounded load (integration, %s)",
+  dialect => {
+    it("counts the rows it draws and no others, and reads the newest entry of at most fifty of sixty collections, every one the window names among them", async () => {
+      const t = await createTestNextly({
+        dialect,
+        collections: SIXTY.map(slug =>
+          defineCollection({
+            slug,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          })
+        ),
+      });
+      current = t;
+      await t.adapter.insert("users", { ...ANA, is_active: true });
+      await grantTo(t, ANA.id, "read", SIXTY);
+      // Two saved collections, so the page is not merely the first by label;
+      // one of them past the first fifty by label.
+      const late = SIXTY[55]!;
+      const later = SIXTY[23]!;
+      const lateEntry = await entry(t, late, { title: "a" }, at(20));
+      await saved(t, ANA, late, lateEntry, at(20));
+      const laterEntry = await entry(t, later, { title: "b" }, at(10));
+      await saved(t, ANA, later, laterEntry, at(10));
+
+      // Every count and read of entries the load makes, as the reader, through
+      // the ordinary paths.
+      const count = vi.spyOn(t.nextly, "count");
+      const find = vi.spyOn(t.nextly, "find");
+      const answer = await contentTable(as(ANA), 6);
+
+      const drawn = answer.items.map(row => String(row.slug));
+      expect(drawn).toHaveLength(6);
+      expect(drawn.slice(0, 2)).toEqual([later, late]);
+      const counted = count.mock.calls.map(([args]) =>
+        String((args as { collection: unknown }).collection)
+      );
+      // 🔴 Exactly the drawn rows: a table that counted all sixty and kept six
+      // draws the same rows, and only the counts tell the two apart.
+      expect(new Set(counted)).toEqual(new Set(drawn));
+      // Entries alone here: no collection has the lifecycle, so no drafts.
+      expect(counted).toHaveLength(6);
+      // Each collection's newest entry ranks the page: read once for each of
+      // fifty. The trail's own reads, which authorize a save by its id, ask by
+      // `where`.
+      const read = find.mock.calls
+        .map(([args]) => args as { collection: unknown; sort?: unknown })
+        .filter(args => args.sort === "-updatedAt")
+        .map(args => String(args.collection));
+      // 🔴 At most fifty, each once: the two the window names, `late` among
+      // them though it is past the first fifty by label, then the first by
+      // label. The last by label is never read.
+      expect(read).toHaveLength(MAX_WIDGET_LIMIT);
+      expect(new Set(read).size).toBe(MAX_WIDGET_LIMIT);
+      expect(read).toContain(late);
+      expect(read).not.toContain(SIXTY[59]);
+      // Every row the table could show, counted without counting an entry.
+      expect(answer.total).toBe(60);
     });
   }
 );

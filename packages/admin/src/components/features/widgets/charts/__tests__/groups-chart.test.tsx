@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CardTierContext } from "../../frame/tier";
+import { nameColumnWidth } from "../drawn/groups-drawing";
 import { GroupsChart, type GroupsChartGroup } from "../groups-chart";
 
 import {
@@ -343,6 +344,12 @@ describe("the tooltip of the group in view", () => {
     await focus();
     await userEvent.setup().keyboard("{End}");
     expect(tip()?.style.bottom).toBe(`${(1 / 3) * 100}%`);
-    expect(tip()?.style.left).toMatch(/^calc\(80px \+ 8px|^calc\(88px/);
+    // From the names' column's end and its gap: the column as wide as these names need.
+    const names = nameColumnWidth(
+      statuses().map(status => status.label),
+      CHART_WIDTH,
+      "12px sans-serif"
+    );
+    expect(tip()?.style.left?.startsWith(`calc(${names + 8}px + `)).toBe(true);
   });
 });

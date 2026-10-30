@@ -1,5 +1,4 @@
 // Dashboard Feature Components
-export { CollectionQuickLinks } from "./CollectionQuickLinks";
 export { ContentStatsGrid } from "./ContentStatsGrid";
 export { OnboardingChecklist } from "./OnboardingChecklist";
 export { ContentStatusWidget } from "./ContentStatusWidget";
