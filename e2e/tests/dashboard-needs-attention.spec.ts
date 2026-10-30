@@ -136,7 +136,8 @@ async function readCardAsEmpty(page: Page): Promise<void> {
     if (card) {
       layout.hiddenWhileEmpty = [...(layout.hiddenWhileEmpty ?? []), card.id];
     }
-    await route.fulfill({ response, json: body });
+    // A read the page gave up while it was answered is already settled: nothing waits for it.
+    await route.fulfill({ response, json: body }).catch(() => {});
   });
 }
 
@@ -185,11 +186,13 @@ async function answerCardAsEmpty(page: Page): Promise<void> {
       await route.abort().catch(() => {});
       return;
     }
-    if (at === -1) return route.fulfill({ response });
-    await route.fulfill({
-      response,
-      body: withCardEmpty(await response.text(), at),
-    });
+    // A batch the page gave up while it was answered (a newer load asks again) is already
+    // settled: nothing waits for it, and a throw here would fail the test and print the request.
+    const body =
+      at === -1 ? undefined : withCardEmpty(await response.text(), at);
+    await route
+      .fulfill(body === undefined ? { response } : { response, body })
+      .catch(() => {});
   });
 }
 
