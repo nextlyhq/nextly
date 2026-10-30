@@ -27,6 +27,9 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
+import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import type { CollectionConfig } from "../../../collections/config/define-collection";
 import {
   account,
@@ -39,6 +42,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
 
 const TEMPLATE = new URL("../../../../../../templates/blog/", import.meta.url);
 
@@ -79,6 +83,7 @@ const AUTHOR_ACTIONS = ["create", "read", "update", "delete"];
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  resetSessionStandingForTests();
   await current?.destroy();
   current = undefined;
 });
@@ -168,6 +173,45 @@ async function stored(
 const authorOf = async (t: TestNextly, id: string) =>
   (await stored(t, id))?.author;
 
+/**
+ * A REST update of post `id` as the signed-in `userId`, as the admin sends
+ * it, answered with its status.
+ */
+async function restUpdate(
+  userId: string,
+  id: string,
+  data: Record<string, unknown>
+): Promise<number> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId,
+      email: `${userId}@example.test`,
+      name: userId,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  const handlers = createDynamicHandlers() as unknown as Record<
+    string,
+    (request: Request, context: unknown) => Promise<Response>
+  >;
+  const path = ["collections", POSTS, "entries", id];
+  const res = await handlers.PATCH!(
+    new Request(`http://localhost/api/${path.join("/")}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `nextly_session=${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(data),
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  return res.status;
+}
+
 describe.each(getConfiguredTestDialects())(
   "the blog template's Posts rules (%s)",
   dialect => {
@@ -201,6 +245,34 @@ describe.each(getConfiguredTestDialects())(
 
       const theirs = await stored(t, posts.others);
       expect(theirs?.title).toBe("Theirs");
+    });
+
+    // The admin edits over REST, so an author edits their own post there and
+    // is refused another's, which is left as it was.
+    it("let an author edit their own post over REST, and refuse another's", async () => {
+      const { t, author, posts } = await boot(dialect);
+      const theirs = await stored(t, posts.others);
+
+      expect(await restUpdate(author, posts.own, { title: "Edited" })).toBe(
+        200
+      );
+      expect(await restUpdate(author, posts.others, { title: "Edited" })).toBe(
+        403
+      );
+      expect((await stored(t, posts.own))?.title).toBe("Edited");
+      expect(await stored(t, posts.others)).toEqual(theirs);
+    });
+
+    // A yes-or-no check names no post, so it can't say which posts the
+    // filter leaves an author: it answers no, and yes to an editor.
+    it("answer an author no and an editor yes when asked whether they may update posts", async () => {
+      const { t, editor, author } = await boot(dialect);
+      const may = (userId: string, operation: "read" | "update") =>
+        t.nextly.access.check({ userId, operation, resource: POSTS });
+
+      expect(await may(author, "update")).toBe(false);
+      expect(await may(editor, "update")).toBe(true);
+      expect(await may(author, "read")).toBe(true);
     });
 
     it("let an author's bulk update change only their own posts", async () => {
