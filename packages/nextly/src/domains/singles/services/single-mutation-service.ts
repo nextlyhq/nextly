@@ -226,6 +226,7 @@ import {
   liveStoredDocument,
   promoteCallerFor,
   promotionIssues,
+  readsSingleInEveryLanguage,
   type PromoteGateContext,
 } from "./promote-gate";
 import {
@@ -1436,8 +1437,8 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * Whether `caller` may read the Single at all, as its read gate answers: a
-   * validation refusal tells one who may not no field of it.
+   * Whether `caller` may read the Single in every language; see
+   * `readsSingleInEveryLanguage`.
    */
   private async readsSingle(
     slug: string,
@@ -1446,17 +1447,15 @@ export class SingleMutationService extends BaseService {
       authenticatedScope?: AuthenticatedScope;
     }
   ): Promise<boolean> {
-    const refused = await checkSingleAccess({
+    return readsSingleInEveryLanguage({
       slug,
-      operation: "read",
       user: caller.user,
-      overrideAccess: false,
+      authenticatedScope: caller.authenticatedScope,
       rbacAccessControlService: this.rbacAccessControlService,
       visitor: this.fieldRuleVisitor,
-      authenticatedScope: caller.authenticatedScope,
       logger: this.logger,
+      languages: this.localization?.locales.map(locale => locale.code) ?? [],
     });
-    return refused === null;
   }
 
   /**

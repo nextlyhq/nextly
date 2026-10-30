@@ -782,6 +782,16 @@ function asSentence(message: string): string {
  * reported as a refusal, exactly as the per-field `validate` is, so a defective
  * plugin cannot turn a rejected write into a 500.
  */
+/** `issuePath` where it addresses `fieldPath` or a position under it, else `fieldPath`. */
+function withinField(issuePath: string | undefined, fieldPath: string): string {
+  if (issuePath === undefined) return fieldPath;
+  return issuePath === fieldPath ||
+    issuePath.startsWith(`${fieldPath}.`) ||
+    issuePath.startsWith(`${fieldPath}[`)
+    ? issuePath
+    : fieldPath;
+}
+
 async function validatePluginFieldType(
   validate: NonNullable<PluginFieldType["validate"]>,
   field: ValidatableField,
@@ -825,9 +835,11 @@ async function validatePluginFieldType(
       for (const issue of result) {
         issues.push({
           // A structured value can be wrong somewhere inside itself, so an
-          // issue may address a position under this field; without one it
-          // belongs to the field as a whole.
-          path: issue.path ?? path,
+          // issue may address a position under this field; without one, or
+          // with one outside it, it belongs to the field as a whole. Kept
+          // inside the field, so the issue names the field that found it:
+          // what its caller may be told follows that field's read rules.
+          path: withinField(issue.path, path),
           code: issue.code ?? "CUSTOM",
           message: asSentence(issue.message),
         });

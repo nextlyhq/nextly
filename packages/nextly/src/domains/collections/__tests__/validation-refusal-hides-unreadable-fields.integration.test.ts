@@ -44,6 +44,14 @@ const READER = { id: "hidden-reader", isActive: true };
 const WRITER = { id: "hidden-writer", isActive: true };
 /** A field group whose one field READER alone may read. */
 const META = "hiddenfieldmeta";
+// A collection and a Single with a field no German read shows, and a Single
+// no German read shows at all.
+const LANG_ENTRIES = "hiddenfieldlangreports";
+const LANG_BANNER = "hiddenfieldlangbanner";
+const LANG_HIDDEN = "hiddenfieldlanghidden";
+const LANG_SLUGS = [LANG_ENTRIES, LANG_BANNER, LANG_HIDDEN];
+/** Readable in every language but German. */
+const notGerman = ({ locale }: { locale?: string }) => locale !== "de";
 const ALLOW = () => true;
 
 // The stored values the schema now refuses, as left by a schema that has
@@ -82,6 +90,17 @@ const fields = () => [
     access: readerOnly,
     validate: namesTheValue,
   }),
+];
+
+/** A field only a German read hides, whose validator names its value. */
+const languageFields = () => [
+  text({ name: "headline" }),
+  text({
+    name: "germanOnly",
+    access: { read: notGerman },
+    validate: namesTheValue,
+  }),
+  number({ name: "shownCount", max: 5 }),
 ];
 
 const GENERIC = {
@@ -154,6 +173,7 @@ describe.each(getConfiguredTestDialects())(
   (dialect: TestDialect) => {
     let t: TestNextly;
     let entryId = "";
+    let langEntryId = "";
 
     beforeAll(async () => {
       t = await createTestNextly({
@@ -185,6 +205,18 @@ describe.each(getConfiguredTestDialects())(
             },
             fields: fields(),
           }),
+          defineCollection({
+            slug: LANG_ENTRIES,
+            localized: true,
+            status: true,
+            access: {
+              create: ALLOW,
+              read: ALLOW,
+              update: ALLOW,
+              publish: ALLOW,
+            },
+            fields: languageFields(),
+          }),
         ],
         singles: [
           defineSingle({
@@ -194,12 +226,27 @@ describe.each(getConfiguredTestDialects())(
             access: { read: ALLOW, update: ALLOW, publish: ALLOW },
             fields: fields(),
           }),
+          defineSingle({
+            slug: LANG_BANNER,
+            localized: true,
+            status: true,
+            access: { read: ALLOW, update: ALLOW, publish: ALLOW },
+            fields: languageFields(),
+          }),
+          defineSingle({
+            slug: LANG_HIDDEN,
+            localized: true,
+            status: true,
+            access: { read: notGerman, update: ALLOW, publish: ALLOW },
+            fields: languageFields(),
+          }),
         ],
       });
+      const granted = [ENTRIES, BANNER, ...LANG_SLUGS];
       for (const caller of [PUBLISHER, READER]) {
-        await userWhoMay(t, caller.id, "read", [ENTRIES, BANNER]);
+        await userWhoMay(t, caller.id, "read", granted);
         for (const action of ["create", "update", "publish", "unpublish"]) {
-          await grantTo(t, caller.id, action, [ENTRIES, BANNER]);
+          await grantTo(t, caller.id, action, granted);
         }
       }
       await userWhoMay(t, WRITER.id, "update", [ENTRIES, BANNER]);
@@ -242,6 +289,57 @@ describe.each(getConfiguredTestDialects())(
           { and: [{ column: "_parent", op: "=", value: id }] }
         );
       }
+
+      // Each language-judged entity, with an English and a German draft, then
+      // a German value the schema now refuses, or a shared count over its cap.
+      const langMade = await t.nextly.create({
+        collection: LANG_ENTRIES,
+        data: { headline: "h", status: "draft" },
+      });
+      langEntryId = String(langMade.item.id);
+      await t.nextly.update({
+        collection: LANG_ENTRIES,
+        id: langEntryId,
+        locale: "de",
+        data: { headline: "h de", germanOnly: "ok" },
+      } as never);
+      for (const slug of [LANG_BANNER, LANG_HIDDEN]) {
+        await singles(t).update(
+          slug,
+          { headline: "h" },
+          { overrideAccess: true }
+        );
+        await singles(t).update(
+          slug,
+          { headline: "h de", germanOnly: "ok" },
+          { overrideAccess: true, locale: "de" }
+        );
+      }
+      const languageRows: Array<[string, string]> = [
+        [`dc_${LANG_ENTRIES}`, langEntryId],
+        [`single_${LANG_BANNER}`, await singleIdOf(t, LANG_BANNER)],
+      ];
+      for (const [table, id] of languageRows) {
+        await t.adapter.update(
+          `${table}_locales`,
+          { german_only: SECRET },
+          {
+            and: [
+              { column: "_parent", op: "=", value: id },
+              { column: "_locale", op: "=", value: "de" },
+            ],
+          }
+        );
+      }
+      await t.adapter.update(
+        `single_${LANG_HIDDEN}`,
+        { shown_count: 9 },
+        {
+          and: [
+            { column: "id", op: "=", value: await singleIdOf(t, LANG_HIDDEN) },
+          ],
+        }
+      );
     }, 120_000);
 
     afterAll(async () => {
@@ -420,6 +518,38 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a publish of every language, judged as a read of each", () => {
+      // Every language at once, a read rule that hides one language is not
+      // asked as that language; each language goes live as itself.
+      it("withholds a collection field only a German read hides", async () => {
+        expect(
+          await issuesOf(() =>
+            handler(t).publishAllLocales({
+              collectionName: LANG_ENTRIES,
+              entryId: langEntryId,
+              ...as(PUBLISHER),
+            })
+          )
+        ).toEqual([GENERIC]);
+      });
+
+      it("withholds a Single field only a German read hides", async () => {
+        expect(
+          await issuesOf(() =>
+            singles(t).publishAllLocales(LANG_BANNER, as(PUBLISHER))
+          )
+        ).toEqual([GENERIC]);
+      });
+
+      it("withholds every field of a Single a German read does not show", async () => {
+        expect(
+          await issuesOf(() =>
+            singles(t).publishAllLocales(LANG_HIDDEN, as(PUBLISHER))
+          )
+        ).toEqual([GENERIC]);
+      });
+    });
+
     describe("to an API key READER made, whose own scope may not read the hidden fields", () => {
       // The key's scope leaves out the Single's unpublish, which the hidden
       // fields' read rule asks for, though READER, its maker, holds it.
@@ -456,6 +586,12 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+/** A Single's stored document id. */
+async function singleIdOf(t: TestNextly, slug: string): Promise<string> {
+  const found = await t.nextly.findSingle({ slug });
+  return String((found as unknown as { id: unknown }).id);
+}
 
 const handler = (t: TestNextly): CollectionsHandler =>
   t.getService("collectionsHandler");

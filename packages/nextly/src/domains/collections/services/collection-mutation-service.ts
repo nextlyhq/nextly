@@ -807,6 +807,11 @@ interface EntryValidationArgs {
    * without naming it. Required, so no write path can forget to say.
    */
   reader: IssueReader;
+  /**
+   * The language the document is, where a write judges several in turn; see
+   * `issuesTheReaderMaySee`.
+   */
+  readLocale?: string;
   /** What `localizedRequiredContext` resolved for a localized write. */
   localeCtx?: {
     localizedFieldNames: ReadonlySet<string>;
@@ -1999,6 +2004,7 @@ export class CollectionMutationService extends BaseService {
       },
       executor: args.tx?.getDrizzle(),
       entryId: args.id,
+      readLocale: args.readLocale,
       // A stored entry the reader may not read is shown to them in no part.
       // A read limited to a filter is not matched against this entry here,
       // so it is judged as one that may not reach it.
@@ -3644,6 +3650,7 @@ export class CollectionMutationService extends BaseService {
       mode: "update",
       user: args.user,
       reader: args.reader,
+      readLocale: args.locale,
       localeCtx: await this.localizedRequiredContext(
         args.collectionName,
         args.locale,
@@ -3688,6 +3695,7 @@ export class CollectionMutationService extends BaseService {
         mode: "update",
         user: args.user,
         reader: args.reader,
+        readLocale: locale,
         localeCtx: await this.localizedRequiredContext(
           args.collectionName,
           locale,

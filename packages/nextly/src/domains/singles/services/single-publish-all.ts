@@ -132,6 +132,7 @@ import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
   promoteCallerFor,
+  readsSingleInEveryLanguage,
 } from "./promote-gate";
 import {
   checkSingleAccess,
@@ -546,24 +547,22 @@ export class SinglePublishAllService extends BaseService {
    * companion locales even when the main row is already published.
    */
   /**
-   * Whether `options`' caller may read the Single at all, as its read gate
-   * answers: a validation refusal tells one who may not no field of it.
+   * Whether `options`' caller may read the Single in every language; see
+   * `readsSingleInEveryLanguage`.
    */
   private async readsSingle(
     slug: string,
     options: PublishAllSingleLocalesOptions
   ): Promise<boolean> {
-    const refused = await checkSingleAccess({
+    return readsSingleInEveryLanguage({
       slug,
-      operation: "read",
       user: options.user,
-      overrideAccess: false,
+      authenticatedScope: options.authenticatedScope,
       rbacAccessControlService: this.rbacAccessControlService,
       visitor: this.fieldRuleVisitor,
-      authenticatedScope: options.authenticatedScope,
       logger: this.logger,
+      languages: this.localization?.locales.map(locale => locale.code) ?? [],
     });
-    return refused === null;
   }
 
   private async authorizePublish(

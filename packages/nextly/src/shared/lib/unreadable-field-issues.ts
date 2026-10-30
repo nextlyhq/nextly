@@ -23,6 +23,10 @@
  *
  * @module shared/lib/unreadable-field-issues
  */
+import {
+  registeredReadLanguagesFor,
+  withRuleLanguage,
+} from "../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { FieldConfig } from "../../collections/fields/types";
 import {
@@ -177,10 +181,17 @@ export async function issuesTheReaderMaySee(
     return issues;
   }
   const located = issues.map(issue => ({ issue, steps: stepsOf(issue.path) }));
-  const judged = await judgedDocument(args);
-  if (!judged) return collapse(located, () => true, args);
-  const withheld = await withheldIssues(located, judged, args);
-  return collapse(located, (_steps, index) => withheld.has(index), args);
+  const judge = async () => {
+    const judged = await judgedDocument(args);
+    if (!judged) return collapse(located, () => true, args);
+    const withheld = await withheldIssues(located, judged, args);
+    return collapse(located, (_steps, index) => withheld.has(index), args);
+  };
+  // Judged as a read of the document in its own language would be: a rule
+  // can answer one language differently from every language at once.
+  return args.readLocale === undefined
+    ? judge()
+    : withRuleLanguage(registeredReadLanguagesFor(args.readLocale), judge);
 }
 
 /** What {@link issuesTheReaderMaySee} judges issues by. */
@@ -205,6 +216,12 @@ interface IssueJudgement {
    * read gate answers; absent where nothing is stored yet.
    */
   rowReadable?: () => Promise<boolean>;
+  /**
+   * The language the document is one of, where a write judges several in
+   * turn: its rules and read gate are asked as a read in that language.
+   * Absent, they are asked in the write's own languages.
+   */
+  readLocale?: string;
   reader: IssueReader;
 }
 

@@ -121,6 +121,24 @@ describe("plugin field-type validation", () => {
     ]);
   });
 
+  it("reports an issue addressed outside the field against the field", async () => {
+    // An issue names the field that found it, so whether its caller may be
+    // told it follows that field's read rules, not the path a validator chose.
+    registerDocument(() => [
+      { path: "", message: "Whole document refused" },
+      { path: "title", message: "Sibling refused" },
+      { path: "bodyCopy", message: "Look-alike refused" },
+    ]);
+
+    const issues = await validateEntryData(
+      { body: { nodes: [] } },
+      [{ name: "body", type: "document" }],
+      { mode: "create" }
+    );
+
+    expect(issues.map(issue => issue.path)).toEqual(["body", "body", "body"]);
+  });
+
   it("gives the validator the field instance, so it can read its own options", async () => {
     const seen = vi.fn(() => true as const);
     registerRating(seen);

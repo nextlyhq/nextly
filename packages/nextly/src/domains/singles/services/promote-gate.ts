@@ -29,6 +29,10 @@
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  registeredReadLanguagesFor,
+  withRuleLanguage,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
@@ -64,6 +68,7 @@ import {
 } from "../../versions/tag-component-types";
 
 import { readCompanionValuesInTx } from "./apply-pending-change";
+import { checkSingleAccess } from "./single-query-service";
 
 /** One language's pending change, as the versions repository stores it. */
 export interface PromotableDraft {
@@ -71,6 +76,33 @@ export interface PromotableDraft {
   locale: string | null;
   /** The stored snapshot, in write shape. */
   snapshot: unknown;
+}
+
+/**
+ * Whether a caller may read the Single in every language, as its read gate
+ * answers a read in each and in all of them at once: a read rule can answer
+ * one language differently, and a promotion is judged language by language,
+ * so a refusal names a field of it only where every language's read could
+ * show it. Asked before the promotion's transaction opens, since the gate
+ * reads the caller's roles on the pool.
+ */
+export async function readsSingleInEveryLanguage(
+  params: Omit<Parameters<typeof checkSingleAccess>[0], "operation"> & {
+    /** The configured language codes; none for a site without languages. */
+    languages: readonly string[];
+  }
+): Promise<boolean> {
+  const { languages, ...gate } = params;
+  const ask = () => checkSingleAccess({ ...gate, operation: "read" });
+  if ((await ask()) !== null) return false;
+  for (const code of languages) {
+    if (
+      (await withRuleLanguage(registeredReadLanguagesFor(code), ask)) !== null
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -104,6 +136,7 @@ export function promoteCallerFor(args: {
   | "authenticatedScope"
   | "grants"
   | "readsEntry"
+  | "executor"
 > {
   return {
     slug: args.slug,
@@ -124,6 +157,7 @@ export function promoteCallerFor(args: {
     // Resolved on the pooled connection before the transaction opened.
     grants: args.grants,
     readsEntry: args.readsEntry,
+    executor: args.tx.getDrizzle(),
   };
 }
 
@@ -231,6 +265,11 @@ export interface PromoteGateContext {
    * it. Absent, the field rules alone decide.
    */
   readsEntry?: boolean;
+  /**
+   * The promoting transaction's connection: a lookup the gate still has to
+   * make reads on it, never on the pool the transaction is holding.
+   */
+  executor?: unknown;
   /**
    * The scope an API key arrived with, so a key is judged on ITS grants rather
    * than on the database roles of whoever owns it. There is no request-local
@@ -358,7 +397,7 @@ export async function promotionIssues(
       locale,
       ctx
     );
-    const issues = await schemaIssues(resolved, ctx);
+    const issues = await schemaIssues(resolved, ctx, locale);
     if (issues.length > 0) return issues;
   }
   return [];
@@ -543,7 +582,9 @@ function promotionRules(
  */
 async function schemaIssues(
   promoted: Record<string, unknown>,
-  ctx: PromoteGateContext
+  ctx: PromoteGateContext,
+  /** The language the promoted document is; `null` for an unlocalized one. */
+  locale: string | null
 ): Promise<ValidationIssue[]> {
   const view = relationshipValidationView(promoted, ctx.fields);
   const issues = await validateEntryData(
@@ -569,6 +610,8 @@ async function schemaIssues(
     slug: ctx.slug,
     document: view,
     entryId: ctx.entryId,
+    executor: ctx.executor,
+    ...(locale === null ? {} : { readLocale: locale }),
     ...(ctx.readsEntry === undefined
       ? {}
       : { rowReadable: () => Promise.resolve(ctx.readsEntry === true) }),
