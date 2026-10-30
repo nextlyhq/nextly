@@ -13,7 +13,9 @@ import { NextlyError, isProgrammerError } from "../../../errors";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import type { StoredHookConfig } from "../../../schemas/dynamic-collections/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
+import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../services/shared";
+import { assertAddressAllowed } from "../../../shared/address-rule";
 import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -387,6 +389,15 @@ export class CollectionMetadataService extends BaseService {
     hooks?: StoredHookConfig[];
     createdBy?: string;
   }): Promise<MetadataServiceResult> {
+    // Every collection create reaches this point (the Builder, the root-exported
+    // CollectionService and plugins' ctx.services), so the address is judged here, before any
+    // migration is written or DDL runs, and outside the result mapping below so the refusal keeps
+    // its address and reason: by the one rule as written, then against the collections' and
+    // Singles' addresses.
+    assertAddressAllowed("collection", data.name);
+    await assertGlobalResourceSlugAvailable(this.adapter, data.name, {
+      addressKind: "collection",
+    });
     try {
       const artifacts = await this.collectionService.generateCollection(data);
 

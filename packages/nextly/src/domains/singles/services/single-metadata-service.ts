@@ -56,6 +56,7 @@ import type {
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
+import { assertAddressAllowed } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
@@ -555,7 +556,8 @@ export class SingleMetadataService {
     // A record that has already gone is NOT an error here. Delete is idempotent by intent, and
     // refusing a second delete would turn a retry into a failure; the teardown below still runs
     // against the caller's table name so a half-finished delete can be completed.
-    const current = await this.registry.getSingleBySlug(slug);
+    // As stored, past the registry row cache: a cached row could still say unlocked.
+    const current = await this.registry.getSingleForWrite(slug);
     if (current?.locked === true) {
       throw NextlyError.definedInCode({
         thing: "Single",
@@ -825,7 +827,8 @@ export class SingleMetadataService {
   private async refreshForUpdate(
     input: UpdateSingleSchemaInput
   ): Promise<DynamicSingleRecord> {
-    const current = await this.registry.getSingleBySlug(input.slug);
+    // As stored, past the registry row cache: the update plans from this row.
+    const current = await this.registry.getSingleForWrite(input.slug);
 
     if (!current) {
       throw NextlyError.notFound({
@@ -1340,7 +1343,8 @@ export class SingleMetadataService {
     }
     await Promise.all(
       [...slugs].map(async slug => {
-        const record = await registry.getComponentBySlug(slug);
+        // As stored, past the registry row cache: the DDL is planned against this table.
+        const record = await registry.findComponentForWrite(slug);
         if (record) resolved.set(slug, record.tableName);
       })
     );
@@ -2070,9 +2074,15 @@ export class SingleMetadataService {
       });
     }
 
+    // The address, judged inside the exclusion every Single create holds, whichever road reached
+    // it: by the one rule, then against the collections' and Singles' addresses, which a create
+    // that started while this one waited may have added.
+    assertAddressAllowed("single", input.slug);
     const adapter = this.adapter;
     if (adapter) {
-      await assertGlobalResourceSlugAvailable(adapter, input.slug);
+      await assertGlobalResourceSlugAvailable(adapter, input.slug, {
+        addressKind: "single",
+      });
     }
 
     // 🔴 Re-judged here, not only by the caller, because the thing that judges it can CHANGE while

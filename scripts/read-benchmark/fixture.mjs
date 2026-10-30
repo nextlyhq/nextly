@@ -5,15 +5,23 @@
  * the author). Every value comes from a seeded random source, so two runs, or
  * two machines, read the same content.
  *
- * Two storage modes are built from one definition:
+ * Three storage modes are built from one definition:
  *   - `main`: a single-language site as Nextly stores one today, every field on
  *     the main table.
  *   - `per-language`: the same site with its translatable fields stored per
- *     language from the start, in the translation table, for its one language.
+ *     language from the start, in the translation table, for its one language:
+ *     a one-language `localization` block and the entities marked translatable.
+ *   - `e4`: the same site with no `localization` block and nothing marked
+ *     translatable, booted with the site-wide storage choice that stores every
+ *     translatable field per language from the start for the site's one
+ *     implicit language: `experimental.perLanguageStorage` in a config, which
+ *     the test harness takes as its `perLanguageStorage` option. A build
+ *     without that option stores this site as `main` does, and the
+ *     measurement's storage check refuses to time it.
  */
 import { pick } from "./stats.mjs";
 
-export const MODES = ["main", "per-language"];
+export const MODES = ["main", "per-language", "e4"];
 
 /** The site's one language in `per-language` mode. */
 const LANGUAGE = "en";
@@ -22,9 +30,10 @@ const LANGUAGE = "en";
 const publicRead = { read: () => true };
 
 /**
- * The collections, component and localization for a storage mode, built with
- * `config`: the builders `nextly/config` exports, handed in by the caller so
- * this module loads without a build of Nextly.
+ * The collections, component, localization and storage option for a storage
+ * mode, as the test harness takes them, built with `config`: the builders
+ * `nextly/config` exports, handed in by the caller so this module loads
+ * without a build of Nextly.
  */
 export function siteFor(mode, config) {
   if (!MODES.includes(mode)) throw new RangeError(`unknown mode ${mode}`);
@@ -63,16 +72,80 @@ export function siteFor(mode, config) {
       }),
     ],
     ...(perLanguage ? { localization: { locales: [LANGUAGE], defaultLocale: LANGUAGE } } : {}),
+    // Every translatable field per language, chosen for the whole site at boot: the harness's
+    // option for what a config spells `experimental.perLanguageStorage`.
+    ...(mode === "e4" ? { perLanguageStorage: true } : {}),
   };
 }
 
+/** The kinds of field a site translates, and the type a read returns each as. */
+const TRANSLATABLE_KINDS = { text: "string", textarea: "string", richText: "object" };
+
 /**
- * The translatable columns of each table that has any: the articles' own, and
- * the card component's. A `main` site keeps them on these tables; a
- * `per-language` site moves them to each table's translation table, where
- * its shared columns never go.
+ * The `nextly/config` builders `siteFor` uses, standing in for them so that
+ * the site's definition can be read here: each returns what it was given,
+ * tagged with its kind.
  */
-export const TRANSLATABLE_COLUMNS = { dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] };
+const DESCRIBING = Object.fromEntries(
+  ["defineCollection", "defineFieldGroup", "checkbox", "date", "fieldGroup", "number", "relationship", "richText", "text", "textarea"].map(name => [
+    name,
+    input => ({ kind: name, ...input }),
+  ])
+);
+
+/** A collection's or component's translatable fields, by name, with the type a read returns each as. */
+function translatableFieldsIn(fields) {
+  return Object.fromEntries(fields.filter(field => field.kind in TRANSLATABLE_KINDS).map(field => [field.name, TRANSLATABLE_KINDS[field.kind]]));
+}
+
+/** Each table of `site` that holds translatable fields: its collections' and its components'. */
+function tablesOf(site) {
+  return [
+    ...site.collections.map(collection => ({ table: `dc_${collection.slug}`, entity: collection })),
+    ...site.fieldGroups.map(group => ({ table: `comp_${group.slug}`, entity: group })),
+  ].filter(({ entity }) => Object.keys(translatableFieldsIn(entity.fields)).length > 0);
+}
+
+/**
+ * The site's translatable fields, by the table they belong to, each with the
+ * type a read returns it as: the articles', the card component's and the
+ * authors'. Read off the site's own definition, so every check made of them,
+ * where they are stored and whether a read returned them, covers every one.
+ */
+export const TRANSLATABLE_FIELDS = Object.fromEntries(
+  tablesOf(siteFor("main", DESCRIBING)).map(({ table, entity }) => [table, translatableFieldsIn(entity.fields)])
+);
+
+/**
+ * How a mode's site stores every table with translatable fields: those
+ * fields' columns, and whether they are kept per language. Read off the
+ * site's definition: per language when the site stores every translatable
+ * field so (`e4`'s site-wide option) or the entity is marked translatable
+ * (`per-language`'s articles and card), and otherwise on the table itself, as
+ * every one is in `main`. The storage check holds every table to it, both
+ * ways, so a table moved that should stay is refused as surely as one left
+ * that should move.
+ */
+export function storageContractOf(mode) {
+  const site = siteFor(mode, DESCRIBING);
+  return Object.fromEntries(
+    tablesOf(site).map(({ table, entity }) => [
+      table,
+      { columns: Object.keys(TRANSLATABLE_FIELDS[table]), perLanguage: site.perLanguageStorage === true || entity.localized === true },
+    ])
+  );
+}
+
+/**
+ * The names of the site's date fields, read off its definition. A read may spell a date otherwise
+ * than it was seeded (another precision, a timezone offset, a Date), so the content check compares
+ * a date by the time it names.
+ */
+export const DATE_FIELDS = (() => {
+  const site = siteFor("main", DESCRIBING);
+  const fields = [...site.collections, ...site.fieldGroups].flatMap(entity => entity.fields);
+  return new Set(fields.filter(field => field.kind === "date").map(field => field.name));
+})();
 
 /** The table a `per-language` site keeps `table`'s translatable values in. */
 export function localesOf(table) {
