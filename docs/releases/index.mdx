@@ -651,12 +651,14 @@ release is looked at again on every pass until it runs; the notice is not repeat
 
 Where the site can send email, every new release notice, stopped or overdue, is also emailed to
 its person. The notice records a job in its own transaction, so it never stands without its email
-on the way: the next [jobs](/docs/jobs) pass queues the email through Nextly's queued send, and a
-process that stops before then leaves the job for the pass after. The email is sent with a key
-made from the notice's id, so a repeat of the job sends nothing more where the provider honours
+on the way: the next [jobs](/docs/jobs) pass sends it, and a process that stops before then leaves
+the job for the pass after. A send that fails in a way a retry can help is tried again with
+backoff, as many times as a queued email is, and one that cannot is logged. The email is sent with
+a key made from the notice's id, so a repeat sends nothing more where the provider honours
 idempotency keys; elsewhere a rare duplicate is possible.
-The email goes only to a person the notice still shows to, whose account is active: someone who may
-no longer read releases, or who was deactivated, is sent nothing.
+The email goes only to a person the notice still shows to, whose account is active, asked again on
+every attempt: someone who may no longer read releases, or who was deactivated, is sent nothing.
+An email that fails for good shows as a failed background job; every send is in the delivery log.
 
 The email gives what happened and the time the release was scheduled for, written in the zone it
 was scheduled in and named, since an email has no reader's zone. It links to the release only

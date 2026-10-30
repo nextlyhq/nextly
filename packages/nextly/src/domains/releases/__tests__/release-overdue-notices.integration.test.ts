@@ -33,6 +33,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { NOTICES_TABLE } from "../../../schemas/notices/table-name";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import { ServiceContainer } from "../../../services/index";
 import { defineEmailProvider } from "../../email/provider-definition";
 import type { EmailService } from "../../email/services/email-service";
 import type { EmailProviderAdapter } from "../../email/types";
@@ -58,12 +59,20 @@ const SLUG = "posts";
 const PAST = new Date("2020-01-01T09:00:00.000Z");
 
 const sent: Array<Parameters<EmailProviderAdapter["send"]>[0]> = [];
+/**
+ * How many of the next sends the provider fails, as one that is briefly
+ * unreachable does: a failure it does not classify, which counts as one a
+ * retry can help.
+ */
+const provider = { failing: 0, attempts: 0 };
 let current: TestNextly | undefined;
 
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
   sent.length = 0;
+  provider.failing = 0;
+  provider.attempts = 0;
 });
 
 const capturing = defineEmailProvider<Record<string, never>>({
@@ -73,6 +82,11 @@ const capturing = defineEmailProvider<Record<string, never>>({
   parseConfig: () => ({}),
   createAdapter: () => ({
     send: async options => {
+      provider.attempts += 1;
+      if (provider.failing > 0) {
+        provider.failing -= 1;
+        return { success: false };
+      }
       sent.push(options);
       return { success: true, messageId: "captured" };
     },
@@ -123,11 +137,15 @@ async function boot(
   return t;
 }
 
-/** A release of one draft, owned and added by `owner`, scheduled for `at`. */
+/**
+ * A release of one draft, owned by `owner` and its draft added by `author`
+ * (the owner unless said), scheduled for `at`.
+ */
 async function scheduledRelease(
   t: TestNextly,
   owner: string,
-  at: Date
+  at: Date,
+  author = owner
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   const created = await handler.createEntry(
@@ -149,7 +167,7 @@ async function scheduledRelease(
       entryId,
       locale: null,
       action: "publish",
-      createdBy: owner,
+      createdBy: author,
     },
     ANY_EDITABLE_STATE
   );
@@ -165,6 +183,21 @@ async function releaseReader(t: TestNextly): Promise<string> {
   const owner = await seedLiveAuthor(t);
   await grantTo(t, owner, "read", [RELEASES_RESOURCE]);
   return owner;
+}
+
+/**
+ * Take every role `userId` holds, as an administrator does, through the
+ * service that also flushes the permission caches.
+ */
+async function revokeRoles(t: TestNextly, userId: string): Promise<void> {
+  const roles = new ServiceContainer(t.adapter).userRoles;
+  const held = await t.adapter.select<{ roleId: string }>("user_roles", {
+    columns: ["roleId"],
+    where: { and: [{ column: "userId", op: "=", value: userId }] },
+  });
+  for (const { roleId } of held) {
+    await roles.unassignRoleFromUser(userId, roleId);
+  }
 }
 
 /** A stored JSON value: text on SQLite, a value elsewhere. */
@@ -222,10 +255,16 @@ function sentTo(address: string) {
 }
 
 /** One jobs trigger, as `/api/jobs/run` makes it. */
-function trigger(t: TestNextly) {
+function trigger(t: TestNextly, now?: Date) {
   return runJobsPass(t.adapter, container.get<JobRegistry>("jobRegistry"), {
     retentionMs: null,
+    ...(now === undefined ? {} : { now: () => now }),
   });
+}
+
+/** A time past any backoff a job's retries could have scheduled from now. */
+function pastEveryBackoff(): Date {
+  return new Date(Date.now() + 7 * 24 * 60 * 60_000);
 }
 
 /** One drain pass with no overdue pass before it: a runner catching up. */
@@ -319,8 +358,12 @@ describe.each(getConfiguredTestDialects())(
 
     it("is told by the drain's own pass before the release runs, and emailed once, in its zone", async () => {
       const t = await boot(dialect);
+      // The site's first account is its super-admin, who may read and publish
+      // everything; it adds the document, and the owner is an ordinary
+      // person given release reads, whose standing is what decides.
+      const admin = await seedLiveAuthor(t);
       const owner = await releaseReader(t);
-      const id = await scheduledRelease(t, owner, PAST);
+      const id = await scheduledRelease(t, owner, PAST, admin);
       const address = await emailOf(t, owner);
 
       await trigger(t);
@@ -351,8 +394,12 @@ describe.each(getConfiguredTestDialects())(
 
     it("is emailed by the next run when the process stopped after the notice, and a repeat sends nothing more", async () => {
       const t = await boot(dialect);
+      // The site's first account is its super-admin, who may read and publish
+      // everything; it adds the document, and the owner is an ordinary
+      // person given release reads, whose standing is what decides.
+      const admin = await seedLiveAuthor(t);
       const owner = await releaseReader(t);
-      const id = await scheduledRelease(t, owner, PAST);
+      const id = await scheduledRelease(t, owner, PAST, admin);
       const address = await emailOf(t, owner);
 
       // The notice and its job are committed, and the process stops before
@@ -382,16 +429,18 @@ describe.each(getConfiguredTestDialects())(
 
     it("is not emailed to an owner whose release access was revoked after the notice", async () => {
       const t = await boot(dialect);
+      // The site's first account is its super-admin, who may read and publish
+      // everything; it adds the document, and the owner is an ordinary
+      // person given release reads, whose standing is what decides.
+      const admin = await seedLiveAuthor(t);
       const owner = await releaseReader(t);
-      const id = await scheduledRelease(t, owner, PAST);
+      const id = await scheduledRelease(t, owner, PAST, admin);
       const address = await emailOf(t, owner);
       await new ReleasesRepository(t.adapter).recordOverdueReleases(new Date());
 
       // Revoked between the notice and the run of its email job: their list
       // now hides the notice, so its email is not sent either.
-      await t.adapter.delete("user_roles", {
-        and: [{ column: "userId", op: "=", value: owner }],
-      });
+      await revokeRoles(t, owner);
       await trigger(t);
 
       expect(await overdueNotices(t, id)).toHaveLength(1);
@@ -403,8 +452,12 @@ describe.each(getConfiguredTestDialects())(
 
     it("is not emailed to an owner deactivated after the notice", async () => {
       const t = await boot(dialect);
+      // The site's first account is its super-admin, who may read and publish
+      // everything; it adds the document, and the owner is an ordinary
+      // person given release reads, whose standing is what decides.
+      const admin = await seedLiveAuthor(t);
       const owner = await releaseReader(t);
-      const id = await scheduledRelease(t, owner, PAST);
+      const id = await scheduledRelease(t, owner, PAST, admin);
       const address = await emailOf(t, owner);
       await new ReleasesRepository(t.adapter).recordOverdueReleases(new Date());
 
@@ -422,6 +475,66 @@ describe.each(getConfiguredTestDialects())(
       expect(jobs.map(job => job.state)).toEqual(jobs.map(() => "done"));
       expect(sentTo(address)).toEqual([]);
     });
+
+    it("is emailed by the retry after a failed attempt, once", async () => {
+      const t = await boot(dialect);
+      // The site's first account is its super-admin, who may read and publish
+      // everything; it adds the document, and the owner is an ordinary
+      // person given release reads, whose standing is what decides.
+      const admin = await seedLiveAuthor(t);
+      const owner = await releaseReader(t);
+      await scheduledRelease(t, owner, PAST, admin);
+      const address = await emailOf(t, owner);
+      await new ReleasesRepository(t.adapter).recordOverdueReleases(new Date());
+
+      provider.failing = 1;
+      await trigger(t);
+      expect(sentTo(address)).toEqual([]);
+      await trigger(t, pastEveryBackoff());
+      await trigger(t, pastEveryBackoff());
+
+      expect(sentTo(address)).toHaveLength(1);
+    });
+
+    for (const [losing, lose] of [
+      [
+        "is deactivated",
+        (t: TestNextly, owner: string) => deactivate(t, owner),
+      ],
+      [
+        "loses release access",
+        (t: TestNextly, owner: string) => revokeRoles(t, owner),
+      ],
+    ] as const) {
+      it(`is not emailed on a retry when the owner ${losing} after a failed attempt`, async () => {
+        const t = await boot(dialect);
+        // The site's first account is its super-admin, who may read and publish
+        // everything; it adds the document, and the owner is an ordinary
+        // person given release reads, whose standing is what decides.
+        const admin = await seedLiveAuthor(t);
+        const owner = await releaseReader(t);
+        const id = await scheduledRelease(t, owner, PAST, admin);
+        const address = await emailOf(t, owner);
+        await new ReleasesRepository(t.adapter).recordOverdueReleases(
+          new Date()
+        );
+
+        // The first attempt fails as a briefly unreachable provider does.
+        provider.failing = 1;
+        await trigger(t);
+        expect(provider.attempts).toBe(1);
+        expect(sentTo(address)).toEqual([]);
+
+        // Between that attempt and the retry, the owner may no longer see
+        // the notice, so the retry, whenever it runs, sends nothing.
+        await lose(t, owner);
+        await trigger(t, pastEveryBackoff());
+        await trigger(t, pastEveryBackoff());
+
+        expect(await overdueNotices(t, id)).toHaveLength(1);
+        expect(sentTo(address)).toEqual([]);
+      });
+    }
 
     it("is told without email where the site sends none, and the job completes", async () => {
       const t = await boot(dialect, false);

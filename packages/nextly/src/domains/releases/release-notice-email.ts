@@ -2,14 +2,19 @@
  * The email that copies a release notice to the person it is for.
  *
  * A release notice is recorded in the transaction of the change it reports,
- * and its email must stand or fall with it. Core's queued send stores an
- * email in a caller's transaction only when that transaction is a plugin's
- * (`EmailService.queue`), and a release changes state in core's own, so the
- * change hands the email on instead: it adds this job in the same
- * transaction ({@link enqueueReleaseNoticeEmail}), and the job queues the
- * email once that has committed. A notice therefore never stands without its
+ * and its email must stand or fall with it. The change adds this job in the
+ * same transaction ({@link enqueueReleaseNoticeEmail}), and the job sends the
+ * email once that has committed: a notice therefore never stands without its
  * email handed on, and a process that stops before the job runs leaves it
  * for the next jobs run.
+ *
+ * Every attempt is the job's, through core's send (`EmailService.send`), and
+ * asks again first whether the notice's person may still be sent it: its
+ * kind's `visible`, and an active account. A failure a retry can help is
+ * thrown to the job queue, which tries again with backoff up to the attempt
+ * limit core's queued email uses; so a person who lost access or was
+ * deactivated between two attempts is sent nothing by the second. A failure
+ * no retry can help is logged, and the notice alone stands.
  *
  * Sent under a key made from the notice's id, so however often the job runs
  * the notice's email is sent once where the provider honours keys: core's
@@ -20,9 +25,17 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../errors";
+import { getNextlyLogger } from "../../observability/logger";
 import { getPublicOrigin } from "../../shared/lib/get-base-url";
-import type { QueuedEmail } from "../email/queued-send";
+import type { EmailFailure } from "../email/failure";
+import { QUEUED_EMAIL_MAX_ATTEMPTS } from "../email/queued-email-job";
+import { thrownAttemptFailure } from "../email/queued-send";
 import type { EmailService } from "../email/services/email-service";
+import {
+  notAcceptedFailure,
+  type EmailSendOutcome,
+} from "../email/services/send-failures";
 import { escapeHtml } from "../email/services/template-engine";
 import { defineJob, type JobDefinition } from "../jobs/job-registry";
 import { enqueueInTransaction } from "../jobs/jobs-repository";
@@ -53,7 +66,7 @@ export interface ReleaseNoticeEmailDeps {
   /** The database the notice and its person are read from. */
   db: NoticesDb;
   /** Core's send service, or `null` where none is registered. */
-  email: Pick<EmailService, "isConfigured" | "queue"> | null;
+  email: Pick<EmailService, "isConfigured" | "send"> | null;
 }
 
 /** The email made from one notice. @experimental */
@@ -138,7 +151,7 @@ export function releaseNoticeMessage(input: {
 }
 
 /**
- * The job that queues a notice's email. Its dependencies are resolved per
+ * The job that sends a notice's email. Its dependencies are resolved per
  * run, as the queued email's own job resolves them, so the send service is
  * the one registered when it runs.
  *
@@ -149,28 +162,68 @@ export function createReleaseNoticeEmailJob(
 ): JobDefinition<ReleaseNoticeEmailJobInput> {
   return defineJob<ReleaseNoticeEmailJobInput>({
     slug: RELEASE_NOTICE_EMAIL_JOB,
+    // As many attempts as core's queued email makes, so a notice's email is
+    // tried as long as any other queued email would be.
+    retry: { maxAttempts: QUEUED_EMAIL_MAX_ATTEMPTS },
     handler: async input => {
       // A row's input is whatever was stored; one without an id names no
       // notice, and there is nothing to send.
       if (typeof input?.noticeId !== "string") return;
-      await emailReleaseNotice(deps(), input.noticeId);
+      const failure = await attemptFailure(deps(), input.noticeId);
+      if (failure === undefined) return;
+      if (!failure.retryable) {
+        getNextlyLogger().warn({
+          kind: "release-notice-email-failed",
+          message:
+            "A release notice's email could not be sent, and trying again would not help; the notice stands",
+          noticeId: input.noticeId,
+          reason: failure.reason,
+        });
+        return;
+      }
+      // To the job queue, which records this as the attempt's error and
+      // backs off; the next attempt asks again who may be sent it.
+      throw new NextlyError({
+        code: "EXTERNAL_SERVICE_ERROR",
+        publicMessage:
+          "A release notice's email was not sent and will be tried again.",
+        logContext: { noticeId: input.noticeId, reason: failure.reason },
+      });
     },
   });
 }
 
 /**
- * Queue the email for one notice, or nothing: the site sends no email, the
+ * One attempt at a notice's email, and why it failed, if it did: by the send's
+ * own answer, or by what core's queued email makes of a send that threw.
+ */
+async function attemptFailure(
+  deps: ReleaseNoticeEmailDeps,
+  noticeId: string
+): Promise<EmailFailure | undefined> {
+  try {
+    const outcome = await emailReleaseNotice(deps, noticeId);
+    if (outcome === null || outcome.success) return undefined;
+    return outcome.failure ?? notAcceptedFailure();
+  } catch (error) {
+    return thrownAttemptFailure(error);
+  }
+}
+
+/**
+ * Send the email for one notice, or nothing: the site sends no email, the
  * notice is gone, it is not a release notice, its person may no longer see
- * it or is deactivated, or its person has no address. The notice alone then stands, and
- * nothing fails.
+ * it or is deactivated, or its person has no address. The notice alone then
+ * stands, and nothing fails. Asked afresh on every call, so each attempt is
+ * judged as it is made.
  *
- * @returns the queued email, or `null` when none was queued
+ * @returns the send's outcome, or `null` when nothing was sent
  * @experimental
  */
 export async function emailReleaseNotice(
   deps: ReleaseNoticeEmailDeps,
   noticeId: string
-): Promise<QueuedEmail | null> {
+): Promise<EmailSendOutcome | null> {
   const { db, email } = deps;
   if (email === null || !(await email.isConfigured())) return null;
   const notice = await new NoticesService({ db }).byId(noticeId);
@@ -212,7 +265,7 @@ export async function emailReleaseNotice(
     ...copy,
     url: path === null || origin === null ? null : `${origin}${path}`,
   });
-  return email.queue({
+  return email.send({
     to: person.email,
     subject: message.subject,
     html: message.html,

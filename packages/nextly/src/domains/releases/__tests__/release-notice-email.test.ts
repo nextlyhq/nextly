@@ -35,8 +35,15 @@ vi.mock("../release-notice-links", () => ({
   mayReadReleaseNotices: async () => site.mayRead,
 }));
 
-const { emailReleaseNotice, releaseNoticeEmailKey, releaseNoticeMessage } =
-  await import("../release-notice-email");
+const {
+  createReleaseNoticeEmailJob,
+  emailReleaseNotice,
+  releaseNoticeEmailKey,
+  releaseNoticeMessage,
+} = await import("../release-notice-email");
+const { getNextlyLogger, setNextlyLogger } = await import(
+  "../../../observability/logger"
+);
 const { RELEASE_OVERDUE_NOTICE } = await import("../release-overdue-notice");
 const { RELEASE_STOPPED_NOTICE } = await import("../release-stopped-notice");
 const { clearNoticeKindsForTests, registerNoticeKind } = await import(
@@ -44,8 +51,8 @@ const { clearNoticeKindsForTests, registerNoticeKind } = await import(
 );
 const { NOTICES_TABLE } = await import("../../../schemas/notices/table-name");
 type NoticesDb = import("../../notices/notices-service").NoticesDb;
-type QueueOptions = Parameters<
-  import("../../email/services/email-service").EmailService["queue"]
+type SendOptions = Parameters<
+  import("../../email/services/email-service").EmailService["send"]
 >[0];
 
 // Registered as the releases feature registers them, since the email shows a
@@ -103,10 +110,7 @@ function holding(
 function sender(configured = true) {
   return {
     isConfigured: vi.fn(async () => configured),
-    queue: vi.fn(async (_options: QueueOptions) => ({
-      id: "queued",
-      state: "waiting" as const,
-    })),
+    send: vi.fn(async (_options: SendOptions) => ({ success: true })),
   };
 }
 
@@ -170,14 +174,14 @@ describe("a release notice's email", () => {
       "n1"
     );
 
-    const linked = withOrigin.queue.mock.calls[0][0];
+    const linked = withOrigin.send.mock.calls[0][0];
     expect(linked.plainText).toContain(
       "Open the release: https://site.example/admin/releases/r1"
     );
     expect(linked.html).toContain(
       '<a href="https://site.example/admin/releases/r1">'
     );
-    const unlinked = withoutOrigin.queue.mock.calls[0][0];
+    const unlinked = withoutOrigin.send.mock.calls[0][0];
     expect(unlinked.plainText).not.toContain("Open the release");
     expect(unlinked.html).not.toContain("<a ");
   });
@@ -189,7 +193,7 @@ describe("a release notice's email", () => {
       { db: holding(NOTICE, "owner@example.com"), email },
       "n1"
     );
-    const message = email.queue.mock.calls[0][0];
+    const message = email.send.mock.calls[0][0];
     expect(message.plainText).toContain("The release has since been deleted.");
     expect(message.plainText).not.toContain("Open the release");
   });
@@ -201,17 +205,17 @@ describe("a release notice's email", () => {
     await emailReleaseNotice(deps, "n1");
     await emailReleaseNotice(deps, "n1");
 
-    expect(email.queue).toHaveBeenCalledTimes(2);
-    expect(email.queue.mock.calls[0][0]).toMatchObject({
+    expect(email.send).toHaveBeenCalledTimes(2);
+    expect(email.send.mock.calls[0][0]).toMatchObject({
       to: "owner@example.com",
       subject: "“Spring launch” missed its time",
       person: { kind: "staff", id: "owner" },
       idempotencyKey: releaseNoticeEmailKey("n1"),
     });
-    expect(email.queue.mock.calls[1][0]).toEqual(email.queue.mock.calls[0][0]);
+    expect(email.send.mock.calls[1][0]).toEqual(email.send.mock.calls[0][0]);
   });
 
-  it("is not queued to a person who may no longer read releases, whose list hides the notice", async () => {
+  it("is not sent to a person who may no longer read releases, whose list hides the notice", async () => {
     site.releases.add("r1");
     site.mayRead = false;
     const email = sender();
@@ -222,10 +226,10 @@ describe("a release notice's email", () => {
         "n1"
       )
     ).toBeNull();
-    expect(email.queue).not.toHaveBeenCalled();
+    expect(email.send).not.toHaveBeenCalled();
   });
 
-  it("is not queued to a person deactivated since, who keeps their roles", async () => {
+  it("is not sent to a person deactivated since, who keeps their roles", async () => {
     site.releases.add("r1");
     const email = sender();
 
@@ -235,10 +239,10 @@ describe("a release notice's email", () => {
         "n1"
       )
     ).toBeNull();
-    expect(email.queue).not.toHaveBeenCalled();
+    expect(email.send).not.toHaveBeenCalled();
   });
 
-  it("is not queued where the site sends no email, the notice is gone, or its person has no address", async () => {
+  it("is not sent where the site sends no email, the notice is gone, or its person has no address", async () => {
     const cases = [
       { email: sender(false), db: holding(NOTICE, "owner@example.com") },
       { email: sender(), db: holding(null, "owner@example.com") },
@@ -250,7 +254,7 @@ describe("a release notice's email", () => {
     ];
     for (const { email, db } of cases) {
       expect(await emailReleaseNotice({ db, email }, "n1")).toBeNull();
-      expect(email.queue).not.toHaveBeenCalled();
+      expect(email.send).not.toHaveBeenCalled();
     }
     expect(
       await emailReleaseNotice(
@@ -258,6 +262,69 @@ describe("a release notice's email", () => {
         "n1"
       )
     ).toBeNull();
+  });
+});
+
+describe("the job that sends a release notice's email", () => {
+  const saved = getNextlyLogger();
+  afterEach(() => setNextlyLogger(saved));
+
+  /** The job, sending through `send`, for the one notice the database holds. */
+  function job(send: (options: SendOptions) => Promise<unknown>) {
+    site.releases.add("r1");
+    return createReleaseNoticeEmailJob(() => ({
+      db: holding(NOTICE, "owner@example.com"),
+      email: {
+        isConfigured: async () => true,
+        send: send as never,
+      },
+    }));
+  }
+  // The handler reads nothing of its run's context.
+  const context = {} as Parameters<
+    ReturnType<typeof createReleaseNoticeEmailJob>["handler"]
+  >[1];
+
+  it("throws a failure a retry can help to the job queue, so the next attempt asks again", async () => {
+    const run = job(async () => ({
+      success: false,
+      failure: {
+        retryable: true,
+        reason: "The email provider could not be reached.",
+      },
+    }));
+
+    await expect(
+      run.handler({ noticeId: "n1" }, context)
+    ).rejects.toMatchObject({ code: "EXTERNAL_SERVICE_ERROR" });
+  });
+
+  it("logs a failure no retry can help, and ends without trying again", async () => {
+    const warn = vi.fn();
+    setNextlyLogger({
+      error: () => {},
+      warn,
+      info: () => {},
+      debug: () => {},
+    });
+    const run = job(async () => ({
+      success: false,
+      failure: { retryable: false, reason: "The recipient was refused." },
+    }));
+
+    await expect(run.handler({ noticeId: "n1" }, context)).resolves.toBe(
+      undefined
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "release-notice-email-failed",
+        noticeId: "n1",
+      })
+    );
+  });
+
+  it("is tried as many times as core's queued email", () => {
+    expect(job(async () => ({ success: true })).retry.maxAttempts).toBe(15);
   });
 });
 
