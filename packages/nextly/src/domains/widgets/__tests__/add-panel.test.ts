@@ -39,6 +39,8 @@ describe("the group each widget is listed in", () => {
       // Offered per collection, as Count is.
       "core/recent-entries": "content",
       "core/over-time": "content",
+      // Super-admins only, and one row of Overview for them.
+      "core/system-health": "overview",
     });
   });
 

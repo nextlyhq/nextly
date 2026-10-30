@@ -27,6 +27,7 @@ import { OverTimeCard } from "@admin/components/features/dashboard/OverTimeCard"
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentEntriesCard } from "@admin/components/features/dashboard/RecentEntriesCard";
 import { SetupCard } from "@admin/components/features/dashboard/SetupCard";
+import { SystemHealthCard } from "@admin/components/features/dashboard/SystemHealthCard";
 import { TeamActivityCard } from "@admin/components/features/dashboard/TeamActivity";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { UpcomingReleasesCard } from "@admin/components/features/dashboard/UpcomingReleases";
@@ -54,4 +55,5 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#Note", NoteCard);
   registerCoreComponent("core#RecentEntries", RecentEntriesCard);
   registerCoreComponent("core#OverTime", OverTimeCard);
+  registerCoreComponent("core#SystemHealth", SystemHealthCard);
 }

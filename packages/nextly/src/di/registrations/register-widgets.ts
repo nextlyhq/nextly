@@ -90,6 +90,7 @@ import { registerActivityWidgetSource } from "../../services/dashboard/activity-
 import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
 import { registerContinueWidgetSource } from "../../services/dashboard/continue-widget-source";
 import { registerSummaryWidgetSources } from "../../services/dashboard/summary-widget-sources";
+import { registerSystemHealthSource } from "../../services/dashboard/system-health-source";
 
 export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = [],
@@ -155,6 +156,8 @@ export function resetWidgetRegistries(
   registerAttentionWidgetSource();
   // The setup card's reads, which reach the permission and database graph.
   registerSetupCard();
+  // System health's read, which the card and the attention digest share.
+  registerSystemHealthSource();
   registerSummaryWidgetSources();
   registerContinueWidgetSource();
 

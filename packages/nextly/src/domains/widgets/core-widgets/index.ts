@@ -69,6 +69,7 @@ import { overTimeWidget } from "./over-time";
 import { quickCreateWidget } from "./quick-create";
 import { recentEntriesWidget } from "./recent-entries";
 import { setupWidget } from "./setup";
+import { systemHealthWidget } from "./system-health";
 import { teamWidget } from "./team";
 import { teamActivityWidget } from "./team-activity";
 import { upcomingReleasesWidget } from "./upcoming-releases";
@@ -87,6 +88,7 @@ export const CORE_DECLARATIONS = [
   noteWidget,
   recentEntriesWidget,
   overTimeWidget,
+  systemHealthWidget,
 ] as const;
 
 /** Core's widgets still written as definitions: every one not declared. */
