@@ -68,6 +68,13 @@ const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
 
 const stored = (userId: string) => STORED[userId] ?? { roles: [], grants: [] };
 
+/**
+ * What the Public role grants, and so what a visitor holds: the read of every
+ * target, so a visitor's read is judged by the target's rule, and every write
+ * is refused for want of a grant.
+ */
+const PUBLIC_GRANTS = onEveryTarget(["read"]);
+
 /** The permissions module, with every lookup answered from `STORED`. */
 export function fakePermissions<T extends object>(real: T): T {
   const superAdmin = (userId: string) =>
@@ -96,6 +103,7 @@ export function fakePermissions<T extends object>(real: T): T {
     listEffectiveGrants: vi.fn(async (userId: string) => [
       ...stored(userId).grants,
     ]),
+    listPublicGrants: vi.fn(async () => [...PUBLIC_GRANTS]),
   };
 }
 
