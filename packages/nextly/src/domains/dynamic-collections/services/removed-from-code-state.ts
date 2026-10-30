@@ -160,8 +160,9 @@ async function migrationDrops(
 }
 
 /**
- * The app's migrations' ledger state, by ledger filename: the newest
- * `file_apply` event per file decides, as everywhere the ledger is read. A
+ * The app's migrations' ledger state, by ledger filename, by the rule every
+ * app reader of the ledger shares (`standingsByFilename`): applied by its
+ * latest outcome alone, and stopped while an attempt is unresolved. A
  * database with no ledger yet has applied nothing.
  */
 async function ledgerStates(
@@ -170,28 +171,26 @@ async function ledgerStates(
   if (!(await adapter.tableExists("nextly_schema_events"))) return new Map();
   const [
     { SchemaEventsRepository },
-    { newestEventsByFilename },
+    { standingsByFilename },
     { scopeLedgerRows },
-    { attemptUnfinished },
   ] = await Promise.all([
     import("../../schema/events/schema-events-repository"),
-    import("../../schema/events/newest-event"),
+    import("../../schema/events/migration-state"),
     import("../../schema/events/ledger-scope"),
-    import("../../schema/migrate/drift-reconcile"),
   ]);
   const rows = await new SchemaEventsRepository(
     adapter.getDrizzle(),
     adapter.dialect
   ).listFileApplies();
   const states = new Map<string, MigrationLedgerState>();
-  for (const [filename, event] of newestEventsByFilename(
+  for (const [filename, standing] of standingsByFilename(
     scopeLedgerRows(rows)
   )) {
     states.set(
       filename,
-      event.status === "applied"
+      standing.state === "applied"
         ? "applied"
-        : attemptUnfinished(event)
+        : standing.unresolvedAttempt !== undefined
           ? "stopped"
           : "pending"
     );

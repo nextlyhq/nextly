@@ -310,6 +310,31 @@ describe.each(getConfiguredTestDialects())(
       expect(marks.singleSchema).toEqual(expected);
     }, 120_000);
 
+    // A migration's state is its latest outcome, as every reader of the ledger
+    // takes it: an attempt that fails after the drop was applied leaves it
+    // applied, so the entity is still half-retired, not stopped.
+    it("stays half-retired when an attempt fails after the drop was applied", async () => {
+      const file = "20261027_120000_drop_removed.sql";
+      await writeDrop(file);
+      for (const table of [tables.collection, tables.single]) {
+        await database!.adapter.executeQuery(
+          `DROP TABLE ${quoted(dialect, table)}`
+        );
+      }
+      await recordAttempt(file, "applied");
+      // Newer than the outcome, so a reader of the newest row would see it.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      await recordAttempt(file, "failed");
+
+      const marks = await marksOf(REMOVED);
+      const expected = {
+        removedFromCode: true,
+        removedFromCodeState: { state: "half-retired" },
+      };
+      expect(marks.collectionListed).toEqual(expected);
+      expect(marks.singleSchema).toEqual(expected);
+    }, 120_000);
+
     it("names none of those steps while an attempt to apply the drop stopped", async () => {
       const file = "20261027_120000_drop_removed.sql";
       await writeDrop(file);
