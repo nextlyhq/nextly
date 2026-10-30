@@ -469,8 +469,9 @@ to another service, in `afterDelete`, which runs only after the delete commits.
 
 A delete made with `deleteEntryInTransaction` inside a plugin's
 [`collections.withTransaction`](/docs/plugins/services#collection-transactions)
-runs differently: its hooks run inside that transaction, after the row is
-locked and checked, and `afterDelete` runs before the transaction commits. An
+runs differently: its hooks run inside that transaction (after the row is
+locked and matched, where the `delete` rule answers a filter), and `afterDelete`
+runs before the transaction commits. An
 effect made there still happens if the transaction then rolls back, so make it
 once `withTransaction` has resolved.
 
