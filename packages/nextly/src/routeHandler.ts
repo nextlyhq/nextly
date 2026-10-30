@@ -25,6 +25,7 @@ import {
   requireAnyPermission,
   requireCollectionAccess,
   requireCollectionWriteAccess,
+  requireGrantAccess,
   requireLifecycleAccess,
   admittedActionOf,
   createJsonErrorResponse,
@@ -738,6 +739,16 @@ const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
   "bulkUpdateByQuery",
 ]);
 
+/**
+ * The writes whose route asks the grant alone: a restore, which writes the
+ * restored version's language, known only once the version is read. The
+ * update it makes asks the rule in that language, before it writes.
+ */
+const GRANT_ONLY_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "restoreEntryVersion",
+  "restoreSingleVersion",
+]);
+
 export const COLLECTION_ENTRY_METHODS = new Set([
   "listEntries",
   "createEntry",
@@ -1027,6 +1038,14 @@ async function resolveAuthorization(
       if (lifecycle) {
         return requireLifecycleAccess(req, lifecycle, slug, route);
       }
+      if (GRANT_ONLY_WRITE_METHODS.has(method)) {
+        return requireGrantAccess(
+          req,
+          getActionFromOperation(operation),
+          slug,
+          route
+        );
+      }
       return requireCollectionAccess(
         req,
         getActionFromOperation(operation),
@@ -1082,6 +1101,9 @@ async function resolveAuthorization(
       const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
       if (lifecycle) {
         return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      if (GRANT_ONLY_WRITE_METHODS.has(method)) {
+        return requireGrantAccess(req, action, slug, route);
       }
       return requireCollectionAccess(req, action, slug, route);
     }

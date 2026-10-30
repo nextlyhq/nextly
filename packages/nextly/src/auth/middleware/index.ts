@@ -805,6 +805,7 @@ const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["updateEntry", "write"],
   ["discardWorkingDraft", "as-named"],
   ["takeLiveSharedValues", "as-named"],
+  ["takeLiveSingleSharedValues", "as-named"],
   ["autosaveEntry", "as-named"],
   ["updateSingleDocument", "write"],
   ["autosaveSingle", "as-named"],
@@ -1045,6 +1046,32 @@ export async function requireLifecycleAccess(
     );
     return isErrorResponse(asUpdate) ? onGrant : asUpdate;
   });
+}
+
+/**
+ * The access check for a route whose write's language only its service
+ * knows: a restore, which writes the restored version's language. By the
+ * grant alone, since the update the restore makes asks the rule in that
+ * language before it writes. Told every language here, a rule allowing only
+ * the version's language would refuse what the update allows.
+ */
+export async function requireGrantAccess(
+  req: Request,
+  action: string,
+  collectionSlug: string,
+  operation?: RouteOperation
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+  if ("statusCode" in authResult) return authResult;
+  // The languages still matter to the read a refusal is answered by.
+  return withRuleLanguage(requestLanguage(operation), () =>
+    authorizeCallerOnGrant(
+      authResult,
+      action,
+      collectionSlug,
+      operation?.namesOne ? "one" : "all"
+    )
+  );
 }
 
 /** The action a write route admitted each caller on, where it accepts several. */
