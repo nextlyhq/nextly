@@ -16,7 +16,7 @@ import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
 import { TRUSTS_EVERY_COLLECTION } from "../../services/collections/trust-grant";
 import { cachedFind } from "../cache/cached-find";
-import { nextlyTags } from "../cache/nextly-tags";
+import { nextlyTags, readTags } from "../cache/nextly-tags";
 import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
 import { deferToRequest } from "./defer-to-request";
@@ -613,7 +613,7 @@ export async function resolveContent(
   return cachedFind(read, {
     // Tag by the collection so any write to it makes this read fresh, plus any
     // caller-supplied tags (related collections a populated read depends on).
-    tags: [...nextlyTags(collection), ...(options.tags ?? [])],
+    tags: readTags(nextlyTags(collection), options.tags),
     keyParts: [
       "nextly",
       "resolve-content",

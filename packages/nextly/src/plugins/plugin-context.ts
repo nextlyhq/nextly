@@ -68,6 +68,7 @@ import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
 import type { ContributedColumn } from "./database/access";
+import { expireContentTarget } from "./database/expire-content-target";
 import {
   createPluginDatabase,
   type PluginDatabase,
@@ -1402,6 +1403,11 @@ function buildPluginDatabase(
       Object.values(relations()).find(
         entry => getTableName(entry.table as Table) === tableName
       )?.table,
+    // Whose cached reads a `contributed` write changed: the collection, Single
+    // or field group the compiled schema seeded that table from, read per call
+    // like the rest of the schema.
+    contentEntity: tableName => active()?.entityOwners.get(tableName),
+    expireContent: expireContentTarget,
     tableList: () => [
       ...(active()?.tables ?? []).map(table => ({
         name: table.name,
