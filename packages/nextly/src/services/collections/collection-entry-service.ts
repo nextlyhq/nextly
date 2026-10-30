@@ -708,6 +708,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** API-key scope; judges the update gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
   }
