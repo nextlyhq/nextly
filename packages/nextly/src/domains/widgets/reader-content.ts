@@ -29,6 +29,10 @@
 
 import { callerMayPerform } from "../../auth/access/route-gate-adapters";
 import {
+  registeredWriteLanguagesFor,
+  withRuleLanguage,
+} from "../../auth/access/rule-language";
+import {
   AUTHORIZATION_CONCURRENCY,
   authorizationGroups,
   readAccessCaller,
@@ -171,14 +175,44 @@ export async function readerMayCreateEntry(
 }
 
 /**
- * Whether this reader may create an entry in one collection: the decision a
- * real write makes, through {@link callerMayPerform}.
+ * Whether this reader may `action` one collection or Single: the decision a
+ * real write makes, through {@link callerMayPerform}, judged in the languages
+ * that write involves.
+ *
+ * The action a card offers opens a page by a link that names no language
+ * (`/admin/collections/<slug>/create`, `/admin/singles/<slug>`), and the
+ * write that page makes names none either, so it is judged as the route
+ * gate judges a write naming no language: in the default language alone
+ * (`registeredWriteLanguagesFor(undefined)`). Outside that, a rule would be
+ * told every configured language, and one that allows a reader the default
+ * language only would refuse here what the page then lets them do.
  */
+function writeVerdict(
+  caller: ReadCaller,
+  action: "create" | "update"
+): (slug: string) => Promise<boolean> {
+  return slug =>
+    withRuleLanguage(registeredWriteLanguagesFor(undefined), () =>
+      callerMayPerform(caller.authenticatedScope, action, slug, caller.user)
+    );
+}
+
+/** Whether this reader may create an entry in one collection ({@link writeVerdict}). */
 export function createVerdict(
   caller: ReadCaller
 ): (slug: string) => Promise<boolean> {
-  return slug =>
-    callerMayPerform(caller.authenticatedScope, "create", slug, caller.user);
+  return writeVerdict(caller, "create");
+}
+
+/**
+ * Whether this reader may update one Single or a collection's entries
+ * ({@link writeVerdict}), as {@link createVerdict} decides creating, so the
+ * two never come to disagree with the write about who may.
+ */
+export function updateVerdict(
+  caller: ReadCaller
+): (slug: string) => Promise<boolean> {
+  return writeVerdict(caller, "update");
 }
 
 /**

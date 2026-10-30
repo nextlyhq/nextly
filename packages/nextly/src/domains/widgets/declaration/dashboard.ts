@@ -24,6 +24,13 @@ import type { AnyWidget, WidgetDataInput } from "./define-widget";
 export type { CoreWidgetId } from "../core-widgets/ids";
 
 /**
+ * The most Needs attention items one plugin may declare. Startup refuses a
+ * plugin that declares more, so a plugin with a line per something it reads
+ * builds no more lines than this.
+ */
+export const MAX_ATTENTION_ITEMS_PER_PLUGIN = 10;
+
+/**
  * A count for the Needs attention card: a whole number, or one marked as a
  * floor when counting stopped at a bound.
  */

@@ -300,9 +300,8 @@ export function GoalEditor({
 
 The editor is registered like the widget's own component, from your admin entry, and the
 component map holds it to the setting's value: an editor written for another setting's value
-fails to compile. Startup refuses an `editor` that names no component, one component used both
-as a widget's view and as a setting's editor, and an `editor` on a widget given to `registerWidget`
-or `contributes.admin.widgets`: custom setting editors need a `defineWidget` declaration.
+fails to compile. Startup refuses an `editor` that names no component, and one component used both
+as a widget's view and as a setting's editor.
 
 ## Testing a widget
 

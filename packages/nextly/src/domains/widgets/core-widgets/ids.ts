@@ -29,6 +29,7 @@ export const CORE_WIDGET_ID = {
   note: "core/note",
   recentEntries: "core/recent-entries",
   overTime: "core/over-time",
+  systemHealth: "core/system-health",
 } as const;
 
 /** The id of one of core's widgets. */
@@ -53,7 +54,20 @@ export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.note,
   CORE_WIDGET_ID.recentEntries,
   CORE_WIDGET_ID.overTime,
+  CORE_WIDGET_ID.systemHealth,
 ] as const satisfies readonly CoreWidgetId[];
+
+/**
+ * Core's widgets only a super-admin is told exist: neither offered to anyone
+ * else, nor placed, nor handed as a card (`widgetAudience`). A super-admin is
+ * not a permission, so no `requiredPermission` gate can say it, and an
+ * `access` predicate is judged per card only, which would still offer the
+ * widget to everyone. Here, beside the ids and importing nothing, so the
+ * audience asks it without loading any card.
+ */
+export const SUPER_ADMIN_WIDGET_IDS: ReadonlySet<string> = new Set<string>([
+  CORE_WIDGET_ID.systemHealth,
+]);
 
 // Every id named above is in the order: a widget added to the names but not
 // here fails to compile.

@@ -6,8 +6,8 @@
  * A widget declaration is its whole content: a `text` widget carries its
  * prose. Filtering the payload in the browser is not a control -- the JSON is
  * what a signed-in caller can fetch -- so this asserts the WIRE: a caller
- * lacking a widget's gate never receives its declaration, from either channel,
- * and a caller holding it does. The caller is an API key rather than a session
+ * lacking a widget's gate never receives its declaration, and a caller holding
+ * it does. The caller is an API key rather than a session
  * because a key is judged on its own stamped grants, which makes "holds" and
  * "lacks" two keys minted from the same role table rather than two mocks.
  */
@@ -20,7 +20,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../config";
-import type { WidgetSetting } from "../domains/widgets/settings";
+import type { WidgetDefinition } from "../domains/widgets/definition";
 import { clearWidgets, registerWidget } from "../domains/widgets/registry";
 import { definePlugin } from "../plugins/plugin-context";
 import { createTestNextly, type TestNextly } from "../plugins/test-nextly";
@@ -49,115 +49,86 @@ const events = defineCollection({
   ],
 });
 
-/** The prose the gated cards carry -- what must never reach the wrong reader. */
-/**
- * A Collection setting defaulting to events. Typed through `unknown` for the
- * contribution: the plugin surface's setting type does not list the content
- * kinds yet, while the boot's own validation accepts them, as the
- * registration channel's type does.
- */
-const PINNED_TO_EVENTS = {
+/** A Collection setting defaulting to events. */
+const PINNED_TO_EVENTS: NonNullable<WidgetDefinition["settings"]>[number] = {
   name: "source",
   label: "Collection",
   type: "collection",
   defaultValue: EVENTS,
-} as unknown as WidgetSetting;
+};
 
+/** The prose the gated cards carry -- what must never reach the wrong reader. */
 const RUNBOOK = "## Runbook\n\nRotate the keys before a release.";
 const EDITORS_ONLY = "Editors: the queue drains at midnight.";
-/** Prose a LATER plugin attaches to an id the first plugin already claimed. */
-const IMPOSTOR = "The vault code is 4-8-15-16.";
 
+/** The plugin whose collections the widgets below read and are gated on. */
 const contributor = definePlugin({
   name: "@test/notes-widgets",
   version: "1.0.0",
   nextly: ">=0.0.1",
   contributes: {
     collections: [notes, events],
-    admin: {
-      widgets: [
-        // Ungated: any authenticated reader. The population control -- a
-        // filter that withholds everything satisfies every absence below.
-        {
-          id: "notes/welcome",
-          title: "Welcome",
-          archetype: "text",
-          size: { default: { w: 4, h: 3 } },
-          content: "Welcome to the notes desk.",
-        },
-        // Gated on a grant the read-only key HOLDS.
-        {
-          id: "notes/runbook",
-          title: "Runbook",
-          archetype: "text",
-          size: { default: { w: 4, h: 3 } },
-          requiredPermission: `read-${NOTES}`,
-          content: RUNBOOK,
-        },
-        // Gated on a grant it LACKS.
-        {
-          id: "notes/editors",
-          title: "For editors",
-          archetype: "text",
-          size: { default: { w: 4, h: 3 } },
-          requiredPermission: `create-${NOTES}`,
-          content: EDITORS_ONLY,
-        },
-        // Shortcuts, each with its own gate or none.
-        {
-          id: "notes/shortcuts",
-          title: "Shortcuts",
-          archetype: "actions",
-          size: { default: { w: 3, h: 2 } },
-          actions: [
-            { label: "All notes", href: "/admin/collections/notes" },
-            {
-              label: "Publish queue",
-              href: "/admin/collections/notes?status=draft",
-              requiredPermission: `publish-${NOTES}`,
-            },
-          ],
-        },
-        // Its Collection setting defaults to events, which a key holding only
-        // read on notes may not read.
-        {
-          id: "notes/pinned",
-          title: "Pinned",
-          archetype: "metric",
-          size: { default: { w: 3, h: 2 } },
-          query: { source: `collection:${NOTES}`, op: "count" },
-          settings: [PINNED_TO_EVENTS],
-        },
-      ],
-    },
   },
 });
 
 /**
- * A second plugin claiming an id the first already declared, gated, with
- * prose of its own. The canonical set and the admin's resolver both keep the
- * FIRST declaration, so this one is never the card -- and it must never be
- * the payload either.
+ * Widgets over those collections, each gated its own way, registered after
+ * boot as core's own cards are.
  */
-const impostor = definePlugin({
-  name: "@test/notes-impostor",
-  version: "1.0.0",
-  nextly: ">=0.0.1",
-  contributes: {
-    admin: {
-      widgets: [
-        {
-          id: "notes/welcome",
-          title: "Welcome (again)",
-          archetype: "text",
-          size: { default: { w: 4, h: 3 } },
-          requiredPermission: `create-${NOTES}`,
-          content: IMPOSTOR,
-        },
-      ],
-    },
+const NOTES_WIDGETS: WidgetDefinition[] = [
+  // Ungated: any authenticated reader. The population control -- a
+  // filter that withholds everything satisfies every absence below.
+  {
+    id: "notes/welcome",
+    title: "Welcome",
+    archetype: "text",
+    size: { default: { w: 4, h: 3 } },
+    content: "Welcome to the notes desk.",
   },
-});
+  // Gated on a grant the read-only key HOLDS.
+  {
+    id: "notes/runbook",
+    title: "Runbook",
+    archetype: "text",
+    size: { default: { w: 4, h: 3 } },
+    requiredPermission: `read-${NOTES}`,
+    content: RUNBOOK,
+  },
+  // Gated on a grant it LACKS.
+  {
+    id: "notes/editors",
+    title: "For editors",
+    archetype: "text",
+    size: { default: { w: 4, h: 3 } },
+    requiredPermission: `create-${NOTES}`,
+    content: EDITORS_ONLY,
+  },
+  // Shortcuts, each with its own gate or none.
+  {
+    id: "notes/shortcuts",
+    title: "Shortcuts",
+    archetype: "actions",
+    size: { default: { w: 3, h: 2 } },
+    actions: [
+      { label: "All notes", href: "/admin/collections/notes" },
+      {
+        label: "Publish queue",
+        href: "/admin/collections/notes?status=draft",
+        requiredPermission: `publish-${NOTES}`,
+      },
+    ],
+  },
+  // Its Collection setting defaults to events, which a key holding only
+  // read on notes may not read.
+  {
+    id: "notes/pinned",
+    title: "Pinned",
+    archetype: "metric",
+    size: { default: { w: 3, h: 2 } },
+    query: { source: `collection:${NOTES}`, op: "count" },
+    settings: [PINNED_TO_EVENTS],
+  },
+];
 
 interface WorkspaceDeclaration {
   id: string;
@@ -182,7 +153,7 @@ async function workspace(headers: Record<string, string>): Promise<Response> {
   const handlers = createDynamicHandlers({
     config: sanitizeConfig({
       collections: [],
-      plugins: [contributor, impostor],
+      plugins: [contributor],
     }),
   });
   return handlers.GET(
@@ -205,7 +176,7 @@ async function layoutFor(key: string): Promise<{ audience?: string }> {
   const handlers = createDynamicHandlers({
     config: sanitizeConfig({
       collections: [],
-      plugins: [contributor, impostor],
+      plugins: [contributor],
     }),
   });
   const res = await handlers.GET(
@@ -226,10 +197,12 @@ let ownerId: string | undefined;
 beforeEach(async () => {
   handle = await createTestNextly({
     collections: [],
-    plugins: [contributor, impostor],
+    plugins: [contributor],
   });
-  // A registration is the OTHER declared channel, and it happens in code after
-  // boot exactly as a plugin's `registerWidget` call does.
+  // Registered after boot, as core's own cards are registered.
+  for (const widget of NOTES_WIDGETS) {
+    registerWidget(widget, { source: "@test/notes-widgets" });
+  }
   registerWidget(
     {
       id: "app/ops-notes",
@@ -359,7 +332,7 @@ async function keyHolding(slugs: string[]): Promise<string> {
 const ids = (widgets: readonly { id: string }[] | undefined) =>
   (widgets ?? []).map(widget => widget.id);
 
-/** Every widget declaration the payload carries, from both channels. */
+/** Every widget declaration the payload carries, core's and each plugin's. */
 function everyDeclaration(body: WorkspaceBody) {
   return [
     ...(body.widgets ?? []),
@@ -372,19 +345,17 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     const body = await workspaceFor(await keyHolding([`read-${NOTES}`]));
 
     // The population, first: the reader IS told about the cards open to any
-    // authenticated caller and the one whose gate they hold, from BOTH
-    // channels. Without this, an empty payload passes every absence below.
-    const contributed = body.plugins?.find(
-      plugin => plugin.name === "@test/notes-widgets"
-    );
-    expect(ids(contributed?.widgets)).toEqual([
-      "notes/welcome",
-      "notes/runbook",
-      "notes/shortcuts",
-      "notes/pinned",
-    ]);
+    // authenticated caller and the ones whose gate they hold. Without this, an
+    // empty payload passes every absence below.
     expect(ids(body.widgets)).toEqual(
-      expect.arrayContaining(["app/board", "app/tools"])
+      expect.arrayContaining([
+        "notes/welcome",
+        "notes/runbook",
+        "notes/shortcuts",
+        "notes/pinned",
+        "app/board",
+        "app/tools",
+      ])
     );
 
     // Then the absences, and on the CONTENT rather than only the id: the whole
@@ -400,71 +371,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     expect(declarations.map(widget => widget.content)).toContain(RUNBOOK);
   });
 
-  it("ships only the declaration that won its id, not a later duplicate", async () => {
-    // 🔴 Two plugins contribute `notes/welcome`. The first, ungated, is the
-    // card -- the canonical set and the admin's resolver both keep the first
-    // -- so the id is visible to every reader. Filtered by id alone, the
-    // later duplicate shipped under the winner's clearance, prose and all,
-    // to a reader lacking the grant it declared.
-    const body = await workspaceFor(await keyHolding([`read-${NOTES}`]));
-
-    const copies = everyDeclaration(body).filter(
-      widget => widget.id === "notes/welcome"
-    );
-    expect(copies).toHaveLength(1);
-    expect(copies[0]?.content).toBe("Welcome to the notes desk.");
-    const later = body.plugins?.find(
-      plugin => plugin.name === "@test/notes-impostor"
-    );
-    expect(later).toBeDefined();
-    expect(later?.widgets).toBeUndefined();
-    expect(everyDeclaration(body).map(widget => widget.content)).not.toContain(
-      IMPOSTOR
-    );
-  });
-
-  it("keeps a gated contribution gated when an ungated registration the admin cannot receive collides with it", async () => {
-    // 🔴 The registry is the override channel, and a registration stating no
-    // permission un-gates a colliding contribution -- for the card the admin
-    // DRAWS. A registration JSON cannot carry is skipped by this payload, so
-    // the admin never receives it and draws the contribution instead; judged
-    // on the raw registry, the verdict was still the registration's, and the
-    // contribution's prose shipped to a reader lacking the grant it declared.
-    registerWidget(
-      {
-        id: "notes/editors",
-        title: "Editors (registered)",
-        archetype: "metric",
-        size: { default: { w: 3, h: 2 } },
-        query: {
-          source: `collection:${NOTES}`,
-          op: "count",
-          where: { views: { greater_than: 10n } },
-        },
-      },
-      { source: "@test/app" }
-    );
-
-    const lacking = await workspaceFor(await keyHolding([`read-${NOTES}`]));
-    const declarations = everyDeclaration(lacking);
-    expect(ids(declarations)).not.toContain("notes/editors");
-    expect(declarations.map(widget => widget.content)).not.toContain(
-      EDITORS_ONLY
-    );
-
-    // The control: the contribution still ships, as itself, to a reader
-    // holding ITS gate -- the collision cost it nothing but the override.
-    const holding = await workspaceFor(
-      await keyHolding([`read-${NOTES}`, `create-${NOTES}`])
-    );
-    const copies = everyDeclaration(holding).filter(
-      widget => widget.id === "notes/editors"
-    );
-    expect(copies).toHaveLength(1);
-    expect(copies[0]?.content).toBe(EDITORS_ONLY);
-  });
-
-  it("withholds a Collection setting's default naming a collection the reader may not read, on both channels", async () => {
+  it("withholds a Collection setting's default naming a collection the reader may not read", async () => {
     registerWidget(
       {
         id: "app/pinned",
@@ -513,7 +420,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     expect(defaults(holding)).toEqual([EVENTS, EVENTS]);
   });
 
-  it("withholds an action whose own gate the reader lacks, on both channels", async () => {
+  it("withholds an action whose own gate the reader lacks", async () => {
     // 🔴 A shortcut is a label and an href. The card's gate held, so the
     // whole list shipped and the browser hid the protected entry afterwards
     // -- readable from the payload regardless.
@@ -541,18 +448,16 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
       await keyHolding([`read-${NOTES}`, `create-${NOTES}`])
     );
 
-    const contributed = body.plugins?.find(
-      plugin => plugin.name === "@test/notes-widgets"
-    );
-    expect(ids(contributed?.widgets)).toEqual([
-      "notes/welcome",
-      "notes/runbook",
-      "notes/editors",
-      "notes/shortcuts",
-      "notes/pinned",
-    ]);
     expect(ids(body.widgets)).toEqual(
-      expect.arrayContaining(["app/board", "app/ops-notes"])
+      expect.arrayContaining([
+        "notes/welcome",
+        "notes/runbook",
+        "notes/editors",
+        "notes/shortcuts",
+        "notes/pinned",
+        "app/board",
+        "app/ops-notes",
+      ])
     );
     expect(everyDeclaration(body).map(widget => widget.content)).toContain(
       EDITORS_ONLY

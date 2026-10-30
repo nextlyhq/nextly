@@ -207,13 +207,13 @@ for (const viewport of WIDTHS) {
     // sent after the write carries this card's question alone.
     const asked = queriesAfterWrite(sent).map(
       request =>
-        (request.postDataJSON() as { queries?: Array<{ source?: string }> })
+        (request.postDataJSON() as { queries?: Array<{ widget?: string }> })
           .queries ?? []
     );
+    // A declared widget's card is asked for by its widget's id.
     expect(
       asked.filter(
-        queries =>
-          queries.length !== 1 || queries[0]?.source !== "collection:posts"
+        queries => queries.length !== 1 || queries[0]?.widget !== CARD
       ),
       `requests that asked other cards: ${JSON.stringify(asked)}`
     ).toEqual([]);
@@ -259,9 +259,12 @@ for (const viewport of WIDTHS) {
       .poll(async () => (await storedCard(page))?.config ?? {})
       .toEqual({});
     await page.reload();
+    // The header draws a choice of two as a segmented control.
     await expect(
-      cell(page).getByRole("combobox", { name: `Accent for ${TITLE}` })
-    ).toHaveText(/Plain/);
+      cell(page)
+        .getByRole("radiogroup", { name: `Accent for ${TITLE}` })
+        .getByRole("radio", { name: "Plain" })
+    ).toHaveAttribute("aria-checked", "true");
   });
 }
 
@@ -324,10 +327,14 @@ test.describe("the quick popover and the card menu at rest", () => {
   }) => {
     const before = await storedCard(page);
     const menu = await openCardMenu(page);
-    await menu.getByRole("menuitem", { name: /^Width/ }).click();
-    await page
-      .getByRole("menuitemradio", { name: "Half width, 6 columns" })
-      .click();
+    // By keyboard: a pointer travelling from the submenu's trigger to its item crosses the menu
+    // and can close the submenu under it, which no reader's pointer does.
+    await menu.getByRole("menuitem", { name: /^Width/ }).press("ArrowRight");
+    const half = page.getByRole("menuitemradio", {
+      name: "Half width, 6 columns",
+    });
+    await expect(half).toBeVisible();
+    await half.press("Enter");
     await expect.poll(async () => (await storedCard(page))?.w).toBe(6);
 
     await page.getByRole("button", { name: "Undo", exact: true }).click();
@@ -341,7 +348,9 @@ test.describe("the quick popover and the card menu at rest", () => {
     await menu.getByRole("menuitem", { name: "Remove" }).click();
     await expect(cell(page)).toBeHidden();
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
-    await expect.poll(async () => (await storedCard(page))?.removed).toBe(true);
+    // The card was placed by a layout write, so this reader has an arrangement, and Remove takes
+    // the card out of it rather than marking it removed.
+    await expect.poll(async () => await storedCard(page)).toBeUndefined();
 
     await page.getByRole("button", { name: `Undo removing ${TITLE}` }).click();
     await expect(cell(page)).toBeVisible();

@@ -560,9 +560,12 @@ test("Show N more grows the Get started card in place, Show less folds it back, 
   const drawn = await cell.getByRole("listitem").count();
   expect(drawn).toBeLessThan(9);
 
-  // Found by what it is, the card's one toggle, not by its words: its name changes as it is
+  // Found by what it is, the card body's one toggle, not by its words: its name changes as it is
   // pressed, and a locator by the first name would stop matching the very control it pressed.
-  const control = cell.locator("button[aria-expanded]");
+  // In the body: the card's header carries its own expanding controls, its menu and its title.
+  const control = cell
+    .getByTestId("widget-card-body")
+    .locator("button[aria-expanded]");
   await expect(control).toHaveCount(1);
   await expect(control).toHaveAccessibleName(`Show ${9 - drawn} more`);
   await expect(control).toHaveAttribute("aria-expanded", "false");

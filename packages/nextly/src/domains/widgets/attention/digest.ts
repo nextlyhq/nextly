@@ -57,7 +57,8 @@ export interface DigestReader {
   kind: AttentionDigestKind;
   label: string;
   severity: AttentionSeverity;
-  link: string;
+  /** Where the reader goes about it; absent when no admin page is the place to act. */
+  link?: string;
   /** One line saying why it is waiting, carried onto its item as it is. */
   reason?: string;
   /** Who declared it, named in the log when it fails: core, or a plugin. */
@@ -209,6 +210,25 @@ export async function runDigest(
 }
 
 /**
+ * What a reader's item is, whatever its count: the same on a failed item, so
+ * a reader is told which item went unchecked and why it would matter. A link
+ * or a reason the reader did not give is left out, not carried as undefined.
+ */
+function itemIdentity(
+  reader: DigestReader
+): Omit<AttentionDigestItem, "count" | "atLeast" | "failed"> {
+  const { id, kind, label, severity, link, reason } = reader;
+  return {
+    id,
+    kind,
+    label,
+    severity,
+    ...(link === undefined ? {} : { link }),
+    ...(reason === undefined ? {} : { reason }),
+  };
+}
+
+/**
  * One reader's item as the digest draws it, or none: hidden from this reader,
  * or nothing waiting. A failed item is drawn as failed and logged, so the
  * others are still answered; a count past the cap is drawn as a floor.
@@ -218,22 +238,12 @@ function digestItem(
   answer: ReaderAnswer
 ): AttentionDigestItem[] {
   if (answer === null) return [];
-  const { id, kind, label, severity, link, reason } = reader;
-  // What the item is, whatever its count: the same on a failed item, so a
-  // reader is told which item went unchecked and why it would matter.
-  const shown = {
-    id,
-    kind,
-    label,
-    severity,
-    link,
-    ...(reason === undefined ? {} : { reason }),
-  };
+  const shown = itemIdentity(reader);
   if ("failure" in answer) {
     getNextlyLogger().warn({
       kind: "attention-item-failed",
       owner: reader.owner,
-      item: id,
+      item: reader.id,
       reason: answer.failure,
       ...(answer.error instanceof Error ? { error: answer.error.message } : {}),
     });
