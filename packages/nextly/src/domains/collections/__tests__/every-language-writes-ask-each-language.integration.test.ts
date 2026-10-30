@@ -27,6 +27,7 @@ import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { defineCollection, text } from "../../../config";
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -211,13 +212,18 @@ async function stillThere(
 const remaining = (t: TestNextly, collection: string, ids: string[]) =>
   Promise.all(ids.map(id => stillThere(t, collection, id)));
 
-/** Whether a Direct API call refused, as opposed to succeeding. */
+/**
+ * Whether a Direct API call was refused as a caller who may read the entry
+ * is refused (403), as opposed to succeeding. Any other failure is thrown,
+ * so a write that broke is never read as one refused.
+ */
 async function refused(call: () => Promise<unknown>): Promise<boolean> {
   try {
     await call();
     return false;
-  } catch {
-    return true;
+  } catch (error) {
+    if (NextlyError.is(error) && error.statusCode === 403) return true;
+    throw error;
   }
 }
 

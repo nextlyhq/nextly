@@ -12155,6 +12155,10 @@ export class CollectionMutationService extends BaseService {
       tx,
     });
     if (each === undefined) {
+      // The caller's own refusal first: one who may not delete is told so,
+      // not how the collection's translation table stands.
+      const plain = await this.accessService.checkCollectionWrite(gate);
+      if (plain.denied) return plain;
       return { denied: this.languagesUnknownRefusal(gate.collectionName) };
     }
     const bySet = new Map<string, Map<string, DeleteGateAnswer>>();
