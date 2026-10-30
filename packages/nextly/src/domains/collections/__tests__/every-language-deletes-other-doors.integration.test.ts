@@ -16,6 +16,14 @@
  * the rule allows some language, in whichever language the request names, and
  * no only where it allows none.
  *
+ * A delete inside the caller's own transaction, through the entry service, is
+ * asked the same way, also when the companion's readiness is not yet known.
+ * The languages a delete asks are those the entry holds and the site still
+ * configures: a row left in a removed language asks nothing more, and an
+ * entry holding no translation row asks once, as a single delete and a batch
+ * delete alike. A collection whose fields reach a localized field group is
+ * asked in every language, an English-only entry included.
+ *
  * @module domains/collections/__tests__/every-language-deletes-other-doors.integration.test
  */
 process.env.NEXTLY_SECRET =
@@ -33,10 +41,17 @@ import { clearRuleFilterReports } from "../../../auth/access/rule-answer";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
+import { forgetCompanionReadiness } from "../../../domains/i18n/runtime/companion-readiness";
 import { NextlyError } from "../../../errors/nextly-error";
 import { definePlugin } from "../../../plugins/plugin-context";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
+import type { ServiceOpts } from "../../../plugins/service-opts";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -44,7 +59,9 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { AccessControlContext } from "../../../shared/types/access";
+import type { AuthUserId } from "../../../types/auth";
 
 // Integration files share fixed system-table names, so this file keeps its
 // own slugs.
@@ -57,6 +74,9 @@ const NO_LANGUAGE = "otherdoors_no_language";
 // A delete rule allowing English alone, which answers no when it is told no
 // language, so a cell asked that way would refuse what a delete allows.
 const ONLY_ENGLISH = "otherdoors_only_english";
+// A delete rule refusing German, over fields reaching a localized field group.
+const GROUPED = "otherdoors_grouped";
+const SEO = "otherdoors_seo";
 
 const AUTHOR = "otherdoors-author";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
@@ -103,15 +123,32 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     // The visitor cases are judged by the Public role a real boot makes.
     seedPublic: true,
     plugins: [probe],
+    fieldGroups: [
+      defineFieldGroup({
+        slug: SEO,
+        localized: true,
+        fields: [text({ name: "metaTitle" })],
+      }),
+    ],
     collections: [
       collection(NOT_GERMAN, notGerman),
       collection(ANY_LANGUAGE, () => true),
       collection(NO_LANGUAGE, () => false),
       collection(ONLY_ENGLISH, context => context.locale === "en"),
+      defineCollection({
+        slug: GROUPED,
+        localized: true,
+        access: { read: () => true, delete: notGerman },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "seo", component: SEO }),
+        ],
+      }),
     ],
   });
-  await userWhoMay(current, AUTHOR, "read", SLUGS);
-  await grantTo(current, AUTHOR, "delete", SLUGS);
+  const all = [...SLUGS, GROUPED];
+  await userWhoMay(current, AUTHOR, "read", all);
+  await grantTo(current, AUTHOR, "delete", all);
   return current;
 }
 
@@ -173,10 +210,59 @@ async function outcome(call: () => Promise<unknown>): Promise<number | string> {
   return "deleted";
 }
 
-const asAuthor = {
+const asAuthor: ServiceOpts = {
   as: "user",
-  user: { id: AUTHOR, email: `${AUTHOR}@example.test` },
-} as const;
+  user: { id: AUTHOR as AuthUserId, email: `${AUTHOR}@example.test` },
+};
+
+const entriesOf = (t: TestNextly) =>
+  t
+    .getService("collectionsHandler")
+    .getEntryService() as CollectionEntryService;
+
+/** The author, as an entry service call names its caller. */
+const author = { id: AUTHOR };
+
+/**
+ * The status a delete in the caller's own transaction refused with, or
+ * "deleted": a returned failure and a thrown one alike.
+ */
+async function deletedInTransaction(
+  t: TestNextly,
+  collection: string,
+  id: string
+): Promise<number | string> {
+  try {
+    const result = await t.adapter.transaction(tx =>
+      entriesOf(t).deleteEntryInTransaction(tx, {
+        collectionName: collection,
+        entryId: id,
+        user: author,
+        overrideAccess: false,
+      })
+    );
+    return result.success ? "deleted" : (result.statusCode ?? "failed");
+  } catch (error) {
+    if (NextlyError.is(error)) return error.statusCode;
+    throw error;
+  }
+}
+
+/** Removes every translation row `id` holds in `collection`. */
+async function dropTranslations(
+  t: TestNextly,
+  collection: string,
+  id: string
+): Promise<void> {
+  const translations = `dc_${collection}_locales`;
+  const ofThisEntry = {
+    and: [{ column: "_parent", op: "=" as const, value: id }],
+  };
+  await t.adapter.delete(translations, ofThisEntry);
+  expect(
+    await t.adapter.select(translations, { where: ofThisEntry })
+  ).toHaveLength(0);
+}
 
 /** The status of a visitor's REST delete of `id`: no session, no key. */
 async function visitorDelete(collection: string, id: string): Promise<number> {
@@ -243,29 +329,41 @@ describe.each(getConfiguredTestDialects())(
         ).toEqual([true, false]);
       });
 
-      it("refuses it inside the plugin's own transaction too, and deletes one with none", async () => {
-        const t = await boot(dialect);
-        const { withGerman, englishOnly } = await seed(t, NOT_GERMAN);
-        const c = services!;
+      // SQLite only: under `as: "user"` the plugin service resolves the
+      // caller's roles on the pool while its own transaction is open, so on
+      // PostgreSQL and MySQL those lookups run outside it, which the harness
+      // refuses. The caller-transaction cases below run on every database.
+      it.skipIf(dialect !== "sqlite")(
+        "refuses it inside the plugin's own transaction too, and deletes one with none",
+        async () => {
+          const t = await boot(dialect);
+          const { withGerman, englishOnly } = await seed(t, NOT_GERMAN);
+          const c = services!;
 
-        expect(
-          await outcome(() =>
-            c.withTransaction(tx =>
-              c.deleteEntryInTransaction(tx, NOT_GERMAN, withGerman, asAuthor)
+          expect(
+            await outcome(() =>
+              c.withTransaction(tx =>
+                c.deleteEntryInTransaction(tx, NOT_GERMAN, withGerman, asAuthor)
+              )
             )
-          )
-        ).toBe(403);
-        expect(
-          await outcome(() =>
-            c.withTransaction(tx =>
-              c.deleteEntryInTransaction(tx, NOT_GERMAN, englishOnly, asAuthor)
+          ).toBe(403);
+          expect(
+            await outcome(() =>
+              c.withTransaction(tx =>
+                c.deleteEntryInTransaction(
+                  tx,
+                  NOT_GERMAN,
+                  englishOnly,
+                  asAuthor
+                )
+              )
             )
-          )
-        ).toBe("deleted");
-        expect(
-          await remaining(t, NOT_GERMAN, [withGerman, englishOnly])
-        ).toEqual([true, false]);
-      });
+          ).toBe("deleted");
+          expect(
+            await remaining(t, NOT_GERMAN, [withGerman, englishOnly])
+          ).toEqual([true, false]);
+        }
+      );
 
       it("deletes an entry with German content under a rule allowing every language", async () => {
         const t = await boot(dialect);
@@ -320,6 +418,137 @@ describe.each(getConfiguredTestDialects())(
         // delete whichever language the admin is shown in.
         expect(await deleteCells("de")).toEqual(expected);
         expect(await deleteCells("en")).toEqual(expected);
+      });
+    });
+
+    describe("a delete in the caller's own transaction, through the entry service", () => {
+      it("refuses deleting an entry with German content under a rule refusing German, and deletes one with none", async () => {
+        const t = await boot(dialect);
+        const { withGerman, englishOnly } = await seed(t, NOT_GERMAN);
+
+        expect(await deletedInTransaction(t, NOT_GERMAN, withGerman)).toBe(403);
+        expect(await deletedInTransaction(t, NOT_GERMAN, englishOnly)).toBe(
+          "deleted"
+        );
+        expect(
+          await remaining(t, NOT_GERMAN, [withGerman, englishOnly])
+        ).toEqual([true, false]);
+      });
+
+      it("deletes in a batch only the entries no language refuses", async () => {
+        const t = await boot(dialect);
+        const { withGerman, englishOnly } = await seed(t, NOT_GERMAN);
+
+        const result = await t.adapter.transaction(tx =>
+          entriesOf(t).deleteEntriesInTransaction(
+            tx,
+            { collectionName: NOT_GERMAN, user: author },
+            [withGerman, englishOnly]
+          )
+        );
+
+        expect({ ok: result.successful, failed: result.failed }).toEqual({
+          ok: 1,
+          failed: 1,
+        });
+        expect(
+          await remaining(t, NOT_GERMAN, [withGerman, englishOnly])
+        ).toEqual([true, false]);
+      });
+
+      it("refuses deleting an entry with German content while the companion's readiness is not yet known", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, NOT_GERMAN);
+        // As after a restart, or once a companion is replaced: nothing is
+        // remembered about the translation table, so the delete must read
+        // the entry's languages rather than take none.
+        forgetCompanionReadiness(t.adapter);
+
+        expect(await deletedInTransaction(t, NOT_GERMAN, withGerman)).toBe(403);
+        expect(await stillThere(t, NOT_GERMAN, withGerman)).toBe(true);
+      });
+    });
+
+    describe("the languages a delete asks", () => {
+      it("deletes in a batch an entry holding a row in a language the site no longer configures", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, ANY_LANGUAGE);
+        // The German row relabelled to a language the app no longer
+        // configures, as one left behind when a locale is removed.
+        await t.adapter.update(
+          `dc_${ANY_LANGUAGE}_locales`,
+          { _locale: "fr" },
+          {
+            and: [
+              { column: "_parent", op: "=", value: withGerman },
+              { column: "_locale", op: "=", value: "de" },
+            ],
+          }
+        );
+
+        const result = await entriesOf(t).deleteEntries(
+          { collectionName: ANY_LANGUAGE, user: author },
+          [withGerman]
+        );
+
+        expect({ ok: result.successful, errors: result.errors }).toEqual({
+          ok: 1,
+          errors: [],
+        });
+        expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(false);
+      });
+
+      it("allows a single delete and a batch delete alike of an entry holding no translation row", async () => {
+        const t = await boot(dialect);
+        const single = await entryIn(t, NOT_GERMAN, "untranslated", false);
+        const batched = await entryIn(t, NOT_GERMAN, "untranslated too", false);
+        // As an entry stored before its collection was localized: no
+        // translation row at all, the main row holding its content.
+        await dropTranslations(t, NOT_GERMAN, single);
+        await dropTranslations(t, NOT_GERMAN, batched);
+
+        expect(
+          await outcome(() =>
+            t.nextly.delete({
+              collection: NOT_GERMAN,
+              id: single,
+              overrideAccess: false,
+              user: author,
+            })
+          )
+        ).toBe("deleted");
+        const result = await entriesOf(t).deleteEntries(
+          { collectionName: NOT_GERMAN, user: author },
+          [batched]
+        );
+        expect({ ok: result.successful, errors: result.errors }).toEqual({
+          ok: 1,
+          errors: [],
+        });
+        expect(await remaining(t, NOT_GERMAN, [single, batched])).toEqual([
+          false,
+          false,
+        ]);
+      });
+
+      it("asks every language where the fields reach a localized field group, an English-only entry included", async () => {
+        const t = await boot(dialect);
+        const englishOnly = await entryIn(t, GROUPED, "english", false);
+
+        // Pinned as it stands: which languages a field group's rows hold is
+        // not read, so the delete asks every language and the rule refusing
+        // German refuses it. A change to read them changes this on purpose.
+        expect(
+          await outcome(() =>
+            t.nextly.delete({
+              collection: GROUPED,
+              id: englishOnly,
+              overrideAccess: false,
+              user: author,
+            })
+          )
+        ).toBe(403);
+        expect(await stillThere(t, GROUPED, englishOnly)).toBe(true);
       });
     });
   }
