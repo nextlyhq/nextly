@@ -179,9 +179,8 @@ async function stateOf(
  * its DDL before recording the collection.
  */
 async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
-  // Through `vi.stubEnv`, since `NODE_ENV` is typed read-only. Put back to the
-  // value it had rather than through `vi.unstubAllEnvs`, which would also drop
-  // the database settings this file stubs for the whole test.
+  // Through `vi.stubEnv`, as the rest of the file sets variables: `NODE_ENV` is typed read-only,
+  // and an unset previous value is removed again rather than stored as "undefined".
   const previous = process.env.NODE_ENV;
   vi.stubEnv("NODE_ENV", "development");
   try {
