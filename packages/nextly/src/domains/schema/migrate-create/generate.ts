@@ -326,8 +326,11 @@ export async function generateMigration(
   // that lost track of which list it came from could not name the record it belongs to.
   // What the companion files left: each companion's columns, and which companions exist; and
   // whether the previous snapshot says which tables were translated without them.
-  const { records: companionHistory, snapshotSays } =
-    await readTranslationRecords(args, previous?.data ?? null);
+  const {
+    records: companionHistory,
+    snapshotSays,
+    signOfTranslation,
+  } = await readTranslationRecords(args, previous?.data ?? null);
   // Nothing to record, whatever else the config holds: the snapshot already says which tables
   // are translated. Decided before any planner, whose refusals and warnings are about a change
   // this run does not make. A never-translated project's older snapshot doesn't say so itself,
@@ -338,12 +341,7 @@ export async function generateMigration(
     ...args.singles.map(e => tagged(e, "single")),
     ...args.components.map(e => tagged(e, "fieldGroup")),
   ];
-  refuseUnrecordedUnlessRecording(args, {
-    entities,
-    previousSnapshot,
-    desiredSnapshot,
-    history: companionHistory,
-  });
+  refuseUnrecordedTranslations(args, { snapshotSays, signOfTranslation });
   // What the snapshot this run writes says of each translated table's companion: read from the
   // database for `--record-snapshot`, carried forward otherwise (`writtenTranslations`).
   const written = await writtenTranslations(args, {
@@ -419,13 +417,15 @@ export async function generateMigration(
   const hasSettingsChanges = changedSettings.length > 0;
 
   const recorded = await recordedUnlessChanged(args, {
+    // Not the per-language unique indexes: a snapshot from before the record has none of them, so
+    // each reads as new, and recording them is the record's own work. Counted, they would leave a
+    // project with a translated unique field no way to record.
     pendingTables: [
       ...operations.map(operationTableName),
       ...[
         ...companionPlans,
         ...fieldLeavesPlans.map(({ plan }) => plan.shared),
         ...fieldJoinsPlans.map(({ plan }) => plan),
-        ...uniquePlans,
       ].map(({ spec }) => spec.mainTable),
     ],
     hasSettingsChanges,
@@ -724,7 +724,11 @@ async function readTranslationRecords(
     "migrationsDir" | "collections" | "singles" | "components"
   >,
   previous: SnapshotFile | null
-): Promise<{ records: TranslationRecords; snapshotSays: boolean }> {
+): Promise<{
+  records: TranslationRecords;
+  snapshotSays: boolean;
+  signOfTranslation: boolean;
+}> {
   const fileHistory = await readCompanionHistory(args.migrationsDir);
   const translatedNow = [
     ...args.collections,
@@ -740,6 +744,7 @@ async function readTranslationRecords(
       snapshotRecords: snapshotSays || !signOfTranslation,
     },
     snapshotSays,
+    signOfTranslation,
   };
 }
 
@@ -753,26 +758,27 @@ function declaredTranslated(previous: SnapshotFile | null): boolean {
 }
 
 /**
- * `refuseUnrecordedTranslationChanges`, for a run that isn't recording: a recording run refuses
- * any change, these included, as a change to migrate (`recordedUnlessChanged`).
+ * Refuses every run but a recording one in a project whose translations no record settles: the
+ * latest snapshot predates the record of translated fields (`snapshotSays`), and the project shows
+ * a sign of translation (`signOfTranslation`). Planned without the record, any change may move a
+ * field between translated and shared on a guess, and lose its values; `--record-snapshot` reads
+ * them from the database once, and every run after it plans from the record.
  */
-function refuseUnrecordedUnlessRecording(
+function refuseUnrecordedTranslations(
   args: Pick<GenerateArgs, "recordSnapshot" | "name">,
-  plan: {
-    entities: readonly TaggedConfigEntity[];
-    previousSnapshot: NextlySchemaSnapshot;
-    desiredSnapshot: NextlySchemaSnapshot;
-    history: TranslationRecords;
-  }
+  project: { snapshotSays: boolean; signOfTranslation: boolean }
 ): void {
-  if (args.recordSnapshot === true) return;
-  refuseUnrecordedTranslationChanges(
-    plan.entities,
-    plan.previousSnapshot,
-    plan.desiredSnapshot,
-    plan.history,
-    args.name
-  );
+  if (args.recordSnapshot === true || project.snapshotSays) return;
+  if (!project.signOfTranslation) return;
+  throw new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage:
+      "`nextly migrate:create` can't tell which fields are translated, so it wrote nothing. " +
+      "The latest snapshot was written before snapshots recorded which fields are translated, and the project has translations: planning a change on a guess could lose their values. " +
+      "To record them, put the config back as it was at the last migration and run `nextly migrate:create --record-snapshot` against a database that has applied every migration, " +
+      `then make your changes again and run \`nextly migrate:create --name ${slugify(args.name)}\`.`,
+    logContext: { reason: "translations-unrecorded" },
+  });
 }
 
 /**
@@ -935,8 +941,7 @@ function refuseChangesToRecord(tables: readonly string[]): void {
     code: "VALIDATION_ERROR",
     publicMessage:
       `--record-snapshot records the config as it was at the last migration, and the config has changes to ${named} to migrate. Nothing was written. ` +
-      "Run `nextly migrate:create --name <name>` instead: its snapshot records the translated fields too, and it refuses a change that may move a field between translated and shared. " +
-      "If it refuses, put the changes aside, run `nextly migrate:create --record-snapshot`, then make them again and run `nextly migrate:create --name <name>`.",
+      "Put the changes aside, run `nextly migrate:create --record-snapshot`, then make them again and run `nextly migrate:create --name <name>`.",
     logContext: { tables: [...new Set(tables)].sort() },
   });
 }
@@ -944,7 +949,7 @@ function refuseChangesToRecord(tables: readonly string[]): void {
 /**
  * `--record-snapshot`: a migration that changes nothing, whose snapshot is the config as it is,
  * recording which fields are translated (`translatedFieldsRecorded`). The way past
- * `refuseUnrecordedTranslationChanges`: run with the config as it was at the last migration, so
+ * `refuseUnrecordedTranslations`: run with the config as it was at the last migration, so
  * the snapshot records the fields as they were. Only for a snapshot that doesn't say which tables
  * are translated (`recordsTranslatedFields`) and a config with nothing to migrate
  * (`refuseChangesToRecord`).
@@ -1595,106 +1600,6 @@ function previousTranslation(
     columns: new Set(history.columns.get(key)?.keys() ?? []),
     companion: history.present.has(key),
   };
-}
-
-/**
- * What planning this change would leave to a guess on an entity whose translations before it no
- * record settles: the columns to name, or `undefined` when nothing is guessed.
- *
- * That is an entity whose `previousTranslation` is `undefined`, when it is translated now or its
- * main table gains or drops a column. Translated now, whether its companion is there and what it
- * holds is the guess, whatever the main table does: turning translation on with only new
- * translated fields reads the same as a companion made outside the files. A main column that
- * comes or goes may be a field moving between translated and shared. Also an entity not
- * translated now that the migration files say had a companion while the previous snapshot doesn't
- * record it as translated, when its main columns change: turning translation off is planned only
- * from the snapshot's record.
- */
-function columnsThatMayLoseTranslations(
-  { entity: c, kind }: TaggedConfigEntity,
-  previousSnapshot: NextlySchemaSnapshot,
-  desiredSnapshot: NextlySchemaSnapshot,
-  history: TranslationRecords
-): string[] | undefined {
-  const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
-  if (!prevMain) return undefined;
-  const previous = previousTranslation(c, kind, previousSnapshot, history);
-  const disableFromFiles =
-    c.localized !== true &&
-    prevMain.localized !== true &&
-    previous?.companion === true;
-  if (previous !== undefined && !disableFromFiles) return undefined;
-  const desiredMain = desiredSnapshot.tables.find(t => t.name === c.tableName);
-  const changed = mainColumnChanges(prevMain, desiredMain);
-  const translatedNow = previous === undefined && c.localized === true;
-  if (!translatedNow && changed.length === 0) return undefined;
-  const translated = translatedNow ? (desiredMain?.localizedColumns ?? []) : [];
-  return [...new Set([...translated, ...changed])].sort();
-}
-
-/** The main-table columns, by name, that `desired` adds to `previous` or drops from it. */
-function mainColumnChanges(
-  previous: TableSpec,
-  desired: TableSpec | undefined
-): string[] {
-  const before = new Set(previous.columns.map(col => col.name));
-  const after = new Set((desired?.columns ?? []).map(col => col.name));
-  return [
-    ...[...after].filter(name => !before.has(name)),
-    ...[...before].filter(name => !after.has(name)),
-  ];
-}
-
-/**
- * Refuses the run, before anything is written, for an entity whose translations before it no
- * record settles when planning it would guess (`columnsThatMayLoseTranslations`). Guessing either
- * way loses values: a field read as new keeps its translations in a companion column nothing
- * reads, one read as the entity becoming translated is copied into a companion that already holds
- * it, and a companion read as there is never made. Every other change goes through.
- */
-function refuseUnrecordedTranslationChanges(
-  entities: readonly TaggedConfigEntity[],
-  previousSnapshot: NextlySchemaSnapshot,
-  desiredSnapshot: NextlySchemaSnapshot,
-  history: TranslationRecords,
-  name: string
-): void {
-  for (const entry of entities) {
-    const { entity: c, kind } = entry;
-    const columns = columnsThatMayLoseTranslations(
-      entry,
-      previousSnapshot,
-      desiredSnapshot,
-      history
-    );
-    if (columns === undefined) continue;
-    const entity = `${KIND_NAMES[kind]} "${c.slug}"`;
-    const what =
-      columns.length === 0
-        ? entity
-        : `${columns.map(column => `"${column}"`).join(", ")} in ${entity}`;
-    // The files that keep the history from settling it, so the developer can see why.
-    const unreadable = history.unreadable(kind, c.slug);
-    const because =
-      unreadable.length === 0
-        ? ""
-        : ` This build can't read ${unreadable.join(", ")}, which may be about it.`;
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      publicMessage:
-        `Can't tell how ${what} stood before this change, translated or shared: ` +
-        `the latest snapshot was written before snapshots recorded which fields are translated, and the migration files alone don't settle it.${because} ` +
-        "Nothing was written: planning the change on a guess could lose values. " +
-        "To record the translated fields, put the config back as it was at the last migration, run `nextly migrate:create --record-snapshot`, " +
-        `then make your changes again and run \`nextly migrate:create --name ${slugify(name)}\`.`,
-      logContext: {
-        entity: c.slug,
-        kind,
-        columns,
-        unreadable,
-      },
-    });
-  }
 }
 
 /** One entity's fields that become translated, and the file that moves their values. */

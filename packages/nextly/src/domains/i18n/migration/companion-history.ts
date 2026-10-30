@@ -60,11 +60,6 @@ export interface CompanionHistory {
    * makes one.
    */
   describes(kind: I18nTransitionKind, slug: string, mainTable: string): boolean;
-  /**
-   * The files this build cannot read that may be about this entity: those whose header names its
-   * slug, and those that name no entity or cannot be opened, which may be anyone's.
-   */
-  unreadable(kind: I18nTransitionKind, slug: string): string[];
   /** Whether there is any localization file here, read or not. */
   anyFile: boolean;
 }
@@ -241,7 +236,6 @@ function historyOf(replay: Replay): CompanionHistory {
     describes: (kind, slug, mainTable) =>
       replay.founded.has(companionHistoryKey(kind, slug, mainTable)) &&
       unreadFor(slug).length === 0,
-    unreadable: (_kind, slug) => unreadFor(slug).map(u => u.name),
     anyFile: replay.columns.size > 0 || replay.unread.length > 0,
   };
 }

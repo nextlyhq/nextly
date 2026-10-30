@@ -1,0 +1,30 @@
+---
+title: TRANSLATIONS_UNRECORDED
+description: "`nextly migrate:create` was run in a project with translations whose latest snapshot predates the record of translated fields."
+---
+
+## Cause
+
+`nextly migrate:create` was run in a project with translations whose latest snapshot predates the record of translated fields.
+
+Snapshots written by early versions of Nextly don't record which fields are translated. In a project that has translations (a localization migration file, an entity translated in the config, or one the latest snapshot's settings say was translated), `migrate:create` can't plan a change without that record: a field moving between translated and shared could lose its values. So it refuses every change, and writes nothing, until the record is made once.
+
+## Fix
+
+Put your config back as it was at the last migration, and record the translated fields against a database that has applied every migration:
+
+```bash
+nextly migrate
+npx nextly migrate:create --record-snapshot
+```
+
+Commit what it writes. Then make your change again and run `npx nextly migrate:create --name <name>`. See [When your migrations predate the record of translated fields](/docs/localization#when-your-migrations-predate-the-record-of-translated-fields).
+
+## Example
+
+```text
+✗ `nextly migrate:create` can't tell which fields are translated, so it wrote nothing.
+  Why:  The latest snapshot was written before snapshots recorded which fields are translated, and the project has translations: planning a change on a guess could lose their values.
+  Next: To record them, put the config back as it was at the last migration and run `nextly migrate:create --record-snapshot` against a database that has applied every migration, then make your changes again and run `nextly migrate:create --name add_excerpt`.
+  Docs: https://nextlyhq.com/docs/cli/errors/translations-unrecorded  (TRANSLATIONS_UNRECORDED)
+```

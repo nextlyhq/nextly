@@ -167,6 +167,7 @@
   "SETUP_ALREADY_COMPLETE": "This install already has an administrator, so setup is complete and the command changed nothing.",
   "SETUP_IN_PROGRESS": "Another setup holds this install's setup claim, so the command changed nothing.",
   "SETUP_TOKEN_SET_BY_ENV": "`NEXTLY_SETUP_TOKEN` sets this install's setup token, so there is no generated one to replace.",
+  "TRANSLATIONS_UNRECORDED": "`nextly migrate:create` was run in a project with translations whose latest snapshot predates the record of translated fields.",
   "UI_SCHEMA_INVALID": "The Schema Builder's `ui-schema.json` holds an entry the manifest's schema rejects.",
   "UI_SCHEMA_NOT_JSON": "The Schema Builder's `ui-schema.json` is not valid JSON.",
   "UI_SCHEMA_UNREADABLE": "The Schema Builder's `ui-schema.json` exists but could not be read.",

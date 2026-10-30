@@ -124,13 +124,7 @@ A field whose type, length or precision changes in the same change is refused, b
 
 ### When your migrations predate the record of translated fields
 
-Snapshots written by early versions of Nextly don't record which fields are translated, and neither do the localization migration files from that time. Every snapshot written now says that it records them. When the latest snapshot doesn't, and your project shows a sign of translation (a localization migration file, a collection, Single or field group translated in your config now, or one the latest snapshot's settings say was translated, as when this change turns its translation off), `nextly migrate:create` reads which fields were translated from the localization files. It relies on them only for an entity whose first localization file created its translations table, and only while no file it can't read may be about that entity. For any other entity, it can't tell how the fields stood before your change, translated or shared, and guessing either way could lose their values. So `migrate:create` refuses and writes nothing. It names the columns, and any file it can't read.
-
-- An entity translated now is refused whatever changed, since whether its translations table is there, and what it holds, is the guess. That includes one whose translations table a development sync or `db:sync` made: such a project is refused on every run, even one that changes another entity, until you record the translated fields once.
-- An entity that isn't translated now is refused when a column is added to or removed from its main table, whatever the field's type: adding a field, or removing or renaming one. That includes one no localization file is about.
-- Turning translation off for a whole collection, Single or field group is refused when the localization files say it has a translations table, since that's planned only from the snapshot's record.
-- A file `migrate:create` can't read may be about the entities it names, or about any entity when it names none.
-- A project with no sign of translation is unaffected: its changes go through as usual. A database where `db:sync` or a development sync made a translations table that no migration file records is read the same way while nothing shows it, so don't mix `db:sync` and `nextly migrate` on one database.
+Snapshots written by early versions of Nextly don't record which fields are translated. Every snapshot written now does, and a new project always has the record. When the latest snapshot predates it and your project has translations (a localization migration file, a collection, Single or field group translated in your config, or one the latest snapshot's settings say was translated, as when your change turns its translation off), `nextly migrate:create` can't tell which fields are translated. Planning a change on a guess could lose a field's values as it moves between translated and shared, so it refuses every change and writes nothing ([`TRANSLATIONS_UNRECORDED`](/docs/cli/errors/translations-unrecorded)) until you record the translated fields once. A project with no translations is unaffected.
 
 To record the translated fields, take two steps:
 
@@ -140,7 +134,7 @@ To record the translated fields, take two steps:
    npx nextly migrate:create --record-snapshot
    ```
 
-   It writes a migration that changes nothing when it runs or rolls back, and a snapshot that records which fields are translated. It records them as the database holds them: it connects to the database `DATABASE_URL` names, the only `migrate:create` run that does, and refuses a translated field whose translations table or column isn't there, writing nothing. Run it against a database that has applied every migration. Commit both. Run again, it writes nothing. While the config has changes to migrate, it's refused and names their tables. When those changes move no field between translated and shared, run `npx nextly migrate:create --name <name>` instead: its snapshot records the translated fields too.
+   It writes a migration that changes nothing when it runs or rolls back, and a snapshot that records which fields are translated. It records them as the database holds them: it connects to the database `DATABASE_URL` names, the only `migrate:create` run that does, and refuses a translated field whose translations table or column isn't there, writing nothing. Run it against a database that has applied every migration. Commit both. Run again, it writes nothing. While the config has changes to migrate, it's refused and names their tables: put them aside, record, then make them again.
 
 2. Make the change again and run `npx nextly migrate:create --name <name>`.
 

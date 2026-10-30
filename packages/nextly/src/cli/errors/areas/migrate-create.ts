@@ -119,6 +119,17 @@ export const MIGRATE_CREATE_CODES = defineCodes({
     cause:
       "`--record-snapshot` was given to `nextly migrate:create` with `--blank` or `--plugin`, which write no snapshot of the app.",
   },
+  TRANSLATIONS_UNRECORDED: {
+    cause:
+      "`nextly migrate:create` was run in a project with translations whose latest snapshot predates the record of translated fields.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "translations-unrecorded",
+        describe: error => refusal(error, 1),
+      },
+    ],
+  },
   RECORD_SNAPSHOT_STORAGE_MISSING: {
     cause:
       "`nextly migrate:create --record-snapshot` would record translated fields that the database has no translations table or column for.",

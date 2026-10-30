@@ -34,6 +34,17 @@ export const MIGRATE_CREATE_CASES = {
       },
       (error: unknown) => error
     ),
+  // Built as `generateMigration` throws it, in a project whose translations no record settles.
+  TRANSLATIONS_UNRECORDED: () =>
+    new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage:
+        "`nextly migrate:create` can't tell which fields are translated, so it wrote nothing. " +
+        "The latest snapshot was written before snapshots recorded which fields are translated, and the project has translations: planning a change on a guess could lose their values. " +
+        "To record them, put the config back as it was at the last migration and run `nextly migrate:create --record-snapshot` against a database that has applied every migration, " +
+        "then make your changes again and run `nextly migrate:create --name add_excerpt`.",
+      logContext: { reason: "translations-unrecorded" },
+    }),
   // Built as `generateMigration` throws it, from `--record-snapshot`'s check of the database.
   RECORD_SNAPSHOT_STORAGE_MISSING: () =>
     new NextlyError({

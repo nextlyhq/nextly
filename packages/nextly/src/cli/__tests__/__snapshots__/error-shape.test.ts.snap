@@ -1595,6 +1595,13 @@ exports[`each code, as a command ends with it > SETUP_TOKEN_SET_BY_ENV 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/setup-token-set-by-env  (SETUP_TOKEN_SET_BY_ENV)"
 `;
 
+exports[`each code, as a command ends with it > TRANSLATIONS_UNRECORDED 1`] = `
+"✗ \`nextly migrate:create\` can't tell which fields are translated, so it wrote nothing.
+  Why:  The latest snapshot was written before snapshots recorded which fields are translated, and the project has translations: planning a change on a guess could lose their values.
+  Next: To record them, put the config back as it was at the last migration and run \`nextly migrate:create --record-snapshot\` against a database that has applied every migration, then make your changes again and run \`nextly migrate:create --name add_excerpt\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/translations-unrecorded  (TRANSLATIONS_UNRECORDED)"
+`;
+
 exports[`each code, as a command ends with it > UI_SCHEMA_INVALID 1`] = `
 "✗ \`ui-schema.json\` failed validation.
   Why:  collections.0.slug: slug must match ^[a-z][a-z0-9_-]*$

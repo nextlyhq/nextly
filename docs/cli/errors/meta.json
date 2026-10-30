@@ -170,6 +170,7 @@
     "setup-already-complete",
     "setup-in-progress",
     "setup-token-set-by-env",
+    "translations-unrecorded",
     "ui-schema-invalid",
     "ui-schema-not-json",
     "ui-schema-unreadable",
