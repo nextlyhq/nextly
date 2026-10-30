@@ -17,6 +17,7 @@ import {
 } from "../../retention/passes";
 import {
   AUDIT_RETENTION_DRAIN_GATE_KEY,
+  CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
@@ -59,6 +60,10 @@ const DRAIN_PASS: Record<
   previewLinks: {
     input: { previewLinks: true },
     claims: PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
+  },
+  cacheTagExpiries: {
+    input: { cacheTagExpiries: true },
+    claims: CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
   },
 };
 

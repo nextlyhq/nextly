@@ -32,6 +32,7 @@ import {
   CONTENT_EVENTS_RETENTION_DRAIN_GATE_KEY,
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   NOTICES_RETENTION_DRAIN_GATE_KEY,
+  CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
@@ -50,6 +51,15 @@ import {
   PREVIEW_LINKS_SWEEP_INTERVAL_MS,
   prunePreviewLinks,
 } from "../../auth/preview/preview-link-records";
+import {
+  createTagExpiryLedger,
+  LEDGER_PRUNE_INTERVAL_MS,
+  LEDGER_RETENTION_MS,
+  type TagExpiryLedgerAdapter,
+} from "../../runtime/cache/tag-expiry-ledger";
+
+/** Batches of the ledger's prune one drain runs, so its turn stays short. */
+const DRAIN_LEDGER_PRUNE_BATCHES = 5;
 
 /** Hard cap on rounds so a persistently-retrying backlog can't loop unbounded. */
 const DEFAULT_MAX_ROUNDS = 100;
@@ -107,8 +117,15 @@ export interface RunDrainDeps {
      * the pass.
      */
     previewLinks?: boolean;
+    /**
+     * Prune the cache tag expiry ledger past the age the cache handlers serve
+     * entries for, for the secrets sweep's reason.
+     */
+    cacheTagExpiries?: boolean;
     // The content-events sweep deletes each batch in a transaction of its own.
-    prune: PruneDeps & { adapter: ContentEventsPruneDb };
+    prune: PruneDeps & {
+      adapter: ContentEventsPruneDb & TagExpiryLedgerAdapter;
+    };
     gate: RetentionGateStore;
   };
 }
@@ -140,6 +157,8 @@ export interface RunDrainResult {
     oneTimeSecrets: number;
     /** Recorded preview links long past their end removed on this call. */
     previewLinks: number;
+    /** Cache tag expiries past the ledger's age removed on this call. */
+    cacheTagExpiries: number;
     /** Notices past the activity log's window removed on this call. */
     notices: number;
     /**
@@ -210,6 +229,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       emailDeliveries: 0,
       oneTimeSecrets: 0,
       previewLinks: 0,
+      cacheTagExpiries: 0,
       notices: 0,
       contentEvents: 0,
     },
@@ -338,6 +358,20 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         heldTurns.add(PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY);
       }
 
+      // The cache tag expiry ledger, claimed with the others for the reason
+      // the secrets sweep is.
+      const cacheTagsTurn =
+        retention.cacheTagExpiries === true && !deadlineSpent()
+          ? await claimRetentionPass(
+              retention.gate,
+              CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY,
+              LEDGER_PRUNE_INTERVAL_MS
+            )
+          : false;
+      if (cacheTagsTurn) {
+        heldTurns.add(CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY);
+      }
+
       // Notices keep the activity log's window, so they ride its policy, on a
       // drain marker of their own.
       const noticesMaxAgeMs =
@@ -389,7 +423,8 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         (noticesTurn && !done.notices ? 1 : 0) +
         (contentEventsTurn ? 1 : 0) +
         (secretsTurn ? 1 : 0) +
-        (previewLinksTurn ? 1 : 0);
+        (previewLinksTurn ? 1 : 0) +
+        (cacheTagsTurn ? 1 : 0);
 
       const webhookPolicy = retention.policy;
       if (webhookPolicy && !deadlineSpent()) {
@@ -646,6 +681,30 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         if (swept.started) {
           heldTurns.delete(PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY);
         }
+      }
+
+      // The cache tag expiry ledger, last. Bounded by batches rather than the
+      // deadline: each batch is one indexed delete of a bounded number of rows,
+      // so a large ledger costs a few short statements, never one long lock,
+      // and what is left waits for the next interval.
+      if (cacheTagsTurn && !deadlineSpent()) {
+        // The ledger is made inside the `try` too: whatever fails, building it
+        // or pruning, a drain whose deliveries succeeded must not reject.
+        try {
+          result.pruned.cacheTagExpiries = await createTagExpiryLedger(
+            retention.prune.adapter
+          ).prune(LEDGER_RETENTION_MS, {
+            maxBatches: DRAIN_LEDGER_PRUNE_BATCHES,
+          });
+        } catch (error) {
+          // Quietly, as the sweeps above.
+          warnQuietly(
+            retention.prune.logger,
+            "Cache tag expiries retention pass failed",
+            { error: error instanceof Error ? error.message : "unknown error" }
+          );
+        }
+        heldTurns.delete(CACHE_TAG_EXPIRIES_RETENTION_DRAIN_GATE_KEY);
       }
     } finally {
       // Anything still held was claimed and never spent. Giving it back costs
