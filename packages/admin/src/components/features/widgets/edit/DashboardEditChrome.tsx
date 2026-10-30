@@ -90,7 +90,11 @@ function ConfirmDialog({
         <AlertDialogFooter>
           {/* No handler: closing IS the refusal. */}
           <AlertDialogCancel>{keep}</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>{confirm}</AlertDialogAction>
+          {/* Red: both questions this chrome asks replace the person's stored
+              layout (a reset, or a save over one that could not be read). */}
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+            {confirm}
+          </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
