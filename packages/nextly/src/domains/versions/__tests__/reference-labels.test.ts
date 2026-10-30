@@ -7,17 +7,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const {
-  getEntrySpy,
-  findByIdSpy,
-  listUsersByIdsSpy,
-  actorForUserSpy,
-} = vi.hoisted(() => ({
-  actorForUserSpy: vi.fn(),
-  getEntrySpy: vi.fn(),
-  findByIdSpy: vi.fn(),
-  listUsersByIdsSpy: vi.fn(),
-}));
+const { getEntrySpy, findByIdSpy, listUsersByIdsSpy, actorForUserSpy } =
+  vi.hoisted(() => ({
+    actorForUserSpy: vi.fn(),
+    getEntrySpy: vi.fn(),
+    findByIdSpy: vi.fn(),
+    listUsersByIdsSpy: vi.fn(),
+  }));
 
 // A signed-in user's actor: the roles and grants the read decision judges,
 // as one lookup resolves them. Mocked so each case names the grants.

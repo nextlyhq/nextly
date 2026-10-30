@@ -357,8 +357,12 @@ export async function recordReleaseEvent(
   });
 }
 
-/** The kinds of release event that name a document of the release. */
-const DOCUMENT_EVENT_KINDS: ReadonlySet<string> = new Set([
+/**
+ * The kinds of release event that name a document of the release: the one
+ * list a reader of a release's documents, and a rename that rewrites them,
+ * select those events by.
+ */
+export const DOCUMENT_EVENT_KINDS: ReadonlySet<string> = new Set([
   RELEASE_CONTENT_EVENT_KINDS.documentAdded.name,
   RELEASE_CONTENT_EVENT_KINDS.documentRemoved.name,
   RELEASE_CONTENT_EVENT_KINDS.documentActionChanged.name,

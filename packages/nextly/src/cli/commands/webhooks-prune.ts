@@ -26,13 +26,12 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { pruneWebhookData } from "../../domains/webhooks/prune";
-import { describeError } from "../../errors/index";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+  connectOrExit,
+  requireDatabaseEnv,
+} from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 interface WebhooksPruneCommandOptions {
@@ -65,22 +64,16 @@ export async function runWebhooksPruneCommand(
     return;
   }
 
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) logger.error(error);
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
+  const configuredDialect = dbValidation.dialect;
 
-  let adapter: CLIDatabaseAdapter;
-  try {
-    adapter = await createCliAdapter({
-      dialect: dbValidation.dialect,
+  const adapter = await connectOrExit(
+    {
+      dialect: configuredDialect,
       databaseUrl: dbValidation.databaseUrl,
-    });
-  } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   try {
     // The ORM resolves table names through a SchemaRegistry, and this command
@@ -142,8 +135,7 @@ export function registerWebhooksPruneCommand(program: Command): void {
           context
         );
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

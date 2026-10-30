@@ -150,6 +150,39 @@ describe("single route failure classification", () => {
     await expect(generateMetadata()).resolves.toEqual({});
   });
 
+  it("treats a visitor asked to sign in as absent, as it does a denial", async () => {
+    const { reader } = stubReader(() => {
+      throw NextlyError.authRequired();
+    });
+    const { generateMetadata } = createSingleRoute({
+      slug: "homepage",
+      nextly: reader,
+      render: () => "rendered",
+      buildMetadata: () => ({ title: "should not be reached" }),
+    });
+
+    await expect(generateMetadata()).resolves.toEqual({});
+  });
+
+  it("RETHROWS any other 401, so a broken credential is not a missing page", async () => {
+    for (const failure of [
+      NextlyError.invalidCredentials(),
+      NextlyError.tokenExpired(),
+    ]) {
+      const { reader } = stubReader(() => {
+        throw failure;
+      });
+      const { generateMetadata } = createSingleRoute({
+        slug: "homepage",
+        nextly: reader,
+        render: () => "rendered",
+        buildMetadata: () => ({}),
+      });
+
+      await expect(generateMetadata()).rejects.toBe(failure);
+    }
+  });
+
   it("RETHROWS a read that broke, so a blip cannot become a missing page", async () => {
     const failure = NextlyError.internal({
       logContext: { reason: "connection reset" },

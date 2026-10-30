@@ -132,15 +132,18 @@ import { UserExtSchemaService } from "../../domains/users/services/user-ext-sche
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
 import type { UserConfig } from "../../users/config/types";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   builderMigrationRemedy,
@@ -278,35 +281,21 @@ export async function runMigrate(
   logger.header("Migrate");
 
   logger.debug("Validating database environment...");
-  const dbValidation = validateDatabaseEnv();
+  const dbValidation = requireDatabaseEnv(logger);
 
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
-
-  const dialect = dbValidation.dialect!;
+  const dialect = dbValidation.dialect;
   logger.debug(`Database dialect: ${dialect}`);
 
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -332,8 +321,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   installRegistryResolver(adapter as unknown as DrizzleAdapter);
@@ -485,8 +473,7 @@ export async function runMigrate(
           : `${formatCount(ran, "migration")} applied.`
       );
     } catch (err) {
-      logger.error(describeError(err));
-      process.exit(1);
+      exitWithError(logger, err);
     }
 
     // Localization companions, once the schema is in step.
@@ -548,8 +535,7 @@ export async function runMigrate(
         }
       }
     } catch (err) {
-      logger.error(describeError(err));
-      process.exit(1);
+      exitWithError(logger, err);
     }
 
     // Read-only, once the run has done its own work: name every registry row
@@ -858,6 +844,15 @@ export async function previewMigrate(args: {
           appStep,
           "up"
         ).run;
+  // Every pending file, whatever the step allows: a real run refuses a
+  // snapshotless Builder file among them before it applies any.
+  const allPendingFiles = await findPendingFiles(
+    adapter,
+    db,
+    dialect,
+    args.migrationsDir,
+    logger
+  );
 
   logger.newline();
   logger.keyValue(
@@ -877,6 +872,18 @@ export async function previewMigrate(args: {
     if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
       logger.info(
         `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
+      );
+    }
+  }
+  // A real run refuses a snapshotless Builder file among ALL its pending files
+  // before it applies any, whatever `--step` allows, so one the step leaves
+  // out of the preview is named too.
+  const previewed = new Set(pendingFiles.map(m => m.name));
+  for (const m of allPendingFiles) {
+    if (previewed.has(m.name)) continue;
+    if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
+      logger.info(
+        `  • ${m.name}.sql (beyond --step) ✖ a real run would refuse it before applying anything: ${builderMigrationRemedy(`${m.name}.sql`)}`
       );
     }
   }
@@ -2334,8 +2341,7 @@ export function registerMigrateCommand(program: Command): void {
       try {
         await runMigrate(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

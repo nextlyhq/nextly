@@ -529,7 +529,8 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
       { status: "published" }
     );
     expect(denied.success).toBe(false);
-    expect(denied.statusCode).toBe(403);
+    // A visitor the Public role does not cover is asked to sign in.
+    expect(denied.statusCode).toBe(401);
 
     // The denial left the row draft.
     const [afterDenial] = await current.adapter.select<{ status: string }>(
