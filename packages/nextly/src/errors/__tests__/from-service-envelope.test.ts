@@ -227,3 +227,31 @@ describe("a typed 409 is not flattened into a generic conflict", () => {
     expect(errorFromServiceEnvelope({ statusCode: 409 }).code).toBe("CONFLICT");
   });
 });
+
+describe("a write that committed before it failed", () => {
+  it("says the change was saved, never that the database is not migrated", () => {
+    // ENTITY_NOT_MIGRATED asks for `nextly migrate` and the request again;
+    // after a commit, sending it again makes the change a second time.
+    const failure = NextlyError.notMigrated({
+      reason: "column",
+      kind: "collection",
+      slug: "posts",
+      table: "dc_posts",
+      field: "subtitle",
+    });
+    const answer = errorFromServiceEnvelope({
+      ...errorEnvelopeFields(failure),
+      committed: true,
+    });
+    expect(answer.code).toBe("INTERNAL_ERROR");
+    expect(answer.publicMessage).toBe(
+      "The change was saved, but the request could not be completed."
+    );
+    // Before any commit, it is answered as it is.
+    expect(
+      errorFromServiceEnvelope({
+        ...errorEnvelopeFields(failure),
+      }).code
+    ).toBe("ENTITY_NOT_MIGRATED");
+  });
+});

@@ -26,6 +26,8 @@ import { cn } from "@admin/lib/utils";
 
 import { useFieldElementId } from "../field-id-scope";
 
+import { toInputValue } from "./date-input-value";
+
 // ============================================================
 // Types
 // ============================================================
@@ -76,66 +78,31 @@ export interface DateInputProps<
 // ============================================================
 
 /**
- * Extracts local date parts and formats them for HTML input types.
- */
-function toLocalInputValue(
-  value: string | Date | null | undefined,
-  format: "date" | "datetime" | "time" | "month"
-): string {
-  if (!value) return "";
-
-  try {
-    const date = typeof value === "string" ? new Date(value) : value;
-    if (Number.isNaN(date.getTime())) return "";
-
-    const Y = date.getFullYear();
-    const M = String(date.getMonth() + 1).padStart(2, "0");
-    const D = String(date.getDate()).padStart(2, "0");
-    const h = String(date.getHours()).padStart(2, "0");
-    const m = String(date.getMinutes()).padStart(2, "0");
-
-    switch (format) {
-      case "datetime":
-        return `${Y}-${M}-${D}T${h}:${m}`;
-      case "time":
-        return `${h}:${m}`;
-      case "month":
-        return `${Y}-${M}`;
-      case "date":
-      default:
-        return `${Y}-${M}-${D}`;
-    }
-  } catch {
-    return "";
-  }
-}
-
-/**
- * Converts a date value to YYYY-MM-DD format for HTML date input using local time.
+ * Converts a date value to YYYY-MM-DD format for HTML date input, as its UTC day.
  */
 function toDateInputValue(value: string | Date | null | undefined): string {
-  return toLocalInputValue(value, "date");
+  return toInputValue(value, "date");
 }
 
 /**
  * Converts a date value to YYYY-MM-DDTHH:MM format for HTML datetime-local input using local time.
  */
 function toDateTimeInputValue(value: string | Date | null | undefined): string {
-  return toLocalInputValue(value, "datetime");
+  return toInputValue(value, "datetime");
 }
 
 /**
- * Converts a date value to HH:MM format for HTML time input using local time.
+ * Converts a date value to HH:MM format for HTML time input, as its UTC time of day.
  */
 function toTimeInputValue(value: string | Date | null | undefined): string {
-  return toLocalInputValue(value, "time");
+  return toInputValue(value, "time");
 }
 
 /**
- * Converts a date value to YYYY-MM format for HTML month input using local time.
+ * Converts a date value to YYYY-MM format for HTML month input, as its UTC month.
  */
 function toMonthInputValue(value: string | Date | null | undefined): string {
-  return toLocalInputValue(value, "month");
+  return toInputValue(value, "month");
 }
 
 // ============================================================

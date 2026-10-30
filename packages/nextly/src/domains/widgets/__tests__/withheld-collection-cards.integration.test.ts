@@ -21,6 +21,7 @@ import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineCollection, text } from "../../../config";
+import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -142,11 +143,14 @@ describe.each(getConfiguredTestDialects())(
             slug: TWIN_UNDERSCORE,
             fields: [text({ name: "title" })],
           }),
-          defineCollection({
-            slug: TWIN_HYPHEN,
-            fields: [text({ name: "title" })],
-          }),
         ],
+      });
+      // Two collections whose addresses differ only by `-` and `_` can exist only from before the
+      // address rule, which refuses the second as new on every road. So one of them is seeded
+      // the way a Builder collection made before the rule is stored.
+      await seedBuilderCollection(handle.adapter as never, {
+        slug: TWIN_HYPHEN,
+        fields: [{ name: "title", type: "text" }],
       });
       // The first account of an instance is its super admin.
       admin = await account("cv-admin@example.com");

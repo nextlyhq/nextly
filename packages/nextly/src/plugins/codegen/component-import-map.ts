@@ -40,6 +40,7 @@ import { isPageBuilderActive, PAGE_BUILDER_PLUGIN } from "./block-manifest";
 /** What a component in the map is for, as a fault about it names it. */
 export type ComponentMapUse =
   | "widget"
+  | "setting editor"
   | "page"
   | "settings"
   | "collection view"
@@ -73,8 +74,11 @@ export interface ComponentMapEntry {
  * for. One wording for the development check and `generate:types --check` alike.
  */
 export function describeComponentUse(each: ComponentMapEntry): string {
-  return each.use === "widget"
-    ? `${each.owner}, widget "${each.widget ?? "?"}": ${each.path}`
+  if (each.use === "widget") {
+    return `${each.owner}, widget "${each.widget ?? "?"}": ${each.path}`;
+  }
+  return each.use === "setting editor"
+    ? `${each.owner}, a setting editor of widget "${each.widget ?? "?"}": ${each.path}`
     : `${each.owner}, ${each.use}: ${each.path}`;
 }
 
@@ -213,16 +217,34 @@ function collectDeclaredWidgetEntries(
   return widgets.flatMap((widget: unknown): ComponentMapEntry[] => {
     const view = isRecord(widget) ? widget.view : undefined;
     const component = isRecord(view) ? view.component : undefined;
-    if (typeof component !== "string" || component.trim() === "") return [];
     const id = isRecord(widget) ? widget.id : undefined;
-    return [
-      {
-        path: component,
-        owner,
-        use: "widget",
-        ...(typeof id === "string" ? { widget: id } : {}),
-      },
-    ];
+    const named = typeof id === "string" ? { widget: id } : {};
+    const drawn: ComponentMapEntry[] =
+      typeof component === "string" && component.trim() !== ""
+        ? [{ path: component, owner, use: "widget", ...named }]
+        : [];
+    return [...drawn, ...settingEditorEntries(widget, owner, named)];
+  });
+}
+
+/**
+ * The components a widget's settings are edited with in the settings sheet,
+ * each from its setting's `editor`. Shipped as the widget's own component is,
+ * since the sheet loads it by its path the same way.
+ */
+function settingEditorEntries(
+  widget: unknown,
+  owner: string,
+  named: { widget?: string }
+): ComponentMapEntry[] {
+  const settings = isRecord(widget) ? widget.settings : undefined;
+  if (!isRecord(settings)) return [];
+  return Object.values(settings).flatMap((setting): ComponentMapEntry[] => {
+    const editor = isRecord(setting) ? setting.editor : undefined;
+    const component = isRecord(editor) ? editor.component : undefined;
+    return typeof component === "string" && component.trim() !== ""
+      ? [{ path: component, owner, use: "setting editor", ...named }]
+      : [];
   });
 }
 
@@ -775,8 +797,11 @@ function widgetNote(entry: ComponentMapEntry | undefined): string {
   // On one line whatever a plugin is called: a line break in its name would end the comment and
   // leave the rest of the name as source.
   const owner = entry?.owner.replace(/[\r\n\u2028\u2029]+/g, " ");
-  return entry?.use === "widget"
-    ? ` // widget ${JSON.stringify(entry.widget ?? "?")} of ${owner}`
+  if (entry?.use === "widget") {
+    return ` // widget ${JSON.stringify(entry.widget ?? "?")} of ${owner}`;
+  }
+  return entry?.use === "setting editor"
+    ? ` // a setting editor of widget ${JSON.stringify(entry.widget ?? "?")} of ${owner}`
     : "";
 }
 

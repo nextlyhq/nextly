@@ -114,6 +114,13 @@ export interface CanonicalWidget {
    */
   textBounds?: readonly TextBound[];
   /**
+   * The declaration's settings, from either channel, so the layout write holds
+   * a value a card's caller changed to the rule it is read back by
+   * (`settingValueProblem`), whichever channel declared the widget. Absent when
+   * the declaration states none.
+   */
+  settings?: readonly AnyWidgetSetting[];
+  /**
    * The declaration's Collection setting, from either channel (a widget states
    * at most one), so the layout read and write judge which collection a card
    * reads by the declaration the admin draws, whichever channel stated it.
@@ -215,6 +222,7 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     ],
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
     ...textBoundsField(definition.settings),
+    ...settingsField(definition.settings),
     ...collectionSettingField(definition.settings),
     ...knobQueriesField(definition),
   };
@@ -251,6 +259,16 @@ export function textBoundsField(
 ): Pick<CanonicalWidget, "textBounds"> {
   const textBounds = textBoundsOf(settings);
   return textBounds === undefined ? {} : { textBounds };
+}
+
+/**
+ * A declaration's settings as a summary field: absent when it states none, so
+ * a merge reads the other channel's, as `textBounds` does.
+ */
+export function settingsField(
+  settings: readonly AnyWidgetSetting[] | undefined
+): Pick<CanonicalWidget, "settings"> {
+  return settings === undefined ? {} : { settings };
 }
 
 /**
@@ -352,11 +370,12 @@ function lifecycleFallback(
 function settingsFallback(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
-): Pick<CanonicalWidget, "textBounds" | "collectionSetting"> {
-  const { textBounds, collectionSetting } =
+): Pick<CanonicalWidget, "textBounds" | "settings" | "collectionSetting"> {
+  const { textBounds, settings, collectionSetting } =
     registration.textBounds === undefined ? contribution : registration;
   return {
     ...(textBounds === undefined ? {} : { textBounds }),
+    ...(settings === undefined ? {} : { settings }),
     ...(collectionSetting === undefined ? {} : { collectionSetting }),
   };
 }

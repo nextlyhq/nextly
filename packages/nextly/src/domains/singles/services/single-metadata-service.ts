@@ -56,6 +56,7 @@ import type {
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
+import { assertAddressAllowed } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
@@ -2070,9 +2071,15 @@ export class SingleMetadataService {
       });
     }
 
+    // The address, judged inside the exclusion every Single create holds, whichever road reached
+    // it: by the one rule, then against the collections' and Singles' addresses, which a create
+    // that started while this one waited may have added.
+    assertAddressAllowed("single", input.slug);
     const adapter = this.adapter;
     if (adapter) {
-      await assertGlobalResourceSlugAvailable(adapter, input.slug);
+      await assertGlobalResourceSlugAvailable(adapter, input.slug, {
+        addressKind: "single",
+      });
     }
 
     // 🔴 Re-judged here, not only by the caller, because the thing that judges it can CHANGE while

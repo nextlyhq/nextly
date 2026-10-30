@@ -116,15 +116,32 @@ function matches(id: string, patterns: readonly (string | RegExp)[]): boolean {
   );
 }
 
+/**
+ * The `process.env.NODE_ENV` the bundle is built for: production unless a
+ * build sets otherwise (see the `define` below for why).
+ */
+const BUILD_NODE_ENV = process.env.NODE_ENV ?? "production";
+
 /** Where the admin's pages live; a chunk whose entry is one of them is a route. */
 const PAGES_DIR = `${path.join(__dirname, "src", "pages")}${path.sep}`;
 
 /**
  * A chunk's file name: `page.<path under src/pages>-<hash>.mjs` for a lazily
- * loaded page, the default `[name]-[hash].mjs` for anything else.
+ * loaded page, `<name>-<hash>.mjs` for anything else.
+ *
+ * A Lexical module resolved through the `production` condition is a
+ * `<Name>.prod.mjs` file, so its chunk would be named `<Name>.prod`. The
+ * suffix is dropped: the bundle budgets pin each lazy chunk by its name, and
+ * which of Lexical's builds was resolved does not make it another route.
  */
-function pageChunkFileName(facadeModuleId: string | null): string {
-  if (!facadeModuleId?.startsWith(PAGES_DIR)) return "[name]-[hash].mjs";
+function chunkFileName(chunk: {
+  name: string;
+  facadeModuleId: string | null;
+}): string {
+  const { facadeModuleId } = chunk;
+  if (!facadeModuleId?.startsWith(PAGES_DIR)) {
+    return `${chunk.name.replace(/\.prod$/, "")}-[hash].mjs`;
+  }
   const page = facadeModuleId
     .slice(PAGES_DIR.length)
     .replace(/\.(tsx?|jsx?)$/, "")
@@ -173,9 +190,7 @@ export default defineConfig([
       // dev behavior sets NODE_ENV=development itself. Whether the
       // development reload stream opens is the running server's call, not
       // this define's: the client subscribes only on the server's explicit yes.
-      "process.env.NODE_ENV": JSON.stringify(
-        process.env.NODE_ENV ?? "production"
-      ),
+      "process.env.NODE_ENV": JSON.stringify(BUILD_NODE_ENV),
     },
     deps: {
       neverBundle: id => matches(id, EXTERNAL_DEPS),
@@ -204,10 +219,26 @@ export default defineConfig([
     platform: "browser",
     // Resolve the browser builds of dependencies, as ES modules, so the
     // bundle carries no Node-specific `require` patterns.
+    //
+    // A production build also resolves the `production` condition. Lexical's
+    // packages publish one: without it they resolve to a module that imports
+    // both their development and production builds and re-exports one by
+    // `process.env.NODE_ENV`. The define picks production either way, but the
+    // re-exporting module keeps every export of the production build and its
+    // own copy of each, and the development build's side effects stay in.
+    // Resolving the production build straight away ships the same code,
+    // tree-shaken, about 80 KB smaller. A development build keeps the
+    // default, which picks the development builds through the same switch.
     inputOptions: {
       resolve: {
         mainFields: ["module", "main"],
-        conditionNames: ["import", "module", "browser", "default"],
+        conditionNames: [
+          "import",
+          "module",
+          "browser",
+          ...(BUILD_NODE_ENV === "production" ? ["production"] : []),
+          "default",
+        ],
       },
     },
     // CRITICAL: Alias use-sync-external-store/shim to our React re-export
@@ -234,7 +265,7 @@ export default defineConfig([
     // pin each route by this name, so it has to be unique and survive a
     // rebuild; every other chunk keeps the default name.
     outputOptions: {
-      chunkFileNames: chunk => pageChunkFileName(chunk.facadeModuleId),
+      chunkFileNames: chunkFileName,
     },
     plugins: [stylesheetImportsAreEmpty],
     onSuccess: () => {

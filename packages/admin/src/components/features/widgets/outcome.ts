@@ -24,6 +24,7 @@
  */
 
 import type { WidgetArchetype } from "nextly/config";
+import { noSettingChosen, settingInSentence } from "nextly/widget-result";
 import type { ReactNode } from "react";
 
 import type {
@@ -247,14 +248,13 @@ function drawsDeclaredComponent(definition: DashboardWidget): boolean {
 function needsSettingEmpty(setting: string): OutcomeEmpty {
   return {
     // Says what is missing; the button beside it says how to fix it, so the two never repeat.
-    title: `No ${lowerFirst(setting)} chosen yet`,
-    action: { label: `Choose ${lowerFirst(setting)}`, opensSettings: true },
+    title: noSettingChosen(setting),
+    action: {
+      label: `Choose ${settingInSentence(setting)}`,
+      opensSettings: true,
+    },
   };
 }
-
-/** A setting's label as it reads inside a sentence: "Collection" becomes "collection". */
-const lowerFirst = (label: string) =>
-  label.charAt(0).toLowerCase() + label.slice(1);
 
 function slotFailure(slot: Extract<WidgetSlot, { ok: false }>): WidgetOutcome {
   switch (slot.code) {

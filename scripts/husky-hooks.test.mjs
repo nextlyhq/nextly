@@ -195,6 +195,23 @@ describe("the pre-push hook specifically", () => {
     expect(buildAt).toBeLessThan(lintAt);
   });
 
+  it("runs the root scripts tests BEFORE every workspace's tests, so a failure there stops first", async () => {
+    /*
+     * The scripts tests take a few minutes and the workspace suites a quarter
+     * of an hour. Run after them, a push that failed the scripts tests learned
+     * it only once both were done. Under `set -e` the first failure ends the
+     * hook, so the order is what decides how long a red takes.
+     */
+    const source = shellCode(await hook("pre-push"));
+
+    const scriptsAt = source.search(/^\s*node scripts\/test-changed\.mjs --scripts-only\s*$/m);
+    const everyWorkspaceAt = source.search(/^\s*pnpm turbo test\b/m);
+
+    expect(scriptsAt).toBeGreaterThan(-1);
+    expect(everyWorkspaceAt).toBeGreaterThan(-1);
+    expect(scriptsAt).toBeLessThan(everyWorkspaceAt);
+  });
+
   it("records what is uncommitted BEFORE the first gate runs", async () => {
     /*
      * Every gate here runs against the working tree while Git pushes HEAD, so

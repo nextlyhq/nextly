@@ -245,8 +245,8 @@
       "compiled": 1
     },
     "docs/widgets/index.mdx": {
-      "samples": 6,
-      "compiled": 5
+      "samples": 8,
+      "compiled": 7
     },
     "packages/adapter-mysql/README.md": {
       "samples": 1,
@@ -545,6 +545,10 @@
       "reader-file #4 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #5 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
+    "docs/widgets/index.mdx": {
+      "reader-file #6 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1,
+      "reader-file #7 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1
+    },
     "packages/admin/README.md": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
@@ -558,10 +562,6 @@
       "reader-name #18 error TS2304: Cannot find name 'Posts'.": 1,
       "reader-name #18 error TS2304: Cannot find name 'Users'.": 1,
       "reader-name #18 error TS2304: Cannot find name 'Media'.": 1
-    },
-    "docs/widgets/index.mdx": {
-      "reader-file #4 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1,
-      "reader-file #5 error TS2307: Cannot find module './shop' or its corresponding type declarations.": 1
     }
   }
 }

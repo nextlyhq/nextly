@@ -71,7 +71,7 @@ describe("core's Note, declared", () => {
   });
 
   it("is one of core's ids, in core's order, and no longer one of its definitions", () => {
-    expect(CORE_DECLARATIONS.map(widget => widget.id)).toEqual(["core/note"]);
+    expect(CORE_DECLARATIONS.map(widget => widget.id)).toContain("core/note");
     expect(CORE_WIDGET_IDS).toContain("core/note");
     // Where it always sorted: after Breakdown, before Recent entries.
     const at = CORE_WIDGET_IDS.indexOf("core/note");
@@ -80,7 +80,10 @@ describe("core's Note, declared", () => {
     expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain("core/note");
     // Every core widget is in exactly one of the two lists.
     expect(
-      [...CORE_WIDGETS.map(widget => widget.id), "core/note"].sort()
+      [
+        ...CORE_WIDGETS.map(widget => widget.id),
+        ...CORE_DECLARATIONS.map(widget => widget.id),
+      ].sort()
     ).toEqual([...CORE_WIDGET_IDS].sort());
   });
 
