@@ -101,17 +101,50 @@ async function fieldsLeavingOnReload(
     config
   )) {
     for (const entity of entities) {
-      const slug = entity.slug;
-      if (slug === undefined || entity.localized !== true) continue;
-      if (deferred.has(`${kind}:${slug}`)) continue;
-      const tableName =
-        (kind === "fieldGroup" ? fieldGroupTables.get(slug) : undefined) ??
-        tableNameOf(entity);
-      const entry = await leavingIn(adapter, { kind, slug, tableName, entity });
+      const target = reloadTarget({
+        kind,
+        entity,
+        tableNameOf,
+        fieldGroupTables,
+        deferred,
+      });
+      const entry = target && (await leavingIn(adapter, target));
       if (entry) found.push(entry);
     }
   }
   return found;
+}
+
+/**
+ * An entity the reload keeps translated and applies, with its table: a field group's is the one
+ * stored for it, which the reload resolved already. `undefined` for any other.
+ */
+function reloadTarget(args: {
+  kind: I18nTransitionKind;
+  entity: LocalizableEntity;
+  tableNameOf: (e: LocalizableEntity) => string;
+  fieldGroupTables: ReadonlyMap<string, string>;
+  deferred: ReadonlySet<string>;
+}):
+  | {
+      kind: I18nTransitionKind;
+      slug: string;
+      tableName: string;
+      entity: LocalizableEntity;
+    }
+  | undefined {
+  const { kind, entity } = args;
+  const slug = entity.slug;
+  if (slug === undefined || entity.localized !== true) return undefined;
+  if (args.deferred.has(`${kind}:${slug}`)) return undefined;
+  const stored =
+    kind === "fieldGroup" ? args.fieldGroupTables.get(slug) : undefined;
+  return {
+    kind,
+    slug,
+    tableName: stored ?? args.tableNameOf(entity),
+    entity,
+  };
 }
 
 /** One entity's fields leaving translation, or `undefined` when none is. */
