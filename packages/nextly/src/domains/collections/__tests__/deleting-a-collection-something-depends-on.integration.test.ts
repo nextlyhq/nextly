@@ -42,7 +42,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import type { CollectionsHandler } from "../../../services/collections-handler";
-import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { resolveFieldGroupRegistryName } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../../schema/extension/active-schema";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
@@ -95,7 +95,7 @@ async function unlock(t: TestNextly, slug: string): Promise<void> {
   );
   // Written past the registry, so its cached rows are cleared as every
   // registry write clears them.
-  clearCollectionRowCache();
+  clearRegistryRowCache();
 }
 
 /** What a call rejected with, so the assertion reads the refusal itself. */

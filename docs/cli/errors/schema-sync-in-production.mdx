@@ -1,0 +1,25 @@
+---
+title: SCHEMA_SYNC_IN_PRODUCTION
+description: "`NODE_ENV` is `production`, where schema changes are applied by migrations and never synced automatically."
+---
+
+## Cause
+
+`NODE_ENV` is `production`, where schema changes are applied by migrations and never synced automatically.
+
+In production the schema changes only through migrations, which are reviewed and recorded. With `NODE_ENV=production` the sync refuses to apply the changes it found, and names the collections they are in.
+
+## Fix
+
+- Create a migration for the changes: `nextly migrate:create --name="add-posts"`.
+- Apply it with `nextly migrate`.
+- If this is not production, unset `NODE_ENV` or set it to `development`, then run the command again.
+
+## Example
+
+```text
+✗ Cannot auto-sync schema in production mode.
+  Why:  `NODE_ENV` is `production`, and 2 collections would change: posts, pages.
+  Next: Run `nextly migrate:create --name="<migration-name>"` to create migrations, then `nextly migrate` to apply.
+  Docs: https://nextlyhq.com/docs/cli/errors/schema-sync-in-production  (SCHEMA_SYNC_IN_PRODUCTION)
+```

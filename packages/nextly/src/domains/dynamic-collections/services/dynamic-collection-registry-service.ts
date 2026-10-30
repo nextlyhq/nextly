@@ -29,7 +29,7 @@ import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import {
   cachedCollectionRow,
-  clearCollectionRowCache,
+  clearRegistryRowCache,
 } from "./collection-row-cache";
 
 export interface CollectionMetadata {
@@ -280,7 +280,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         createdBy: metadata.createdBy,
       });
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // Publish the decision into the live policy as well as the column. The
@@ -405,7 +405,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         }
       }
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // A rename carries the live recording decision to the new slug and drops
@@ -647,7 +647,7 @@ export class DynamicCollectionRegistryService extends BaseService {
       await this.deleteRegistryRow(this.db, slug);
     } catch (error) {
       // Cleared whether or not the delete ran, as after an insert.
-      clearCollectionRowCache();
+      clearRegistryRowCache();
       throw error;
     }
     this.forgetUnregisteredCollection(slug);
@@ -690,7 +690,7 @@ export class DynamicCollectionRegistryService extends BaseService {
    * longer exists.
    */
   forgetUnregisteredCollection(slug: string): void {
-    clearCollectionRowCache();
+    clearRegistryRowCache();
     clearWebhookRecording("collection", slug);
   }
 }

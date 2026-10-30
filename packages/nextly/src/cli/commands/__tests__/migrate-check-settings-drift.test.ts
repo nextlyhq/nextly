@@ -26,6 +26,28 @@ import { runMigrateCreate } from "../migrate-create";
 const loaded = vi.hoisted(() => ({
   config: undefined as unknown,
 }));
+// `../program` imports every command, `migrate` with its whole graph among
+// them; the command under test needs only its context factory, and is handed
+// its context here anyway.
+vi.mock("../../program", () => ({
+  createContext: () => ({
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      success: () => {},
+    },
+  }),
+}));
+
+// `migrate` is the largest command module. `migrate:check` reads it only for
+// `parseSqlSections`, to warn about statements a run would refuse, which this
+// file does not test: every file it checks is one `migrate:create` wrote.
+vi.mock("../migrate", () => ({
+  parseSqlSections: () => ({ upSql: "", downSql: "" }),
+}));
+
 vi.mock("../../utils/config-loader", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/config-loader")>()),
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
@@ -74,6 +96,10 @@ async function run(
     options: {},
     cwd: dir,
   } as CommandContext;
+  // The error a command ends with is printed on standard error, in the error shape.
+  const printed = vi.spyOn(console, "error").mockImplementation(message => {
+    said.push(String(message));
+  });
   const exit = vi.spyOn(process, "exit").mockImplementation(code => {
     throw new Error(`exit ${String(code)}`);
   });
@@ -86,6 +112,7 @@ async function run(
     throw error;
   } finally {
     exit.mockRestore();
+    printed.mockRestore();
   }
 }
 
@@ -115,6 +142,7 @@ describe("migrate:check and settings", () => {
     const { code, said } = await check(project("Articles"));
 
     expect(code).toBe(1);
+    expect(said.join("\n")).toContain("(SETTINGS_CHANGE_WITHOUT_MIGRATION)");
     expect(said.join("\n")).toContain("posts: description");
     expect(said.join("\n")).toContain("migrate:create");
   });

@@ -67,7 +67,10 @@ function capture() {
     success: push,
     newline: () => {},
     keyValue: () => {},
+    getOptions: () => ({ noColor: true }),
   };
+  // The error a run ends with is printed in the error shape on standard error.
+  vi.spyOn(console, "error").mockImplementation((m: string) => push(m));
   return { lines, context: { logger } as unknown as CommandContext };
 }
 
@@ -111,6 +114,7 @@ describe("migrate:fresh and the data-loss consent", () => {
     expect(connect).not.toHaveBeenCalled();
     expect(output).toContain("every table in the database");
     expect(output).toContain("--accept-data-loss");
+    expect(output).toContain("(DATA_LOSS_CONSENT_REQUIRED)");
   });
 
   it("proceeds with --accept-data-loss, listing what it deletes", async () => {
@@ -130,6 +134,7 @@ describe("migrate:fresh and the data-loss consent", () => {
     expect(code).toBe(1);
     expect(connect).not.toHaveBeenCalled();
     expect(output).toContain("only by the consent without targets");
+    expect(output).toContain("(DATA_LOSS_CONSENT_NOT_COVERED)");
   });
 
   it("honours --force, naming it deprecated", async () => {

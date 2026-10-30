@@ -40,7 +40,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { CollectionFileManager } from "../../../services/collection-file-manager";
-import { clearCollectionRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import type { CollectionRegistryService } from "../services/collection-registry-service";
 
@@ -99,7 +99,7 @@ async function bootPair(dialect: TestDialect): Promise<TestNextly> {
     { locked: 0 },
     { and: [{ column: "slug", op: "IN", value: [TAGS, NOTES] }] }
   );
-  clearCollectionRowCache();
+  clearRegistryRowCache();
   current = t;
   return t;
 }

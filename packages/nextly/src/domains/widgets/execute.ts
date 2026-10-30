@@ -19,6 +19,7 @@
  * @module domains/widgets/execute
  */
 
+import type { InternalTimeseriesArgs } from "../../direct-api/namespaces/collections";
 import { requireNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
 import { NextlyError } from "../../errors/nextly-error";
@@ -298,19 +299,25 @@ async function runRangedTimeseries(
 ): Promise<WidgetResult> {
   const dateField = query.dateField ?? "";
   const window = rangeWindow(range, now);
-  const result = await requireNextly().timeseries({
+  // The rows end at the batch's instant's whole second (`openWindowEnd`); the
+  // intervals are still placed by the instant itself, and a row stored rounded
+  // across the last interval's end, before that second ends, counts in the
+  // last interval, as the row filter below keeps it. Named through the Direct
+  // API's internal arguments (`InternalTimeseriesArgs`), which the published
+  // `TimeseriesArgs` leaves out.
+  const args: InternalTimeseriesArgs = {
     collection,
     dateField,
     interval: window.interval,
     intervals: window.intervals,
     now: window.anchor,
-    // The rows end at the batch's instant's whole second (`openWindowEnd`);
-    // the intervals are still placed by the instant itself.
+    rowsEnd: openWindowEnd(now),
     ...sharedReadArgs(
       boundedBy(query, dateField, window.start, openWindowEnd(now)),
       caller
     ),
-  });
+  };
+  const result = await requireNextly().timeseries(args);
   return { op: "timeseries", points: result.points, interval: result.interval };
 }
 
