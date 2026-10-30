@@ -69,6 +69,9 @@ async function boot(
 ): Promise<Handler> {
   const t = await createTestNextly({
     dialect,
+    // The handler's reads are checked and made as a visitor, judged by the
+    // Public role a real boot makes, which reads `ts_events` by its rule.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: EVENTS,

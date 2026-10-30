@@ -283,14 +283,25 @@ exports[`plugin-sdk public export surface > \`./schema\` surface is unchanged 1`
 ]
 `;
 
+exports[`plugin-sdk public export surface > \`./testing/admin\` surface is unchanged 1`] = `
+[
+  "RenderWidgetCardOptions (type)",
+  "WidgetCardState (type)",
+  "renderWidgetCard (value)",
+]
+`;
+
 exports[`plugin-sdk public export surface > \`./testing\` surface is unchanged 1`] = `
 [
   "CreateTestNextlyOptions (type)",
+  "RunWidgetLoadOptions (type)",
   "TestDialect (type)",
   "TestNextly (type)",
+  "WidgetLoadResult (type)",
   "createTestNextly (value)",
   "describeAbortedTransactions (value)",
   "getConfiguredTestDialects (value)",
+  "runWidgetLoad (value)",
   "takeAbortedTransactionSightings (value)",
 ]
 `;

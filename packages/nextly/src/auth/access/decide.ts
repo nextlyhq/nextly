@@ -27,13 +27,12 @@
 import { NextlyError } from "../../errors/nextly-error";
 import { consoleLogger } from "../../shared/types";
 import type {
-  AccessControlFunction,
   CollectionAccessControl,
   SingleAccessControl,
 } from "../../shared/types/access";
+import type { CollectionFilterRule } from "../../shared/types/rule-filter";
 
 import {
-  holdsByManage,
   holdsPermission,
   isSuperAdmin,
   ruleContext,
@@ -41,6 +40,10 @@ import {
   type Actor,
   type SystemActor,
 } from "./actor";
+import {
+  RETIRED_MANAGE_PLAIN_ACTIONS,
+  isRetiredManage,
+} from "./retired-manage-permissions";
 import {
   mayAnswerFilter,
   reportRuleFilterMisuse,
@@ -120,10 +123,12 @@ function refuse(reason: RefusalReason): Decision {
 function ruleFor(
   target: AccessTarget,
   action: AccessAction
-): AccessControlFunction | boolean | undefined {
-  // A Single declares no create or delete rule; asked one, it has none.
+): CollectionFilterRule | boolean | undefined {
+  // A Single declares no create or delete rule; asked one, it has none. A
+  // rule answering only true or false is a filter rule too, so the one type
+  // holds the read rule, which may answer a filter, and every other.
   const access:
-    | Partial<Record<AccessAction, AccessControlFunction | boolean>>
+    | Partial<Record<AccessAction, CollectionFilterRule | boolean>>
     | undefined = target.access;
   return access?.[action];
 }
@@ -334,8 +339,7 @@ export async function decide(
  * as settings, roles or email providers, or an action no rule is declared for,
  * such as `manage`. The permission alone answers: trusted work is allowed, a
  * super-admin is allowed, a plugin's person, who holds no role and meets no
- * rule here, is refused, and anyone else needs the permission, which on a
- * system resource its `manage-` permission also gives ({@link holdsByManage}).
+ * rule here, is refused, and anyone else needs the permission itself.
  */
 export function decidePermission(
   actor: Actor,
@@ -345,8 +349,17 @@ export function decidePermission(
   if (actor.kind === "system") return ALLOW;
   if (actor.kind === "principal") return refuse("principal-without-rule");
   if (isSuperAdmin(actor)) return ALLOW;
-  return holdsPermission(actor, action, resource) ||
-    holdsByManage(actor, action, resource)
+  // A retired `manage-` permission, asked by a gate written before it was
+  // retired, is answered by the plain four it stood for, each held as stored:
+  // a role still holding the retired one itself holds none of them.
+  if (isRetiredManage(action, resource)) {
+    return RETIRED_MANAGE_PLAIN_ACTIONS.every(
+      plain => decidePermission(actor, plain, resource).allowed
+    )
+      ? ALLOW
+      : refuse("no-permission");
+  }
+  return holdsPermission(actor, action, resource)
     ? ALLOW
     : refuse("no-permission");
 }
