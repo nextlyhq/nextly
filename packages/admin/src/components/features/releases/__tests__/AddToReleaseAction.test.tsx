@@ -122,18 +122,19 @@ describe("the action is offered", () => {
   it("to a caller who can assemble and publish this document", () => {
     show();
     expect(text("present")).toBe("present");
-    expect(text("label")).toBe("Add to release");
+    expect(text("label")).toBe("Add to release…");
   });
 
-  it("as a menu action, not a toolbar button", () => {
+  it("on the Publish split's arrow, not as a toolbar button", () => {
     /*
      * The placement is the point of contributing a description rather than a
-     * control. Scheduling a release is a document-management act like Duplicate,
-     * and as a toolbar button it also widened the action cluster — which is what
-     * pushed Save under the version-history panel.
+     * control. Adding to a release decides when this goes live, so it sits
+     * beside Schedule publish… on the primary action's arrow; as a toolbar
+     * button it widened the action cluster, which is what pushed Save under
+     * the version-history panel.
      */
     show();
-    expect(text("placement")).toBe("menu/document");
+    expect(text("placement")).toBe("publish-menu/-");
   });
 
   it("carrying no reason when it can actually be used", () => {

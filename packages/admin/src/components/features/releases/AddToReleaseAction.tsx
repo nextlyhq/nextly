@@ -44,6 +44,7 @@ import {
 import { useCan } from "@admin/hooks/useCan";
 import type { Release, ReleaseMemberAction } from "@admin/types/releases";
 
+import { dialogOpenerOf, returnFocusTo } from "./dialog-opener";
 import { releaseErrorMessage } from "./release-error";
 import { describeRelease } from "./release-schedule";
 
@@ -307,6 +308,7 @@ function AddToReleaseDialog({
   canRead,
   canPublishDocument,
   canUnpublishDocument,
+  opener,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
@@ -316,6 +318,7 @@ function AddToReleaseDialog({
   canRead: boolean;
   canPublishDocument: boolean;
   canUnpublishDocument: boolean;
+  opener: HTMLElement | null;
 }) {
   const {
     releaseId,
@@ -342,7 +345,7 @@ function AddToReleaseDialog({
         else onOpenChange(true);
       }}
     >
-      <DialogContent>
+      <DialogContent onCloseAutoFocus={event => returnFocusTo(opener, event)}>
         <form
           onSubmit={event => {
             event.preventDefault();
@@ -493,6 +496,8 @@ export function useAddToReleaseAction({
   const documentKey = `${scopeKind}:${scopeSlug}:${entryId}`;
   const [openFor, setOpenFor] = useState<string | null>(null);
   const open = openFor === documentKey;
+  // Where focus goes back to when the dialog closes.
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
   const setOpen = (next: boolean) => setOpenFor(next ? documentKey : null);
 
   /*
@@ -526,7 +531,7 @@ export function useAddToReleaseAction({
   /*
    * A DESCRIPTION and the handler that runs it, for the editor's action model
    * to place. This module renders no trigger, which is what lets the model put
-   * the action in the overflow menu beside Duplicate; a component drawing its
+   * the action on the Publish split's arrow; a component drawing its
    * own button decides that itself and cannot be told otherwise.
    *
    * It also keeps the control out of the editor's `<form>`. A `<button>` with
@@ -537,12 +542,20 @@ export function useAddToReleaseAction({
   const contributed: ContributedAction = {
     action: {
       id: "add-to-release",
-      label: "Add to release",
-      placement: "menu",
-      group: "document",
+      // It opens a dialog, so it ends in an ellipsis, as Schedule publish…
+      // beside it does.
+      label: "Add to release…",
+      // On the Publish split's arrow, beside Schedule publish…: both decide
+      // when this document goes live.
+      placement: "publish-menu",
       ...(disabledReason === undefined ? {} : { disabledReason }),
     },
-    binding: { onSelect: () => setOpen(true) },
+    binding: {
+      onSelect: () => {
+        setOpener(dialogOpenerOf(globalThis.document?.activeElement ?? null));
+        setOpen(true);
+      },
+    },
   };
 
   const dialog = (
@@ -555,6 +568,7 @@ export function useAddToReleaseAction({
       canRead={canRead}
       canPublishDocument={canPublishDocument}
       canUnpublishDocument={canUnpublishDocument}
+      opener={opener}
     />
   );
 

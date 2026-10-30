@@ -29,6 +29,7 @@ import { documentViewMount } from "@admin/components/features/entries/EntryForm/
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
+import { useSchedulePublishAction } from "@admin/components/features/releases/SchedulePublishAction";
 import {
   CONTENT_PAGE_MEASURE,
   CONTENT_MEASURE_LENGTH,
@@ -352,6 +353,18 @@ export default function EditEntryPage({
     // schema declares no lifecycle.
     lifecycleEnabled: collection?.status,
     onDefaultLocale: !isNonDefaultLocale,
+  });
+  // The Publish split's other way to publish: at a time, in a release of its
+  // own named after the entry.
+  const schedule = useSchedulePublishAction({
+    scopeKind: "collection",
+    scopeSlug: slug,
+    entryId: id,
+    lifecycleEnabled: collection?.status,
+    onDefaultLocale: !isNonDefaultLocale,
+    documentTitle: entry
+      ? entryTitleValue(entry, collection?.admin?.useAsTitle)
+      : undefined,
   });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
@@ -713,6 +726,7 @@ export default function EditEntryPage({
             </div>
           )}
           {release.dialog}
+          {schedule.dialog}
           <EntryForm
             /* A standing fact about the whole document, so a band across the
              editor's column directly under its header, read before the fields.
@@ -741,11 +755,12 @@ export default function EditEntryPage({
             onViewApi={() =>
               navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
             }
-            /* Contributed to the editor's action model, which places it in the
-             overflow menu beside Duplicate: scheduling a release is a
-             document-management act rather than a leading one, and the toolbar
-             is reserved for the verbs an author reaches for while writing. */
+            /* Contributed to the editor's action model, which places both on
+             the Publish split's arrow: they decide when this goes live, and
+             the toolbar is reserved for the verbs an author reaches for while
+             writing. Schedule first, the one most often reached for. */
             documentActions={[
+              ...(schedule.contributed === null ? [] : [schedule.contributed]),
               ...(release.contributed === null ? [] : [release.contributed]),
               ...(pin === null ? [] : [pin]),
             ]}
