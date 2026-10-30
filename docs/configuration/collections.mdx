@@ -372,6 +372,8 @@ Available view overrides: `Edit`, `List`. Available injection points: `BeforeLis
 
 Each CRUD operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to the database role/permission system.
 
+A collection's `read`, `update`, `delete`, `publish` and `unpublish` rules may also return a filter, which allows only the entries it matches, such as an author's own posts (experimental). See [Only their own entries](/docs/permissions#only-their-own-entries).
+
 A declared rule only narrows the role's permission. A signed-in user or an API key needs the permission for the operation first (`update-posts`), and the rule then lets them through only by returning `true`, so a rule adds your own condition and never admits someone whose role lacks the permission. A plugin-defined person, who holds no permissions, is judged by the rule alone. Don't decide by a role's name: a custom role holding the permission, and an API key whose roles carry none of the names, would be refused. See [Roles and Permissions](/docs/permissions#collection-access).
 
 ```typescript
