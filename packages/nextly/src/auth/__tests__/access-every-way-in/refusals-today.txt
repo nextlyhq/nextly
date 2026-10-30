@@ -826,7 +826,6 @@ service custom-role delete collection async-false at rest  404 NOT_FOUND error  
 service custom-role delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service custom-role delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service custom-role delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -859,7 +858,6 @@ service custom-role delete collection returns-false at rest  404 NOT_FOUND error
 service custom-role delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service custom-role delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service custom-role delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -987,7 +985,6 @@ service custom-role publish collection async-false at rest  404 NOT_FOUND error 
 service custom-role publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service custom-role publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service custom-role publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1024,7 +1021,6 @@ service custom-role publish collection returns-false at rest  404 NOT_FOUND erro
 service custom-role publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service custom-role publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service custom-role publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1216,7 +1212,6 @@ service custom-role unpublish collection async-false at rest  404 NOT_FOUND erro
 service custom-role unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service custom-role unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service custom-role unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1253,7 +1248,6 @@ service custom-role unpublish collection returns-false at rest  404 NOT_FOUND er
 service custom-role unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service custom-role unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service custom-role unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service custom-role unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1339,7 +1333,6 @@ service custom-role update collection async-false at route  403 FORBIDDEN error 
 service custom-role update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service custom-role update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service custom-role update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1385,7 +1378,6 @@ service custom-role update collection returns-false at route  403 FORBIDDEN erro
 service custom-role update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service custom-role update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service custom-role update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service custom-role update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service custom-role update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1588,7 +1580,6 @@ service key-full-access delete collection async-false at rest  404 NOT_FOUND err
 service key-full-access delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-full-access delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-full-access delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1621,7 +1612,6 @@ service key-full-access delete collection returns-false at rest  404 NOT_FOUND e
 service key-full-access delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-full-access delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-full-access delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1729,7 +1719,6 @@ service key-full-access publish collection async-false at rest  404 NOT_FOUND er
 service key-full-access publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-full-access publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-full-access publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1766,7 +1755,6 @@ service key-full-access publish collection returns-false at rest  404 NOT_FOUND 
 service key-full-access publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-full-access publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-full-access publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1930,7 +1918,6 @@ service key-full-access unpublish collection async-false at rest  404 NOT_FOUND 
 service key-full-access unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service key-full-access unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service key-full-access unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -1967,7 +1954,6 @@ service key-full-access unpublish collection returns-false at rest  404 NOT_FOUN
 service key-full-access unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service key-full-access unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-full-access unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service key-full-access unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2039,7 +2025,6 @@ service key-full-access update collection async-false at route  403 FORBIDDEN er
 service key-full-access update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-full-access update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-full-access update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2085,7 +2070,6 @@ service key-full-access update collection returns-false at route  403 FORBIDDEN 
 service key-full-access update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-full-access update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-full-access update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-full-access update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-full-access update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2525,7 +2509,6 @@ service key-partial publish collection async-false at rest  404 NOT_FOUND error 
 service key-partial publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-partial publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-partial publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2562,7 +2545,6 @@ service key-partial publish collection returns-false at rest  404 NOT_FOUND erro
 service key-partial publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-partial publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-partial publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-partial publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2909,7 +2891,6 @@ service key-partial update collection async-false at route  403 FORBIDDEN error 
 service key-partial update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-partial update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-partial update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -2955,7 +2936,6 @@ service key-partial update collection returns-false at route  403 FORBIDDEN erro
 service key-partial update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-partial update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-partial update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-partial update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-partial update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5160,7 +5140,6 @@ service key-role-based delete collection async-false at rest  404 NOT_FOUND erro
 service key-role-based delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-role-based delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-role-based delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5193,7 +5172,6 @@ service key-role-based delete collection returns-false at rest  404 NOT_FOUND er
 service key-role-based delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-role-based delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-role-based delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5311,7 +5289,6 @@ service key-role-based publish collection async-false at rest  404 NOT_FOUND err
 service key-role-based publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-role-based publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-role-based publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5348,7 +5325,6 @@ service key-role-based publish collection returns-false at rest  404 NOT_FOUND e
 service key-role-based publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-role-based publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-role-based publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5526,7 +5502,6 @@ service key-role-based unpublish collection async-false at rest  404 NOT_FOUND e
 service key-role-based unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service key-role-based unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service key-role-based unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5563,7 +5538,6 @@ service key-role-based unpublish collection returns-false at rest  404 NOT_FOUND
 service key-role-based unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service key-role-based unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service key-role-based unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5642,7 +5616,6 @@ service key-role-based update collection async-false at route  403 FORBIDDEN err
 service key-role-based update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-role-based update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5688,7 +5661,6 @@ service key-role-based update collection returns-false at route  403 FORBIDDEN e
 service key-role-based update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-role-based update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5896,7 +5868,6 @@ service key-role-based-super-admin delete collection async-false at rest  404 NO
 service key-role-based-super-admin delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service key-role-based-super-admin delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service key-role-based-super-admin delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -5929,7 +5900,6 @@ service key-role-based-super-admin delete collection returns-false at rest  404 
 service key-role-based-super-admin delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service key-role-based-super-admin delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service key-role-based-super-admin delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6057,7 +6027,6 @@ service key-role-based-super-admin publish collection async-false at rest  404 N
 service key-role-based-super-admin publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service key-role-based-super-admin publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service key-role-based-super-admin publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6094,7 +6063,6 @@ service key-role-based-super-admin publish collection returns-false at rest  404
 service key-role-based-super-admin publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service key-role-based-super-admin publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service key-role-based-super-admin publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6286,7 +6254,6 @@ service key-role-based-super-admin unpublish collection async-false at rest  404
 service key-role-based-super-admin unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service key-role-based-super-admin unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service key-role-based-super-admin unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6323,7 +6290,6 @@ service key-role-based-super-admin unpublish collection returns-false at rest  4
 service key-role-based-super-admin unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service key-role-based-super-admin unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service key-role-based-super-admin unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service key-role-based-super-admin unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6409,7 +6375,6 @@ service key-role-based-super-admin update collection async-false at route  403 F
 service key-role-based-super-admin update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based-super-admin update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service key-role-based-super-admin update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -6455,7 +6420,6 @@ service key-role-based-super-admin update collection returns-false at route  403
 service key-role-based-super-admin update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service key-role-based-super-admin update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service key-role-based-super-admin update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service key-role-based-super-admin update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -7825,7 +7789,6 @@ service user-partial publish collection async-false at rest  404 NOT_FOUND error
 service user-partial publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service user-partial publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service user-partial publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -7862,7 +7825,6 @@ service user-partial publish collection returns-false at rest  404 NOT_FOUND err
 service user-partial publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service user-partial publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-partial publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service user-partial publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8223,7 +8185,6 @@ service user-partial update collection async-false at route  403 FORBIDDEN error
 service user-partial update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service user-partial update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service user-partial update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8269,7 +8230,6 @@ service user-partial update collection returns-false at route  403 FORBIDDEN err
 service user-partial update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-partial update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service user-partial update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-partial update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service user-partial update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8472,7 +8432,6 @@ service user-with delete collection async-false at rest  404 NOT_FOUND error  mi
 service user-with delete collection async-false at route  403 FORBIDDEN error  | You can't delete c async falses.
 service user-with delete collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection async-filter at route  403 FORBIDDEN error  | You can't delete c async filters.
 service user-with delete collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8505,7 +8464,6 @@ service user-with delete collection returns-false at rest  404 NOT_FOUND error  
 service user-with delete collection returns-false at route  403 FORBIDDEN error  | You can't delete c returns falses.
 service user-with delete collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with delete collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with delete collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with delete collection returns-filter at route  403 FORBIDDEN error  | You can't delete c returns filters.
 service user-with delete collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8613,7 +8571,6 @@ service user-with publish collection async-false at rest  404 NOT_FOUND error  m
 service user-with publish collection async-false at route  403 FORBIDDEN error  | You can't publish c async falses.
 service user-with publish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with publish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with publish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection async-filter at route  403 FORBIDDEN error  | You can't publish c async filters.
 service user-with publish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8650,7 +8607,6 @@ service user-with publish collection returns-false at rest  404 NOT_FOUND error 
 service user-with publish collection returns-false at route  403 FORBIDDEN error  | You can't publish c returns falses.
 service user-with publish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with publish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with publish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with publish collection returns-filter at route  403 FORBIDDEN error  | You can't publish c returns filters.
 service user-with publish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8814,7 +8770,6 @@ service user-with unpublish collection async-false at rest  404 NOT_FOUND error 
 service user-with unpublish collection async-false at route  403 FORBIDDEN error  | You can't unpublish c async falses.
 service user-with unpublish collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with unpublish collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with unpublish collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection async-filter at route  403 FORBIDDEN error  | You can't unpublish c async filters.
 service user-with unpublish collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8851,7 +8806,6 @@ service user-with unpublish collection returns-false at rest  404 NOT_FOUND erro
 service user-with unpublish collection returns-false at route  403 FORBIDDEN error  | You can't unpublish c returns falses.
 service user-with unpublish collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with unpublish collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
-service user-with unpublish collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with unpublish collection returns-filter at route  403 FORBIDDEN error  | You can't unpublish c returns filters.
 service user-with unpublish collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8923,7 +8877,6 @@ service user-with update collection async-false at route  403 FORBIDDEN error  |
 service user-with update collection async-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection async-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection async-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service user-with update collection async-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection async-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection async-filter at route  403 FORBIDDEN error  | You can't edit c async filters.
 service user-with update collection async-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.
@@ -8969,7 +8922,6 @@ service user-with update collection returns-false at route  403 FORBIDDEN error 
 service user-with update collection returns-false at service  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection returns-filter at direct outside  404 NOT_FOUND thrown  missing=same  | Not found.
 service user-with update collection returns-filter at lock  404 NOT_FOUND error  missing=same  | Not found.
-service user-with update collection returns-filter at rest  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection returns-filter at rest outside  404 NOT_FOUND error  missing=same  | Not found.
 service user-with update collection returns-filter at route  403 FORBIDDEN error  | You can't edit c returns filters.
 service user-with update collection returns-filter at service outside  404 NOT_FOUND thrown  missing=same  | Not found.

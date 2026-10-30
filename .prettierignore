@@ -20,6 +20,11 @@ coverage/
 # Generated files
 *.tsbuildinfo
 *.d.ts
+# The admin's component map and its list: `nextly generate:types --check`
+# reads the map one entry a line, so a line wrapped by formatting reads as a
+# map out of date.
+**/plugin-admin-imports.generated.ts
+**/plugin-admin-components.generated.ts
 
 # Template files (contain {{placeholder}} markers that aren't valid syntax)
 packages/create-nextly-app/templates/
