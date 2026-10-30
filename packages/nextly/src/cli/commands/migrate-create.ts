@@ -111,14 +111,19 @@ import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
 import { CORE_TABLE_NAMES } from "../../schemas/core-schema";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
-import { createContext, type CommandContext } from "../program";
 import {
-  getDialectDisplayName,
-  validateDatabaseEnv,
-  type SupportedDialect,
-} from "../utils/adapter";
+  migrationCreateCancelled,
+  migrationNameRequired,
+} from "../errors/areas/migrate-create";
+import { exitWithError } from "../errors/index";
+import { createContext, type CommandContext } from "../program";
+import { getDialectDisplayName, type SupportedDialect } from "../utils/adapter";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
 import { bundleAndRequire } from "../utils/config-bundler";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import { loadConfig } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 // ============================================================================
@@ -225,6 +230,7 @@ export async function runMigrateCreate(
       publicMessage:
         "--no-transaction writes a blank migration file (with --blank) or a plugin module (with --plugin). A generated migration file is not marked: marking it changes the contents its snapshot was taken over. Put the statements that need to run outside a transaction in a file of their own: nextly migrate:create --blank --no-transaction.",
       statusCode: 400,
+      logContext: { reason: "no-transaction-not-blank" },
     });
   }
 
@@ -235,43 +241,25 @@ export async function runMigrateCreate(
   // F11 PR 3: dialect comes from DATABASE_URL (no DB connection needed —
   // we just need to know which SQL flavor to emit). validateDatabaseEnv
   // handles the parsing without opening a connection.
-  const dbValidation = validateDatabaseEnv();
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables. " +
-        "(migrate:create does not connect to the DB but needs the dialect to emit the right SQL.)"
-    );
-    process.exit(1);
-  }
-  const dialect = dbValidation.dialect!;
+  const dbValidation = requireDatabaseEnv(logger);
+  const dialect = dbValidation.dialect;
 
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
   const name = options.name ?? nameArg;
   if (!options.blank && !name) {
-    logger.error(
-      "--name is required for non-blank migrations. " +
-        "Use --blank to create an empty migration without a name, or pass --name=<slug>."
-    );
-    process.exit(1);
+    exitWithError(logger, migrationNameRequired());
   }
 
   // Load config.
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -340,8 +328,7 @@ export async function runMigrateCreate(
       uiSchemaFile: configResult.config.db.uiSchemaFile,
     });
   } catch (error) {
-    logger.error(`Failed to load UI schema: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   // Materialize plugin extends that target Builder-made entities (P8): append
@@ -485,11 +472,10 @@ export async function runMigrateCreate(
     // migration: Cancelled by user." stack-style message.
     if (error instanceof PromptCancelledError) {
       // The prompt-renames helper already printed clack's `cancel()`
-      // message before throwing. Just exit.
-      process.exit(1);
+      // message before throwing; the error says what it left undone.
+      exitWithError(logger, migrationCreateCancelled());
     }
-    logger.error(`Failed to generate migration: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   if (result === null) {
@@ -731,6 +717,7 @@ async function buildPluginDraft(args: {
         `Singles or field groups, what the hook adds to it is migrated by the APP: \`nextly migrate:create\` ` +
         `in the app writes it, whoever contributed it. Guard the hook with ` +
         `\`schema.getTable("${missing}")\` so it skips the table when compiled for this module.`,
+      logContext: { reason: "plugin-extend-target-outside", target: missing },
     });
   }
 }
@@ -873,7 +860,7 @@ function pluginDefinitionFrom(
         .join(
           ", "
         )}). Point --plugin at a file that exports one, or export it as the default.`,
-      logContext: { entry },
+      logContext: { reason: "plugin-entry-exports-several", entry },
     });
   }
   if (named.length === 1) return named[0][1] as Partial<PluginDefinition>;
@@ -906,6 +893,7 @@ async function loadPluginEntry(
       code: "INVALID_INPUT",
       publicMessage: `The plugin entry ${relative(cwd, entryPath)} exports no definition with a name, so its migrations cannot be attributed.`,
       statusCode: 400,
+      logContext: { reason: "plugin-entry-unnamed" },
     });
   }
   if (typeof definition.schemaVersion !== "number") {
@@ -913,6 +901,7 @@ async function loadPluginEntry(
       code: "INVALID_INPUT",
       publicMessage: `Plugin "${definition.name}" declares no schemaVersion. A plugin needs one before migrations can be generated for it.`,
       statusCode: 400,
+      logContext: { reason: "plugin-schema-version-missing" },
     });
   }
   return definition as GeneratablePlugin;
@@ -975,6 +964,11 @@ async function loadShippedMigrations(
         `Generation stops here rather than treating it as a first generation — doing that would rewrite the barrel and orphan the modules it lists. ` +
         `Fix the barrel (or the module it imports) and run this again.`,
       statusCode: 400,
+      logContext: {
+        reason: "plugin-migrations-barrel-unreadable",
+        barrel: relative(cwd, barrelPath),
+        detail: describeError(error),
+      },
     });
   }
   const shipped = (loaded.mod as { migrations?: PluginMigration[] }).migrations;
@@ -1366,8 +1360,7 @@ export function registerMigrateCreateCommand(program: Command): void {
         try {
           await runMigrateCreate(positionalName, resolvedOptions, context);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );

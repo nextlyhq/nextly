@@ -633,9 +633,16 @@ function buildRoute<TNode>(
         } catch (error) {
           // An access-restricted collection has no PUBLIC paths to pre-render —
           // skip it (its entries render on demand, enforced per request) rather
-          // than fail the build. Any non-access error still surfaces.
+          // than fail the build. The refusal is a 403, or AUTH_REQUIRED where
+          // the anonymous reader is asked to sign in; any other 401, such as an
+          // invalid credential, and any non-access error still surface.
           // `NextlyError.is` matches across bundled package copies.
-          if (NextlyError.is(error) && error.statusCode === 403) break;
+          if (
+            (NextlyError.is(error) && error.statusCode === 403) ||
+            NextlyError.isCode(error, "AUTH_REQUIRED")
+          ) {
+            break;
+          }
           throw error;
         }
         for (const item of result.items) {

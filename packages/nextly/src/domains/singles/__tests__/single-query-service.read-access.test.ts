@@ -73,7 +73,7 @@ function createService(
     fields: [textField("siteName")],
   });
 
-  const rbac = createMockRBACService(rbacAllows);
+  const rbac = createMockRBACService();
   if (readRule) rbac.getRegisteredAccess.mockReturnValue({ read: readRule });
 
   const service = new SingleQueryService(
@@ -188,7 +188,8 @@ describe("SingleQueryService.get — the read gate", () => {
       logger: createSilentLogger() as never,
     });
 
-    expect(denied?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(denied?.statusCode).toBe(401);
     // Refused before the rule is asked.
     expect(publishRule).not.toHaveBeenCalled();
   });

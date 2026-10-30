@@ -1,0 +1,23 @@
+---
+title: CONFIG_SYNTAX_ERROR
+description: "The configuration file is not valid TypeScript, so it could not be compiled."
+---
+
+## Cause
+
+The configuration file is not valid TypeScript, so it could not be compiled.
+
+The CLI compiles `nextly.config.ts`, and every file it imports, before it reads anything from it. A syntax error anywhere in them stops the command before it does any work. The Why line gives the file, line and column of each error.
+
+## Fix
+
+Open the file at the line and column the error names, correct the code there, and run the command again. Your editor or `tsc --noEmit` reports the same error.
+
+## Example
+
+```text
+✗ `nextly.config.ts` has a syntax error, so it could not be read.
+  Why:  nextly.config.ts:3:20: Expected "}" but found "fields"
+  Next: Fix line 3 of `nextly.config.ts`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)
+```

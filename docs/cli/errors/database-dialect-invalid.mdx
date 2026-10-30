@@ -1,0 +1,23 @@
+---
+title: DATABASE_DIALECT_INVALID
+description: "`DB_DIALECT` names a database Nextly does not support."
+---
+
+## Cause
+
+`DB_DIALECT` names a database Nextly does not support.
+
+Nextly runs on PostgreSQL, MySQL and SQLite, and `DB_DIALECT` must name one of them exactly: `postgresql`, `mysql` or `sqlite`.
+
+## Fix
+
+Set `DB_DIALECT` to `postgresql`, `mysql` or `sqlite`, or remove it, and the CLI tells the database from `DATABASE_URL`.
+
+## Example
+
+```text
+✗ `DB_DIALECT` is `mssql`, which is not a database Nextly supports.
+  Why:  Nextly runs on PostgreSQL, MySQL and SQLite.
+  Next: Set `DB_DIALECT` to `postgresql`, `mysql` or `sqlite`, or remove it to read the type from `DATABASE_URL`.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-dialect-invalid  (DATABASE_DIALECT_INVALID)
+```
