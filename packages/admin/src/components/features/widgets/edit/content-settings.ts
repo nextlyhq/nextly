@@ -133,13 +133,45 @@ function unfitField(
   return unfitContentField(setting.type, fieldsNamedBy(setting, value), source);
 }
 
-/** Whether every field a dependent setting's value names is one it may use here. */
-function valueFits(
+/**
+ * The first field a dependent setting's value names that the collection the
+ * form holds for it does not offer it, with that collection's source; or
+ * `undefined` where every field fits, and where the collection has no source
+ * to judge by.
+ */
+function unavailableField(
   setting: DependentSetting,
-  value: unknown,
-  source: PublishedContentSource
-): boolean {
-  return unfitField(setting, value, source) === undefined;
+  values: Readonly<Record<string, unknown>>,
+  sources: readonly PublishedContentSource[]
+): { field: string; source: PublishedContentSource } | undefined {
+  const source = sources.find(
+    candidate => candidate.collection === values[setting.of]
+  );
+  if (source === undefined) return undefined;
+  const field = unfitField(setting, values[setting.name], source);
+  return field === undefined ? undefined : { field, source };
+}
+
+/**
+ * Why a Field setting's value cannot be saved, or `undefined`: it names a
+ * field the collection the form holds now does not offer this reader. The
+ * field-fit rule is core's (`unfitContentField`), the one the layout write
+ * refuses such a value by, and the words are the ones it refuses it with, so
+ * a value it would refuse is named under its own control instead.
+ *
+ * Judged where the sheet judges a stale value (`staleContentValues`): nothing
+ * while the sources have not arrived, or over a collection with no source.
+ */
+export function unavailableFieldProblem(
+  setting: AnyWidgetSetting,
+  values: Readonly<Record<string, unknown>>,
+  sources: readonly PublishedContentSource[] | undefined
+): string | undefined {
+  if (setting.type !== "field" || sources === undefined) return undefined;
+  if (unavailableField(setting, values, sources) === undefined) {
+    return undefined;
+  }
+  return `"${setting.label ?? setting.name}" names a field that is not available.`;
 }
 
 /**
@@ -208,14 +240,10 @@ function staleDependent(
   values: Readonly<Record<string, unknown>>,
   sources: readonly PublishedContentSource[]
 ): StaleContentValue | undefined {
+  const unavailable = unavailableField(setting, values, sources);
+  if (unavailable === undefined) return undefined;
+  const { field, source } = unavailable;
   const value = values[setting.name];
-  const source = sources.find(
-    candidate => candidate.collection === values[setting.of]
-  );
-  if (source === undefined || valueFits(setting, value, source)) {
-    return undefined;
-  }
-  const field = unfitField(setting, value, source);
   const label = setting.label ?? setting.name;
   const isDefault = sameSettingValue(value, setting.defaultValue);
   // Replaced by the rule the server applies before a card's `load` is handed
