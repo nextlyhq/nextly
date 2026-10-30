@@ -111,18 +111,21 @@ for (const dialect of getConfiguredTestDialects()) {
         { slug: held, label: "Holds the table", fields: FIELDS }
       );
 
-      // Rejected for the reason that is true — a table conflict — rather than by whatever the
-      // database says when the unique index on `table_name` stops the insert. The distinction is
-      // the whole point: reaching the insert means the DDL and the runtime re-registration have
-      // already run, and the second of those rebinds the EXISTING field group to this request's
-      // fields.
+      // Refused before any DDL, naming both addresses, rather than by whatever the database says
+      // when the unique index on `table_name` stops the insert. The distinction is the whole point:
+      // reaching the insert means the DDL and the runtime re-registration have already run, and the
+      // second of those rebinds the EXISTING field group to this request's fields. The address rule
+      // sees the two share a snake_case form before the table check sees they share a table.
       await expect(
         current.nextly.fieldGroups.create({
           slug: collides,
           label: "Wants the same table",
           fields: [{ name: "different", type: "text" }],
         })
-      ).rejects.toMatchObject({ code: "DUPLICATE" });
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: { errors: [{ code: "SLUG_SAME_SNAKE_CASE" }] },
+      });
 
       // The field group that owns the table is untouched, which is what a refusal before the DDL
       // buys. Its own fields still describe it.
