@@ -54,7 +54,7 @@ import { toDbError } from "../../../database/errors";
 // CollectionEntryService facade and CollectionBulkService still consume it;
 // only the internal error mapping changed. fromDatabaseError keeps driver
 // text out of the wire and routes identifying detail to logContext (§13.8).
-import { NextlyError } from "../../../errors";
+import { NEXTLY_ERROR_STATUS, NextlyError } from "../../../errors";
 import {
   errorEnvelopeFields,
   errorFromServiceEnvelope,
@@ -365,6 +365,27 @@ function emitCollectionEvent(
   }
 }
 
+/** A write's words for an entry that is not there, naming it in a batch item. */
+function missingEntryMessage(entryId: string, identify: boolean): string {
+  return identify ? `Entry not found: ${entryId}` : "Entry not found";
+}
+
+/**
+ * A batch item's refusal answered as missing, in the words its missing entry
+ * gets, so an entry the caller may not read cannot be told apart from one
+ * that is not there. Any other refusal is returned as it is.
+ */
+function asMissingItem<T>(
+  refused: CollectionServiceResult<T>,
+  entryId: string,
+  identify: boolean
+): CollectionServiceResult<T> {
+  if (!identify || refused.statusCode !== NEXTLY_ERROR_STATUS.NOT_FOUND) {
+    return refused;
+  }
+  return { ...refused, message: missingEntryMessage(entryId, identify) };
+}
+
 /**
  * Convert any thrown error into the legacy CollectionServiceResult shape.
  *
@@ -555,9 +576,19 @@ interface DeleteEntryWriteParams {
 }
 
 /** The only things that differ between the two delete entry points. */
+/**
+ * A batch's delete gate, asked once before its transaction opened, where its
+ * rule answered a filter: each row is matched against it under its lock.
+ */
+export interface DeleteRowFilter {
+  readonly denied: null;
+  readonly filter: RuleFilter;
+  readonly read?: ReadReach;
+}
+
 interface DeleteEntryWriteOptions {
   /** Which shape of the row gate to apply — see the comment at its use. */
-  rowGate: "access-service" | "batch-hoisted";
+  rowGate: "access-service" | "batch-hoisted" | DeleteRowFilter;
   /** Run user hooks. Access and recording are NOT hooks and always run. */
   runHooks: boolean;
   /** Name the missing id in a 404, so a failing batch item is identifiable. */
@@ -4063,6 +4094,14 @@ export class CollectionMutationService extends BaseService {
     /** Who discarded it, for the document's history. */
     actor?: RequestActor;
     user?: UserContext;
+    /**
+     * Ask the update `user` was authorized for again under the lock, so a
+     * change since the caller judged it cannot move the entry out of an
+     * update rule's filter and still have its pending change removed. Set by
+     * a caller that authorized the discard as `user`'s update; without it,
+     * authorization stays the caller's concern.
+     */
+    updateUnderLock?: { authenticatedScope?: AuthenticatedScope };
   }): Promise<number> {
     // Refused first when the collection is removed from code, before any hook
     // or read of the entry, so a refused write changes nothing.
@@ -4076,6 +4115,26 @@ export class CollectionMutationService extends BaseService {
       // Serialize with concurrent draft-save upserts, which lock this same parent
       // row before writing the sidecar.
       await tx.lockRow(tableName, params.entryId);
+      if (params.updateUnderLock) {
+        // Route authorization already ran, so only the coarse re-check is
+        // skipped; the document's own rules and their filter are asked here.
+        const denied = await this.refusalOfWriteInTransaction(
+          tx,
+          {
+            collectionName: params.collectionName,
+            operation: "update",
+            entryId: params.entryId,
+            user: params.user,
+            overrideAccess: false,
+            routeAuthorized: true,
+            authenticatedScope: params.updateUnderLock.authenticatedScope,
+            executor: tx.getDrizzle(),
+          },
+          [],
+          params.locale ?? undefined
+        );
+        if (denied) throw errorFromServiceEnvelope(denied);
+      }
       const draftLocale = workingDraftLocale({
         documentLocalized:
           (collection as { localized?: boolean }).localized === true,
@@ -4140,15 +4199,21 @@ export class CollectionMutationService extends BaseService {
     // or read of the entry, so a refused write changes nothing.
     await refuseWriteIfRemovedFromCode("collection", params.collectionName);
     try {
-      const accessDenied =
-        await this.accessService.checkCollectionAccess<TakenLiveValues>({
+      // An update of this entry: a rule that answers a filter allows it only
+      // where the filter matches the entry as it is stored, in the language
+      // whose pending change it writes.
+      const accessDenied = await this.refusalOfStoredUpdate<TakenLiveValues>(
+        {
           collectionName: params.collectionName,
           operation: "update",
+          entryId: params.entryId,
           user: params.overrideAccess ? undefined : params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
           authenticatedScope: params.authenticatedScope,
-        });
+        },
+        params.locale ?? undefined
+      );
       if (accessDenied) return accessDenied;
       const collection = await this.collectionService.getCollection(
         params.collectionName
@@ -4242,6 +4307,25 @@ export class CollectionMutationService extends BaseService {
     // The lock every save and publish of this document takes, so the live
     // values read here are the ones the next publish compares with.
     await tx.lockRow(tableName, params.entryId);
+    // The update asked again on the locked row, so a change since it was
+    // judged above cannot move the entry out of a filter and still have its
+    // pending change written.
+    const deniedUnderLock = await this.refusalOfWriteInTransaction(
+      tx,
+      {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: params.overrideAccess ? undefined : params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        executor: tx.getDrizzle(),
+      },
+      [],
+      params.locale ?? undefined
+    );
+    if (deniedUnderLock) throw errorFromServiceEnvelope(deniedUnderLock);
     const pending = await new VersionsRepository(tx).findWorkingDraft(
       ref,
       draftLocale
@@ -7625,6 +7709,12 @@ export class CollectionMutationService extends BaseService {
      * super-admin-owned key when this gate authorizes a version-label edit.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * The language the caller's write acts in: a filter on a translated field
+     * is matched in it, so an autosave in German is held to the German
+     * entry. The default language where it names none.
+     */
+    locale?: string;
   }): Promise<boolean> {
     // Loaded because the hooks below are shown the row as it stands, and a
     // write to a row that is not there is a not-found rather than a refusal.
@@ -7638,20 +7728,58 @@ export class CollectionMutationService extends BaseService {
     // the difference between them be probed.
     if (!existingEntry) return false;
 
-    const denied = await this.accessService.checkCollectionAccess({
-      collectionName: params.collectionName,
-      operation: "update",
-      entryId: params.entryId,
-      user: params.user,
-      // Never overridden: this exists to APPLY the document's rules, so a
-      // caller that could opt out of them would defeat the point.
-      overrideAccess: false,
-      routeAuthorized: params.routeAuthorized,
-      // A scoped API key is judged on its own update grant, so the session
-      // super-admin bypass does not apply to a super-admin-owned key here.
-      authenticatedScope: params.authenticatedScope,
-    });
+    const denied = await this.refusalOfStoredUpdate(
+      {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: params.user,
+        // Never overridden: this exists to APPLY the document's rules, so a
+        // caller that could opt out of them would defeat the point.
+        overrideAccess: false,
+        routeAuthorized: params.routeAuthorized,
+        // A scoped API key is judged on its own update grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        authenticatedScope: params.authenticatedScope,
+      },
+      params.locale
+    );
     return denied === null;
+  }
+
+  /**
+   * The refusal of an update of `params.entryId` as it is stored, or `null`
+   * where the caller may make it: the update gate's own refusal, or, where
+   * its rule answers a filter, that of an entry the filter does not match, in
+   * words where the caller may read it and as a missing entry where it may
+   * not. A filter on a translated field is matched in `locale`, the language
+   * the update acts in, or in the default where it names none.
+   */
+  private async refusalOfStoredUpdate<T>(
+    params: FilteredWriteCheck["params"],
+    locale?: string
+  ): Promise<CollectionServiceResult<T> | null> {
+    const access = await this.accessService.checkCollectionWrite<T>(params);
+    if (access.denied) return access.denied;
+    const schema = (await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    )) as Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
+    const match = await this.prepareFilteredWrite(
+      params.collectionName,
+      params.operation,
+      schema,
+      access,
+      { locale }
+    );
+    if (!match) return null;
+    const judged = await this.judgedAgainstWriteFilter<T>(
+      this.db,
+      schema,
+      String(params.entryId),
+      match,
+      params
+    );
+    return judged.refusal;
   }
 
   /**
@@ -11766,16 +11894,24 @@ export class CollectionMutationService extends BaseService {
    * `params` names, asked on that transaction: the gate's own refusal or,
    * where its rule answers a filter, that of an entry outside it. An entry
    * inside the filter has it added to `filteredWrites`, which the written row
-   * is matched against again before the write may stand.
+   * is matched against again before the write may stand. A filter on a
+   * translated field is matched in `locale`, or in the default.
    */
   private async refusalOfWriteInTransaction(
     tx: TransactionContext,
     params: FilteredWriteCheck["params"],
-    filteredWrites: FilteredTransactionWrite[]
+    filteredWrites: FilteredTransactionWrite[],
+    locale?: string
   ): Promise<CollectionServiceResult | null> {
     const access = await this.accessService.checkCollectionWrite(params);
     if (access.denied) return access.denied;
-    return this.refusalOutsideFilterOfWrite(tx, params, access, filteredWrites);
+    return this.refusalOutsideFilterOfWrite(
+      tx,
+      params,
+      access,
+      filteredWrites,
+      locale
+    );
   }
 
   /**
@@ -11788,13 +11924,15 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     params: FilteredWriteCheck["params"],
     access: { filter?: RuleFilter; read?: ReadReach },
-    filteredWrites: FilteredTransactionWrite[]
+    filteredWrites: FilteredTransactionWrite[],
+    locale?: string
   ): Promise<CollectionServiceResult | null> {
     const prepared = await this.matchInTransaction(
       tx,
       params.operation,
       access,
-      params.collectionName
+      params.collectionName,
+      locale
     );
     if (!prepared) return null;
     const judged = await this.judgedAgainstWriteFilter(
@@ -11885,7 +12023,8 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     action: FilteredWrite,
     access: { filter?: RuleFilter; read?: ReadReach },
-    collectionName: string
+    collectionName: string,
+    locale?: string
   ): Promise<
     | {
         schema: Record<string, SQLWrapper | undefined> & { id: SQLWrapper };
@@ -11904,7 +12043,7 @@ export class CollectionMutationService extends BaseService {
       action,
       schema,
       access,
-      { executor }
+      { executor, locale }
     );
     return match ? { schema, match } : undefined;
   }
@@ -13293,7 +13432,9 @@ export class CollectionMutationService extends BaseService {
         // may also name are never stored, and no hook is handed a value sent by
         // a caller judged without update.
         if (gate !== "update") body = { status: body.status };
-        if (denied) return denied;
+        if (denied) {
+          return asMissingItem(denied, entryId, options.identifyMissingEntry);
+        }
         if (gate !== "update") rowAllowed = gate;
       }
 
@@ -13319,9 +13460,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -13332,7 +13471,9 @@ export class CollectionMutationService extends BaseService {
           rowFilter.access,
           filteredWrites
         );
-        if (outside) return outside;
+        if (outside) {
+          return asMissingItem(outside, entryId, options.identifyMissingEntry);
+        }
       }
 
       let currentData: Record<string, unknown> = { ...body };
@@ -13853,9 +13994,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14555,9 +14694,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14568,8 +14705,8 @@ export class CollectionMutationService extends BaseService {
 
       if (options.rowGate === "batch-hoisted") {
         // Nothing to re-check per row: the batch caller hoists the
-        // collection-level delete gate out of its loop, and no row-ownership
-        // rule remains for a safety net to compare against.
+        // collection-level delete gate out of its loop, and its rule answered
+        // no filter to match the row against.
       } else {
         // The transaction API asks the access service for the whole verdict,
         // with the caller's `overrideAccess` as the create and update paths
@@ -14585,11 +14722,20 @@ export class CollectionMutationService extends BaseService {
           overrideAccess: params.overrideAccess,
           executor: tx.getDrizzle(),
         };
-        const access = await this.accessService.checkCollectionWrite<{
-          deleted: boolean;
-        }>(accessParams);
+        // A batch asked its gate before its transaction opened and hands each
+        // row the filter it answered; anything else asks here.
+        const access =
+          options.rowGate === "access-service"
+            ? await this.accessService.checkCollectionWrite<{
+                deleted: boolean;
+              }>(accessParams)
+            : options.rowGate;
         if (access.denied) {
-          return access.denied;
+          return asMissingItem(
+            access.denied,
+            entryId,
+            options.identifyMissingEntry
+          );
         }
         // A delete rule's filter allows only the entries it matches. Matched on
         // the caller's transaction under the row lock, before any hook runs.
@@ -14597,7 +14743,13 @@ export class CollectionMutationService extends BaseService {
           const refused = await this.refusalOutsideFilterInTransaction<{
             deleted: boolean;
           }>(tx, tableName, entryId, access, accessParams);
-          if (refused) return refused;
+          if (refused) {
+            return asMissingItem(
+              refused,
+              entryId,
+              options.identifyMissingEntry
+            );
+          }
         }
       }
 
@@ -14694,9 +14846,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -14738,9 +14888,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: false,
           statusCode: 404,
-          message: options.identifyMissingEntry
-            ? `Entry not found: ${entryId}`
-            : "Entry not found",
+          message: missingEntryMessage(entryId, options.identifyMissingEntry),
           data: null,
         };
       }
@@ -15046,11 +15194,12 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     params: DeleteEntryWriteParams,
     entryId: string,
-    skipHooks: boolean
+    skipHooks: boolean,
+    rowGate: "batch-hoisted" | DeleteRowFilter = "batch-hoisted"
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.deleteEntryWrite(tx, params, entryId, {
-        rowGate: "batch-hoisted",
+        rowGate,
         runHooks: !skipHooks,
         identifyMissingEntry: true,
         failureMessage: "Failed to delete entry",
