@@ -697,11 +697,7 @@ function WidgetCardHeader({
       // No rule under the header: a divider is the difference between a card and a panel.
       noBorder
       data-testid="widget-card-header"
-      className={cn(
-        FRAME_HEADER.className,
-        "shrink-0 flex-row items-center gap-2 space-y-0 p-0",
-        collapsed && "sr-only"
-      )}
+      className={headerClassName(collapsed)}
     >
       {leading && <span className="-ml-2 shrink-0">{leading}</span>}
       <div className="min-w-0 flex-1">
@@ -713,18 +709,7 @@ function WidgetCardHeader({
           className="flex min-w-0 items-baseline gap-1.5 text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
           <span className="truncate">{title}</span>
-          {titleCount !== undefined && (
-            <>
-              <span
-                aria-hidden
-                className="shrink-0 text-xs font-normal text-muted-foreground"
-                data-testid="widget-card-title-count"
-              >
-                {titleCount}
-              </span>
-              <span className="sr-only">{titleCountSpoken(titleCount)}</span>
-            </>
-          )}
+          <TitleCountMark count={titleCount} />
         </h2>
         {subtitle && (
           <p
@@ -747,6 +732,32 @@ function WidgetCardHeader({
       )}
       {headerAction && <span className="shrink-0">{headerAction}</span>}
     </CardHeader>
+  );
+}
+
+/** The header's classes: kept for assistive technology only while the card is collapsed. */
+function headerClassName(collapsed: boolean): string {
+  return cn(
+    FRAME_HEADER.className,
+    "shrink-0 flex-row items-center gap-2 space-y-0 p-0",
+    collapsed && "sr-only"
+  );
+}
+
+/** The count beside the title, muted, and read after it as ", N items"; nothing without one. */
+function TitleCountMark({ count }: { count: TitleCount | undefined }) {
+  if (count === undefined) return null;
+  return (
+    <>
+      <span
+        aria-hidden
+        className="shrink-0 text-xs font-normal text-muted-foreground"
+        data-testid="widget-card-title-count"
+      >
+        {count}
+      </span>
+      <span className="sr-only">{titleCountSpoken(count)}</span>
+    </>
   );
 }
 
