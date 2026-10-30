@@ -99,6 +99,10 @@ async function generate(
   vi.spyOn(context.logger, "error").mockImplementation((message: string) => {
     errors.push(message);
   });
+  // The error a command ends with is printed on standard error, in the error shape.
+  vi.spyOn(console, "error").mockImplementation(message => {
+    errors.push(String(message));
+  });
   let exited: string | undefined;
   try {
     await runMigrateCreate(

@@ -474,8 +474,7 @@ export async function runMigrateCreate(
           }),
       });
     } catch (error) {
-      logger.error(describeError(error, { context: false }));
-      process.exit(1);
+      exitWithError(logger, error);
     }
   }
 
