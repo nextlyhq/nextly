@@ -104,8 +104,11 @@ export interface MediaLibraryToolbarProps {
     onToggleColumn: (key: string) => void;
   };
   folderTree: { visible: boolean; onToggle: () => void };
-  /** `allowed` is false for a reader: no Upload is offered. */
-  upload: { allowed: boolean; open: boolean; onToggle: () => void };
+  /**
+   * `allowed` is false for a reader: no Upload is offered. `onUpload` opens
+   * the file chooser; what is chosen goes to the upload tray.
+   */
+  upload: { allowed: boolean; onUpload: () => void };
 }
 
 /**
@@ -472,8 +475,7 @@ export function MediaLibraryToolbar({
         {upload.allowed && (
           <Button
             size="icon"
-            onClick={upload.onToggle}
-            aria-expanded={upload.open}
+            onClick={upload.onUpload}
             // Named here because the words below are hidden on a narrow row,
             // and an icon alone names nothing.
             aria-label="Upload files"

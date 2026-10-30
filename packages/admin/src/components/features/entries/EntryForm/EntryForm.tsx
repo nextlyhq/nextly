@@ -10,7 +10,8 @@
  * - DocumentTitleBlock for the title and, on an entry, the slug under it
  * - EntryMetaStrip for the document id where the panel is not on screen
  * - EntryFormContent for field rendering (Builder-defined fields only)
- * - EntryFormSidebar for system metadata (Document panel only)
+ * - EntryFormSidebar for the document panel's sections, framed docked,
+ *   floating or as a sheet by DocumentSidePanel
  *
  * Supports both standalone (page) and embedded (modal) modes.
  *
@@ -74,10 +75,10 @@ import { DocumentBanners } from "./DocumentBanners";
 import { DocumentBar } from "./DocumentBar";
 import {
   DOCUMENT_COLUMN_INSET,
-  DOCUMENT_PANEL_STICKY,
   DocumentEditorLayout,
 } from "./DocumentEditorLayout";
 import { DocumentLockBanner } from "./DocumentLockBanner";
+import { DocumentSidePanel } from "./DocumentSidePanel";
 import { DocumentTitleBlock } from "./DocumentTitleBlock";
 import { DocumentTrail } from "./DocumentTrail";
 import { DocumentViewBody, type DocumentViewMount } from "./DocumentViewBody";
@@ -109,7 +110,7 @@ import {
   type DocumentActionBindingsInput,
 } from "./useDocumentActionBindings";
 import { useDocumentLockSurface } from "./useDocumentLockSurface";
-import { useDocumentPanelCollapsed } from "./useDocumentPanelCollapsed";
+import { useDocumentPanel } from "./useDocumentPanel";
 import {
   useEntryForm,
   getCollectionFields,
@@ -529,13 +530,6 @@ export function EntryForm({
   // when a field-level revalidation runs after that first attempt.
   const { errors, submitCount } = form.formState;
 
-  // Rail collapse state. Toggle lives in the DocumentBar; the rail itself
-  // reads `railCollapsed` to decide whether to render. Persisted in
-  // localStorage so the choice survives reloads.
-  // Out of the way when the author collapsed it, and while history is open,
-  // which takes its place.
-  const { collapsed: railCollapsed, toggle: toggleRail } =
-    useDocumentPanelCollapsed(historyEnabledFrom(collection) !== false);
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
@@ -900,6 +894,31 @@ export function EntryForm({
     mode === "create" ? {} : { documentStatus: editedStatus };
 
   /*
+   * Whether the preview pane is actually on screen: withheld while
+   * translation mode is on, beside a document view, and for a reader, as the
+   * pane itself reads below.
+   */
+  const previewOnScreen =
+    previewOpen &&
+    translationMode.source === undefined &&
+    !documentView &&
+    !updatesHeld;
+
+  // The document panel: on screen or not, and how it sits at the editor's
+  // width. The preview folds it and showing it closes the preview; history
+  // takes its place. Its toggle lives in the DocumentBar.
+  const panel = useDocumentPanel({
+    historyAvailable: historyEnabledFrom(collection) !== false,
+    previewOpen: previewOnScreen,
+    closePreview: () => setPreviewOpen(false),
+  });
+  // Nothing to show before the entry exists.
+  const panelOnScreen = mode === "edit" && panel.shown;
+  // Where the docked column is on screen, it carries the id and the language
+  // panel, so the field column's own copies of them step aside.
+  const panelDocked = mode === "edit" && panel.docked;
+
+  /*
    * What deciding this document's actions reads. Every write handler goes
    * through the gate above, and the storing ones hand back their outcome so an
    * action run from outside the header can say what it came to.
@@ -1061,12 +1080,7 @@ export function EntryForm({
               // flag survives a move from the edit screen into the view.
               // Nor for a reader, who is offered no preview: an open pane
               // closes once the user may no longer change the entry.
-              open={
-                previewOpen &&
-                translationMode.source === undefined &&
-                !documentView &&
-                !updatesHeld
-              }
+              open={previewOnScreen}
               onClose={() => setPreviewOpen(false)}
               scope={{
                 collection: collection.name,
@@ -1142,9 +1156,12 @@ export function EntryForm({
                               row, so they sit above it rather than inside the
                               measured field column. */}
                             <DocumentEditorLayout
+                              frameRef={panel.measure}
+                              panelMode={panel.mode}
                               bar={
                                 <DocumentBar
                                   mode={mode}
+                                  panelMode={panel.mode}
                                   documentLocked={lock.readOnly}
                                   isSubmitting={isSubmitting}
                                   // The whole unsaved-work state, so the restore
@@ -1213,9 +1230,9 @@ export function EntryForm({
                                     "collection",
                                     controllerNames[0]
                                   )}
-                                  isRailCollapsed={railCollapsed}
+                                  isRailCollapsed={!panelOnScreen}
                                   onToggleRail={
-                                    mode === "edit" ? toggleRail : undefined
+                                    mode === "edit" ? panel.toggle : undefined
                                   }
                                 />
                               }
@@ -1269,17 +1286,15 @@ export function EntryForm({
                                   }
                                 />
                                 <EntryMetaStrip
-                                  isRailCollapsed={railCollapsed}
+                                  panelCarriesId={panelDocked}
                                   documentId={entry?.id}
                                 />
 
-                                {/* The language panel, inline. Its rail mount is
-                        `hidden @4xl/content:flex`, so this is the exact
-                        complement: shown only where the rail is not. When the
-                        rail cannot carry it at all — create mode, or the author
-                        collapsed it — the panel renders unconditionally instead,
-                        because "the actions live in the rail" is precisely the
-                        failure this stage removes. */}
+                                {/* The language panel, inline: the exact
+                        complement of the docked panel, shown wherever that
+                        column is not on screen — create mode, a folded panel,
+                        and every width the panel floats or is a sheet at,
+                        where it opens only when asked for. */}
                                 {localizationEnabled && (
                                   <div
                                     className={cn(
@@ -1287,9 +1302,7 @@ export function EntryForm({
                                       // fields, not indented past them.
                                       "pt-4",
                                       DOCUMENT_COLUMN_INSET,
-                                      mode === "edit" &&
-                                        !railCollapsed &&
-                                        "@4xl/content:hidden"
+                                      panelDocked && "hidden"
                                     )}
                                   >
                                     <DocumentLanguagePanel
@@ -1359,45 +1372,50 @@ export function EntryForm({
                                 </ViewedVersionBody>
                               </div>
 
-                              {/* Rail (collapsible). Width 320px. Hidden until the content panel
-                  is wide enough (@4xl) to fit it beside the main column, until a
-                  future mobile sheet ships.
-
-                  The mode === "edit" gate: in create mode the entry does not
-                  exist yet, so DocumentPanel returns null and the rail has
-                  nothing to show. Rendering it anyway left an empty 320px
-                  strip down the right side of the page, which reads as a
-                  failed load rather than as an absence. */}
-                              {mode === "edit" && !railCollapsed && (
-                                <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-                                  <div
-                                    className={cn(
-                                      DOCUMENT_PANEL_STICKY,
-                                      "overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col"
-                                    )}
-                                  >
-                                    <EntryFormSidebar
-                                      mode={mode}
-                                      entry={entry}
-                                      hasStatus={hasStatus}
-                                      {...(locale === undefined
-                                        ? {}
-                                        : { locale })}
-                                      {...(switchLocale === undefined
-                                        ? {}
-                                        : { onLocaleChange: switchLocale })}
-                                      actionsDisabled={contentHeld}
-                                      // Publishing every language is a write
-                                      // too, so a recovery holds it as well.
-                                      publishAllDisabled={
-                                        publishAllHeld || recovering
-                                      }
-                                      // A reader may still open the other languages.
-                                      navigationDisabled={navigationHeld}
-                                    />
-                                  </div>
-                                </div>
-                              )}
+                              {/* The document panel, framed for the editor's
+                                width: docked beside the fields, floating
+                                over them, or a sheet on a phone. Not in
+                                create mode: the entry does not exist yet, and
+                                an empty column reads as a failed load. */}
+                              {mode === "edit" ? (
+                                <DocumentSidePanel
+                                  mode={panel.mode}
+                                  shown={panelOnScreen}
+                                  onClose={panel.hide}
+                                >
+                                  <EntryFormSidebar
+                                    mode={mode}
+                                    entry={entry}
+                                    hasStatus={hasStatus}
+                                    // The pill's status, read from the
+                                    // language being edited.
+                                    documentStatus={editedStatus}
+                                    {...(savedEntryId === ""
+                                      ? {}
+                                      : {
+                                          releaseDocument: {
+                                            scopeKind: "collection" as const,
+                                            scopeSlug: collection.name,
+                                            entryId: savedEntryId,
+                                          },
+                                        })}
+                                    {...(locale === undefined
+                                      ? {}
+                                      : { locale })}
+                                    {...(switchLocale === undefined
+                                      ? {}
+                                      : { onLocaleChange: switchLocale })}
+                                    actionsDisabled={contentHeld}
+                                    // Publishing every language is a write
+                                    // too, so a recovery holds it as well.
+                                    publishAllDisabled={
+                                      publishAllHeld || recovering
+                                    }
+                                    // A reader may still open the other languages.
+                                    navigationDisabled={navigationHeld}
+                                  />
+                                </DocumentSidePanel>
+                              ) : null}
                             </DocumentEditorLayout>
                           </CopyFromLanguageScope>
                         </SaveActionFormProvider>

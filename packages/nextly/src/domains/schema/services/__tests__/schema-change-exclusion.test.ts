@@ -173,7 +173,7 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     getAllSingles: vi.fn(
       async (): Promise<{ slug: string; tableName: string }[]> => []
     ),
-    getSingleBySlug: vi.fn(
+    getSingleForWrite: vi.fn(
       async (slug: string): Promise<SingleRowDouble> => ({
         slug,
         tableName: "single_page",
@@ -374,7 +374,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // contradict the row.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],
@@ -416,7 +416,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // are consumed, so that is where they are read.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],
@@ -565,7 +565,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // between the caller's check and this claim would otherwise drop a table the config owns.
     const adapter = makeAdapter();
     const { service, registry } = makeService(adapter);
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],
@@ -593,7 +593,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // the new vocabulary and leaves `schema_hash` untouched, because its registry step projects only
     // id / fields / config_path. A fixture that moved the hash instead would be testing a state the
     // migration never produces — which is what the first version of this test did.
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [{ name: "hero", type: "fieldGroup" }],
@@ -630,7 +630,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
     // above, and the refusal would look like coverage while breaking ordinary saves.
     const adapter = makeAdapter({ mainTableExists: true });
     const { service, registry } = makeService(adapter);
-    registry.getSingleBySlug.mockResolvedValue({
+    registry.getSingleForWrite.mockResolvedValue({
       slug: "page",
       tableName: "single_page",
       fields: [],
