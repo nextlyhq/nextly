@@ -36,10 +36,15 @@
 import crypto from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
 
+import {
+  mediaPageQuerySchema,
+  mediaQueryCondition,
+  type MediaPageQuery,
+} from "../domains/media/media-library-query";
 import {
   errorForLog,
   filesKeptByOthers,
@@ -89,8 +94,19 @@ export interface UpdateFolderInput {
 export interface FolderContents {
   folder: MediaFolder;
   subfolders: MediaFolder[];
+  /** One page of the folder's own items. */
   mediaFiles: Record<string, unknown>[];
   breadcrumbs: Array<{ id: string; name: string }>;
+  /** Which page `mediaFiles` is, and how many items there are in all. */
+  meta: FolderContentsPage;
+}
+
+/** Which page of a folder's items a response holds. */
+export interface FolderContentsPage {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
 }
 
 export interface FolderResponse {
@@ -461,7 +477,9 @@ export class MediaFolderService extends BaseService {
    * Get folder contents (subfolders + media files)
    */
   async getFolderContents(
-    folderId: string | null
+    folderId: string | null,
+    /** Which page of its items, and how they are narrowed and sorted. */
+    query: Partial<MediaPageQuery> = {}
   ): Promise<FolderContentsResponse> {
     try {
       const { mediaFolders: _mediaFolders, media } = this.tables;
@@ -496,15 +514,31 @@ export class MediaFolderService extends BaseService {
 
       const subfolders = subfoldersResult.data || [];
 
-      const mediaFiles = folderSchemaAvailable
-        ? await this.db
-            .select()
-            .from(media)
-            .where(
-              folderId ? eq(media.folderId, folderId) : isNull(media.folderId)
-            )
-            .orderBy(media.uploadedAt)
-        : await this.db.select().from(media).orderBy(media.uploadedAt);
+      // One page of the folder's items, narrowed, sorted and paged in the
+      // database by the same condition the media list uses, with the count of
+      // every item the narrowing matches.
+      const { page, limit, search, type, sortBy, sortOrder } =
+        mediaPageQuerySchema.parse(query);
+      const where = mediaQueryCondition(media, null, {
+        ...(folderSchemaAvailable ? { folderId: folderId ?? null } : {}),
+        search,
+        type,
+      });
+      const [counted] = await this.db
+        .select({ value: count() })
+        .from(media)
+        .where(where);
+      const total = Number(counted?.value ?? 0);
+      // The id after the sort column, so items uploaded in the same instant
+      // keep one order and no item shows on two pages.
+      const order = sortOrder === "asc" ? asc : desc;
+      const mediaFiles = await this.db
+        .select()
+        .from(media)
+        .where(where)
+        .orderBy(order(media[sortBy]), order(media.id))
+        .limit(limit)
+        .offset((page - 1) * limit);
 
       const breadcrumbs = await this.getBreadcrumbs(folderId);
 
@@ -525,6 +559,12 @@ export class MediaFolderService extends BaseService {
           subfolders,
           mediaFiles,
           breadcrumbs,
+          meta: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+          },
         },
       };
     } catch (error) {

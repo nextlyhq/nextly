@@ -40,6 +40,7 @@ import { jobsTables } from "./jobs";
 import { languagesTables } from "./languages";
 import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
+import { mediaUsageTables } from "./media-usage";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
 import { noticesTables } from "./notices";
@@ -266,6 +267,9 @@ export function getCoreSchema(
     // snapshot for the reason every table above is.
     ...Object.values(dashboardPinsTables(dialect)),
     ...Object.values(dashboardPreferencesTables(dialect)),
+    // `nextly_media_usage` — which media items each document uses. In the
+    // snapshot for the reason every table above is.
+    ...Object.values(mediaUsageTables(dialect)),
     // `email_brand` — the site's email brand settings, one row. In the
     // snapshot for the reason every table above is.
     ...Object.values(emailBrandTables(dialect)),
@@ -362,6 +366,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_notices",
   "nextly_dashboard_pins",
   "nextly_dashboard_preferences",
+  "nextly_media_usage",
 ] as const;
 
 /**

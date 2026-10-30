@@ -232,6 +232,8 @@ import {
   isCompanionReady,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { mediaUsagePresent } from "../../media/usage/media-usage-store";
+import { recordStoredDocumentUsage } from "../../media/usage/stored-document-usage";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   sharedComparison,
@@ -1237,6 +1239,121 @@ export class CollectionMutationService extends BaseService {
     }
   }
 
+  /**
+   * Rewrite the record of which media items this entry uses from what its
+   * tables hold now, on the write's own transaction, so the record commits or
+   * rolls back with the write that changed it. Called once everything the
+   * write changes is in the transaction. Nothing is recorded before
+   * `nextly migrate` has created the record's table: asked on the
+   * transaction's own connection, as a catalogue read that cannot abort it.
+   */
+  private async recordEntryMediaUsage(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      tableName: string;
+      fields: readonly FieldDefinition[];
+      /**
+       * Whether the write held its change as a working draft: it then stored
+       * nothing, so there is nothing to read again.
+       */
+      heldDraft?: boolean;
+    }
+  ): Promise<void> {
+    if (args.heldDraft === true) return;
+    try {
+      const present = await mediaUsagePresent(
+        this.adapter,
+        this.logger,
+        transactionTableProbe(this.adapter, tx)
+      );
+      if (!present) return;
+      const companion = await this.fileManager.loadCompanionSchema(
+        args.collectionName,
+        tx.getDrizzle()
+      );
+      // The translations are read only where they are there: before the
+      // translations migration they sit on the main row, which is read anyway.
+      // Remembered, never resolved, inside a transaction (see
+      // `splitLocalizedWriteData`).
+      const translations =
+        companion !== null &&
+        cachedCompanionReadiness(this.adapter, companion.companionTableName) ===
+          "ready"
+          ? companion
+          : null;
+      const entryId = String(args.entryId);
+      await recordStoredDocumentUsage(
+        tx,
+        {
+          fieldGroupDataService: this.fieldGroupDataService,
+          locales: this.localization?.locales.map(l => l.code) ?? [],
+        },
+        { kind: "collection", slug: args.collectionName, documentId: entryId },
+        {
+          tableName: args.tableName,
+          rowId: entryId,
+          fields: args.fields as unknown as FieldConfig[],
+          translations,
+        }
+      );
+    } catch (err) {
+      // A write never stands with a record that disagrees with it: the batch
+      // and transaction loops must abort, not keep the write as a soft
+      // per-item failure.
+      throw markWriteIntegrityFailure(err);
+    }
+  }
+
+  /**
+   * Rebuild the record of which media items every entry of a collection uses,
+   * from what its tables hold, for `nextly media reindex-usage`. A page of
+   * entries at a time, each page on one transaction, read by id after the
+   * last one read, so an entry created or deleted while it runs moves no
+   * other entry onto a page already read. Returns how many entries it read.
+   */
+  async rebuildMediaUsage(collectionName: string): Promise<number> {
+    const collection =
+      await this.collectionService.getCollection(collectionName);
+    const fields = collectionFields(collection);
+    const tableName = collectionTableName(collection, collectionName);
+    // The translations' readiness is remembered here, off any transaction,
+    // for the reads inside each page's (see `warmLocalizedReadiness`).
+    await this.warmLocalizedReadiness(collectionName);
+    const pageSize = 200;
+    let read = 0;
+    let after: string | number | undefined;
+    for (;;) {
+      const rows = await this.adapter.select<{ id: string | number }>(
+        tableName,
+        {
+          columns: ["id"],
+          ...(after === undefined
+            ? {}
+            : { where: { and: [{ column: "id", op: ">", value: after }] } }),
+          orderBy: [{ column: "id", direction: "asc" }],
+          limit: pageSize,
+        }
+      );
+      if (rows.length > 0) {
+        await this.adapter.transaction(async tx => {
+          for (const row of rows) {
+            await this.recordEntryMediaUsage(tx, {
+              collectionName,
+              entryId: String(row.id),
+              tableName,
+              fields,
+            });
+          }
+        });
+        read += rows.length;
+        after = rows[rows.length - 1].id;
+      }
+      if (rows.length < pageSize) return read;
+    }
+  }
+
   /** A save in this document's history; see `recordSaveEvent`. */
   private recordSaveHistory(
     tx: TransactionContext,
@@ -1681,6 +1798,13 @@ export class CollectionMutationService extends BaseService {
       tx.getDrizzle()
     );
     const eventActor = actorForWrite(args.actor, args.user);
+    // Which media items the new entry uses, from what the create stored.
+    await this.recordEntryMediaUsage(tx, {
+      collectionName: args.collectionName,
+      entryId,
+      tableName: args.tableName,
+      fields: args.fields,
+    });
     // The document's first history event, in the caller's transaction.
     await this.recordHistoryEvent(tx, args.collectionName, entryId, {
       kind: "created",
@@ -6068,6 +6192,15 @@ export class CollectionMutationService extends BaseService {
           createdVersionNo = captured.versionNo;
         }
 
+        // Which media items the new entry uses, from what the create stored:
+        // its row, its translation and its field groups are all written above.
+        await this.recordEntryMediaUsage(tx, {
+          collectionName: params.collectionName,
+          entryId: entry.id as string,
+          tableName,
+          fields,
+        });
+
         // The document's first history event, in the create's transaction.
         await this.recordHistoryEvent(
           tx,
@@ -7455,6 +7588,16 @@ export class CollectionMutationService extends BaseService {
             publishDocDenied = movedOut;
             throw new StatusTransitionDeniedError();
           }
+
+          // Which media items the entry uses now. A publish that promoted held
+          // working drafts wrote their content, in any language, so every
+          // language is read again.
+          await this.recordEntryMediaUsage(tx, {
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            tableName,
+            fields,
+          });
 
           // One history event for the whole publish, naming the languages it
           // moved, rather than one per language as the deliveries above are.
@@ -10940,6 +11083,17 @@ export class CollectionMutationService extends BaseService {
                 // locale-specific too — the singles path counts it the same way.
                 Object.keys(snapshotComponents ?? {}).length > 0;
 
+              // Which media items the entry uses now, from what this update
+              // stored; a held working draft's media count once it is
+              // published.
+              await this.recordEntryMediaUsage(tx, {
+                collectionName: params.collectionName,
+                entryId: params.entryId,
+                tableName,
+                fields,
+                heldDraft: storeAsWorkingDraft,
+              });
+
               // The version this update produced, which its status moves name below.
               let producedVersionNo: number | null = null;
               if (versionsConfig?.enabled && !storeAsWorkingDraft) {
@@ -12805,6 +12959,7 @@ export class CollectionMutationService extends BaseService {
       // Asked before the transaction opens: see `DashboardTables`.
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+        mediaUsagePresent: await mediaUsagePresent(this.adapter),
       };
       await this.adapter.transaction(async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
@@ -14638,6 +14793,14 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           access: this.fieldGroupAccess(params),
         });
+        // Which media items the entry uses now, from what this update stored.
+        // A held edit stored nothing, so it changes nothing here either.
+        await this.recordEntryMediaUsage(tx, {
+          collectionName: params.collectionName,
+          entryId,
+          tableName,
+          fields,
+        });
       }
 
       // Record a durable version snapshot and the outbox event on the caller's
@@ -15291,6 +15454,11 @@ export class CollectionMutationService extends BaseService {
         { scopeKind: "collection", scopeSlug: params.collectionName, entryId },
         {
           dashboardPinsPresent: await dashboardPinsPresent(
+            this.adapter,
+            undefined,
+            transactionTableProbe(this.adapter, tx)
+          ),
+          mediaUsagePresent: await mediaUsagePresent(
             this.adapter,
             undefined,
             transactionTableProbe(this.adapter, tx)

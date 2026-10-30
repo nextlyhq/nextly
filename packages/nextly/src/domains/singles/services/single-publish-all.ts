@@ -133,6 +133,7 @@ import {
   liveStoredDocument,
   promoteCallerFor,
 } from "./promote-gate";
+import { recordSingleMediaUsage } from "./single-media-usage";
 import {
   checkSingleAccess,
   singleGrantRefusal,
@@ -836,6 +837,25 @@ export class SinglePublishAllService extends BaseService {
       );
     }
 
+    // Which media items the Single uses now. A publish that promoted held
+    // working drafts wrote their content, in any language, so every language
+    // is read again.
+    await recordSingleMediaUsage(
+      tx,
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        fieldGroupDataService: this.fieldGroupDataService,
+        localization: this.localization,
+      },
+      {
+        slug: plan.slug,
+        rowId: plan.existingDoc.id,
+        tableName: plan.singleMeta.tableName,
+        fields: plan.fieldConfigs,
+        companion: plan.companion,
+      }
+    );
     await this.recordPublishHistory(tx, plan, {
       user: options.user,
       mainFrom: lockedRow.status as string | null,

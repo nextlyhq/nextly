@@ -62,6 +62,7 @@ import type { SupportedDialect } from "../../../types/database";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import { mediaUsagePresent } from "../../media/usage/media-usage-store";
 import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
@@ -937,6 +938,7 @@ export class CollectionSyncService extends BaseService {
             // Asked before the transaction opens: see `DashboardTables`.
             const tables = {
               dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+              mediaUsagePresent: await mediaUsagePresent(this.adapter),
             };
             await this.adapter.transaction(tx =>
               deleteEntityRegistryRow(tx, "collection", slug, tables)

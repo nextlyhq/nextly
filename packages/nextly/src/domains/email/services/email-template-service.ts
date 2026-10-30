@@ -44,6 +44,8 @@ import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
+import { recordEmailTemplateUsage } from "../../media/usage/email-template-usage";
+import { mediaUsagePresent } from "../../media/usage/media-usage-store";
 import { MetaService } from "../../meta";
 import {
   BRAND_BINDING,
@@ -1268,7 +1270,9 @@ export class EmailTemplateService extends BaseService {
     };
 
     try {
-      await this.db.insert(this.emailTemplates).values(values);
+      await this.writeTemplateRow(id, db =>
+        db.insert(this.emailTemplates).values(values)
+      );
     } catch (error) {
       // Pattern B: surface unique-violation as DUPLICATE (409) so the admin UI
       // can show a friendly "slug already exists" message; everything else
@@ -1294,6 +1298,36 @@ export class EmailTemplateService extends BaseService {
       actor,
     });
     return created;
+  }
+
+  /**
+   * Run a write to one template's row and rewrite the record of which media
+   * items the template uses, on one transaction, so the two commit or roll
+   * back together. Before `nextly migrate` has created the record's table the
+   * write runs alone, as it always did.
+   *
+   * The email services are never handed a caller's transaction. Inside a
+   * flow that has one open, opening another would take a second connection
+   * that the first may be waiting on, so the write and the record each run
+   * on the pool there, as the write always has.
+   */
+  private async writeTemplateRow<T>(
+    templateId: string,
+    write: (db: EmailTemplateService["db"]) => Promise<T>
+  ): Promise<T> {
+    if (!(await mediaUsagePresent(this.adapter, this.logger))) {
+      return write(this.db);
+    }
+    if (transactionOpenInFlow(this.adapter)) {
+      const result = await write(this.db);
+      await recordEmailTemplateUsage(this.adapter, templateId);
+      return result;
+    }
+    return this.adapter.transaction(async tx => {
+      const result = await write(tx.getDrizzle<EmailTemplateService["db"]>());
+      await recordEmailTemplateUsage(tx, templateId);
+      return result;
+    });
   }
 
   /** The stored row by id. */
@@ -1437,12 +1471,14 @@ export class EmailTemplateService extends BaseService {
     }
 
     try {
-      await this.db
-        .update(this.emailTemplates)
-        .set(updateData)
-        // Conditioned on the row as read: an override's base comes from it,
-        // and a save in between must not be overwritten.
-        .where(this.unchanged(existing));
+      await this.writeTemplateRow(id, db =>
+        db
+          .update(this.emailTemplates)
+          .set(updateData)
+          // Conditioned on the row as read: an override's base comes from it,
+          // and a save in between must not be overwritten.
+          .where(this.unchanged(existing))
+      );
     } catch (error) {
       // Default Pattern A: drizzle hands us the raw driver error, so normalise
       // through toDbError(dialect) first to get a DbError; fromDatabaseError
@@ -1541,9 +1577,9 @@ export class EmailTemplateService extends BaseService {
       });
     }
 
-    await this.db
-      .delete(this.emailTemplates)
-      .where(eq(this.emailTemplates.id, id));
+    await this.writeTemplateRow(id, db =>
+      db.delete(this.emailTemplates).where(eq(this.emailTemplates.id, id))
+    );
     // A deleted template has nothing left to keep on the old engine.
     await this.unmarkEngine(keptKey(id)).catch(() => undefined);
     await this.unmarkEngine(authoredKey(id)).catch(() => undefined);
@@ -1902,10 +1938,12 @@ export class EmailTemplateService extends BaseService {
     columns: Record<string, unknown>
   ): Promise<void> {
     const afterSave = await this.checkLiquidOnSave(record, version);
-    await this.db
-      .update(this.emailTemplates)
-      .set({ ...version, ...columns, baseDigest, updatedAt: new Date() })
-      .where(this.unchanged(row));
+    await this.writeTemplateRow(row.id, db =>
+      db
+        .update(this.emailTemplates)
+        .set({ ...version, ...columns, baseDigest, updatedAt: new Date() })
+        .where(this.unchanged(row))
+    );
     await this.assertWritten(row.id, version, baseDigest, record.slug);
     await afterSave(await this.getTemplate(row.id));
   }
@@ -1929,10 +1967,9 @@ export class EmailTemplateService extends BaseService {
     const undoKeep = () =>
       engine.created ? this.unmarkEngine(keptKey(row.id)) : Promise.resolve();
     try {
-      await this.db
-        .update(this.emailTemplates)
-        .set(columns)
-        .where(this.unchanged(row));
+      await this.writeTemplateRow(row.id, db =>
+        db.update(this.emailTemplates).set(columns).where(this.unchanged(row))
+      );
     } catch (error) {
       await undoKeep();
       throw error;
@@ -2220,26 +2257,28 @@ export class EmailTemplateService extends BaseService {
     // is written and the next boot tries again.
     const { created } = await this.keepIfWrittenForOldEngine(id, entry);
     try {
-      await this.db.insert(this.emailTemplates).values({
-        id,
-        slug: t.slug,
-        name: t.name,
-        useLayout: t.useLayout ?? true,
-        ...this.ownerColumns(entry),
-        layoutId: t.layoutId ?? null,
-        fromOverride: t.fromOverride ?? null,
-        replyTo: t.replyTo ?? null,
-        isActive: t.isActive ?? true,
-        providerId: t.providerId ?? null,
-        attachments: t.attachments ?? null,
-        carriesSecret: entry.carriesSecret,
-        ...storedOwner(entry.owner),
-        overridden: false,
-        baseVersion: null,
-        baseDigest: null,
-        createdAt: now,
-        updatedAt: now,
-      });
+      await this.writeTemplateRow(id, db =>
+        db.insert(this.emailTemplates).values({
+          id,
+          slug: t.slug,
+          name: t.name,
+          useLayout: t.useLayout ?? true,
+          ...this.ownerColumns(entry),
+          layoutId: t.layoutId ?? null,
+          fromOverride: t.fromOverride ?? null,
+          replyTo: t.replyTo ?? null,
+          isActive: t.isActive ?? true,
+          providerId: t.providerId ?? null,
+          attachments: t.attachments ?? null,
+          carriesSecret: entry.carriesSecret,
+          ...storedOwner(entry.owner),
+          overridden: false,
+          baseVersion: null,
+          baseDigest: null,
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
       this.logger.info(`Created email template: ${t.slug}`);
     } catch (error) {
       // No row has this id, so no engine choice may name it either: boots
@@ -2322,31 +2361,35 @@ export class EmailTemplateService extends BaseService {
     // an edit saved in between is the site's and stays.
     const where = this.unchanged(row);
     if (keepSitesVersion) {
-      await this.db
+      await this.writeTemplateRow(row.id, db =>
+        db
+          .update(this.emailTemplates)
+          .set({
+            ...owner,
+            ...detailsOf(entry.defaults),
+            overridden: true,
+            baseVersion: {
+              ...(row.baseVersion ?? entry.version),
+              details: detailsOf(entry.defaults),
+            },
+            baseDigest: row.baseDigest ?? entry.digest,
+          })
+          .where(where)
+      );
+      return;
+    }
+    await this.writeTemplateRow(row.id, db =>
+      db
         .update(this.emailTemplates)
         .set({
           ...owner,
-          ...detailsOf(entry.defaults),
-          overridden: true,
-          baseVersion: {
-            ...(row.baseVersion ?? entry.version),
-            details: detailsOf(entry.defaults),
-          },
-          baseDigest: row.baseDigest ?? entry.digest,
+          ...this.ownerColumns(entry),
+          overridden: false,
+          baseVersion: null,
+          baseDigest: null,
         })
-        .where(where);
-      return;
-    }
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...owner,
-        ...this.ownerColumns(entry),
-        overridden: false,
-        baseVersion: null,
-        baseDigest: null,
-      })
-      .where(where);
+        .where(where)
+    );
     // It now follows the owner, so it renders on the engine the owner's
     // version was written for.
     await this.settleIfFollowing(row.slug, entry);
@@ -2368,17 +2411,19 @@ export class EmailTemplateService extends BaseService {
     if (kept && !sameStoredValue(detailsOf(row), kept)) return;
     // Already the owner's, and recorded as such.
     if (kept && sameStoredValue(kept, owners)) return;
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...owners,
-        updatedAt: new Date(),
-        baseVersion: {
-          ...versionOf(row.baseVersion ?? entry.version),
-          details: owners,
-        },
-      })
-      .where(this.unchanged(row));
+    await this.writeTemplateRow(row.id, db =>
+      db
+        .update(this.emailTemplates)
+        .set({
+          ...owners,
+          updatedAt: new Date(),
+          baseVersion: {
+            ...versionOf(row.baseVersion ?? entry.version),
+            details: owners,
+          },
+        })
+        .where(this.unchanged(row))
+    );
   }
 
   /**

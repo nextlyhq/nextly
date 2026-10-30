@@ -47,7 +47,9 @@ export function DeleteFolderDialog({
   const { mutate: deleteFolderMutation, isPending } = useDeleteFolder();
 
   const subfolderCount = folderContents?.subfolders?.length ?? 0;
-  const mediaCount = folderContents?.files?.length ?? 0;
+  // Every file the folder holds, which the server counts: `files` is one
+  // page of them.
+  const mediaCount = folderContents?.meta?.total ?? 0;
   const hasContents = subfolderCount > 0 || mediaCount > 0;
   const displayName =
     folderName ?? folderContents?.folder?.name ?? "this folder";

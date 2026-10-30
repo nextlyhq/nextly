@@ -18,6 +18,10 @@
 
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { deletePinsOfTarget } from "../dashboard/dashboard-pins";
+import {
+  removeDocumentUsage,
+  removeEntityUsage,
+} from "../media/usage/media-usage-store";
 
 import type { VersionsDbApi } from "./db-api";
 import { REGISTRY_TABLES } from "./history-locks";
@@ -26,15 +30,17 @@ import { deleteViewsForDocument, deleteViewsForEntity } from "./version-views";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
 /**
- * Which of the dashboard's tables a sweep may write, asked by the caller
- * BEFORE its transaction opens (`dashboardPinsPresent`): a table that does not
- * exist yet (a site that has not run `nextly migrate`) is skipped, since a
- * statement against it would abort the whole transaction on PostgreSQL.
- * Required, so no delete path can leave a deleted entity's pins behind by
+ * Which of the dashboard's and the media library's tables a sweep may write,
+ * asked by the caller BEFORE its transaction opens (`dashboardPinsPresent`,
+ * `mediaUsagePresent`): a table that does not exist yet (a site that has not
+ * run `nextly migrate`) is skipped, since a statement against it would abort
+ * the whole transaction on PostgreSQL. Required, so no delete path can leave
+ * a deleted entity's pins, or the record of the media it used, behind by
  * forgetting to ask.
  */
 export interface DashboardTables {
   dashboardPinsPresent: boolean;
+  mediaUsagePresent: boolean;
 }
 
 /**
@@ -73,6 +79,11 @@ export async function deleteEntityRegistryRow(
       targetSlug: scopeSlug,
     });
   }
+  // The record of the media its documents used: every entry of a collection,
+  // or the Single itself. A page's media is recorded as its collection's.
+  if (scopeKind !== "page" && tables.mediaUsagePresent) {
+    await removeEntityUsage(tx, { kind: scopeKind, slug: scopeSlug });
+  }
   return deleted;
 }
 
@@ -96,6 +107,14 @@ export async function sweepDeletedDocument(
       targetType: ref.scopeKind,
       targetSlug: ref.scopeSlug,
       entryId: ref.scopeKind === "collection" ? ref.entryId : "",
+    });
+  }
+  // The record of the media the document used: it uses nothing now.
+  if (ref.scopeKind !== "page" && tables.mediaUsagePresent) {
+    await removeDocumentUsage(tx, {
+      kind: ref.scopeKind,
+      slug: ref.scopeSlug,
+      documentId: ref.scopeKind === "collection" ? ref.entryId : "",
     });
   }
 }

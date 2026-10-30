@@ -6,6 +6,7 @@ import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../schemas/email-queue-recipients/
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
 import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
+import { MEDIA_USAGE_TABLE } from "../schemas/media-usage/table-name";
 import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
@@ -764,6 +765,23 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_dashboard_preferences_key_uidx"
       ON "${DASHBOARD_PREFERENCES_TABLE}" ("user_id", "preference_key")`,
+    // Which media items each document uses. Columns match
+    // schemas/media-usage/sqlite.ts; a Single's `document_id` and a shared
+    // value's `locale` are "" so the unique index holds without a partial
+    // index.
+    `CREATE TABLE IF NOT EXISTS "${MEDIA_USAGE_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "media_id" TEXT NOT NULL REFERENCES "media"("id") ON DELETE CASCADE,
+      "subject_kind" TEXT NOT NULL,
+      "subject_slug" TEXT NOT NULL,
+      "document_id" TEXT NOT NULL,
+      "field_path" TEXT NOT NULL,
+      "locale" TEXT NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_media_usage_uidx"
+      ON "${MEDIA_USAGE_TABLE}" ("subject_kind", "subject_slug", "document_id", "field_path", "locale", "media_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_media_usage_media_idx"
+      ON "${MEDIA_USAGE_TABLE}" ("media_id")`,
     // The site's email brand settings, one row. Columns match
     // schemas/email-brand/sqlite.ts; each setting is nullable, null being its
     // starting value.

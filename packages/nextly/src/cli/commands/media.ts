@@ -25,6 +25,10 @@ import {
   type MediaFilesRecord,
 } from "../../domains/media/stored-files";
 import {
+  reindexMediaUsage,
+  type ReindexUsageResult,
+} from "../../domains/media/usage/reindex-usage";
+import {
   initializeMediaStorage,
   type MediaStorage,
 } from "../../storage/storage";
@@ -403,6 +407,10 @@ function otherUploaders(
  * `nextly media orphans [--apply]`: finds, and with --apply removes, the
  * upload-time thumbnails deletes before this release left in the media
  * storage, still publicly served. A dry run by default.
+ *
+ * `nextly media reindex-usage`: rebuilds the record of where each media item
+ * is used from the stored content, for an install whose content predates the
+ * record and after a restore.
  */
 export function createMediaCommand(): Command {
   const media = new Command("media").description(
@@ -471,5 +479,109 @@ export function createMediaCommand(): Command {
         exitWithError(context.logger, error);
       }
     });
+  media
+    .command("reindex-usage")
+    .description(
+      "Rebuild the record of where each media item is used, from the stored content"
+    )
+    .action(async (_cmdOptions: unknown, cmd: Command) => {
+      const context = createContext(cmd.optsWithGlobals());
+      let adapter: CLIDatabaseAdapter | null = null;
+      try {
+        const cwd = path.resolve(context.cwd);
+        enterProject(cwd, false, context.logger);
+        const loaded = await loadConfig({
+          configPath: context.configPath,
+          cwd,
+        });
+        const db = databaseEnvOrThrow();
+        adapter = await createCliAdapter({
+          dialect: db.dialect,
+          databaseUrl: db.databaseUrl,
+          logger: context.options.verbose ? context.logger : undefined,
+        });
+        const drizzle = adapter as unknown as DrizzleAdapter;
+        installRegistryResolver(drizzle);
+        const result = await reindexUsageWithServices(
+          loaded,
+          drizzle,
+          context.logger
+        );
+        console.log(
+          `Read ${result.documents} document(s); the record holds ${result.rows} use(s) of media items.`
+        );
+        await adapter.disconnect();
+        process.exit(0);
+      } catch (error) {
+        if (adapter) await adapter.disconnect();
+        exitWithError(context.logger, error);
+      }
+    });
   return media;
+}
+
+/**
+ * Boot the services on this command's connection and rebuild the media usage
+ * record through them: every collection's entries, every Single and every
+ * email template, read the way a write reads them.
+ *
+ * Booted as the plugin lifecycle command boots, with the config as the app
+ * wrote it and boot migrations off, and torn down in a `finally`, so a
+ * rebuild that fails leaves no running plugins behind. The connection stays
+ * open for the caller to close.
+ */
+async function reindexUsageWithServices(
+  loaded: Awaited<ReturnType<typeof loadConfig>>,
+  adapter: DrizzleAdapter,
+  logger: Logger
+): Promise<ReindexUsageResult> {
+  const { registerServices, clearServices, destroyRegisteredPlugins } =
+    await import("../../di/register");
+  const { getService } = await import("../../di");
+  const { buildServiceConfig } = await import(
+    "../../init/build-service-config"
+  );
+  const { getImageProcessor } = await import("../../storage/image-processor");
+  const { getHookRegistry } = await import("../../hooks/hook-registry");
+  const { appConfig, pluginConsent, projectRoot } = loaded;
+  try {
+    await registerServices({
+      ...buildServiceConfig({
+        config: {
+          ...appConfig,
+          db: { ...appConfig.db, runMigrationsOnBoot: false },
+        },
+        pluginConsent,
+        adapter,
+        imageProcessor: getImageProcessor(),
+        hookRegistry: getHookRegistry(),
+        logger,
+      }),
+      appRoot: projectRoot,
+    });
+    return await reindexMediaUsage({
+      adapter,
+      collections: {
+        slugs: async () =>
+          (
+            await getService("collectionRegistryService").getAllCollections()
+          ).map(collection => collection.slug),
+        rebuild: slug =>
+          getService("collectionService").rebuildMediaUsage(slug),
+      },
+      singles: {
+        slugs: async () =>
+          (await getService("singleRegistryService").getAllSingles()).map(
+            single => single.slug
+          ),
+        rebuild: slug =>
+          getService("singleEntryService").rebuildMediaUsage(slug),
+      },
+      meta: getService("metaService"),
+      say: line => console.log(line),
+    });
+  } finally {
+    await destroyRegisteredPlugins();
+    clearServices();
+  }
 }

@@ -148,9 +148,14 @@ export interface FolderContentsResponse {
   data: {
     folder: MediaFolder | null; // null for root
     subfolders: MediaFolder[];
-    /** The folder's files, under the key the server sends (`files`). */
+    /**
+     * One page of the folder's files, under the key the server sends
+     * (`files`): the first, unless a page is asked for.
+     */
     files: Media[];
     breadcrumbs: Array<{ id: string; name: string }>;
+    /** How many files the folder holds in all, and which page `files` is. */
+    meta: { total: number; page: number; limit: number; totalPages: number };
   };
 }
 

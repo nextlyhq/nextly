@@ -115,6 +115,9 @@ export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";
 // creates.
 export { nextlyDashboardPinsMysql as nextlyDashboardPins } from "../dashboard-pins/mysql";
 export { nextlyDashboardPreferencesMysql as nextlyDashboardPreferences } from "../dashboard-preferences/mysql";
+// Which media items each document uses; in the bundle for the reason the
+// releases note above gives — this map is what the push creates.
+export { nextlyMediaUsageMysql as nextlyMediaUsage } from "../media-usage/mysql";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.

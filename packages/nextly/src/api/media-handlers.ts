@@ -48,6 +48,7 @@
  * - DELETE /api/media/folders/:id            - Delete folder
  * - GET    /api/media/folders/:id/contents   - Get folder contents
  * - GET    /api/media/folders/root/contents  - Get root folder contents
+ * - GET    /api/media/counts                 - Every folder's and view's item count
  *
  * @module api/media-handlers
  */
@@ -66,6 +67,11 @@ import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
 import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
+import {
+  mediaPageQuerySchema,
+  mediaViewSchema,
+  type MediaPageQuery,
+} from "../domains/media/media-library-query";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -143,6 +149,7 @@ const MEDIA_ACTION_BY_ROUTE: Partial<
   "get-folder": "read",
   "get-folder-contents": "read",
   "get-root-contents": "read",
+  "media-counts": "read",
   "upload-media": "create",
   "create-folder": "create",
   "update-media": "update",
@@ -161,6 +168,7 @@ const READ_ROUTE_TYPES = new Set<ParsedMediaRoute["type"]>([
   "get-folder",
   "get-folder-contents",
   "get-root-contents",
+  "media-counts",
 ]);
 
 /**
@@ -285,6 +293,7 @@ interface ParsedMediaRoute {
     | "delete-folder"
     | "get-folder-contents"
     | "get-root-contents"
+    | "media-counts"
     | "not-found";
   mediaId?: string;
   folderId?: string;
@@ -302,8 +311,13 @@ function parseMediaRoute(
     return { type: "not-found" };
   }
 
-  // "bulk" must be matched before the generic segments.length === 1 block
-  // so it is never mistaken for a media ID.
+  // "counts" and "bulk" must be matched before the generic
+  // segments.length === 1 block so neither is mistaken for a media ID.
+  if (segments[0] === "counts" && segments.length === 1) {
+    if (method === "GET") return { type: "media-counts" };
+    return { type: "not-found" };
+  }
+
   if (segments[0] === "bulk" && segments.length === 1) {
     if (method === "DELETE") return { type: "bulk-delete-media" };
     return { type: "not-found" };
@@ -397,6 +411,10 @@ async function handleListMedia(request: Request): Promise<Response> {
     search: searchParams.get("search") || undefined,
     type: (searchParams.get("type") as ListMediaOptions["type"]) || undefined,
     folderId: folderIdParam === "root" ? "root" : folderIdParam || undefined,
+    view: parseAtBoundary(
+      mediaViewSchema.optional(),
+      searchParams.get("view") ?? undefined
+    ),
     sortBy:
       (searchParams.get("sortBy") as ListMediaOptions["sortBy"]) ||
       "uploadedAt",
@@ -664,24 +682,70 @@ async function handleDeleteFolder(
   return respondAction("Folder deleted.", { id: folderId });
 }
 
-async function handleGetFolderContents(folderId: string): Promise<Response> {
+/** A folder's page query, parsed from the request's search parameters. */
+function folderPageQuery(request: Request): MediaPageQuery {
+  const { searchParams } = new URL(request.url);
+  const raw: Record<string, string> = {};
+  for (const key of [
+    "page",
+    "limit",
+    "search",
+    "type",
+    "sortBy",
+    "sortOrder",
+  ]) {
+    const value = searchParams.get(key);
+    if (value !== null && value !== "") raw[key] = value;
+  }
+  return parseAtBoundary(mediaPageQuerySchema, raw);
+}
+
+/** `value` parsed by `schema`, or the request's validation error. */
+function parseAtBoundary<T>(schema: z.ZodType<T>, value: unknown): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  return parsed.data;
+}
+
+async function handleGetFolderContents(
+  request: Request,
+  folderId: string
+): Promise<Response> {
   const mediaService = await getMediaService();
   const context = createRequestContext();
 
-  const contents = await mediaService.getFolderContents(folderId, context);
+  const contents = await mediaService.getFolderContents(
+    folderId,
+    context,
+    folderPageQuery(request)
+  );
 
   // Folder contents is a structured object (folder, subfolders, mediaFiles,
   // breadcrumbs); ship it bare via respondData for non-CRUD reads.
   return respondData(contents as unknown as Record<string, unknown>);
 }
 
-async function handleGetRootContents(): Promise<Response> {
+async function handleGetRootContents(request: Request): Promise<Response> {
   const mediaService = await getMediaService();
   const context = createRequestContext();
 
-  const contents = await mediaService.getFolderContents(null, context);
+  const contents = await mediaService.getFolderContents(
+    null,
+    context,
+    folderPageQuery(request)
+  );
 
   return respondData(contents as unknown as Record<string, unknown>);
+}
+
+/**
+ * The sidebar's counts: every folder's items, the items in no folder, and
+ * each view's, from one query.
+ */
+async function handleMediaCounts(): Promise<Response> {
+  const mediaService = await getMediaService();
+  const counts = await mediaService.countLibrary(createRequestContext());
+  return respondData(counts as unknown as Record<string, unknown>);
 }
 
 // ============================================================
@@ -746,10 +810,13 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
             response = await handleGetFolder(route.folderId!);
             break;
           case "get-folder-contents":
-            response = await handleGetFolderContents(route.folderId!);
+            response = await handleGetFolderContents(request, route.folderId!);
             break;
           case "get-root-contents":
-            response = await handleGetRootContents();
+            response = await handleGetRootContents(request);
+            break;
+          case "media-counts":
+            response = await handleMediaCounts();
             break;
           default:
             throwUnmatchedRoute(resolvedParams.path, "GET");

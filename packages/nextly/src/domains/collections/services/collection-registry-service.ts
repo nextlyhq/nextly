@@ -36,6 +36,7 @@ import type {
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { mediaUsagePresent } from "../../media/usage/media-usage-store";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
@@ -602,6 +603,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Asked before the transaction opens: see `DashboardTables`.
       const tables = {
         dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+        mediaUsagePresent: await mediaUsagePresent(this.adapter),
       };
       const count = await this.adapter.transaction(async tx => {
         return deleteEntityRegistryRow(tx, "collection", slug, tables);
