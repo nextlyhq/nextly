@@ -33,6 +33,7 @@ import {
   anyPermissionVerdict,
   routeGateVerdict,
   routeGrantVerdict,
+  routeVisitorVerdict,
   type RouteRules,
 } from "../access/route-gate-adapters";
 import {
@@ -48,6 +49,7 @@ import {
   apiKeyScopeFrom,
   type GrantedPermission,
 } from "../authenticated-scope";
+import { readAccessTokenCookie } from "../cookies/access-token-cookie";
 import { getSession } from "../session";
 import { startServicesForAuthentication } from "../session/session-standing";
 
@@ -398,6 +400,19 @@ function sessionClaims(
   return Object.keys(claims).length > 0 ? claims : undefined;
 }
 
+/**
+ * Whether a request carries no credential at all, read without the container:
+ * a header read and a cookie parse. Any `Authorization` header counts, a key
+ * or not, so a header in another scheme is a credential that is not valid.
+ * The one test of a visitor, asked before the handler boots and after.
+ */
+export function carriesNoCredential(req: Request): boolean {
+  return (
+    req.headers.get("authorization") === null &&
+    readAccessTokenCookie(req) === null
+  );
+}
+
 export async function requireAuthentication(
   req: Request
 ): Promise<AuthContext | ErrorResponse> {
@@ -433,13 +448,19 @@ export async function requireAuthentication(
         "TOKEN_EXPIRED"
       );
     }
-    return createErrorResponse(
+    const refused = createErrorResponse(
       401,
       "Authentication required",
       "Authentication required.",
       undefined,
       "AUTH_REQUIRED"
     );
+    // A session cookie that is malformed, forged or revoked, or an
+    // `Authorization` header that presents no key, is a credential that is
+    // not valid, answered the same; only neither at all is none.
+    return carriesNoCredential(req)
+      ? { ...refused, noCredential: true }
+      : refused;
   }
 
   // ErrorResponse → Bearer header was present but key is invalid — propagate
@@ -935,6 +956,13 @@ export interface RouteOperation {
    */
   namesOne?: boolean;
   /**
+   * The route serves a visitor, a request carrying no credential, what the
+   * Public role grants: the gate asks the one decision for it rather than
+   * refusing it as signed out. Set only by a route whose handler calls the
+   * service as that visitor, which judges it again by the same decision.
+   */
+  admitsVisitor?: boolean;
+  /**
    * The route's handler reads through the query service's filtered read,
    * which limits what it reads to the entries a read rule's filter matches,
    * so a caller whose rule answers one is let through. Set only by a route
@@ -976,16 +1004,29 @@ function appliesFilterFor(
  * {@link requestLanguage}. On REST this is the only place
  * an entry's rule is asked, so it is told them here.
  */
+export function requireCollectionAccess(
+  req: Request,
+  action: string,
+  collectionSlug: string,
+  operation?: RouteOperation & { admitsVisitor?: false }
+): Promise<AuthContext | ErrorResponse>;
+/** A route that may admit a visitor is answered `null` for one; see `visitorAnswer`. */
+export function requireCollectionAccess(
+  req: Request,
+  action: string,
+  collectionSlug: string,
+  operation: RouteOperation
+): Promise<AuthContext | ErrorResponse | null>;
 export async function requireCollectionAccess(
   req: Request,
   action: string,
   collectionSlug: string,
   operation?: RouteOperation
-): Promise<AuthContext | ErrorResponse> {
+): Promise<AuthContext | ErrorResponse | null> {
   const authResult = await requireAuthentication(req);
 
   if ("statusCode" in authResult) {
-    return authResult;
+    return visitorAnswer(authResult, action, collectionSlug, operation);
   }
 
   // Worked out after authentication, never before: on a cold worker the
@@ -1004,6 +1045,79 @@ export async function requireCollectionAccess(
       appliesFilterFor(action, operation)
     )
   );
+}
+
+/**
+ * Whether authentication refused a visitor: a request carrying no credential
+ * at all, neither a session cookie nor a key. One whose credential is not
+ * valid is not a visitor, and is asked to sign in again whatever the Public
+ * role grants. The one test every gate that may serve a visitor asks, here
+ * and at the media routes.
+ */
+export function isVisitorRefusal(refused: ErrorResponse): boolean {
+  return refused.noCredential === true;
+}
+
+/**
+ * The answer for a request that authentication refused, at a collection or
+ * Single gate. Where the route admits visitors and the request carries no
+ * credential at all, it is a visitor, judged by the one decision with the
+ * Public role's grants:
+ *
+ * - allowed, it is answered `null`: no caller, so the handler calls the
+ *   service as the visitor, which judges it again by the same decision;
+ * - refused for want of the Public role's permission, it keeps the sign-in
+ *   answer authentication gave, since signing in could grant it;
+ * - refused by the target's rule, it is a 403. It is never answered as a
+ *   missing entry, as a caller with no identity is not at the service.
+ *
+ * Anything else authentication refused, a credential that is not valid (an
+ * expired, malformed, forged or revoked session, or a bad key), is answered
+ * as it was: it is never judged as a visitor.
+ */
+async function visitorAnswer(
+  refused: ErrorResponse,
+  action: string,
+  resource: string,
+  operation: RouteOperation | undefined
+): Promise<ErrorResponse | null> {
+  if (operation?.admitsVisitor !== true || !isVisitorRefusal(refused)) {
+    return refused;
+  }
+  return withRuleLanguage(requestLanguage(operation), async () => {
+    const appliesFilter =
+      action === "read" && operation.appliesReadFilter === true;
+    const verdict = await routeVisitorVerdict(
+      action,
+      resource,
+      getRBACService(),
+      appliesFilter
+    );
+    if (verdict.allowed) return null;
+    // A read rule's filter, at a route whose handler applies one: let
+    // through, as for a signed-in caller. No route vouches for a visitor, so
+    // the service judges it again and reads only the entries the filter
+    // matches; nothing needs keeping for it.
+    if (appliesFilter && verdict.refusal === "only-matching-entries") {
+      return null;
+    }
+    // Access that could not be read goes to the route's error handling, as
+    // a signed-in caller's does.
+    if (verdict.refusal === "failed") throw verdict.error;
+    if (verdict.refusal === "unauthenticated") return refused;
+    return {
+      ...createErrorResponse(
+        NEXTLY_ERROR_STATUS.FORBIDDEN,
+        "Forbidden",
+        await refusalMessageFor(
+          action,
+          resource,
+          operation.namesOne ? "one" : "all"
+        )
+      ),
+      reason: `the access decision refused a visitor ${action} on ${resource}: its access rule`,
+    };
+  });
 }
 
 /**
@@ -1070,14 +1184,30 @@ export function admittedActionOf(caller: AuthContext): string | undefined {
  * of the action the write asks, which `actionAsked` reads from the request
  * only then; without it, or where it names update, as update refuses them.
  */
+export function requireCollectionWriteAccess(
+  req: Request,
+  collectionSlug: string,
+  operation?: RouteOperation & { admitsVisitor?: false },
+  actionAsked?: () => Promise<"update" | "publish" | "unpublish">
+): Promise<AuthContext | ErrorResponse>;
+/** A route that may admit a visitor is answered `null` for one; see `visitorAnswer`. */
+export function requireCollectionWriteAccess(
+  req: Request,
+  collectionSlug: string,
+  operation: RouteOperation,
+  actionAsked?: () => Promise<"update" | "publish" | "unpublish">
+): Promise<AuthContext | ErrorResponse | null>;
 export async function requireCollectionWriteAccess(
   req: Request,
   collectionSlug: string,
   operation?: RouteOperation,
   actionAsked?: () => Promise<"update" | "publish" | "unpublish">
-): Promise<AuthContext | ErrorResponse> {
+): Promise<AuthContext | ErrorResponse | null> {
   const authResult = await requireAuthentication(req);
-  if ("statusCode" in authResult) return authResult;
+  // A visitor is judged on update alone: it never publishes or unpublishes.
+  if ("statusCode" in authResult) {
+    return visitorAnswer(authResult, "update", collectionSlug, operation);
+  }
   return withRuleLanguage(requestLanguage(operation), async () => {
     // A route naming one entry is refused about it, as in requireCollectionAccess.
     const scope = operation?.namesOne ? "one" : "all";
@@ -1140,7 +1270,9 @@ async function refusalForActionAsked(
  * Helper to check if a result is an error response
  */
 export function isErrorResponse(
-  result: AuthContext | ErrorResponse
+  result: AuthContext | ErrorResponse | null
 ): result is ErrorResponse {
-  return "statusCode" in result;
+  // `null` is a visitor a collection or Single gate admitted: no caller, and
+  // no refusal either.
+  return result !== null && "statusCode" in result;
 }
