@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 
 import { DrizzleAdapter } from "../adapter";
+import { TABLE_NOT_REGISTERED_CODE } from "../types";
 import type {
   SupportedDialect,
   SqlParam,
@@ -184,16 +185,18 @@ describe("DrizzleAdapter", () => {
 
   describe("TableResolver requirement", () => {
     it("should throw when select is called without TableResolver", async () => {
-      // CRUD methods require setTableResolver() to be called during boot
+      // CRUD methods refuse a table no resolver holds
       await expect(adapter.select("users")).rejects.toThrow(
-        /not found in schema registry/
+        /not found in schema registry: this running instance has not registered it/
       );
     });
 
     it("should throw when insert is called without TableResolver", async () => {
       await expect(
         adapter.insert("users", { email: "test@example.com" })
-      ).rejects.toThrow(/not found in schema registry/);
+      ).rejects.toThrow(
+        /not found in schema registry: this running instance has not registered it/
+      );
     });
 
     it("should throw when update is called without TableResolver", async () => {
@@ -203,7 +206,9 @@ describe("DrizzleAdapter", () => {
           { name: "Updated" },
           { and: [{ column: "id", op: "=", value: "1" }] }
         )
-      ).rejects.toThrow(/not found in schema registry/);
+      ).rejects.toThrow(
+        /not found in schema registry: this running instance has not registered it/
+      );
     });
 
     it("should throw when delete is called without TableResolver", async () => {
@@ -211,7 +216,55 @@ describe("DrizzleAdapter", () => {
         adapter.delete("users", {
           and: [{ column: "id", op: "=", value: "1" }],
         })
-      ).rejects.toThrow(/not found in schema registry/);
+      ).rejects.toThrow(
+        /not found in schema registry: this running instance has not registered it/
+      );
+    });
+  });
+
+  describe("a table the resolver does not hold", () => {
+    // Every CRUD method answers it the same way: one code a caller can tell
+    // apart from any database failure, the table named, and nothing about how
+    // the adapter was wired, which is not what an operator can act on.
+    const where = { and: [{ column: "id", op: "=" as const, value: "1" }] };
+    const calls: Array<[string, () => Promise<unknown>]> = [
+      ["select", () => adapter.select("dc_posts")],
+      ["selectOne", () => adapter.selectOne("dc_posts")],
+      ["count", () => adapter.count("dc_posts")],
+      ["insert", () => adapter.insert("dc_posts", { title: "a" })],
+      ["update", () => adapter.update("dc_posts", { title: "b" }, where)],
+      [
+        "updateCount",
+        () => adapter.updateCount("dc_posts", { title: "b" }, where),
+      ],
+      ["delete", () => adapter.delete("dc_posts", where)],
+      [
+        "upsert",
+        () =>
+          adapter.upsert(
+            "dc_posts",
+            { id: "1", title: "a" },
+            { conflictColumns: ["id"] }
+          ),
+      ],
+    ];
+
+    it.each(calls)("%s refuses it as not registered", async (_name, call) => {
+      adapter.setTableResolver({ getTable: () => null });
+      const error = await call().then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      expect(error).toMatchObject({
+        code: TABLE_NOT_REGISTERED_CODE,
+        table: "dc_posts",
+      });
+      const message = (error as Error).message;
+      expect(message).toContain('"dc_posts"');
+      expect(message).toContain("not registered");
+      expect(message).not.toContain("setTableResolver");
+      // Code that recognises the refusal by its message still does.
+      expect(message).toContain("not found in schema registry");
     });
   });
 

@@ -61,6 +61,7 @@ import {
   splitSqlStatements,
   statementRefusals,
 } from "../../domains/schema/migrate/split-sql";
+import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -452,6 +453,15 @@ export async function runChecks(args: {
       return exitWithError(logger, migrationSnapshotInvalid(err.message));
     }
     throw err;
+  }
+
+  // Addresses, by the one address rule, before the drift a new entity also
+  // shows. A new one the rule refuses fails the check; one an entity already
+  // has (its table is in the latest snapshot) keeps working, and is reported
+  // once as a warning naming the address and the reason.
+  if (!reportMigrationAddresses(args.entities, latest, logger)) {
+    process.exit(1);
+    return;
   }
 
   const ops = diffSnapshots(previousSnapshot, desiredSnapshot);

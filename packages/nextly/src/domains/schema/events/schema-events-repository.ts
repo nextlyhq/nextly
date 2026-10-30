@@ -23,7 +23,7 @@ import type {
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
 
-import { newestEvent } from "./newest-event";
+import { standingOf } from "./migration-state";
 import { asRepositoryDb, type RepositoryDb } from "./repository-db";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
@@ -303,14 +303,15 @@ export class SchemaEventsRepository {
   }
 
   /**
-   * True iff the file's MOST RECENT `file_apply` event is `applied`. Latest
-   * wins: a later `rolled_back` (or `failed`) event un-applies the file so the
-   * next `migrate` re-runs it. Mirrors the event-sourced model the resolve
-   * command uses (see newest-event.ts).
+   * Whether the migration is applied: for an app migration, its latest
+   * outcome says so, and a record that is not an outcome (an attempt failed or
+   * stopped) leaves it as it was; a later `rolled_back` outcome un-applies it
+   * so the next `migrate` re-runs it. A plugin module keeps its history's
+   * rule, its newest record (`standingOf`).
    */
   async isFileApplied(filename: string): Promise<boolean> {
     const rows = await this.findFileApplies(filename);
-    return newestEvent(rows)?.status === "applied";
+    return standingOf(filename, rows).state === "applied";
   }
 
   /** Find a row by id. */
@@ -400,8 +401,11 @@ export class SchemaEventsRepository {
   }
 
   /**
-   * Every `file_rollback` row: rollbacks that failed. Kept apart from
-   * `listFileApplies`, whose rows alone decide whether a migration is applied.
+   * Every `file_rollback` row: rollbacks that failed, and rollbacks started
+   * where part of a DOWN can commit before it ends, whose row stays
+   * `in_progress` when the process stops before an outcome is recorded. Kept
+   * apart from `listFileApplies`, whose outcomes alone decide whether a
+   * migration is applied.
    */
   async listFailedRollbacks(): Promise<SchemaEventRow[]> {
     return (await this.db

@@ -28,6 +28,12 @@ export const BlockPages = defineCollection({
   // Draft/Published lifecycle. The route reads with the default `published`
   // scope, so an unpublished row must 404 rather than render.
   status: true,
+  // Anyone may read a block page, as anyone may read the plugin's `pages`: the
+  // route reads as the visitor, whom the Public role judges, and boot grants
+  // that role a collection's read only where its rule answers `true`. A
+  // visitor's read is held to published content whatever it asks for, so the
+  // rule needs no condition on the page's state.
+  access: { read: () => true },
   // Where a block page previews. Without this the collection resolves to
   // `notConfigured`, and a preview link minted for one of its drafts has
   // nowhere to send the reviewer — it verifies, then refuses, which is

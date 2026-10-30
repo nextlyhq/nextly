@@ -290,6 +290,76 @@ describe("whether a card can be asked", () => {
     );
   });
 
+  // Core's declared Breakdown and Recent entries, as the registry publishes them: no query, their
+  // data answered on the server, so the batch asks them nothing to judge by.
+  const declaredBreakdown = {
+    id: "core/breakdown",
+    title: "Breakdown",
+    archetype: "custom",
+    serverData: true,
+    settings: [
+      { name: "collection", type: "collection" },
+      {
+        name: "groupBy",
+        type: "groupBy",
+        of: "collection",
+        defaultFrom: "collection",
+      },
+    ],
+  } as unknown as DashboardWidget;
+  const declaredRecent = {
+    id: "core/recent-entries",
+    title: "Recent entries",
+    archetype: "custom",
+    serverData: true,
+    settings: [{ name: "collection", type: "collection", rows: "titled" }],
+  } as unknown as DashboardWidget;
+  const titled: PublishedContentSource[] = [
+    {
+      collection: "posts",
+      label: "Posts",
+      lifecycle: true,
+      titleField: "title",
+      fields: [
+        { name: "title", type: "string" },
+        { name: "updatedAt", type: "date" },
+      ],
+    },
+    ...sources.slice(1),
+  ];
+
+  it("offers a card core answers only where its load would read: something to divide by", () => {
+    expect(
+      askableWith(declaredBreakdown, { collection: "posts" }, sources)
+    ).toBe(true);
+    // 🔴 With no query to judge, every declared card read as askable, and a
+    // Breakdown was offered on a collection it divides by nothing.
+    expect(
+      askableWith(declaredBreakdown, { collection: "notes" }, sources)
+    ).toBe(false);
+  });
+
+  it("offers a titled list core answers only on a collection that titles its rows", () => {
+    expect(askableWith(declaredRecent, { collection: "posts" }, titled)).toBe(
+      true
+    );
+    // Notes publishes no title field to name its rows by.
+    expect(askableWith(declaredRecent, { collection: "notes" }, titled)).toBe(
+      false
+    );
+  });
+
+  it("offers a card core answers with no such setting wherever it is asked", () => {
+    const note = {
+      id: "core/note",
+      title: "Note",
+      archetype: "custom",
+      serverData: true,
+      settings: [{ name: "text", type: "textarea" }],
+    } as unknown as DashboardWidget;
+    expect(askableWith(note, {}, sources)).toBe(true);
+  });
+
   it("asks a query with a source and, where grouped, a group key", () => {
     expect(askableQuery({ source: "collection:posts", op: "list" })).toBe(true);
     expect(askableQuery({ op: "list" })).toBe(false);

@@ -50,23 +50,45 @@ import { WidgetCard } from "./WidgetCard";
  * shape is what keeps the card from jumping when the data lands.
  */
 /**
+ * What the card's skeleton is drawn as: the display a declared widget says it looks like (its
+ * `skeleton`, published as its `sketch`), else its archetype's. The ONE value its shape, its rows
+ * and their layout are all read from, so a declared list's skeleton is a list's rows and a
+ * declared table's a table's, never a list's shape with a custom card's rows.
+ */
+function skeletonDisplayOf(definition: DashboardWidget): string {
+  return definition.sketch ?? definition.archetype;
+}
+
+/**
+ * The columns a declared table's skeleton holds the place of, beside its title: a table drawn by
+ * the widget's own component asks no query the count could be read from, so the skeleton stands
+ * in with two, which draws a table's heading and columns at the large tier and a row's detail
+ * line below it.
+ */
+const DECLARED_TABLE_COLUMNS = 2;
+
+/**
  * The items setting a list or table card's skeleton holds the place of, from the query as asked;
  * `null` for one that declared no limit, which draws the default number, and `undefined` for any
  * other card, whose skeleton draws its default rows.
  */
 function skeletonItemsFor(definition: DashboardWidget): unknown {
-  if (definition.archetype !== "list" && definition.archetype !== "table")
-    return undefined;
+  const display = skeletonDisplayOf(definition);
+  if (display !== "list" && display !== "table") return undefined;
   return definition.query?.limit ?? null;
 }
 
 /**
  * How many columns a list or table card selects, which is how its skeleton is laid out at each
- * tier. Undefined for any other card, whose skeleton has no rows to lay out.
+ * tier. Undefined for any other card, whose skeleton has no rows to lay out. A declared table,
+ * which asks no query, stands in with `DECLARED_TABLE_COLUMNS`.
  */
 function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
-  if (definition.archetype !== "list" && definition.archetype !== "table")
-    return undefined;
+  const display = skeletonDisplayOf(definition);
+  if (display !== "list" && display !== "table") return undefined;
+  if (definition.query === undefined && display === "table") {
+    return DECLARED_TABLE_COLUMNS;
+  }
   return definition.query?.select?.length ?? 0;
 }
 
@@ -289,7 +311,7 @@ function sharedCardProps(
     ...(placement?.size === undefined ? {} : { h: placement.size.h }),
     // The display the widget says it looks like, else its archetype's: a
     // declared card's `skeleton`, published as its `sketch`.
-    skeleton: skeletonFor(definition.sketch ?? definition.archetype),
+    skeleton: skeletonFor(skeletonDisplayOf(definition)),
     skeletonItems: skeletonItemsFor(definition),
     // The density the card's list rows, and the skeleton holding their place, are drawn at.
     listDensity: listDensityOf(placement?.settings),

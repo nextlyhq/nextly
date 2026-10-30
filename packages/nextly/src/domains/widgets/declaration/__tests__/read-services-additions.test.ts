@@ -14,7 +14,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { executeWidgetQuery } from "../../execute";
-import { rangeWindow, type WidgetQuery } from "../../query";
+import {
+  rangeWindow,
+  validateWidgetQuery,
+  type WidgetQuery,
+} from "../../query";
 import type { WidgetResult } from "../../result";
 import { clearSources, registerSource } from "../../sources";
 import { bindReadServices } from "../read-services";
@@ -306,6 +310,66 @@ describe("a count over a window", () => {
       0
     );
     expect(executed).not.toHaveBeenCalled();
+  });
+});
+
+describe("a count over a window with a malformed filter", () => {
+  /** Services whose reads are checked by the query's own validator, as the batch checks them. */
+  const validated = () =>
+    bindReadServices({
+      caller: person,
+      prepare: async query => validateWidgetQuery(query),
+      signal: new AbortController().signal,
+      now: NOW,
+    });
+
+  /** How a read settles: its refusal's code and words, or that it answered. */
+  const settled = (read: Promise<number>) =>
+    read.then(
+      () => "answered",
+      (error: { code?: unknown; message?: unknown }) =>
+        `${String(error.code)}: ${String(error.message)}`
+    );
+
+  it.each([
+    ["an and that is no list", { and: "bad" }],
+    ["a filter that is a word", "bad"],
+    ["a filter that is a number", 3],
+    ["a filter that is null", null],
+  ])(
+    "is refused for %s exactly as the same count without a window is, and never run",
+    async (_case, where) => {
+      executed.mockResolvedValue({ op: "count", total: 9 });
+      const plain = await settled(
+        validated().count("orders", { where } as never)
+      );
+      const windowed = await settled(
+        validated().count("orders", {
+          where,
+          window: { range: "30d" },
+        } as never)
+      );
+      // 🔴 Wrapped beside the window or replaced by it, the filter never
+      // reached the check, and the count ran over every entry in the window.
+      expect(plain).not.toBe("answered");
+      expect(windowed).toBe(plain);
+      expect(executed).not.toHaveBeenCalled();
+    }
+  );
+
+  it("narrows a filter the check accepts to the window, the control", async () => {
+    executed.mockResolvedValue({ op: "count", total: 9 });
+    await expect(
+      validated().count("orders", {
+        where: { ref: { equals: "x" } },
+        window: { range: "30d" },
+      })
+    ).resolves.toBe(9);
+    const [query] = executed.mock.calls[0] ?? [];
+    expect(query?.where).toMatchObject({
+      ref: { equals: "x" },
+      and: [{ createdAt: expect.any(Object) }],
+    });
   });
 });
 

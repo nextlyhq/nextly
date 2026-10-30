@@ -37,13 +37,9 @@ import {
   isOwnableSystemColumn,
   isReservedSystemColumn,
 } from "../../lib/system-columns";
-import {
-  NEWLY_RESERVED_SLUG_NOTES,
-  SYSTEM_RESOURCES,
-} from "../../schemas/_zod/rbac";
+import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
-  DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldTypeShared,
@@ -171,15 +167,14 @@ export interface SingleValidationResult {
  * any migration or table is built. The system-resource names are added here
  * rather than in the shared base list, which also feeds the component validator
  * where they must not apply.
+ *
+ * A configured slug is judged by the one address rule (`shared/address-rule`),
+ * which reserves the same names; this list stays for code that reads it.
  */
 export const RESERVED_SINGLE_SLUGS = [
   ...RESERVED_SLUGS,
   ...SYSTEM_RESOURCES,
 ] as const;
-
-const RESERVED_SINGLE_SLUGS_SET: Set<string> = new Set<string>(
-  RESERVED_SINGLE_SLUGS
-);
 
 // ============================================================
 // Domain-Specific Validation
@@ -468,12 +463,7 @@ export function validateSingleConfig(
   const errors: SingleValidationError[] = [];
   const errsBase = errors as unknown as BaseValidationError[];
 
-  validateSlugShared(config.slug, errsBase, {
-    entityLabel: "Single",
-    reservedSlugsSet: RESERVED_SINGLE_SLUGS_SET,
-    reservedSlugNotes: NEWLY_RESERVED_SLUG_NOTES,
-    sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
-  });
+  validateSlugShared(config.slug, errsBase, "single");
 
   validateFields(
     config.fields,

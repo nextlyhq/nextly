@@ -10,6 +10,21 @@ import { runReconcileCore } from "./upgrade";
 
 // The schema lock is exercised against real databases in its own suites. These drive the upgrade steps
 // through a narrow adapter double that cannot hold it, so here the lock runs the work as given.
+// `program` imports every command, `migrate` with its whole graph among them;
+// the command under test takes only its context factory from it, and is
+// handed its context here.
+vi.mock("../program", () => ({
+  createContext: () => ({
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      success: () => {},
+    },
+  }),
+}));
+
 vi.mock("../../domains/schema/pipeline/locks", async importOriginal => ({
   ...(await importOriginal<
     typeof import("../../domains/schema/pipeline/locks")
