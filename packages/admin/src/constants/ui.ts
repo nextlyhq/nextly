@@ -26,3 +26,12 @@ export const UI = {
    */
   PREVIEW_WIDTH_DEBOUNCE_MS: 300,
 } as const;
+
+/**
+ * Where the toaster's bottom edge sits, as a custom property on the document
+ * root. The toaster reads it with its own default as the fallback, so toasts
+ * stay in their usual corner until something else claims that corner: the
+ * media library's upload tray sets it to clear itself while it is open, and
+ * removes it when it closes, so a toast appears above the tray, not over it.
+ */
+export const TOAST_OFFSET_BOTTOM_PROPERTY = "--nx-toast-offset-bottom";

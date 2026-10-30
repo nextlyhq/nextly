@@ -16,7 +16,11 @@ import { expectTypeOf } from "vitest";
 
 import type { WidgetSizeDeclaration } from "../../grid-size";
 import { rangeWindow, type RangeInterval } from "../../query";
-import type { WidgetRenderSize, WidgetResultField } from "../../result";
+import type {
+  SettingEditorProps,
+  WidgetRenderSize,
+  WidgetResultField,
+} from "../../result";
 import type { WidgetScope } from "../../resolved-sources";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "../../sources";
 import type { CoreView } from "../displays";
@@ -148,6 +152,15 @@ expectTypeOf<WidgetRenderSize["h"]>().toEqualTypeOf<number>();
 expectTypeOf<WidgetRenderSize["tier"]>().toEqualTypeOf<
   "small" | "medium" | "large"
 >();
+
+// A setting's own editor is handed its value or none, and may set either:
+// `onChange(undefined)` clears a setting, so an editor can offer a Clear.
+expectTypeOf<SettingEditorProps<number>["value"]>().toEqualTypeOf<
+  number | undefined
+>();
+expectTypeOf<
+  Parameters<SettingEditorProps<number>["onChange"]>[0]
+>().toEqualTypeOf<number | undefined>();
 
 // A declaration states its size in the grid's own type, the one the site
 // config, a stored placement and the admin read.

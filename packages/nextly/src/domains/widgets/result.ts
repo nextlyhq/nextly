@@ -18,6 +18,25 @@ import type { WidgetQuery } from "./query";
 import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
+ * What an activity row says happened, as a reader is told it: an entry or
+ * Single was created, saved, published, unpublished or deleted.
+ *
+ * The `event` of a `system:activity` row and of a `GET /dashboard/activity`
+ * row, published here beside the rows' other wire types so a consumer can
+ * switch on it exhaustively. A closed set: the server names an event only by
+ * one of these (`activityEventOf`), and leaves it out of a row it cannot name
+ * one for.
+ *
+ * @experimental
+ */
+export type ActivityEvent =
+  | "created"
+  | "saved"
+  | "published"
+  | "unpublished"
+  | "deleted";
+
+/**
  * One column of a list result, as the admin needs to head it.
  *
  * Carried on the RESULT rather than published as source metadata, and the
@@ -335,8 +354,11 @@ export interface SettingEditorProps<Value> {
   label: string;
   /** Its value in the sheet; `undefined` while none is chosen. */
   value: Value | undefined;
-  /** Sets its value in the sheet. */
-  onChange: (value: Value) => void;
+  /**
+   * Sets its value in the sheet; `undefined` clears it, so the setting is
+   * saved unset and the card reads its default, or no value where it has none.
+   */
+  onChange: (value: Value | undefined) => void;
   /** The card's other settings, by key, as the sheet holds them now. */
   settings: Readonly<Record<string, unknown>>;
   /** True while the sheet is saving: the editor takes no input then. */

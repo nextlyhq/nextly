@@ -38,10 +38,15 @@ import {
 import { existingDocumentIds } from "../lib/readable-documents";
 import type { Logger } from "../shared";
 
-import { activityMetadataOf, isContentSave } from "./activity-changes";
+import {
+  activityEventOf,
+  activityMetadataOf,
+  isContentSave,
+  isSettingsNamespace,
+  type ActivityEvent,
+} from "./activity-changes";
 import {
   afterRun,
-  isSettingsNamespace,
   runKeyOf,
   runsOf,
   type ActivityRun,
@@ -78,6 +83,15 @@ export interface ActivityLogEntry {
   /** NULL once the actor's account was deleted and their identity erased. */
   userEmail: string | null;
   action: ActivityLogAction;
+  /**
+   * What the row says happened, as a reader is told it (`activityEventOf`):
+   * created, saved, published, unpublished or deleted. Absent from a
+   * settings change, and from an update whose record leaves open what it did:
+   * one written before its changed fields were recorded, or one of a document
+   * that no longer exists, whose marks were dropped with its title (see
+   * `historyOfRemovedDocuments`). Such a row says no more than its action.
+   */
+  event?: ActivityEvent;
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
@@ -1078,6 +1092,20 @@ function instantText(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
+/** The event a row names, as `ActivityLogEntry.event` describes it, or nothing. */
+function eventOf(
+  row: Record<string, unknown>,
+  metadata: Record<string, unknown> | null
+): { event?: ActivityEvent } {
+  const event = activityEventOf({
+    action: row.action,
+    metadata,
+    subjectKind: row.subjectKind,
+    collection: row.collection,
+  });
+  return event === undefined ? {} : { event };
+}
+
 /**
  * Safely convert an unknown driver-returned value to a nullable string.
  * Avoids `Object.toString()` fallthrough that triggers no-base-to-string.
@@ -1818,6 +1846,10 @@ export class ActivityLogService extends BaseService {
       userName: toNullableString(row.userName),
       userEmail: toNullableString(row.userEmail),
       action: String(row.action) as ActivityLogAction,
+      // Named from the marks this row still carries, by the rule the runs read
+      // it by: an update that carries none, a removed document's among them,
+      // names none rather than calling its publish or unpublish a save.
+      ...eventOf(row, metadata),
       collection: String(row.collection),
       // Type-narrow before stringification so we don't fall through to
       // Object#toString for non-primitive driver values.

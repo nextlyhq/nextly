@@ -25,11 +25,11 @@ const logger = {
 /** A registry whose two consulted methods are supplied per case. */
 function registryOf(over: {
   updateComponentIfVersion?: unknown;
-  getComponent?: unknown;
+  getComponentForWrite?: unknown;
 }) {
   return {
     updateComponentIfVersion: vi.fn(),
-    getComponent: vi.fn(),
+    getComponentForWrite: vi.fn(),
     ...over,
   } as unknown as FieldGroupRegistryService;
 }
@@ -93,7 +93,7 @@ describe("recordStrandedTransition", () => {
       .mockResolvedValueOnce({ matched: true });
     const registry = registryOf({
       updateComponentIfVersion,
-      getComponent: vi.fn(async () => ({ schemaVersion: 9 })),
+      getComponentForWrite: vi.fn(async () => ({ schemaVersion: 9 })),
     });
 
     await expect(run(registry, async () => null)).rejects.toThrow(
@@ -111,7 +111,7 @@ describe("recordStrandedTransition", () => {
   it("says the row advanced when it moved again before it could be marked", async () => {
     const registry = registryOf({
       updateComponentIfVersion: vi.fn(async () => ({ matched: false })),
-      getComponent: vi.fn(async () => ({ schemaVersion: 9 })),
+      getComponentForWrite: vi.fn(async () => ({ schemaVersion: 9 })),
     });
 
     // Distinct from "marked": this operator must RELOAD, not reconcile, because the change was
@@ -144,7 +144,7 @@ describe("recordStrandedTransition", () => {
       }),
       registryOf({
         updateComponentIfVersion: vi.fn(async () => ({ matched: false })),
-        getComponent: vi.fn(async () => ({ schemaVersion: 9 })),
+        getComponentForWrite: vi.fn(async () => ({ schemaVersion: 9 })),
       }),
       registryOf({
         updateComponentIfVersion: vi.fn(async () => {

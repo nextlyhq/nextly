@@ -576,6 +576,37 @@ export interface AdminBrandingColors {
 }
 
 /**
+ * Which deployment the admin is running in, as a badge beside the project's
+ * name on the dashboard, so nobody mistakes production for staging. Named by
+ * the site, never guessed from the process environment.
+ *
+ * @example
+ * // One config for every deployment: each sets its own label.
+ * admin: { environment: { label: process.env.NEXTLY_ENV_LABEL ?? "Production" } }
+ *
+ * @experimental While the dashboard's header is being built.
+ */
+export interface AdminEnvironmentConfig {
+  /** The badge's text, such as "Production" or "Staging": up to 24 characters. */
+  label: string;
+  /** How loudly the badge reads. Defaults to `"neutral"`. */
+  tone?: AdminEnvironmentTone;
+}
+
+/** The tones an environment badge may take. */
+export type AdminEnvironmentTone = "neutral" | "warning" | "critical";
+
+/** Every tone a badge may take, which the startup check holds a config to. */
+const ENVIRONMENT_TONES: readonly AdminEnvironmentTone[] = [
+  "neutral",
+  "warning",
+  "critical",
+];
+
+/** The most characters an environment label may hold: it is a badge. */
+const MAX_ENVIRONMENT_LABEL = 24;
+
+/**
  * Branding configuration for the Nextly admin UI.
  */
 export interface AdminBrandingConfig {
@@ -670,6 +701,14 @@ export interface PluginOverride {
 export interface AdminConfig {
   /** Branding customizations: logo, colors, favicon. */
   branding?: AdminBrandingConfig;
+
+  /**
+   * The deployment this admin runs in, shown as a badge beside the project's
+   * name. No badge without it.
+   *
+   * @experimental While the dashboard's header is being built.
+   */
+  environment?: AdminEnvironmentConfig;
 
   /**
    * How this site shapes its dashboard: its own widgets, widgets hidden for
@@ -1196,7 +1235,63 @@ function authMinPasswordLength(value: number | undefined): number {
   });
 }
 
+/**
+ * `admin.environment`, checked: a label of 1 to 24 characters with text in it,
+ * and a tone this version draws, or absent.
+ *
+ * @throws {NextlyError} `VALIDATION_ERROR` naming the setting otherwise
+ */
+function checkedAdminEnvironment(environment: unknown): void {
+  if (environment === undefined) return;
+  const problems = adminEnvironmentProblems(environment);
+  if (problems.length === 0) return;
+  throw NextlyError.validation({ errors: problems });
+}
+
+/** Each fault in `admin.environment`, as a validation error naming its path. */
+function adminEnvironmentProblems(
+  environment: unknown
+): { path: string; code: "INVALID_VALUE"; message: string }[] {
+  const fault = (path: string, message: string) => ({
+    path,
+    code: "INVALID_VALUE" as const,
+    message,
+  });
+  if (
+    typeof environment !== "object" ||
+    environment === null ||
+    Array.isArray(environment)
+  ) {
+    return [fault("admin.environment", "Must be { label, tone? }.")];
+  }
+  const { label, tone } = environment as Record<string, unknown>;
+  return [
+    ...(typeof label === "string" && label.trim().length > 0
+      ? label.length > MAX_ENVIRONMENT_LABEL
+        ? [
+            fault(
+              "admin.environment.label",
+              `Must be at most ${MAX_ENVIRONMENT_LABEL} characters: it is drawn as a badge.`
+            ),
+          ]
+        : []
+      : [fault("admin.environment.label", "Must be text, not empty.")]),
+    ...(tone === undefined ||
+    ENVIRONMENT_TONES.includes(tone as AdminEnvironmentTone)
+      ? []
+      : [
+          fault(
+            "admin.environment.tone",
+            `Must be one of ${ENVIRONMENT_TONES.map(each => `"${each}"`).join(", ")}.`
+          ),
+        ]),
+  ];
+}
+
 export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
+  // The environment badge's label and tone, refused at boot rather than drawn
+  // wrong on every dashboard.
+  checkedAdminEnvironment(config.admin?.environment);
   // Validate apiKeys.rateLimit bounds — these are runtime-critical.
   if (config.apiKeys?.rateLimit?.requestsPerHour !== undefined) {
     if (

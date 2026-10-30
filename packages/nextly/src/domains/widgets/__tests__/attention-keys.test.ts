@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ATTENTION_KINDS,
   attentionPartKey,
+  attentionTotalOf,
   parseAttentionKey,
 } from "../attention-keys";
 
@@ -47,5 +48,43 @@ describe("Needs attention's keys", () => {
     "Unpublished",
   ])("reads %j as no key at all", value => {
     expect(parseAttentionKey(value)).toBeNull();
+  });
+});
+
+describe("Needs attention's total", () => {
+  it("sums each kind's own bucket and never its parts, which break a kind down", () => {
+    expect(
+      attentionTotalOf([
+        { value: "unpublished", count: 3 },
+        { value: "unpublished:collection:posts", count: 2 },
+        { value: "unpublished:single:home", count: 1 },
+        { value: "scheduled", count: 2 },
+        { value: "scheduled:collection:posts", count: 2 },
+        { value: "overdue", count: 1 },
+      ])
+    ).toEqual({ count: 6, atLeast: false });
+  });
+
+  it("is a floor when any kind's count is one, a zero floor included", () => {
+    expect(
+      attentionTotalOf([
+        { value: "unpublished", count: 99, atLeast: true },
+        { value: "overdue", count: 1 },
+      ])
+    ).toEqual({ count: 100, atLeast: true });
+    expect(
+      attentionTotalOf([{ value: "scheduled", count: 0, atLeast: true }])
+    ).toEqual({ count: 0, atLeast: true });
+  });
+
+  it("adds nothing for a bucket it does not name, a null bucket or a count below one", () => {
+    expect(
+      attentionTotalOf([
+        { value: "plugin:seo", count: 4, atLeast: true },
+        { value: null, count: 5 },
+        { value: "overdue", count: -2 },
+        { value: "unpublished", count: 1 },
+      ])
+    ).toEqual({ count: 1, atLeast: false });
   });
 });

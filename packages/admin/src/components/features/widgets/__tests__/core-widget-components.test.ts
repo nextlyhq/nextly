@@ -106,13 +106,13 @@ describe("core widget component paths resolve", () => {
    */
   it("reads a non-empty set of named paths from core", () => {
     expect(named).toEqual(
-      expect.arrayContaining(["core#TeamSummary", "core#RecentActivity"])
+      expect.arrayContaining(["core#TeamSummary", "core#TeamActivity"])
     );
   });
 
   it("reads a non-empty set of registrations from the admin", () => {
     expect(registered).toEqual(
-      expect.arrayContaining(["core#TeamSummary", "core#RecentActivity"])
+      expect.arrayContaining(["core#TeamSummary", "core#TeamActivity"])
     );
   });
 
