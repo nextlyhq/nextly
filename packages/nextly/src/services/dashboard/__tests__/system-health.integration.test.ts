@@ -4,8 +4,8 @@
  * for an editor, who is neither offered the card nor shown the items.
  *
  * What only a database can settle: that the ledger's own rows are read as the
- * schema domain writes them (a migration's attempt that failed or never
- * finished, a collection's failed schema change), on every dialect, and that
+ * schema domain writes them (a migration's apply or rollback that failed or
+ * never finished, a collection's failed schema change), on every dialect, and that
  * the one super-admin decision reads the roles the database holds.
  *
  * Runs against whichever dialects the integration run configures; CI covers
@@ -24,6 +24,7 @@ import {
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
 import { readAccessCaller } from "../../../auth/entity-read-access";
+import { recordRollbackFailed } from "../../../cli/commands/plugin-module-rollback";
 import { defineCollection, text } from "../../../config";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { runDigest } from "../../../domains/widgets/attention/digest";
@@ -210,8 +211,43 @@ describe.each(getConfiguredTestDialects())(
           id: "core/system-migrations-failed",
           count: 1,
           severity: "critical",
-          reason: "A migration did not finish applying.",
+          reason: "A migration did not finish applying or rolling back.",
           link: "#system-health",
+        }),
+      ]);
+      await editorSeesNothing(editor);
+    });
+
+    it("reports an applied migration whose migrate:down failed, as migrate:status warns of it", async () => {
+      const { admin, editor, ledger } = await boot();
+      const applied = await ledger.recordStart({
+        eventType: "file_apply",
+        source: "cli-migrate",
+        filename: "0003_shi_rollback.sql",
+      });
+      await ledger.markApplied(applied, {});
+      // The control: applied, and nothing since.
+      expect((await healthFor(admin)).migrations.status).toBe("ok");
+
+      // Recorded as migrate:down records a DOWN that failed: a rollback row,
+      // never a change to the applied one.
+      await recordRollbackFailed({
+        repo: ledger,
+        filename: "0003_shi_rollback.sql",
+        dialect,
+        note: "migrate:down failed: TEST",
+      });
+
+      expect((await healthFor(admin)).migrations).toEqual({
+        status: "failed",
+        failed: 1,
+        pending: 0,
+      });
+      expect(await systemItemsFor(admin)).toEqual([
+        expect.objectContaining({
+          id: "core/system-migrations-failed",
+          count: 1,
+          severity: "critical",
         }),
       ]);
       await editorSeesNothing(editor);

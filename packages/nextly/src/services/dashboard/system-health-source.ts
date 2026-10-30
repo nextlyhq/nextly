@@ -7,8 +7,10 @@
  * - **Version:** the running core version (`getCoreVersion`).
  * - **Migrations:** the boot migrations gate's own state, read without waiting
  *   on it (`assertBootMigrationsSettled`): still running at boot, or refused;
- *   and the schema ledger's migrations whose newest attempt did not finish
- *   (`readSchemaProblems`, by the ledger's `attemptUnfinished` rule).
+ *   and the schema ledger's migrations with an attempt, an apply's or a
+ *   rollback's, that did not finish and that nothing has resolved since
+ *   (`readSchemaProblems`, by each migration's standing, as `migrate:status`
+ *   reads it).
  * - **Schema changes:** the ledger's collections whose newest schema change
  *   failed, from the same read.
  * - **Storage:** the storage layer's last failed write, which it keeps per
@@ -93,9 +95,9 @@ async function collectionLabel(slug: string): Promise<string> {
 }
 
 /**
- * The migrations line: failed when the gate refused or a migration's newest
- * attempt did not finish; pending while boot migrations are still running;
- * otherwise up to date.
+ * The migrations line: failed when the gate refused or a migration has an
+ * unresolved attempt (an apply or a rollback that did not finish); pending
+ * while boot migrations are still running; otherwise up to date.
  *
  * While the gate is pending, an attempt with no outcome yet is the boot's own
  * run under way, so it is counted as pending; once settled, the same row is an
@@ -175,7 +177,7 @@ const SYSTEM_PROBLEMS: readonly {
   {
     id: "core/system-migrations-failed",
     label: "Failed migrations",
-    reason: "A migration did not finish applying.",
+    reason: "A migration did not finish applying or rolling back.",
     link: SYSTEM_HEALTH_LINK,
     count: health => health.migrations.failed,
   },
