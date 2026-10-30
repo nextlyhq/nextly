@@ -31,6 +31,7 @@ import type {
 import type { WidgetSource } from "../../domains/widgets/sources";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext, PluginDefinition } from "../plugin-context";
+import { carriedRemovedKey } from "../removed-widget-keys";
 
 /**
  * Answers one contributed source's query, for one caller.
@@ -155,8 +156,13 @@ export function collectWidgetSources(
     // `enabled` is optional and absent means enabled, so this tests for an
     // explicit `false` rather than for a truthy value.
     if (plugin.enabled === false) continue;
-    for (const contributed of plugin.contributes?.widgetSources ?? []) {
-      consider(contributed, plugin.name, seen, out);
+    const carried = carriedRemovedKey(plugin, "widgetSources");
+    if (!Array.isArray(carried)) continue;
+    // Each entry as written: the key is no field of the contributions type, and
+    // `consider` refuses an entry with no usable id before reading further.
+    const contributed: readonly PluginWidgetSource[] = carried;
+    for (const source of contributed) {
+      consider(source, plugin.name, seen, out);
     }
   }
 

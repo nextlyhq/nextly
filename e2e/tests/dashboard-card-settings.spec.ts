@@ -176,13 +176,13 @@ for (const viewport of WIDTHS) {
     // sent after the write carries this card's question alone.
     const asked = queriesAfterWrite(sent).map(
       request =>
-        (request.postDataJSON() as { queries?: Array<{ source?: string }> })
+        (request.postDataJSON() as { queries?: Array<{ widget?: string }> })
           .queries ?? []
     );
+    // A declared widget's card is asked for by its widget's id.
     expect(
       asked.filter(
-        queries =>
-          queries.length !== 1 || queries[0]?.source !== "collection:posts"
+        queries => queries.length !== 1 || queries[0]?.widget !== CARD
       ),
       `requests that asked other cards: ${JSON.stringify(asked)}`
     ).toEqual([]);

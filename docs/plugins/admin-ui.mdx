@@ -449,10 +449,9 @@ admin: {
 }
 ```
 
-A widget contributed in the older shape (`contributes.admin.widgets`) is suggested by being
-declared, as it was placed before suggestions existed. These widgets go after the named
-suggestions, ascending by `defaultOrder`, and one that omits it comes after every one that
-states it.
+A plugin adds widgets only under `contributes.dashboard.widgets`, each declared with
+`defineWidget`. Startup refuses a plugin that still carries `contributes.admin.widgets` or
+`contributes.widgetSources`, naming the plugin and the key.
 
 A reader's saved layout, once they have arranged their dashboard, wins over all of this.
 Think of the default as where a card starts, not where it stays.
