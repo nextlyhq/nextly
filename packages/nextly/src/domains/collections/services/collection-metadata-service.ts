@@ -11,6 +11,10 @@ import { toDbError } from "../../../database/errors";
 import type { PermissionSeedService } from "../../../domains/auth/services/permission-seed-service";
 import { NextlyError, isProgrammerError } from "../../../errors";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
+import {
+  buildCollectionRevalidationIntent,
+  readRevalidateConfig,
+} from "../../../revalidation/intent-builders";
 import type { StoredHookConfig } from "../../../schemas/dynamic-collections/types";
 import type { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { Logger } from "../../../services/shared";
@@ -18,6 +22,7 @@ import { BaseService } from "../../../shared/base-service";
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
+import { flushContentChange } from "../../flush-content-change";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 
 /** Result shape returned by metadata service methods. */
@@ -1009,6 +1014,17 @@ export class CollectionMetadataService extends BaseService {
 
       // Unregister from metadata
       await this.collectionService.unregisterCollection(params.collectionName);
+
+      // Every cached read of this collection now describes rows that are gone:
+      // expire them, unless the collection owned its own freshness.
+      await flushContentChange(
+        buildCollectionRevalidationIntent(
+          params.collectionName,
+          readRevalidateConfig(collection)
+        ),
+        this.logger,
+        "a collection was deleted"
+      );
 
       // Delete associated permissions
       if (this.permissionSeedService) {
