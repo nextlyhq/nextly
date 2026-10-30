@@ -494,6 +494,39 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(403);
     });
 
+    it("matches an autosave against the filter in the language it saves", async () => {
+      const SLUG = "restfilter_autosave_language";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const id = await ownedInEnglishOnly(t, SLUG);
+      const autosave = (query: string) =>
+        rest(
+          "PUT",
+          [...entry(SLUG, id), "versions", "autosave"],
+          { title: "typed" },
+          query
+        );
+
+      // The author's in English, another's in German.
+      expect(await autosave("?locale=en")).toBe(200);
+      expect(await autosave("?locale=de")).toBe(403);
+    });
+
     it("takes the live values into a held edit the filter matches in its language", async () => {
       const SLUG = "restfilter_take_matched";
       current = await createTestNextly({

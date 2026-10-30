@@ -185,7 +185,10 @@ async function assertHandlerGates(
   write: "label" | "discard" | "autosave",
   logContext: Record<string, unknown>,
   // The version a label names, whose own language is asked about.
-  versionNo?: number
+  versionNo?: number,
+  // The language a discard or an autosave acts in, which the update rule's
+  // filter is matched in.
+  locale?: string | null
 ): Promise<void> {
   const authenticatedScope = resolved.authenticatedScope;
   if (
@@ -230,7 +233,8 @@ async function assertHandlerGates(
     ref.scopeSlug,
     ref.entryId,
     user,
-    authenticatedScope
+    authenticatedScope,
+    locale ?? undefined
   );
   if (write === "autosave") {
     const policy = await resolveVersionsPolicy(ref.scopeKind, ref.scopeSlug);
@@ -309,7 +313,8 @@ async function checkedWriter(
     resolved,
     write,
     logContext,
-    at.versionNo
+    at.versionNo,
+    at.locale
   );
   const authenticatedScope = resolved.authenticatedScope;
 

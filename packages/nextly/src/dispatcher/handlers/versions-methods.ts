@@ -796,6 +796,8 @@ async function assertDocumentWriteAllowed(
     slug: string;
     entryId: string;
     user: UserContext;
+    /** The language the write acts in, which the update rule matches in. */
+    locale?: string | null;
   },
   reason: string
 ): Promise<AuthenticatedScope | undefined> {
@@ -805,7 +807,8 @@ async function assertDocumentWriteAllowed(
     args.slug,
     args.entryId,
     args.user,
-    authenticatedScope
+    authenticatedScope,
+    args.locale ?? undefined
   );
   return authenticatedScope;
 }

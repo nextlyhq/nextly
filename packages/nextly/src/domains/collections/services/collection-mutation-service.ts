@@ -7636,6 +7636,12 @@ export class CollectionMutationService extends BaseService {
      * super-admin-owned key when this gate authorizes a version-label edit.
      */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * The language the caller's write acts in: a filter on a translated field
+     * is matched in it, so an autosave in German is held to the German
+     * entry. The default language where it names none.
+     */
+    locale?: string;
   }): Promise<boolean> {
     // Loaded because the hooks below are shown the row as it stands, and a
     // write to a row that is not there is a not-found rather than a refusal.
@@ -7649,19 +7655,22 @@ export class CollectionMutationService extends BaseService {
     // the difference between them be probed.
     if (!existingEntry) return false;
 
-    const denied = await this.refusalOfStoredUpdate({
-      collectionName: params.collectionName,
-      operation: "update",
-      entryId: params.entryId,
-      user: params.user,
-      // Never overridden: this exists to APPLY the document's rules, so a
-      // caller that could opt out of them would defeat the point.
-      overrideAccess: false,
-      routeAuthorized: params.routeAuthorized,
-      // A scoped API key is judged on its own update grant, so the session
-      // super-admin bypass does not apply to a super-admin-owned key here.
-      authenticatedScope: params.authenticatedScope,
-    });
+    const denied = await this.refusalOfStoredUpdate(
+      {
+        collectionName: params.collectionName,
+        operation: "update",
+        entryId: params.entryId,
+        user: params.user,
+        // Never overridden: this exists to APPLY the document's rules, so a
+        // caller that could opt out of them would defeat the point.
+        overrideAccess: false,
+        routeAuthorized: params.routeAuthorized,
+        // A scoped API key is judged on its own update grant, so the session
+        // super-admin bypass does not apply to a super-admin-owned key here.
+        authenticatedScope: params.authenticatedScope,
+      },
+      params.locale
+    );
     return denied === null;
   }
 
