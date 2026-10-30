@@ -44,6 +44,10 @@
  */
 
 import { LocalStorageAdapter } from "./adapters/local-adapter";
+import {
+  recordStorageWriteFailure,
+  recordStorageWriteSuccess,
+} from "./last-write-failure";
 import type {
   BulkDeleteResult,
   ClientUploadData,
@@ -94,6 +98,20 @@ export interface MediaStorageConfig {
     /** URL path prefix for serving files (default: /uploads) */
     publicPath?: string;
   };
+}
+
+/**
+ * The adapter's type ("local", "s3"), naming it in the last-failed-write
+ * record; "unknown" when the adapter cannot say, so recording a failure never
+ * throws in place of the write's own error.
+ */
+function adapterType(adapter: IStorageAdapter): string {
+  try {
+    const type = adapter.getType();
+    return typeof type === "string" && type !== "" ? type : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 // ============================================================
@@ -287,7 +305,18 @@ export class MediaStorage {
       uploadOptions.folder = config.prefix + (options.folder || "");
     }
 
-    return adapter.upload(buffer, uploadOptions);
+    // Every server-side write is recorded for System health: a failure as
+    // the adapter's last failed write, a success as clearing it. The record is
+    // kept per process (`last-write-failure`), and the error still reaches the
+    // caller as it always did.
+    try {
+      const result = await adapter.upload(buffer, uploadOptions);
+      recordStorageWriteSuccess();
+      return result;
+    } catch (error) {
+      recordStorageWriteFailure(adapterType(adapter), error);
+      throw error;
+    }
   }
 
   /**
