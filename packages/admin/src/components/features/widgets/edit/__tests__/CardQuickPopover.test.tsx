@@ -17,7 +17,6 @@ import {
   CORE_WIDGETS,
 } from "../../../../../../../nextly/src/domains/widgets/core-widgets";
 import { CORE_WIDGET_ID } from "../../../../../../../nextly/src/domains/widgets/core-widgets/ids";
-import { toDefinition } from "../../../../../../../nextly/src/domains/widgets/declaration/declared-widgets";
 import { CardQuickPopover, CardTitleButton } from "../CardQuickSetting";
 import type { CardSettingsWriteCallbacks } from "../useCardSettingsWrite";
 import {
@@ -39,7 +38,7 @@ const SOURCES: PublishedContentSource[] = [
     lifecycle: true,
     titleField: "title",
     fields: [
-      { name: "title", label: "Title", type: "text" },
+      { name: "title", label: "Title", type: "string" },
       { name: "updatedAt", label: "Updated", type: "date" },
     ],
   },
@@ -48,7 +47,7 @@ const SOURCES: PublishedContentSource[] = [
     label: "Pages",
     lifecycle: false,
     titleField: "title",
-    fields: [{ name: "title", label: "Title", type: "text" }],
+    fields: [{ name: "title", label: "Title", type: "string" }],
   },
 ];
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -56,14 +55,28 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 
 /**
- * A core card as the registry publishes it to the admin: a declaration through the registry's
- * own `toDefinition`, a definition with its size filled in, as every published size is.
+ * A core card as the registry publishes it to the admin, with its size filled in as every
+ * published size is. A declaration's settings are published as a list, each named by its key;
+ * written out here from the declaration's own record, since the registry's converter reads
+ * nextly's server modules, which the admin's type check does not reach.
  */
 function coreCard(id: string): DashboardWidget {
   const declared = CORE_DECLARATIONS.find(widget => widget.id === id);
-  const definition = declared
-    ? toDefinition(declared, "core")
-    : CORE_WIDGETS.find(widget => widget.id === id);
+  if (declared) {
+    return {
+      id: declared.id,
+      title: declared.title,
+      archetype: "custom",
+      size: sizeBounds(declared.size),
+      settings: Object.entries(
+        (declared as { settings?: Record<string, object> }).settings ?? {}
+      ).map(([name, setting]) => ({
+        ...setting,
+        name,
+      })),
+    } as unknown as DashboardWidget;
+  }
+  const definition = CORE_WIDGETS.find(widget => widget.id === id);
   if (!definition) throw new Error(`no core widget ${id}`);
   return {
     ...definition,
@@ -72,14 +85,13 @@ function coreCard(id: string): DashboardWidget {
 }
 
 /** A write whose every change lands at once. */
-function landingWrite(): CellSettingsWrite {
+function landingWrite() {
   const lands = (_value: unknown, callbacks: CardSettingsWriteCallbacks) =>
     callbacks.onLanded?.();
-  return {
-    write: vi.fn(lands),
-    resize: vi.fn(lands),
-    isWriting: false,
-  };
+  const write = vi.fn(lands);
+  const resize = vi.fn(lands);
+  const settingsWrite: CellSettingsWrite = { write, resize, isWriting: false };
+  return { settingsWrite, write, resize };
 }
 
 /** A card's title and menu button around its quick popover, as the grid's cell draws them. */
@@ -138,7 +150,7 @@ function Card({
 
 function draw(id: string, config?: Record<string, unknown>) {
   const widget = coreCard(id);
-  const settingsWrite = landingWrite();
+  const { settingsWrite, write, resize } = landingWrite();
   const onMoreSettings = vi.fn();
   render(
     <Card
@@ -148,7 +160,7 @@ function draw(id: string, config?: Record<string, unknown>) {
       onMoreSettings={onMoreSettings}
     />
   );
-  return { widget, settingsWrite, onMoreSettings };
+  return { widget, write, resize, onMoreSettings };
 }
 
 /** The popover's controls by their visible labels, in order, then its last button. */
@@ -210,7 +222,7 @@ describe("the quick popover of core's cards", () => {
 
 describe("a change in the quick popover", () => {
   it("is written at once, while the popover stays open", async () => {
-    const { settingsWrite } = draw(CORE_WIDGET_ID.overTime, {
+    const { write } = draw(CORE_WIDGET_ID.overTime, {
       collection: "posts",
     });
     const { user, popover } = await openFromTitle("Over time");
@@ -220,8 +232,8 @@ describe("a change in the quick popover", () => {
     await user.click(screen.getByRole("option", { name: "Last 7 days" }));
 
     // Written on the change itself, not held for the popover to close.
-    expect(settingsWrite.write).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(settingsWrite.write).mock.calls[0]?.[0]).toEqual({
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0]?.[0]).toEqual({
       collection: "posts",
       dateRange: "7d",
     });
@@ -231,13 +243,13 @@ describe("a change in the quick popover", () => {
   });
 
   it("resizes the card at once from its Size", async () => {
-    const { settingsWrite } = draw(CORE_WIDGET_ID.note);
+    const { resize } = draw(CORE_WIDGET_ID.note);
     const { user, popover } = await openFromTitle("Note");
     await user.click(within(popover).getByRole("combobox", { name: "Width" }));
     await user.click(
       screen.getByRole("option", { name: "Full width, 12 columns" })
     );
-    expect(vi.mocked(settingsWrite.resize).mock.calls[0]?.[0]).toEqual({
+    expect(resize.mock.calls[0]?.[0]).toEqual({
       w: 12,
       h: 3,
     });

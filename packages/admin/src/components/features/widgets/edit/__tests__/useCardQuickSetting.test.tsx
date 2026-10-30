@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { gridBounds } from "../../__tests__/grid-bounds";
+import type { QuickSetting } from "../quick-setting";
 import type { CardSettingsWriteCallbacks } from "../useCardSettingsWrite";
 import {
   useCardQuickSetting,
@@ -23,7 +24,11 @@ import {
   type CellStagedWrite,
 } from "../useCardQuickSetting";
 
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const toast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  dismiss: vi.fn(),
+}));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
   toast,
@@ -53,6 +58,20 @@ vi.mock("../../widget-as-asked", () => {
   };
 });
 
+/** The widget's quick setting: its range. */
+const range: QuickSetting = {
+  name: "range",
+  type: "select",
+  label: "Date range",
+  quick: true,
+  defaultValue: "7d",
+  options: [
+    { label: "Last 7 days", value: "7d" },
+    { label: "Last 30 days", value: "30d" },
+    { label: "Last 90 days", value: "90d" },
+  ],
+};
+
 const WIDGET: DashboardWidget = {
   id: "core/activity",
   title: "Activity",
@@ -61,18 +80,9 @@ const WIDGET: DashboardWidget = {
   size: { default: { w: 4, h: 3 }, min: { w: 3, h: 2 }, max: { w: 12, h: 6 } },
   query: { source: "collection:posts", op: "list", limit: 5 },
   settings: [
-    {
-      name: "range",
-      type: "select",
-      label: "Date range",
-      quick: true,
-      defaultValue: "7d",
-      options: [
-        { label: "Last 7 days", value: "7d" },
-        { label: "Last 30 days", value: "30d" },
-        { label: "Last 90 days", value: "90d" },
-      ],
-    },
+    range,
+    // Changed in the sheet, never quick: what a later save changes beside the quick setting.
+    { name: "limit", type: "number", label: "Rows", defaultValue: 5 },
   ],
 };
 
@@ -145,9 +155,6 @@ function pressUndo() {
   if (!options?.action) throw new Error("no Undo offered");
   act(() => options.action?.onClick());
 }
-
-const range = WIDGET.settings?.[0];
-if (range?.type !== "select") throw new Error("fixture: range is a select");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -237,6 +244,26 @@ describe("a quick setting changed at rest", () => {
     expect(new Set(ids)).toEqual(new Set(["card-change-p1"]));
   });
 
+  it("is undone for that setting alone, keeping a later save of another of the card's settings", () => {
+    const { settingsWrite, write } = landingWrite();
+    const props = base(settingsWrite, { config: { range: "30d" } });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSetting(range, "90d"));
+    const changed = { ...props, config: { range: "90d" } };
+    settle(rerender, changed, new Date(2_000));
+    // The sheet's Done saves Rows after it, while the change's Undo is still on offer.
+    rerender({
+      ...changed,
+      updatedAt: new Date(2_000),
+      config: { range: "90d", limit: 9 },
+    });
+
+    pressUndo();
+    expect(write.mock.calls.at(-1)?.[0]).toEqual({ range: "30d", limit: 9 });
+  });
+
   it("goes back to the stored value, and offers no Undo, when the write does not land", () => {
     const { settingsWrite } = landingWrite({
       write: vi.fn((_config, callbacks: CardSettingsWriteCallbacks) =>
@@ -312,6 +339,60 @@ describe("the card's size, changed at rest", () => {
   });
 });
 
+describe("an Undo offered at rest, once customising begins", () => {
+  // Customising hands the card to the draft and takes its at-rest write away, as the grid does.
+  const customising = { isEditing: true, settingsWrite: undefined };
+
+  it("is taken down, and writes nothing under the draft when pressed anyway", () => {
+    const { settingsWrite, write } = landingWrite();
+    const props = base(settingsWrite, { config: { range: "30d" } });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSetting(range, "90d"));
+    const changed = { ...props, config: { range: "90d" } };
+    settle(rerender, changed, new Date(2_000));
+    expect(toasts()).toEqual(["Activity: Date range set to Last 90 days."]);
+
+    rerender({ ...changed, updatedAt: new Date(2_000), ...customising });
+    expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
+    pressUndo();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("does the same for a size", () => {
+    const { settingsWrite, resize } = landingWrite();
+    const props = base(settingsWrite, { size: { w: 4, h: 3 } });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSize({ w: 12, h: 3 }));
+    rerender({ ...props, size: { w: 12, h: 3 }, ...customising });
+    expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
+    pressUndo();
+    expect(resize).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not said, nor offered later, when customising begins before the card shows the change", () => {
+    const { settingsWrite } = landingWrite();
+    const props = base(settingsWrite, { config: { range: "30d" } });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSetting(range, "90d"));
+    // The write landed and the card is still asking again when customising begins.
+    rerender({ ...props, config: { range: "90d" }, isFetching: true });
+    rerender({ ...props, config: { range: "90d" }, ...customising });
+    // Back at rest, with the card's new answer in: the change from before is not said then.
+    rerender({
+      ...props,
+      config: { range: "90d" },
+      updatedAt: new Date(2_000),
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
 describe("a new collection from the popover", () => {
   const LISTED: DashboardWidget = {
     ...WIDGET,
@@ -333,7 +414,7 @@ describe("a new collection from the popover", () => {
     collection,
     label: collection[0]?.toUpperCase() + collection.slice(1),
     lifecycle: false,
-    fields: fields.map(name => ({ name, label: name, type: "text" })),
+    fields: fields.map(name => ({ name, label: name, type: "string" })),
   });
 
   it("resets the settings that work over it, and is said by the collection's label", () => {

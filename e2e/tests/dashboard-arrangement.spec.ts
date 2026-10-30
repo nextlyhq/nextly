@@ -26,12 +26,18 @@ test.describe.configure({ lock: [LOCK.dashboard] });
 
 const CELLS = '[data-testid^="widget-cell-"]';
 
-/** The cards' widget ids in DOM order: the order the page is read in. */
+/**
+ * The cards' widget ids in DOM order: the order the page is read in. A card
+ * hidden while empty keeps its cell but is not drawn (`display: none`), so a
+ * reader never meets it; it is left out here as it is from the visual order.
+ */
 async function readingOrder(page: Page): Promise<string[]> {
   return page
     .locator(CELLS)
     .evaluateAll(cells =>
-      cells.map(cell => cell.getAttribute("data-testid") ?? "")
+      cells
+        .filter(cell => cell.checkVisibility())
+        .map(cell => cell.getAttribute("data-testid") ?? "")
     );
 }
 
@@ -112,7 +118,9 @@ for (const width of [1440, 820]) {
     // Mixed heights, or a grid that backfilled gaps could still pass.
     expect(await placeMixedHeights(page)).toBe(true);
     await page.reload();
-    await expect(page.locator(CELLS).first()).toBeVisible();
+    await expect(
+      page.locator(CELLS).filter({ visible: true }).first()
+    ).toBeVisible();
 
     const reading = await readingOrder(page);
     // More than one card, or "agree" proves nothing.
@@ -144,7 +152,9 @@ test("removes a card, brings it back and saves a removal, by keyboard alone", as
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await gotoAdmin(page, "/");
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   const before = await readingOrder(page);
 
   await customize(page);
@@ -213,7 +223,9 @@ test("removes a card, brings it back and saves a removal, by keyboard alone", as
   // other card keeps its order.
   const removedCell = inCustomize[0];
   await page.reload();
-  await expect(page.locator(CELLS).first()).toBeVisible();
+  await expect(
+    page.locator(CELLS).filter({ visible: true }).first()
+  ).toBeVisible();
   expect(await readingOrder(page)).toEqual(
     before.filter(id => id !== removedCell)
   );

@@ -41,6 +41,10 @@ import {
 } from "@admin/context/providers/BrandingProvider";
 import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import type {
+  DashboardLayoutRead,
+  DashboardLayoutResponse,
+} from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "./core-components";
 import { DrawFailureContext, useDrawFailures } from "./draw-failures";
@@ -66,6 +70,12 @@ import { useDashboardFocus } from "./edit/useDashboardFocus";
 import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
+import { usePublishGridChrome } from "./grid-chrome";
+import {
+  HiddenWhileEmptyContext,
+  useHiddenWhileEmptyAtFirstPaint,
+  type CardAnswers,
+} from "./hidden-while-empty";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
 import { DashboardWidthProvider, useDashboardWidth } from "./useDashboardWidth";
@@ -202,6 +212,7 @@ const NO_CARDS: [] = [];
  * Each query is sized for the tier it will be drawn at. The width is measured before the first
  * paint, and no card is asked before it is known, so every first query is sized for its card's
  * tier. Dragging is decided from the same width: on wherever more than one column is drawn.
+ * The batch is asked under the token of `layout`, the layout answer the cards are drawn from.
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
@@ -209,7 +220,8 @@ function useCardsAtDashboardWidth(
   carry: Pick<
     Parameters<typeof useCardDrag>[0],
     "gridRef" | "say" | "drop" | "requestFocus"
-  >
+  >,
+  layout: DashboardLayoutResponse | undefined
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
@@ -229,7 +241,10 @@ function useCardsAtDashboardWidth(
     dashboardRef,
     dashboardWidth,
     drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
-    ...useWidgetBatch(cards, draws.failed),
+    // Asked under the token of the layout answer the cards are drawn from, and again under each
+    // new one: a layout read that lands after the batch started is the load the cards are then
+    // drawn from, and the server answers a card that load read ahead only under its token.
+    ...useWidgetBatch(cards, draws.failed, layout?.readAheadToken),
     reportDraw: draws.report,
   };
 }
@@ -355,6 +370,45 @@ function ArrangementLoading() {
 }
 
 /**
+ * What every card under the grid reads beside its props: where a card that fails to draw reports
+ * it, and which cards the dashboard is drawn without while empty: those the first layout answer
+ * found empty, less any a later layout answer, or the card's own batch answer (`answers`), finds
+ * with something waiting (`hidden-while-empty`).
+ * Mounted with the grid, which waits for that answer, and taken at the dashboard's width, which
+ * is measured before the first paint, so the verdict is in place before any card is painted.
+ */
+function CardContexts({
+  reportDraw,
+  layout,
+  dashboardWidth,
+  answers,
+  children,
+}: {
+  reportDraw: ComponentProps<typeof DrawFailureContext.Provider>["value"];
+  layout: DashboardLayoutRead | undefined;
+  /** The dashboard's width, which the verdict is taken at once it has one. */
+  dashboardWidth: number | undefined;
+  answers: CardAnswers;
+  children: ReactNode;
+}): JSX.Element {
+  const hiddenWhileEmpty = useHiddenWhileEmptyAtFirstPaint(
+    layout,
+    dashboardWidth,
+    answers
+  );
+  return (
+    <DrawFailureContext.Provider value={reportDraw}>
+      <HiddenWhileEmptyContext.Provider value={hiddenWhileEmpty}>
+        {/* The width a card's settings panel previews it at (`cardOuterWidth`). */}
+        <DashboardWidthProvider value={dashboardWidth}>
+          {children}
+        </DashboardWidthProvider>
+      </HiddenWhileEmptyContext.Provider>
+    </DrawFailureContext.Provider>
+  );
+}
+
+/**
  * What the dashboard's container holds while there are no cards to draw, or `null` once there
  * are. Drawn inside the measured container either way, by the one return that draws it.
  *
@@ -386,6 +440,26 @@ function holdingBody({
   return awaitingArrangement ? <ArrangementLoading /> : null;
 }
 
+/**
+ * The reader's stored layout and the arrangement drawn from it, read together:
+ * the arrangement is the layout's, and the card writes outside customise mode
+ * need the layout itself.
+ */
+function useLayoutArrangement(
+  declared: Parameters<typeof useDashboardArrangement>[0],
+  announce: Parameters<typeof useDashboardArrangement>[2],
+  focus: Parameters<typeof useDashboardArrangement>[3]
+) {
+  const layout = useDashboardLayout();
+  const arrangement = useDashboardArrangement(
+    declared,
+    layout,
+    announce,
+    focus
+  );
+  return { layout, arrangement };
+}
+
 export function WidgetGrid(): JSX.Element {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -413,10 +487,8 @@ export function WidgetGrid(): JSX.Element {
   // Where focus goes when a gesture moves or removes the element holding it.
   const focus = useDashboardFocus();
 
-  const layout = useDashboardLayout();
-  const arrangement = useDashboardArrangement(
+  const { layout, arrangement } = useLayoutArrangement(
     declared,
-    layout,
     announce,
     focus
   );
@@ -457,12 +529,27 @@ export function WidgetGrid(): JSX.Element {
     failed,
     settling,
     retry,
+    refresh,
     reportDraw,
-  } = useCardsAtDashboardWidth(visible, editor.isEditing, {
-    gridRef: focus.gridRef,
-    say: announce.drag,
-    drop: arrangement.dropCard,
-    requestFocus: focus.request,
+  } = useCardsAtDashboardWidth(
+    visible,
+    editor.isEditing,
+    {
+      gridRef: focus.gridRef,
+      say: announce.drag,
+      drop: arrangement.dropCard,
+      requestFocus: focus.request,
+    },
+    layout.layout
+  );
+
+  // What the page's header draws from the grid.
+  usePublishGridChrome({
+    arrangement,
+    requested,
+    updatedAtFor,
+    refresh,
+    customizeRef: focus.customizeRef,
   });
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
@@ -549,7 +636,6 @@ export function WidgetGrid(): JSX.Element {
             isUnreadable={layout.isUnreadable}
             onStageReset={arrangement.stageReset}
             on={{
-              begin: arrangement.begin,
               cancel: arrangement.cancel,
               addWidget: () => addPanel.setOpen(true),
             }}
@@ -558,38 +644,41 @@ export function WidgetGrid(): JSX.Element {
           />
 
           <CardDragContext drag={drag}>
-            <DashboardWidthProvider value={dashboardWidth}>
-              <AtRestSettingsWriteProvider value={settingsWrite}>
-                <DrawFailureContext.Provider value={reportDraw}>
-                  <ArrangedGrid
-                    rows={visible}
-                    placements={editor.placements}
-                    isDrawn={arrangement.isDrawn}
-                    isEditing={editor.isEditing}
-                    writes={{
-                      isWriting: editor.isWriting,
-                      singleCardWriteBlocked: singleCardWriteBlocked(
-                        layout.isUnreadable
-                      ),
-                      settings: settingsWrite,
-                    }}
-                    slots={slots}
-                    cellSlots={cellSlots}
-                    requested={requested}
-                    updatedAtFor={updatedAtFor}
-                    fetchedSizeFor={fetchedSizeFor}
-                    fetchingPlacementIds={fetchingPlacementIds}
-                    retry={retry}
-                    announcement={announcement}
-                    focus={focus}
-                    gridRef={focus.gridRef}
-                    highlightedId={ring.highlightedId}
-                    drag={drag}
-                    on={cardActions(arrangement, removal, editor)}
-                  />
-                </DrawFailureContext.Provider>
-              </AtRestSettingsWriteProvider>
-            </DashboardWidthProvider>
+            <AtRestSettingsWriteProvider value={settingsWrite}>
+              <CardContexts
+                reportDraw={reportDraw}
+                layout={layout.layout}
+                answers={{ slots, fetching: fetchingPlacementIds }}
+                dashboardWidth={dashboardWidth}
+              >
+                <ArrangedGrid
+                  rows={visible}
+                  placements={editor.placements}
+                  isDrawn={arrangement.isDrawn}
+                  isEditing={editor.isEditing}
+                  writes={{
+                    isWriting: editor.isWriting,
+                    singleCardWriteBlocked: singleCardWriteBlocked(
+                      layout.isUnreadable
+                    ),
+                    settings: settingsWrite,
+                  }}
+                  slots={slots}
+                  cellSlots={cellSlots}
+                  requested={requested}
+                  updatedAtFor={updatedAtFor}
+                  fetchedSizeFor={fetchedSizeFor}
+                  fetchingPlacementIds={fetchingPlacementIds}
+                  retry={retry}
+                  announcement={announcement}
+                  focus={focus}
+                  gridRef={focus.gridRef}
+                  highlightedId={ring.highlightedId}
+                  drag={drag}
+                  on={cardActions(arrangement, removal, editor)}
+                />
+              </CardContexts>
+            </AtRestSettingsWriteProvider>
           </CardDragContext>
 
           <DashboardAddPanel

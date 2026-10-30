@@ -221,7 +221,10 @@ describe("resolveServiceOpts", () => {
     await expect(
       resolve({ as: "user", user: { id: "u1", email: "u@e.com" } })
     ).rejects.toThrow();
-    expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith("u1");
+    expect(vi.mocked(listRoleSlugsForUserOrRefuse)).toHaveBeenCalledWith(
+      "u1",
+      undefined
+    );
     expect(vi.mocked(listRoleSlugsForUser)).not.toHaveBeenCalled();
   });
 

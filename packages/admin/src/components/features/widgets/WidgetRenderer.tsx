@@ -41,6 +41,10 @@ import type { CardState } from "./frame/card-state";
 import { listDensityOf } from "./frame/list-rows";
 import type { CardEmptyContent, SkeletonShape } from "./frame/states";
 import type { AnswerSize } from "./frame/tier";
+import {
+  useHiddenWhileEmpty,
+  useHidesWhenAnswerEmpty,
+} from "./hidden-while-empty";
 import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
 import { askableQuery } from "./widget-as-asked";
 import { WidgetCard } from "./WidgetCard";
@@ -313,13 +317,16 @@ function sharedCardProps(
     | "answerSize"
     | "subtitle"
     | "tier"
-  >
+  > & { hiddenWhileEmpty: boolean; hidesWhenAnswerEmpty: boolean }
 ) {
+  const { hiddenWhileEmpty, hidesWhenAnswerEmpty, ...rest } = controls;
+  const hides = definition.hidesWhenEmpty === true;
   return {
     title: definition.title,
     link: definition.link,
-    ...controls,
-    hidesWhenEmpty: definition.hidesWhenEmpty === true,
+    ...rest,
+    hiddenWhileEmpty: hides && hiddenWhileEmpty,
+    hidesWhenAnswerEmpty: hides && hidesWhenAnswerEmpty,
     cardId: placement?.id ?? definition.id,
     widgetId: definition.id,
     // The card's height, which its list rows are counted from.
@@ -577,6 +584,10 @@ export function WidgetRenderer({
   subtitle,
   tier,
 }: WidgetRendererProps): JSX.Element {
+  // Taken off the dashboard while empty by the layout read's verdict, held for the visit; or, for
+  // a widget the layout read cannot answer, by its own answer as it is drawn.
+  const hiddenWhileEmpty = useHiddenWhileEmpty(placement?.id);
+  const hidesWhenAnswerEmpty = useHidesWhenAnswerEmpty(definition.id);
   const shared = sharedCardProps(definition, placement, {
     headerAction,
     quick,
@@ -585,6 +596,8 @@ export function WidgetRenderer({
     customizing,
     answerSize,
     subtitle,
+    hiddenWhileEmpty,
+    hidesWhenAnswerEmpty,
     ...(tier === undefined ? {} : { tier }),
   });
 

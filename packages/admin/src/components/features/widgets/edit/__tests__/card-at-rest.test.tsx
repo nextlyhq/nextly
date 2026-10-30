@@ -12,7 +12,8 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DASHBOARD_HEADING_ID } from "@admin/components/features/dashboard/WelcomeHeader";
+import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
+import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
 import type { AdminBranding } from "@admin/types/branding";
@@ -30,10 +31,15 @@ import {
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
 
-const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+const toast = vi.hoisted(() => ({
+  error: vi.fn(),
+  success: vi.fn(),
+  dismiss: vi.fn(),
+}));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -42,6 +48,18 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
+}));
+// The page's header beside the grid holds Customize: its own reads stubbed.
+vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
+  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
+  useDashboardSummary: () => ({ data: undefined }),
+}));
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({
+    user: { id: "u1", name: "Dev User", email: "dev@example.com" },
+    isLoading: false,
+    error: null,
+  }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -107,22 +125,41 @@ function branding(): AdminBranding {
   } as unknown as AdminBranding;
 }
 
+/** The default dashboard both cards are on, at their widgets' default size. */
+const DEFAULTS: WidgetPlacement[] = [
+  { id: "p1", widgetId: "core/styled", w: 4, h: 3, removed: false },
+  { id: "p2", widgetId: "core/plain", w: 4, h: 3, removed: false },
+];
+
+/**
+ * What the server reads back for a reader still following the default, as its layout read does
+ * (`dismissalsApplied`, tested with the layout endpoint in nextly's own suite): the default's
+ * cards in the default's order, each with the removal and settings the reader stored, and the
+ * size they stored only where it departs from the default's, which is the size they chose. The
+ * admin's tests do not import the server's modules, so the rule is stated here for this card list.
+ */
+function followedDefault(
+  written: readonly WidgetPlacement[]
+): WidgetPlacement[] {
+  return DEFAULTS.map(card => {
+    const choice = written.find(placement => placement.id === card.id);
+    if (choice === undefined) return card;
+    return {
+      ...card,
+      w: choice.w,
+      h: choice.h,
+      removed: choice.removed,
+      ...(choice.config === undefined ? {} : { config: choice.config }),
+    };
+  });
+}
+
 function layout(): DashboardLayoutResponse {
   return {
-    placements: [
-      {
-        id: "p1",
-        widgetId: "core/styled",
-        w: 4,
-        h: 3,
-        removed: false,
-        config: { accent: "soft" },
-      },
-      { id: "p2", widgetId: "core/plain", w: 4, h: 3, removed: false },
-    ],
+    placements: [{ ...DEFAULTS[0], config: { accent: "soft" } }, DEFAULTS[1]],
     widgets: {},
     available: [],
-    defaultPlacements: [],
+    defaultPlacements: DEFAULTS,
     version: 7,
     source: "own",
     // A row of dismissals at most: the reader still follows the default.
@@ -140,14 +177,17 @@ function renderGrid() {
     },
   });
   const Wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      <h1 id={DASHBOARD_HEADING_ID} tabIndex={-1}>
-        Welcome
-      </h1>
-      {children}
-    </QueryClientProvider>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return render(<WidgetGrid />, { wrapper: Wrapper });
+  // The page's header and grid, as the page composes them: the header holds the page's heading,
+  // which a closed notice returns focus to, and Customize.
+  return render(
+    <DashboardChromeProvider>
+      <WelcomeHeader />
+      <WidgetGrid />
+    </DashboardChromeProvider>,
+    { wrapper: Wrapper }
+  );
 }
 
 type User = ReturnType<typeof userEvent.setup>;
@@ -159,9 +199,8 @@ async function openMenu(user: User, title: string) {
   return screen.findByRole("menu");
 }
 
-/** Chooses a width from the card menu at rest, by keyboard: jsdom has no geometry for a pointer. */
-async function chooseWidthAtRest(user: User, title: string, name: string) {
-  const menu = await openMenu(user, title);
+/** Chooses a width from an open card menu's Width submenu, by keyboard: jsdom has no geometry. */
+async function chooseWidthIn(user: User, menu: HTMLElement, name: string) {
   await user.click(within(menu).getByRole("menuitem", { name: /Width/ }));
   const widths = await waitFor(() => {
     const menus = screen.getAllByRole("menu");
@@ -170,6 +209,22 @@ async function chooseWidthAtRest(user: User, title: string, name: string) {
   });
   within(widths).getByRole("menuitemradio", { name }).focus();
   await user.keyboard("{Enter}");
+}
+
+/** Chooses a width from the card menu at rest. */
+async function chooseWidthAtRest(user: User, title: string, name: string) {
+  await chooseWidthIn(user, await openMenu(user, title), name);
+}
+
+/** The same width chosen from the customise menu, then saved: the write customise mode sends. */
+async function chooseWidthAndSave(user: User, title: string, name: string) {
+  await user.click(await screen.findByTestId("dashboard-edit-begin"));
+  await user.click(
+    await screen.findByRole("button", { name: `Card actions for ${title}` })
+  );
+  await chooseWidthIn(user, await screen.findByRole("menu"), name);
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
 }
 
 /** The body of the `index`th layout write, in the order sent. */
@@ -199,13 +254,18 @@ beforeEach(() => {
   mockBranding = branding();
   layoutResponse = layout();
   api.get.mockImplementation(() => Promise.resolve(layoutResponse));
-  // The stand-in APPLIES the write, so the next read answers with it.
+  // The stand-in answers the next read as the server would, not by echoing the write.
   api.put.mockImplementation((_path: string, body: unknown) => {
-    const write = body as { placements: WidgetPlacement[] };
+    const write = body as { placements: WidgetPlacement[]; arranged: boolean };
+    const before = layoutResponse as DashboardLayoutResponse;
+    const arranged = write.arranged || before.arranged;
     layoutResponse = {
-      ...(layoutResponse as DashboardLayoutResponse),
-      placements: write.placements,
-      version: (layoutResponse?.version ?? 0) + 1,
+      ...before,
+      arranged,
+      placements: arranged
+        ? write.placements
+        : followedDefault(write.placements),
+      version: before.version + 1,
     };
     return Promise.resolve({ message: "ok", item: {} });
   });
@@ -260,40 +320,15 @@ describe("Size in the card menu at rest", () => {
     vi.clearAllMocks();
     layoutResponse = layout();
     renderGrid();
-    await user.click(await screen.findByTestId("dashboard-edit-begin"));
-    await user.click(
-      await screen.findByRole("button", { name: "Card actions for Styled" })
-    );
-    const menu = await screen.findByRole("menu");
-    await user.click(within(menu).getByRole("menuitem", { name: /Width/ }));
-    const widths = await waitFor(() => {
-      const menus = screen.getAllByRole("menu");
-      expect(menus.length).toBe(2);
-      return menus[1];
-    });
-    within(widths)
-      .getByRole("menuitemradio", { name: "Half width, 6 columns" })
-      .focus();
-    await user.keyboard("{Enter}");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    await chooseWidthAndSave(user, "Styled", "Half width, 6 columns");
     const saved = sent(0);
 
     expect(api.put.mock.calls[0]?.[0]).toBe(restPath);
-    expect(rest?.placements).toEqual(saved?.placements);
-    expect(
-      rest?.placements.find(placement => placement.id === "p1")
-    ).toMatchObject({
-      w: 6,
-      h: 3,
-    });
-    expect({ version: rest?.version, scope: rest?.scope }).toEqual({
-      version: saved?.version,
-      scope: saved?.scope,
-    });
     // The one difference, on purpose: resizing one card is not taking charge of the dashboard.
-    expect(rest?.arranged).toBe(false);
-    expect(saved?.arranged).toBe(true);
+    expect({ ...rest, arranged: true }).toEqual(saved);
+    expect(rest).toMatchObject({ arranged: false });
+    expect(saved).toMatchObject({ arranged: true });
+    expect(rest?.placements[0]).toMatchObject({ id: "p1", w: 6, h: 3 });
   });
 
   it("offers Undo, which puts the card back at the size it had", async () => {

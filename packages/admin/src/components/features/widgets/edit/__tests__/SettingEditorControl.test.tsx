@@ -2,8 +2,10 @@
  * A setting drawn by its own editor in the settings sheet: the component its
  * widget names in `editor`, handed the setting's value, a change callback and
  * the card's other settings, in place of the setting's own field; a change it
- * makes is saved with the rest on Done. An editor the site did not register
- * says so in its place.
+ * makes is saved with the rest on Done. A change the setting does not take,
+ * or a Field setting naming a field its collection does not offer, is named
+ * under the editor and nothing is saved; `onChange(undefined)` saves the
+ * setting unset. An editor the site did not register says so in its place.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -18,8 +20,24 @@ import {
 
 import { SettingsPanel } from "../SettingsPanel";
 
+// The collections and fields the reader is offered, as the workspace payload
+// sends them: Posts offers Title and Headline, and nothing called Subtitle.
+const branding = vi.hoisted(() => ({
+  widgetSources: [
+    {
+      collection: "posts",
+      label: "Posts",
+      lifecycle: false,
+      fields: [
+        { name: "title", type: "string", label: "Title" },
+        { name: "headline", type: "string", label: "Headline" },
+      ],
+    },
+  ],
+}));
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
-  useBranding: () => ({ widgetSources: [] }),
+  useBranding: () => branding,
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -55,6 +73,38 @@ function TargetEditor({ value }: SettingEditorProps<number>) {
   return <p>Target is {typeof value}</p>;
 }
 
+const FIELD_EDITOR = "@acme/goals/admin#FieldEditor";
+
+/** Picks a field by name, whether the collection offers it or not, or clears the choice. */
+function FieldEditor({ value, onChange }: SettingEditorProps<string>) {
+  return (
+    <div>
+      <p>Column is {value ?? "unset"}</p>
+      <button type="button" onClick={() => onChange("subtitle")}>
+        Pick Subtitle
+      </button>
+      <button type="button" onClick={() => onChange("headline")}>
+        Pick Headline
+      </button>
+      <button type="button" onClick={() => onChange(undefined)}>
+        Clear
+      </button>
+    </div>
+  );
+}
+
+/** A Field setting with no default, over a Collection setting, drawn by its own editor. */
+const withField: AnyWidgetSetting[] = [
+  { name: "collection", type: "collection", label: "Collection" },
+  {
+    name: "column",
+    type: "field",
+    of: "collection",
+    label: "Column",
+    editor: { component: FIELD_EDITOR },
+  },
+];
+
 const declared: AnyWidgetSetting[] = [
   { name: "title", type: "text", label: "Title", defaultValue: "" },
   {
@@ -88,10 +138,12 @@ function open(
 beforeEach(() => {
   registerComponent(EDITOR, GoalEditor as never);
   registerComponent(TARGET_EDITOR, TargetEditor as never);
+  registerComponent(FIELD_EDITOR, FieldEditor as never);
 });
 afterEach(() => {
   unregisterComponent(EDITOR);
   unregisterComponent(TARGET_EDITOR);
+  unregisterComponent(FIELD_EDITOR);
 });
 
 describe("a setting with its own editor", () => {
@@ -127,6 +179,46 @@ describe("a setting with its own editor", () => {
       await screen.findByText('"Goal" is at most 30.', { selector: "p" })
     ).toBeTruthy();
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("names a field its collection does not offer on Done, and saves nothing", async () => {
+    const onSave = open({ collection: "posts", column: "title" }, withField);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Pick Subtitle" })
+    );
+    expect(screen.getByText("Column is subtitle")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    // The words the layout write refuses the same value with.
+    expect(
+      await screen.findByText('"Column" names a field that is not available.', {
+        selector: "p",
+      })
+    ).toBeTruthy();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("saves a field its collection offers", async () => {
+    const onSave = open({ collection: "posts", column: "title" }, withField);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Pick Headline" })
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls.at(-1)?.[0]).toEqual({
+      collection: "posts",
+      column: "headline",
+    });
+  });
+
+  it("clears its setting with onChange(undefined), and the setting is saved unset", async () => {
+    const onSave = open({ collection: "posts", column: "title" }, withField);
+    expect(screen.getByText("Column is title")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByText("Column is unset")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    // No value for `column`, not even the form's blank: the card reads it as unset.
+    expect(onSave.mock.calls.at(-1)?.[0]).toEqual({ collection: "posts" });
   });
 
   it("is handed no value, never the form's blank, for a setting with none", () => {

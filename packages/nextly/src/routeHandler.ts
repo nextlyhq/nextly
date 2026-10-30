@@ -59,6 +59,7 @@ import {
   getDashboardPins,
   postDashboardPin,
 } from "./api/dashboard-pins";
+import { getDashboardSummary } from "./api/dashboard-summary";
 import {
   acquireLock,
   readLock,
@@ -570,6 +571,8 @@ async function handleDashboardRequest(
       return postWidgetQuery(req);
     case "getWidgetLayout":
       return getWidgetLayout(req);
+    case "getDashboardSummary":
+      return getDashboardSummary(req);
     case "putWidgetLayout":
       return putWidgetLayout(req);
     case "deleteWidgetLayout":

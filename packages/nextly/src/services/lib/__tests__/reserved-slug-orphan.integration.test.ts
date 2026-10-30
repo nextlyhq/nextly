@@ -11,8 +11,8 @@
  * the physical table is absent afterward:
  *
  *   - Collection: `CollectionMetadataService.createCollection` (via the
- *     `collectionsHandler`) validates the name inside `generateCollection`
- *     before `saveMigration`/`runMigration`, so no `dc_<name>` table appears.
+ *     `collectionsHandler`) judges the name by the one address rule before
+ *     `generateCollection`, so no `dc_<name>` table appears.
  *   - Single: the `createSingle` dispatcher rejects at the top of `execute`,
  *     before `generateMigrationSQL`/`executeMigrationStatements`, so no
  *     `single_<name>` table appears.
@@ -77,19 +77,33 @@ describe("reserved slug rejection leaves no orphan table (integration)", () => {
     current = await createTestNextly({ collections: [] });
 
     for (const name of RESERVED_NAMES) {
-      const result = await collectionsHandlerOf(current).createCollection({
-        name,
-        label: name,
-        fields: [{ name: "body", type: "text" }],
+      // The one address rule refuses the name at the top of createCollection,
+      // outside the { success: false } result mapping, so the refusal is thrown
+      // and keeps the address and its reason: the system resource it would share
+      // permissions with.
+      await expect(
+        collectionsHandlerOf(current).createCollection({
+          name,
+          label: name,
+          fields: [{ name: "body", type: "text" }],
+        })
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "slug",
+              code: "SLUG_RESERVED",
+              message: expect.stringContaining(
+                `Collection address '${name}' is reserved: it names a Nextly system resource`
+              ),
+            },
+          ],
+        },
       });
 
-      // createCollection maps validation failures to a { success: false }
-      // result (see CollectionMetadataService.errorToMetadataResult).
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(400);
-
-      // The reserved name was rejected inside generateCollection, before the
-      // migration was saved or run, so no `dc_<name>` table exists.
+      // Refused before generateCollection, so no migration was saved or run
+      // and no `dc_<name>` table exists.
       expect(await tableExists(current, `dc_${name}`)).toBe(false);
     }
   });

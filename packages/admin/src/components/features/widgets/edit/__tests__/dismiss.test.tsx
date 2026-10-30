@@ -15,7 +15,13 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DASHBOARD_HEADING_ID } from "@admin/components/features/dashboard/WelcomeHeader";
+import { GET_STARTED_WIDGET_ID } from "nextly/config";
+
+import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
+import {
+  DASHBOARD_HEADING_ID,
+  WelcomeHeader,
+} from "@admin/components/features/dashboard/WelcomeHeader";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { AdminBranding } from "@admin/types/branding";
 import type {
@@ -34,10 +40,15 @@ let layoutResponse: DashboardLayoutResponse | undefined;
 
 // `vi.hoisted`, because `vi.mock` is lifted above every other statement in the
 // file and a plain `const` here is not yet initialised when the factory runs.
-const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+const toast = vi.hoisted(() => ({
+  error: vi.fn(),
+  success: vi.fn(),
+  dismiss: vi.fn(),
+}));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -46,6 +57,18 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
+}));
+// The page's header beside the grid holds Customize: its own reads stubbed.
+vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
+  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
+  useDashboardSummary: () => ({ data: undefined }),
+}));
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({
+    user: { id: "u1", name: "Dev User", email: "dev@example.com" },
+    isLoading: false,
+    error: null,
+  }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -129,15 +152,17 @@ function renderGrid() {
     },
   });
   const Wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      {/* The page's heading, which a closed notice returns focus to. */}
-      <h1 id={DASHBOARD_HEADING_ID} tabIndex={-1}>
-        Welcome
-      </h1>
-      {children}
-    </QueryClientProvider>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return render(<WidgetGrid />, { wrapper: Wrapper });
+  // The page's header, whose heading a closed notice returns focus to and which holds
+  // Customize, beside the grid.
+  return render(
+    <DashboardChromeProvider>
+      <WelcomeHeader />
+      <WidgetGrid />
+    </DashboardChromeProvider>,
+    { wrapper: Wrapper }
+  );
 }
 
 /** Enters customise mode and waits for the per-card menus to exist. */
@@ -380,6 +405,29 @@ describe("Remove for a reader who has arranged their dashboard", () => {
       arranged: true,
     });
     expect(sent.placements.some(placement => placement.removed)).toBe(false);
+  });
+
+  it("hides the Get started card instead, which the server would carry back into a list without it", async () => {
+    mockBranding = branding({
+      "core/onboarding": { id: GET_STARTED_WIDGET_ID, title: "Get started" },
+    });
+    const placements = [
+      { ...ARRANGED[0], widgetId: GET_STARTED_WIDGET_ID },
+      ARRANGED[1],
+    ];
+    layoutResponse = layout({ arranged: true, placements });
+    const user = userEvent.setup();
+    renderGrid();
+    await removeFromMenu(user, "Get started");
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    // Held in the list, marked removed: the reader's choice the server keeps.
+    expect(api.put.mock.calls[0][1]).toEqual({
+      placements: [{ ...placements[0], removed: true }, placements[1]],
+      version: 7,
+      scope: "tok",
+      arranged: true,
+    });
   });
 
   it("Undo puts the card back where it was, with its settings", async () => {

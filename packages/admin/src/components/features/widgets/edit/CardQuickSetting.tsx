@@ -27,7 +27,12 @@ import {
   SelectValue,
   Switch,
 } from "@nextlyhq/ui";
-import type { ComponentPropsWithRef, JSX, ReactElement } from "react";
+import type {
+  ComponentPropsWithRef,
+  JSX,
+  KeyboardEvent,
+  ReactElement,
+} from "react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { cn } from "@admin/lib/utils";
@@ -93,6 +98,21 @@ export function CardQuickSetting({
       >
         {label}
       </Button>
+    );
+  }
+
+  // A choice of exactly two is drawn as both choices, side by side, so the one not chosen is
+  // one press away and in view; a longer list keeps the compact menu.
+  if (setting.options.length === 2) {
+    return (
+      <SegmentedChoice
+        name={name}
+        options={setting.options}
+        value={typeof shown === "string" ? shown : undefined}
+        inert={inert}
+        title={unavailable}
+        onSelect={change}
+      />
     );
   }
 
@@ -377,5 +397,114 @@ export function CardQuickPopover({
         ) : null}
       </PopoverContent>
     </Popover>
+  );
+}
+
+/**
+ * Where a key moves the choice in a group of `count`, from `index`, as a radio group moves:
+ * the arrows to the next or previous choice, wrapping, and Home and End to the first and last.
+ * `undefined` for any other key.
+ */
+function segmentFor(
+  key: string,
+  index: number,
+  count: number
+): number | undefined {
+  switch (key) {
+    case "ArrowRight":
+    case "ArrowDown":
+      return (index + 1) % count;
+    case "ArrowLeft":
+    case "ArrowUp":
+      return (index - 1 + count) % count;
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * A choice drawn as a segmented control: a radio group named for the setting and its card, one
+ * radio per option, the chosen one raised on the muted track. Only the chosen radio is in the
+ * tab order (the first, while none is chosen), and the arrows, Home and End move to another
+ * choice and choose it, as a radio group does. Its height is the menu trigger's, so the card's
+ * header keeps its own. While the setting cannot change, every radio is disabled, as the menu is.
+ */
+function SegmentedChoice({
+  name,
+  options,
+  value,
+  inert,
+  title,
+  onSelect,
+}: {
+  name: string;
+  options: readonly { label: string; value: string }[];
+  value: string | undefined;
+  inert: boolean;
+  title: string | undefined;
+  onSelect: (next: string) => void;
+}): JSX.Element {
+  const radios = useRef<(HTMLButtonElement | null)[]>([]);
+  const chosen = options.findIndex(option => option.value === value);
+  const tabbable = chosen === -1 ? 0 : chosen;
+
+  const choose = (index: number) => {
+    const option = options[index];
+    if (option === undefined) return;
+    radios.current[index]?.focus();
+    if (option.value !== value) onSelect(option.value);
+  };
+  const onKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number
+  ) => {
+    const next = segmentFor(event.key, index, options.length);
+    if (next === undefined) return;
+    event.preventDefault();
+    choose(next);
+  };
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label={name}
+      aria-disabled={inert || undefined}
+      title={title}
+      data-testid="card-quick-segmented"
+      className="inline-flex h-7 items-center gap-0.5 rounded-md bg-muted p-0.5"
+    >
+      {options.map((option, index) => {
+        const checked = index === chosen;
+        return (
+          <button
+            key={option.value}
+            ref={element => {
+              radios.current[index] = element;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            tabIndex={index === tabbable ? 0 : -1}
+            disabled={inert}
+            onClick={() => choose(index)}
+            onKeyDown={event => onKeyDown(event, index)}
+            className={cn(
+              "h-full rounded-sm px-2 text-xs transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+              checked
+                ? "bg-background font-semibold text-foreground shadow-sm"
+                : "font-medium text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }

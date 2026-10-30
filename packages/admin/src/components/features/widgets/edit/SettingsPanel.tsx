@@ -780,6 +780,7 @@ function SettingControl({
         setting={setting}
         component={setting.editor.component}
         disabled={saving}
+        sources={sources}
       />
     );
   }

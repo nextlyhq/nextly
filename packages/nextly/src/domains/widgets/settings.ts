@@ -59,6 +59,7 @@ import {
 } from "./query";
 import {
   getSource,
+  isWidgetTab,
   sourceKindFromId,
   type WidgetSourceFilter,
 } from "./sources";
@@ -631,8 +632,11 @@ export function widgetSettingsProblems(settings: unknown): string[] {
   ];
 }
 
-/** The most settings one widget may mark quick: what a card's quick popover holds. */
-const MAX_QUICK_SETTINGS = 3;
+/**
+ * The most settings one widget may mark quick: what a card's quick popover holds of them, beside
+ * the card's Collection. The admin's popover caps at this same number.
+ */
+export const MAX_QUICK_SETTINGS = 3;
 
 /**
  * Why a widget's settings mark too many as quick, or nothing when they do not.
@@ -1706,6 +1710,19 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
     apply: (query, value) =>
       value === true
         ? { ...query, where: { ...query.where, onlyMine: true } }
+        : { ...query },
+  },
+  {
+    // Tab: whose work the card shows, on a source that narrows by it. Matched
+    // by NAME as well as type, as Only mine is; a value that is not one of
+    // the tabs leaves the query as declared, and the source shows its default.
+    drives: (setting, source) =>
+      setting.type === "select" &&
+      setting.name === "tab" &&
+      narrowsBy(source, "tab"),
+    apply: (query, value) =>
+      isWidgetTab(value)
+        ? { ...query, where: { ...query.where, tab: value } }
         : { ...query },
   },
 ];

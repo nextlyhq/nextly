@@ -37,7 +37,7 @@ import {
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
-import { resolveWidgetOutcome } from "../outcome";
+import { useReportedPlacements } from "../reported-placements";
 import { cardRowStyle, GRID_CLASS } from "../sizes";
 
 import { ArrangedCell } from "./ArrangedCell";
@@ -249,58 +249,39 @@ function cellSettingsWrite(
 }
 
 /**
- * Whether a card is off the dashboard: its widget's own `shows` said no for this person, or it
- * hides when empty and its answer is. Read from the outcome the renderer draws from
- * (`resolveWidgetOutcome`), so the two cannot disagree.
- */
-function hiddenWhileEmpty(
-  row: ArrangedWidget,
-  slots: Record<string, WidgetSlot>,
-  cellSlots: CellSlots
-): boolean {
-  const outcome = resolveWidgetOutcome(
-    row.widget,
-    slots[row.placementId],
-    key => cellSlots[row.placementId]?.[key]
-  );
-  if (outcome.state === "not-shown") return true;
-  return row.widget.hidesWhenEmpty === true && outcome.state === "empty";
-}
-
-/**
  * How many cards are on show: every one while customising, where a hidden card is shown marked;
- * at rest, those not taken off the dashboard (`hiddenWhileEmpty`), so a dashboard whose every
- * card is hidden says it is empty rather than drawing nothing.
+ * at rest, those whose card has not reported itself off the dashboard (`hidden`), so a dashboard
+ * whose every card is hidden says it is empty rather than drawing nothing. Counted from the cards'
+ * own reports (`useReportCardHidden`), the decision each card is drawn by, its body's reported
+ * state included; a card that reports nothing is on show.
  */
 function shownCount(
   rows: readonly ArrangedWidget[],
   isEditing: boolean,
-  answers: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots }
+  hidden: ReadonlySet<string>
 ): number {
   if (isEditing) return rows.length;
-  return rows.filter(
-    row => !hiddenWhileEmpty(row, answers.slots, answers.cellSlots)
-  ).length;
+  return rows.filter(row => !hidden.has(row.placementId)).length;
 }
 
 /**
  * When the OLDEST answer on show arrived, or `undefined` before any has: the time the page's one
  * freshness line is true of, since every card on show is at least that fresh. Only a card that
- * asked and is drawn counts: a card hidden while its answer is empty is not on show.
+ * asked and is drawn counts: a card that reported itself off the dashboard (`hidden`) is not on
+ * show.
  */
 function oldestAnswer(
   rows: readonly ArrangedWidget[],
   answers: {
+    hidden: ReadonlySet<string>;
     requested: ReadonlySet<string>;
-    slots: Record<string, WidgetSlot>;
-    cellSlots: CellSlots;
     updatedAtFor: (placementId: string) => Date | null;
   }
 ): Date | undefined {
   let oldest: Date | undefined;
   for (const row of rows) {
     if (!answers.requested.has(row.placementId)) continue;
-    if (hiddenWhileEmpty(row, answers.slots, answers.cellSlots)) continue;
+    if (answers.hidden.has(row.placementId)) continue;
     const at = answers.updatedAtFor(row.placementId);
     if (at !== null && (oldest === undefined || at < oldest)) oldest = at;
   }
@@ -327,12 +308,9 @@ export function ArrangedGrid({
   gridRef,
   on,
 }: ArrangedGridProps): JSX.Element {
-  const answeredAt = oldestAnswer(rows, {
-    requested,
-    slots,
-    cellSlots,
-    updatedAtFor,
-  });
+  // The cards that reported themselves off the dashboard, each as it is drawn.
+  const { placements: hidden, report: reportHidden } = useReportedPlacements();
+  const answeredAt = oldestAnswer(rows, { hidden, requested, updatedAtFor });
   return (
     // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
     // this, the one element the dashboard's width is measured from.
@@ -361,7 +339,7 @@ export function ArrangedGrid({
           {announcement}
         </span>
         <EmptyArrangement
-          count={shownCount(rows, isEditing, { slots, cellSlots })}
+          count={shownCount(rows, isEditing, hidden)}
           isEditing={isEditing}
         />
         <DropLineMark line={drag?.line} />
@@ -377,6 +355,7 @@ export function ArrangedGrid({
             isWriting={writes.isWriting}
             singleCardWriteBlocked={writes.singleCardWriteBlocked}
             {...cellSettingsWrite(writes.settings, row)}
+            reportHidden={reportHidden}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
             can={moveAvailability(placements, row.placementId, isDrawn)}

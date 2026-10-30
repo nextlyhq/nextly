@@ -10,6 +10,8 @@
  * @module components/features/widgets/archetypes/timeseries
  */
 
+import { answerHasNothing } from "nextly/widget-result";
+
 import { WithCollectionUnit } from "../charts/chart-unit";
 import { OverTimeChart } from "../charts/over-time-chart";
 import { cardLocale } from "../frame/format";
@@ -75,7 +77,7 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
     count: point.count,
   }));
 
-  if (rows.length === 0) {
+  if (answerHasNothing(result)) {
     // The frame's one empty state, worded for a chart over time. Source-neutral: the card may read any
     // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     return {

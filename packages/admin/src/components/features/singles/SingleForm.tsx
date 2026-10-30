@@ -95,6 +95,7 @@ import {
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
+import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
@@ -131,6 +132,7 @@ import {
 } from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { SingleAdminOptions } from "@admin/types/entities";
+import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
 import { relaxIdentityRequired } from "./identity-fields";
 import { useSinglePreviewLink } from "./useSinglePreviewLink";
@@ -143,7 +145,7 @@ import { useSinglePreviewPane } from "./useSinglePreviewPane";
 /**
  * Single schema data (from useSingleSchema hook)
  */
-export interface SingleSchema {
+export interface SingleSchema extends RemovedFromCodeMark {
   slug: string;
   label: string;
   description?: string;
@@ -773,13 +775,21 @@ export function SingleForm({
   // A user who may read this Single but not change it gets the same page,
   // read-only, with no claim made on the document.
   const updateAnswer = useUpdateAnswer(schema.slug);
-  const readOnlyForReader = updateAnswer === "refused";
+  // A Single removed from code refuses every write, for everyone: the page
+  // opens as it does for a reader, through the same gates.
+  const removedFromCode = isRemovedFromCode(schema);
+  const readOnlyForReader = updateAnswer === "refused" || removedFromCode;
+  // What the user's access allows, apart from the removal: previewing and
+  // sharing a preview follow it alone, since the server keeps preview links
+  // working for a removed Single and opening one writes nothing.
+  const accessAllowsEdits = editsOffered(updateAnswer);
   // While a language switch's answer is on its way, nothing that saves is
   // offered and a submit is held, though the page is not read-only.
-  const mayEdit = editsOffered(updateAnswer);
-  // What changing the Single needs is held with it: previewing and sharing a
-  // preview (minting a link needs it on the server) and a version's restore,
-  // for a reader and while a language switch's answer is on its way.
+  const mayEdit = accessAllowsEdits && !removedFromCode;
+  const previewHeld = !accessAllowsEdits;
+  // What changing the Single needs is held with it: a recovery point and a
+  // version's restore, for a reader, for a removed Single and while a
+  // language switch's answer is on its way.
   const updatesHeld = !mayEdit;
   // While a refused publish's recovery runs, every field it reaches is
   // read-only, as it is while someone else holds the Single.
@@ -788,6 +798,7 @@ export function SingleForm({
     slug: schema.slug,
     entryId: document.id,
     readOnlyForReader,
+    readOnlyBecause: removedFromCode ? "removed-from-code" : "access",
   });
   const lock = heldWhileRecovering(lockSurface, recovering);
 
@@ -828,12 +839,16 @@ export function SingleForm({
   const writesHeld = writeActionsHeld(viewingVersion, lock.actionsDisabled);
   // Changing the content is held for a reader as well.
   const editsHeld = writesHeld || !mayEdit;
+  // A status write alone is held where the document's writes are, and for a
+  // Single removed from code, whose publish the server refuses as it refuses
+  // a save.
+  const statusWriteHold = writesHeld || removedFromCode;
   // Publishing every language changes only each language's status, so a
   // reader whose document nothing else holds is still offered it.
   const publishAllHeld = statusWritesHeld({
     editsHeld,
     refused: readOnlyForReader,
-    writesHeld,
+    writesHeld: statusWriteHold,
   });
   // A refused publish's recovery changes the content, so it is held exactly
   // as the content's own saves are.
@@ -919,7 +934,7 @@ export function SingleForm({
         // A reader's publish and unpublish still go, as the status alone.
         const status = readerStatusWrite(intent, {
           refused: readOnlyForReader,
-          writesHeld,
+          writesHeld: statusWriteHold,
         });
         return status === undefined ? submitHeld : writeStatus(status);
       }
@@ -990,7 +1005,7 @@ export function SingleForm({
       writePending,
       editsHeld,
       readOnlyForReader,
-      writesHeld,
+      statusWriteHold,
       writeStatus,
       document.id,
       schema,
@@ -1144,7 +1159,9 @@ export function SingleForm({
     admin: schema.admin,
   });
   // Whether the pane is actually on screen, as the pane itself reads below.
-  const previewOnScreen = previewPane.open && !documentView && !updatesHeld;
+  // A removed Single keeps it: the preview follows access alone, as
+  // previewing writes nothing.
+  const previewOnScreen = previewPane.open && !documentView && !previewHeld;
 
   // The document panel, as the entry editor decides it (`useDocumentPanel`):
   // the collapse choice shared with it, history taking its place, and the
@@ -1266,6 +1283,7 @@ export function SingleForm({
     // page withholds only the edits, through `canEdit`.
     documentLocked: lock.actionsDisabled,
     canEdit: mayEdit,
+    writesRefused: removedFromCode,
     contributedActions: documentActions,
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
@@ -1424,12 +1442,12 @@ export function SingleForm({
                                   // Sharing a preview needs the permission to change
                                   // the Single on the server, so a reader is not offered it.
                                   isLinkAvailable={
-                                    previewLink.isAvailable && !updatesHeld
+                                    previewLink.isAvailable && !previewHeld
                                   }
                                   // Withheld from a reader, so the share
                                   // popover cannot stay mounted for them.
                                   {...(previewLink.shareDocument ===
-                                    undefined || updatesHeld
+                                    undefined || previewHeld
                                     ? {}
                                     : {
                                         shareDocument:
@@ -1445,7 +1463,7 @@ export function SingleForm({
                                   // share link beside it: opening one mints a
                                   // credential the server grants only to a
                                   // user who may change the Single.
-                                  {...(updatesHeld ? {} : previewPane.toggle)}
+                                  {...(previewHeld ? {} : previewPane.toggle)}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     // A reader's page holds the slot's writes too.
@@ -1458,6 +1476,7 @@ export function SingleForm({
                                   // entry id.
                                   scope="single"
                                   documentLocked={lock.readOnly}
+                                  writesRefused={removedFromCode}
                                   isRailCollapsed={panel.collapsed}
                                   onToggleRail={panel.toggle}
                                 />

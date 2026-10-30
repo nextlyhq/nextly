@@ -22,6 +22,7 @@ import type { ReadCaller } from "../../../services/dashboard/readable-resources"
 import { intervalWindow } from "../../collections/query/timeseries-interval";
 import { answerAsAsked } from "../answer-as-asked";
 import { executeWidgetQuery } from "../execute";
+import { processHeld } from "../process-held";
 import { publishableContentSources } from "../publish";
 import {
   isRangeInterval,
@@ -65,6 +66,33 @@ export interface ReadServiceBinding {
    * that collection is disclosed.
    */
   answersNothing?: (slug: string) => boolean;
+  /**
+   * The dashboard load this card is answered for, and on which side of it.
+   * The layout read answers a card that hides while empty before the
+   * dashboard is drawn (`"ahead"`); the dashboard drawn from that read asks
+   * the same card again in its batch (`"batch"`), and a core widget may hand
+   * that batch the answer read ahead for the same load rather than reading
+   * twice (Needs attention's digest). Absent for any other ask.
+   */
+  readAhead?: ReadAheadSide;
+}
+
+/**
+ * One side of one dashboard load's read-ahead: `token` names the load, minted
+ * by its layout read and sent back by the batch that load asks, so an answer
+ * read ahead for one load is never handed to another, a second tab of the
+ * same reader's included.
+ */
+export interface ReadAheadSide {
+  side: "ahead" | "batch";
+  token: string;
+  /**
+   * The credential the side's request was authenticated by, as the batch
+   * names it: an answer read ahead is handed only to a batch on the same one.
+   * Absent where it could not be named, and then nothing read ahead is
+   * reused, on either side.
+   */
+  credential?: string;
 }
 
 /** A call's own options, of which only the ones a read may carry are kept. */
@@ -81,6 +109,8 @@ interface ReadOptions {
   window?: unknown;
   /** Whether a list asks how many it matched in all. */
   total?: unknown;
+  /** Whether a list answers its links as stored ids. */
+  depth?: unknown;
   signal?: unknown;
 }
 
@@ -229,6 +259,19 @@ function onlyTrue(options: unknown, key: "total"): boolean {
   });
 }
 
+/**
+ * The depth a list is read at: `0`, each link answered as the id it stores, or
+ * `undefined`, core's own default. Refused, before anything is checked, when it
+ * is anything else, as `total` is.
+ */
+function depthOf(options: unknown): 0 | undefined {
+  const value = optionOf(options, "depth");
+  if (value === undefined || value === 0) return value;
+  throw NextlyError.invalidInput({
+    message: 'A widget\'s data read names a "depth" other than 0.',
+  });
+}
+
 /** A count's window, as the call states it, once its shape is known to be one. */
 interface CountWindow {
   range: TimeseriesRange;
@@ -325,10 +368,95 @@ function refuseUnreadableDate(slug: string, dateField: string): void {
   });
 }
 
+/**
+ * The caller each card's services were bound for, and the side of a dashboard
+ * load's read-ahead they were bound on (`ReadServiceBinding.readAhead`), kept
+ * beside them rather than on them: the services a data function is handed
+ * carry no person, and a plugin's function must never be able to read one off
+ * them, nor another load's token.
+ *
+ * Held for the process (`processHeld`), since Next.js and Turbopack can
+ * evaluate this module in more than one server graph, and the request route
+ * that binds a card's services and the widget registered at boot, whose
+ * `load` asks for their caller, can each hold a different copy. Reachable only
+ * through `bindReadServices`, `boundCaller` and `boundReadAhead`.
+ */
+const bindings = processHeld(
+  "nextly.dashboard.readCallers",
+  () => new WeakMap<WidgetReadServices, BoundRead>(),
+  (held): held is WeakMap<WidgetReadServices, BoundRead> =>
+    held instanceof WeakMap
+);
+
+/** What core keeps of a card's binding, beside its services. */
+interface BoundRead {
+  caller: ReadCaller;
+  readAhead: ReadAheadSide | undefined;
+}
+
+/** What `services` were bound with; services core did not bind are refused. */
+function boundRead(services: WidgetReadServices): BoundRead {
+  const bound = bindings.get(services);
+  if (bound === undefined) {
+    // Only services this module bound have a caller; anything else would be
+    // read as nobody, which must refuse rather than read as the system.
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "This widget could not be answered",
+      logMessage: "a widget's read services were not bound by core",
+      logContext: { reason: "widget-services-unbound" },
+    });
+  }
+  return bound;
+}
+
+/**
+ * The caller `services` were bound for, for core's own widgets whose data is
+ * a core source asked as that caller (Needs attention's digest), so an API
+ * key is still judged by its own grant rather than by the person who made it.
+ * Internal to core: no public entry point exports it.
+ */
+export function boundCaller(services: WidgetReadServices): ReadCaller {
+  return boundRead(services).caller;
+}
+
+/**
+ * The dashboard load `services` were bound for, and on which side of its
+ * read-ahead (`ReadServiceBinding.readAhead`); `undefined` for any other ask.
+ * Internal to core, as `boundCaller` is.
+ */
+export function boundReadAhead(
+  services: WidgetReadServices
+): ReadAheadSide | undefined {
+  return boundRead(services).readAhead;
+}
+
 /** The read services for one card, bound to `binding`. */
 export function bindReadServices(
   binding: ReadServiceBinding
 ): WidgetReadServices {
+  const services = readServices(binding);
+  const { readAhead } = binding;
+  bindings.set(services, {
+    caller: binding.caller,
+    // Core's own copy, so a binding changed after the services were made
+    // leaves the load they answer for as it was.
+    readAhead:
+      readAhead === undefined
+        ? undefined
+        : {
+            side: readAhead.side,
+            token: readAhead.token,
+            ...(readAhead.credential === undefined
+              ? {}
+              : { credential: readAhead.credential }),
+          },
+  });
+  return services;
+}
+
+/** The reads themselves, bound to `binding`'s caller, check and signal. */
+function readServices(binding: ReadServiceBinding): WidgetReadServices {
   const {
     caller,
     prepare,
@@ -371,18 +499,23 @@ export function bindReadServices(
    * was asked, as a source's answer is, so a read that answered anything else
    * is a fault, never a quiet empty answer.
    */
-  async function run({
-    signal,
-    slug,
-    ...query
-  }: CheckedRead): Promise<WidgetResult> {
+  async function run(
+    { signal, slug, ...query }: CheckedRead,
+    depth?: 0
+  ): Promise<WidgetResult> {
     // After the check, never instead of it: see `answersNothing`.
     if (answersNothing?.(slug) === true) {
       return answerAsAsked(query, nothingThere(query, now));
     }
     return answerAsAsked(
       query,
-      await executeWidgetQuery(query, caller, { signal, now: new Date(now) })
+      await executeWidgetQuery(query, caller, {
+        signal,
+        now: new Date(now),
+        // A list's depth, handed to the executor as core's own `find` takes
+        // it, and only when the call names one.
+        ...(depth === 0 ? { depth } : {}),
+      })
     );
   }
 
@@ -423,6 +556,7 @@ export function bindReadServices(
     },
     async find(collection, options) {
       const counted = onlyTrue(options, "total");
+      const depth = depthOf(options);
       // 🔴 A limit of 0 asks for no rows: what `rowsThatFit` answers for a
       // card whose body holds none, and what that card's frame draws. A query
       // runs at one row at the least, so the read is asked at one, checked as
@@ -440,7 +574,7 @@ export function bindReadServices(
         options
       );
       if (none && !counted) return { items: [] };
-      const answer = await run(checked);
+      const answer = await run(checked, depth);
       // As the browser would receive them, so the function may answer them
       // as they are and the card's transport check passes.
       const sent = sentAsJson(

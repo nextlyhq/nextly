@@ -66,6 +66,77 @@ export interface CardMenuProps {
   removeUnavailable?: string | undefined;
 }
 
+/** Settings: opens the card's quick popover or its sheet, which takes focus itself. */
+function SettingsItem({
+  disabled,
+  onOpen,
+}: {
+  disabled: boolean;
+  onOpen: () => void;
+}): JSX.Element {
+  return (
+    <DropdownMenuItem
+      disabled={disabled}
+      onSelect={onOpen}
+      data-testid="card-menu-settings"
+    >
+      <Settings aria-hidden className="size-4" />
+      Settings…
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * Remove: asks nothing, since the removal notice offers Undo, and focus moves to it once the card
+ * has gone. Until then focus returns to the menu's button, on a card still drawn.
+ *
+ * Unavailable, it stays focusable and says why: `aria-disabled` rather than `disabled`, which
+ * would take it, and its reason, out of the keyboard's reach.
+ */
+function RemoveItem({
+  disabled,
+  unavailable,
+  onRemove,
+}: {
+  disabled: boolean;
+  unavailable: string | undefined;
+  onRemove: () => void;
+}): JSX.Element {
+  const reasonId = useId();
+  const refused = unavailable !== undefined;
+  return (
+    <>
+      <DropdownMenuItem
+        disabled={disabled}
+        aria-disabled={refused || undefined}
+        aria-describedby={refused ? reasonId : undefined}
+        title={unavailable}
+        onSelect={event => {
+          if (refused) {
+            event.preventDefault();
+            return;
+          }
+          onRemove();
+        }}
+        // The destructive token, highlighted or not: the one item here that takes something away.
+        className={cn(
+          "text-destructive data-[highlighted]:text-destructive",
+          refused && "cursor-not-allowed opacity-50"
+        )}
+        data-testid="card-menu-remove"
+      >
+        <Trash2 aria-hidden className="size-4" />
+        Remove
+      </DropdownMenuItem>
+      {refused ? (
+        <span id={reasonId} className="sr-only">
+          {unavailable}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 export function CardMenu({
   title,
   triggerRef,
@@ -77,15 +148,14 @@ export function CardMenu({
   removeDisabled = false,
   removeUnavailable,
 }: CardMenuProps): JSX.Element {
-  const reasonId = useId();
-  const unavailable = removeUnavailable !== undefined;
   // Set by Settings, which sends focus into its popover or sheet: the menu's own close would
   // otherwise return focus to its trigger a tick later and take it back out.
   const focusIsHandled = useRef(false);
   const axes = size
     ? sizeAxes(size.size, size.bounds, chosen => size.onSetSize(chosen))
     : [];
-  const hasAbove = onOpenSettings !== undefined || axes.length > 0 || onRefresh;
+  const hasAbove =
+    onOpenSettings !== undefined || axes.length > 0 || onRefresh !== undefined;
 
   return (
     // `modal={false}`, as the customise menu: Settings opens a popover or a sheet from inside
@@ -116,17 +186,13 @@ export function CardMenu({
         }}
       >
         {onOpenSettings ? (
-          <DropdownMenuItem
+          <SettingsItem
             disabled={settingsDisabled}
-            onSelect={() => {
+            onOpen={() => {
               focusIsHandled.current = true;
               onOpenSettings();
             }}
-            data-testid="card-menu-settings"
-          >
-            <Settings aria-hidden className="size-4" />
-            Settings…
-          </DropdownMenuItem>
+          />
         ) : null}
         {/* Disabled while a write is in flight: each choice is a write of its own. */}
         {axes.map(axis => (
@@ -148,38 +214,11 @@ export function CardMenu({
         ) : null}
         {onRemove && hasAbove ? <DropdownMenuSeparator /> : null}
         {onRemove ? (
-          <DropdownMenuItem
+          <RemoveItem
             disabled={removeDisabled}
-            // Unavailable, it stays focusable and says why: `aria-disabled` rather than
-            // `disabled`, which would take it, and its reason, out of the keyboard's reach.
-            aria-disabled={unavailable || undefined}
-            aria-describedby={unavailable ? reasonId : undefined}
-            title={removeUnavailable}
-            // Asks nothing: the removal notice offers Undo, and focus moves to it once the card
-            // has gone. Until then it returns to this button, on a card still drawn.
-            onSelect={event => {
-              if (unavailable) {
-                event.preventDefault();
-                return;
-              }
-              onRemove();
-            }}
-            // The destructive token, highlighted or not: the one item here that takes
-            // something away.
-            className={cn(
-              "text-destructive data-[highlighted]:text-destructive",
-              unavailable && "cursor-not-allowed opacity-50"
-            )}
-            data-testid="card-menu-remove"
-          >
-            <Trash2 aria-hidden className="size-4" />
-            Remove
-          </DropdownMenuItem>
-        ) : null}
-        {onRemove && unavailable ? (
-          <span id={reasonId} className="sr-only">
-            {removeUnavailable}
-          </span>
+            unavailable={removeUnavailable}
+            onRemove={onRemove}
+          />
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>

@@ -25,6 +25,9 @@ import type {
 } from "@admin/types/dashboard/widgets";
 import { MAX_PLACEMENTS } from "nextly/config";
 
+import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
+import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
+import { FrameState } from "../../frame/card-state";
 import { WidgetGrid } from "../../WidgetGrid";
 import { DRAG_INSTRUCTIONS } from "../drag/drag-messages";
 import {
@@ -39,6 +42,7 @@ let layoutRejects = false;
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -47,6 +51,18 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
+}));
+// The page's header beside the grid holds Customize: its own reads stubbed.
+vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
+  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
+  useDashboardSummary: () => ({ data: undefined }),
+}));
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({
+    user: { id: "u1", name: "Dev User", email: "dev@example.com" },
+    isLoading: false,
+    error: null,
+  }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -149,7 +165,17 @@ function renderGrid() {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
+  // The page's header and grid, as the page composes them: Customize is the header's.
+  return {
+    client,
+    ...render(
+      <DashboardChromeProvider>
+        <WelcomeHeader />
+        <WidgetGrid />
+      </DashboardChromeProvider>,
+      { wrapper: Wrapper }
+    ),
+  };
 }
 
 beforeEach(() => {
@@ -1748,6 +1774,51 @@ describe("an arrangement whose every card is not shown for its reader", () => {
     expect(screen.getByTestId("hidden-while-empty")).toHaveTextContent(
       "Not shown for you right now"
     );
+  });
+});
+
+describe("an arrangement whose every card leaves by its own empty answer", () => {
+  /**
+   * One card of a widget drawn by its own component at `component`, which hides while empty and
+   * which the layout read names as leaving by its own answer.
+   */
+  function quietCard(component: string) {
+    mockBranding = branding(["acme/quiet"], {
+      "acme/quiet": { component, hidesWhenEmpty: true },
+    });
+    layoutResponse = layout([{ id: "p1", widgetId: "acme/quiet" }], {
+      hiddenWhenAnswerEmpty: ["acme/quiet"],
+    });
+    renderGrid();
+    return screen.findByTestId("widget-cell-acme/quiet");
+  }
+
+  it("tells the reader their dashboard is empty at rest, counting the card as it hid itself", async () => {
+    // The component reports its answer empty to the frame, which only the card can see: counted
+    // from the answer instead, the card was on show and the grid was left blank.
+    registerCoreComponent("core#ReportsEmpty", () => (
+      <FrameState
+        state={{ kind: "empty", empty: { title: "Nothing waiting" } }}
+      />
+    ));
+    const cell = await quietCard("core#ReportsEmpty");
+    expect(within(cell).getByRole("region")).toHaveAttribute(
+      "data-hidden-empty"
+    );
+    expect(await screen.findByTestId("widget-grid-empty")).toBeInTheDocument();
+  });
+
+  it("does not while the card has something to draw", async () => {
+    // The control: a grid that said every such dashboard was empty would pass the case above.
+    registerCoreComponent("core#DrawsALine", () => <p>One order waiting</p>);
+    const cell = await quietCard("core#DrawsALine");
+    expect(
+      await within(cell).findByText("One order waiting")
+    ).toBeInTheDocument();
+    expect(within(cell).getByRole("region")).not.toHaveAttribute(
+      "data-hidden-empty"
+    );
+    expect(screen.queryByTestId("widget-grid-empty")).toBeNull();
   });
 });
 

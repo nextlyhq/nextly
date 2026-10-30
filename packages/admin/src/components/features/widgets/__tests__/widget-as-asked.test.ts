@@ -27,30 +27,55 @@ const settings: DashboardWidget["settings"] = [
   { name: "collection", label: "Collection", type: "collection" },
 ];
 
-const recentlyEdited: DashboardWidget = {
-  id: "core/recently-edited",
-  title: "Recently edited",
+/** A list over a system source that narrows by Collection and Only mine. */
+const recentSaves: DashboardWidget = {
+  id: "acme/recent-saves",
+  title: "Recent saves",
   archetype: "list",
   size: gridBounds(4),
-  query: { source: "system:recent-edits", op: "list", limit: 5 },
+  query: { source: "system:saves", op: "list", limit: 5 },
   settings,
   sourceFilters: ["collection", "onlyMine"],
 };
 
+/** Continue where you left off, as the payload carries it: its tab is its one filter. */
+const continueCard: DashboardWidget = {
+  id: "core/continue",
+  title: "Continue where you left off",
+  archetype: "custom",
+  component: "core#ContinueCard",
+  size: gridBounds(4),
+  query: { source: "system:continue", op: "list", limit: 5 },
+  settings: [
+    {
+      name: "tab",
+      label: "Show",
+      type: "select",
+      defaultValue: "mine",
+      quick: true,
+      options: [
+        { label: "Mine", value: "mine" },
+        { label: "Team", value: "team" },
+      ],
+    },
+  ],
+  sourceFilters: ["tab"],
+};
+
 describe("a widget as it is asked", () => {
   it("narrows a filtering source by the reader's Collection and Only mine", () => {
-    const asked = widgetAsAsked(recentlyEdited, {
+    const asked = widgetAsAsked(recentSaves, {
       collection: "pages",
       onlyMine: true,
     });
-    expect(asked.query?.source).toBe("system:recent-edits");
+    expect(asked.query?.source).toBe("system:saves");
     expect(asked.query?.where).toEqual({ collection: "pages", onlyMine: true });
   });
 
   it("asks a source without declared filters by its collection instead", () => {
     // 🔴 The must-differ case: the same settings without `sourceFilters` take
     // the collection knob's other branch, so the card's source is replaced.
-    const { sourceFilters: _filters, ...unfiltered } = recentlyEdited;
+    const { sourceFilters: _filters, ...unfiltered } = recentSaves;
     const asked = widgetAsAsked(
       {
         ...unfiltered,
@@ -63,7 +88,21 @@ describe("a widget as it is asked", () => {
   });
 
   it("keeps the widget itself when nothing is chosen", () => {
-    expect(widgetAsAsked(recentlyEdited, {}).query?.where).toBeUndefined();
+    expect(widgetAsAsked(recentSaves, {}).query?.where).toBeUndefined();
+  });
+
+  it("asks Continue for the tab its reader chose, and Mine by default", () => {
+    expect(widgetAsAsked(continueCard, { tab: "team" }).query?.where).toEqual({
+      tab: "team",
+    });
+    // The declared default is applied like a chosen value.
+    expect(widgetAsAsked(continueCard, {}).query?.where).toEqual({
+      tab: "mine",
+    });
+    // A stored value that is not one of its options reads back as the default.
+    expect(
+      widgetAsAsked(continueCard, { tab: "everyone" }).query?.where
+    ).toEqual({ tab: "mine" });
   });
 });
 
