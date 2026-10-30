@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { includingHidden } from "../support/test";
+
 /**
  * The widget preview page's address, and its read, on a PRODUCTION build.
  *
@@ -45,7 +47,7 @@ test.describe("the widget preview page on a production build", () => {
       .click();
     await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
     await expect(
-      page.getByTestId("widget-previews-link").filter({ visible: true })
+      includingHidden(page).getByTestId("widget-previews-link")
     ).toHaveCount(0);
     await page
       .getByTestId("dashboard-edit-cancel")
