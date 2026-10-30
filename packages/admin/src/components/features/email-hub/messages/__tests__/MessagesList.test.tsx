@@ -30,8 +30,7 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
 
 function holding(slugs: string[]) {
   vi.mocked(useCurrentUserPermissions).mockReturnValue({
-    // Asked as the product asks: a `manage-` permission counts as the plain
-    // ones it stands for.
+    // Asked as the product asks it.
     hasPermission: (slug: string) => holdsPermission(new Set(slugs), slug),
     isLoading: false,
     hasAnswer: true,
@@ -104,7 +103,12 @@ const EMAILS = [
   email({ slug: "default-layout", name: "Default layout", kind: "layout" }),
 ];
 
-const MANAGER = ["manage-email-templates"];
+const MANAGER = [
+  "read-email-templates",
+  "create-email-templates",
+  "update-email-templates",
+  "delete-email-templates",
+];
 
 /** The table view, which is what a desktop reader sees. */
 function table() {

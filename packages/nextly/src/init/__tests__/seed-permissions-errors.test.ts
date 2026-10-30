@@ -18,6 +18,7 @@ const seedPublicRole = vi.fn();
 const seedPublicReadGrants = vi.fn();
 const withdrawUndeclaredPluginGrants = vi.fn();
 const seedPluginRoles = vi.fn();
+const rolesHoldingRetiredManage = vi.fn();
 
 /** The registered adapter: one object per registration of the services. */
 let adapter = { getCapabilities: () => ({ dialect: "postgresql" }) };
@@ -58,6 +59,10 @@ vi.mock("../../domains/auth/services/public-read-grant", () => ({
   withdrawUndeclaredPluginGrants,
 }));
 vi.mock("../../plugins/roles/seed-roles", () => ({ seedPluginRoles }));
+vi.mock("../../domains/auth/retired-manage", () => ({
+  rolesHoldingRetiredManage,
+  formatRetiredManageWarning: () => "roles holding a retired permission",
+}));
 
 const { awaitBootSeeding, holdBootSeeding, seedPermissionsAndRolePresets } =
   await import("../seed-permissions");
@@ -82,6 +87,7 @@ beforeEach(() => {
   seedPublicRole.mockResolvedValue({ made: true });
   seedPublicReadGrants.mockResolvedValue(undefined);
   seedPluginRoles.mockResolvedValue(undefined);
+  rolesHoldingRetiredManage.mockResolvedValue([]);
 });
 
 describe("seedPermissionsAndRolePresets", () => {
@@ -90,10 +96,39 @@ describe("seedPermissionsAndRolePresets", () => {
     seedRolePresets.mockRejectedValue(missingTable());
     seedPublicRole.mockRejectedValue(missingTable());
     seedPluginRoles.mockRejectedValue(missingTable());
+    rolesHoldingRetiredManage.mockRejectedValue(missingTable());
 
     await expect(seedPermissionsAndRolePresets()).resolves.toBeUndefined();
 
     expect(error).not.toHaveBeenCalled();
+  });
+
+  it("goes on without the retired manage check when its read stalls", async () => {
+    // A read that has not answered holds the boot only for the check's bound.
+    // It answers in `finally`, so an unbounded check fails here rather than
+    // leaving the seeding, and every later test that joins it, waiting.
+    vi.useFakeTimers();
+    let answer: () => void = () => {};
+    rolesHoldingRetiredManage.mockReturnValue(
+      new Promise(resolve => {
+        answer = () => resolve([]);
+      })
+    );
+    let finished = false;
+    const seeding = seedPermissionsAndRolePresets().then(() => {
+      finished = true;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1_900);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(finished).toBe(true);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      answer();
+      await seeding;
+      vi.useRealTimers();
+    }
   });
 
   it("logs any other failure as an error naming the step, and still seeds the presets", async () => {

@@ -27,7 +27,7 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 }));
 
 vi.mock("@admin/components/ui", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
 }));
 
 import { entryKeys } from "@admin/services/entryApi";

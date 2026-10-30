@@ -16,7 +16,10 @@ test("Try again brings back a page whose first render failed", async ({
 }) => {
   const id = `retry-${Date.now()}`;
   await page.goto(`/render-retry?id=${id}`);
-  await expect(page.getByTestId("render-retry-failed")).toBeVisible();
+  // Visible only: a page Cache Components keeps hidden can hold a copy of either.
+  await expect(
+    page.getByTestId("render-retry-failed").filter({ visible: true })
+  ).toBeVisible();
 
   // A full reload would clear this, so it surviving the retry is the proof the
   // content came back in place.
@@ -25,9 +28,9 @@ test("Try again brings back a page whose first render failed", async ({
   });
   await page.getByRole("button", { name: "Try again" }).click();
 
-  await expect(page.getByTestId("render-retry-loaded")).toHaveText(
-    `Loaded ${id}`
-  );
+  await expect(
+    page.getByTestId("render-retry-loaded").filter({ visible: true })
+  ).toHaveText(`Loaded ${id}`);
   expect(
     await page.evaluate(
       () => (window as unknown as { __noReload?: boolean }).__noReload
