@@ -178,6 +178,113 @@ answers. A widget's `shows` function gets the same `size`.
   size for a card not yet saved, with the tier `"medium"`.
 </Callout>
 
+### What a load can read
+
+The `services` a `load` is handed read as the person viewing the card, with the same checks a
+card's own query gets. Beside `count`, `find`, `groupBy` and `timeseries`, they answer:
+
+```ts
+import { defineWidget } from "@nextlyhq/plugin-sdk";
+
+export const ordersThisMonth = defineWidget({
+  id: "acme/orders-this-month",
+  title: "Orders this month",
+  description: "How many orders came in over the last 30 days.",
+  size: { default: { w: 3, h: 2 } },
+  view: "figure",
+  // Drawn as a number while it loads, and in the add panel.
+  skeleton: "figure",
+  load: async ({ services }) => ({
+    total: await services.count("orders", { window: { range: "30d" } }),
+  }),
+});
+```
+
+- **`count(collection, { window })`** counts the entries whose `dateField` (their `createdAt`
+  unless you name another) falls in a range's window: `{ range: "30d" }` is the same window a
+  series over `"30d"` is drawn across. Add `previous: true` for the window just as long that
+  ends where that one starts, so the last 30 days and the 30 before them never share an entry.
+- **`find(collection, { total: true })`** also answers `total`, how many entries the same read
+  matched in all, for a "View all (N)" link; `atLeast: true` beside it means the number is a
+  floor. A `limit` of `0` answers no rows, which is what `rowsThatFit` gives for a card too
+  short to hold one.
+- **`groupBy`** answers `truncated: true` when it left groups out, and `atLeast: true` when its
+  counts are floors.
+- **`describe(collection)`** answers the collection as your reads may use it: its `title` field,
+  whether it has a draft and published `status` (as `defineCollection({ status: true })` gives
+  it), and its `fields`, each with its `name`, its `label`, `type`, and `choices` for a field of
+  choices. A field the collection gives no label of its own is labelled from its name, as the
+  admin names it: `createdAt` is "Created At". Only fields the viewer may read are listed. Use
+  it to name a grouping's values or to choose a list's columns.
+
+A `dateField`, for `count`'s window or for `timeseries`, must be a date field of the collection
+that everyone who can read the collection can read. Any other field is refused, whoever asks.
+
+`skeleton` says what a card looks like while its data is on the way, and how its row is
+sketched in the add panel: `"figure"`, `"list"`, `"bars"`, `"series"` or `"table"`. Without it,
+the card loads in the frame's generic shape.
+
+All of these are experimental.
+
+## Testing a widget
+
+`@nextlyhq/plugin-sdk/testing` runs a widget's `load` for a given person against a test instance,
+through the dashboard's own route, so that person's access applies exactly as it does on the
+dashboard:
+
+```ts
+import { createTestNextly, runWidgetLoad } from "@nextlyhq/plugin-sdk/testing";
+import { expect, it } from "vitest";
+
+import { openOrders, shop } from "./shop";
+
+it("counts the open orders for the instance's administrator", async () => {
+  const t = await createTestNextly({ plugins: [shop] });
+  // The first user an instance stores is its super administrator.
+  const admin = await t.nextly.users.create({
+    email: "admin@example.com",
+    password: "Password123!",
+    data: { isActive: true },
+  });
+  await t.nextly.create({ collection: "orders", data: { state: "open" } });
+  const answer = await runWidgetLoad(t, openOrders, {
+    as: { id: admin.item.id },
+  });
+  expect(answer).toEqual({ state: "ready", data: { total: 1 } });
+  await t.destroy();
+});
+```
+
+It answers in the card's own states: `ready` and `empty` with the data, `needs-setting`,
+`unavailable`, `not-shown`, or `error`. `as: null` answers as the dashboard answers nobody signed
+in.
+
+`@nextlyhq/plugin-sdk/testing/admin` draws the card in the admin's own frame, for a state you name
+or for what a load answered:
+
+```tsx
+import { renderWidgetCard } from "@nextlyhq/plugin-sdk/testing/admin";
+import { render, screen } from "@testing-library/react";
+import { expect, it } from "vitest";
+
+import { openOrders } from "./shop";
+
+it("draws the count in the dark scheme", () => {
+  render(
+    renderWidgetCard(openOrders, {
+      state: "ready",
+      data: { total: 3 },
+      theme: "dark",
+    })
+  );
+  const card = screen.getByRole("region", { name: "Open orders" });
+  expect(card.textContent).toContain("3");
+});
+```
+
+Both helpers are for tests and stay out of a production build. They are experimental, and their
+shape may change.
+
 ## Related
 
 - [Plugin admin UI](/docs/plugins/admin-ui) — contributing admin surfaces
