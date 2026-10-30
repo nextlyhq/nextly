@@ -265,42 +265,84 @@ async function scanCollection(
   let pagesUsed = 0;
   let cursor: string | number | undefined;
 
-  for (;;) {
-    if (pagesUsed >= pagesAllowed) return { pagesUsed, bounded: true };
-
-    const page = await services.find(slug, {
-      select: SCAN_SELECT,
-      sort: "id",
-      limit: ISSUE_SCAN_PAGE_SIZE,
-      total: true,
-      // 🔴 Each link as the id it stores, never expanded. Expanded, the social
-      // image of a reader who may not read media comes back null, a hidden
-      // image indistinguishable from a missing one, and every page that has
-      // one counted as missing it (see `isBlank`).
-      depth: 0,
-      ...(cursor === undefined
-        ? {}
-        : { where: { id: { greater_than: cursor } } }),
-    });
+  while (pagesUsed < pagesAllowed) {
+    const page = await readPage(services, slug, cursor);
     pagesUsed += 1;
+    tallyRows(page.items, checks, byIssue);
 
-    for (const row of page.items) {
-      for (const issue of issuesFor(row, checks)) countOne(byIssue, issue);
-    }
-
-    // A read that answered no total is taken as one that may have more,
-    // while its page was full: the cautious reading, bounded by the budget.
-    const matched =
-      page.total ??
-      (page.items.length >= ISSUE_SCAN_PAGE_SIZE
-        ? ISSUE_SCAN_PAGE_SIZE + 1
-        : page.items.length);
-    if (matched <= ISSUE_SCAN_PAGE_SIZE) return { pagesUsed, bounded: false };
-
-    const next = cursorOf(page.items.at(-1));
-    if (next === undefined) return { pagesUsed, bounded: true };
-    cursor = next;
+    const step = nextStep(page);
+    if (step.done) return { pagesUsed, bounded: step.bounded };
+    cursor = step.cursor;
   }
+  return { pagesUsed, bounded: true };
+}
+
+/** One page of a scan, as the read answers it. */
+type ScanPage = Awaited<ReturnType<IssueReads["find"]>>;
+
+/** One page of `slug`'s rows: the page after `cursor`, or the first. */
+function readPage(
+  services: IssueReads,
+  slug: string,
+  cursor: string | number | undefined
+): Promise<ScanPage> {
+  return services.find(slug, {
+    select: SCAN_SELECT,
+    sort: "id",
+    limit: ISSUE_SCAN_PAGE_SIZE,
+    total: true,
+    // 🔴 Each link as the id it stores, never expanded. Expanded, the social
+    // image of a reader who may not read media comes back null, a hidden
+    // image indistinguishable from a missing one, and every page that has
+    // one counted as missing it (see `isBlank`).
+    depth: 0,
+    ...(cursor === undefined
+      ? {}
+      : { where: { id: { greater_than: cursor } } }),
+  });
+}
+
+/** Adds the issues of every row of a page to `byIssue`. */
+function tallyRows(
+  rows: readonly unknown[],
+  checks: IssueChecks,
+  byIssue: Map<string, number>
+): void {
+  for (const row of rows) {
+    for (const issue of issuesFor(row, checks)) countOne(byIssue, issue);
+  }
+}
+
+/** How a scan goes on after a page: done, and whether short of the end, or on from a row. */
+type ScanStep =
+  | { done: true; bounded: boolean }
+  | { done: false; cursor: string | number };
+
+/**
+ * What follows `page`: the end, when no more rows matched than it asked for;
+ * the row it continues from; or a stop with its counts said to be floors, when
+ * more matched and the page answered no row to continue from.
+ */
+function nextStep(page: ScanPage): ScanStep {
+  if (matchedBy(page) <= ISSUE_SCAN_PAGE_SIZE) {
+    return { done: true, bounded: false };
+  }
+  const next = cursorOf(page.items.at(-1));
+  if (next === undefined) return { done: true, bounded: true };
+  return { done: false, cursor: next };
+}
+
+/**
+ * How many rows matched the read a page came from.
+ *
+ * A read that answered no total is taken as one that may have more, while its
+ * page was full: the cautious reading, bounded by the budget.
+ */
+function matchedBy(page: ScanPage): number {
+  if (page.total !== undefined) return page.total;
+  return page.items.length >= ISSUE_SCAN_PAGE_SIZE
+    ? ISSUE_SCAN_PAGE_SIZE + 1
+    : page.items.length;
 }
 
 /**
