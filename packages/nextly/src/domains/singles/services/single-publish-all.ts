@@ -26,7 +26,6 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
-import type { SharedFieldsConflictPublicData } from "../../../errors/public-data";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -81,6 +80,7 @@ import {
   type PendingChange,
   pendingChangesInSaveOrder,
   type PublishableShape,
+  type RefuseSharedFields,
   sharedStateForPublish,
 } from "../../versions/publish-all-plan";
 import {
@@ -779,8 +779,7 @@ export class SinglePublishAllService extends BaseService {
     const priorCompanionValues = await this.companionValuesBeforePromotion(
       tx,
       plan,
-      pending,
-      priorCompanionStatuses
+      pending
     );
 
     const written = await this.writePublishedStatuses(
@@ -935,16 +934,21 @@ export class SinglePublishAllService extends BaseService {
       );
     }
 
-    return {
-      publishedRow: {
-        ...lockedRow,
-        ...(hasMainStatus
-          ? { status: "published", updated_at: publishNow }
-          : {}),
-        ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
-      },
-      mainRowTransitioned,
+    // The row as this publish left it, read back on the lock it holds: the
+    // promotion wrote the pending changes' shared values to it, so the locked
+    // row with the status laid over it would still carry the old ones, in the
+    // version the publish records and in every event's current state.
+    const publishedRow = (await tx.selectOne<Record<string, unknown>>(
+      singleMeta.tableName,
+      {
+        where: this.whereEq("id", existingDoc.id),
+      }
+    )) ?? {
+      ...lockedRow,
+      ...(hasMainStatus ? { status: "published", updated_at: publishNow } : {}),
+      ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
     };
+    return { publishedRow, mainRowTransitioned };
   }
 
   /**
@@ -1231,25 +1235,23 @@ export class SinglePublishAllService extends BaseService {
 
   /**
    * Each language's translated values before the drafts are promoted, keyed by
-   * locale, for the previous state of this publish's events. Empty when no
-   * event is recorded, or when nothing is pending: the companion rows are then
-   * left as they are, and the values read after the publish are the same.
+   * locale, for the previous state of this publish's events. Read only for the
+   * languages whose pending change the promotion writes: every other
+   * language's companion row is left as it is, so the values read after the
+   * publish are the same. Empty when no event is recorded.
    */
   private async companionValuesBeforePromotion(
     tx: TransactionContext,
     plan: PublishPlan,
-    pending: readonly PendingChange[],
-    priorCompanionStatuses: Map<string, string | null>
+    pending: readonly PendingChange[]
   ): Promise<Map<string, Record<string, unknown>>> {
     const prior = new Map<string, Record<string, unknown>>();
     const { companion } = plan;
     if (!plan.recordingEnabled || pending.length === 0) return prior;
     if (!companion || !plan.companionPublishable) return prior;
-    const defaultLocale = this.localization?.defaultLocale;
-    const locales = new Set<string>([
-      ...(defaultLocale !== undefined ? [defaultLocale] : []),
-      ...priorCompanionStatuses.keys(),
-    ]);
+    const locales = new Set(
+      pending.flatMap(draft => (draft.locale === null ? [] : [draft.locale]))
+    );
     for (const locale of locales) {
       prior.set(
         locale,
@@ -1324,11 +1326,7 @@ export class SinglePublishAllService extends BaseService {
   private sharedConflict(
     plan: PublishPlan,
     caller: SharedFieldsCaller,
-    refused: {
-      fields: string[];
-      live: Record<string, unknown>;
-      reason?: SharedFieldsConflictPublicData["reason"];
-    }
+    refused: Parameters<RefuseSharedFields>[0]
   ): Promise<NextlyError> {
     const { options } = caller;
     return sharedValuesConflict({
@@ -1530,11 +1528,15 @@ export class SinglePublishAllService extends BaseService {
    * Append this publish's outbox events on the publish transaction, so they
    * commit with the status write and never survive a rollback.
    *
-   * Three kinds, matching what a consumer of the ordinary write path already
-   * expects: one `single.updated` for the write itself; one untagged
+   * Matching what a consumer of the ordinary write path already expects: one
+   * untagged `single.updated` for the write itself; one untagged
    * `single.published` when the main row transitioned and no default-locale
-   * companion event already encodes it; and one locale-tagged
-   * `single.published` per translation that actually went live.
+   * companion event already encodes it; one locale-tagged `single.published`
+   * per translation that went live; and one locale-tagged `single.updated` per
+   * translation already live whose pending change went live. The default
+   * language's pending change is then described by both an untagged and a
+   * tagged `single.updated`, as a first publish of it is by an untagged
+   * `single.updated` and a tagged `single.published`.
    *
    * The untagged main event is SUPPRESSED when the default locale's own
    * companion row transitions here, because that locale-tagged event stands in

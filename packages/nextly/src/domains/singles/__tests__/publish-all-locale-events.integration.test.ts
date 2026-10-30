@@ -18,6 +18,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { snapshotRecord } from "../../versions/shared-publish-base";
+import { VersionsRepository } from "../../versions/versions-repository";
 import type { WebhookEvent } from "../../webhooks/types";
 import type { SingleEntryService } from "../services/single-entry-service";
 
@@ -38,7 +40,11 @@ function preferences(slug: string) {
     localized: true,
     status: true,
     versions: { drafts: true },
-    fields: [text({ name: "siteName", localized: true })],
+    fields: [
+      text({ name: "siteName", localized: true }),
+      // Shared by every language: kept on the main row.
+      text({ name: "tagline", localized: false }),
+    ],
   });
 }
 
@@ -85,7 +91,8 @@ interface Seen {
  */
 async function eventsSince(
   before: ReadonlySet<string>,
-  slug: string
+  slug: string,
+  field = "siteName"
 ): Promise<Seen[]> {
   const rows = await current!.adapter.select<EventRow>("nextly_events");
   return rows
@@ -97,8 +104,8 @@ async function eventsSince(
     .map(event => ({
       type: event.type,
       locale: event.resource.locale,
-      data: event.data.siteName,
-      previous: event.previous?.siteName,
+      data: event.data[field],
+      previous: event.previous?.[field],
     }))
     .sort((a, b) =>
       `${a.locale ?? ""}:${a.type}`.localeCompare(`${b.locale ?? ""}:${b.type}`)
@@ -174,6 +181,75 @@ describe.each(getConfiguredTestDialects())(
           previous: "Hello",
         },
       ]);
+    });
+
+    it("reports the shared value a pending change put live, in its events and in the published version", async () => {
+      const singles = await boot(dialect);
+      for (const [locale, data] of [
+        ["en", { siteName: "Hello", tagline: "Old" }],
+        ["de", { siteName: "Hallo" }],
+      ] as const) {
+        const live = await singles.update(
+          EVERY,
+          { ...data, status: "published" },
+          { locale, overrideAccess: true }
+        );
+        expect(live.success, JSON.stringify(live)).toBe(true);
+      }
+      // German's pending change edits the shared field, held until published.
+      const held = await singles.update(
+        EVERY,
+        { tagline: "New" },
+        { locale: "de", overrideAccess: true }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      const read = async () => {
+        const got = await singles.get(EVERY, {
+          locale: "en",
+          overrideAccess: true,
+        });
+        return ((got as { data?: unknown }).data ?? got) as Record<
+          string,
+          unknown
+        >;
+      };
+      expect((await read()).tagline).toBe("Old");
+      const before = await eventIds();
+
+      const every = await singles.publishAllLocales(EVERY, {
+        overrideAccess: true,
+      });
+      expect(every.success, JSON.stringify(every)).toBe(true);
+      const live = await read();
+      expect(live.tagline).toBe("New");
+
+      // What readers see now, against what they saw before, in every event.
+      const events = await eventsSince(before, EVERY, "tagline");
+      expect(events.filter(event => event.type === "single.updated")).toEqual([
+        {
+          type: "single.updated",
+          locale: undefined,
+          data: "New",
+          previous: "Old",
+        },
+        {
+          type: "single.updated",
+          locale: "de",
+          data: "New",
+          previous: "Old",
+        },
+      ]);
+      // The version the publish records holds the content it put live.
+      const versions = new VersionsRepository(current!.adapter);
+      const ref = {
+        scopeKind: "single" as const,
+        scopeSlug: EVERY,
+        entryId: String(live.id),
+      };
+      const [newest] = await versions.listByDoc(ref, { limit: 1 });
+      expect(newest?.status).toBe("published");
+      const published = await versions.findByVersionNo(ref, newest!.versionNo!);
+      expect(snapshotRecord(published?.snapshot).tagline).toBe("New");
     });
   }
 );

@@ -32,3 +32,5 @@
 Publishing every language of a localized Single now tells each language's webhook subscribers what a publish of that one language would. A language that was already live and whose pending change goes live gets a `single.updated` event tagged with its locale; before, it got none. A language going live for the first time still gets `single.published`. For the default language, the untagged `single.updated` and the new tagged one both describe the write.
 
 Each event's `previous` now holds the content readers saw before the publish. Before, it was built from translated values read after the pending changes were promoted, so it already held the new text.
+
+When a pending change edited a field every language shares, the version a publish of every language records, and each event's current state, now hold the shared value it put live. Before, both kept the value from before the publish.
