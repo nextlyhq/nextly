@@ -30,6 +30,7 @@ vi.mock("../domains/widgets/declaration/declared-widgets", () => ({
 import type { AuthContext } from "../auth/middleware";
 import type { CanonicalWidget } from "../domains/widgets/canonical";
 import type { WidgetPlacement } from "../domains/widgets/layout";
+import { readAheadState } from "../domains/widgets/read-ahead-handover";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import {
@@ -175,6 +176,33 @@ describe("the cards a reader's dashboard is drawn without while empty", () => {
     const [first, second] = asked.map(([, , , input]) => input);
     expect(first.signal).toBe(signal);
     expect(first.now).toBe(second.now);
+  });
+
+  it("hands the read's load over once every card it asked has answered, the slowest included", async () => {
+    let answerSlow!: (empty: boolean) => void;
+    cardAnswersEmpty.mockImplementation(
+      (_declared, placement: WidgetPlacement) =>
+        placement.widgetId === "core/quiet-b"
+          ? new Promise<boolean>(resolve => {
+              answerSlow = resolve;
+            })
+          : Promise.resolve(true)
+    );
+    const judged = cardsAnsweredEmpty(
+      auth,
+      reader,
+      [card("core/quiet-a"), card("core/quiet-b")],
+      aheadOf("load-handover")
+    );
+    await vi.waitFor(() => expect(cardAnswersEmpty).toHaveBeenCalledTimes(2));
+    // The quick card has answered, and read ahead what it reads; the slow one is still being
+    // judged, so the load is not handed over and nothing read for it has begun to wait.
+    expect(readAheadState("load-handover")).toBe("pending");
+
+    answerSlow(false);
+    expect(await judged).toEqual(["core/quiet-a"]);
+    // Handed over now, as the layout read's answer is ready: the batch's window starts here.
+    expect(readAheadState("load-handover")).toBe("open");
   });
 
   it("asks nothing, and reads no source, when no card hides while empty", async () => {

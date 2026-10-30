@@ -31,6 +31,13 @@
  * collections are counted, a few at a time. Past either bound the count is a
  * floor and says so (`atLeast`), and the card shows "N+".
  *
+ * ## One collection that cannot be counted fails only its part
+ *
+ * Its part is left out and the kind's total is a floor, as past the bound;
+ * every other part and kind is still answered. The collections counted are the
+ * dashboard's own (`queryableSlugs`), which already leave out one kept off the
+ * dashboard, a collection removed from code included, whose table may be gone.
+ *
  * ## Language
  *
  * The counts are read with no language named, as the entry list reads, so each
@@ -84,6 +91,7 @@ import {
   MAX_WIDGET_LIMIT,
   type WidgetQuery,
 } from "../../domains/widgets/query";
+import { readAheadState } from "../../domains/widgets/read-ahead-handover";
 import {
   queryableSlugs,
   readableCollectionSlugs,
@@ -102,6 +110,7 @@ import { ATTENTION_SOURCE_ID } from "../../domains/widgets/system-source-ids";
 import { registerSystemSource } from "../../domains/widgets/system-sources";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
+import { getNextlyLogger } from "../../observability/logger";
 import type { CollectionsHandler } from "../collections-handler";
 
 import { readAheadAccess } from "./read-ahead-access";
@@ -197,6 +206,11 @@ async function countedCollections(
  * Each counted collection's entries under `filter`, up to the cap, as the
  * caller reads them: through the entry list's own door, a few at a time, and
  * stopping when the slot's signal says nobody is waiting any more.
+ *
+ * A collection that could not be counted costs only its own part: it is left
+ * out and logged, and the kind's total becomes a floor (`more`), as it does
+ * for collections past the bound, so the card never reads "All clear" over a
+ * list it could not read and every other part is still answered.
  */
 async function collectionParts(
   caller: ReadCaller,
@@ -205,43 +219,68 @@ async function collectionParts(
 ): Promise<{ parts: AttentionPart[]; more: boolean; any: boolean }> {
   const { slugs, more } = await countedCollections(caller);
   const parts: AttentionPart[] = [];
+  let unread = false;
   for (const group of authorizationGroups(slugs)) {
     context.opts?.signal?.throwIfAborted();
-    const counted = await Promise.all(
-      group.map(async slug => {
-        const result = await collections().countEntriesUpTo({
-          collectionName: slug,
-          overrideAccess: false,
-          user: caller.user,
-          ...(caller.authenticatedScope
-            ? { authenticatedScope: caller.authenticatedScope }
-            : {}),
-          // Every lifecycle state, as the entry list asks by default: the
-          // entries a workflow condition keeps may be drafts.
-          status: "all",
-          workflowFilter: filter,
-          releaseNow: context.now,
-          cap: ATTENTION_COUNT_CAP,
-        });
-        if (!result.success || !result.data) {
-          // A collection the reader may read that could not be counted: the
-          // card fails rather than shows a total missing a part.
-          throw errorFromServiceEnvelope(result, {
-            source: ATTENTION_SOURCE_ID,
-            collectionName: slug,
-          });
-        }
-        return {
-          contentKind: "collection" as const,
-          slug,
-          count: result.data.count,
-          atLeast: result.data.atLeast,
-        };
-      })
+    const settled = await Promise.allSettled(
+      group.map(slug => collectionPart(caller, slug, filter, context))
     );
-    parts.push(...counted);
+    settled.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        parts.push(result.value);
+        return;
+      }
+      unread = true;
+      getNextlyLogger().warn({
+        kind: "attention-part-failed",
+        source: ATTENTION_SOURCE_ID,
+        collection: group[index],
+        ...(result.reason instanceof Error
+          ? { error: result.reason.message }
+          : {}),
+      });
+    });
   }
-  return { parts, more, any: slugs.length > 0 };
+  return { parts, more: more || unread, any: slugs.length > 0 };
+}
+
+/**
+ * One collection's entries under `filter`, up to the cap, as the caller reads
+ * them. Rejects when the collection could not be counted, for
+ * {@link collectionParts} to leave its part out.
+ */
+async function collectionPart(
+  caller: ReadCaller,
+  slug: string,
+  filter: WorkflowFilter,
+  context: AttentionContext
+): Promise<AttentionPart> {
+  const result = await collections().countEntriesUpTo({
+    collectionName: slug,
+    overrideAccess: false,
+    user: caller.user,
+    ...(caller.authenticatedScope
+      ? { authenticatedScope: caller.authenticatedScope }
+      : {}),
+    // Every lifecycle state, as the entry list asks by default: the entries a
+    // workflow condition keeps may be drafts.
+    status: "all",
+    workflowFilter: filter,
+    releaseNow: context.now,
+    cap: ATTENTION_COUNT_CAP,
+  });
+  if (!result.success || !result.data) {
+    throw errorFromServiceEnvelope(result, {
+      source: ATTENTION_SOURCE_ID,
+      collectionName: slug,
+    });
+  }
+  return {
+    contentKind: "collection",
+    slug,
+    count: result.data.count,
+    atLeast: result.data.atLeast,
+  };
 }
 
 const readUnpublished: AttentionKindReader = async (caller, context) => {
@@ -492,26 +531,28 @@ async function readAttentionDigest(
   return runDigest(readers, opts?.signal);
 }
 
-/**
- * How long a digest read ahead for a dashboard load waits for that load's own
- * batch to take it: one load, never a standing cache.
- */
-const READ_AHEAD_KEPT_MS = 5_000;
-
 /** At most this many loads' digests wait at once; the oldest goes first. */
 const READ_AHEAD_LOADS = 500;
 
+/** A digest read ahead, and the dashboard load it waits for. */
+interface WaitingDigest {
+  token: string;
+  items: AttentionDigestItem[];
+}
+
 /**
  * Digests read ahead by the layout read, by access and load
- * ({@link waitingKey}), each waiting for the batch of that load. Held for the
- * process (`processHeld`), as the card's own digest read is: the layout read
- * and the batch can reach different copies of this module.
+ * ({@link waitingKey}), each waiting for the batch of that load: one load,
+ * never a standing cache. How long one waits is its load's (`readAheadState`):
+ * from when its layout read handed the load over, having judged every card,
+ * not from when the digest was read. Held for the process (`processHeld`), as
+ * the card's own digest read is: the layout read and the batch can reach
+ * different copies of this module.
  */
 const readAhead = processHeld(
   "nextly.dashboard.attentionReadAhead",
-  () => new Map<string, { at: number; items: AttentionDigestItem[] }>(),
-  (held): held is Map<string, { at: number; items: AttentionDigestItem[] }> =>
-    held instanceof Map
+  () => new Map<string, WaitingDigest>(),
+  (held): held is Map<string, WaitingDigest> => held instanceof Map
 );
 
 /**
@@ -530,12 +571,14 @@ function waitingKey(access: string, token: string): string {
 
 /**
  * The digest waiting under `key`, taken: gone from the map whether or not it
- * is still fresh, and `undefined` when there was none or it is not.
+ * may be taken, and `undefined` when there was none or its load is not open
+ * (`readAheadState`): not yet handed over by its layout read, or handed over
+ * longer ago than its batch is given.
  */
 function takeWaiting(key: string): AttentionDigestItem[] | undefined {
   const waiting = readAhead.get(key);
   readAhead.delete(key);
-  return waiting !== undefined && Date.now() - waiting.at < READ_AHEAD_KEPT_MS
+  return waiting !== undefined && readAheadState(waiting.token) === "open"
     ? waiting.items
     : undefined;
 }
@@ -545,14 +588,16 @@ function takeWaiting(key: string): AttentionDigestItem[] | undefined {
  * read answers the card ahead (`side: "ahead"`), to learn whether it is empty
  * before the dashboard is drawn, and leaves its digest under its access and
  * its load's token; the batch of that load (`side: "batch"`, the same token)
- * takes it, once, if it is fresh and the batch asks under exactly the same
- * access, read at the batch's own request. Any other ask, a batch of no load,
- * one under any other access, one whose digest was taken, expired or never
- * read, a refetch or a later visit, reads anew, and no ask takes or removes
- * another load's digest. So what a reader resolved is gone from the next
- * answer they are given, two loads of one reader each draw from their own
- * read, and a digest is never handed to access it was not read for. A side
- * whose access cannot be stated neither keeps nor takes one.
+ * takes it, once, while its load is open (from when the layout read handed it
+ * over, having judged every card, for the window `readAheadState` gives) and
+ * if the batch asks under exactly the same access, read at the batch's own
+ * request. Any other ask, a batch of no load, one under any other access, one
+ * whose digest was taken, expired or never read, a refetch or a later visit,
+ * reads anew, and no ask takes or removes another load's digest. So what a
+ * reader resolved is gone from the next answer they are given, two loads of
+ * one reader each draw from their own read, and a digest is never handed to
+ * access it was not read for. A side whose access cannot be stated neither
+ * keeps nor takes one.
  */
 async function cardDigest(
   caller: ReadCaller,
@@ -567,26 +612,32 @@ async function cardDigest(
   }
   const items = await readAttentionDigest(caller, opts);
   if (load?.side === "ahead" && access !== undefined) {
-    keepForBatch(waitingKey(access, load.token), items);
+    keepForBatch(waitingKey(access, load.token), load.token, items);
   }
   return items;
 }
 
 /**
- * Leaves `items` under `key` for its load's batch. Every digest no batch took
- * in time goes first, the oldest at the front, since they are kept in the
- * order they were read; then the oldest beyond {@link READ_AHEAD_LOADS}.
+ * Leaves `items` under `key` for the batch of the load `token` names. Every
+ * digest whose load has closed goes first, since no batch will take it; one
+ * whose load is still being judged stays, however long ago it was read, as
+ * its window has not begun. Then the oldest beyond {@link READ_AHEAD_LOADS}.
  */
-function keepForBatch(key: string, items: AttentionDigestItem[]): void {
-  const at = Date.now();
+function keepForBatch(
+  key: string,
+  token: string,
+  items: AttentionDigestItem[]
+): void {
   // Deleted first, so a load read ahead again is kept at the back, as the
   // newest, rather than in its first place.
   readAhead.delete(key);
+  // Every entry is looked at, not only those at the front: digests are kept in
+  // the order they were read, and loads close in the order they are handed
+  // over, which is not the same order.
   for (const [held, waiting] of readAhead) {
-    if (at - waiting.at < READ_AHEAD_KEPT_MS) break;
-    readAhead.delete(held);
+    if (readAheadState(waiting.token) === "closed") readAhead.delete(held);
   }
-  readAhead.set(key, { at, items });
+  readAhead.set(key, { token, items });
   for (const oldest of readAhead.keys()) {
     if (readAhead.size <= READ_AHEAD_LOADS) break;
     readAhead.delete(oldest);

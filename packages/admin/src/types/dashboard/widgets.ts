@@ -327,8 +327,9 @@ export interface DashboardLayoutResponse {
    * An opaque token for this one read of the layout: the cards in
    * `hiddenWhileEmpty` were answered ahead under it, and the dashboard's batch
    * sends it back so a card is handed the answer read for this load and no
-   * other tab's. New on every read, so it is never part of a query key.
-   * Absent from a server that predates it, and the batch then sends none.
+   * other tab's. New on every read, and part of the batch's query key, so a
+   * new layout answer asks the cards again, once, under its token. Absent from
+   * a server that predates it, and the batch then sends none.
    */
   readAheadToken?: string;
 }

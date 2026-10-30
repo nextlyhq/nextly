@@ -27,6 +27,7 @@
 
 import type { SizeTier } from "@nextlyhq/ui/format";
 import {
+  hashKey,
   useQueries,
   useQueryClient,
   type QueryClient,
@@ -43,14 +44,12 @@ import type { WidgetRenderSize } from "nextly/widget-result";
 import { useMemo } from "react";
 
 import type {
-  DashboardLayoutResponse,
   DashboardWidget,
   WidgetResult,
   WidgetResultField,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
 import {
   fetchWidgetBatch,
   type CardAsk,
@@ -964,9 +963,9 @@ interface PartitionAnswer {
 async function askPartition(
   partition: readonly WidgetQueryRequest[],
   queryClient: QueryClient,
-  queryKey: QueryKey,
-  signal: AbortSignal
+  ask: { queryKey: QueryKey; signal: AbortSignal; readAheadToken?: string }
 ): Promise<PartitionAnswer> {
+  const { queryKey, signal, readAheadToken } = ask;
   const sizes = sizesSent(partition);
   const applied = appliedSent(partition);
   const cellsApplied = cellsAppliedSent(partition);
@@ -1022,15 +1021,6 @@ async function askPartition(
       { updatedAt: heldAt }
     );
 
-  // The token of the layout answer the dashboard is drawn from, read as the request is made rather
-  // than kept in the query key: it is new on every layout read, and a key carrying it would split
-  // the cache on every visit. The server hands a card the answer that read worked out ahead under
-  // it, once, so this load is never handed another tab's.
-  const readAheadToken =
-    queryClient.getQueryData<DashboardLayoutResponse>(
-      DASHBOARD_LAYOUT_KEY
-    )?.readAheadToken;
-
   // Nothing to send, when every cell asked is one its card's tier does not draw: no round trip.
   const answered =
     positions.length === 0
@@ -1039,6 +1029,9 @@ async function askPartition(
           positions.map(position => sentEntry(partition[position])),
           {
             signal,
+            // The token of the layout answer the dashboard is drawn from, the one this request's
+            // key carries: the server hands a card the answer that read worked out ahead under
+            // it, once, so this load is never handed another tab's.
             ...(readAheadToken === undefined ? {} : { readAheadToken }),
             onSlots: arrived => {
               for (const { index, slot } of arrived) {
@@ -1093,12 +1086,50 @@ function partitionRequests(
   return partitions;
 }
 
+/** The key of one partition's answer, before the load it is asked for. */
+function partitionKey(
+  partition: readonly WidgetQueryRequest[]
+): readonly unknown[] {
+  return ["dashboard", "widget-queries", partition.map(unsized)];
+}
+
+/**
+ * The latest answer held for the same partition under another load's token (or none), with when
+ * it was written: what a partition asked under a new token starts from, so its cards keep the
+ * numbers on screen while the new load's request runs, as a refetch keeps them under one key.
+ * Matched by the whole partition key, not by prefix: TanStack's partial match would take a
+ * partition that merely begins with this one's requests.
+ */
+function heldUnderAnotherLoad(
+  queryClient: QueryClient,
+  partition: readonly WidgetQueryRequest[]
+): { data: PartitionAnswer; at: number } | undefined {
+  const own = hashKey(partitionKey(partition));
+  let held: { data: PartitionAnswer; at: number } | undefined;
+  const entries = queryClient.getQueriesData<PartitionAnswer>({
+    queryKey: ["dashboard", "widget-queries"],
+  });
+  for (const [key, data] of entries) {
+    if (data === undefined || hashKey(key.slice(0, 3)) !== own) continue;
+    const at = queryClient.getQueryState(key)?.dataUpdatedAt ?? 0;
+    if (held === undefined || at > held.at) held = { data, at };
+  }
+  return held;
+}
+
 /**
  * Batches `queries` into as few requests as the endpoint allows and hands each
  * widget back its own slot.
+ *
+ * `readAheadToken` is the token of the layout answer the dashboard is drawn
+ * from, absent where there is none (or the batch is not a dashboard's own). It
+ * is part of each partition's key, so a layout answer with a new token asks the
+ * whole batch again, once, under that token, and the server can hand a card the
+ * answer that layout read worked out ahead for it; the same token asks nothing.
  */
 export function useWidgetQueries(
-  queries: WidgetQueryRequest[]
+  queries: WidgetQueryRequest[],
+  readAheadToken?: string
 ): UseWidgetQueriesResult {
   const partitions = useMemo(() => partitionRequests(queries), [queries]);
   const queryClient = useQueryClient();
@@ -1109,8 +1140,14 @@ export function useWidgetQueries(
       // for different widgets are different questions and must not share one cache entry;
       // TanStack hashes the array deterministically, so a re-render with an equal-but-new
       // array does not refetch. `sized` is left out so a change of tier is not a new question;
-      // see `WidgetQueryRequest.sized`.
-      queryKey: ["dashboard", "widget-queries", partition.map(unsized)],
+      // see `WidgetQueryRequest.sized`. Then the layout answer's token, when there is one: a new
+      // layout answer is a new load, whose cards the server may hand what it read ahead for it,
+      // so the batch is asked again under it, and a request that started under the token held
+      // before is not the one its cards are drawn from.
+      queryKey: [
+        ...partitionKey(partition),
+        ...(readAheadToken === undefined ? [] : [readAheadToken]),
+      ],
       // Built from this render's partition, and TanStack runs the latest observer's function,
       // so a refetch sends each card's CURRENT tier. The signal is TanStack's own, so a
       // dashboard the reader leaves stops reading, and the server gives up the batch.
@@ -1122,11 +1159,21 @@ export function useWidgetQueries(
         signal: AbortSignal;
       }): Promise<PartitionAnswer> => {
         try {
-          return await askPartition(partition, queryClient, queryKey, signal);
+          return await askPartition(partition, queryClient, {
+            queryKey,
+            signal,
+            ...(readAheadToken === undefined ? {} : { readAheadToken }),
+          });
         } catch (error) {
           return failedAsking(partition, error);
         }
       },
+      // Under a new token, the answer the partition held under the one before, with its time, so
+      // the cards keep their numbers and the freshness line while the new load is asked. Read
+      // when the new entry is made; never under the same token, which has its own answer.
+      initialData: () => heldUnderAnotherLoad(queryClient, partition)?.data,
+      initialDataUpdatedAt: () =>
+        heldUnderAnotherLoad(queryClient, partition)?.at,
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
       retry: 2,

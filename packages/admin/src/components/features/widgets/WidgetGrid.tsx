@@ -203,6 +203,7 @@ const NO_CARDS: [] = [];
  * Each query is sized for the tier it will be drawn at. The width is measured before the first
  * paint, and no card is asked before it is known, so every first query is sized for its card's
  * tier. Dragging is decided from the same width: on wherever more than one column is drawn.
+ * The batch is asked under the token of `layout`, the layout answer the cards are drawn from.
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
@@ -210,7 +211,8 @@ function useCardsAtDashboardWidth(
   carry: Pick<
     Parameters<typeof useCardDrag>[0],
     "gridRef" | "say" | "drop" | "requestFocus"
-  >
+  >,
+  layout: DashboardLayoutResponse | undefined
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
@@ -229,7 +231,10 @@ function useCardsAtDashboardWidth(
   return {
     dashboardRef,
     drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
-    ...useWidgetBatch(cards, draws.failed),
+    // Asked under the token of the layout answer the cards are drawn from, and again under each
+    // new one: a layout read that lands after the batch started is the load the cards are then
+    // drawn from, and the server answers a card that load read ahead only under its token.
+    ...useWidgetBatch(cards, draws.failed, layout?.readAheadToken),
     reportDraw: draws.report,
   };
 }
@@ -463,12 +468,17 @@ export function WidgetGrid(): JSX.Element {
     settling,
     retry,
     reportDraw,
-  } = useCardsAtDashboardWidth(visible, editor.isEditing, {
-    gridRef: focus.gridRef,
-    say: announce.drag,
-    drop: arrangement.dropCard,
-    requestFocus: focus.request,
-  });
+  } = useCardsAtDashboardWidth(
+    visible,
+    editor.isEditing,
+    {
+      gridRef: focus.gridRef,
+      say: announce.drag,
+      drop: arrangement.dropCard,
+      requestFocus: focus.request,
+    },
+    layout.layout
+  );
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
   const { announcement } = gridAnnouncer;

@@ -27,6 +27,7 @@ import type { CanonicalWidget } from "../domains/widgets/canonical";
 import { refreshContentSources } from "../domains/widgets/content-sources";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import type { WidgetPlacement } from "../domains/widgets/layout";
+import { handOverReadAhead } from "../domains/widgets/read-ahead-handover";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import { cardAnswersEmpty, type CardBatch } from "./widget-cards";
@@ -88,7 +89,11 @@ export interface AheadOfTheBatch {
  * read, under the request's `signal`, at the tier it is drawn at on a
  * dashboard `dashboardWidth` wide, as read ahead for the dashboard load
  * `readAheadToken` names: the batch that load asks, sending the token back,
- * may be handed what was read here, and no other ask is.
+ * may be handed what was read here, and no other ask is. The load is handed
+ * over (`handOverReadAhead`) once every card has answered, the slowest
+ * included, when the layout read's answer is ready to return: what was read
+ * here waits for the batch from then, so a card that answered early does not
+ * see its answer expire while a slower one is still being judged.
  */
 export async function cardsAnsweredEmpty(
   auth: AuthContext,
@@ -115,6 +120,9 @@ export async function cardsAnsweredEmpty(
   };
   const scope = createBatchScope();
   const now = new Date();
+  // The load is handed over once every card has answered, however the judging
+  // ended: a read that failed is never answered, so no batch names its load,
+  // and handing it over lets what was read for it close and be dropped.
   const empty = await Promise.all(
     asked.map(({ placement, declared }) =>
       cardAnswersEmpty(
@@ -125,7 +133,7 @@ export async function cardsAnsweredEmpty(
         ahead.dashboardWidth
       )
     )
-  );
+  ).finally(() => handOverReadAhead(ahead.readAheadToken));
   return asked
     .filter((_, index) => empty[index])
     .map(({ placement }) => placement.id);

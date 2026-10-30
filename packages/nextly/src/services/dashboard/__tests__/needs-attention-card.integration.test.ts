@@ -6,7 +6,10 @@
  * What only a database can settle: that an API key is answered by its own
  * grant rather than by the roles of the person who made it, that a reader with
  * nothing waiting gets an answer the card judges empty (so it leaves the
- * dashboard), and that an item leaves once the work it counts is done.
+ * dashboard), and that an item leaves once the work it counts is done; and
+ * that a half-retired collection (removed from code, its table dropped, its
+ * registry row left behind) fails neither the card nor Needs attention's
+ * grouped answer, and that a collection whose count fails costs only its part.
  *
  * Runs against whichever dialects the integration run configures; CI covers
  * SQLite, PostgreSQL and MySQL.
@@ -17,7 +20,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   superAdminUser,
@@ -28,18 +31,28 @@ import {
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../config";
+import { publishDeclaredEntities } from "../../../domains/dynamic-collections/services/removed-from-code-writes";
 import {
   publishAsItStands,
   scheduleAsItStands,
 } from "../../../domains/releases/__tests__/helpers/release-writes";
 import { ReleasesRepository } from "../../../domains/releases/releases-repository";
+import {
+  clearAttentionItems,
+  registerAttentionItems,
+} from "../../../domains/widgets/attention/items";
 import { createBatchScope } from "../../../domains/widgets/batch-scope";
 import { needsAttentionWidget } from "../../../domains/widgets/core-widgets/needs-attention";
 import { refreshContentSources } from "../../../domains/widgets/content-sources";
+import type { AttentionItem } from "../../../domains/widgets/declaration/dashboard";
 import {
   bindReadServices,
   type ReadAheadSide,
 } from "../../../domains/widgets/declaration/read-services";
+import type { WidgetQuery } from "../../../domains/widgets/query";
+import { handOverReadAhead } from "../../../domains/widgets/read-ahead-handover";
+import { sourceResolver } from "../../../domains/widgets/resolved-sources";
+import { ATTENTION_SOURCE_ID } from "../../../domains/widgets/system-source-ids";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -50,13 +63,69 @@ import type { ReadCaller } from "../readable-resources";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const NOTES = "nac_notes";
+/**
+ * Half-retired by the cases that name it: removed from code, its table
+ * dropped, its registry row left behind.
+ */
+const RETIRED = "nac_retired";
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  clearAttentionItems();
+  publishDeclaredEntities(undefined);
   await current?.destroy();
   current = undefined;
 });
+
+/**
+ * A plugin's attention items, kept as startup keeps them: one counting the
+ * notes and one counting the collection a case half-retires.
+ */
+function declarePluginItems(): void {
+  const counting = (slug: string, label: string): AttentionItem => ({
+    id: `acme/${slug.replace("nac_", "")}`,
+    label,
+    collections: [slug],
+    count: ({ services, signal }) => services.count(slug, { signal }),
+    link: `collections/${slug}`,
+  });
+  registerAttentionItems([
+    {
+      owner: 'plugin "acme"',
+      widgets: [],
+      suggest: undefined,
+      alternatives: undefined,
+      attention: [
+        counting(NOTES, "Notes waiting"),
+        counting(RETIRED, "Retired waiting"),
+      ],
+      unknownKeys: [],
+    },
+  ]);
+}
+
+/**
+ * Needs attention's grouped answer for `caller` (`system:attention` asked
+ * with `groupBy`), each bucket as its count, "+" for a floor.
+ */
+async function groupedFor(caller: ReadCaller): Promise<Record<string, string>> {
+  const resolve = sourceResolver(ATTENTION_SOURCE_ID);
+  if (!resolve) throw new Error("system:attention is not registered");
+  const query: WidgetQuery = {
+    source: ATTENTION_SOURCE_ID,
+    op: "groupBy",
+    groupBy: "item",
+  };
+  const result = await resolve(query, caller);
+  if (result.op !== "groupBy") throw new Error(result.op);
+  return Object.fromEntries(
+    result.buckets.map(bucket => [
+      bucket.value,
+      `${bucket.count}${bucket.atLeast === true ? "+" : ""}`,
+    ])
+  );
+}
 
 const MINUTE = 60 * 1000;
 
@@ -97,9 +166,18 @@ function keyScope(authority: "holds" | "lapsed"): AuthenticatedScope {
  * The card's answer for `caller`, as a batch answers it: services bound to
  * that caller, and to the side of the dashboard load `readAhead` names, if
  * any: `ahead` as the layout read answers it before the dashboard is drawn,
- * `batch` as the batch of that load asks it.
+ * `batch` as the batch of that load asks it. An `ahead` answer's load is then
+ * handed over, as the layout read hands it over once it has judged every card
+ * (`cardFor`); `answerFor` leaves it being judged.
  */
 async function cardFor(caller: ReadCaller, readAhead?: ReadAheadSide) {
+  const answer = await answerFor(caller, readAhead);
+  if (readAhead?.side === "ahead") handOverReadAhead(readAhead.token);
+  return answer;
+}
+
+/** The card's answer as `cardFor` gives it, with an `ahead` load left being judged. */
+async function answerFor(caller: ReadCaller, readAhead?: ReadAheadSide) {
   const signal = new AbortController().signal;
   const now = new Date();
   const answer = await needsAttentionWidget.load({
@@ -222,6 +300,46 @@ describe.each(getConfiguredTestDialects())(
         empty: false,
       });
       expect(await cardFor(admin)).toEqual({
+        ids: ["core/overdue-releases"],
+        empty: false,
+      });
+    });
+
+    it("hands the batch the layout read's digest when the read took longer than the window to hand its load over", async () => {
+      const t = await boot();
+      const admin: ReadCaller = {
+        user: { id: await superAdminUser(t, "nac-slow") },
+      };
+      // The layout read answers this card with nothing waiting, then goes on judging a slower card.
+      expect((await answerFor(admin, ahead("load-slow"))).ids).toEqual([]);
+      await overdueRelease(t);
+
+      // Six seconds on, longer than the five a batch is given, the slower card has answered and
+      // the load is handed over; its batch asks at once.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() + 6_000);
+      try {
+        handOverReadAhead("load-slow");
+        // Handed the digest that judged the card, not one read since: the window began at the
+        // handover, not when the digest was read.
+        expect(await cardFor(admin, batchOf("load-slow"))).toEqual({
+          ids: [],
+          empty: true,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("hands a batch nothing read ahead for a load its layout read has not handed over", async () => {
+      const t = await boot();
+      const admin: ReadCaller = {
+        user: { id: await superAdminUser(t, "nac-early") },
+      };
+      // Read ahead with nothing waiting, the layout read still judging: its window has not begun.
+      expect((await answerFor(admin, ahead("load-early"))).ids).toEqual([]);
+      await overdueRelease(t);
+      expect(await cardFor(admin, batchOf("load-early"))).toEqual({
         ids: ["core/overdue-releases"],
         empty: false,
       });
@@ -351,6 +469,112 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await cardFor(asked(), batchOf("load-same", "api-key:k1"))
       ).toEqual({ ids: ["core/overdue-releases"], empty: false });
+    });
+
+    /** Boots with the notes and {@link RETIRED} both declared, one entry in each. */
+    async function bootWithRetired(): Promise<TestNextly> {
+      current = await createTestNextly({
+        dialect,
+        collections: [NOTES, RETIRED].map(slug =>
+          defineCollection({ slug, fields: [text({ name: "title" })] })
+        ),
+      });
+      for (const collection of [NOTES, RETIRED]) {
+        await current.nextly.create({ collection, data: { title: "One" } });
+      }
+      await refreshContentSources();
+      return current;
+    }
+
+    /**
+     * Half-retires {@link RETIRED}: its table dropped, as an applied drop
+     * migration leaves it, and the configuration published without it, as the
+     * boot or reload of that configuration publishes it, while its registry
+     * row stays. Then the content sources are refreshed, as every dashboard
+     * request does first.
+     */
+    async function halfRetire(t: TestNextly): Promise<void> {
+      const row = await t
+        .getService("collectionRegistryService")
+        .getCollectionBySlug(RETIRED);
+      if (!row) throw new Error(`${RETIRED} has no registry row`);
+      await t.adapter.dropTable(row.tableName);
+      // Positive controls: the table is gone and the registry row is not.
+      expect(await t.adapter.tableExists(row.tableName)).toBe(false);
+      expect(
+        await t
+          .getService("collectionRegistryService")
+          .getCollectionBySlug(RETIRED)
+      ).toMatchObject({ slug: RETIRED, source: "code" });
+      publishDeclaredEntities({
+        collections: [{ slug: NOTES }],
+        singles: [],
+      });
+      await refreshContentSources();
+    }
+
+    it("loads beside a half-retired collection, every other item intact", async () => {
+      const t = await bootWithRetired();
+      await overdueRelease(t);
+      declarePluginItems();
+      const admin: ReadCaller = {
+        user: { id: await superAdminUser(t, "nac-retired-card") },
+      };
+      // Positive control: before it is retired, the item counting it reaches
+      // its table and is shown.
+      expect(await cardFor(admin)).toEqual({
+        ids: ["core/overdue-releases", "acme/notes", "acme/retired"],
+        empty: false,
+      });
+
+      await halfRetire(t);
+
+      // The card answers, ready and not empty, with the overdue release and the
+      // notes' item as they were. The item over the retired collection is not
+      // drawn as failed: the collection is not the site's any more, so it
+      // shows to nobody, as an item over a collection the site lacks does.
+      expect(await cardFor(admin)).toEqual({
+        ids: ["core/overdue-releases", "acme/notes"],
+        empty: false,
+      });
+    });
+
+    it("answers its grouped counts beside a half-retired collection, with no part left unread", async () => {
+      const t = await bootWithRetired();
+      await overdueRelease(t);
+      const admin: ReadCaller = {
+        user: { id: await superAdminUser(t, "nac-retired-grouped") },
+      };
+      expect(await groupedFor(admin)).toEqual({ overdue: "1" });
+
+      await halfRetire(t);
+
+      // Not refused, and no kind a floor: the retired collection is not one
+      // the dashboard counts, so nothing was left unread.
+      expect(await groupedFor(admin)).toEqual({ overdue: "1" });
+    });
+
+    it("answers its grouped counts when a collection it counts cannot be read, that part alone unread", async () => {
+      const t = await bootWithRetired();
+      await overdueRelease(t);
+      const admin: ReadCaller = {
+        user: { id: await superAdminUser(t, "nac-unreadable") },
+      };
+      // A declared collection whose table is gone: still the dashboard's, so
+      // it is counted, and its count fails.
+      const row = await t
+        .getService("collectionRegistryService")
+        .getCollectionBySlug(RETIRED);
+      if (!row) throw new Error(`${RETIRED} has no registry row`);
+      await t.adapter.dropTable(row.tableName);
+
+      // The overdue release is answered as before; the two kinds that count
+      // collections are floors of nothing found, never "All clear".
+      expect(await groupedFor(admin)).toEqual({
+        overdue: "1",
+        unpublished: "0+",
+        scheduled: "0+",
+      });
     });
 
     it("never hands one reader's read-ahead digest to a caller with other grants", async () => {

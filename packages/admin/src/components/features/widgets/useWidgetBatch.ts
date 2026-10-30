@@ -368,11 +368,14 @@ const NO_DRAW_FAILURES: ReadonlySet<string> = new Set();
 /**
  * `drawFailed` is the placements whose own component threw drawing a fine
  * answer (`draw-failures`): the answer cannot say so, so they are counted as
- * failed from here.
+ * failed from here. `readAheadToken` is the token of the layout answer the
+ * cards are drawn from: the batch is asked under it, and again, once, under
+ * each new one (`useWidgetQueries`).
  */
 export function useWidgetBatch(
   cards: BatchCard[],
-  drawFailed: ReadonlySet<string> = NO_DRAW_FAILURES
+  drawFailed: ReadonlySet<string> = NO_DRAW_FAILURES,
+  readAheadToken?: string
 ): WidgetBatch {
   // 🔴 Sorted by ID, not left in display order. `useWidgetQueries` puts the
   // request partitions into its TanStack query keys, so a key built from the
@@ -401,7 +404,7 @@ export function useWidgetBatch(
     [cards]
   );
 
-  const batch = useWidgetQueries(requests);
+  const batch = useWidgetQueries(requests, readAheadToken);
   const { isFetching, updatedAt } = batch;
 
   // Retry for one card at a time, over the batch's answers; see `useCardRetries`.
