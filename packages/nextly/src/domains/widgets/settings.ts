@@ -72,7 +72,7 @@ import {
 export type SettingSection = "data" | "display" | "advanced";
 
 /** Every section, in the order the settings panel draws them. */
-export const SETTING_SECTIONS: readonly SettingSection[] = [
+const SETTING_SECTIONS: readonly SettingSection[] = [
   "data",
   "display",
   "advanced",
@@ -773,6 +773,8 @@ function settingProblem(
     options?: unknown;
     min?: unknown;
     max?: unknown;
+    rows?: unknown;
+    section?: unknown;
   };
 
   if (typeof name !== "string" || name === "") {
@@ -788,9 +790,7 @@ function settingProblem(
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${quote(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
-  const flags =
-    flagsProblem(type, quick, (rest as { rows?: unknown }).rows, defaultFrom) ??
-    sectionProblem((rest as { section?: unknown }).section);
+  const flags = flagsProblem(type, quick, rest, defaultFrom);
   if (flags !== undefined) return `setting "${name}" ${flags}`;
   const editor = editorProblem((rest as { editor?: unknown }).editor);
   if (editor !== undefined) return `setting "${name}" ${editor}`;
@@ -828,11 +828,11 @@ function sectionProblem(section: unknown): string | undefined {
     : `has section ${quote(section)}; expected one of ${SETTING_SECTIONS.map(known => `"${known}"`).join(", ")}`;
 }
 
-/** Why a setting's `quick`, `rows` or `defaultFrom` is unusable, or `undefined`. */
+/** Why a setting's `quick`, `rows`, `section` or `defaultFrom` is unusable, or `undefined`. */
 function flagsProblem(
   type: AnyWidgetSetting["type"],
   quick: unknown,
-  rows: unknown,
+  rest: { rows?: unknown; section?: unknown },
   defaultFrom: unknown
 ): string | undefined {
   if (quick !== undefined && typeof quick !== "boolean") {
@@ -847,7 +847,7 @@ function flagsProblem(
   ) {
     return `has defaultFrom ${quote(defaultFrom)}; only a Group by setting takes it, as "collection"`;
   }
-  return rowsProblem(type, rows);
+  return rowsProblem(type, rest.rows) ?? sectionProblem(rest.section);
 }
 
 /**

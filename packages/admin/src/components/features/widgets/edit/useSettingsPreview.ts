@@ -127,6 +127,39 @@ function previewRequests(
   ];
 }
 
+/**
+ * The preview's own card, the settings its component reads and the size it is drawn at, and the
+ * size its question is asked at: the card's own, as the dashboard asks it, else the widest.
+ */
+function usePreviewPlacement(args: {
+  previewId: string;
+  widget: DashboardWidget;
+  draft: Record<string, unknown>;
+  sources: ReturnType<typeof useBranding>["widgetSources"];
+  size: GridSize | undefined;
+  tier: SizeTier | undefined;
+}): {
+  placement: SettingsPreview["placement"];
+  askedSize: AnswerSize & { tier: SizeTier };
+} {
+  const { previewId, widget, draft, sources, size, tier } = args;
+  return useMemo(() => {
+    const settings = settingsAsAsked(widget, draft, sources);
+    return {
+      placement: {
+        id: previewId,
+        settings,
+        ...(size === undefined ? {} : { size }),
+      },
+      askedSize: {
+        tier: tier ?? WIDEST_TIER,
+        ...(size === undefined ? {} : { h: size.h }),
+        density: listDensityOf(settings),
+      },
+    };
+  }, [previewId, widget, draft, sources, size, tier]);
+}
+
 export function useSettingsPreview(args: {
   /** The widget as declared, before any settings apply. */
   widget: DashboardWidget;
@@ -166,23 +199,14 @@ export function useSettingsPreview(args: {
   // The question settles before it is asked, so a run of changes asks once.
   const settled = useDebouncedValue(asking, PREVIEW_ASK_DELAY_MS);
 
-  const placement = useMemo(
-    () => ({
-      id: previewId,
-      settings: settingsAsAsked(widget, draft, sources),
-      ...(args.size === undefined ? {} : { size: args.size }),
-    }),
-    [previewId, widget, draft, sources, args.size]
-  );
-  // The size the preview's question is asked at: the card's own, as the dashboard asks it.
-  const askedSize = useMemo(
-    () => ({
-      tier: args.tier ?? WIDEST_TIER,
-      ...(args.size === undefined ? {} : { h: args.size.h }),
-      density: listDensityOf(placement.settings),
-    }),
-    [args.tier, args.size, placement.settings]
-  );
+  const { placement, askedSize } = usePreviewPlacement({
+    previewId,
+    widget,
+    draft,
+    sources,
+    size: args.size,
+    tier: args.tier,
+  });
 
   // The settled question itself is each request's query, so each new question is a new one.
   const requests = useMemo<WidgetQueryRequest[]>(

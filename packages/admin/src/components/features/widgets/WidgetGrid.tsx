@@ -249,6 +249,50 @@ function useCardsAtDashboardWidth(
   };
 }
 
+/**
+ * Whether leaving the dashboard asks first: while customising, when the draft or a card's open
+ * settings panel holds a change, since the panel leaves the asking to this prompt then.
+ */
+function leaveAsks(
+  editor: { hasUnsavedChanges: boolean; isEditing: boolean },
+  panelHoldsChanges: boolean
+): boolean {
+  return editor.hasUnsavedChanges || (editor.isEditing && panelHoldsChanges);
+}
+
+/**
+ * The admin's own unsaved-changes prompt, over the dashboard: Save, Discard and Keep editing
+ * before the reader leaves with changes in customise mode.
+ */
+function DashboardLeaveGuard({
+  editor,
+  saveRequest,
+  children,
+}: {
+  editor: LayoutEditor;
+  saveRequest: ReturnType<typeof useSaveRequest>;
+  children: ReactNode;
+}): JSX.Element {
+  // Whether a card's settings panel holds a change Done has not kept.
+  const panelHoldsChanges = useSettingsPanelHoldsChanges();
+  return (
+    <UnsavedChangesGuard
+      // A card's settings panel holding a change counts while customising, where the panel
+      // leaves the asking to this prompt: one leave, one question.
+      isDirty={leaveAsks(editor, panelHoldsChanges)}
+      onDiscard={editor.cancel}
+      // The bar's Save and this prompt's are one request, which keeps an open settings
+      // panel's change with the draft (`useSaveRequest`).
+      onSave={saveRequest.request}
+      // A Save the prompt could not make, because a settings panel refused its change, leaves
+      // the reader in that panel, on what it refused.
+      onCancel={bringRefusedPanelForward}
+    >
+      {children}
+    </UnsavedChangesGuard>
+  );
+}
+
 /** Why a single-card write is unavailable while the stored layout is unreadable. */
 const UNREADABLE_SINGLE_CARD =
   "Unavailable: your saved dashboard couldn't be loaded. Save it from Customize first.";
@@ -464,8 +508,6 @@ export function WidgetGrid(): JSX.Element {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();
-  // Whether a card's settings panel holds a change Done has not kept; see the leave prompt below.
-  const panelHoldsChanges = useSettingsPanelHoldsChanges();
 
   // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
   // and the registry `registerWidget` writes to. Reading only the first made the
@@ -611,20 +653,7 @@ export function WidgetGrid(): JSX.Element {
           was pending lost them when it failed. Discarding says nothing, because
           the page is leaving and the next one speaks for itself; reload and
           close get the browser's own prompt. */}
-      <UnsavedChangesGuard
-        // A card's settings panel holding a change counts while customising, where the panel
-        // leaves the asking to this prompt: one leave, one question.
-        isDirty={
-          editor.hasUnsavedChanges || (editor.isEditing && panelHoldsChanges)
-        }
-        onDiscard={editor.cancel}
-        // The bar's Save and this prompt's are one request, which keeps an open settings
-        // panel's change with the draft (`useSaveRequest`).
-        onSave={saveRequest.request}
-        // A Save the prompt could not make, because a settings panel refused its change, leaves
-        // the reader in that panel, on what it refused.
-        onCancel={bringRefusedPanelForward}
-      >
+      <DashboardLeaveGuard editor={editor} saveRequest={saveRequest}>
         <div className="space-y-4">
           <DashboardEditChrome
             editor={editor}
@@ -701,7 +730,7 @@ export function WidgetGrid(): JSX.Element {
             onClose={removal.close}
           />
         </div>
-      </UnsavedChangesGuard>
+      </DashboardLeaveGuard>
     </div>
   );
 }

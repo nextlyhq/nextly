@@ -18,6 +18,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { GridSize } from "nextly/config";
 import { useEffect, useRef, useState, type JSX, type RefObject } from "react";
 
@@ -34,7 +35,7 @@ import { useSettingsPreview, type ShownAnswer } from "./useSettingsPreview";
 export const NO_FILTER_MATCH = "No entries match these filters";
 
 /** Whether any Filter setting in `draft` holds a condition. */
-export function filtersApplied(
+function filtersApplied(
   widget: DashboardWidget,
   draft: Record<string, unknown>
 ): boolean {
@@ -76,6 +77,88 @@ function useDrawnState(ref: RefObject<HTMLElement | null>): string | null {
   return state;
 }
 
+/** How much the preview is scaled down to fit the room it is given, and where that room is. */
+function usePreviewScale(cardWidth: number | undefined) {
+  // Scaled down when the card is wider than the room, never up.
+  const roomRef = useRef<HTMLDivElement>(null);
+  const room = useMeasuredWidth(roomRef);
+  const scale =
+    cardWidth === undefined || room === null
+      ? 1
+      : Math.min(1, room / cardWidth);
+  return { roomRef, scale };
+}
+
+/** The card itself, drawn at its real width and height and scaled into the preview's room. */
+function PreviewCard({
+  preview,
+  tier,
+  cardWidth,
+  height,
+  scale,
+  hidden,
+  cardRef,
+}: {
+  preview: ReturnType<typeof useSettingsPreview>;
+  tier: SizeTier | undefined;
+  cardWidth: number | undefined;
+  height: number;
+  scale: number;
+  /** Hidden behind the preview's own notice, still drawn so its state is read. */
+  hidden: boolean;
+  cardRef: RefObject<HTMLDivElement | null>;
+}): JSX.Element {
+  return (
+    // A card shown, not used: its content is out of reach.
+    <div
+      ref={cardRef}
+      inert
+      aria-hidden={hidden || undefined}
+      data-testid="settings-preview"
+      data-scale={scale}
+      className={hidden ? "invisible" : undefined}
+      style={{
+        ...(cardWidth === undefined ? {} : { width: cardWidth }),
+        height,
+        ...(scale === 1 ? {} : { transform: `scale(${scale})` }),
+        transformOrigin: "top left",
+      }}
+    >
+      <WidgetRenderer
+        definition={preview.definition}
+        placement={preview.placement}
+        slot={preview.slot}
+        {...(preview.slotFor === undefined ? {} : { slotFor: preview.slotFor })}
+        subtitle={preview.subtitle}
+        isFetching={preview.isFetching}
+        {...(preview.answerSize === undefined
+          ? {}
+          : { answerSize: preview.answerSize })}
+        {...(tier === undefined ? {} : { tier })}
+      />
+    </div>
+  );
+}
+
+/** What the preview says in the card's place while the panel's filters match nothing. */
+function NoMatchNotice({ onClearFilters }: { onClearFilters: () => void }) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-card p-4 text-center">
+      <p role="status" className="text-sm text-foreground">
+        {NO_FILTER_MATCH}
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onClearFilters}
+      >
+        Clear filters
+      </Button>
+    </div>
+  );
+}
+
 export function SettingsPreview(props: {
   /** The widget as declared, before any settings apply. */
   widget: DashboardWidget;
@@ -105,14 +188,7 @@ export function SettingsPreview(props: {
     size,
     tier,
   });
-  // The room the panel gives the preview, against the card's own width: scaled down when the
-  // card is wider, never up.
-  const roomRef = useRef<HTMLDivElement>(null);
-  const room = useMeasuredWidth(roomRef);
-  const scale =
-    cardWidth === undefined || room === null
-      ? 1
-      : Math.min(1, room / cardWidth);
+  const { roomRef, scale } = usePreviewScale(cardWidth);
   const height = cardHeightPx(size.h);
   const cardRef = useRef<HTMLDivElement>(null);
   const drawnState = useDrawnState(cardRef);
@@ -131,50 +207,12 @@ export function SettingsPreview(props: {
         style={{ height: height * scale }}
         data-testid="settings-preview-room"
       >
-        {/* A card shown, not used: its content is out of reach. */}
-        <div
-          ref={cardRef}
-          inert
-          aria-hidden={noMatch ? true : undefined}
-          data-testid="settings-preview"
-          data-scale={scale}
-          className={noMatch ? "invisible" : undefined}
-          style={{
-            ...(cardWidth === undefined ? {} : { width: cardWidth }),
-            height,
-            transform: scale === 1 ? undefined : `scale(${scale})`,
-            transformOrigin: "top left",
-          }}
-        >
-          <WidgetRenderer
-            definition={preview.definition}
-            placement={preview.placement}
-            slot={preview.slot}
-            {...(preview.slotFor === undefined
-              ? {}
-              : { slotFor: preview.slotFor })}
-            subtitle={preview.subtitle}
-            isFetching={preview.isFetching}
-            {...(preview.answerSize === undefined
-              ? {}
-              : { answerSize: preview.answerSize })}
-            {...(tier === undefined ? {} : { tier })}
-          />
-        </div>
+        <PreviewCard
+          {...{ preview, tier, cardWidth, height, scale, cardRef }}
+          hidden={noMatch}
+        />
         {noMatch ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-card p-4 text-center">
-            <p role="status" className="text-sm text-foreground">
-              {NO_FILTER_MATCH}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={props.onClearFilters}
-            >
-              Clear filters
-            </Button>
-          </div>
+          <NoMatchNotice onClearFilters={props.onClearFilters} />
         ) : null}
       </div>
     </section>

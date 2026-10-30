@@ -64,6 +64,7 @@ import {
   useState,
   useSyncExternalStore,
   type ReactNode,
+  type RefObject,
   type JSX,
 } from "react";
 import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
@@ -365,7 +366,7 @@ function listOf(names: readonly string[]): string {
  * What the panel says beside a Collection setting a reader just changed: the settings over it
  * that the change reset, by their labels, or nothing when it reset none that held a choice.
  */
-export function collectionResetNotice(
+function collectionResetNotice(
   reset: readonly AnyWidgetSetting[]
 ): string | undefined {
   if (reset.length === 0) return undefined;
@@ -999,48 +1000,55 @@ function PanelActions({
   );
 }
 
-export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
-  const { open, title, settings, config, blocked, renderPreview } = props;
-  // The collections and fields this reader may be offered, decided on the
-  // server; absent until the session-gated half of the payload arrives.
-  const sources = useBranding().widgetSources;
-  const { stale, defaultValues } = usePanelBaseline(settings, config, sources);
-  const { form, resetSection, resetNotices } = usePanelForm(
-    open,
-    settings,
-    sources,
-    defaultValues
-  );
-  const draft = usePanelDraft(form, settings, config);
-  const own = useOwnTitle(open, props.ownTitle);
-  const { saving, failure, submit, changeOpen } = usePanelDone(props);
-  const formRef = useRef<HTMLFormElement>(null);
-  const fieldsRef = useRef<HTMLFieldSetElement>(null);
+/** Where focus goes as the panel opens, when it opens on its first field, and as it closes. */
+function panelFocus(
+  props: Pick<SettingsPanelProps, "focusFirstField" | "returnFocusTo">,
+  fieldsRef: RefObject<HTMLFieldSetElement | null>
+) {
+  return {
+    onCloseAutoFocus: (event: Event) => {
+      const target = props.returnFocusTo?.();
+      if (!target) return;
+      event.preventDefault();
+      target.focus();
+    },
+    ...(props.focusFirstField
+      ? {
+          onOpenAutoFocus: (event: Event) => {
+            const first = [
+              ...(fieldsRef.current?.querySelectorAll<HTMLElement>(
+                SETTINGS_FIELD
+              ) ?? []),
+            ].find(field => !field.hasAttribute("data-card-title"));
+            // Where there is no field to land on, the panel's own choice stands.
+            if (!first) return;
+            event.preventDefault();
+            first.focus();
+          },
+        }
+      : {}),
+  };
+}
 
-  // What Done would keep, against what the panel opened on: the leave prompt asks only when the
-  // two differ, and another card's panel opening closes this one only when they do not.
-  const opened = useMemo(
-    () => toStoredConfig(settings, defaultValues, config),
-    [settings, defaultValues, config]
-  );
-  const kept: PanelKept = useMemo(
-    () => ({ config: draft, ownTitle: own.ownTitle.trim() }),
-    [draft, own.ownTitle]
-  );
-  const holdsChanges =
-    !sameSettingValue(draft, opened) ||
-    kept.ownTitle !== (props.ownTitle ?? "");
-  // Another card's settings asked for while this panel holds a change: what to open once the
-  // reader has answered this panel's prompt.
-  const [leaving, setLeaving] = useState<(() => void) | undefined>(undefined);
+/**
+ * Keeping the panel's change: Done, staging it for the dashboard's prompt, focus on what a
+ * refused staging named, and emptying its filters. One reading of the change (`keepable`) for
+ * Done and for staging, so a change Done would refuse is never staged.
+ */
+function usePanelKeeping(args: {
+  settings: readonly AnyWidgetSetting[];
+  config: Record<string, unknown> | undefined;
+  form: UseFormReturn<Record<string, unknown>>;
+  own: ReturnType<typeof useOwnTitle>;
+  submit: (kept: PanelKept) => Promise<boolean>;
+  holdsChanges: boolean;
+  fieldsRef: RefObject<HTMLFieldSetElement | null>;
+}) {
+  const { settings, config, form, own, submit, holdsChanges, fieldsRef } = args;
   // Set by a refused staging, and cleared by the next one.
   const refused = useRef(false);
 
-  /**
-   * What Done would keep from `values`, or `undefined` when the panel's own checks refuse it,
-   * each refusal said beside its field. The one reading of a panel's change, for Done and for the
-   * dashboard's prompt staging it.
-   */
+  /** What Done would keep from `values`, or `undefined` when a check refuses it, said in place. */
   const keepable = (values: Record<string, unknown>): PanelKept | undefined => {
     // A note over its bound is refused here, by the counter the layout write uses, rather than
     // by the server after Done; so is a title too long for a card's header.
@@ -1067,8 +1075,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
 
   /**
    * This panel's change as Done would keep it, for the dashboard's prompt to save with the rest:
-   * judged by the same checks, the form's rules included, so a change Done would refuse is never
-   * staged. Refused, the panel shows why and takes focus on the first field it refuses.
+   * judged by the same checks, the form's rules included. Refused, the panel shows why.
    */
   const stage = async (): Promise<PanelKept | "invalid" | undefined> => {
     refused.current = false;
@@ -1079,6 +1086,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
     refused.current = true;
     return "invalid";
   };
+
   // Kept until the next staging rather than spent here: a Save's prompt hands focus back after
   // the save answered, so the panel is asked again once it has, and must still know.
   const focusRefused = () => {
@@ -1088,19 +1096,6 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
       ?.focus();
   };
 
-  useOnePanelOpen(props.placementId, open, holdsChanges, {
-    close: () => changeOpen(false),
-    askToLeave: then => setLeaving(() => then),
-    stage,
-    focusRefused,
-  });
-
-  const automatic = props.widget
-    ? titleAsAsked(props.widget, draft, sources).title
-    : title;
-  const bySection = (section: SettingSection) =>
-    settings.filter(setting => sectionOf(setting) === section);
-
   /** Every Filter setting emptied, as the reader's own change, so Done keeps it. */
   const clearFilters = () => {
     for (const setting of settings) {
@@ -1109,6 +1104,190 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
       }
     }
   };
+  return { done, stage, focusRefused, clearFilters };
+}
+
+/**
+ * The prompt another card's settings open behind, while this panel holds a change, and what its
+ * choices do: Discard closes this panel and opens the other; Save opens it once the save lands.
+ */
+function PanelLeavePrompt({
+  leaving,
+  setLeaving,
+  title,
+  saving,
+  changeOpen,
+  submit,
+  kept,
+}: {
+  leaving: (() => void) | undefined;
+  setLeaving: (then: (() => void) | undefined) => void;
+  title: string;
+  saving: boolean;
+  changeOpen: (open: boolean) => void;
+  submit: (kept: PanelKept) => Promise<boolean>;
+  kept: PanelKept;
+}) {
+  return (
+    <LeavePrompt
+      open={leaving !== undefined}
+      title={title}
+      saving={saving}
+      onKeep={() => setLeaving(undefined)}
+      onDiscard={() => {
+        setLeaving(undefined);
+        changeOpen(false);
+        leaving?.();
+      }}
+      onSave={() => {
+        void submit(kept).then(landed => {
+          setLeaving(undefined);
+          if (landed) leaving?.();
+        });
+      }}
+    />
+  );
+}
+
+/** The panel's sections, in order: each drawn where it holds something, Display always. */
+function PanelSections({
+  settings,
+  sources,
+  saving,
+  widget,
+  resetNotices,
+  resetSection,
+  own,
+  automatic,
+}: {
+  settings: readonly AnyWidgetSetting[];
+  sources: WidgetSources;
+  saving: boolean;
+  widget: DashboardWidget | undefined;
+  resetNotices: Readonly<Record<string, string>>;
+  resetSection: (section: SettingSection) => void;
+  own: ReturnType<typeof useOwnTitle>;
+  automatic: string;
+}) {
+  return (
+    <>
+      {SECTIONS.map(({ section, label }) => {
+        const inSection = settings.filter(
+          setting => sectionOf(setting) === section
+        );
+        // Display holds every card's title; the others only what the widget declares.
+        if (section !== "display" && inSection.length === 0) return null;
+        const isDisplay = section === "display";
+        return (
+          <PanelSection
+            key={section}
+            section={section}
+            label={label}
+            saving={saving}
+            onReset={() => {
+              resetSection(section);
+              if (isDisplay) own.setOwnTitle("");
+            }}
+          >
+            {isDisplay ? (
+              <TitleField
+                value={own.ownTitle}
+                automatic={automatic}
+                problem={own.problem}
+                onChange={own.setOwnTitle}
+              />
+            ) : null}
+            <SectionFields
+              settings={inSection}
+              sources={sources}
+              saving={saving}
+              widget={widget}
+              resetNotices={resetNotices}
+            />
+          </PanelSection>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * What the panel holds: the reader's sources, its form and what it opened on, the card's own
+ * title, Done's progress, what Done would keep, and whether that differs from what it opened on.
+ */
+function usePanelState(props: SettingsPanelProps) {
+  const { open, settings, config } = props;
+  // The collections and fields this reader may be offered, decided on the
+  // server; absent until the session-gated half of the payload arrives.
+  const sources = useBranding().widgetSources;
+  const { stale, defaultValues } = usePanelBaseline(settings, config, sources);
+  const formState = usePanelForm(open, settings, sources, defaultValues);
+  const draft = usePanelDraft(formState.form, settings, config);
+  const own = useOwnTitle(open, props.ownTitle);
+  const doneState = usePanelDone(props);
+
+  // What Done would keep, against what the panel opened on: the leave prompt asks only when the
+  // two differ, and another card's panel opening closes this one only when they do not.
+  const opened = useMemo(
+    () => toStoredConfig(settings, defaultValues, config),
+    [settings, defaultValues, config]
+  );
+  const kept: PanelKept = useMemo(
+    () => ({ config: draft, ownTitle: own.ownTitle.trim() }),
+    [draft, own.ownTitle]
+  );
+  const holdsChanges =
+    !sameSettingValue(draft, opened) ||
+    kept.ownTitle !== (props.ownTitle ?? "");
+  return {
+    sources,
+    stale,
+    ...formState,
+    draft,
+    own,
+    ...doneState,
+    kept,
+    holdsChanges,
+  };
+}
+
+/** The panel's Title placeholder: the title the card would have automatically. */
+function automaticTitleOf(
+  widget: DashboardWidget | undefined,
+  draft: Record<string, unknown>,
+  sources: WidgetSources,
+  fallback: string
+): string {
+  return widget ? titleAsAsked(widget, draft, sources).title : fallback;
+}
+
+export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
+  const { open, title, settings, config, blocked, renderPreview } = props;
+  const state = usePanelState(props);
+  const { sources, stale, form, resetSection, resetNotices, draft, own } =
+    state;
+  const { saving, failure, submit, changeOpen, kept, holdsChanges } = state;
+  const formRef = useRef<HTMLFormElement>(null);
+  const fieldsRef = useRef<HTMLFieldSetElement>(null);
+  // Another card's settings asked for while this panel holds a change: what to open once the
+  // reader has answered this panel's prompt.
+  const [leaving, setLeaving] = useState<(() => void) | undefined>(undefined);
+  const keeping = usePanelKeeping({
+    settings,
+    config,
+    form,
+    own,
+    submit,
+    holdsChanges,
+    fieldsRef,
+  });
+  useOnePanelOpen(props.placementId, open, holdsChanges, {
+    close: () => changeOpen(false),
+    askToLeave: then => setLeaving(() => then),
+    stage: keeping.stage,
+    focusRefused: keeping.focusRefused,
+  });
+  const automatic = automaticTitleOf(props.widget, draft, sources, title);
 
   return (
     <UnsavedChangesGuard
@@ -1118,24 +1297,9 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
       disabled={!open || props.defersLeave === true}
       onSave={() => submit(kept)}
     >
-      <LeavePrompt
-        open={leaving !== undefined}
-        title={title}
-        saving={saving}
-        onKeep={() => setLeaving(undefined)}
-        onDiscard={() => {
-          const then = leaving;
-          setLeaving(undefined);
-          changeOpen(false);
-          then?.();
-        }}
-        onSave={() => {
-          const then = leaving;
-          void submit(kept).then(landed => {
-            setLeaving(undefined);
-            if (landed) then?.();
-          });
-        }}
+      <PanelLeavePrompt
+        {...{ leaving, title, saving, changeOpen, submit, kept }}
+        setLeaving={next => setLeaving(() => next)}
       />
       <Sheet open={open} onOpenChange={changeOpen} modal={false}>
         <SheetContent
@@ -1147,27 +1311,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
           // Not modal: the dashboard behind stays usable, so a click on it is the reader using
           // it, never a request to throw the panel's changes away.
           onInteractOutside={event => event.preventDefault()}
-          onCloseAutoFocus={event => {
-            const target = props.returnFocusTo?.();
-            if (!target) return;
-            event.preventDefault();
-            target.focus();
-          }}
-          {...(props.focusFirstField
-            ? {
-                onOpenAutoFocus: (event: Event) => {
-                  const first = [
-                    ...(fieldsRef.current?.querySelectorAll<HTMLElement>(
-                      SETTINGS_FIELD
-                    ) ?? []),
-                  ].find(field => !field.hasAttribute("data-card-title"));
-                  // Where there is no field to land on, the panel's own choice stands.
-                  if (!first) return;
-                  event.preventDefault();
-                  first.focus();
-                },
-              }
-            : {})}
+          {...panelFocus(props, fieldsRef)}
         >
           <SheetHeader>
             <SheetTitle>{title} settings</SheetTitle>
@@ -1184,11 +1328,11 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
               // nothing back, so the result is voided deliberately rather than
               // handed to an attribute that would ignore it silently.
               onSubmit={event => {
-                void form.handleSubmit(done)(event);
+                void form.handleSubmit(keeping.done)(event);
               }}
               className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4"
             >
-              {renderPreview ? renderPreview(kept, clearFilters) : null}
+              {renderPreview?.(kept, keeping.clearFilters)}
               <PanelNotices {...{ blocked, failure, stale }} />
               {/* Frozen while Done saves: the save carries the values Done was pressed on, so a
                   field changed after it would be dropped without a word when the panel closes.
@@ -1198,41 +1342,11 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
                 disabled={saving}
                 className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
               >
-                {SECTIONS.map(({ section, label }) => {
-                  const inSection = bySection(section);
-                  // Display holds every card's title; the others only what the widget declares.
-                  if (section !== "display" && inSection.length === 0) {
-                    return null;
-                  }
-                  return (
-                    <PanelSection
-                      key={section}
-                      section={section}
-                      label={label}
-                      saving={saving}
-                      onReset={() => {
-                        resetSection(section);
-                        if (section === "display") own.setOwnTitle("");
-                      }}
-                    >
-                      {section === "display" ? (
-                        <TitleField
-                          value={own.ownTitle}
-                          automatic={automatic}
-                          problem={own.problem}
-                          onChange={own.setOwnTitle}
-                        />
-                      ) : null}
-                      <SectionFields
-                        settings={inSection}
-                        sources={sources}
-                        saving={saving}
-                        widget={props.widget}
-                        resetNotices={resetNotices}
-                      />
-                    </PanelSection>
-                  );
-                })}
+                <PanelSections
+                  {...{ settings, sources, saving, resetNotices, resetSection }}
+                  {...{ own, automatic }}
+                  widget={props.widget}
+                />
               </fieldset>
               <PanelActions
                 saving={saving}
