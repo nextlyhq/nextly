@@ -6,7 +6,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
@@ -64,6 +64,7 @@ function renderDialogs(
   const result = render(
     <BuilderSchemaChangeDialogs
       confirmation={confirmationOf(p, overrides)}
+      kind="collection"
       entityName="posts"
       onConfirm={onConfirm}
     />
@@ -89,6 +90,38 @@ describe("BuilderSchemaChangeDialogs", () => {
   // A rename candidate needs a decision from the user even though nothing is
   // being destroyed, so a "safe" classification alone must not shorten the
   // dialog.
+  // A removal drops its field's column, and the preview's count of the values
+  // in it reads 0 when counting fails, so a preview it calls safe can still be
+  // deleting values. The short confirmation would say it "does not affect
+  // existing data", in the primary colour.
+  it("shows the full dialog, in red, for a safe change that removes a field", () => {
+    renderDialogs(
+      preview({
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "summary",
+              type: "text",
+              rowCount: 0,
+              classification: "safe",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
+    );
+    expect(
+      screen.queryByText(/do not affect existing data/i)
+    ).not.toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog");
+    const buttons = within(dialog).getAllByRole("button");
+    expect(buttons[buttons.length - 1].className).toMatch(
+      /\bbg-destructive-solid\b/
+    );
+  });
+
   it("shows the full dialog for a safe change that carries a rename candidate", () => {
     renderDialogs(
       preview({
@@ -238,15 +271,15 @@ describe("BuilderSchemaChangeDialogs", () => {
     ).toEqual(REQUIRED_REFUSAL.steps);
     expect(screen.queryByText(/nextly i18n:restore/)).not.toBeInTheDocument();
     expect(
-      screen.getByText("Schema Change Needs Another Step")
+      screen.getByText("Schema change needs another step")
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/This change cannot be saved to/)
+      screen.getByText(/This change cannot be saved to the collection/)
     ).toBeInTheDocument();
     expect(screen.queryByText(/will be applied to/)).not.toBeInTheDocument();
     // The push's own prompt for the refused field's new column is moot, so it is not asked.
     expect(
-      screen.queryByText(/is required but table has/)
+      screen.queryByText(/A new required field has no value/)
     ).not.toBeInTheDocument();
     // Nothing in the change could be saved, so the only way out is Close.
     expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
@@ -290,7 +323,7 @@ describe("BuilderSchemaChangeDialogs", () => {
       })
     );
 
-    const save = screen.getByRole("button", { name: "Save Changes" });
+    const save = screen.getByRole("button", { name: "Save changes" });
     expect(save).toBeDisabled();
     expect(save.className).toMatch(/\bbg-primary\b/);
     expect(save.className).not.toMatch(/bg-destructive/);
@@ -339,7 +372,25 @@ describe("BuilderSchemaChangeDialogs", () => {
 
   it("shows the full dialog for a destructive change", () => {
     renderDialogs(
-      preview({ classification: "destructive", hasDestructiveChanges: true })
+      preview({
+        classification: "destructive",
+        hasDestructiveChanges: true,
+        // What a destructive preview carries: a row the server classes as
+        // deleting values, which is what the dialog's colour follows.
+        changes: {
+          added: [],
+          removed: [
+            {
+              name: "body",
+              type: "text",
+              rowCount: 3,
+              classification: "destructive",
+            },
+          ],
+          changed: [],
+          unchanged: [],
+        },
+      })
     );
     expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
     expect(

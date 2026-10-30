@@ -140,7 +140,7 @@ To record the translated fields, take two steps:
    npx nextly migrate:create --record-snapshot
    ```
 
-   It writes a migration that changes nothing when it runs or rolls back, and a snapshot that records which fields are translated. Commit both. Run again, it writes nothing. While the config has changes to migrate, it's refused and names their tables. When those changes move no field between translated and shared, run `npx nextly migrate:create --name <name>` instead: its snapshot records the translated fields too.
+   It writes a migration that changes nothing when it runs or rolls back, and a snapshot that records which fields are translated. It records them as the database holds them: it connects to the database `DATABASE_URL` names, the only `migrate:create` run that does, and refuses a translated field whose translations table or column isn't there, writing nothing. Run it against a database that has applied every migration. Commit both. Run again, it writes nothing. While the config has changes to migrate, it's refused and names their tables. When those changes move no field between translated and shared, run `npx nextly migrate:create --name <name>` instead: its snapshot records the translated fields too.
 
 2. Make the change again and run `npx nextly migrate:create --name <name>`.
 

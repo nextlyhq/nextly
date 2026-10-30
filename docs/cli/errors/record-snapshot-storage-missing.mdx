@@ -1,0 +1,30 @@
+---
+title: RECORD_SNAPSHOT_STORAGE_MISSING
+description: "`nextly migrate:create --record-snapshot` would record translated fields that the database has no translations table or column for."
+---
+
+## Cause
+
+`nextly migrate:create --record-snapshot` would record translated fields that the database has no translations table or column for.
+
+`--record-snapshot` writes a snapshot that records which fields are translated, for a project whose snapshots [predate that record](/docs/localization#when-your-migrations-predate-the-record-of-translated-fields). It records them as the database holds them: every translated field needs its column in the entity's translations table (`<table>_locales`). A config changed since the last migration can declare a translated field the database has no storage for yet, and a snapshot that recorded it would have later migrations planned over a translations table that is not there.
+
+## Fix
+
+Run it against a database that has applied every migration, with the config as it was at the last migration:
+
+```bash
+nextly migrate
+npx nextly migrate:create --record-snapshot
+```
+
+Then make your change to the config again, and run `npx nextly migrate:create --name <name>`.
+
+## Example
+
+```text
+✗ `--record-snapshot` found translated fields the database holds no storage for: collection "posts" has no translations table (dc_posts_locales).
+  Why:  It records which fields are translated as the database holds them, so that no later migration is planned over a translations table that is not there. Nothing was written.
+  Next: Run it against a database that has applied every migration, with the config as it was at the last migration.
+  Docs: https://nextlyhq.com/docs/cli/errors/record-snapshot-storage-missing  (RECORD_SNAPSHOT_STORAGE_MISSING)
+```

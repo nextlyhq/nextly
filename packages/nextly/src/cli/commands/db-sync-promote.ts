@@ -8,12 +8,13 @@
 import { appendFileSync, existsSync } from "node:fs";
 
 import * as p from "@clack/prompts";
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { serializeCollection } from "../../domains/schema/services/code-generator";
-import { CollectionRegistryService } from "../../services/collections/collection-registry-service";
+import { exitWithError } from "../errors";
+import { promoteCollectionNotFound } from "../errors/areas/sync";
 import type { CommandContext } from "../program";
-import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
+
+import { openCollectionRegistry } from "./db-sync-registry";
 
 export async function runPromote(
   slug: string,
@@ -21,35 +22,14 @@ export async function runPromote(
 ): Promise<void> {
   const { logger } = context;
 
-  // 1. Database wiring. Reuses the same validateDatabaseEnv + createCliAdapter
-  // pipeline as the normal db:sync flow so DATABASE_URL errors look the
-  // same as always.
-  const env = validateDatabaseEnv();
-  if (!env.valid) {
-    logger.error(env.errors.join("; "));
-    process.exit(1);
-  }
-  const adapter = await createCliAdapter({ logger });
-
-  // CollectionRegistryService expects a full DrizzleAdapter. The CLI
-  // adapter is structurally compatible; same cast pattern as dev-build.ts.
-  const registry = new CollectionRegistryService(
-    adapter as unknown as DrizzleAdapter,
-    {
-      info: (msg: string) => logger.debug(msg),
-      warn: (msg: string) => logger.warn(msg),
-      error: (msg: string) => logger.error(msg),
-      debug: (msg: string) => logger.debug(msg),
-    }
-  );
+  // 1. Database wiring, shared with --demote, so a missing or unreachable
+  // database ends with the same errors as the rest of db:sync.
+  const registry = await openCollectionRegistry(logger);
 
   // 2. Fetch the UI collection record.
   const record = await registry.getCollectionBySlug(slug);
   if (!record) {
-    logger.error(
-      `Collection '${slug}' not found in UI source (dynamic_collections).`
-    );
-    process.exit(1);
+    exitWithError(logger, promoteCollectionNotFound(slug));
   }
 
   // 3. Serialize the record's fields to idiomatic TS source.

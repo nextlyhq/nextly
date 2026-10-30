@@ -248,7 +248,9 @@ export interface GenerateArgs {
    * only by `recordSnapshot`, which records which fields are translated as the database holds them
    * (`refuseTranslatedStorageNotHeld`); every other run stays offline.
    */
-  liveCompanionColumns?: (tableName: string) => Promise<readonly string[]>;
+  liveCompanionColumns?:
+    | ((tableName: string) => Promise<readonly string[]>)
+    | undefined;
   /**
    * Override the timestamp for tests. Production callers omit and get
    * `new Date()`.
@@ -823,7 +825,7 @@ async function refuseTranslatedStorageNotHeld(
     publicMessage:
       `--record-snapshot records which fields are translated as the database holds them, and ${missing.join("; ")}. ` +
       "Nothing was written. Run it against a database that has applied every migration, with the config as it was at the last migration.",
-    logContext: { missing },
+    logContext: { reason: "record-snapshot-storage-missing", missing },
   });
 }
 

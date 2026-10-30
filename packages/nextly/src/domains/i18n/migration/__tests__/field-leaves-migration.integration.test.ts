@@ -54,6 +54,7 @@ import {
   type MinimalConfigEntity,
 } from "../../../schema/migrate-create/generate";
 import { withMigrateLock } from "../../../schema/pipeline/locks";
+import { companionColumnNames } from "../../runtime/companion-io";
 import { stepFileOf } from "../step-windows";
 import {
   createScratchDatabase,
@@ -527,6 +528,9 @@ for (const entry of DIALECTS) {
           components: [],
           nonInteractive: true,
           recordSnapshot: true,
+          // As the CLI reads it: the translations tables this database has.
+          liveCompanionColumns: table =>
+            companionColumnNames(adapter as never, table),
           now: new Date(Date.UTC(2026, 9, 16, 10, created)),
         });
         expect(record).not.toBeNull();
