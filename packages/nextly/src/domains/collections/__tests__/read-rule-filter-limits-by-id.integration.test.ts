@@ -113,10 +113,6 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     current,
     [NOTES, VANISHED, COMPONENTED, RENAMED_CHILD].map(slug => `read-${slug}`)
   );
-  // Boot's seeding asks each read rule as a visitor to decide the Public
-  // role's grants, which reports a rule's misuse once; it is forgotten here
-  // so the report a case counts is its own read's.
-  clearRuleFilterReports();
   return current;
 }
 
