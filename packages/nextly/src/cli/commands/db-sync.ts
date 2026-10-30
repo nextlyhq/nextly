@@ -75,6 +75,7 @@ import {
   ACCEPT_DATA_LOSS_HELP,
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import { exitWithError } from "../errors";
