@@ -1043,6 +1043,15 @@ async function bulkItemRefusal(
 }
 
 /**
+ * A filtered write's twin's answer from the request that sent it with the
+ * entry inside the filter, by row, until the table asks the twin.
+ */
+const bulkTwinAnswers = new Map<
+  string,
+  { answer: Answer; refusal?: Refusal }
+>();
+
+/**
  * The bulk routes by ids. A request the route refuses whole answers with its
  * status, as REST does; one it lets through answers 200 whatever happened to
  * each entry, so the entry's own result among the items is the answer: `A`
@@ -1051,16 +1060,26 @@ async function bulkItemRefusal(
  * exist.
  *
  * A write a rule's filter limits sends the entry inside the filter together
- * with its twin outside it, as a selection holding both is sent: the twin
- * must be failed on its own and left as it was, or the cell answers
- * `=twin-written` (changed, or named among the changed) or `=twin-unnamed`
- * (in neither list), whatever the entry inside was answered.
+ * with its twin outside it, as a selection holding both is sent, and the
+ * twin's own result in that request is its answer when the table asks it
+ * ({@link bulkTwinAnswers}): `A` where the route changed it, a refusal's
+ * status where it failed it and left it as it was, `=twin-written` where it
+ * failed it and changed it all the same, and `=twin-unnamed` where it named
+ * it in neither list.
  */
 async function bulk(world: World, row: Row, who: CallerHandle) {
   // The table asks this door only writes to existing entries.
   const { action } = row;
   if (action === "list" || action === "count") {
     throw new Error(`a bulk route sends no ${action}`);
+  }
+  const seen = askingOutside.getStore()
+    ? bulkTwinAnswers.get(rowKey(row))
+    : undefined;
+  if (seen) {
+    bulkTwinAnswers.delete(rowKey(row));
+    if (seen.refusal) noteRefusal(seen.refusal);
+    return seen.answer;
   }
   const { slug, id } = addressOf(world, row, "bulk");
   const twin =
@@ -1075,37 +1094,58 @@ async function bulk(world: World, row: Row, who: CallerHandle) {
     twin === undefined ? [id] : [id, twin],
     who.headers
   );
-  if (twin !== undefined) {
-    const twinAfter = await storedRowOf(world, row, twin);
-    if (
-      !isDeepStrictEqual(twinBefore, twinAfter) ||
-      (res.status < 300 && (await bulkChanged(res, twin)))
-    ) {
-      return "=twin-written";
-    }
-    if (res.status < 300 && !(await bulkItemRefusal(res, twin))) {
-      return "=twin-unnamed";
-    }
-  }
   const absent = () => bulkRequest(slug, action, [ABSENT_ID], who.headers);
   // A request refused whole names no entry in its path, and is compared with
   // the same request for an entry that does not exist, so a refusal that
-  // tells the two apart shows.
+  // tells the two apart shows. Its twin, refused with it, is asked again on
+  // its own.
   if (res.status >= 300) {
     await noteResponse(res);
     await noteMissing(res, await absent());
     return fromStatus(res.status);
   }
+  if (twin !== undefined) {
+    const kept = isDeepStrictEqual(
+      twinBefore,
+      await storedRowOf(world, row, twin)
+    );
+    const answered = await bulkItemAnswer(res, twin, absent);
+    bulkTwinAnswers.set(
+      rowKey(row),
+      answered.refusal && !kept ? { answer: "=twin-written" } : answered
+    );
+  }
+  const answered = await bulkItemAnswer(res, id, absent);
+  if (answered.refusal) noteRefusal(answered.refusal);
+  return answered.answer;
+}
+
+/**
+ * One entry's answer among a bulk route's items: `A` where it was changed,
+ * the status of its failure's code where it failed, with that refusal
+ * compared with the same request for an entry that does not exist, and
+ * `=unnamed` where neither list names it.
+ */
+async function bulkItemAnswer(
+  res: Response,
+  id: string,
+  absent: () => Promise<Response>
+): Promise<{ answer: Answer; refusal?: Refusal }> {
   const refusal = await bulkItemRefusal(res, id);
-  if (!refusal) return (await bulkChanged(res, id)) ? "A" : "=unnamed";
-  noteRefusal(refusal);
+  if (!refusal) {
+    return { answer: (await bulkChanged(res, id)) ? "A" : "=unnamed" };
+  }
   const missing = await absent();
+  noteRefusal(refusal);
   noteMissingRefusal(
     missing.status >= 300
       ? await refusalOf(missing)
       : await bulkItemRefusal(missing, ABSENT_ID)
   );
-  return refusal.status === 0 ? "E" : String(refusal.status);
+  return {
+    answer: refusal.status === 0 ? "E" : String(refusal.status),
+    refusal: takeRefusal(),
+  };
 }
 
 const ADAPTERS: Record<
