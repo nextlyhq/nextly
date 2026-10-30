@@ -226,6 +226,65 @@ the card loads in the frame's generic shape.
 
 All of these are experimental.
 
+## Testing a widget
+
+`@nextlyhq/plugin-sdk/testing` runs a widget's `load` for a given person against a test instance,
+through the dashboard's own route, so that person's access applies exactly as it does on the
+dashboard:
+
+```ts
+import { createTestNextly, runWidgetLoad } from "@nextlyhq/plugin-sdk/testing";
+import { expect, it } from "vitest";
+
+import { openOrders, shop } from "./shop";
+
+it("counts the open orders for the instance's administrator", async () => {
+  const t = await createTestNextly({ plugins: [shop] });
+  // The first user an instance stores is its super administrator.
+  const admin = await t.nextly.users.create({
+    email: "admin@example.com",
+    password: "Password123!",
+    data: { isActive: true },
+  });
+  await t.nextly.create({ collection: "orders", data: { state: "open" } });
+  const answer = await runWidgetLoad(t, openOrders, {
+    as: { id: admin.item.id },
+  });
+  expect(answer).toEqual({ state: "ready", data: { total: 1 } });
+  await t.destroy();
+});
+```
+
+It answers in the card's own states: `ready` and `empty` with the data, `needs-setting`,
+`unavailable`, `not-shown`, or `error`. `as: null` answers as the dashboard answers nobody signed
+in.
+
+`@nextlyhq/plugin-sdk/testing/admin` draws the card in the admin's own frame, for a state you name
+or for what a load answered:
+
+```tsx
+import { renderWidgetCard } from "@nextlyhq/plugin-sdk/testing/admin";
+import { render, screen } from "@testing-library/react";
+import { expect, it } from "vitest";
+
+import { openOrders } from "./shop";
+
+it("draws the count in the dark scheme", () => {
+  render(
+    renderWidgetCard(openOrders, {
+      state: "ready",
+      data: { total: 3 },
+      theme: "dark",
+    })
+  );
+  const card = screen.getByRole("region", { name: "Open orders" });
+  expect(card.textContent).toContain("3");
+});
+```
+
+Both helpers are for tests and stay out of a production build. They are experimental, and their
+shape may change.
+
 ## Related
 
 - [Plugin admin UI](/docs/plugins/admin-ui) — contributing admin surfaces
