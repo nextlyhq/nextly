@@ -591,17 +591,24 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect(await contentsOf(dir)).toEqual(before);
     });
 
-    it("plans no companion over one no localization file is about", async () => {
-      // Its translated column is not on the main table, so the companion is there; a file that
-      // made it again would drop it on rollback.
-      const files = await secondRun(dialect, [TRANSLATED, NOTES], {
+    it("refuses a translated collection no localization file is about, unchanged, writing nothing", async () => {
+      // Its companion may be there, made outside the files, or not: a file that made it again
+      // would drop it on rollback, and one that took it as there would plan no companion for a
+      // collection turning translation on with only new fields, which reads the same.
+      let dir = "";
+      let before: Record<string, string> = {};
+      const run = secondRun(dialect, [TRANSLATED, NOTES], {
         first: [TRANSLATED],
-        beforeSecond: forgetCompanionFiles,
+        beforeSecond: async d => {
+          await forgetCompanionFiles(d);
+          dir = d;
+          before = await contentsOf(d);
+        },
       });
 
-      expect(files.map(f => f.name)).toEqual([
-        expect.stringMatching(/_two\.sql$/),
-      ]);
+      await expect(run).rejects.toThrow(/"body" in collection "docs"/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
+      expect(await contentsOf(dir)).toEqual(before);
     });
 
     it("refuses what reads as a collection becoming translated beside a localization file that names no collection, writing nothing", async () => {
@@ -635,8 +642,8 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       // The file may have made notes' companion, so `summary` may be coming back from it.
       let dir = "";
       let before: Record<string, string> = {};
-      const run = secondRun(dialect, [TRANSLATED, NOTES_GROWN], {
-        first: [TRANSLATED, NOTES],
+      const run = secondRun(dialect, NOTES_GROWN, {
+        first: NOTES,
         beforeSecond: async d => {
           await forgetTranslatedFieldRecord(d);
           // Hand-edited: the marker, and no header saying which entity it is about.
@@ -706,7 +713,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       };
       // docs' companion file is written first and pages' after it, so a file of pages' that may be
       // anyone's would leave docs' history unread too.
-      const files = await secondRun(
+      const run = secondRun(
         dialect,
         [withField({ name: "tagline", type: "text", localized: false }), pages],
         {
@@ -718,10 +725,10 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         }
       );
 
-      // pages' file can't be read, but it names pages: docs' own files still say `tagline` is new.
-      expect(files.map(f => f.name)).toEqual([
-        expect.stringMatching(/_two\.sql$/),
-      ]);
+      // pages' file can't be read, so pages is refused; but it names pages, so docs' own files
+      // still say `tagline` is new, and docs, checked first, isn't the one refused.
+      await expect(run).rejects.toThrow(/in collection "pages"/);
+      await expect(run).rejects.toThrow(/_localization_pages\.sql/);
     });
 
     it("reads a file it can't read, after the one that made the companion, as possibly changing it", async () => {
@@ -738,9 +745,10 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         },
       ]);
 
-      // `body` shared now: no file moves it out of the companion the files alone describe. The
-      // new collection gives the run a main file to write either way.
-      const files = await filesOfRun(dialect, dir, [
+      // Translated again, with `body` shared: read from the files alone, `body` would move out of
+      // a companion the disable dropped. Nothing settles it, so nothing is written.
+      const before = await contentsOf(dir);
+      const run = filesOfRun(dialect, dir, [
         {
           ...TRANSLATED,
           fields: [
@@ -748,13 +756,10 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
             ...SHARED.fields,
           ],
         },
-        {
-          slug: "notes",
-          tableName: "dc_notes",
-          fields: [{ name: "title", type: "text" }],
-        },
       ]);
-      expect(files).toEqual([expect.stringMatching(/_next\.sql$/)]);
+      await expect(run).rejects.toThrow(/"headline" in collection "docs"/);
+      await expect(run).rejects.toThrow(/_disable_localization_docs\.sql/);
+      expect(await contentsOf(dir)).toEqual(before);
     });
 
     it("refuses a column change once a file it can't read may be the collection's, whatever comes after it", async () => {
@@ -994,7 +999,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         ],
         {
           first: [TRANSLATED, notes([{ name: "title", type: "text" }])],
-          beforeSecond: forgetEverything,
+          beforeSecond: forgetTranslatedFieldRecord,
         }
       );
 
@@ -1011,11 +1016,70 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       // A companion made outside the files reads the same as none.
       const run = secondRun(dialect, [pages, TRANSLATED], {
         first: [pages, { ...TRANSLATED, localized: false }],
-        beforeSecond: forgetEverything,
+        beforeSecond: forgetTranslatedFieldRecord,
       });
 
       await expect(run).rejects.toThrow(/"body" in collection "docs"/);
       await expect(run).rejects.toThrow(/--record-snapshot/);
+    });
+
+    it("refuses turning translation on with only a new translated field, in a project whose translations no record settles", async () => {
+      // `headline` stays shared, so the main table keeps every column it had.
+      const notes: MinimalConfigEntity = {
+        slug: "notes",
+        tableName: "dc_notes",
+        fields: [{ name: "headline", type: "text", localized: false }],
+      };
+      const dir = await projectAfter(dialect, [
+        {
+          collections: [TRANSLATED, notes],
+          after: forgetTranslatedFieldRecord,
+        },
+      ]);
+      const before = await contentsOf(dir);
+
+      // No main column changes, and a companion made outside the files reads the same: planned
+      // on a guess, notes would get no companion.
+      const run = filesOfRun(dialect, dir, [
+        TRANSLATED,
+        {
+          ...notes,
+          localized: true,
+          fields: [
+            ...notes.fields,
+            { name: "summary", type: "text", localized: true },
+          ],
+        },
+      ]);
+      await expect(run).rejects.toThrow(/"summary" in collection "notes"/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
+      expect(await contentsOf(dir)).toEqual(before);
+    });
+
+    it("refuses renaming a translated field of a collection whose companion no file made", async () => {
+      let dir = "";
+      let before: Record<string, string> = {};
+      const run = secondRun(
+        dialect,
+        {
+          ...TRANSLATED,
+          fields: [
+            { name: "content", type: "text", localized: true },
+            { name: "price", type: "number" },
+          ],
+        },
+        {
+          beforeSecond: async d => {
+            await forgetCompanionFiles(d);
+            dir = d;
+            before = await contentsOf(d);
+          },
+        }
+      );
+
+      await expect(run).rejects.toThrow(/"content" in collection "docs"/);
+      await expect(run).rejects.toThrow(/--record-snapshot/);
+      expect(await contentsOf(dir)).toEqual(before);
     });
 
     describe("--record-snapshot", () => {
@@ -1140,7 +1204,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
           ],
         };
         const dir = await projectAfter(dialect, [
-          { collections: [unique], after: forgetEverything },
+          { collections: [unique], after: forgetTranslatedFieldRecord },
         ]);
 
         // The per-language unique index is new to a snapshot that predates the record.

@@ -1373,9 +1373,9 @@ interface TranslationRecords extends CompanionHistory {
  * The previous snapshot says first: a table with the record (`localized` and `localizedColumns`)
  * was translated with those columns, and one without it was not, when the snapshot records them
  * for every table (`snapshotRecords`). An older snapshot may not; then the companion files say,
- * replayed in order, when a file made or dropped this entity's companion whole and no file this
- * build cannot read may have changed it since (`describes`). An entity no file makes or drops has
- * no record: its companion, if any, came from outside the files.
+ * replayed in order, when this entity's first file made its companion (a `create-only` or an
+ * `enable`) and no file this build cannot read may be about it, before or after (`describes`).
+ * Any other entity has no record: its companion, if any, may have come from outside the files.
  */
 function previousTranslation(
   c: MinimalConfigEntity,
@@ -1402,47 +1402,59 @@ function previousTranslation(
 }
 
 /**
- * The main-table columns this change adds or drops on an entity whose translations before it no
- * record settles, so moving or keeping a value on a guess could lose it. Empty for any other.
+ * What planning this change would leave to a guess on an entity whose translations before it no
+ * record settles: the columns to name, or `undefined` when nothing is guessed.
  *
- * That is an entity whose `previousTranslation` is `undefined`, and also one not translated now
- * that the migration files say had a companion while the previous snapshot doesn't record it as
- * translated: turning translation off is planned only from the snapshot's record. No other rule
- * reads the change: whether the entity is becoming translated, or which field is new, is exactly
- * what no record says.
+ * That is an entity whose `previousTranslation` is `undefined`, when it is translated now or its
+ * main table gains or drops a column. Translated now, whether its companion is there and what it
+ * holds is the guess, whatever the main table does: turning translation on with only new
+ * translated fields reads the same as a companion made outside the files. A main column that
+ * comes or goes may be a field moving between translated and shared. Also an entity not
+ * translated now that the migration files say had a companion while the previous snapshot doesn't
+ * record it as translated, when its main columns change: turning translation off is planned only
+ * from the snapshot's record.
  */
 function columnsThatMayLoseTranslations(
   { entity: c, kind }: TaggedConfigEntity,
   previousSnapshot: NextlySchemaSnapshot,
   desiredSnapshot: NextlySchemaSnapshot,
   history: TranslationRecords
-): string[] {
+): string[] | undefined {
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
-  if (!prevMain) return [];
+  if (!prevMain) return undefined;
   const previous = previousTranslation(c, kind, previousSnapshot, history);
   const disableFromFiles =
     c.localized !== true &&
     prevMain.localized !== true &&
     previous?.companion === true;
-  if (previous !== undefined && !disableFromFiles) return [];
-  const before = new Set(prevMain.columns.map(col => col.name));
-  const after = new Set(
-    (
-      desiredSnapshot.tables.find(t => t.name === c.tableName)?.columns ?? []
-    ).map(col => col.name)
-  );
+  if (previous !== undefined && !disableFromFiles) return undefined;
+  const desiredMain = desiredSnapshot.tables.find(t => t.name === c.tableName);
+  const changed = mainColumnChanges(prevMain, desiredMain);
+  const translatedNow = previous === undefined && c.localized === true;
+  if (!translatedNow && changed.length === 0) return undefined;
+  const translated = translatedNow ? (desiredMain?.localizedColumns ?? []) : [];
+  return [...new Set([...translated, ...changed])].sort();
+}
+
+/** The main-table columns, by name, that `desired` adds to `previous` or drops from it. */
+function mainColumnChanges(
+  previous: TableSpec,
+  desired: TableSpec | undefined
+): string[] {
+  const before = new Set(previous.columns.map(col => col.name));
+  const after = new Set((desired?.columns ?? []).map(col => col.name));
   return [
     ...[...after].filter(name => !before.has(name)),
     ...[...before].filter(name => !after.has(name)),
-  ].sort();
+  ];
 }
 
 /**
- * Refuses the run, before anything is written, when it adds or drops a main-table column of an
- * entity whose translations before it no record settles (`columnsThatMayLoseTranslations`).
- * Guessing either way loses the values: a field read as new keeps its translations in a companion
- * column nothing reads, and one read as the entity becoming translated is copied into a companion
- * that already holds it. Every other change goes through.
+ * Refuses the run, before anything is written, for an entity whose translations before it no
+ * record settles when planning it would guess (`columnsThatMayLoseTranslations`). Guessing either
+ * way loses values: a field read as new keeps its translations in a companion column nothing
+ * reads, one read as the entity becoming translated is copied into a companion that already holds
+ * it, and a companion read as there is never made. Every other change goes through.
  */
 function refuseUnrecordedTranslationChanges(
   entities: readonly TaggedConfigEntity[],
@@ -1459,8 +1471,12 @@ function refuseUnrecordedTranslationChanges(
       desiredSnapshot,
       history
     );
-    if (columns.length === 0) continue;
-    const named = columns.map(column => `"${column}"`).join(", ");
+    if (columns === undefined) continue;
+    const entity = `${KIND_NAMES[kind]} "${c.slug}"`;
+    const what =
+      columns.length === 0
+        ? entity
+        : `${columns.map(column => `"${column}"`).join(", ")} in ${entity}`;
     // The files that keep the history from settling it, so the developer can see why.
     const unreadable = history.unreadable(kind, c.slug);
     const because =
@@ -1470,9 +1486,9 @@ function refuseUnrecordedTranslationChanges(
     throw new NextlyError({
       code: "VALIDATION_ERROR",
       publicMessage:
-        `Can't tell whether ${named} in ${KIND_NAMES[kind]} "${c.slug}" ${columns.length === 1 ? "moves" : "move"} between translated and shared: ` +
+        `Can't tell how ${what} stood before this change, translated or shared: ` +
         `the latest snapshot was written before snapshots recorded which fields are translated, and the migration files alone don't settle it.${because} ` +
-        "Nothing was written: moving the values on a guess could lose them. " +
+        "Nothing was written: planning the change on a guess could lose values. " +
         "To record the translated fields, put the config back as it was at the last migration, run `nextly migrate:create --record-snapshot`, " +
         `then make your changes again and run \`nextly migrate:create --name ${slugify(name)}\`.`,
       logContext: {
