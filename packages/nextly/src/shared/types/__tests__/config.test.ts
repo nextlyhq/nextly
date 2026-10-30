@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 import { sanitizeConfig } from "../config";
 
 describe("sanitizeConfig — production migration db options", () => {
@@ -46,5 +48,52 @@ describe("preview config survives the boot pipeline", () => {
 
   it("leaves preview undefined when the application sets none", () => {
     expect(sanitizeConfig({}).preview).toBeUndefined();
+  });
+});
+
+describe("sanitizeConfig — admin.environment", () => {
+  /** The paths and messages startup refuses `environment` with, or none. */
+  function refusals(environment: unknown): { path: string; message: string }[] {
+    try {
+      sanitizeConfig({
+        admin: { environment } as Parameters<typeof sanitizeConfig>[0]["admin"],
+      });
+      return [];
+    } catch (error) {
+      expect(error).toBeInstanceOf(NextlyError);
+      const { errors } = (error as NextlyError).publicData as {
+        errors: { path: string; message: string }[];
+      };
+      return errors.map(({ path, message }) => ({ path, message }));
+    }
+  }
+
+  it("accepts a label with a tone this version draws, or none", () => {
+    expect(refusals({ label: "Production" })).toEqual([]);
+    expect(refusals({ label: "Staging", tone: "warning" })).toEqual([]);
+    expect(refusals({ label: "x".repeat(24), tone: "critical" })).toEqual([]);
+    expect(
+      sanitizeConfig({ admin: { environment: { label: "Local" } } }).admin
+        ?.environment
+    ).toEqual({ label: "Local" });
+  });
+
+  it("refuses an empty or blank label, a label past 24 characters and an unknown tone, naming each", () => {
+    expect(refusals({ label: "  " })).toEqual([
+      { path: "admin.environment.label", message: "Must be text, not empty." },
+    ]);
+    expect(refusals({ label: "x".repeat(25), tone: "loud" })).toEqual([
+      {
+        path: "admin.environment.label",
+        message: "Must be at most 24 characters: it is drawn as a badge.",
+      },
+      {
+        path: "admin.environment.tone",
+        message: 'Must be one of "neutral", "warning", "critical".',
+      },
+    ]);
+    expect(refusals("Production")).toEqual([
+      { path: "admin.environment", message: "Must be { label, tone? }." },
+    ]);
   });
 });

@@ -96,8 +96,24 @@ const KIND_ORDER: readonly SettingsEntityKind[] = [
   "fieldGroup",
 ];
 
-/** Arrays whose entries are declarations of their own: fields, and blocks. */
+/**
+ * Arrays whose entries are declarations of their own: fields, and blocks.
+ * Only inside a declaration; a list of the same name in a plugin option is
+ * that option's data.
+ */
 const DECLARATION_LISTS = new Set(["fields", "blocks"]);
+
+/**
+ * The keys a declaration holds that no snapshot records, by who declares it.
+ * Code-defined `access` is decided by code on each request, and code-first
+ * hooks are functions, so an entity that lists none and one whose list is
+ * empty declare the same settings. A Builder entity's `hooks` are stored
+ * configs the registry runs, so they are recorded.
+ */
+const RUNTIME_KEYS: Record<SettingsSource, ReadonlySet<string>> = {
+  code: new Set(["access", "hooks"]),
+  builder: new Set(["access"]),
+};
 
 /** Removed, because a function or nothing serialisable was all it held. */
 const DROPPED = Symbol("dropped");
@@ -107,13 +123,15 @@ const DROPPED = Symbol("dropped");
  *
  * Functions are dropped wherever they occur, and so is a container left empty
  * only because everything in it was a function: `hooks: { beforeChange: [fn] }`
- * says nothing a snapshot can hold, and keeping it as `{}` would make adding
- * or removing a hook read as a settings change. `access` is dropped on the
- * entity and on every field and block it declares. Keys are kept as written;
- * the snapshot writer sorts them.
+ * says nothing a snapshot can hold. The keys `RUNTIME_KEYS` names for
+ * `source` are dropped on the entity and on every field and block it
+ * declares. Keys are kept as written; the snapshot writer sorts them.
  */
-export function settingsOf(declaration: unknown): SettingsObject {
-  const value = normalize(declaration, true, new Set());
+export function settingsOf(
+  declaration: unknown,
+  source: SettingsSource
+): SettingsObject {
+  const value = normalize(declaration, RUNTIME_KEYS[source], new Set());
   return value !== DROPPED &&
     value !== null &&
     typeof value === "object" &&
@@ -122,9 +140,13 @@ export function settingsOf(declaration: unknown): SettingsObject {
     : {};
 }
 
+/**
+ * `runtime` is the keys to leave out when `value` is a declaration, or a list
+ * of them, and null for anything else.
+ */
 function normalize(
   value: unknown,
-  isDeclaration: boolean,
+  runtime: ReadonlySet<string> | null,
   path: Set<object>
 ): SettingsValue | typeof DROPPED {
   if (value === null || typeof value !== "object")
@@ -135,8 +157,8 @@ function normalize(
   path.add(value);
   try {
     return Array.isArray(value)
-      ? normalizeList(value, isDeclaration, path)
-      : normalizeObject(value as Record<string, unknown>, isDeclaration, path);
+      ? normalizeList(value, runtime, path)
+      : normalizeObject(value as Record<string, unknown>, runtime, path);
   } finally {
     path.delete(value);
   }
@@ -162,18 +184,18 @@ function normalizeScalar(value: unknown): SettingsValue | typeof DROPPED {
 
 function normalizeList(
   value: readonly unknown[],
-  isDeclaration: boolean,
+  runtime: ReadonlySet<string> | null,
   path: Set<object>
 ): SettingsValue[] | typeof DROPPED {
   const items = value
-    .map(item => normalize(item, isDeclaration, path))
+    .map(item => normalize(item, runtime, path))
     .filter((item): item is SettingsValue => item !== DROPPED);
   return items.length === 0 && value.length > 0 ? DROPPED : items;
 }
 
 function normalizeObject(
   value: Record<string, unknown>,
-  isDeclaration: boolean,
+  runtime: ReadonlySet<string> | null,
   path: Set<object>
 ): SettingsObject | typeof DROPPED {
   // A null prototype, so an own `__proto__` key (a parsed manifest can hold
@@ -182,10 +204,14 @@ function normalizeObject(
   const out = Object.create(null) as SettingsObject;
   let dropped = 0;
   for (const [key, child] of Object.entries(value)) {
-    if (isDeclaration && key === "access") continue;
+    if (runtime?.has(key)) continue;
+    // A declaration's fields and blocks are declarations too; anything else it
+    // holds, an option's own `fields` list included, is data.
     const normalized = normalize(
       child,
-      DECLARATION_LISTS.has(key) && Array.isArray(child),
+      runtime !== null && DECLARATION_LISTS.has(key) && Array.isArray(child)
+        ? runtime
+        : null,
       path
     );
     if (normalized === DROPPED) dropped += 1;

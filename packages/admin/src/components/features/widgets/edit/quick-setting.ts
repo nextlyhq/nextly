@@ -2,8 +2,8 @@
  * A card's quick setting: the one setting its widget marks `quick`, changed on the card itself
  * rather than in the settings sheet.
  *
- * Only a choice can sit on a card header: a `select`, drawn as a compact menu, or a `checkbox`,
- * drawn as a toggle. A widget marking any other type quick keeps it in the sheet, where every
+ * Only a choice can sit on a card header: a `select`, drawn as a compact menu (or, with exactly
+ * two options, as a segmented control showing both), or a `checkbox`, drawn as a toggle. A widget marking any other type quick keeps it in the sheet, where every
  * setting is drawn.
  *
  * @module components/features/widgets/edit/quick-setting

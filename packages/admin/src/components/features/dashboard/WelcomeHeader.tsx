@@ -1,14 +1,16 @@
 "use client";
 
-import type { JSX } from "react";
+import { Button } from "@nextlyhq/ui";
+import { useEffect, useState, type JSX } from "react";
 
+import { useAppName } from "@admin/context/providers/BrandingProvider";
+import { useDashboardSummary } from "@admin/hooks/queries/useDashboardSummary";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 
-function getFirstName(name: string | undefined | null): string {
-  if (!name) return "there";
-  const first = name.split(" ")[0];
-  return first || "there";
-}
+import { useDashboardChrome } from "./header/dashboard-chrome";
+import { EnvironmentBadge } from "./header/EnvironmentBadge";
+import { Freshness } from "./header/Freshness";
+import { SummaryLine } from "./header/SummaryLine";
 
 /**
  * The id of the dashboard's level-one heading.
@@ -20,59 +22,117 @@ function getFirstName(name: string | undefined | null): string {
  */
 export const DASHBOARD_HEADING_ID = "dashboard-heading";
 
+/** The greeting for the reader's own hour, with their first name, or "Welcome" without one. */
+export function greetingFor(
+  name: string | null | undefined,
+  now: Date
+): string {
+  const first = name?.trim().split(/\s+/)[0];
+  if (!first) return "Welcome";
+  const hour = now.getHours();
+  const part = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  return `Good ${part}, ${first}`;
+}
+
+/** The time the header words itself against, moved on each minute. */
+function useMinuteClock(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return now;
+}
+
 /**
- * Top-of-dashboard welcome strip, holding the page's one level-one heading.
+ * The dashboard's header, part of the page rather than a widget: a greeting,
+ * the project's name (the page's one level-one heading) with the environment
+ * badge the site config names, the live summary, the freshness line when the
+ * data is old, and Customize.
  *
  * It renders in every state, from first paint: the heading is where a
  * screen-reader or keyboard user lands when they jump by heading, and every
- * card title (an `h2`) sits under it in the outline. So it does not step aside
- * for the sample-content card, and it does not wait for the signed-in user:
- * until they are known it reads "Welcome" with a placeholder where the name
- * goes, and the name fills in without moving anything.
+ * card title (an `h2`) sits under it in the outline. The project's name needs
+ * no request, so the heading is whole at once; the greeting waits for the
+ * signed-in user behind a placeholder of its own.
  *
- * Copy is intentionally neutral — works for both first-time visitors and
- * returners, since the dashboard surfaces content + schemas + team
- * regardless of when you came back.
+ * Customize is drawn only for a reader the grid has an arrangement for, and
+ * not while customise mode is open, when the mode's own bar holds the controls.
  */
 export function WelcomeHeader(): JSX.Element {
   const { user, isLoading: userLoading } = useDashboardUser();
+  const appName = useAppName();
+  const { data: summary } = useDashboardSummary();
+  const chrome = useDashboardChrome();
+  const now = useMinuteClock();
 
   return (
-    <div className="space-y-1 pb-4">
-      <h1
-        id={DASHBOARD_HEADING_ID}
-        // Focusable only PROGRAMMATICALLY (`-1` keeps it out of the Tab
-        // sequence), so focus can be returned here when the element holding it
-        // is taken off the page.
-        tabIndex={-1}
-        aria-busy={userLoading || undefined}
-        // No outline when focus is sent here: a heading is a place to land,
-        // not a control, and a ring around it reads as something to press.
-        className="text-xl font-semibold tracking-[-0.04em] text-foreground leading-tight focus:outline-none"
-      >
-        {userLoading ? (
-          <>
-            Welcome
-            {/* A span, not the shared Skeleton (a div, which a heading may not
-                contain), with the same tokens. Hidden from assistive tech so the
-                heading's name is "Welcome" until the user arrives. */}
+    <header
+      className="flex flex-wrap items-end justify-between gap-3 px-0.5 pt-1 pb-4"
+      data-testid="dashboard-header"
+    >
+      <div className="min-w-0">
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="dashboard-greeting"
+        >
+          {userLoading ? (
+            // A placeholder the greeting's height, hidden from assistive tech.
             <span
               aria-hidden="true"
-              className="ml-2 inline-block h-5 w-24 align-middle bg-primary/5 animate-pulse rounded-md motion-reduce:animate-none"
+              className="inline-block h-3 w-28 rounded bg-primary/5 align-middle animate-pulse motion-reduce:animate-none"
             />
-          </>
-        ) : (
-          <>
-            Welcome,{" "}
-            {/* Same ink as the heading it sits in; the name is emphasis of the
-                title, not an action. */}
-            <span className="text-foreground">{getFirstName(user?.name)}</span>
-          </>
-        )}
-      </h1>
-      <p className="text-sm font-normal text-muted-foreground tracking-tight">
-        Manage your content, schemas, and team from one place.
-      </p>
-    </div>
+          ) : (
+            greetingFor(user?.name, now)
+          )}
+        </p>
+        <div className="flex items-center gap-2">
+          <h1
+            id={DASHBOARD_HEADING_ID}
+            // Focusable only PROGRAMMATICALLY (`-1` keeps it out of the Tab
+            // sequence), so focus can be returned here when the element holding it
+            // is taken off the page.
+            tabIndex={-1}
+            // No outline when focus is sent here: a heading is a place to land,
+            // not a control, and a ring around it reads as something to press.
+            className="text-xl font-semibold tracking-[-0.01em] text-foreground leading-tight focus:outline-none"
+          >
+            {appName}
+          </h1>
+          {/* Beside the heading, not in it: the heading's name is the project's. */}
+          {summary?.environment ? (
+            <EnvironmentBadge environment={summary.environment} />
+          ) : null}
+        </div>
+        <SummaryLine summary={summary} cards={chrome?.cards ?? {}} now={now} />
+        <Freshness
+          oldestAnswerAt={chrome?.oldestAnswerAt ?? null}
+          now={now}
+          onRefresh={() => chrome?.refresh()}
+        />
+      </div>
+      {chrome?.customizable && !chrome.editing ? (
+        <div className="flex gap-2" data-testid="dashboard-edit-offer">
+          <Button
+            ref={chrome.customizeRef}
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={chrome.begin}
+            // 🔴 Beginning an edit is not itself a write, and it still has to
+            // wait for one: the draft is seeded with the version it will be
+            // saved against, so one opened while a write settles would carry a
+            // guard about to go stale.
+            disabled={chrome.writing}
+            data-testid="dashboard-edit-begin"
+          >
+            {/* "Customize", the word every message about this mode uses: the
+                unreadable-layout notice tells the reader to save "from
+                Customize", so the control has to be called that. */}
+            Customize
+          </Button>
+        </div>
+      ) : null}
+    </header>
   );
 }

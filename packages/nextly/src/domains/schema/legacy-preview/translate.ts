@@ -2,9 +2,9 @@
 // + RenameCandidate[]) into the legacy SchemaPreviewResult shape that
 // the admin SchemaChangeDialog renders.
 //
-// F8 PR 3 introduced this file to keep the public framework's
+// This file keeps the public framework's
 // `/api/collections/schema/{slug}/preview` endpoint backwards-
-// compatible while migrating internals onto the new pipeline. The
+// compatible now that its internals run on the new pipeline. The
 // translator is documented compatibility code:
 //   - Single source of truth for preview data is now the pipeline
 //     (Phase A diff + Phase B classifier in `pipeline/preview.ts`).
@@ -70,7 +70,7 @@ export interface TranslateContext {
  *   4. Compute classification per legacy rules: most-severe-wins across
  *      all field-level classifications, plus the pipeline's level.
  *   5. Default `ddlPreview` to []. Legacy did a best-effort dry-run
- *      pushSchema; in PR 3 we drop that side-channel because it
+ *      pushSchema; that side-channel is gone here because it
  *      coupled preview to drizzle-kit timing. No admin UI consumer
  *      reads `ddlPreview` today.
  */

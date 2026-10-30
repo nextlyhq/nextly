@@ -441,6 +441,18 @@ const RELEASE_KINDS = [
 ] as const;
 
 /**
+ * Where the releases of one attention reason are listed, relative to the
+ * admin: the Releases list's Needs attention tab, filtered to that reason.
+ * The digest's release items link here, and so does the dashboard header's
+ * attention part when overdue releases are waiting.
+ */
+export function releasesAttentionLink(
+  reason: (typeof RELEASE_KINDS)[number]["kind"]
+): string {
+  return `releases?tab=attention&reason=${reason}`;
+}
+
+/**
  * A reader for each release kind. A reader who may not read releases is shown
  * neither, exactly as on a site with none; and so is one whose access could
  * not be read, since the digest hides an item whose `visible` check throws
@@ -455,7 +467,7 @@ function releaseReaders(caller: ReadCaller): DigestReader[] {
     kind,
     label,
     severity: "critical" as const,
-    link: `releases?tab=attention&reason=${kind}`,
+    link: releasesAttentionLink(kind),
     owner: "core",
     visible: mayReadReleases,
     read: () => count(caller),

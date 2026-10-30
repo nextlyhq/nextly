@@ -2,15 +2,15 @@
  * The dashboard's Upcoming releases card, drawn from its `system:releases`
  * answer: the line naming releases that need attention above the rows at every
  * size, each part linking to the Releases list filtered to its reason; the rows
- * as core's lists draw them, each leading to its release; and the frame's own
- * states.
+ * as core's lists draw them, each a date chip, the release's name, its entries
+ * and its status, leading to its release; and the frame's own states.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import { describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import {
   CardHeightContext,
   CardTierContext,
@@ -21,7 +21,16 @@ import { UpcomingReleasesCard } from "./UpcomingReleases";
 const QUERY = {
   source: "system:releases",
   op: "list" as const,
-  select: ["kind", "title", "scheduledAt", "reason", "count"],
+  select: [
+    "kind",
+    "id",
+    "title",
+    "scheduledAt",
+    "entries",
+    "issues",
+    "reason",
+    "count",
+  ],
   limit: 5,
 };
 
@@ -30,11 +39,14 @@ const FIELDS = [
   { name: "scheduledAt", label: "Scheduled", type: "date" as const },
 ];
 
-const release = (n: number) => ({
+const release = (n: number, extra: Record<string, unknown> = {}) => ({
   kind: "release",
   id: `r${n}`,
   title: `Launch ${n}`,
-  scheduledAt: "2099-01-01T00:00:00.000Z",
+  scheduledAt: "2099-01-01T12:00:00.000Z",
+  entries: 3,
+  issues: 0,
+  ...extra,
 });
 
 function answer(items: Record<string, unknown>[]) {
@@ -104,7 +116,7 @@ describe("the upcoming rows", () => {
     // the seven rows the answer holds.
     draw(
       {
-        slot: answer([...ATTENTION, ...[1, 2, 3, 4, 5].map(release)]),
+        slot: answer([...ATTENTION, ...[1, 2, 3, 4, 5].map(n => release(n))]),
       },
       "medium"
     );
@@ -117,7 +129,10 @@ describe("the upcoming rows", () => {
   it("say there are more when the release rows hold one more than the card draws", () => {
     // The footer leads to Releases. The source counts no total, so the extra row says at least
     // six exist.
-    draw({ slot: answer([...[1, 2, 3, 4, 5, 6].map(release)]) }, "medium");
+    draw(
+      { slot: answer([...[1, 2, 3, 4, 5, 6].map(n => release(n))]) },
+      "medium"
+    );
     expect(screen.getAllByTestId("entity-row")).toHaveLength(5);
     const footer = screen.getByTestId("list-card-footer");
     expect(footer).toHaveTextContent("View all (6+)");
@@ -127,7 +142,7 @@ describe("the upcoming rows", () => {
   it("leave the attention line its room, so no row is drawn past the card's edge", () => {
     // 🔴 Four rows tall, the body holds four rows, and none to spare: counted without the line
     // above them, the fourth row would be cut off at the card's foot.
-    const releases = [1, 2, 3, 4, 5, 6].map(release);
+    const releases = [1, 2, 3, 4, 5, 6].map(n => release(n));
     const drawAt = (items: Record<string, unknown>[]) =>
       render(
         <CardHeightContext.Provider value={4}>
@@ -151,6 +166,48 @@ describe("the upcoming rows", () => {
     drawAt([...ATTENTION, ...releases]);
     expect(screen.getByTestId("release-attention")).toBeInTheDocument();
     expect(screen.getAllByTestId("entity-row")).toHaveLength(3);
+  });
+
+  it("draw each release as a date chip, its name, its entries and its status", () => {
+    draw(
+      {
+        slot: answer([
+          release(1, { scheduledAt: "2099-03-14T12:00:00.000Z", entries: 1 }),
+          release(2, { entries: 4, issues: 2 }),
+          release(3, { issues: 1 }),
+          // Left unchecked by the source: no status rather than a guess.
+          release(4, { issues: null }),
+        ]),
+      },
+      "medium"
+    );
+    const rows = screen.getAllByTestId("entity-row");
+    expect(
+      within(rows[0]!).getByTestId("entity-row-leading")
+    ).toHaveTextContent("14");
+    expect(within(rows[0]!).getByTestId("entity-row-title")).toHaveTextContent(
+      "Launch 1"
+    );
+    expect(within(rows[0]!).getByTestId("entity-row-meta")).toHaveTextContent(
+      "1 entry"
+    );
+    expect(within(rows[0]!).getByTestId("status-pill")).toHaveTextContent(
+      "Ready"
+    );
+    expect(within(rows[1]!).getByTestId("entity-row-meta")).toHaveTextContent(
+      "4 entries"
+    );
+    expect(within(rows[1]!).getByTestId("status-pill")).toHaveTextContent(
+      "2 issues"
+    );
+    expect(within(rows[1]!).getByTestId("status-pill")).toHaveAttribute(
+      "data-tone",
+      "bad"
+    );
+    expect(within(rows[2]!).getByTestId("status-pill")).toHaveTextContent(
+      "1 issue"
+    );
+    expect(within(rows[3]!).queryByTestId("status-pill")).toBeNull();
   });
 
   it("lead each release row to its release", () => {

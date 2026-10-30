@@ -277,7 +277,7 @@ describe("the allowlist", () => {
   // entries without removing or lowering any, one more when it learned the bracketed form, and one
   // more when patterns began reading normalised text and a label wrapped across lines became
   // visible. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 217;
+  const EXPECTED_ENTRIES = 216;
   // 503 -> 498: recorded offences in `services/users.ts`, the Direct API auth
   // namespace and its test, and `auth-service.ts` no longer exist, so the list
   // shrank by five digests. Each entry itself remains, which is why the count
@@ -296,7 +296,11 @@ describe("the allowlist", () => {
   // the scanner it no longer has, no longer exists; its entry remains.
   // 480 -> 479: one recorded offence in `collection-dispatcher.ts` no longer
   // exists; its entry remains.
-  const EXPECTED_TOTAL = 479;
+  // 479 -> 477: the two recorded offences in `legacy-preview/translate.ts`, each
+  // naming a numbered change, no longer exist, and its entry emptied (217 -> 216).
+  // 477 -> 475: one recorded offence each in `register-collections.ts` and
+  // `collections-handler.ts` no longer exists; both entries remain.
+  const EXPECTED_TOTAL = 475;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

@@ -143,7 +143,7 @@ describeEachDialect("what the add panel is offered", dialect => {
     expect(named(layout).has(GATED)).toBe(true);
     expect(layout.widgets[GATED]?.group).toBe("overview");
     expect(layout.widgets["core/team"]?.group).toBe("team");
-    expect(layout.widgets["core/recent-activity"]?.group).toBe("team");
+    expect(layout.widgets["core/team-activity"]?.group).toBe("team");
   });
 
   it("does not name a widget the reader may not see", async () => {
@@ -154,7 +154,7 @@ describeEachDialect("what the add panel is offered", dialect => {
     // activity, which has no gate and no condition. Not Team: it is offered
     // only to someone who may read people and add or change them, which this
     // reader, holding no grants, may not.
-    expect(named(layout).has("core/recent-activity")).toBe(true);
+    expect(named(layout).has("core/team-activity")).toBe(true);
   });
 
   it("names no widget per collection: a collection is reached through a Content widget", async () => {

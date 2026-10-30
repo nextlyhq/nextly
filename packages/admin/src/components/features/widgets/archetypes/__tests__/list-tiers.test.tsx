@@ -35,10 +35,10 @@ const recentPosts = {
   },
 } as unknown as Parameters<typeof listBody>[1];
 
-const recentActivity = {
+const teamActivity = {
   ...recentPosts,
-  id: "core/recent-activity",
-  title: "Recent activity",
+  id: "core/team-activity",
+  title: "Team activity",
   query: { source: "system:activity", op: "list", select: ["title"], limit: 5 },
 } as unknown as Parameters<typeof listBody>[1];
 
@@ -151,7 +151,7 @@ describe("saying there are more", () => {
 
   it("has no footer for a list that is not one collection's, however many more it holds", () => {
     // A footer holds a link, never a bare count, and this list has no list view to open.
-    drawAt("medium", 6, recentActivity);
+    drawAt("medium", 6, teamActivity);
     expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
