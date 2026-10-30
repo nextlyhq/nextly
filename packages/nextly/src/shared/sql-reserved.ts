@@ -185,3 +185,78 @@ export const SQL_RESERVED_KEYWORDS = [
   "match",
   "natural",
 ] as const;
+
+// ============================================================
+// The Schema Builder's lists
+// ============================================================
+
+/** SQL keywords that should be blocked as field/collection names. */
+export const BUILDER_SQL_KEYWORDS = [
+  "select",
+  "insert",
+  "update",
+  "delete",
+  "drop",
+  "create",
+  "alter",
+  "table",
+  "from",
+  "where",
+  "join",
+  "union",
+  "order",
+  "group",
+  "having",
+  "limit",
+  "offset",
+  "index",
+  "constraint",
+  "primary",
+  "foreign",
+  "key",
+  "references",
+  "on",
+  "null",
+  "not",
+  "and",
+  "or",
+  "in",
+  "like",
+  "between",
+  "exists",
+  "case",
+  "when",
+  "then",
+  "else",
+  "end",
+  "as",
+  "distinct",
+  "all",
+  "any",
+  "some",
+  "into",
+  "values",
+  "set",
+  "cascade",
+] as const;
+
+/**
+ * Reserved names for collections.
+ *
+ * Separate from `RESERVED_SLUGS`, which the code-first validator uses: a
+ * Builder-created collection never passes through that path, so a name has to
+ * be refused here as well to be refused at all.
+ */
+export const BUILDER_RESERVED_COLLECTION_NAMES = [
+  "users",
+  "roles",
+  "permissions",
+  "sessions",
+  "accounts",
+  "dynamic_collections",
+  // Permission identity is action + resource, so a collection named `webhooks`
+  // would share the rows the webhook endpoint routes check: its `read-webhooks`
+  // would expose endpoint configuration and `update-webhooks` the signing
+  // secrets.
+  "webhooks",
+] as const;

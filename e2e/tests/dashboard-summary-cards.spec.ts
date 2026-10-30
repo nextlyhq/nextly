@@ -3,7 +3,8 @@
  * browser: each draws from its own answer and offers the way on that its name
  * promises.
  *
- * - Team draws the number of people and links to Users.
+ * - Team draws the number of people and links to Users. It is not on the default dashboard:
+ *   a reader who manages the team adds it.
  * - Content draws a tile per collection, each linking to its list.
  * - Create draws its shortcuts.
  * - Upcoming releases, with nothing scheduled, offers Releases as its one way on.
@@ -41,6 +42,8 @@ interface Layout {
   version: number;
   scope: string;
   widgets: Record<string, unknown>;
+  /** What a reset would return to: the default dashboard this reader is handed. */
+  defaultPlacements: Array<{ widgetId: string }>;
   placements: Array<{
     id: string;
     widgetId: string;
@@ -67,6 +70,11 @@ async function placeCards(page: Page): Promise<void> {
       throw new Error(`${id} is not visible to this reader`);
     }
   }
+  // Offered to this reader, and still not on their default: a reader who manages the team adds
+  // Team from the add panel.
+  expect(layout.defaultPlacements.map(p => p.widgetId)).not.toContain(
+    "core/team"
+  );
   const others = layout.placements.filter(
     placement => !CARDS.includes(placement.widgetId as (typeof CARDS)[number])
   );

@@ -38,7 +38,8 @@ import { listWidgets } from "../registry";
 
 /**
  * The agreed default, in order, each at its agreed size, `w` by `h` in grid units. A list card is
- * five rows tall, the height whose body holds five rows, but four beside Team, whose row it shares.
+ * five rows tall, the height whose body holds five rows. Team is not on the default, even for a
+ * person it is offered to.
  */
 const AGREED = [
   ["core/needs-attention", "8x4"],
@@ -47,7 +48,6 @@ const AGREED = [
   ["core/recent-activity", "6x5"],
   ["core/content-table", "12x4"],
   ["core/upcoming-releases", "4x4"],
-  ["core/team", "4x4"],
 ] as const;
 const AGREED_IDS: ReadonlySet<string> = new Set(AGREED.map(([id]) => id));
 
@@ -165,8 +165,14 @@ describe.each(getConfiguredTestDialects())(
         title: "Spring launch",
       });
       expect(await defaultFor(admin)).toEqual(without());
+      // Team is offered to the administrator, who manages the team, and is
+      // not on their default: they add it from the add panel.
+      const followed = await layoutOf(admin);
+      expect(followed.placements.map(p => p.widgetId)).not.toContain(
+        "core/team"
+      );
 
-      // No grants: nothing to create, count or list, and neither the team nor releases.
+      // No grants: nothing to create, count or list, and no releases.
       expect(await defaultFor(editor)).toEqual([
         ["core/recently-edited", "6x5"],
         ["core/recent-activity", "6x5"],

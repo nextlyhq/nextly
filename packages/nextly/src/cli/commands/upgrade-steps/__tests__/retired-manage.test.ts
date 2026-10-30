@@ -6,12 +6,18 @@ import { describe, expect, it, vi } from "vitest";
 
 const recheck = vi.hoisted(() => vi.fn(async () => undefined));
 const convert = vi.hoisted(() =>
-  vi.fn(async (_roleId: string, _options?: { recheckReleases?: boolean }) => true)
+  vi.fn(
+    async (_roleId: string, _options?: { recheckReleases?: boolean }) => true
+  )
 );
 
 vi.mock("../../../../domains/auth/retired-manage", () => ({
   rolesHoldingRetiredManage: async () =>
-    ["a", "b", "c"].map(id => ({ id, name: id, permissions: ["manage-media"] })),
+    ["a", "b", "c"].map(id => ({
+      id,
+      name: id,
+      permissions: ["manage-media"],
+    })),
 }));
 vi.mock("../../../../domains/auth/services/role-permission-service", () => ({
   RolePermissionService: class {

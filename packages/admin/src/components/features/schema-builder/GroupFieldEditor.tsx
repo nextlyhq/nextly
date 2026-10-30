@@ -34,13 +34,15 @@ export function GroupFieldEditor({
       {/* Section Header */}
       <div className="flex items-center gap-2">
         <Icons.FolderOpen className="h-4 w-4 text-muted-foreground" />
-        <Label className="text-xs font-medium">Group Configuration</Label>
+        {/* "Settings": the options header above already names the type in
+            its plain words, and every Builder label is in sentence case. */}
+        <Label className="text-xs font-medium">Settings</Label>
       </div>
 
       {/* Admin Options Section */}
       <div className="space-y-3">
         <Label className="text-xs font-medium text-muted-foreground">
-          Admin Options
+          Admin options
         </Label>
 
         {/* Hide Gutter Toggle */}
@@ -48,8 +50,8 @@ export function GroupFieldEditor({
           <div className="space-y-0.5">
             <FormLabelWithTooltip
               className="text-sm font-medium"
-              label="Hide Gutter"
-              description="Hide the vertical line and padding. Useful when this group is nested inside another group, array, or block to reduce visual clutter."
+              label="Hide gutter"
+              description="Hide the vertical line and padding. Useful when this group is nested inside another group, repeating rows, or block to reduce visual clutter."
             />
           </div>
           <Switch
@@ -64,8 +66,10 @@ export function GroupFieldEditor({
           affordance lives there. Group editor configures only the
           parent (gutter visibility). */}
       <EditorAlert>
-        Groups organize related fields under a common property without creating
-        repeatable rows like arrays.
+        {/* Compared with repeating rows by their plain name; "array" is
+            only the code's name for them. */}
+        Groups organize related fields under a common property. Unlike repeating
+        rows, they don&apos;t repeat.
       </EditorAlert>
     </div>
   );

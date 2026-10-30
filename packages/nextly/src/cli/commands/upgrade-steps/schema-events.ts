@@ -132,6 +132,7 @@ async function pending(context: UpgradeStepContext): Promise<number> {
       publicMessage:
         `A table named "${eventsTable}" already exists with an unexpected ` +
         "shape. Rename it, or re-run with `--target-table-name <name>`.",
+      logContext: { table: eventsTable },
     });
   }
 

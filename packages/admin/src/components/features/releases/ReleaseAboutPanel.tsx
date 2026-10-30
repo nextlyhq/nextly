@@ -18,7 +18,7 @@ import {
   dayHeading,
   timeOfDay,
 } from "@admin/components/features/versions/history-story-text";
-import { StoryActorName } from "@admin/components/features/versions/HistoryStoryRows";
+import { StoryActorName } from "@admin/components/features/versions/StoryActorName";
 import { Button, Skeleton } from "@admin/components/ui";
 import {
   useReleaseCreation,

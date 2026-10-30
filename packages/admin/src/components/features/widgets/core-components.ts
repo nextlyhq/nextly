@@ -17,6 +17,7 @@
  * @module components/features/widgets/core-components
  */
 
+import { BreakdownCard } from "@admin/components/features/dashboard/BreakdownCard";
 import { ContentTable } from "@admin/components/features/dashboard/ContentTable";
 import { CountCard } from "@admin/components/features/dashboard/CountCard";
 import { GetStartedCard } from "@admin/components/features/dashboard/GetStartedCard";
@@ -49,6 +50,7 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#RecentlyEdited", RecentlyEdited);
   registerCoreComponent("core#UpcomingReleases", UpcomingReleasesCard);
   registerCoreComponent("core#Count", CountCard);
+  registerCoreComponent("core#Breakdown", BreakdownCard);
   registerCoreComponent("core#Note", NoteCard);
   registerCoreComponent("core#RecentEntries", RecentEntriesCard);
   registerCoreComponent("core#OverTime", OverTimeCard);

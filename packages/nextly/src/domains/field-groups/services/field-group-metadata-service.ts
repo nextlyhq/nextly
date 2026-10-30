@@ -41,6 +41,11 @@ import type {
   FieldGroupMigrationStatus as SchemaFieldGroupMigrationStatus,
 } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  addressRefusalError,
+  assertAddressAllowed,
+  findSameSnakeCaseAddress,
+} from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
@@ -198,6 +203,7 @@ export class FieldGroupMetadataService {
     // process-global field-type registry from inside this same exclusion. A declaration the old
     // registration accepted would otherwise be built and stored against the new one, and every
     // later write to the field group would fail on options the active plugin rejects.
+    await this.assertAddressAllowed(input.slug);
     await this.assertTableUnowned(input);
     const { assertValidPluginFieldOptions } = await import(
       "../../../api/fields-payload"
@@ -320,7 +326,9 @@ export class FieldGroupMetadataService {
     // Raises NOT_FOUND itself when the slug is gone, so there is no absence branch here. One that
     // existed would be a guard that can never fire, and a guard that cannot fire reads as coverage
     // while proving nothing.
-    const existing = await this.registry.getComponent(input.slug);
+    // As stored, past the registry row cache: a row cached before the lock was taken describes
+    // the state this read exists to re-establish.
+    const existing = await this.registry.getComponentForWrite(input.slug);
     // 🔴 A diverged field group is REFUSED for any edit that would move storage again.
     //
     // Recording the state is only half of it. Without this, an editor opened after the mark reads
@@ -506,7 +514,8 @@ export class FieldGroupMetadataService {
     requestedLocalized: boolean | undefined
   ): Promise<DynamicFieldGroupRecord | null> {
     try {
-      const current = await this.registry.getComponent(input.slug);
+      // As stored: whether this save's own write landed.
+      const current = await this.registry.getComponentForWrite(input.slug);
       if (input.fields !== undefined) {
         if (current.schemaHash !== (await this.hashFields(input.fields)))
           return null;
@@ -1031,6 +1040,23 @@ export class FieldGroupMetadataService {
         message: `Generated database identifier "${name}" is ${identifierBytes(name)} bytes once encoded as UTF-8; the limit is ${MAX_IDENTIFIER_LENGTH} (${MAX_IDENTIFIER_LENGTH} characters of plain ASCII). Shorten the field group's slug or the field name it derives from.`,
       })),
     });
+  }
+
+  /**
+   * Judge a new address by the one rule every road shares (`shared/address-rule`), and against the
+   * other field groups' addresses: one with the same snake_case form names the same table.
+   */
+  private async assertAddressAllowed(slug: string): Promise<void> {
+    assertAddressAllowed("fieldGroup", slug);
+    const twin = findSameSnakeCaseAddress(
+      "fieldGroup",
+      slug,
+      (await this.registry.getAllComponents()).map(existing => ({
+        kind: "fieldGroup" as const,
+        address: existing.slug,
+      }))
+    );
+    if (twin) throw addressRefusalError(twin, slug);
   }
 
   /**
