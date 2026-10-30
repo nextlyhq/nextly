@@ -561,7 +561,8 @@ export class SingleMetadataService {
     // A record that has already gone is NOT an error here. Delete is idempotent by intent, and
     // refusing a second delete would turn a retry into a failure; the teardown below still runs
     // against the caller's table name so a half-finished delete can be completed.
-    const current = await this.registry.getSingleBySlug(slug);
+    // As stored, past the registry row cache: a cached row could still say unlocked.
+    const current = await this.registry.getSingleForWrite(slug);
     if (current?.locked === true) {
       throw NextlyError.definedInCode({
         thing: "Single",
@@ -841,7 +842,8 @@ export class SingleMetadataService {
   private async refreshForUpdate(
     input: UpdateSingleSchemaInput
   ): Promise<DynamicSingleRecord> {
-    const current = await this.registry.getSingleBySlug(input.slug);
+    // As stored, past the registry row cache: the update plans from this row.
+    const current = await this.registry.getSingleForWrite(input.slug);
 
     if (!current) {
       throw NextlyError.notFound({
@@ -1356,7 +1358,8 @@ export class SingleMetadataService {
     }
     await Promise.all(
       [...slugs].map(async slug => {
-        const record = await registry.getComponentBySlug(slug);
+        // As stored, past the registry row cache: the DDL is planned against this table.
+        const record = await registry.findComponentForWrite(slug);
         if (record) resolved.set(slug, record.tableName);
       })
     );

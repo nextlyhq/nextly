@@ -1,10 +1,11 @@
 /**
- * The singleton guard's one exemption stays one name wide.
+ * The singleton guard's exemptions stay exactly as wide as their names.
  *
  * `shared-module-guards.ts` fails a file that changes a `__nextly*` singleton,
- * except the loaded-dialect cache, which it restores without failing. That
- * exemption is safe only for that cache, so a change to any other singleton,
- * including one whose name merely starts the same way, must still fail.
+ * except the loaded-dialect cache and the role version every permission check
+ * refreshes, which it restores without failing. Those exemptions are safe only
+ * for them, so a change to any other singleton, including one whose name
+ * merely starts the same way, must still fail.
  */
 
 import { describe, expect, it } from "vitest";
@@ -17,12 +18,24 @@ import {
 const changed = (key: string, label = key) => ({ key, label });
 
 describe("which changed singletons fail a file", () => {
-  it("exempts exactly the loaded-dialect cache", () => {
-    expect([...RESTORED_QUIETLY]).toEqual(["__nextly_dialectTables"]);
+  it("exempts exactly the loaded-dialect cache and the role version", () => {
+    expect([...RESTORED_QUIETLY]).toEqual([
+      "__nextly_dialectTables",
+      "__nextly_rbacEpoch",
+    ]);
   });
 
   it("does not fail a file for loading another dialect", () => {
     expect(failingSingletons([changed("__nextly_dialectTables")])).toEqual([]);
+  });
+
+  it("does not fail a file for refreshing the role version", () => {
+    expect(
+      failingSingletons([
+        changed("__nextly_rbacEpoch"),
+        changed("readAt", "__nextly_rbacEpoch.readAt"),
+      ])
+    ).toEqual([]);
   });
 
   it("still fails a file for any other singleton it changed", () => {
@@ -40,7 +53,14 @@ describe("which changed singletons fail a file", () => {
       failingSingletons([
         changed("__nextly_dialectTablesBackup"),
         changed("__nextly_dialect"),
+        changed("__nextly_rbacEpochBackup"),
+        changed("readAt", "__nextly_rbacEpochBackup.readAt"),
       ])
-    ).toEqual(["__nextly_dialectTablesBackup", "__nextly_dialect"]);
+    ).toEqual([
+      "__nextly_dialectTablesBackup",
+      "__nextly_dialect",
+      "__nextly_rbacEpochBackup",
+      "__nextly_rbacEpochBackup.readAt",
+    ]);
   });
 });

@@ -20,7 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@admin/__tests__/utils";
 
 import { EntryLocaleProvider } from "../../EntryLocaleContext";
-import { NARROW_ONLY, WIDE_ONLY } from "../DocumentActionBar";
+import type { DocumentPanelMode } from "../document-panel-mode";
 import { BarUnderTest as DocumentBar } from "./bar-under-test";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
@@ -90,6 +90,7 @@ function Harness({
   share = false,
   toolbarSlot,
   preview = false,
+  panelMode,
 }: {
   state: State;
   /** Whether this document may be shared, which offers the share row. */
@@ -98,6 +99,8 @@ function Harness({
   toolbarSlot?: React.ReactNode;
   /** Whether a preview can be opened, which draws the preview control. */
   preview?: boolean;
+  /** How the panel sits at the editor's width; a phone's is `sheet`. */
+  panelMode?: DocumentPanelMode;
 }) {
   const methods = useForm({
     defaultValues: { title: state.entry?.title ?? "" },
@@ -132,6 +135,9 @@ function Harness({
         onUnpublish={vi.fn()}
         onDiscardWorkingDraft={vi.fn()}
         onToggleRail={vi.fn()}
+        // A menu row every state offers, so the menu is drawn at every width.
+        onViewApi={vi.fn()}
+        {...(panelMode === undefined ? {} : { panelMode })}
       />
     </FormProvider>
   );
@@ -195,7 +201,7 @@ describe("the document bar", () => {
       screen.getByRole("button", { name: /^save draft$/i }),
       screen.getByRole("button", { name: /^publish$/i }),
       screen.getByRole("button", { name: "More actions" }),
-      screen.getByRole("button", { name: /^(show|hide) rail$/i }),
+      screen.getByRole("button", { name: /^(show|hide) document panel$/i }),
     ];
     const follows = (a: Node, b: Node) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -301,39 +307,78 @@ describe("the document bar", () => {
     expect(hides(label!)).toBe(true);
   });
 
-  it("folds History and the preview into the menu on a narrow screen, and hides the panel toggle there", async () => {
+  it("folds History, the preview and the panel toggle into the menu on a phone", async () => {
     const user = userEvent.setup();
-    render(<Harness state={STATES[1]!} share />);
-    // On a narrow screen these controls go...
-    const narrowHidden = WIDE_ONLY;
-    expect(screen.getByRole("button", { name: "History" }).className).toContain(
-      narrowHidden
-    );
+    render(<Harness state={STATES[1]!} share panelMode="sheet" />);
+    // Out of the bar...
     expect(
-      screen
-        .getByRole("button", { name: "Share preview link…" })
-        .closest("div.contents")?.className
-    ).toContain(narrowHidden);
+      screen.queryByRole("button", { name: "History" })
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /^(show|hide) rail$/i }).className
-    ).toContain(narrowHidden);
+      screen.queryByRole("button", { name: "Preview options" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^(show|hide) document panel$/i })
+    ).not.toBeInTheDocument();
 
-    // ...and the menu offers them, as rows shown only at that width.
+    // ...and into the menu, first, as rows.
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    const shownNarrow = NARROW_ONLY.split(" ").at(-1)!;
-    const history = await screen.findByRole("menuitem", {
-      name: "History",
-    });
-    expect(history.className).toContain(shownNarrow);
-    const share = screen.getByRole("menuitem", { name: "Share preview link…" });
-    expect(share.className).toContain(shownNarrow);
-    await user.click(share);
+    const rows = (await screen.findAllByRole("menuitem")).map(
+      row => row.textContent
+    );
+    expect(rows.slice(0, 3)).toEqual([
+      "History",
+      "Share preview link…",
+      "Hide document panel",
+    ]);
+    await user.click(
+      screen.getByRole("menuitem", { name: "Share preview link…" })
+    );
     // The same popover the wide control opens, hung from the row that stays
     // on screen.
     expect(
       await screen.findByRole("heading", { name: "Share a preview" })
     ).toBeInTheDocument();
   });
+
+  it.each(["docked", "floating"] as const)(
+    "keeps History, the preview and the panel toggle in the bar where the panel is %s",
+    async mode => {
+      const user = userEvent.setup();
+      render(<Harness state={STATES[1]!} share panelMode={mode} />);
+      expect(
+        screen.getByRole("button", { name: "History" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Share preview link…" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Hide document panel" })
+      ).toBeInTheDocument();
+      // The menu holds the document's own verbs only.
+      await user.click(screen.getByRole("button", { name: "More actions" }));
+      const rows = (await screen.findAllByRole("menuitem")).map(
+        row => row.textContent
+      );
+      expect(rows).not.toContain("History");
+      expect(rows).not.toContain("Hide document panel");
+    }
+  );
+
+  it.each(["docked", "floating", "sheet"] as const)(
+    "keeps the save state's polite and assertive live regions mounted, empty, where the panel is %s",
+    mode => {
+      // Present before their text changes, at every width: a region mounted
+      // with its first announcement is not reliably read.
+      render(<Harness state={STATES[1]!} panelMode={mode} />);
+      const polite = screen.getByTestId("document-status-live");
+      const assertive = screen.getByTestId("document-status-failure");
+      expect(polite).toHaveAttribute("aria-live", "polite");
+      expect(assertive).toHaveAttribute("aria-live", "assertive");
+      expect(polite).toBeEmptyDOMElement();
+      expect(assertive).toBeEmptyDOMElement();
+    }
+  );
 
   it("draws no panel toggle while history is open, since history takes the panel's place", () => {
     window.history.replaceState(
@@ -347,7 +392,7 @@ describe("the document bar", () => {
       // the accessibility tree: the toggle must be absent, not merely hidden.
       expect(
         screen.queryByRole("button", {
-          name: /^(show|hide) rail$/i,
+          name: /^(show|hide) document panel$/i,
           hidden: true,
         })
       ).not.toBeInTheDocument();
@@ -357,7 +402,7 @@ describe("the document bar", () => {
     // The control: without history open the toggle is there.
     render(<Harness state={STATES[1]!} />);
     expect(
-      screen.getByRole("button", { name: /^(show|hide) rail$/i })
+      screen.getByRole("button", { name: /^(show|hide) document panel$/i })
     ).toBeInTheDocument();
   });
 

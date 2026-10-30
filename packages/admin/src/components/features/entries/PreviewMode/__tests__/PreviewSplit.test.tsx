@@ -239,3 +239,17 @@ describe("PreviewSplit pointer", () => {
     expect(editorPercent()).toBe(70);
   });
 });
+
+describe("PreviewSplit on a phone", () => {
+  it("gives the open preview the whole width, keeping the editor mounted", () => {
+    renderSplit();
+    // Side by side, a phone has room for neither: the editor and the divider
+    // step aside at the content area's phone width.
+    const phone = "@max-[37.5rem]/content:hidden";
+    const pane = screen.getByTestId("editor").closest("[style]");
+    expect(pane?.className).toContain(phone);
+    expect(screen.getByRole("separator").className).toContain(phone);
+    // Stepped aside, not removed: what a field holds survives the preview.
+    expect(screen.getByTestId("editor")).toBeInTheDocument();
+  });
+});

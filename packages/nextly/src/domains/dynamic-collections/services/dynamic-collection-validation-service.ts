@@ -18,7 +18,10 @@ import {
   BUILDER_SQL_KEYWORDS,
 } from "../../../shared/sql-reserved";
 import { consoleLogger } from "../../../shared/types";
-import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
+import {
+  toSnakeCase,
+  usesJunctionTable,
+} from "../../schema/services/field-column-descriptor";
 
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
@@ -61,17 +64,36 @@ export const RESERVED_FIELD_NAMES: readonly string[] =
  */
 export const collectionNameSchema = addressSchema("collection");
 
+/**
+ * The longest identifier every supported database keeps whole: PostgreSQL
+ * truncates past 63 characters, so a longer column name would not be the one
+ * the write path asks for.
+ */
+const MAX_COLUMN_NAME_LENGTH = 63;
+
+// A field keeps the name it is given, camelCase included, as on every other
+// road; its column is `toSnakeCase(name)`. So each rule that protects a column
+// is checked against that column, not only against the name as written.
 export const fieldNameSchema = z
   .string()
   .min(1, "Field name cannot be empty")
   .max(50, "Field name must be 50 characters or less")
   .regex(
-    /^[a-z][a-z0-9_]*$/,
-    "Field name must start with lowercase letter and contain only lowercase letters, numbers, and underscores"
+    /^[a-z][a-zA-Z0-9_]*$/,
+    "Field name must start with a lowercase letter and contain only letters, numbers, and underscores"
   )
-  .refine((name: string) => !RESERVED_FIELD_NAMES.includes(name), {
-    message: "Field name is reserved",
-  })
+  .refine(
+    (name: string) =>
+      !RESERVED_FIELD_NAMES.includes(name) &&
+      !RESERVED_FIELD_NAMES.includes(toSnakeCase(name)),
+    { message: "Field name is reserved" }
+  )
+  .refine(
+    (name: string) => toSnakeCase(name).length <= MAX_COLUMN_NAME_LENGTH,
+    {
+      message: `Field name's column would be longer than ${MAX_COLUMN_NAME_LENGTH} characters`,
+    }
+  )
   .refine(
     (name: string) => !SQL_KEYWORDS.includes(name.toLowerCase() as never),
     {
@@ -117,14 +139,22 @@ export class DynamicCollectionValidationService {
       throw new Error(errorMessage);
     }
 
-    const fieldNames = new Set<string>();
+    // Two names that become one column clash as surely as two equal names:
+    // `metaTitle` and `meta_title` are both stored in `meta_title`.
+    const namesByColumn = new Map<string, string>();
     const duplicates: string[] = [];
 
     for (const field of fields) {
-      if (fieldNames.has(field.name)) {
-        duplicates.push(field.name);
+      const column = toSnakeCase(field.name);
+      const earlier = namesByColumn.get(column);
+      if (earlier !== undefined) {
+        duplicates.push(
+          earlier === field.name
+            ? field.name
+            : `${earlier} and ${field.name} (both column ${column})`
+        );
       }
-      fieldNames.add(field.name);
+      namesByColumn.set(column, field.name);
     }
 
     if (duplicates.length > 0) {
