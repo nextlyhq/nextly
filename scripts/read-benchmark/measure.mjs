@@ -23,7 +23,7 @@ import { parseArgs } from "node:util";
 
 import { isCliEntry } from "../cli-entry.mjs";
 
-import { TRANSLATABLE_FIELDS, articleData, authorData, localesOf, siteFor, storesPerLanguage, translatableColumnsOf } from "./fixture.mjs";
+import { TRANSLATABLE_FIELDS, articleData, authorData, localesOf, siteFor, storageContractOf } from "./fixture.mjs";
 import { pick, seededRandom, summarize } from "./stats.mjs";
 
 const AUTHORS = 20;
@@ -179,14 +179,14 @@ async function localesStorage(adapter, table) {
 }
 
 /**
- * What each table with translatable columns stores: its own columns, and its
- * translation table's rows and columns. The evidence that a mode stores what it
- * says it does: a `per-language` run storing its values where `main` does would
- * compare a site with itself.
+ * What every table with translatable columns stores, whatever the mode: its
+ * own columns, and its translation table's rows and columns. The evidence that
+ * a mode stores what it says it does: a `per-language` run storing its values
+ * where `main` does would compare a site with itself.
  */
-export async function storageOf(adapter, mode) {
+export async function storageOf(adapter) {
   const storage = {};
-  for (const table of Object.keys(translatableColumnsOf(mode))) {
+  for (const table of Object.keys(TRANSLATABLE_FIELDS)) {
     storage[table] = { columns: columnsOf(await adapter.select(table)), locales: await localesStorage(adapter, localesOf(table)) };
   }
   return storage;
@@ -224,18 +224,19 @@ function misplaced(translatable, onMain, onLocales) {
 }
 
 /**
- * Refuses a site whose storage is not the mode's, table by table for every
- * table the mode translates. `e4` is held to what `per-language` stores, the
- * authors' table as well, so a build that does not store it so is never timed.
- * Each translation table holds one row per row of its table: one per article,
- * for the articles and their cards, and one per author.
+ * Refuses a site whose storage is not the mode's, holding every table with
+ * translatable columns to the mode's contract (`storageContractOf`) both ways:
+ * one the mode keeps per language has its translation table, of the right
+ * size, and one it does not has none, its columns on the table itself. So a
+ * build that leaves a table behind, or moves one it should not, is never
+ * timed. A translation table holds one row per row of its table: one per
+ * article, for the articles and their cards, and one per author.
  */
 export function checkStorage(mode, docs, storage) {
-  const problemOf = storesPerLanguage(mode) ? perLanguageProblem : mainProblem;
-  for (const [table, translatable] of Object.entries(translatableColumnsOf(mode))) {
+  for (const [table, { columns, perLanguage }] of Object.entries(storageContractOf(mode))) {
     const stored = storage[table];
     if (stored === undefined) throw new Error(`${mode} mode: ${table} was not read`);
-    const problem = problemOf(translatable, table === "dc_authors" ? AUTHORS : docs, stored);
+    const problem = perLanguage ? perLanguageProblem(columns, table === "dc_authors" ? AUTHORS : docs, stored) : mainProblem(columns, docs, stored);
     if (problem) throw new Error(`${mode} mode: ${table} ${problem}`);
   }
 }
@@ -350,7 +351,7 @@ async function main(argv) {
   const { handle, cleanup } = await boot(options);
   try {
     const articleIds = await seedSite(handle.nextly, options);
-    const storage = await storageOf(handle.adapter, options.mode);
+    const storage = await storageOf(handle.adapter);
     checkStorage(options.mode, options.docs, storage);
     const { createDynamicHandlers } = await import(new URL("runtime.mjs", NEXTLY_DIST).href);
     const reads = readsFor({ nextly: handle.nextly, handlers: createDynamicHandlers(), keys: await readOnlyKeys(handle), articleIds, options });

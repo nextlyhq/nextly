@@ -23,11 +23,6 @@ import { pick } from "./stats.mjs";
 
 export const MODES = ["main", "per-language", "e4"];
 
-/** Whether a mode's site keeps its translatable fields in the translation tables: all but `main`. */
-export function storesPerLanguage(mode) {
-  return mode !== "main";
-}
-
 /** The site's one language in `per-language` mode. */
 const LANGUAGE = "en";
 
@@ -122,16 +117,23 @@ export const TRANSLATABLE_FIELDS = Object.fromEntries(
 );
 
 /**
- * The tables whose translatable columns a mode's site is checked for, by
- * table, with those columns. A `main` site keeps every one on its own table.
- * `per-language` moves those of the entities it marks translatable, the
- * articles and the card. `e4` moves every translatable field, the authors'
- * name and bio among them.
+ * How a mode's site stores every table with translatable fields: those
+ * fields' columns, and whether they are kept per language. Read off the
+ * site's definition: per language when the site stores every translatable
+ * field so (`e4`'s site-wide option) or the entity is marked translatable
+ * (`per-language`'s articles and card), and otherwise on the table itself, as
+ * every one is in `main`. The storage check holds every table to it, both
+ * ways, so a table moved that should stay is refused as surely as one left
+ * that should move.
  */
-export function translatableColumnsOf(mode) {
+export function storageContractOf(mode) {
   const site = siteFor(mode, DESCRIBING);
-  const moved = tablesOf(site).filter(({ entity }) => mode !== "per-language" || entity.localized === true);
-  return Object.fromEntries(moved.map(({ table }) => [table, Object.keys(TRANSLATABLE_FIELDS[table])]));
+  return Object.fromEntries(
+    tablesOf(site).map(({ table, entity }) => [
+      table,
+      { columns: Object.keys(TRANSLATABLE_FIELDS[table]), perLanguage: site.perLanguageStorage === true || entity.localized === true },
+    ])
+  );
 }
 
 /** The table a `per-language` site keeps `table`'s translatable values in. */

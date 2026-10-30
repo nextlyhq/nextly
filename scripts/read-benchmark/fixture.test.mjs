@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MODES, TRANSLATABLE_FIELDS, articleData, authorData, localesOf, siteFor, storesPerLanguage, translatableColumnsOf } from "./fixture.mjs";
+import { MODES, TRANSLATABLE_FIELDS, articleData, authorData, localesOf, siteFor, storageContractOf } from "./fixture.mjs";
 import { seededRandom } from "./stats.mjs";
 
 /** Builders that return what they were given, tagged, so a site's shape can be read without Nextly. */
@@ -38,9 +38,6 @@ describe("the benchmark site, by storage mode", () => {
     expect(siteFor("main", config).perLanguageStorage).toBeUndefined();
   });
 
-  it("holds every mode but main to per-language storage", () => {
-    expect(MODES.filter(storesPerLanguage)).toEqual(["per-language", "e4"]);
-  });
 
   it("gives every mode the same fields, so only the storage differs", () => {
     const fields = mode => articles(siteFor(mode, config)).fields.map(f => `${f.kind}:${f.name}`);
@@ -64,14 +61,19 @@ describe("the benchmark site, by storage mode", () => {
     });
   });
 
-  it("checks the tables each mode translates, with every translatable column of each", () => {
-    const articlesAndCard = { dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] };
+  it("states how every mode stores every table with translatable fields", () => {
+    const stored = (authors, articles, card) => ({
+      dc_authors: { columns: ["name", "bio"], perLanguage: authors },
+      dc_articles: { columns: ["headline", "excerpt", "body"], perLanguage: articles },
+      comp_card: { columns: ["heading", "blurb"], perLanguage: card },
+    });
+    // main keeps every one on its own table.
+    expect(storageContractOf("main")).toEqual(stored(false, false, false));
+    // per-language moves those of the entities it marks translatable, and leaves the authors.
+    expect(storageContractOf("per-language")).toEqual(stored(false, true, true));
     // e4 moves every translatable field, the authors' among them.
-    expect(translatableColumnsOf("e4")).toEqual({ dc_authors: ["name", "bio"], ...articlesAndCard });
-    // per-language moves those of the entities it marks translatable.
-    expect(translatableColumnsOf("per-language")).toEqual(articlesAndCard);
-    // main keeps every one on its own table, where it is checked for.
-    expect(translatableColumnsOf("main")).toEqual({ dc_authors: ["name", "bio"], ...articlesAndCard });
+    expect(storageContractOf("e4")).toEqual(stored(true, true, true));
+    expect(MODES.map(mode => Object.keys(storageContractOf(mode)))).toEqual(MODES.map(() => Object.keys(TRANSLATABLE_FIELDS)));
     expect(localesOf("dc_articles")).toBe("dc_articles_locales");
   });
 });
