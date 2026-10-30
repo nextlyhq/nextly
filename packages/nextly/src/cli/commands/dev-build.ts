@@ -28,6 +28,7 @@ import {
   beginI18nTransition,
   settleI18nTransition,
 } from "../../domains/i18n/migration/transition-state";
+import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import { deleteEntityRegistryRow } from "../../domains/versions/entity-teardown";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
@@ -975,7 +976,8 @@ export async function ensureLocalizedCompanions(
   for (const [kind, group, resolveTableName] of groups) {
     for (const entity of group) {
       if (!entity.slug) continue;
-      if (entity.localized !== true) {
+      // Restored only when its translatable values no longer belong in a companion (`storesPerLanguage`).
+      if (!storesPerLanguage(entity)) {
         // Turning localization off is a transition too, and until now only the Schema Builder
         // performed it: this pass skipped everything not currently localized, so a companion
         // created from configuration was simply abandoned. Reads fall back to the main table and

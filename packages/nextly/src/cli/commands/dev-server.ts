@@ -38,6 +38,8 @@ import {
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
+import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
+import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -99,6 +101,25 @@ import type { LoadConfigResult } from "../utils/config-loader";
 import { formatDuration } from "../utils/logger";
 
 import type { ResolvedDevOptions } from "./db-sync";
+
+/**
+ * The fields whose columns belong on an entity's main table: every one, or for an entity whose
+ * translatable values live in its companion (`storesPerLanguage`), its shared ones only, so a
+ * column top-up never puts a translatable column back on the main table.
+ */
+function mainTableFields<F extends { name?: string; type: string }>(
+  entity: { localized?: unknown },
+  fields: F[]
+): F[] {
+  if (!storesPerLanguage(entity)) return fields;
+  const translatable = new Set(
+    resolveLocalizedFieldNames(
+      fields as Parameters<typeof resolveLocalizedFieldNames>[0],
+      true
+    )
+  );
+  return fields.filter(field => !field.name || !translatable.has(field.name));
+}
 
 // ============================================================================
 // Core Table Creation
@@ -929,7 +950,10 @@ export async function performSinglesAutoSync(
           drizzleAdapter,
           serviceLogger,
           tableName,
-          [...systemFields, ...singleConfig.fields] as unknown as FieldConfig[],
+          [
+            ...systemFields,
+            ...mainTableFields(singleConfig, singleConfig.fields),
+          ] as unknown as FieldConfig[],
           { timestamps: true, builtBy: "collection" }
         );
 
@@ -946,7 +970,8 @@ export async function performSinglesAutoSync(
         const migrationSQL = schemaService.generateMigrationSQL(
           tableName,
           singleConfig.fields as unknown as FieldDefinition[],
-          { isSingle: true }
+          // Translatable columns stay off a main table whose values live in its companion.
+          { isSingle: true, localized: storesPerLanguage(singleConfig) }
         );
 
         const statements = migrationSQL
@@ -1070,8 +1095,11 @@ export async function performSinglesReconcile(
       // registry's stored fields for UI-created singles.
       const codeFirstConfig = config.singles?.find(s => s.slug === single.slug);
       let fields: FieldDefinition[];
+      // Whether its translatable columns stay off the main table, from the same source as its fields.
+      let localized: boolean;
       if (codeFirstConfig) {
         fields = codeFirstConfig.fields as unknown as FieldDefinition[];
+        localized = storesPerLanguage(codeFirstConfig);
       } else {
         const record = await singleRegistry.getSingleBySlug(single.slug);
         if (!record) {
@@ -1080,12 +1108,13 @@ export async function performSinglesReconcile(
           );
         }
         fields = record.fields as unknown as FieldDefinition[];
+        localized = storesPerLanguage(record);
       }
 
       const migrationSQL = schemaService.generateMigrationSQL(
         single.tableName,
         fields,
-        { isSingle: true }
+        { isSingle: true, localized }
       );
 
       const statements = migrationSQL
@@ -1205,7 +1234,7 @@ export async function performComponentsAutoSync(
           drizzleAdapter,
           serviceLogger,
           tableName,
-          componentConfig.fields,
+          mainTableFields(componentConfig, componentConfig.fields),
           { timestamps: true, builtBy: "fieldGroup" }
         );
 
@@ -1221,7 +1250,9 @@ export async function performComponentsAutoSync(
         // Table doesn't exist — create it
         const migrationSQL = schemaService.generateMigrationSQL(
           tableName,
-          componentConfig.fields
+          componentConfig.fields,
+          // Translatable columns stay off a main table whose values live in its companion.
+          { localized: storesPerLanguage(componentConfig) }
         );
 
         const statements = migrationSQL

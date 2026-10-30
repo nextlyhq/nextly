@@ -45,7 +45,10 @@ import {
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
-import { assertPerLanguageStorageUnchanged } from "../domains/i18n/per-language-storage";
+import {
+  assertPerLanguageStorageUnchanged,
+  storesPerLanguage,
+} from "../domains/i18n/per-language-storage";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearActiveExtensionSchema,
@@ -1159,7 +1162,9 @@ async function ensureLocalizedCompanionsForReload(
     for (const entity of entities) {
       if (!entity.slug) continue;
       if (deferred.has(`${kind}:${entity.slug}`)) continue;
-      if (entity.localized !== true) {
+      // Restored only when its translatable values no longer belong in a companion: an entity that
+      // is not translatable, on a site that does not keep every translatable field per language.
+      if (!storesPerLanguage(entity)) {
         // Turning localization off is a transition too. Only the Schema Builder used to perform
         // it, so an entity localized from configuration and then un-localized kept its content in
         // a companion nothing reads any more, and fell back to whatever the main table held before
@@ -1558,6 +1563,8 @@ async function applyReloadHolding(
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
+        /** The per-language storage choice, which a reload may not change. */
+        perLanguageStorage?: boolean;
         auditRetention?: ResolvedAuditRetentionConfig;
         localization?: { defaultLocale?: string };
         /**
@@ -2246,7 +2253,7 @@ async function applyReloadHolding(
           // These branches apply a CONFIG edit, so the table is the pipeline's.
           builtBy: "codeFirst" as const,
           hasStatus: target.status === true,
-          localized: target.localized === true,
+          localized: storesPerLanguage(target),
         }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
@@ -2297,7 +2304,7 @@ async function applyReloadHolding(
         target.tableName,
         target.fields,
         dialect,
-        { builtBy: "codeFirst" as const, localized: target.localized === true }
+        { builtBy: "codeFirst" as const, localized: storesPerLanguage(target) }
       );
       const operations = diffSnapshots(live, { tables: [desiredTable] });
 
@@ -2920,7 +2927,7 @@ async function applyReloadHolding(
         // `localized` now travels on the DesiredCollection entry (set above from
         // the config target), so the main table is regenerated without the
         // translatable columns and the companion is registered.
-        const localized = c.localized === true;
+        const localized = storesPerLanguage(c);
         const { table } = generateRuntimeSchema(
           c.tableName,
           c.fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -2951,7 +2958,7 @@ async function applyReloadHolding(
         // i18n: a localized single omits its translatable columns from the main
         // runtime table and registers the companion `single_<slug>_locales` table —
         // mirrors the collection branch above.
-        const localized = (s as { localized?: boolean }).localized === true;
+        const localized = storesPerLanguage(s);
         const { table } = generateRuntimeSchema(
           s.tableName,
           s.fields as Parameters<typeof generateRuntimeSchema>[1],
@@ -3001,7 +3008,7 @@ async function applyReloadHolding(
       for (const comp of Object.values(desiredComponents)) {
         // i18n: a localized component omits its translatable columns from the main
         // comp_ runtime table and registers the companion `comp_<slug>_locales` table.
-        const localized = (comp as { localized?: boolean }).localized === true;
+        const localized = storesPerLanguage(comp);
         const table = fieldGroupSchemaService.generateRuntimeSchema(
           comp.tableName,
           comp.fields,
