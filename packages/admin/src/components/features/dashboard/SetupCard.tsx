@@ -9,13 +9,14 @@
  * - setup could not be checked: says so with Retry, and never a step shown open on that basis;
  * - every step done: "You're all set", said once (the server has recorded it, so the next load
  *   leaves the card out);
- * - collapsed: one line, "N of M done", with Expand, kept per reader on the server;
+ * - collapsed: one line, "Set up your project · N of M done", with Expand and Dismiss, the whole
+ *   card one grid row tall (`frame/collapse`), kept per reader on the server;
  * - the steps: "N of M done" and a progress bar over one row of tiles, two columns below 640 px.
  *
  * Each tile is a step: its number or a tick, its name, one line of detail, and what the reader can
  * do about it. Skip is offered on "Fill in your Singles" and "Invite a teammate" only, and Restore
  * on a step skipped. The Singles are one tile, "N of M filled in"; choosing it opens a short list
- * of them, each with its state and link, and the card grows in place to hold it. Sample content is
+ * of them, each with its state and link. The card grows in place to hold whatever it draws. Sample content is
  * the first tile, with its load and decline drawn inside it, and is left out where the project's
  * sample-content route says it cannot be loaded by this reader.
  *
@@ -54,6 +55,7 @@ import { useSingles } from "@admin/hooks/queries/useSingles";
 import { cn } from "@admin/lib/utils";
 
 import { FrameState } from "../widgets/frame/card-state";
+import { useCardCollapsed } from "../widgets/frame/collapse";
 import { CardGrowContext } from "../widgets/frame/grow";
 
 import {
@@ -89,19 +91,21 @@ const STATUS_TEXT: Record<SetupStep["status"], string> = {
 /**
  * The steps this card draws: the server's, less sample content where the project's route says
  * this reader cannot load it. A step already answered stays, since someone on this site loaded or
- * declined it. Counted again over what is drawn, so "N of M done" counts the tiles shown.
+ * declined it, and so does one this reader has just answered here (`answeredHere`), drawn done at
+ * once while the card asks for its steps again. Counted again over what is drawn, so "N of M done"
+ * counts the tiles shown.
  */
 function drawnSteps(
   steps: readonly SetupStep[],
-  seed: SeedStatus
+  seed: SeedStatus,
+  answeredHere: boolean
 ): ReturnType<typeof talliedSetup> {
   return talliedSetup(
-    steps.filter(
-      step =>
-        step.kind !== "sample" ||
-        step.status !== "open" ||
-        seed.kind !== "hidden"
-    )
+    steps.flatMap((step): SetupStep[] => {
+      if (step.kind !== "sample" || step.status !== "open") return [step];
+      if (answeredHere) return [{ kind: "sample", status: "done" }];
+      return seed.kind === "hidden" ? [] : [step];
+    })
   );
 }
 
@@ -181,12 +185,21 @@ function SampleContent({
   seed: SeedStatus;
   startSeed: () => void;
   skip: () => void;
+  /** Runs once a load has succeeded. */
   onLoaded: () => void;
 }) {
-  // The steps as they are now once a run has finished: never an earlier answer.
+  // The steps as they are now once a run has finished: never an earlier answer. Asked once per
+  // load that succeeds, however often the card is drawn while it shows that outcome.
   const loaded = seed.kind === "success";
+  const told = useRef(false);
   useEffect(() => {
-    if (loaded) onLoaded();
+    if (!loaded) {
+      told.current = false;
+      return;
+    }
+    if (told.current) return;
+    told.current = true;
+    onLoaded();
   }, [loaded, onLoaded]);
   if (seed.kind === "loading") {
     return <span className="text-xs text-muted-foreground">Checking…</span>;
@@ -376,18 +389,22 @@ function SinglesList({
 }
 
 /**
- * Asks the frame to grow the card while the Singles' list is open, so no row is cut by the
- * card's edge, and to draw it at its own rows again once the list closes.
+ * Asks the frame to draw the card as tall as its steps need while they are drawn: two rows hold
+ * 46 px of body, less than one row of tiles under the progress line, and a card never scrolls, so
+ * a tile cut by the card's edge would be lost. Measured after every draw, so the card follows the
+ * Singles' list opening and closing and a tile's actions wrapping; drawn at its own rows again
+ * when the steps are not drawn (collapsed, all set, or not known). A card only grows: one whose
+ * rows already hold its steps keeps them (`grownRows`).
  */
-function useGrowWhile(
-  open: boolean,
+function useGrowToFit(
+  drawn: boolean,
   content: React.RefObject<HTMLDivElement | null>
 ): void {
   const report = useContext(CardGrowContext);
   useLayoutEffect(() => {
     if (report === undefined) return;
-    report(open ? content.current?.offsetHeight : undefined);
-  }, [open, report, content]);
+    report(drawn ? content.current?.offsetHeight : undefined);
+  });
   useEffect(() => () => report?.(undefined), [report]);
 }
 
@@ -429,9 +446,14 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   const [collapsedHere, setCollapsedHere] = useState<boolean | undefined>();
   const collapsed = collapsedHere ?? card.collapsed;
   const [singlesOpen, setSinglesOpen] = useState(false);
+  // Sample content loaded or declined from this card: its tile is drawn done at once.
+  const [sampleAnsweredHere, setSampleAnsweredHere] = useState(false);
   const singlesListId = useId();
   const content = useRef<HTMLDivElement>(null);
-  useGrowWhile(singlesOpen && !collapsed, content);
+  const drawsSteps = card.setup.known && !card.allSet;
+  useGrowToFit(!collapsed && drawsSteps, content);
+  // One grid row while collapsed: the line below is then the whole card.
+  useCardCollapsed(collapsed && drawsSteps);
 
   if (!card.setup.known) {
     // Not known is its own answer: never drawn as steps waiting, nor as finished.
@@ -447,7 +469,7 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   }
   if (card.allSet) return <AllSet write={write} />;
 
-  const steps = drawnSteps(card.setup.steps, seed);
+  const steps = drawnSteps(card.setup.steps, seed, sampleAnsweredHere);
   if (!steps.known) return null;
   const toggleCollapsed = () => {
     setCollapsedHere(!collapsed);
@@ -458,6 +480,37 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
     (step): step is Extract<SetupStep, { kind: "singles" }> =>
       step.kind === "singles"
   );
+
+  if (collapsed) {
+    return (
+      <div
+        className="flex h-10 min-w-0 items-center gap-2"
+        data-testid="setup-card"
+      >
+        <p
+          className="min-w-0 flex-1 truncate text-sm"
+          data-testid="setup-progress"
+        >
+          {/* The frame keeps the card's title for assistive technology, which reads it as the
+              card's name; this is the same words, drawn. */}
+          <span aria-hidden="true" className="font-semibold text-foreground">
+            Set up your project
+          </span>
+          <span className="text-muted-foreground"> · {progress}</span>
+        </p>
+        {write.failed !== undefined && (
+          <p role="alert" className="shrink-0 text-xs text-destructive">
+            {write.failed}
+          </p>
+        )}
+        <CardControls
+          collapsed={collapsed}
+          write={write}
+          onToggle={toggleCollapsed}
+        />
+      </div>
+    );
+  }
 
   return (
     <div ref={content} className="grid gap-2" data-testid="setup-card">
@@ -482,37 +535,39 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
           {write.failed}
         </p>
       )}
-      {!collapsed && (
-        <>
-          {/* One row of tiles: one column per step from 640 px, two below. */}
-          <ol
-            className="grid grid-cols-2 gap-2 sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none"
-            aria-label="Setup steps"
-          >
-            {steps.steps.map((step, index) => (
-              <StepTile
-                key={step.kind}
-                step={step}
-                position={index + 1}
-                write={write}
-                singlesOpen={singlesOpen}
-                onToggleSingles={() => setSinglesOpen(open => !open)}
-                singlesListId={singlesListId}
-                sample={
-                  <SampleContent
-                    seed={seed}
-                    startSeed={startSeed}
-                    skip={skip}
-                    onLoaded={retry}
-                  />
-                }
+      {/* One row of tiles: one column per step from 640 px, two below. */}
+      <ol
+        className="grid grid-cols-2 gap-2 sm:auto-cols-fr sm:grid-flow-col sm:grid-cols-none"
+        aria-label="Setup steps"
+      >
+        {steps.steps.map((step, index) => (
+          <StepTile
+            key={step.kind}
+            step={step}
+            position={index + 1}
+            write={write}
+            singlesOpen={singlesOpen}
+            onToggleSingles={() => setSinglesOpen(open => !open)}
+            singlesListId={singlesListId}
+            sample={
+              <SampleContent
+                seed={seed}
+                startSeed={startSeed}
+                skip={() => {
+                  setSampleAnsweredHere(true);
+                  skip(retry);
+                }}
+                onLoaded={() => {
+                  setSampleAnsweredHere(true);
+                  retry();
+                }}
               />
-            ))}
-          </ol>
-          {singles !== undefined && singlesOpen && (
-            <SinglesList step={singles} id={singlesListId} />
-          )}
-        </>
+            }
+          />
+        ))}
+      </ol>
+      {singles !== undefined && singlesOpen && (
+        <SinglesList step={singles} id={singlesListId} />
       )}
     </div>
   );

@@ -6,6 +6,10 @@ import type { SetupCardData, SetupStep } from "nextly/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import {
+  CardCollapseContext,
+  type CardCollapse,
+} from "@admin/components/features/widgets/frame/collapse";
 import { CardGrowContext } from "@admin/components/features/widgets/frame/grow";
 import {
   fireEvent,
@@ -27,6 +31,7 @@ const seed = vi.hoisted(() => ({
     | { kind: "hidden" }
     | { kind: "idle"; template: { slug: string; label: string } }
     | { kind: "seeding" }
+    | { kind: "success"; result: unknown }
     | { kind: "error"; message: string },
   startSeed: vi.fn(),
   skip: vi.fn(),
@@ -77,8 +82,12 @@ function dataOf(patch: Partial<SetupCardData> = {}): SetupCardData {
 
 const retry = vi.fn();
 
-function draw(data: SetupCardData, grow?: (px: number | undefined) => void) {
-  const card = (
+function draw(
+  data: SetupCardData,
+  grow?: (px: number | undefined) => void,
+  collapse?: CardCollapse
+) {
+  const body = (
     <SetupCard
       widgetId="core/setup"
       placementId="core/setup"
@@ -89,12 +98,20 @@ function draw(data: SetupCardData, grow?: (px: number | undefined) => void) {
       retry={retry}
     />
   );
+  const grown =
+    grow === undefined ? (
+      body
+    ) : (
+      <CardGrowContext.Provider value={grow}>{body}</CardGrowContext.Provider>
+    );
   return render(
     inFrame(
-      grow === undefined ? (
-        card
+      collapse === undefined ? (
+        grown
       ) : (
-        <CardGrowContext.Provider value={grow}>{card}</CardGrowContext.Provider>
+        <CardCollapseContext.Provider value={collapse}>
+          {grown}
+        </CardCollapseContext.Provider>
       ),
       "Set up your project"
     )
@@ -149,7 +166,7 @@ describe("the setup card", () => {
     expect(singles[0]).toHaveTextContent("2 of 5 filled in");
   });
 
-  it("opens a short list of the Singles on choosing that tile, each with its state and link, and grows the card to hold it", () => {
+  it("opens a short list of the Singles on choosing that tile, each with its state and link", () => {
     const grow = vi.fn();
     draw(dataOf(), grow);
     const open = screen.getByRole("button", {
@@ -168,9 +185,16 @@ describe("the setup card", () => {
     ).toHaveAttribute("href", "/admin/singles/home");
     const footer = list.querySelector('[data-setup-single="footer"]')!;
     expect(footer).toHaveTextContent("Not filled in yet");
-    // The card asked to grow, and to be drawn at its own rows again once closed.
-    expect(grow).toHaveBeenCalledWith(expect.any(Number));
     fireEvent.click(open);
+    expect(screen.queryByRole("list", { name: /Your Singles/ })).toBeNull();
+  });
+
+  it("asks the frame to grow the card to hold its steps while they are drawn, and not while collapsed", () => {
+    const grow = vi.fn();
+    draw(dataOf(), grow);
+    // Two rows hold less than a row of tiles: the card reports what its steps need.
+    expect(grow).toHaveBeenLastCalledWith(expect.any(Number));
+    fireEvent.click(screen.getByRole("button", { name: "Collapse setup" }));
     expect(grow).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -240,6 +264,33 @@ describe("the setup card", () => {
         collapsed: false,
       })
     );
+  });
+
+  it("draws the collapsed card as one line, Set up your project · N of M done, and has the frame draw it one row tall", () => {
+    const setCollapsed = vi.fn();
+    draw(dataOf({ collapsed: true }), undefined, {
+      collapsed: true,
+      setCollapsed,
+    });
+    // Asked of the frame before the paint, so the card is one row from its first frame.
+    expect(setCollapsed).toHaveBeenLastCalledWith(true);
+    const line = screen.getByTestId("setup-progress");
+    expect(line).toHaveTextContent("Set up your project · 1 of 5 done");
+    // One line: no bar, no tiles, nothing under it.
+    expect(screen.getByTestId("setup-card").children).toHaveLength(2);
+    expect(screen.queryByRole("list", { name: "Setup steps" })).toBeNull();
+    // Opened, the frame draws the card at its own rows again.
+    fireEvent.click(screen.getByRole("button", { name: "Expand setup" }));
+    expect(setCollapsed).toHaveBeenLastCalledWith(false);
+  });
+
+  it("never asks the frame to collapse a card that is all set or could not check setup", () => {
+    const setCollapsed = vi.fn();
+    draw(dataOf({ collapsed: true, setup: { known: false } }), undefined, {
+      collapsed: false,
+      setCollapsed,
+    });
+    expect(setCollapsed).not.toHaveBeenCalledWith(true);
   });
 
   it("is drawn collapsed when the reader left it collapsed, on any device", () => {
@@ -332,6 +383,45 @@ describe("the setup card", () => {
     );
     fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
     expect(seed.startSeed).toHaveBeenCalledTimes(2);
+  });
+
+  it("draws sample content done at once on No thanks, and asks for the card again once the decline lands", () => {
+    draw(dataOf());
+    fireEvent.click(
+      within(tiles()[0]!).getByRole("button", { name: "No thanks" })
+    );
+    // Done here and counted, before any answer: never gone, then back.
+    expect(tiles()[0]).toHaveAttribute("data-status", "done");
+    expect(screen.getByTestId("setup-progress")).toHaveTextContent(
+      "2 of 5 done"
+    );
+    expect(retry).not.toHaveBeenCalled();
+    // The decline is recorded, and the card asks for its steps as they now are.
+    const [onRecorded] = seed.skip.mock.calls[0] as [() => void];
+    onRecorded();
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks for the card again once per load that succeeds, however often it is drawn", () => {
+    seed.status = { kind: "success", result: {} };
+    const { rerender } = draw(dataOf());
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(tiles()[0]).toHaveAttribute("data-status", "done");
+    rerender(
+      inFrame(
+        <SetupCard
+          widgetId="core/setup"
+          placementId="core/setup"
+          settings={{}}
+          size={{ w: 12, h: 2, tier: "large" }}
+          data={dataOf()}
+          refreshing={false}
+          retry={retry}
+        />,
+        "Set up your project"
+      )
+    );
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it("says a sample-content run is under way inside its tile", () => {

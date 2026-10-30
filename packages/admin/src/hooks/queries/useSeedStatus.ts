@@ -39,7 +39,11 @@ export type SeedStatus =
 interface UseSeedStatusReturn {
   status: SeedStatus;
   startSeed: () => void;
-  skip: () => void;
+  /**
+   * Decline sample content for the site. `onRecorded` runs once the decline
+   * has landed, so a card drawn from it can ask for its steps again.
+   */
+  skip: (onRecorded?: () => void) => void;
 }
 
 const QK_PROBE = ["seed", "probe"] as const;
@@ -127,6 +131,9 @@ export function useSeedStatus(): UseSeedStatusReturn {
   return {
     status,
     startSeed: () => seedMut.mutate(),
-    skip: () => skipMut.mutate(),
+    skip: onRecorded =>
+      skipMut.mutate(undefined, {
+        ...(onRecorded === undefined ? {} : { onSuccess: () => onRecorded() }),
+      }),
   };
 }
