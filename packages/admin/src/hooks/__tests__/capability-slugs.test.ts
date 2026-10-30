@@ -59,7 +59,7 @@ describe("a grant reveals the section it belongs to", () => {
     ["read-users", "canViewUsers"],
     ["read-roles", "canViewRoles"],
     ["read-media", "canViewMedia"],
-    ["manage-settings", "canViewSettings"],
+    ["read-settings", "canViewSettings"],
     ["read-webhooks", "canViewWebhooks"],
     ["read-content-releases", "canViewReleases"],
   ] as const)("%s reveals %s", (slug, flag) => {
@@ -70,8 +70,11 @@ describe("a grant reveals the section it belongs to", () => {
 describe("an UMBRELLA grant reveals what it covers", () => {
   // The half with no coverage before, and the half a table makes easy to get
   // wrong: these slugs reveal a section without being its `read-` slug.
-  it("manage-media reveals the media section", () => {
-    expect(from("manage-media").canViewMedia).toBe(true);
+  it("a retired manage- grant reveals nothing, as the server counts it for nothing", () => {
+    // A role not yet converted by `nextly upgrade` is refused every plain
+    // action there, so no section it would open is offered.
+    expect(from("manage-media").canViewMedia).toBe(false);
+    expect(from("manage-settings").canViewSettings).toBe(false);
   });
 
   it("an api-key grant that opens a screen reveals settings", () => {
@@ -83,7 +86,7 @@ describe("an UMBRELLA grant reveals what it covers", () => {
   // Email is its own area now, with its own rail entry, so an email grant
   // opens nothing in the Settings panel and must not reveal it.
   it("an email grant does not reveal settings", () => {
-    for (const slug of ["manage-email-providers", "manage-email-templates"]) {
+    for (const slug of ["read-email-providers", "read-email-templates"]) {
       expect(from(slug).canViewSettings, slug).toBe(false);
     }
   });
@@ -92,7 +95,7 @@ describe("an UMBRELLA grant reveals what it covers", () => {
    * The other half, and the reason this list is not simply every slug naming
    * the resource. `canViewSettings` shows the rail entry AND opens
    * `/admin/settings`, whose page is General Settings — which answers to
-   * `manage-settings` and returns 403 without it. So a grant belongs here only
+   * `read-settings` and returns 403 without it. So a grant belongs here only
    * if it opens a destination IN the panel.
    *
    * `create-` and `delete-api-keys` do not: the panel's only api-key entry is

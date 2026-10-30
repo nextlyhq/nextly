@@ -9,9 +9,17 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import { withBuilderForeignKeys } from "../builder-foreign-keys";
+import {
+  withBuilderForeignKeys,
+  withoutKeysOnKeylessRenames,
+} from "../builder-foreign-keys";
 import { desiredCollectionTable } from "../desired-collection-table";
-import type { ForeignKeySpec, TableSpec } from "../diff/types";
+import type {
+  ForeignKeySpec,
+  NextlySchemaSnapshot,
+  Operation,
+  TableSpec,
+} from "../diff/types";
 import type { DesiredCollection } from "../types";
 
 const TABLE = "dc_posts";
@@ -23,12 +31,25 @@ const author = (options: Record<string, unknown>, required = false) => ({
   options: { target: "authors", relationType: "manyToOne", ...options },
 });
 
-function collection(fields: unknown[], builderOwned = true): DesiredCollection {
+const TITLE = { name: "title", type: "text" };
+
+/** `author` under another name, as a rename leaves it. */
+const writer = (options: Record<string, unknown> = {}) => ({
+  ...author(options),
+  name: "writer",
+});
+
+function collection(
+  fields: unknown[],
+  builderOwned = true,
+  recordedFields?: readonly unknown[]
+): DesiredCollection {
   return {
     slug: "posts",
     tableName: TABLE,
     fields: fields as never,
     builderOwned,
+    ...(recordedFields ? { recordedFields: recordedFields as never } : {}),
   };
 }
 
@@ -78,6 +99,56 @@ describe("withBuilderForeignKeys", () => {
     expect(keysFor(collection(fields), live(fields, []))).toEqual([]);
   });
 
+  // MySQL commits each schema statement, so an apply that added a relationship's column can stop
+  // before its key. The registry still records the fields from before, so the next apply sees a
+  // field it adds over a column that is already there, and creates the key the first one did not.
+  it("adds the key of a relationship this change adds whose column an earlier apply left without one", () => {
+    const fields = [{ name: "title", type: "text" }, author({})];
+    expect(
+      keysFor(collection(fields, true, [TITLE]), live(fields, []))
+    ).toEqual([LIVE_KEY]);
+  });
+
+  it("leaves a recorded relationship without a key as it was", () => {
+    const fields = [{ name: "title", type: "text" }, author({})];
+    expect(
+      keysFor(collection(fields, true, [TITLE, author({})]), live(fields, []))
+    ).toEqual([]);
+  });
+
+  // MySQL commits a rename on its own, so an apply can rename a relationship's column and stop
+  // before the registry learns the new name. The next apply has no rename to answer: the registry
+  // records the old name, the change has the new one, and its column is already in place.
+  it("plans no key on a relationship an earlier apply renamed", () => {
+    expect(
+      keysFor(
+        collection([TITLE, writer()], true, [TITLE, author({})]),
+        live([TITLE, writer()], [])
+      )
+    ).toEqual([]);
+  });
+
+  it("keys a relationship the change adds while a recorded one to another table is gone", () => {
+    expect(
+      keysFor(
+        collection([TITLE, writer()], true, [
+          TITLE,
+          author({ target: "editors" }),
+        ]),
+        live([TITLE, writer()], [])
+      )
+    ).toEqual([expect.objectContaining({ columns: ["writer"] })]);
+  });
+
+  it("keys a relationship the change adds while the recorded one keeps its column", () => {
+    expect(
+      keysFor(
+        collection([TITLE, writer()], true, [TITLE, author({})]),
+        live([TITLE, author({}), writer()], [])
+      )
+    ).toEqual([expect.objectContaining({ columns: ["writer"] })]);
+  });
+
   it("reads a legacy relationship without judging it", () => {
     // Required and nulled on delete: impossible to create, but stored by an
     // older save. Every later save of the collection visits it.
@@ -115,5 +186,70 @@ describe("withBuilderForeignKeys", () => {
   it("leaves a code-first collection's table as it was", () => {
     const desired = collection([author({})], false);
     expect(keysFor(desired, live([author({})], [LIVE_KEY]))).toBeUndefined();
+  });
+});
+
+describe("withoutKeysOnKeylessRenames", () => {
+  const key = (column: string): ForeignKeySpec => ({
+    name: `fk_dc_posts_${column}`,
+    columns: [column],
+    referencesTable: "dc_authors",
+    referencesColumns: ["id"],
+    onDelete: "set null",
+    onUpdate: "no action",
+  });
+  const table = (keys: ForeignKeySpec[]): TableSpec => ({
+    name: TABLE,
+    columns: [],
+    foreignKeys: keys,
+  });
+  const snapshot = (keys: ForeignKeySpec[]): NextlySchemaSnapshot => ({
+    tables: [table(keys)],
+  });
+  const renamed: Operation = {
+    type: "rename_column",
+    tableName: TABLE,
+    fromColumn: "author",
+    toColumn: "writer",
+    fromType: "text",
+    toType: "text",
+  };
+  const added: Operation = {
+    type: "add_foreign_key",
+    tableName: TABLE,
+    foreignKey: key("writer"),
+  };
+
+  it("takes back the key planned on a renamed column whose old column had none", () => {
+    const planned = withoutKeysOnKeylessRenames(
+      [renamed, added],
+      snapshot([key("writer")]),
+      snapshot([]),
+      new Set([TABLE])
+    );
+    expect(planned.operations).toEqual([renamed]);
+    expect(planned.desired.tables[0].foreignKeys).toEqual([]);
+  });
+
+  it("keeps the key when the old column had one", () => {
+    const planned = withoutKeysOnKeylessRenames(
+      [renamed, added],
+      snapshot([key("writer")]),
+      snapshot([key("author")]),
+      new Set([TABLE])
+    );
+    expect(planned.operations).toEqual([renamed, added]);
+    expect(planned.desired.tables[0].foreignKeys).toEqual([key("writer")]);
+  });
+
+  it("keeps a key a table the Builder does not own declares", () => {
+    const planned = withoutKeysOnKeylessRenames(
+      [renamed, added],
+      snapshot([key("writer")]),
+      snapshot([]),
+      new Set()
+    );
+    expect(planned.operations).toEqual([renamed, added]);
+    expect(planned.desired.tables[0].foreignKeys).toEqual([key("writer")]);
   });
 });

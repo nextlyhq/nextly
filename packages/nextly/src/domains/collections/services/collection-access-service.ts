@@ -17,6 +17,10 @@ import {
   collectionGateVerdict,
   type GateVerdict,
 } from "../../../auth/access/gate-adapters";
+import {
+  ownDatabaseVisitor,
+  visitorWithoutAccessService,
+} from "../../../auth/access/own-database-visitor";
 import { refusalMessageFor } from "../../../auth/access/refusal-message";
 import type { RuleFilter } from "../../../auth/access/rule-answer";
 import { askReadAsPlainRead } from "../../../auth/access/rule-language";
@@ -33,6 +37,7 @@ import type { AccessOperation } from "../../../services/access";
 import { hasPermission } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import type { VisitorGrantsLoader } from "../../../shared/lib/field-level-registry";
 
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import type { ReadReach } from "./write-filter-match";
@@ -41,7 +46,7 @@ import type { ReadReach } from "./write-filter-match";
  * The writes that limit themselves to the entries a write rule's filter
  * matches, by matching the entry they change against it under its lock.
  */
-export type FilteredWrite = "delete";
+export type FilteredWrite = "delete" | "update" | "publish" | "unpublish";
 
 /** What the collection gate is asked about a caller and an operation. */
 interface CollectionAccessParams {
@@ -79,6 +84,31 @@ export class CollectionAccessService extends BaseService {
     private readonly rbacAccessControlService?: RBACAccessControlService
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * The visitor as this service's own database records it, built by the one
+   * builder the Single services use too. The loader this gate, the
+   * relationship reads over the same database and the field rules judged on
+   * it share, so none of them reads Public elsewhere.
+   */
+  readonly ownDatabaseVisitor: VisitorGrantsLoader = ownDatabaseVisitor({
+    adapter: this.adapter,
+    logger: this.logger,
+    db: () => this.db,
+  });
+
+  /**
+   * Where the field rules of a read or write through this service read a
+   * visitor's Public grants, as this gate reads them (`visitorOf`): this
+   * database without an access-control service, and with one undefined, so
+   * they read the process's cached copy as the gate then does.
+   */
+  get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    return visitorWithoutAccessService(
+      this.rbacAccessControlService,
+      this.ownDatabaseVisitor
+    );
   }
 
   /**
@@ -168,8 +198,11 @@ export class CollectionAccessService extends BaseService {
     // What the caller may read decides how an entry outside the filter is
     // refused, so it is asked as the reads that apply a filter ask it, and
     // as a plain read is: in the default language and its fallbacks, not
-    // every language the write acts in.
-    const read = await askReadAsPlainRead(ask);
+    // every language the write acts in, and of the caller itself, since a
+    // route that authorized the write judged the write and not a read.
+    const read = await askReadAsPlainRead(
+      this.gateFor({ ...params, routeAuthorized: false }, true)
+    );
     if (!read.allowed && read.refusal === "failed") {
       return {
         denied: this.accessUnreadable<T>(read.error, {
@@ -189,7 +222,12 @@ export class CollectionAccessService extends BaseService {
    */
   async refusalOutsideFilter<T>(
     params: CollectionAccessParams,
-    readsEntry: boolean
+    readsEntry: boolean,
+    /**
+     * The write would have moved the entry out of the filter: the entry was
+     * inside it, so the caller could see it, and is told in words.
+     */
+    afterWrite = false
   ): Promise<CollectionServiceResult<T>> {
     const { collectionName, operation, executor } = params;
     if (!readsEntry) {
@@ -205,7 +243,9 @@ export class CollectionAccessService extends BaseService {
       unauthenticated: false,
       namesOne: true,
       executor,
-      reason: `the entry is outside the caller's ${operation} filter`,
+      reason: afterWrite
+        ? `the ${operation} would move the entry outside the caller's ${operation} filter`
+        : `the entry is outside the caller's ${operation} filter`,
     });
   }
 
@@ -254,6 +294,8 @@ export class CollectionAccessService extends BaseService {
             executor ?? this.db,
             this.dialect
           ),
+        // A visitor likewise: the Public role as this database records it.
+        visitorWithoutService: () => this.ownDatabaseVisitor(executor),
       });
   }
 

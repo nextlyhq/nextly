@@ -572,7 +572,10 @@ async function authorizeBy(
     auth: AuthContext,
     action: string,
     resource: string,
-    rules: RouteRules
+    rules: RouteRules,
+    // Whether the route's handler applies a read rule's filter; a verdict on
+    // the grant alone reads no rule, and has no filter to hand back.
+    appliesFilter?: boolean
   ) => Promise<GateVerdict>,
   authResult: AuthContext,
   action: string,
@@ -939,6 +942,23 @@ export interface RouteOperation {
    * the filter to what it reads.
    */
   appliesReadFilter?: boolean;
+  /**
+   * The route's handler is an entry write whose service matches the entry
+   * against a write rule's filter, so a caller whose rule answers one is let
+   * through on it, the filter kept for the write to apply. Set only by a
+   * route that does.
+   */
+  appliesWriteFilter?: boolean;
+}
+
+/** Whether `operation` applies the filter a rule answers for `action`. */
+function appliesFilterFor(
+  action: string,
+  operation: RouteOperation | undefined
+): boolean {
+  return action === "read"
+    ? operation?.appliesReadFilter === true
+    : operation?.appliesWriteFilter === true;
 }
 
 /**
@@ -981,7 +1001,7 @@ export async function requireCollectionAccess(
       // A route naming one entry is refused about that entry. Named by the
       // route, never by a parameter: a query can carry an `entryId` too.
       operation?.namesOne ? "one" : "all",
-      action === "read" && operation?.appliesReadFilter === true
+      appliesFilterFor(action, operation)
     )
   );
 }
@@ -1065,7 +1085,8 @@ export async function requireCollectionWriteAccess(
       authResult,
       "update",
       collectionSlug,
-      scope
+      scope,
+      appliesFilterFor("update", operation)
     );
     if (!isErrorResponse(asUpdate)) {
       admittedActions.set(asUpdate, "update");
@@ -1080,7 +1101,16 @@ export async function requireCollectionWriteAccess(
         : authorizeCaller;
     const refusals = new Map<"publish" | "unpublish", ErrorResponse>();
     for (const action of ["publish", "unpublish"] as const) {
-      const answer = await authorize(authResult, action, collectionSlug, scope);
+      const answer =
+        authorize === authorizeCaller
+          ? await authorizeCaller(
+              authResult,
+              action,
+              collectionSlug,
+              scope,
+              appliesFilterFor(action, operation)
+            )
+          : await authorize(authResult, action, collectionSlug, scope);
       if (!isErrorResponse(answer)) {
         admittedActions.set(answer, action);
         return answer;

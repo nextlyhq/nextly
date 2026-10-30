@@ -165,8 +165,7 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
 }));
 
 vi.mock("@admin/hooks/useCurrentUserPermissions", async () => {
-  // Asked as the product asks: a `manage-` permission counts as the plain
-  // ones it stands for.
+  // Asked as the product asks it.
   const { holdsPermission } = await import(
     "@admin/lib/permissions/holds-permission"
   );
@@ -222,7 +221,13 @@ beforeEach(() => {
   getDocument.mockReset();
   getDocument.mockResolvedValue({ id: "s", updatedAt: "", tokens: SITE_STYLE });
   grants.clear();
-  grants.add("manage-email-templates");
+  for (const slug of [
+    "read-email-templates",
+    "create-email-templates",
+    "update-email-templates",
+    "delete-email-templates",
+  ])
+    grants.add(slug);
   overview.current = OVERVIEW;
 });
 
