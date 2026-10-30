@@ -15,7 +15,10 @@ import { describe, expect, it } from "vitest";
 import { CORE_WIDGET_IDS } from "../core-widgets/ids";
 
 /** The removed ids, each beside the core widget that took its place. */
-const REMOVED = [["core/recent-activity", "core/team-activity"]] as const;
+const REMOVED = [
+  ["core/recent-activity", "core/team-activity"],
+  ["core/recently-edited", "core/continue"],
+] as const;
 
 const PACKAGES = path.resolve(__dirname, "../../../../..");
 /** The files that may name a removed id: the tests asserting its absence. */

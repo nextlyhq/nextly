@@ -49,6 +49,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { WIDGET_QUERIES_KEY } from "./widget-queries-key";
 import {
   fetchWidgetBatch,
   type CardAsk,
@@ -1098,7 +1099,7 @@ export function useWidgetQueries(
       // TanStack hashes the array deterministically, so a re-render with an equal-but-new
       // array does not refetch. `sized` is left out so a change of tier is not a new question;
       // see `WidgetQueryRequest.sized`.
-      queryKey: ["dashboard", "widget-queries", partition.map(unsized)],
+      queryKey: [...WIDGET_QUERIES_KEY, partition.map(unsized)],
       // Built from this render's partition, and TanStack runs the latest observer's function,
       // so a refetch sends each card's CURRENT tier. The signal is TanStack's own, so a
       // dashboard the reader leaves stops reading, and the server gives up the batch.

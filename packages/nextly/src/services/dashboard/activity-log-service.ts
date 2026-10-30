@@ -379,6 +379,48 @@ function collectionsKeptOffClause(
   };
 }
 
+/**
+ * The conditions that keep the saves of one person (`savedBy`) or every save
+ * but theirs (`notSavedBy`), from one statement of what "a person's save" is,
+ * so the two are exact complements: a row written before the kind was
+ * recorded is a person's; an API key's save is never one, whatever its id.
+ */
+function saverConditions(
+  options: Pick<RecentEditsOptions, "savedBy" | "notSavedBy">
+): WhereClause[] {
+  const conditions: WhereClause[] = [];
+  const byPerson = (id: string): WhereClause => ({
+    and: [
+      { column: "userId", op: "=", value: id },
+      {
+        or: [
+          { column: "actorType", op: "IS NULL" },
+          { column: "actorType", op: "=", value: "user" },
+        ],
+      },
+    ],
+  });
+  if (options.savedBy !== undefined) {
+    conditions.push(byPerson(options.savedBy));
+  }
+  if (options.notSavedBy !== undefined) {
+    // NOT of the person's condition, spelled out: a NULL `userId` is nobody's.
+    conditions.push({
+      or: [
+        { column: "userId", op: "IS NULL" },
+        { column: "userId", op: "!=", value: options.notSavedBy },
+        {
+          and: [
+            { column: "actorType", op: "IS NOT NULL" },
+            { column: "actorType", op: "!=", value: "user" },
+          ],
+        },
+      ],
+    });
+  }
+  return conditions;
+}
+
 /** Options for the documents most recently saved; see `getRecentEdits`. */
 export interface RecentEditsOptions {
   /** How many documents the card shows; clamped as every widget query is. */
@@ -396,6 +438,11 @@ export interface RecentEditsOptions {
    * key never matches it, though a key's id and a person's could be equal.
    */
   savedBy?: string;
+  /**
+   * Only saves this person did NOT make: every other person's, and every API
+   * key's, whatever its id. The exact complement of `savedBy` for the same id.
+   */
+  notSavedBy?: string;
 }
 
 /**
@@ -1385,18 +1432,7 @@ export class ActivityLogService extends BaseService {
                 ],
               },
             ]),
-        ...(options.savedBy === undefined
-          ? []
-          : [
-              { column: "userId", op: "=" as const, value: options.savedBy },
-              // A row written before the kind was recorded is a person's.
-              {
-                or: [
-                  { column: "actorType", op: "IS NULL" as const },
-                  { column: "actorType", op: "=" as const, value: "user" },
-                ],
-              },
-            ]),
+        ...saverConditions(options),
       ],
     };
     try {

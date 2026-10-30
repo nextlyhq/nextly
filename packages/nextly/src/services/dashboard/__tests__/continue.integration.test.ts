@@ -1,14 +1,17 @@
 /**
- * Recently edited, from the activity trail, through a booted instance on every
- * dialect.
+ * Continue where you left off, from the reader's pins and the activity trail,
+ * through a booted instance on every dialect.
  *
  * What only a booted instance shows: the real write paths record what makes a
  * save a save (a publish marks its row, a held edit is recorded as the edit it
  * is, a Single names the fields it changed), and the card's source reads them
  * back one row per document, across every collection the reader may read and
- * no cap on how many, as that reader, each with its status now.
+ * no cap on how many, as that reader, each titled as they read it now: Mine
+ * with their pins first, Team with everyone else's saves. A reader who has
+ * saved nothing (Cleo) reads every save on Team, which is how the trail's own
+ * cases are asked here.
  *
- * @module services/dashboard/__tests__/recently-edited.integration.test
+ * @module services/dashboard/__tests__/continue.integration.test
  */
 
 import { randomUUID } from "crypto";
@@ -37,12 +40,15 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../readable-resources";
-import { RECENT_EDITS_SOURCE_ID } from "../recent-edits-widget-source";
+import { CONTINUE_SOURCE_ID } from "../continue-widget-source";
+import { dashboardPinsService } from "../dashboard-pins-service";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run on a reused database.
 const NOTES = "re_notes";
 const PAGES = "re_pages";
 const SECRET = "re_secret";
+/** A collection whose read rule refuses whoever a test names, between two reads. */
+const GATED = "re_gated";
 const HOME = "re-home";
 /** A Single with Draft/Published, saved but never published. */
 const ABOUT = "re-about";
@@ -55,6 +61,11 @@ const ANA = { id: "re-ana", name: "Ana", email: "ana@re.test" };
 const BEN = { id: "re-ben", name: "Ben", email: "ben@re.test" };
 /** The one person `SECRET`'s rule lets read it. */
 const BOSS = { id: "re-boss", name: "Boss", email: "boss@re.test" };
+/** A reader who saves nothing, so Team shows her every save she may read. */
+const CLEO = { id: "re-cleo", name: "Cleo", email: "cleo@re.test" };
+
+/** Readers `GATED`'s rule refuses, changed by a test. */
+const refused = new Set<string>();
 
 const T0 = Date.parse("2026-10-23T12:00:00Z");
 /** `minutes` before T0. */
@@ -63,6 +74,7 @@ const at = (minutes: number) => new Date(T0 - minutes * 60_000);
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  refused.clear();
   await current?.destroy();
   current = undefined;
 });
@@ -93,6 +105,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         versions: true,
         access: { read: () => true },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: GATED,
+        access: {
+          read: ({ user }: { user?: { id?: string } | null }) =>
+            !refused.has(user?.id ?? ""),
+        },
         fields: [text({ name: "title" })],
       }),
       defineCollection({
@@ -142,7 +162,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     ],
   });
   current = t;
-  for (const person of [ANA, BEN, BOSS]) {
+  for (const person of [ANA, BEN, BOSS, CLEO]) {
     await t.adapter.insert("users", { ...person, is_active: true });
     // A code rule only narrows the permission, so each reader holds read on
     // every collection and Single here and the rules decide what they see.
@@ -150,10 +170,39 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       NOTES,
       PAGES,
       SECRET,
+      GATED,
       ...MANY,
       HOME,
       ABOUT,
     ]);
+  }
+  return t;
+}
+
+/** A collection whose entries are written in each of the site's languages. */
+const INTL = "re_intl";
+
+/**
+ * A site in English and French with one localized collection, its title
+ * per language: apart from `boot`, so no other case runs on a localized site.
+ */
+async function bootLocalized(dialect: TestDialect): Promise<TestNextly> {
+  const t = await createTestNextly({
+    dialect,
+    collections: [
+      defineCollection({
+        slug: INTL,
+        localized: true,
+        access: { read: () => true },
+        fields: [text({ name: "title", localized: true })],
+      }),
+    ],
+    localization: { locales: ["en", "fr"], defaultLocale: "en" },
+  });
+  current = t;
+  for (const person of [ANA, CLEO]) {
+    await t.adapter.insert("users", { ...person, is_active: true });
+    await grantTo(t, person.id, "read", [INTL]);
   }
   return t;
 }
@@ -247,16 +296,37 @@ const as = (person: { id: string }): ReadCaller => ({
   user: { id: person.id, roles: [] },
 });
 
-async function recentlyEdited(
+/** The card's answer for `caller` on `tab`, whole, as the batch hands it on. */
+function asked(
   caller: ReadCaller,
+  tab: "mine" | "team",
   query: Partial<WidgetQuery> = {}
-): Promise<Record<string, unknown>[]> {
-  const answer: WidgetResult = await executeWidgetQuery(
-    { source: RECENT_EDITS_SOURCE_ID, op: "list", limit: 25, ...query },
+): Promise<WidgetResult> {
+  return executeWidgetQuery(
+    {
+      source: CONTINUE_SOURCE_ID,
+      op: "list",
+      limit: 25,
+      where: { tab },
+      ...query,
+    },
     caller
   );
+}
+
+/** The rows of the card for `caller` on `tab`. */
+async function rowsOf(
+  caller: ReadCaller,
+  tab: "mine" | "team"
+): Promise<Record<string, unknown>[]> {
+  const answer = await asked(caller, tab);
   return answer.op === "list" ? answer.items : [];
 }
+
+/** Every save but the reader's, newest first: Team. */
+const team = (caller: ReadCaller) => rowsOf(caller, "team");
+/** The reader's pins, then their own saves: Mine. */
+const mine = (caller: ReadCaller) => rowsOf(caller, "mine");
 
 const metadataOf = (row: TrailRow): Record<string, unknown> =>
   typeof row.metadata === "string"
@@ -264,7 +334,7 @@ const metadataOf = (row: TrailRow): Record<string, unknown> =>
     : (row.metadata ?? {});
 
 describe.each(getConfiguredTestDialects())(
-  "Recently edited from the activity trail (integration, %s)",
+  "Continue where you left off (integration, %s)",
   dialect => {
     it("lists the latest save of each document across more than twenty collections, newest first", async () => {
       const t = await boot(dialect);
@@ -273,7 +343,7 @@ describe.each(getConfiguredTestDialects())(
         ids.push(await create(t, ANA, slug, { title: `Doc ${i}` }, at(i + 1)));
       }
 
-      const rows = await recentlyEdited(as(ANA));
+      const rows = await team(as(CLEO));
       // 🔴 Every one of the twenty-two: the read it replaces stopped at twenty
       // collections, so the oldest two never appeared.
       expect(rows.map(row => row.entryId)).toEqual(ids);
@@ -292,7 +362,7 @@ describe.each(getConfiguredTestDialects())(
       await save(t, ANA, NOTES, id, { title: "two" }, at(5));
       const [latest] = await save(t, BEN, NOTES, id, { title: "three" }, at(1));
 
-      const rows = await recentlyEdited(as(ANA));
+      const rows = await team(as(CLEO));
       expect(rows.map(row => [row.entryId, row.id, row.userId])).toEqual([
         [id, latest!.id, BEN.id],
       ]);
@@ -306,11 +376,11 @@ describe.each(getConfiguredTestDialects())(
       // A publish on its own: the status and the write's own stamps change.
       await save(t, BEN, NOTES, id, { status: "published" }, at(1));
 
-      const rows = await recentlyEdited(as(ANA));
+      const rows = await team(as(CLEO));
       expect(rows.map(row => [row.id, row.userId, row.status])).toEqual([
         [edit!.id, ANA.id, "published"],
       ]);
-      expect(rows[0]?.createdAt).toBe(at(5).toISOString());
+      expect(rows[0]?.editedAt).toBe(at(5).toISOString());
     });
 
     it("shows a held edit of a published page as changes not published, until a promotion puts it live", async () => {
@@ -325,7 +395,7 @@ describe.each(getConfiguredTestDialects())(
       // No `status`: held as a working draft on the published page.
       const [held] = await save(t, ANA, PAGES, id, { title: "pending" }, at(5));
 
-      const pending = await recentlyEdited(as(BEN));
+      const pending = await team(as(CLEO));
       expect(pending.map(row => [row.id, row.userId])).toEqual([
         [held!.id, ANA.id],
       ]);
@@ -346,7 +416,7 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(metadataOf(promotion!)).toMatchObject({ published: true });
 
-      const live = await recentlyEdited(as(BEN));
+      const live = await team(as(CLEO));
       // 🔴 Still Ana's save at its own time: the promotion published her edits
       // and made none of its own.
       expect(live.map(row => [row.id, row.userId])).toEqual([
@@ -384,9 +454,9 @@ describe.each(getConfiguredTestDialects())(
         published: true,
         publishedWithEdits: true,
       });
-      expect(
-        (await recentlyEdited(as(BEN))).map(row => [row.id, row.userId])
-      ).toEqual([[publish!.id, BEN.id]]);
+      expect((await team(as(CLEO))).map(row => [row.id, row.userId])).toEqual([
+        [publish!.id, BEN.id],
+      ]);
     });
 
     it("keeps the editor's row when the publish only echoes the draft back", async () => {
@@ -412,9 +482,9 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(metadataOf(publish!)).toMatchObject({ published: true });
       expect(metadataOf(publish!)).not.toHaveProperty("publishedWithEdits");
-      expect(
-        (await recentlyEdited(as(BEN))).map(row => [row.id, row.userId])
-      ).toEqual([[held!.id, ANA.id]]);
+      expect((await team(as(CLEO))).map(row => [row.id, row.userId])).toEqual([
+        [held!.id, ANA.id],
+      ]);
     });
 
     it("labels a Single saved as a draft with its status", async () => {
@@ -436,7 +506,7 @@ describe.each(getConfiguredTestDialects())(
       // Read as the reader, in every state: a draft is read, not reported
       // missing, so its row says "draft" rather than nothing.
       expect(
-        (await recentlyEdited(as(ANA))).map(row => [row.collection, row.status])
+        (await team(as(CLEO))).map(row => [row.collection, row.status])
       ).toEqual([[ABOUT, "draft"]]);
     });
 
@@ -511,16 +581,16 @@ describe.each(getConfiguredTestDialects())(
     it("fills the card from older readable saves when the newest are all of a collection the reader may not read", async () => {
       const t = await boot(dialect);
       const readable = await create(t, ANA, NOTES, { title: "mine" }, at(500));
-      const secret = await create(t, BOSS, SECRET, { title: "hush" }, at(400));
+      const secret = await create(t, BEN, SECRET, { title: "hush" }, at(400));
       // More than one page of the walk, every one a save Ana may not read.
       await t.adapter.insertMany(
         "activity_log",
         Array.from({ length: 150 }, (_, i) => ({
           id: randomUUID(),
           actor_type: "user",
-          user_id: BOSS.id,
-          user_name: BOSS.name,
-          user_email: BOSS.email,
+          user_id: BEN.id,
+          user_name: BEN.name,
+          user_email: BEN.email,
           action: "update",
           collection: SECRET,
           entry_id: secret,
@@ -531,17 +601,17 @@ describe.each(getConfiguredTestDialects())(
         }))
       );
 
-      expect((await recentlyEdited(as(ANA))).map(row => row.entryId)).toEqual([
+      expect((await team(as(CLEO))).map(row => row.entryId)).toEqual([
         readable,
       ]);
       // The control: the reader the rule lets in sees the secret first.
-      expect((await recentlyEdited(as(BOSS))).map(row => row.entryId)).toEqual([
+      expect((await team(as(BOSS))).map(row => row.entryId)).toEqual([
         secret,
         readable,
       ]);
     });
 
-    it("narrows to the reader's own saves and to one collection, and never takes a key's save for a person's", async () => {
+    it("puts the reader's own saves on Mine and everyone else's on Team, and never takes a key's save for a person's", async () => {
       const t = await boot(dialect);
       const anas = await create(t, ANA, NOTES, { title: "Ana's" }, at(30));
       const bens = await create(t, BEN, NOTES, { title: "Ben's" }, at(20));
@@ -564,16 +634,15 @@ describe.each(getConfiguredTestDialects())(
         metadata: { changedFields: ["title"] },
       });
 
+      expect((await mine(as(ANA))).map(row => row.entryId)).toEqual([
+        other,
+        anas,
+      ]);
+      // 🔴 The key's save of Ben's note is the latest that is not Ana's own,
+      // however its id compares with hers.
       expect(
-        (await recentlyEdited(as(ANA), { where: { onlyMine: true } })).map(
-          row => row.entryId
-        )
-      ).toEqual([other, anas]);
-      expect(
-        (await recentlyEdited(as(ANA), { where: { collection: NOTES } })).map(
-          row => row.entryId
-        )
-      ).toEqual([bens, anas]);
+        (await team(as(ANA))).map(row => [row.entryId, row.actorType])
+      ).toEqual([[bens, "apiKey"]]);
     });
 
     it("names the fields a Single's save changed, a component's included, with neither webhooks nor audit on", async () => {
@@ -618,11 +687,123 @@ describe.each(getConfiguredTestDialects())(
         outboxBefore
       );
       expect(
-        (await recentlyEdited(as(ANA))).map(edit => [
-          edit.subjectKind,
-          edit.collection,
-        ])
+        (await team(as(CLEO))).map(edit => [edit.subjectKind, edit.collection])
       ).toEqual([["single", HOME]]);
+    });
+
+    it("lists Mine's pins first and the reader's saves after, and Team's saves by others, each entry once", async () => {
+      const t = await boot(dialect);
+      // Saved three times by Ana: one row on her Mine.
+      const own = await create(t, ANA, NOTES, { title: "Own" }, at(30));
+      await save(t, ANA, NOTES, own, { title: "Own two" }, at(25));
+      await save(t, ANA, NOTES, own, { title: "Own three" }, at(20));
+      // Ben's, pinned by Ana.
+      const pinned = await create(t, BEN, NOTES, { title: "Pinned" }, at(15));
+      // Ben's, saved twice: one row on Ana's Team.
+      const bens = await create(t, BEN, NOTES, { title: "Ben's" }, at(10));
+      await save(t, BEN, NOTES, bens, { title: "Ben's two" }, at(5));
+      await dashboardPinsService().pin(as(ANA), {
+        targetType: "collection",
+        targetSlug: NOTES,
+        entryId: pinned,
+      });
+
+      const ownRows = await mine(as(ANA));
+      expect(ownRows.map(row => [row.entryId, row.pinned])).toEqual([
+        [pinned, true],
+        [own, false],
+      ]);
+      expect(ownRows[1]).toMatchObject({ entryTitle: "Own three" });
+
+      const others = await team(as(ANA));
+      expect(
+        others.map(row => [row.entryId, row.userName, row.pinned])
+      ).toEqual([
+        [bens, BEN.name, false],
+        [pinned, BEN.name, true],
+      ]);
+      // Each entry once on each tab.
+      for (const rows of [ownRows, others]) {
+        const ids = rows.map(row => row.entryId);
+        expect(new Set(ids).size).toBe(ids.length);
+      }
+    });
+
+    it("leaves out, title and all, an entry the reader may no longer read, and one that is deleted", async () => {
+      const t = await boot(dialect);
+      const gated = await create(
+        t,
+        ANA,
+        GATED,
+        { title: "Gated plan" },
+        at(20)
+      );
+      const doomed = await create(t, ANA, NOTES, { title: "Doomed" }, at(10));
+      await dashboardPinsService().pin(as(BEN), {
+        targetType: "collection",
+        targetSlug: GATED,
+        entryId: gated,
+      });
+
+      // The control: before the change, Ben reads both, and his pin.
+      expect((await team(as(BEN))).map(row => row.entryId)).toEqual([
+        doomed,
+        gated,
+      ]);
+      expect((await mine(as(BEN))).map(row => row.entryId)).toEqual([gated]);
+
+      refused.add(BEN.id);
+      await t.nextly.delete({ collection: NOTES, id: doomed });
+
+      // 🔴 Neither row, nor its title anywhere in the answer, on either tab.
+      for (const tab of ["team", "mine"] as const) {
+        const answer = await asked(as(BEN), tab);
+        expect(answer.op === "list" ? answer.items : null).toEqual([]);
+        expect(JSON.stringify(answer)).not.toContain("Gated plan");
+        expect(JSON.stringify(answer)).not.toContain("Doomed");
+      }
+      // Cleo may still read the gated entry; the deleted one is gone for her too.
+      expect((await team(as(CLEO))).map(row => row.entryTitle)).toEqual([
+        "Gated plan",
+      ]);
+      // Ben's pin is kept, so it returns with his access.
+      refused.delete(BEN.id);
+      expect((await mine(as(BEN))).map(row => row.entryId)).toEqual([gated]);
+    });
+
+    it("titles a save made in another language in that language, as the row links to it", async () => {
+      const t = await bootLocalized(dialect);
+      const id = await create(t, ANA, INTL, { title: "Title EN" }, at(10));
+      await written(t, at(5), () =>
+        handlerOf(t).updateEntry(
+          { ...asPerson(ANA, INTL), entryId: id, locale: "fr" },
+          { title: "Titre FR" }
+        )
+      );
+      // Ana's latest save of it, recorded in French: the row this case reads.
+      await t.adapter.insert("activity_log", {
+        id: randomUUID(),
+        actor_type: "user",
+        user_id: ANA.id,
+        user_name: ANA.name,
+        user_email: ANA.email,
+        action: "update",
+        collection: INTL,
+        entry_id: id,
+        entry_title: "Titre FR",
+        subject_kind: "collection",
+        locale: "fr",
+        metadata: JSON.stringify({ changedFields: ["title"] }),
+        created_at: new Date(T0),
+      });
+
+      const answer = await asked(as(CLEO), "team");
+      const rows = answer.op === "list" ? answer.items : [];
+      expect(rows.map(row => [row.entryId, row.locale])).toEqual([[id, "fr"]]);
+      // 🔴 The French title, read in French as Cleo: the default language's
+      // title would name the row in a language its link does not open.
+      expect(rows[0]).toMatchObject({ entryTitle: "Titre FR" });
+      expect(JSON.stringify(answer)).not.toContain("Title EN");
     });
   }
 );

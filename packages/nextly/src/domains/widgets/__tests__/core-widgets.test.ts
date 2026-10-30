@@ -10,7 +10,7 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
+import { registerContinueWidgetSource } from "../../../services/dashboard/continue-widget-source";
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_WIDGETS } from "../core-widgets";
@@ -22,7 +22,11 @@ import {
 } from "../definition";
 import { sizeBounds, sizeDeclarationProblems } from "../grid-size";
 import { DENSITY_OPTIONS } from "../declaration/setting-builders";
-import { LIST_DENSITIES, MAX_WIDGET_LIMIT } from "../query-limits";
+import {
+  LIST_DENSITIES,
+  MAX_WIDGET_LIMIT,
+  MAX_WIDGET_ROWS,
+} from "../query-limits";
 import { clearSources } from "../sources";
 import { CONTENT_SOURCE_ID, TEAM_SOURCE_ID } from "../system-source-ids";
 import { clearSystemResolvers } from "../system-sources";
@@ -42,7 +46,7 @@ function card(id: string) {
 beforeAll(() => {
   clearSources();
   clearSystemResolvers();
-  registerRecentEditsWidgetSource();
+  registerContinueWidgetSource();
 });
 
 describe("core widget definitions", () => {
@@ -230,27 +234,26 @@ describe("core widget definitions", () => {
 describe("the list cards' Density", () => {
   // Recent entries' Density, declared, is held to the same choice in
   // `core-declarations.test.ts`.
-  it.each([
-    "core/recently-edited",
-    "core/team-activity",
-    "core/upcoming-releases",
-  ])("%s offers the shared choice, one option for every density", id => {
-    // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
-    const widget = CORE_WIDGETS.find(w => w.id === id);
-    const density = widget?.settings?.find(
-      setting => setting.name === "density"
-    );
-    expect(density).toMatchObject({
-      type: "select",
-      defaultValue: "default",
-      options: [...DENSITY_OPTIONS],
-    });
-    expect(
-      (density as { options?: { value: string }[] } | undefined)?.options?.map(
-        option => option.value
-      )
-    ).toEqual([...LIST_DENSITIES]);
-  });
+  it.each(["core/continue", "core/team-activity", "core/upcoming-releases"])(
+    "%s offers the shared choice, one option for every density",
+    id => {
+      // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
+      const widget = CORE_WIDGETS.find(w => w.id === id);
+      const density = widget?.settings?.find(
+        setting => setting.name === "density"
+      );
+      expect(density).toMatchObject({
+        type: "select",
+        defaultValue: "default",
+        options: [...DENSITY_OPTIONS],
+      });
+      expect(
+        (
+          density as { options?: { value: string }[] } | undefined
+        )?.options?.map(option => option.value)
+      ).toEqual([...LIST_DENSITIES]);
+    }
+  );
 });
 
 describe("the content card", () => {
@@ -261,6 +264,38 @@ describe("the content card", () => {
       source: CONTENT_SOURCE_ID,
       op: "list",
       limit: MAX_WIDGET_LIMIT,
+    });
+  });
+});
+
+describe("Continue where you left off", () => {
+  it("takes Recently edited's place: no core id, card or default names the old one", () => {
+    const ids = CORE_WIDGETS.map(widget => widget.id);
+    const defaults = CORE_DEFAULT_LAYOUT.map(entry => entry.widget);
+    // The control: the card that replaced it is there, so an absence below is
+    // the old id being gone rather than a list that is empty.
+    expect(ids).toContain("core/continue");
+    expect(defaults).toContain("core/continue");
+    expect(ids).not.toContain("core/recently-edited");
+    expect(defaults).not.toContain("core/recently-edited");
+  });
+
+  it("puts its tab on its header and offers the rows a list draws", () => {
+    const settings = card("core/continue").settings ?? [];
+    const quick = settings.filter(setting => setting.quick === true);
+    expect(quick.map(setting => setting.name)).toEqual(["tab"]);
+    expect(quick[0]).toMatchObject({
+      type: "select",
+      defaultValue: "mine",
+      options: [
+        { label: "Mine", value: "mine" },
+        { label: "Team", value: "team" },
+      ],
+    });
+    expect(settings.find(setting => setting.name === "limit")).toMatchObject({
+      type: "number",
+      min: 1,
+      max: MAX_WIDGET_ROWS,
     });
   });
 });
@@ -319,7 +354,7 @@ describe("the default dashboard", () => {
     ["core/quick-create", [4, 4], [4, 2], [12, 4]],
     // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
     // default.
-    ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
+    ["core/continue", [6, 5], [4, 4], [12, 8]],
     ["core/team-activity", [6, 5], [4, 4], [12, 8]],
     ["core/content", [12, 4], [6, 3], [12, 6]],
     // Alone on its row: Team, for the people who manage the team, is not on the default.
