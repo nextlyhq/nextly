@@ -231,6 +231,11 @@ export default defineConfig({
       // double does not appear in a contributor's plugins list or inject a
       // showcase section into the Posts collection.
       NEXTLY_E2E_STYLE_FIXTURE: "1",
+      // The first-party plugins the playground registers only when named
+      // (`apps/playground/nextly.config.ts`): the SEO plugin, as it ships, for
+      // dashboard-seo-issues.spec.ts. It extends a collection of its own there,
+      // so no other spec meets its fields.
+      NEXTLY_PLAYGROUND_PLUGINS: "seo",
       // Registers the slow-card fixture, which dashboard-slow-card.spec.ts
       // delays. Its card answers at once until that spec asks otherwise, so the
       // other dashboard specs see an ordinary card.
