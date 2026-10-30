@@ -102,6 +102,8 @@ vi.mock("@admin/components/ui", () => ({
     warning: vi.fn(),
     info: vi.fn(),
     error: api.toastError,
+    // The update hook closes a refusal's toast when the editor leaves it.
+    dismiss: vi.fn(),
   },
 }));
 

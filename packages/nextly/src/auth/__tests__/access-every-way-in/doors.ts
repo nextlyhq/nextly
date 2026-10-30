@@ -7,6 +7,7 @@
  * the real catch-all, a Direct API call, a plugin route — and never calls the
  * decision behind it, so a door that stops asking the decision shows up here.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 
 import { vi } from "vitest";
@@ -26,7 +27,12 @@ import { widgetAudience } from "../../../domains/widgets/visibility";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
-import { recordingDeviations, type Deviation } from "../../access/deviations";
+import {
+  DEVIATIONS,
+  recordingDeviations,
+  type Deviation,
+} from "../../access/deviations";
+import { runWithAccessMemo } from "../../access/request-memo";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
@@ -43,17 +49,27 @@ import {
   takeRefusal,
   type Refusal,
 } from "./refusals";
-import { rowKey, type Answer, type Door, type Row } from "./table";
+import {
+  hasOutsideTwin,
+  rowKey,
+  verdictOf,
+  type Answer,
+  type Door,
+  type Row,
+} from "./table";
 import {
   MEDIA_MARKER,
   ORIGIN,
   PROBES_WHERE,
   USER_MARKER,
   collectionOf,
+  handleForCell,
+  outsideKey,
   ownKey,
   personRoute,
   probesRead,
   pubSingleOf,
+  refsOf,
   relationOf,
   singleOf,
   widgetFor,
@@ -90,17 +106,28 @@ async function settle(
   }
 }
 
+/**
+ * Set while a door is asked a filtered write of the entry's twin outside the
+ * rule's filter, so the door names that twin rather than the entry inside it.
+ */
+const askingOutside = new AsyncLocalStorage<true>();
+
 /** The target's slug, and the row id a collection action names. */
 function addressOf(world: World, row: Row, door: string) {
-  if (row.target === "single") return { slug: singleOf(row.rule), id: "" };
-  if (row.target === "single-pub") {
-    return { slug: pubSingleOf(row.rule), id: "" };
+  if (row.target === "single") {
+    return { slug: singleOf(row.rule, row.setup), id: "" };
   }
-  const slug = collectionOf(row.rule);
+  if (row.target === "single-pub") {
+    return { slug: pubSingleOf(row.rule, row.setup), id: "" };
+  }
+  const slug = collectionOf(row.rule, row.setup);
   const seeded = world.seeded.get(slug);
   if (!seeded) throw new Error(`nothing seeded for ${slug}`);
-  const id =
-    row.action === "read"
+  // A filtered write's twin outside the filter first: an update's twin is a
+  // row of its own, not the one row every update rewrites.
+  const id = askingOutside.getStore()
+    ? (seeded.own.get(outsideKey(door, row.caller, row.action)) ?? "")
+    : row.action === "read"
       ? seeded.readId
       : row.action === "update"
         ? seeded.updateId
@@ -474,10 +501,14 @@ async function directWithoutService(world: World, row: Row, who: CallerHandle) {
 }
 
 async function website(world: World, row: Row, who: CallerHandle) {
-  const entry = await resolveContent(collectionOf(row.rule), "probe", {
-    nextly: world.t.nextly,
-    ...(who.user ? { user: who.user } : {}),
-  });
+  const entry = await resolveContent(
+    collectionOf(row.rule, row.setup),
+    "probe",
+    {
+      nextly: world.t.nextly,
+      ...(who.user ? { user: who.user } : {}),
+    }
+  );
   return entry ? "A" : "R";
 }
 
@@ -502,9 +533,9 @@ async function route(world: World, row: Row, who: CallerHandle) {
 }
 
 export function targetSlug(row: Row): string {
-  if (row.target === "collection") return collectionOf(row.rule);
-  if (row.target === "single") return singleOf(row.rule);
-  if (row.target === "single-pub") return pubSingleOf(row.rule);
+  if (row.target === "collection") return collectionOf(row.rule, row.setup);
+  if (row.target === "single") return singleOf(row.rule, row.setup);
+  if (row.target === "single-pub") return pubSingleOf(row.rule, row.setup);
   return RESOURCE_PATHS[row.target] ?? row.target;
 }
 
@@ -612,7 +643,12 @@ async function entity(_world: World, row: Row, who: CallerHandle) {
     user: who.user,
     ...(who.actor ? { authenticatedScope: who.actor } : {}),
   });
-  return fromBoolean(await canReadEntity(targetSlug(row), caller));
+  // Asked inside a request, as every reader behind it is (a route, the
+  // Direct API, a plugin service): a read rule's filter is kept for the
+  // request there, and outside one the reader refuses it.
+  return fromBoolean(
+    await runWithAccessMemo(() => canReadEntity(targetSlug(row), caller))
+  );
 }
 
 /**
@@ -685,7 +721,7 @@ async function schema(
     if (answer.refusal) noteRefusal(answer.refusal);
     return answer.refused;
   }
-  const slug = collectionOf(row.rule);
+  const slug = collectionOf(row.rule, row.setup);
   return {
     answer: answer.includes(slug) ? "A" : "R",
     deviations: bySubject.get(slug) ?? [],
@@ -724,11 +760,12 @@ function populationAnswer(value: unknown, row: Row, marker: string): Answer {
   return "uploadedBy" in value || "uploaded_by" in value ? "A" : "S";
 }
 
-/** Reads `refs` with its relationships populated, once per caller. */
+/** Reads the setup's `refs` with its relationships populated. */
 async function population(world: World, row: Row, who: CallerHandle) {
+  const collection = refsOf(row.setup);
   const ref = (await world.t.nextly.findByID({
-    collection: "refs",
-    id: world.refId,
+    collection,
+    id: world.refIds.get(collection) ?? "",
     depth: 1,
     ...(row.setup === "bound" ? boundCaller(who) : directCaller(who)),
   })) as Record<string, unknown> | null;
@@ -836,7 +873,15 @@ async function capabilities(
   const cell = answer.entities[slug];
   const deviations = bySubject.get(`${row.action}-${slug}`) ?? [];
   if (cell === undefined || !(row.action in cell)) {
-    return { answer: "=absent", deviations };
+    // An entity is left out where the caller may not read it, so its read's
+    // deviations are the ones that decided every action's absence.
+    const read = bySubject.get(`read-${slug}`) ?? [];
+    return {
+      answer: "=absent",
+      deviations: DEVIATIONS.filter(
+        deviation => deviations.includes(deviation) || read.includes(deviation)
+      ),
+    };
   }
   return { answer: fromBoolean(cell[row.action]), deviations };
 }
@@ -888,12 +933,12 @@ async function lock(world: World, row: Row, who: CallerHandle) {
     row.target === "single"
       ? {
           scopeKind: "single",
-          slug: singleOf(row.rule),
-          entryId: await singleDocumentId(world, singleOf(row.rule)),
+          slug: singleOf(row.rule, row.setup),
+          entryId: await singleDocumentId(world, singleOf(row.rule, row.setup)),
         }
       : {
           scopeKind: "collection",
-          slug: collectionOf(row.rule),
+          slug: collectionOf(row.rule, row.setup),
           entryId: addressOf(world, row, "lock").id,
         };
   const res = await request("POST", ["document-lock"], who.headers, ref);
@@ -966,8 +1011,9 @@ async function answer(
   deviations: Deviation[];
   refusal?: Refusal;
 }> {
-  const who = world.callers.get(row.caller);
-  if (!who) throw new Error(`no caller ${row.caller}`);
+  const seeded = world.callers.get(row.caller);
+  if (!seeded) throw new Error(`no caller ${row.caller}`);
+  const who = await handleForCell(seeded);
   const adapter =
     row.setup === "no-service" && door === "direct"
       ? directWithoutService
@@ -997,9 +1043,15 @@ const WRITING_DOORS: ReadonlySet<Door> = new Set<Door>([
 
 const READS: ReadonlySet<Row["action"]> = new Set(["read", "list", "count"]);
 
+/** The setups whose writes are asked: the others ask reads alone. */
+const WRITING_SETUPS: ReadonlySet<Row["setup"]> = new Set<Row["setup"]>([
+  "service",
+  "public",
+]);
+
 function writes(row: Row, door: Door): boolean {
   return (
-    row.setup === "service" &&
+    WRITING_SETUPS.has(row.setup) &&
     !READS.has(row.action) &&
     (row.target === "collection" ||
       row.target === "single" ||
@@ -1010,9 +1062,11 @@ function writes(row: Row, door: Door): boolean {
 
 /** The table a write to the row's target lands in. */
 function tableOf(row: Row): string {
-  if (row.target === "single") return `single_${singleOf(row.rule)}`;
-  if (row.target === "single-pub") return `single_${pubSingleOf(row.rule)}`;
-  return `dc_${collectionOf(row.rule)}`;
+  if (row.target === "single") return `single_${singleOf(row.rule, row.setup)}`;
+  if (row.target === "single-pub") {
+    return `single_${pubSingleOf(row.rule, row.setup)}`;
+  }
+  return `dc_${collectionOf(row.rule, row.setup)}`;
 }
 
 /**
@@ -1043,7 +1097,7 @@ async function markUpdated(world: World, row: Row): Promise<void> {
   const single = row.target === "single";
   const id = single
     ? (await storedTable(world, row))[0]?.id
-    : world.seeded.get(collectionOf(row.rule))?.updateId;
+    : world.seeded.get(collectionOf(row.rule, row.setup))?.updateId;
   // A Single's row is made on its first read, which every Single's update
   // follows in the table's order; an update finding none is seen anyway.
   if (id === undefined || id === null) return;
@@ -1096,7 +1150,10 @@ const statusAfter = (row: Row) =>
 /**
  * A door's answer to one row, and, for a write, what it did to the database:
  * `landed` says it changed the target's table at all, and `done` that it made
- * the change asked for. Both are set only where the door writes.
+ * the change asked for. Both are set only where the door writes. A filtered
+ * write is asked of the entry inside the rule's filter and then of its twin
+ * outside it; `outsideKept` says the twin's ask left the table as it found
+ * it.
  */
 export async function ask(
   world: World,
@@ -1108,11 +1165,13 @@ export async function ask(
   refusal?: Refusal;
   landed?: boolean;
   done?: boolean;
+  outsideKept?: boolean;
+  outside?: { answer: Answer; refusal?: Refusal };
 }> {
   if (!writes(row, door)) return answer(world, row, door);
   await markUpdated(world, row);
   const before = await storedTable(world, row);
-  const { answer: given, deviations, refusal } = await answer(world, row, door);
+  const inside = await answer(world, row, door);
   const after = await storedTable(world, row);
   const landed = !isDeepStrictEqual(before, after);
   // A Single's publish or unpublish is done only when its status moved, and
@@ -1125,5 +1184,40 @@ export async function ask(
       : row.action === "new-pub"
         ? addedPublished(before, after)
         : landed;
-  return { answer: given, deviations, refusal, landed, done };
+  if (!hasOutsideTwin(row)) return { ...inside, landed, done };
+  // The twin, compared with the table as the first ask left it: an ask
+  // answered as refused that wrote all the same is caught here.
+  const outside = await askingOutside.run(true, () => answer(world, row, door));
+  const outsideKept = isDeepStrictEqual(after, await storedTable(world, row));
+  return {
+    ...filteredAnswer(inside, outside),
+    landed,
+    done,
+    outsideKept,
+    // The twin's own answer, kept apart from the cell's: an `M` says it was
+    // refused, and this says how, so a 403 where the twin is unreadable shows.
+    outside: { answer: outside.answer, refusal: outside.refusal },
+  };
+}
+
+/**
+ * One answer to a filtered write from its two asks: `M` where the entry inside
+ * the filter was let through and its twin refused, `A` where both were, which
+ * is a filter not applied, and the inside entry's own answer where it was
+ * refused. The deviations either ask recorded are the cell's.
+ */
+function filteredAnswer(
+  inside: { answer: Answer; deviations: Deviation[]; refusal?: Refusal },
+  outside: { answer: Answer; deviations: Deviation[]; refusal?: Refusal }
+): { answer: Answer; deviations: Deviation[]; refusal?: Refusal } {
+  const deviations = DEVIATIONS.filter(
+    deviation =>
+      inside.deviations.includes(deviation) ||
+      outside.deviations.includes(deviation)
+  );
+  if (inside.answer !== "A") return { ...inside, deviations };
+  return {
+    answer: verdictOf(outside.answer) === "refuse" ? "M" : "A",
+    deviations,
+  };
 }

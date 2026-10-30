@@ -3,7 +3,7 @@
  * is one this caller was handed, from its declaration, as the person asking; every other card gets
  * the one "unavailable" answer, byte for byte.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBatchScope } from "../domains/widgets/batch-scope";
 import { NextlyError } from "../errors/nextly-error";
@@ -12,6 +12,7 @@ import { declaredWidget } from "../domains/widgets/declaration/declared-widgets"
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
 import { setSiteDashboardRules } from "../domains/widgets/site-rules";
+import { clearSources, registerSource } from "../domains/widgets/sources";
 
 import { cardIsShownTo, prepareCards } from "./widget-cards";
 import { askableCards } from "./widget-layout";
@@ -974,6 +975,20 @@ function sizeLoaded(): unknown {
 }
 
 describe("the size a card's load is handed", () => {
+  // The collection the trend card's series reads, with the date it places
+  // entries by: a series is placed only by a date field of the collection.
+  beforeEach(() => {
+    clearSources();
+    registerSource({
+      id: "collection:orders",
+      label: "Orders",
+      kind: "collection",
+      supports: ["count", "timeseries"],
+      fields: [{ name: "createdAt", type: "date" }],
+    });
+  });
+  afterEach(() => clearSources());
+
   it("reads a trend only for a large card: a small one makes no trend read", async () => {
     await expect(
       answeredEntry({
@@ -995,6 +1010,40 @@ describe("the size a card's load is handed", () => {
     ).resolves.toMatchObject({ result: { total: 1 } });
     // 🔴 The separating pair: a load handed no size, or the same size for both, reads alike.
     expect(opsRun()).toEqual(["count", "timeseries"]);
+    expect(sizeLoaded()).toEqual({ w: 12, h: 6, tier: "large" });
+  });
+
+  it("holds the size to the site's narrower bounds, where an override narrows them", async () => {
+    // The site narrows the trend's largest size to half the row, four rows high: a card asked
+    // at the widget's own largest is loaded at the site's, the size the admin draws it at.
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([["acme/trend", { size: { max: { w: 6, h: 4 } } }]]),
+    });
+    try {
+      await answeredEntry({
+        widget: "acme/trend",
+        card: "c-trend",
+        size: { w: 12, h: 6, tier: "large" },
+      });
+      expect(sizeLoaded()).toEqual({ w: 6, h: 4, tier: "large" });
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
+    // The control: with no override, the widget's own bounds hold, and the same ask is loaded
+    // at the size it named.
+    await answeredEntry({
+      widget: "acme/trend",
+      card: "c-trend",
+      size: { w: 12, h: 6, tier: "large" },
+    });
     expect(sizeLoaded()).toEqual({ w: 12, h: 6, tier: "large" });
   });
 

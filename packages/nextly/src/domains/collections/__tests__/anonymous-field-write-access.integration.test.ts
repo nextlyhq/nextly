@@ -29,6 +29,7 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+import { grantPublic } from "../../../__tests__/helpers/public-role";
 
 let current: TestNextly | undefined;
 
@@ -42,6 +43,9 @@ const SLUG = "notes";
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    // The boot's seeding, which makes the Public role an anonymous writer is
+    // judged by.
+    seedPublic: true,
     collections: [
       defineCollection({
         slug: SLUG,
@@ -119,6 +123,10 @@ describe.each(getConfiguredTestDialects())(
       // the REST path reaches this with no user at all: the dispatcher forwards
       // no user when nobody is signed in, and never passes `overrideAccess`.
       const t = await boot(dialect);
+      // The collection's rule only narrows the create permission, so the
+      // Public role an anonymous writer is judged by holds it, as a site
+      // admin would grant it to allow anonymous submissions.
+      await grantPublic(t, [`create-${SLUG}`]);
       const created = await (
         t.getService("collectionsHandler") as CollectionsHandler
       ).createEntry(

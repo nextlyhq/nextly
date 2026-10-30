@@ -17,6 +17,7 @@
  */
 
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { deletePinsOfTarget } from "../dashboard/dashboard-pins";
 
 import type { VersionsDbApi } from "./db-api";
 import { REGISTRY_TABLES } from "./history-locks";
@@ -25,8 +26,20 @@ import { deleteViewsForDocument, deleteViewsForEntity } from "./version-views";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
 /**
- * Delete an entity's registry row, then its autosaves and version pins, on
- * the caller's transaction. Returns how many registry rows were deleted.
+ * Which of the dashboard's tables a sweep may write, asked by the caller
+ * BEFORE its transaction opens (`dashboardPinsPresent`): a table that does not
+ * exist yet (a site that has not run `nextly migrate`) is skipped, since a
+ * statement against it would abort the whole transaction on PostgreSQL.
+ * Required, so no delete path can leave a deleted entity's pins behind by
+ * forgetting to ask.
+ */
+export interface DashboardTables {
+  dashboardPinsPresent: boolean;
+}
+
+/**
+ * Delete an entity's registry row, then its autosaves, version pins and
+ * readers' dashboard pins, on the caller's transaction. Returns how many registry rows were deleted.
  *
  * The row goes FIRST. A pin locks this row before it writes, so deleting it
  * first takes the same lock in the same order: a pin under way finishes, and
@@ -38,7 +51,8 @@ import { VersionsRepository, type VersionRef } from "./versions-repository";
 export async function deleteEntityRegistryRow(
   tx: VersionsDbApi,
   scopeKind: VersionScopeKind,
-  scopeSlug: string
+  scopeSlug: string,
+  tables: DashboardTables
 ): Promise<number> {
   const registry = REGISTRY_TABLES[scopeKind];
   if (registry === undefined) return 0;
@@ -51,6 +65,14 @@ export async function deleteEntityRegistryRow(
   );
   await deletePinsForEntity(tx, scopeKind, scopeSlug);
   await deleteViewsForEntity(tx, scopeKind, scopeSlug);
+  // Every reader's dashboard pins of it: each entry of a collection, or the
+  // Single itself. A page is not something a reader pins.
+  if (scopeKind !== "page") {
+    await deletePinsOfTarget(tx, tables.dashboardPinsPresent, {
+      targetType: scopeKind,
+      targetSlug: scopeSlug,
+    });
+  }
   return deleted;
 }
 
@@ -62,8 +84,18 @@ export async function deleteEntityRegistryRow(
  */
 export async function sweepDeletedDocument(
   tx: VersionsDbApi,
-  ref: VersionRef
+  ref: VersionRef,
+  tables: DashboardTables
 ): Promise<void> {
   await deletePinsForDocument(tx, ref);
   await deleteViewsForDocument(tx, ref);
+  // Every reader's dashboard pin of the document. A Single's is the Single's
+  // own, which has no entry id; a page is not something a reader pins.
+  if (ref.scopeKind !== "page") {
+    await deletePinsOfTarget(tx, tables.dashboardPinsPresent, {
+      targetType: ref.scopeKind,
+      targetSlug: ref.scopeSlug,
+      entryId: ref.scopeKind === "collection" ? ref.entryId : "",
+    });
+  }
 }

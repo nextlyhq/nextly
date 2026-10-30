@@ -15,6 +15,7 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
+import { usePinAction } from "@admin/components/features/dashboard/pin-action";
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import {
   DocumentLockBanner,
@@ -341,6 +342,12 @@ export default function EditEntryPage({
    * loading it reports no action, which is correct — there is nothing on screen
    * to contribute one to.
    */
+  // The reader's own pin of this entry, offered beside "Add to release".
+  const pin = usePinAction(
+    id && slug
+      ? { targetType: "collection", targetSlug: slug, entryId: id }
+      : null
+  );
   const release = useAddToReleaseAction({
     scopeKind: "collection",
     scopeSlug: slug,
@@ -795,9 +802,14 @@ export default function EditEntryPage({
              document-management act rather than a leading one, and the toolbar
              is reserved for the verbs an author reaches for while writing. */
             documentActions={
-              release.contributed === null || removedFromCode
+              removedFromCode
                 ? []
-                : [release.contributed]
+                : [
+                    ...(release.contributed === null
+                      ? []
+                      : [release.contributed]),
+                    ...(pin === null ? [] : [pin]),
+                  ]
             }
             locale={locale}
             onLocaleChange={changeLocale}
