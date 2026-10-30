@@ -41,6 +41,11 @@ import type {
   FieldGroupMigrationStatus as SchemaFieldGroupMigrationStatus,
 } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import {
+  addressRefusalError,
+  assertAddressAllowed,
+  findSameSnakeCaseAddress,
+} from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
@@ -198,6 +203,7 @@ export class FieldGroupMetadataService {
     // process-global field-type registry from inside this same exclusion. A declaration the old
     // registration accepted would otherwise be built and stored against the new one, and every
     // later write to the field group would fail on options the active plugin rejects.
+    await this.assertAddressAllowed(input.slug);
     await this.assertTableUnowned(input);
     const { assertValidPluginFieldOptions } = await import(
       "../../../api/fields-payload"
@@ -1031,6 +1037,23 @@ export class FieldGroupMetadataService {
         message: `Generated database identifier "${name}" is ${identifierBytes(name)} bytes once encoded as UTF-8; the limit is ${MAX_IDENTIFIER_LENGTH} (${MAX_IDENTIFIER_LENGTH} characters of plain ASCII). Shorten the field group's slug or the field name it derives from.`,
       })),
     });
+  }
+
+  /**
+   * Judge a new address by the one rule every road shares (`shared/address-rule`), and against the
+   * other field groups' addresses: one with the same snake_case form names the same table.
+   */
+  private async assertAddressAllowed(slug: string): Promise<void> {
+    assertAddressAllowed("fieldGroup", slug);
+    const twin = findSameSnakeCaseAddress(
+      "fieldGroup",
+      slug,
+      (await this.registry.getAllComponents()).map(existing => ({
+        kind: "fieldGroup" as const,
+        address: existing.slug,
+      }))
+    );
+    if (twin) throw addressRefusalError(twin, slug);
   }
 
   /**
