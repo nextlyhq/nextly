@@ -947,3 +947,19 @@ service user-with publish collection async-filter at route  # filter-not-applied
 service user-with publish collection returns-filter at route  # filter-not-applied
 service user-with unpublish collection async-filter at route  # filter-not-applied
 service user-with unpublish collection returns-filter at route  # filter-not-applied
+
+# The bulk routes ask a visitor to sign in before the Public role is asked:
+# a bulk write needs a signed-in caller.
+public visitor delete collection async-true at bulk
+public visitor delete collection none at bulk
+public visitor delete collection other-operation at bulk
+public visitor delete collection publish-false at bulk
+public visitor delete collection returns-true at bulk
+public visitor delete collection role-screen-spelling at bulk
+public visitor delete collection true at bulk
+public visitor update collection async-true at bulk
+public visitor update collection none at bulk
+public visitor update collection publish-false at bulk
+public visitor update collection returns-true at bulk
+public visitor update collection role-screen-spelling at bulk
+public visitor update collection true at bulk

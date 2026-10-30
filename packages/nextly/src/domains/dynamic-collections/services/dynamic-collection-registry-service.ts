@@ -28,7 +28,7 @@ import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import {
   cachedCollectionRow,
-  clearCollectionRowCache,
+  clearRegistryRowCache,
 } from "./collection-row-cache";
 
 export interface CollectionMetadata {
@@ -279,7 +279,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         createdBy: metadata.createdBy,
       });
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // Publish the decision into the live policy as well as the column. The
@@ -404,7 +404,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         }
       }
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // A rename carries the live recording decision to the new slug and drops
@@ -648,7 +648,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         .delete(this.dynamicCollections)
         .where(eq(this.dynamicCollections.slug, slug));
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // Drop the in-process recording decision with the row: this is the path the

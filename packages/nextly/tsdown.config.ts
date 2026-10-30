@@ -190,6 +190,11 @@ const clientEntries = [
   // the server, so neither keeps a copy; it imports nothing. Internal: not a
   // public API.
   "src/collections/fields/field-label.ts",
+  // The data each of core's declared cards answers, as their own entry: the
+  // card's server `load` is typed to answer it and its admin component to draw
+  // it, and the module holds types alone, so the admin takes nothing more.
+  // Internal: not a public API.
+  "src/domains/widgets/core-widgets/data.ts",
   // The query-parameter formats, so a caller writes one with the same code the
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.

@@ -204,17 +204,21 @@ describe.each(getConfiguredTestDialects())(
         false
       );
 
-      // The driver's own error for the missing table, rethrown as it was:
+      // The driver's own error for the missing table, named with its file:
       // not the partial-failure error, which only a marked file raises.
       const error = await migrate().catch((thrown: unknown) => thrown);
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toMatch(MISSING_TABLE);
+      expect((error as Error).message).toContain("20261001_000001_marks");
       expect(error).not.toMatchObject({
         code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
       });
-      expect(await ledgerStatus("20261001_000001_marks.sql")).toEqual([
-        "failed",
-      ]);
+      // On MySQL the attempt was recorded before its first statement, which
+      // committed on its own; elsewhere it was written inside the
+      // transaction, and rolled back with it.
+      expect(await ledgerStatus("20261001_000001_marks.sql")).toEqual(
+        dialect === "mysql" ? ["failed"] : []
+      );
 
       expect(await marks()).toEqual([]);
       expect(warnings.join("\n")).not.toContain("outside a transaction");
