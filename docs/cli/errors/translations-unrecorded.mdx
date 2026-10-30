@@ -7,7 +7,7 @@ description: "`nextly migrate:create` was run in a project with translations who
 
 `nextly migrate:create` was run in a project with translations whose latest snapshot predates the record of translated fields.
 
-Snapshots written by early versions of Nextly don't record which fields are translated. In a project that has translations (a localization migration file, an entity translated in the config, or one the latest snapshot's settings say was translated), `migrate:create` can't plan a change without that record: a field moving between translated and shared could lose its values. So it refuses every change, and writes nothing, until the record is made once.
+Snapshots written by early versions of Nextly don't record which fields are translated. In a project that has translations (a localization migration file, or an entity the latest snapshot's settings say was translated), `migrate:create` can't plan a change without that record: a field moving between translated and shared could lose its values. So it refuses every change, and writes nothing, until the record is made once.
 
 ## Fix
 

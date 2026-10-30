@@ -631,12 +631,6 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         next: [NOTES],
       },
       {
-        sign: "a collection translated now",
-        first: [NOTES],
-        forget: forgetTranslatedFieldRecord,
-        next: [NOTES, TRANSLATED],
-      },
-      {
         sign: "the snapshot's settings, for a collection turned off now",
         first: [declared(true)],
         forget: forgetCompanionFiles,
@@ -683,6 +677,26 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
 
       expect(await filesOfRun(dialect, dir, [TRANSLATED, NOTES])).toEqual([
         expect.stringMatching(/_next\.sql$/),
+      ]);
+    });
+
+    it("turns translation on in a project that was never translated, with no record first", async () => {
+      const translated: MinimalConfigEntity = {
+        ...NOTES_GROWN,
+        localized: true,
+        fields: [
+          { name: "title", type: "text" },
+          { name: "summary", type: "text", localized: true },
+        ],
+      };
+      const dir = await projectAfter(dialect, [
+        { collections: [NOTES_GROWN], after: forgetTranslatedFieldRecord },
+      ]);
+
+      // No localization file, and no snapshot saying anything was translated: nothing to settle.
+      expect(await filesOfRun(dialect, dir, [translated])).toEqual([
+        expect.stringMatching(/_next\.sql$/),
+        expect.stringMatching(/_enable_localization_notes\.sql$/),
       ]);
     });
 
@@ -797,11 +811,11 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
 
       it("records a translations table made outside the migration files that holds every column", async () => {
         const dir = await projectAfter(dialect, [
-          { collections: [TRANSLATED], after: forgetCompanionFiles },
+          { collections: [declared(true)], after: forgetCompanionFiles },
         ]);
 
         expect(
-          await generate(dialect, dir, [TRANSLATED], "record", 30, {
+          await generate(dialect, dir, [declared(true)], "record", 30, {
             recordSnapshot: true,
             liveCompanionColumns: table =>
               Promise.resolve(
@@ -813,14 +827,21 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
 
       it("refuses to record a translated field its translations table has no column for, naming it", async () => {
         const dir = await projectAfter(dialect, [
-          { collections: [TRANSLATED], after: forgetCompanionFiles },
+          { collections: [declared(true)], after: forgetCompanionFiles },
         ]);
         const before = await contentsOf(dir);
 
-        const recording = generate(dialect, dir, [TRANSLATED], "record", 30, {
-          recordSnapshot: true,
-          liveCompanionColumns: () => Promise.resolve(["_parent", "_locale"]),
-        });
+        const recording = generate(
+          dialect,
+          dir,
+          [declared(true)],
+          "record",
+          30,
+          {
+            recordSnapshot: true,
+            liveCompanionColumns: () => Promise.resolve(["_parent", "_locale"]),
+          }
+        );
         await expect(recording).rejects.toThrow(/"body"/);
         await expect(recording).rejects.toThrow(/collection "docs"/);
         expect(await contentsOf(dir)).toEqual(before);
@@ -878,35 +899,6 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
           expect.stringMatching(/_archive_localization_docs\.sql$/),
           expect.stringMatching(/_two\.sql$/),
           expect.stringMatching(/_shared_localization_docs\.sql$/),
-        ]);
-      });
-
-      it("records a project that was never translated, so translation can be turned on after it", async () => {
-        const translated: MinimalConfigEntity = {
-          ...NOTES_GROWN,
-          localized: true,
-          fields: [
-            { name: "title", type: "text" },
-            { name: "summary", type: "text", localized: true },
-          ],
-        };
-        const dir = await projectAfter(dialect, [
-          { collections: [NOTES_GROWN], after: forgetTranslatedFieldRecord },
-        ]);
-
-        // Turning translation on is a sign of translation, and the older snapshot doesn't say
-        // `summary` was shared.
-        await expect(
-          generate(dialect, dir, [translated], "two", 20)
-        ).rejects.toThrow(/--record-snapshot/);
-        expect(
-          await generate(dialect, dir, [NOTES_GROWN], "record", 30, {
-            recordSnapshot: true,
-          })
-        ).not.toBeNull();
-        expect(await filesOfRun(dialect, dir, [translated])).toEqual([
-          expect.stringMatching(/_next\.sql$/),
-          expect.stringMatching(/_enable_localization_notes\.sql$/),
         ]);
       });
 

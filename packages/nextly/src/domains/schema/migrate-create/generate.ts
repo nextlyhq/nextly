@@ -714,15 +714,12 @@ export async function generateMigration(
  * What says how each entity's companion stood before this run (`TranslationRecords`), and whether
  * the previous snapshot says so itself (`snapshotSays`, `recordsTranslatedFields`). A project that
  * shows no sign of translation was never translated through its migrations, so its snapshot has
- * nothing left unsaid either. The signs: a localization file, an entity translated in the config
- * now, or one the previous snapshot's settings record declares translated, which is an entity this
- * edit turns translation off for.
+ * nothing left unsaid either, and an entity it turns translated now is planned as the first. The
+ * signs: a localization file, or an entity the previous snapshot's settings record declares
+ * translated, as when this edit turns its translation off.
  */
 async function readTranslationRecords(
-  args: Pick<
-    GenerateArgs,
-    "migrationsDir" | "collections" | "singles" | "components"
-  >,
+  args: Pick<GenerateArgs, "migrationsDir">,
   previous: SnapshotFile | null
 ): Promise<{
   records: TranslationRecords;
@@ -730,14 +727,8 @@ async function readTranslationRecords(
   signOfTranslation: boolean;
 }> {
   const fileHistory = await readCompanionHistory(args.migrationsDir);
-  const translatedNow = [
-    ...args.collections,
-    ...args.singles,
-    ...args.components,
-  ].some(e => e.localized === true);
   const snapshotSays = recordsTranslatedFields(previous);
-  const signOfTranslation =
-    fileHistory.anyFile || translatedNow || declaredTranslated(previous);
+  const signOfTranslation = fileHistory.anyFile || declaredTranslated(previous);
   return {
     records: {
       ...fileHistory,
