@@ -107,6 +107,7 @@ import {
   useMeasuredTier,
   type RowsLayout,
 } from "./frame/tier";
+import { CardTitleCountContext, titleCountSpoken } from "./frame/title-count";
 
 export interface WidgetCardProps {
   /** The card's subject, always rendered, in every state, once. */
@@ -301,6 +302,9 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
   const footer = useFooterClaims(props.widgetId);
   const report = useCallback((next: CardState | null) => setReported(next), []);
+  // A count the body shows beside the title (`useCardTitleCount`), while it is drawn: a body that
+  // stops being drawn unmounts, and its unmount withdraws the count.
+  const [titleCount, setTitleCount] = useState<number | undefined>(undefined);
   const given = props.state ?? READY;
   const state = shownState(given, reported);
   const drawsBody = showsBody(given);
@@ -340,6 +344,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 titleId={titleId}
                 subtitleId={subtitleId}
                 title={title}
+                titleCount={titleCount}
                 subtitle={props.subtitle}
                 leading={props.leading}
                 quick={props.quick}
@@ -358,24 +363,22 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                   showsBody(state)
                 )}
               >
-                {flags.markedHidden ? (
-                  <p
-                    className="mb-2 text-xs font-medium text-muted-foreground"
-                    data-testid="hidden-while-empty"
-                  >
-                    {flags.hiddenBecause}
-                  </p>
-                ) : null}
+                <HiddenWhileEmptyNote
+                  marked={flags.markedHidden}
+                  because={flags.hiddenBecause}
+                />
                 <StateBody state={state} title={title} props={props} />
                 {/* The body stays mounted while it reports a state, so the data it reads keeps
                   arriving; what it renders then is its report, which draws nothing. */}
                 {drawsBody ? (
                   <CardStateReportProvider value={report}>
-                    <CardFooterSlotProvider value={footerSlot}>
-                      <CardFooterClaimProvider value={footer.claims}>
-                        {props.children}
-                      </CardFooterClaimProvider>
-                    </CardFooterSlotProvider>
+                    <CardTitleCountContext.Provider value={setTitleCount}>
+                      <CardFooterSlotProvider value={footerSlot}>
+                        <CardFooterClaimProvider value={footer.claims}>
+                          {props.children}
+                        </CardFooterClaimProvider>
+                      </CardFooterSlotProvider>
+                    </CardTitleCountContext.Provider>
                   </CardStateReportProvider>
                 ) : null}
               </CardContent>
@@ -390,6 +393,28 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
         </AnswerSizeContext.Provider>
       </ListDensityContext.Provider>
     </CardTierContext.Provider>
+  );
+}
+
+/**
+ * The line above the body that says why a card is hidden from the dashboard while it is empty,
+ * drawn while it is (`frameFlags`); nothing otherwise.
+ */
+function HiddenWhileEmptyNote({
+  marked,
+  because,
+}: {
+  marked: boolean;
+  because: string | undefined;
+}) {
+  if (!marked) return null;
+  return (
+    <p
+      className="mb-2 text-xs font-medium text-muted-foreground"
+      data-testid="hidden-while-empty"
+    >
+      {because}
+    </p>
   );
 }
 
@@ -533,6 +558,7 @@ function WidgetCardHeader({
   titleId,
   subtitleId,
   title,
+  titleCount,
   subtitle,
   leading,
   quick,
@@ -542,6 +568,8 @@ function WidgetCardHeader({
   titleId: string;
   subtitleId: string;
   title: string;
+  /** A count the body shows beside the title, muted; read after it as ", N items". */
+  titleCount?: number | undefined;
   subtitle?: string | undefined;
   leading?: ReactNode;
   quick?: ReactNode;
@@ -565,9 +593,21 @@ function WidgetCardHeader({
         <h2
           id={titleId}
           title={title}
-          className="truncate text-sm font-semibold leading-5 tracking-tight text-foreground"
+          className="flex min-w-0 items-baseline gap-1.5 text-sm font-semibold leading-5 tracking-tight text-foreground"
         >
-          {title}
+          <span className="truncate">{title}</span>
+          {titleCount !== undefined && (
+            <>
+              <span
+                aria-hidden
+                className="shrink-0 text-xs font-normal text-muted-foreground"
+                data-testid="widget-card-title-count"
+              >
+                {titleCount}
+              </span>
+              <span className="sr-only">{titleCountSpoken(titleCount)}</span>
+            </>
+          )}
         </h2>
         {subtitle && (
           <p

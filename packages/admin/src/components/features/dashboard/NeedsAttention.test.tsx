@@ -7,7 +7,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { LIST_ROW_HEIGHT_PX } from "nextly/card-geometry";
+
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
+import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
+import { HiddenWhileEmptyContext } from "@admin/components/features/widgets/hidden-while-empty";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 
 import { NeedsAttention } from "./NeedsAttention";
@@ -42,23 +46,72 @@ const SEO = {
 
 function draw(
   items: readonly object[],
-  props: { refreshing?: boolean; retry?: () => void } = {}
+  props: { refreshing?: boolean; retry?: () => void; revealed?: boolean } = {}
 ) {
+  const card = inFrame(
+    <NeedsAttention
+      widgetId="core/needs-attention"
+      placementId="attention"
+      settings={{}}
+      size={{ w: 8, h: 3, tier: "medium" }}
+      data={{ items }}
+      refreshing={props.refreshing ?? false}
+      retry={props.retry ?? (() => undefined)}
+    />,
+    "Needs your attention"
+  );
+  // As the dashboard holds it: a card it drew without at first, then showed.
   return render(
-    inFrame(
-      <NeedsAttention
-        widgetId="core/needs-attention"
-        placementId="attention"
-        settings={{}}
-        size={{ w: 8, h: 3, tier: "medium" }}
-        data={{ items }}
-        refreshing={props.refreshing ?? false}
-        retry={props.retry ?? (() => undefined)}
-      />,
-      "Needs your attention"
+    props.revealed === true ? (
+      <HiddenWhileEmptyContext.Provider
+        value={{ hidden: new Set(), revealed: new Set(["attention"]) }}
+      >
+        {card}
+      </HiddenWhileEmptyContext.Provider>
+    ) : (
+      card
     )
   );
 }
+
+/**
+ * Lays the card out as the frame draws it at `h` grid rows: a body of `cardBodyHeightPx(h)`, rows
+ * of the list's own height from its top, and the fold's control wherever it is drawn.
+ */
+function layOut(h: number): void {
+  const rect = (top: number, bottom: number) =>
+    ({
+      top,
+      bottom,
+      left: 0,
+      right: 600,
+      width: 600,
+      height: bottom - top,
+    }) as DOMRect;
+  const row = LIST_ROW_HEIGHT_PX.default;
+  const body = cardBodyHeightPx(h);
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: Element) {
+      if (this.getAttribute("data-testid") === "widget-card-body")
+        return rect(0, body);
+      if (this.hasAttribute("data-fold-row")) {
+        const index = [
+          ...(this.parentElement?.querySelectorAll("[data-fold-row]") ?? []),
+        ].indexOf(this);
+        return rect(row * index, row * (index + 1));
+      }
+      if (this.hasAttribute("aria-controls")) return rect(body + 12, body + 40);
+      return rect(0, 0);
+    }
+  );
+}
+
+const plugin = (n: number) => ({
+  ...SEO,
+  id: `seo/item-${n}`,
+  label: `Item ${n}`,
+  count: n,
+});
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -162,41 +215,7 @@ describe("NeedsAttention", () => {
   });
 
   it("folds the items its height does not hold behind Show N more, which shows them, moves focus and says so", () => {
-    // A body that ends 160 px down, rows 52 px tall from 0, and the control 36 px below the last
-    // row: two whole rows fit above the control, the third would be cut.
-    const rect = (top: number, bottom: number) =>
-      ({
-        top,
-        bottom,
-        left: 0,
-        right: 600,
-        width: 600,
-        height: bottom - top,
-      }) as DOMRect;
-    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: Element) {
-        if (this.getAttribute("data-testid") === "widget-card-body")
-          return rect(0, 160);
-        if (this.hasAttribute("data-fold-row")) {
-          const index = [
-            ...(this.parentElement?.querySelectorAll("[data-fold-row]") ?? []),
-          ].indexOf(this);
-          return rect(52 * index, 52 * (index + 1));
-        }
-        if (this.hasAttribute("aria-controls")) {
-          const rows = this.parentElement?.querySelectorAll("[data-fold-row]");
-          const last = 52 * (rows?.length ?? 0);
-          return rect(last + 4, last + 36);
-        }
-        return rect(0, 0);
-      }
-    );
-    const plugin = (n: number) => ({
-      ...SEO,
-      id: `seo/item-${n}`,
-      label: `Item ${n}`,
-      count: n,
-    });
+    layOut(3);
     draw([STOPPED, OVERDUE, plugin(3), plugin(2)]);
 
     expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
@@ -213,5 +232,51 @@ describe("NeedsAttention", () => {
     fireEvent.click(control);
     expect(screen.getAllByTestId("needs-attention-item")).toHaveLength(2);
     expect(screen.queryByText("2 more items shown")).toBeNull();
+  });
+
+  it("fills its body with whole rows at 3 and 4 rows tall, its control in the footer's room", () => {
+    const items = [STOPPED, OVERDUE, plugin(5), plugin(4), plugin(3)];
+    const fits = (h: number) =>
+      Math.floor(cardBodyHeightPx(h) / LIST_ROW_HEIGHT_PX.default);
+    for (const h of [3, 4]) {
+      layOut(h);
+      const { unmount } = draw(items);
+      expect(
+        screen.getAllByTestId("needs-attention-item"),
+        `h=${h}`
+      ).toHaveLength(fits(h));
+      // In the footer, whose room the frame keeps for every card: none of the body's room goes
+      // to it, so the rows have all of it.
+      const control = screen.getByRole("button", {
+        name: `Show ${items.length - fits(h)} more`,
+      });
+      expect(screen.getByTestId("widget-card-footer")).toContainElement(
+        control
+      );
+      unmount();
+      vi.restoreAllMocks();
+    }
+    // The frame's geometry: 2 rows at 3 tall, 4 at 4.
+    expect([fits(3), fits(4)]).toEqual([2, 4]);
+  });
+
+  it("carries how many items there are beside its title, read with it", () => {
+    draw([STOPPED, OVERDUE, SEO]);
+    expect(screen.getByTestId("widget-card-title-count")).toHaveTextContent(
+      "3"
+    );
+    expect(
+      screen.getByRole("region", { name: "Needs your attention, 3 items" })
+    ).toBeInTheDocument();
+  });
+
+  it("says how many items need the reader when it joined the dashboard while they were on it", () => {
+    draw([STOPPED, OVERDUE], { revealed: true });
+    expect(screen.getByText("2 items need your attention")).toBeInTheDocument();
+  });
+
+  it("says nothing of arriving when it was drawn from the start", () => {
+    draw([STOPPED, OVERDUE]);
+    expect(screen.queryByText(/need your attention/)).toBeNull();
   });
 });

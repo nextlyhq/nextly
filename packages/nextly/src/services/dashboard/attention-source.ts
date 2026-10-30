@@ -76,7 +76,8 @@ import {
 import { provideAttentionDigest } from "../../domains/widgets/core-widgets/needs-attention";
 import {
   boundCaller,
-  boundToReadAhead,
+  boundReadAhead,
+  type ReadAheadSide,
 } from "../../domains/widgets/declaration/read-services";
 import { processHeld } from "../../domains/widgets/process-held";
 import {
@@ -491,19 +492,19 @@ async function readAttentionDigest(
 }
 
 /**
- * How long a digest read ahead for a reader's dashboard waits for that
- * dashboard's own batch to take it: one load, never a standing cache.
+ * How long a digest read ahead for a dashboard load waits for that load's own
+ * batch to take it: one load, never a standing cache.
  */
 const READ_AHEAD_KEPT_MS = 5_000;
 
-/** At most this many readers' digests wait at once; the oldest goes first. */
-const READ_AHEAD_READERS = 500;
+/** At most this many loads' digests wait at once; the oldest goes first. */
+const READ_AHEAD_LOADS = 500;
 
 /**
- * Digests read ahead by the layout read, by reader, each waiting for the
- * batch that follows. Held for the process (`processHeld`), as the card's own
- * digest read is: the layout read and the batch can reach different copies
- * of this module.
+ * Digests read ahead by the layout read, by reader and load
+ * ({@link waitingKey}), each waiting for the batch of that load. Held for the
+ * process (`processHeld`), as the card's own digest read is: the layout read
+ * and the batch can reach different copies of this module.
  */
 const readAhead = processHeld(
   "nextly.dashboard.attentionReadAhead",
@@ -528,37 +529,66 @@ function readerKey(caller: ReadCaller): string {
 }
 
 /**
+ * Where one load's digest waits: under its reader AND its load's token. The
+ * reader keeps a token sent by one caller from reaching a digest read for
+ * another; the token keeps two loads of one reader, two tabs or a remount
+ * racing a refetch, from taking each other's digest, read at different
+ * moments and so perhaps different.
+ */
+function waitingKey(caller: ReadCaller, token: string): string {
+  return JSON.stringify([readerKey(caller), token]);
+}
+
+/**
  * The Needs attention card's digest: read once per dashboard load. The layout
- * read answers the card ahead (`readsAhead`), to learn whether it is empty
- * before the dashboard is drawn, and leaves its digest for this reader; the
- * batch that follows takes it, once, if it is fresh. Any other ask, a refetch,
- * a retry or a later visit, reads anew, so what a reader resolved is gone from
- * the next answer they are given.
+ * read answers the card ahead (`side: "ahead"`), to learn whether it is empty
+ * before the dashboard is drawn, and leaves its digest under its load's token;
+ * the batch of that load (`side: "batch"`, the same token) takes it, once, if
+ * it is fresh. Any other ask, a batch of no load, one whose digest was taken,
+ * expired or never read, a refetch or a later visit, reads anew, and no ask
+ * takes or removes another load's digest. So what a reader resolved is gone
+ * from the next answer they are given, and two loads of one reader each draw
+ * from their own read.
  */
 async function cardDigest(
   caller: ReadCaller,
-  readsAhead: boolean,
+  load: ReadAheadSide | undefined,
   opts: { signal: AbortSignal; now: Date }
 ): Promise<AttentionDigestItem[]> {
-  const key = readerKey(caller);
-  const waiting = readAhead.get(key);
-  readAhead.delete(key);
-  if (
-    !readsAhead &&
-    waiting !== undefined &&
-    Date.now() - waiting.at < READ_AHEAD_KEPT_MS
-  ) {
-    return waiting.items;
-  }
-  const items = await readAttentionDigest(caller, opts);
-  if (readsAhead) {
-    readAhead.set(key, { at: Date.now(), items });
-    for (const oldest of readAhead.keys()) {
-      if (readAhead.size <= READ_AHEAD_READERS) break;
-      readAhead.delete(oldest);
+  if (load?.side === "batch") {
+    const key = waitingKey(caller, load.token);
+    const waiting = readAhead.get(key);
+    readAhead.delete(key);
+    if (waiting !== undefined && Date.now() - waiting.at < READ_AHEAD_KEPT_MS) {
+      return waiting.items;
     }
   }
+  const items = await readAttentionDigest(caller, opts);
+  if (load?.side === "ahead") {
+    keepForBatch(waitingKey(caller, load.token), items);
+  }
   return items;
+}
+
+/**
+ * Leaves `items` under `key` for its load's batch. Every digest no batch took
+ * in time goes first, the oldest at the front, since they are kept in the
+ * order they were read; then the oldest beyond {@link READ_AHEAD_LOADS}.
+ */
+function keepForBatch(key: string, items: AttentionDigestItem[]): void {
+  const at = Date.now();
+  // Deleted first, so a load read ahead again is kept at the back, as the
+  // newest, rather than in its first place.
+  readAhead.delete(key);
+  for (const [held, waiting] of readAhead) {
+    if (at - waiting.at < READ_AHEAD_KEPT_MS) break;
+    readAhead.delete(held);
+  }
+  readAhead.set(key, { at, items });
+  for (const oldest of readAhead.keys()) {
+    if (readAhead.size <= READ_AHEAD_LOADS) break;
+    readAhead.delete(oldest);
+  }
 }
 
 /**
@@ -619,7 +649,7 @@ export function registerAttentionWidgetSource(): void {
   // The Needs your attention card's own read: the digest as the caller its
   // read services were bound for, so an API key is judged by its own grant.
   provideAttentionDigest((services, opts) =>
-    cardDigest(boundCaller(services), boundToReadAhead(services), opts)
+    cardDigest(boundCaller(services), boundReadAhead(services), opts)
   );
   registerSystemSource(
     {

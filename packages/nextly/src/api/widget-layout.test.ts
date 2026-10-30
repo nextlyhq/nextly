@@ -208,6 +208,7 @@ function putReq(body: unknown): Request {
 interface LayoutPayload {
   placements?: WidgetPlacement[];
   hiddenWhileEmpty?: string[];
+  readAheadToken?: string;
   available?: string[];
   version?: number;
   source?: string;
@@ -2805,11 +2806,34 @@ describe("the one default", () => {
         expect.objectContaining({ widgetId: "acme/quiet" }),
         expect.objectContaining({ widgetId: "site/a" }),
       ],
-      expect.any(AbortSignal)
+      expect.any(AbortSignal),
+      body.readAheadToken
     );
     // A card that empties is no change to the arrangement: a save staged
     // before it did is not a conflict.
     expect(body.scope).toBe(placed.scope);
+  });
+
+  it("names each read's own load, the token its cards were read ahead under, outside the scope token", async () => {
+    registerWidget(widget({ id: "acme/quiet" }));
+    plan({ cards: [{ widget: "acme/quiet" }] });
+
+    const first = await bodyOf(await getWidgetLayout(getReq()));
+    const firstAsked = cardsAnsweredEmpty.mock.lastCall;
+    const second = await bodyOf(await getWidgetLayout(getReq()));
+    const secondAsked = cardsAnsweredEmpty.mock.lastCall;
+
+    expect(first.readAheadToken).toEqual(expect.any(String));
+    expect(second.readAheadToken).toEqual(expect.any(String));
+    // The token each answer carries is the one its own cards were read ahead
+    // under, so the batch that sends it back takes that read's answer.
+    expect(firstAsked?.[4]).toBe(first.readAheadToken);
+    expect(secondAsked?.[4]).toBe(second.readAheadToken);
+    // A load of its own on every read: two tabs of one reader never name the
+    // same load. Nothing else about the dashboard changed, so the scope token
+    // does not move with it.
+    expect(second.readAheadToken).not.toBe(first.readAheadToken);
+    expect(second.scope).toBe(first.scope);
   });
 
   it("leaves out a card its declared widget would not show this reader, and carries it into the first save", async () => {

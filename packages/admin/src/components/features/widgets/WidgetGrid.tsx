@@ -338,9 +338,10 @@ function ArrangementLoading() {
 
 /**
  * What every card under the grid reads beside its props: where a card that fails to draw reports
- * it, and which cards the dashboard is drawn without while empty, from the first layout answer
- * the grid is drawn from and for the whole visit (`hidden-while-empty`). Mounted with the grid,
- * which waits for that answer, so the verdict is taken before any card is drawn.
+ * it, and which cards the dashboard is drawn without while empty: those the first layout answer
+ * found empty, less any a later answer finds with something waiting (`hidden-while-empty`).
+ * Mounted with the grid, which waits for that answer, so the verdict is taken before any card is
+ * drawn.
  */
 function CardContexts({
   reportDraw,

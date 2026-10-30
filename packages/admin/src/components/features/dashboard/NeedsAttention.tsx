@@ -10,7 +10,10 @@ import { cn } from "@admin/lib/utils";
 
 import { EntityRow, ENTITY_LEADING_CLASS } from "../widgets/frame/entity-row";
 import { useRowFold } from "../widgets/frame/fold";
+import { CardFooterContent } from "../widgets/frame/footer-slot";
 import { LIST_ROW_HEIGHT_CLASS } from "../widgets/frame/geometry";
+import { useCardTitleCount } from "../widgets/frame/title-count";
+import { useRevealedWhileViewed } from "../widgets/hidden-while-empty";
 
 import {
   attentionRows,
@@ -33,15 +36,27 @@ import {
  *
  * The card never scrolls: it draws the rows its height holds and folds the
  * rest, the least urgent, behind "Show N more", which grows the card in place
- * until "Show less" (`useRowFold`).
+ * until "Show less" (`useRowFold`). That control sits in the card's footer,
+ * whose room the frame keeps for every card, so the rows have the whole body.
+ * The title carries how many items there are ("Needs your attention 2").
+ *
+ * A card that joins the dashboard while the reader is on it (hidden at first,
+ * then found with something waiting) says how many items arrived, politely,
+ * so a reader looking elsewhere on the page learns of them.
  */
 export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
   data,
   refreshing,
   retry,
+  placementId,
 }) => {
   const rows = useMemo(() => attentionRows(data), [data]);
   const fold = useRowFold(rows.length);
+  useCardTitleCount(rows.length);
+  const arrival = useArrivalAnnouncement(
+    useRevealedWhileViewed(placementId),
+    rows.length
+  );
   const listId = useId();
   const listRef = useRef<HTMLUListElement | null>(null);
   // The rows the reader's "Show N more" revealed, while they are shown: focus
@@ -107,30 +122,49 @@ export const NeedsAttention: React.FC<DeclaredComponentProps> = ({
         ))}
       </ul>
       {fold.hasControl && (
-        <Button
-          ref={fold.controlRef}
-          variant="ghost"
-          size="sm"
-          className="justify-self-start"
-          aria-expanded={fold.expanded}
-          aria-controls={listId}
-          onClick={toggle}
-        >
-          {fold.expanded
-            ? "Show less"
-            : `Show ${rows.length - fold.shown} more`}
-        </Button>
+        <CardFooterContent>
+          <Button
+            ref={fold.controlRef}
+            variant="ghost"
+            size="sm"
+            aria-expanded={fold.expanded}
+            aria-controls={listId}
+            onClick={toggle}
+          >
+            {fold.expanded
+              ? "Show less"
+              : `Show ${rows.length - fold.shown} more`}
+          </Button>
+        </CardFooterContent>
       )}
       <p className="sr-only" aria-live="polite">
         {fold.expanded && revealed !== null
           ? `${revealed.count} more ${revealed.count === 1 ? "item" : "items"} shown`
-          : ""}
+          : arrival}
       </p>
     </div>
   );
 };
 
 NeedsAttention.displayName = "NeedsAttention";
+
+/**
+ * What the card says once, after it is drawn, when it joined the dashboard while the reader was
+ * on it: how many items need them. Set after the first paint, into a live region already on the
+ * page, which is what makes assistive technology read it; empty for a card drawn from the start.
+ */
+function useArrivalAnnouncement(revealed: boolean, count: number): string {
+  const [said, setSaid] = useState("");
+  const announced = useRef(false);
+  useEffect(() => {
+    if (!revealed || count === 0 || announced.current) return;
+    announced.current = true;
+    setSaid(
+      `${count} ${count === 1 ? "item needs" : "items need"} your attention`
+    );
+  }, [revealed, count]);
+  return said;
+}
 
 /** A severity's name, as assistive technology hears it before the row. */
 function severityName(severity: AttentionSeverity): string {

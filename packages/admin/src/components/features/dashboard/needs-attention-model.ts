@@ -39,25 +39,47 @@ const isText = (value: unknown): value is string =>
 /** One item of the answer, or `null` for anything the card cannot draw. */
 function attentionRow(item: unknown): AttentionRow | null {
   if (!isRecord(item) || !isText(item.id) || !isText(item.label)) return null;
-  const { id, label } = item;
-  const severity: AttentionSeverity =
-    item.severity === "critical" ? "critical" : "warning";
   const failed = item.failed === true;
+  return {
+    id: item.id,
+    label: item.label,
+    severity: item.severity === "critical" ? "critical" : "warning",
+    ...rowWords(item.label, item, failed),
+    ...rowExtras(item),
+    failed,
+  };
+}
+
+/**
+ * The row's label with its count, as drawn and as heard: "Overdue releases · 2". A failed item's
+ * count was never read, so its row says the label alone.
+ */
+function rowWords(
+  label: string,
+  item: Record<string, unknown>,
+  failed: boolean
+): Pick<AttentionRow, "title" | "spoken"> {
+  if (failed) return { title: label, spoken: label };
   const count = typeof item.count === "number" ? item.count : 0;
   const atLeast = item.atLeast === true;
-  // The link is the one rule startup holds a plugin's link to: a path inside
-  // the admin. One that breaks it is drawn with no Review rather than as a link
-  // that leaves the admin.
+  return {
+    title: `${label} · ${countText(count, atLeast)}`,
+    spoken: `${label}: ${countSpoken(count, atLeast)}`,
+  };
+}
+
+/**
+ * Why the item waits, when its owner said, and where its Review leads. The link is the one rule
+ * startup holds a plugin's link to: a path inside the admin. One that breaks it is drawn with no
+ * Review rather than as a link that leaves the admin.
+ */
+function rowExtras(
+  item: Record<string, unknown>
+): Pick<AttentionRow, "reason" | "href"> {
   const href = isText(item.link) ? adminHref(item.link) : undefined;
   return {
-    id,
-    label,
-    severity,
-    title: failed ? label : `${label} · ${countText(count, atLeast)}`,
-    spoken: failed ? label : `${label}: ${countSpoken(count, atLeast)}`,
     ...(isText(item.reason) ? { reason: item.reason } : {}),
     ...(href === undefined ? {} : { href }),
-    failed,
   };
 }
 

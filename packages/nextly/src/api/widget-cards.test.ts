@@ -10,7 +10,10 @@ import { NextlyError } from "../errors/nextly-error";
 import * as loggerModule from "../observability/logger";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import type { WidgetReadServices } from "../domains/widgets/declaration/define-widget";
-import { boundToReadAhead } from "../domains/widgets/declaration/read-services";
+import {
+  boundReadAhead,
+  type ReadAheadSide,
+} from "../domains/widgets/declaration/read-services";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
 import { setSiteDashboardRules } from "../domains/widgets/site-rules";
@@ -1033,16 +1036,28 @@ describe("whether a card answers empty, asked by the layout read before the dash
     expect(gatedLoad).not.toHaveBeenCalled();
   });
 
-  it("binds its read services as read ahead of the batch when the layout read asks", async () => {
-    const ahead: boolean[] = [];
+  it("binds its read services to the dashboard load its batch names, on the batch's side of it", async () => {
+    const bound: Array<ReadAheadSide | undefined> = [];
     ordersFunction.mockImplementation(async (...args: unknown[]) => {
       const { services } = args[0] as { services: WidgetReadServices };
-      ahead.push(boundToReadAhead(services));
+      bound.push(boundReadAhead(services));
       return { total: 0 };
     });
-    await answersEmpty("acme/orders", { ...batch, readAhead: true });
+    await answersEmpty("acme/orders", {
+      ...batch,
+      readAhead: { side: "ahead", token: "load-a" },
+    });
+    await answersEmpty("acme/orders", {
+      ...batch,
+      readAhead: { side: "batch", token: "load-b" },
+    });
     await answersEmpty("acme/orders");
-    expect(ahead).toEqual([true, false]);
+    // Each load by its own token and side, and a batch of no load bound to none.
+    expect(bound).toEqual([
+      { side: "ahead", token: "load-a" },
+      { side: "batch", token: "load-b" },
+      undefined,
+    ]);
     ordersFunction.mockImplementation(async () => ({ total: 7 }));
   });
 });

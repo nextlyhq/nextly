@@ -313,6 +313,14 @@ export interface DashboardLayoutResponse {
    * a server that predates it, which reads as none.
    */
   hiddenWhileEmpty?: string[];
+  /**
+   * An opaque token for this one read of the layout: the cards in
+   * `hiddenWhileEmpty` were answered ahead under it, and the dashboard's batch
+   * sends it back so a card is handed the answer read for this load and no
+   * other tab's. New on every read, so it is never part of a query key.
+   * Absent from a server that predates it, and the batch then sends none.
+   */
+  readAheadToken?: string;
 }
 
 /** What the layout read says of the Get started card. */

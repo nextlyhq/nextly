@@ -308,7 +308,7 @@ export function ArrangedGrid({
   gridRef,
   on,
 }: ArrangedGridProps): JSX.Element {
-  const hidden = useContext(HiddenWhileEmptyContext);
+  const { hidden } = useContext(HiddenWhileEmptyContext);
   const answeredAt = oldestAnswer(rows, {
     requested,
     slots,

@@ -524,12 +524,17 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   // admin draws its first paint without them rather than drawing them and
   // taking them out. Outside the scope token: what a card answers changes
   // with the content, and a save must not conflict because a card emptied.
+  // Each read is one dashboard load, named by a token of its own: what is read
+  // ahead here is left for the batch that sends this token back, and for no
+  // other load, a second tab of the same reader's included.
+  const readAheadToken = crypto.randomUUID();
   const { cardsAnsweredEmpty } = await import("./cards-answered-empty");
   const hiddenWhileEmpty = await cardsAnsweredEmpty(
     auth,
     view.reader,
     placements,
-    req.signal
+    req.signal,
+    readAheadToken
   );
   // The default as a reader following it would be handed it: their card has
   // no settings yet, so it is drawn from the answer alone. The steps are
@@ -590,6 +595,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // card is drawn, so the card and its steps cannot disagree.
       getStarted,
       hiddenWhileEmpty,
+      // The load the cards above were read ahead for, which the dashboard's
+      // batch sends back to be handed what was read for it. Outside the scope
+      // token, as `hiddenWhileEmpty` is: it differs on every read.
+      readAheadToken,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );

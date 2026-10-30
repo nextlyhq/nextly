@@ -9,6 +9,7 @@ import type { WidgetQuery } from "nextly/config";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
 import { useWidgetQueries, type WidgetQueryRequest } from "./useWidgetQueries";
 import { fetchWidgetBatch, type StreamedSlot } from "./widget-query-stream";
 
@@ -94,6 +95,57 @@ describe("useWidgetQueries, streamed", () => {
     await answer.started;
 
     expect(fetchBatch.mock.calls[0]?.[1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("sends the token of the layout answer held as each request is made, outside the cache key", async () => {
+    // Not `wrapper`'s client: this case writes the layout answer into the cache the hook reads.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retryDelay: 0 } },
+    });
+    const own = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const batchKeys = () =>
+      client
+        .getQueryCache()
+        .findAll({ queryKey: ["dashboard", "widget-queries"] })
+        .map(query => query.queryHash);
+    client.setQueryData(DASHBOARD_LAYOUT_KEY, { readAheadToken: "load-1" });
+
+    const first = heldAnswer();
+    const { result, rerender } = renderHook(() => useWidgetQueries(REQUESTS), {
+      wrapper: own,
+    });
+    await first.started;
+    expect(fetchBatch.mock.calls[0]?.[1].readAheadToken).toBe("load-1");
+    await first.end([total(1), total(2)]);
+    await waitFor(() => expect(result.current.slots.slow).toEqual(total(2)));
+    const keysBefore = batchKeys();
+
+    // A later layout read is another load: the refetch names it, read from the cache as the
+    // request is made, with no render of the hook in between.
+    client.setQueryData(DASHBOARD_LAYOUT_KEY, { readAheadToken: "load-2" });
+    const second = heldAnswer();
+    void result.current.refetch();
+    await second.started;
+    expect(fetchBatch.mock.calls[1]?.[1].readAheadToken).toBe("load-2");
+    await second.end([total(3), total(4)]);
+    await waitFor(() => expect(result.current.slots.slow).toEqual(total(4)));
+
+    // And a render that sees the new layout answer files the cards' answers under the one key
+    // they were filed under: a token in the key would split the cache on every visit.
+    rerender();
+    expect(batchKeys()).toEqual(keysBefore);
+    expect(fetchBatch).toHaveBeenCalledTimes(2);
+    client.clear();
+  });
+
+  it("sends no token while no layout answer is held", async () => {
+    const answer = heldAnswer();
+    renderHook(() => useWidgetQueries(REQUESTS), { wrapper });
+    await answer.started;
+
+    expect(fetchBatch.mock.calls[0]?.[1]).not.toHaveProperty("readAheadToken");
   });
 
   it("keeps the numbers on screen through a refetch until each card's new one arrives", async () => {

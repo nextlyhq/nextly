@@ -67,12 +67,25 @@ export interface ReadServiceBinding {
    */
   answersNothing?: (slug: string) => boolean;
   /**
-   * Bound for the layout read, which answers a card that hides while empty
-   * before the dashboard is drawn: the batch that follows asks the same card
-   * again, and a core widget may hand it this answer rather than reading
-   * twice (Needs attention's digest).
+   * The dashboard load this card is answered for, and on which side of it.
+   * The layout read answers a card that hides while empty before the
+   * dashboard is drawn (`"ahead"`); the dashboard drawn from that read asks
+   * the same card again in its batch (`"batch"`), and a core widget may hand
+   * that batch the answer read ahead for the same load rather than reading
+   * twice (Needs attention's digest). Absent for any other ask.
    */
-  readAhead?: boolean;
+  readAhead?: ReadAheadSide;
+}
+
+/**
+ * One side of one dashboard load's read-ahead: `token` names the load, minted
+ * by its layout read and sent back by the batch that load asks, so an answer
+ * read ahead for one load is never handed to another, a second tab of the
+ * same reader's included.
+ */
+export interface ReadAheadSide {
+  side: "ahead" | "batch";
+  token: string;
 }
 
 /** A call's own options, of which only the ones a read may carry are kept. */
@@ -333,16 +346,17 @@ function refuseUnreadableDate(slug: string, dateField: string): void {
 }
 
 /**
- * The caller each card's services were bound for, and whether they were bound
- * to read ahead (`ReadServiceBinding.readAhead`), kept beside them rather than
- * on them: the services a data function is handed carry no person, and a
- * plugin's function must never be able to read one off them.
+ * The caller each card's services were bound for, and the side of a dashboard
+ * load's read-ahead they were bound on (`ReadServiceBinding.readAhead`), kept
+ * beside them rather than on them: the services a data function is handed
+ * carry no person, and a plugin's function must never be able to read one off
+ * them, nor another load's token.
  *
  * Held for the process (`processHeld`), since Next.js and Turbopack can
  * evaluate this module in more than one server graph, and the request route
  * that binds a card's services and the widget registered at boot, whose
  * `load` asks for their caller, can each hold a different copy. Reachable only
- * through `bindReadServices`, `boundCaller` and `boundToReadAhead`.
+ * through `bindReadServices`, `boundCaller` and `boundReadAhead`.
  */
 const bindings = processHeld(
   "nextly.dashboard.readCallers",
@@ -354,7 +368,7 @@ const bindings = processHeld(
 /** What core keeps of a card's binding, beside its services. */
 interface BoundRead {
   caller: ReadCaller;
-  readAhead: boolean;
+  readAhead: ReadAheadSide | undefined;
 }
 
 /** What `services` were bound with; services core did not bind are refused. */
@@ -384,10 +398,13 @@ export function boundCaller(services: WidgetReadServices): ReadCaller {
 }
 
 /**
- * Whether `services` were bound to read ahead of the dashboard's own batch
- * (`ReadServiceBinding.readAhead`). Internal to core, as `boundCaller` is.
+ * The dashboard load `services` were bound for, and on which side of its
+ * read-ahead (`ReadServiceBinding.readAhead`); `undefined` for any other ask.
+ * Internal to core, as `boundCaller` is.
  */
-export function boundToReadAhead(services: WidgetReadServices): boolean {
+export function boundReadAhead(
+  services: WidgetReadServices
+): ReadAheadSide | undefined {
   return boundRead(services).readAhead;
 }
 
@@ -396,9 +413,15 @@ export function bindReadServices(
   binding: ReadServiceBinding
 ): WidgetReadServices {
   const services = readServices(binding);
+  const { readAhead } = binding;
   bindings.set(services, {
     caller: binding.caller,
-    readAhead: binding.readAhead === true,
+    // Core's own copy, so a binding changed after the services were made
+    // leaves the load they answer for as it was.
+    readAhead:
+      readAhead === undefined
+        ? undefined
+        : { side: readAhead.side, token: readAhead.token },
   });
   return services;
 }

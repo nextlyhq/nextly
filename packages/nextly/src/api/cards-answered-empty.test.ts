@@ -77,7 +77,8 @@ describe("the cards a reader's dashboard is drawn without while empty", () => {
         card("core/quiet-busy"),
         card("core/quiet-a"),
       ],
-      new AbortController().signal
+      new AbortController().signal,
+      "load-1"
     );
     expect(hidden).toEqual(["core/quiet-b", "core/quiet-a"]);
     // A card that shows its empty state, and one with no declaration, are
@@ -86,20 +87,23 @@ describe("the cards a reader's dashboard is drawn without while empty", () => {
     expect(refreshContentSources).toHaveBeenCalledTimes(1);
   });
 
-  it("asks ahead of the dashboard's own batch, as the reader, with the read's one instant and signal", async () => {
+  it("asks ahead of the dashboard's own batch, for the read's own load, as the reader, with the read's one instant and signal", async () => {
     cardAnswersEmpty.mockResolvedValue(true);
     const signal = new AbortController().signal;
     await cardsAnsweredEmpty(
       auth,
       reader,
       [card("core/quiet-a"), card("core/quiet-b")],
-      signal
+      signal,
+      "load-7"
     );
     expect(cardBatchFor).toHaveBeenCalledWith(auth, reader);
     const asked = cardAnswersEmpty.mock.calls;
+    // Under the token the layout read was handed, so only the batch that
+    // sends it back may take what was read here.
     expect(asked.map(([, , given]) => given)).toEqual([
-      { ...batch, readAhead: true },
-      { ...batch, readAhead: true },
+      { ...batch, readAhead: { side: "ahead", token: "load-7" } },
+      { ...batch, readAhead: { side: "ahead", token: "load-7" } },
     ]);
     const [first, second] = asked.map(([, , , input]) => input);
     expect(first.signal).toBe(signal);
@@ -111,7 +115,8 @@ describe("the cards a reader's dashboard is drawn without while empty", () => {
       auth,
       reader,
       [card("core/count")],
-      new AbortController().signal
+      new AbortController().signal,
+      "load-1"
     );
     expect(hidden).toEqual([]);
     expect(refreshContentSources).not.toHaveBeenCalled();

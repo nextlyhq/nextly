@@ -54,7 +54,9 @@ function bodyOf(element: Element | null): HTMLElement | null {
 
 /**
  * Whole rows that fit the body, measured with every row and the control drawn. A row is an
- * element marked `data-fold-row`; nothing else in the list is counted.
+ * element marked `data-fold-row`; nothing else in the list is counted. A control drawn in the
+ * card's footer (`CardFooterContent`), whose room the frame keeps for every card, takes none of
+ * the body's: only one drawn in the body below the rows is reserved for.
  */
 function measuredFit(
   list: HTMLElement | null,
@@ -67,7 +69,7 @@ function measuredFit(
   const bottoms = rows.map(row => row.getBoundingClientRect().bottom);
   const last = bottoms[bottoms.length - 1];
   const reserve =
-    control === null || last === undefined
+    control === null || last === undefined || !body.contains(control)
       ? 0
       : control.getBoundingClientRect().bottom - last;
   return rowsThatFit(bottoms, body.getBoundingClientRect().bottom, reserve);

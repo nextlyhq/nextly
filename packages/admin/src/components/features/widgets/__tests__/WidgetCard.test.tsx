@@ -233,7 +233,8 @@ describe("the header", () => {
       </WidgetCard>
     );
     const heading = screen.getByRole("heading", { name: title });
-    expect(heading).toHaveClass("truncate");
+    // Drawn on one line, shortened, beside room for a count the body may show after it.
+    expect(within(heading).getByText(title)).toHaveClass("truncate");
     expect(heading).toHaveAttribute("title", title);
   });
 

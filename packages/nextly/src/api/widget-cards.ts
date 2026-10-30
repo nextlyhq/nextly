@@ -23,7 +23,10 @@ import {
   type DeclaredWidget,
 } from "../domains/widgets/declaration/declared-widgets";
 import type { WidgetLoadSize } from "../domains/widgets/declaration/define-widget";
-import { bindReadServices } from "../domains/widgets/declaration/read-services";
+import {
+  bindReadServices,
+  type ReadAheadSide,
+} from "../domains/widgets/declaration/read-services";
 import { WIDGET_CELL_TIERS } from "../domains/widgets/definition";
 import {
   clampSize,
@@ -174,10 +177,13 @@ export interface CardBatch {
    */
   check: (raw: unknown) => Promise<WidgetQuery>;
   /**
-   * Asked by the layout read, ahead of the dashboard's own batch, so the read
-   * services each card is bound to say so (`ReadServiceBinding.readAhead`).
+   * The dashboard load this batch answers, and on which side of its
+   * read-ahead: the layout read's, ahead of the dashboard's own batch, or
+   * that batch, carrying the token the layout read handed the dashboard. The
+   * read services each card is bound to carry it
+   * (`ReadServiceBinding.readAhead`).
    */
-  readAhead?: boolean;
+  readAhead?: ReadAheadSide;
 }
 
 /**
@@ -480,7 +486,7 @@ async function judgeCard(
       signal,
       now,
       ...(collections === undefined ? {} : { collections }),
-      ...(batch.readAhead === true ? { readAhead: true } : {}),
+      ...(batch.readAhead === undefined ? {} : { readAhead: batch.readAhead }),
     }),
   };
   const { shows } = declaration;

@@ -22,7 +22,7 @@ import { declaredWidget } from "../domains/widgets/declaration/declared-widgets"
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
-import { cardAnswersEmpty } from "./widget-cards";
+import { cardAnswersEmpty, type CardBatch } from "./widget-cards";
 import { cardBatchFor } from "./widget-query";
 
 const NONE: readonly string[] = [];
@@ -34,13 +34,16 @@ const NONE: readonly string[] = [];
  * that failed or ran out of time included, is placed.
  *
  * Every card is asked at once, with one instant and one share scope for the
- * read, under the request's `signal`.
+ * read, under the request's `signal`, as read ahead for the dashboard load
+ * `readAheadToken` names: the batch that load asks, sending the token back,
+ * may be handed what was read here, and no other ask is.
  */
 export async function cardsAnsweredEmpty(
   auth: AuthContext,
   reader: ReadCaller,
   placements: readonly WidgetPlacement[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  readAheadToken: string
 ): Promise<readonly string[]> {
   const asked = placements.flatMap(placement => {
     const declared = declaredWidget(placement.widgetId);
@@ -53,7 +56,10 @@ export async function cardsAnsweredEmpty(
   // collections it reads, and its `shows`, read the content sources.
   await refreshContentSources();
   // Ahead of the dashboard's own batch, which asks these cards again.
-  const batch = { ...cardBatchFor(auth, reader), readAhead: true };
+  const batch: CardBatch = {
+    ...cardBatchFor(auth, reader),
+    readAhead: { side: "ahead", token: readAheadToken },
+  };
   const scope = createBatchScope();
   const now = new Date();
   const empty = await Promise.all(

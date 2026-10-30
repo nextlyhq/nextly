@@ -36,45 +36,48 @@ function answer(hidden?: string[]): DashboardLayoutResponse {
 }
 
 describe("the cards a dashboard is drawn without while empty", () => {
-  it("are the first answer's, held for the visit whatever a later read says", () => {
-    const { result, rerender } = renderHook(
-      ({ layout }) => useHiddenWhileEmptyAtFirstPaint(layout),
-      {
-        initialProps: {
-          layout: answer(["core/needs-attention"]) as
-            | DashboardLayoutResponse
-            | undefined,
-        },
-      }
-    );
-    expect([...result.current]).toEqual(["core/needs-attention"]);
+  function held(first: DashboardLayoutResponse | undefined) {
+    return renderHook(({ layout }) => useHiddenWhileEmptyAtFirstPaint(layout), {
+      initialProps: { layout: first as DashboardLayoutResponse | undefined },
+    });
+  }
 
-    // An item arrived and the layout was read again: the card does not join
-    // the page mid-view, which would move every card after it.
-    rerender({ layout: answer([]) });
-    expect([...result.current]).toEqual(["core/needs-attention"]);
+  it("are the first answer's, and a card a later read finds empty stays shown", () => {
+    const { result, rerender } = held(answer([]));
+    expect([...result.current.hidden]).toEqual([]);
+
+    // The last item cleared while the reader looked: the card stays, saying
+    // nothing is waiting, rather than leaving and moving the cards after it.
+    rerender({ layout: answer(["core/needs-attention"]) });
+    expect([...result.current.hidden]).toEqual([]);
+    expect([...result.current.revealed]).toEqual([]);
   });
 
-  it("are none for a dashboard drawn before any answer, and stay so when one arrives", () => {
-    const { result, rerender } = renderHook(
-      ({ layout }) => useHiddenWhileEmptyAtFirstPaint(layout),
-      {
-        initialProps: {
-          layout: undefined as DashboardLayoutResponse | undefined,
-        },
-      }
-    );
-    expect(result.current.size).toBe(0);
+  it("show a hidden card a later read finds with something waiting, marked as revealed", () => {
+    const { result, rerender } = held(answer(["core/needs-attention"]));
+    expect([...result.current.hidden]).toEqual(["core/needs-attention"]);
+    expect([...result.current.revealed]).toEqual([]);
 
-    // The cards are already drawn: an answer that arrives later moves none.
+    // A return visit's refetch found new work: the card is shown, and says so.
+    rerender({ layout: answer([]) });
+    expect([...result.current.hidden]).toEqual([]);
+    expect([...result.current.revealed]).toEqual(["core/needs-attention"]);
+
+    // Found empty again: once shown it stays shown for the visit.
     rerender({ layout: answer(["core/needs-attention"]) });
-    expect(result.current.size).toBe(0);
+    expect([...result.current.hidden]).toEqual([]);
+  });
+
+  it("are none for a dashboard drawn before any answer, and none join when one arrives", () => {
+    const { result, rerender } = held(undefined);
+    expect(result.current.hidden.size).toBe(0);
+
+    rerender({ layout: answer(["core/needs-attention"]) });
+    expect(result.current.hidden.size).toBe(0);
   });
 
   it("are none for a server that predates the verdict", () => {
-    const { result } = renderHook(() =>
-      useHiddenWhileEmptyAtFirstPaint(answer())
-    );
-    expect(result.current.size).toBe(0);
+    const { result } = held(answer());
+    expect(result.current.hidden.size).toBe(0);
   });
 });

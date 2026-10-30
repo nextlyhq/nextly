@@ -43,12 +43,14 @@ import type { WidgetRenderSize } from "nextly/widget-result";
 import { useMemo } from "react";
 
 import type {
+  DashboardLayoutResponse,
   DashboardWidget,
   WidgetResult,
   WidgetResultField,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { DASHBOARD_LAYOUT_KEY } from "./useDashboardLayout";
 import {
   fetchWidgetBatch,
   type CardAsk,
@@ -1020,6 +1022,15 @@ async function askPartition(
       { updatedAt: heldAt }
     );
 
+  // The token of the layout answer the dashboard is drawn from, read as the request is made rather
+  // than kept in the query key: it is new on every layout read, and a key carrying it would split
+  // the cache on every visit. The server hands a card the answer that read worked out ahead under
+  // it, once, so this load is never handed another tab's.
+  const readAheadToken =
+    queryClient.getQueryData<DashboardLayoutResponse>(
+      DASHBOARD_LAYOUT_KEY
+    )?.readAheadToken;
+
   // Nothing to send, when every cell asked is one its card's tier does not draw: no round trip.
   const answered =
     positions.length === 0
@@ -1028,6 +1039,7 @@ async function askPartition(
           positions.map(position => sentEntry(partition[position])),
           {
             signal,
+            ...(readAheadToken === undefined ? {} : { readAheadToken }),
             onSlots: arrived => {
               for (const { index, slot } of arrived) {
                 const position = positions[index];

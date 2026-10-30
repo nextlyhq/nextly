@@ -11,7 +11,7 @@
  * Other specs leave their own stopped and overdue releases in the shared
  * database, so the spec finds its rows by label and reads no exact count.
  */
-import { expect } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { signInAsLimitedUser } from "./support/limited-user";
@@ -93,5 +93,126 @@ test("rows for stopped and overdue releases, each with its reason and Review; no
     // Left as they were found: a stopped or overdue release of this spec's
     // would show the card on every later spec's dashboard.
     for (const { id } of seeded) await cancel(page, id);
+  }
+});
+
+/**
+ * Follows the link at `href` the way the app does, within the page, so the dashboard's cached
+ * layout answer is the one a return is first drawn from.
+ */
+async function followLink(page: Page, href: string): Promise<void> {
+  await page.evaluate(target => {
+    const link = document.querySelector<HTMLAnchorElement>(
+      `a[href="${target}"]`
+    );
+    if (!link) throw new Error(`no link to ${target}`);
+    link.click();
+  }, href);
+}
+
+/**
+ * Passes the layout read through as one that found the card with nothing waiting, so the first
+ * visit is drawn without it whatever the shared database holds.
+ */
+async function readCardAsEmpty(page: Page): Promise<void> {
+  await page.route("**/dashboard/layout", async (route: Route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    // Aborted rather than thrown when the read is given up: a throw out of the handler prints
+    // the request, session cookie included.
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    const body = (await response.json()) as Record<string, unknown>;
+    const layout = (Array.isArray(body.placements) ? body : body.data) as {
+      placements: Array<{ id: string; widgetId: string }>;
+      hiddenWhileEmpty?: string[];
+    };
+    const card = layout.placements.find(p => p.widgetId === CARD);
+    if (card) {
+      layout.hiddenWhileEmpty = [...(layout.hiddenWhileEmpty ?? []), card.id];
+    }
+    await route.fulfill({ response, json: body });
+  });
+}
+
+/** An overdue release left as the runner would leave it, for this spec to cancel. */
+async function overdueRelease(page: Page, stamp: string) {
+  const postId = await post(page, stamp);
+  const id = await release(page, `Attention return ${stamp}`, postId);
+  await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+  await leaveReleasesAsTheRunnerWould(page, [{ id, outcome: "overdue" }]);
+  return id;
+}
+
+test("a return that finds new work waiting shows the card, and says so", async ({
+  page,
+}) => {
+  const id = await overdueRelease(page, Date.now().toString(36));
+  try {
+    await readCardAsEmpty(page);
+    await gotoAdmin(page, "");
+    // Drawn cards only: a card the page is drawn without keeps a cell it never shows.
+    const card = page
+      .getByTestId(`widget-cell-${CARD}`)
+      .filter({ visible: true });
+    await expect(
+      page
+        .getByTestId("widget-cell-core/recently-edited")
+        .filter({ visible: true })
+    ).toBeVisible();
+    await expect(card).toHaveCount(0);
+
+    // Away and back within the session: the return is drawn from the cached answer, which hid
+    // the card, and the read it makes again finds the overdue release.
+    await followLink(page, "/admin/collections/posts");
+    await page.waitForURL(/\/admin\/collections\/posts/);
+    await page.unroute("**/dashboard/layout");
+    await followLink(page, "/admin");
+    await page.waitForURL(/\/admin\/?$/);
+
+    await expect(card).toBeVisible();
+    await expect(
+      card.getByText(/^\d+ items? needs? your attention$/)
+    ).toBeAttached();
+  } finally {
+    await page.unroute("**/dashboard/layout").catch(() => {});
+    await cancel(page, id);
+  }
+});
+
+test("a return whose waiting work was done meanwhile keeps the card in place", async ({
+  page,
+}) => {
+  const id = await overdueRelease(page, Date.now().toString(36));
+  let cancelled = false;
+  try {
+    await gotoAdmin(page, "");
+    const card = page
+      .getByTestId(`widget-cell-${CARD}`)
+      .filter({ visible: true });
+    await expect(card).toBeVisible();
+
+    await followLink(page, "/admin/collections/posts");
+    await page.waitForURL(/\/admin\/collections\/posts/);
+    await cancel(page, id);
+    cancelled = true;
+    const reread = page.waitForResponse(
+      response =>
+        response.url().includes("/dashboard/layout") &&
+        response.request().method() === "GET"
+    );
+    await followLink(page, "/admin");
+    await page.waitForURL(/\/admin\/?$/);
+    await reread;
+
+    // Shown when the reader came back, so it stays: what they are looking at does not jump up.
+    // It says nothing is waiting, or shows what other work still is.
+    await expect(card).toBeVisible();
+  } finally {
+    if (!cancelled) await cancel(page, id);
   }
 });
