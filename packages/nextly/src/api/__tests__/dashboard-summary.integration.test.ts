@@ -21,7 +21,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { defineCollection, text } from "../../config";
+import {
+  RELEASE_MEMBERS_TABLE,
+  RELEASES_TABLE,
+} from "../../domains/releases/release-tables";
+import { releaseMemberKey } from "../../domains/releases/release-member-key";
+import { needsAttentionWidget } from "../../domains/widgets/core-widgets/needs-attention";
 import { defineWidget } from "../../domains/widgets/declaration/define-widget";
+import { setting } from "../../domains/widgets/declaration/setting-builders";
 import { clearSources } from "../../domains/widgets/sources";
 import { definePlugin } from "../../plugins/plugin-context";
 import {
@@ -30,7 +37,10 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
+import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import { ServiceContainer } from "../../services";
+import { registerAttentionWidgetSource } from "../../services/dashboard/attention-source";
+import type { CollectionsHandler } from "../../services/collections-handler";
 import { WidgetLayoutService } from "../../services/widgets/widget-layout-service";
 import { sanitizeConfig } from "../../shared/types/config";
 
@@ -40,6 +50,15 @@ const NEW = { where: { state: { equals: "new" } } };
 const inbox = defineCollection({
   slug: INBOX,
   fields: [text({ name: "state" })],
+});
+
+/** Entries with unpublished changes, and entries a release will publish. */
+const DRAFTED = "drafted";
+const drafted = defineCollection({
+  slug: DRAFTED,
+  status: true,
+  versions: { drafts: true },
+  fields: [text({ name: "title" })],
 });
 
 const forms = definePlugin({
@@ -68,6 +87,28 @@ const forms = definePlugin({
             count: async ({ services }) => services.count(INBOX, NEW),
           },
         }),
+        // Placed any number of times, each card shown or not by its own
+        // setting: the header counts it for the first card that is shown.
+        defineWidget({
+          id: "acme/replies",
+          title: "Replies",
+          description: "Submissions waiting for a reply, where a card asks",
+          category: "Forms",
+          size: { default: { w: 6, h: 3 } },
+          several: true,
+          settings: {
+            open: setting.checkbox({ label: "Open", defaultValue: true }),
+          },
+          shows: ({ settings }) => settings.open,
+          load: async ({ services }) => ({
+            total: await services.count(INBOX, NEW),
+          }),
+          view: "figure",
+          summary: {
+            label: "replies owed",
+            count: async ({ services }) => services.count(INBOX, NEW),
+          },
+        }),
       ],
     },
   },
@@ -91,7 +132,11 @@ let otherId: string | undefined;
 
 describe.each(getConfiguredTestDialects())("on %s", dialect => {
   beforeEach(async () => {
-    handle = await createTestNextly({ dialect, plugins: [forms] });
+    handle = await createTestNextly({
+      dialect,
+      collections: [drafted],
+      plugins: [forms],
+    });
     clearSources();
     ownerId = await userNamed("owner");
     otherId = await userNamed("other");
@@ -133,21 +178,113 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
   /** Stores `userId`'s own dashboard: one card of the inbox widget. */
   async function placeInbox(userId: string): Promise<void> {
+    await place(userId, [
+      { id: "inbox-card", widgetId: "acme/inbox", w: 6, h: 3, removed: false },
+    ]);
+  }
+
+  /** Stores `userId`'s own dashboard: exactly the cards given, in order. */
+  async function place(
+    userId: string,
+    placements: {
+      id: string;
+      widgetId: string;
+      w: number;
+      h: number;
+      removed: boolean;
+      config?: Record<string, unknown>;
+    }[]
+  ): Promise<void> {
     const silent = { debug() {}, info() {}, warn() {}, error() {} };
     await new WidgetLayoutService(handle!.adapter, silent).saveLayout(
       "user",
       userId,
-      [
-        {
-          id: "inbox-card",
-          widgetId: "acme/inbox",
-          w: 6,
-          h: 3,
-          removed: false,
-        },
-      ],
+      placements,
       0
     );
+  }
+
+  /** A published entry of the drafted collection, its id. */
+  async function publishedEntry(title: string): Promise<string> {
+    const handler = handle!.getService(
+      "collectionsHandler"
+    ) as CollectionsHandler;
+    const created = await handler.createEntry(
+      { collectionName: DRAFTED, overrideAccess: true },
+      { title, status: "published" }
+    );
+    const id = (created.data as { id?: string } | undefined)?.id;
+    expect(typeof id, "the entry must be created").toBe("string");
+    return id!;
+  }
+
+  /** A working draft of `entryId`: an unpublished change. */
+  async function draftOf(entryId: string): Promise<void> {
+    await handle!.adapter.insert(VERSIONS_TABLE, {
+      id: crypto.randomUUID(),
+      scopeKind: "collection",
+      scopeSlug: DRAFTED,
+      entryId,
+      versionNo: null,
+      status: "draft",
+      isAutosave: false,
+      snapshot: JSON.stringify({ title: "edited" }),
+      label: null,
+      locale: null,
+      sourceVersionNo: null,
+      createdBy: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      updatedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+  }
+
+  /** A scheduled release at `at` that publishes `entryId`. */
+  async function releaseAt(at: Date, entryId: string): Promise<void> {
+    const id = crypto.randomUUID();
+    const now = new Date();
+    await handle!.adapter.insert(RELEASES_TABLE, {
+      id,
+      title: `Release ${id.slice(0, 8)}`,
+      description: null,
+      scheduledAt: at,
+      timezone: "UTC",
+      state: "scheduled",
+      publishedAt: null,
+      createdBy: null,
+      createdAt: now,
+      updatedAt: now,
+      revision: 0,
+    });
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: DRAFTED,
+      entryId,
+      locale: null,
+    };
+    await handle!.adapter.insert(RELEASE_MEMBERS_TABLE, {
+      id: crypto.randomUUID(),
+      releaseId: id,
+      ...ref,
+      action: "publish",
+      memberKey: releaseMemberKey(id, ref),
+      createdBy: null,
+      createdAt: now,
+    });
+  }
+
+  /** One batch entry's slot, as the dashboard's own query answers it for `cookie`. */
+  async function slotFor(cookie: string, entry: unknown): Promise<unknown> {
+    const response = await handlers().POST(
+      new Request("http://localhost/api/dashboard/query", {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ queries: [entry] }),
+      }),
+      { params: Promise.resolve({ params: ["dashboard", "query"] }) }
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { results: unknown[] };
+    return body.results[0];
   }
 
   /** Gives `userId` a role holding exactly the grants named. */
@@ -185,19 +322,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
   /** The inbox card's answer, as the dashboard's own query reads it for `cookie`. */
   async function cardAnswer(cookie: string): Promise<unknown> {
-    const response = await handlers().POST(
-      new Request("http://localhost/api/dashboard/query", {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({
-          queries: [{ widget: "acme/inbox", card: "inbox-card" }],
-        }),
-      }),
-      { params: Promise.resolve({ params: ["dashboard", "query"] }) }
-    );
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { results: unknown[] };
-    return body.results[0];
+    return slotFor(cookie, { widget: "acme/inbox", card: "inbox-card" });
   }
 
   /** A signed-in person's session cookie, as the admin's own requests carry it. */
@@ -295,6 +420,115 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ parts: [], failed: 0 });
+    });
+
+    it("counts what the Needs attention card counts, with unpublished, scheduled and overdue work waiting", async () => {
+      // Each boot's sources are cleared before the case runs; the card's own
+      // source is published again, as boot publishes it.
+      registerAttentionWidgetSource();
+      const soon = await publishedEntry("Publishing soon");
+      const late = await publishedEntry("Overdue");
+      await draftOf(soon);
+      await draftOf(late);
+      await releaseAt(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000), soon);
+      await releaseAt(new Date(Date.now() - 60 * 60 * 1000), late);
+      const session = await sessionOf(ownerId!);
+
+      // The card's own answer, asked by the dashboard's own query.
+      const card = (await slotFor(session, needsAttentionWidget.query)) as {
+        ok: boolean;
+        result: {
+          op: string;
+          buckets: { value: string; count: number; atLeast?: boolean }[];
+        };
+      };
+      expect(card, JSON.stringify(card)).toMatchObject({
+        ok: true,
+        result: { op: "groupBy" },
+      });
+      const kinds = new Map(
+        card.result.buckets
+          .filter(bucket =>
+            ["unpublished", "scheduled", "overdue"].includes(bucket.value)
+          )
+          .map(bucket => [bucket.value, bucket.count])
+      );
+      // Every kind has work in it: entries waiting that the release digest
+      // alone (overdue and stopped releases) would never count.
+      expect(kinds.get("unpublished")).toBe(2);
+      expect(kinds.get("scheduled")).toBe(1);
+      expect(kinds.get("overdue")).toBe(1);
+      const cardTotal = [...kinds.values()].reduce((sum, n) => sum + n, 0);
+
+      const header = (await (await summaryRequest(session)).json()) as {
+        parts: { kind: string; count: number; link?: string }[];
+        failed: number;
+      };
+      expect(header.failed).toBe(0);
+      expect(header.parts.find(part => part.kind === "attention")).toEqual({
+        kind: "attention",
+        count: cardTotal,
+        link: "releases?tab=attention&reason=overdue",
+      });
+    });
+
+    it("counts a widget placed twice for its card that is shown, when the first is hidden", async () => {
+      await seedInbox();
+      await place(ownerId!, [
+        {
+          id: "replies-closed",
+          widgetId: "acme/replies",
+          w: 6,
+          h: 3,
+          removed: false,
+          config: { open: false },
+        },
+        {
+          id: "replies-open",
+          widgetId: "acme/replies",
+          w: 6,
+          h: 3,
+          removed: false,
+          config: { open: true },
+        },
+      ]);
+
+      const header = (await (
+        await summaryRequest(await sessionOf(ownerId!))
+      ).json()) as { parts: { kind: string }[]; failed: number };
+
+      expect(header.parts.filter(part => part.kind === "widget")).toEqual([
+        {
+          kind: "widget",
+          widget: "acme/replies",
+          card: "replies-open",
+          label: "replies owed",
+          count: 2,
+        },
+      ]);
+      expect(header.failed).toBe(0);
+    });
+
+    it("gives the environment's label exactly as configured, even one that reads as a timestamp", async () => {
+      // A timezone other than UTC, so a pass that rewrote timestamps by value
+      // would change a label that reads as one.
+      await (
+        handle!.getService("generalSettingsService") as unknown as {
+          updateSettings(data: { timezone: string }): Promise<unknown>;
+        }
+      ).updateSettings({ timezone: "Asia/Karachi" });
+      const label = "2026-10-30T08:00:00Z";
+
+      const response = await summaryRequest(await sessionOf(ownerId!), {
+        environment: { label },
+      });
+
+      expect((await response.json()).environment).toEqual({
+        label,
+        tone: "neutral",
+      });
+      // The handler's internal marker never reaches the client.
+      expect(response.headers.has("x-nextly-skip-date-formatting")).toBe(false);
     });
 
     it("names the environment the site config sets, its tone defaulting to neutral", async () => {

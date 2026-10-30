@@ -15,6 +15,11 @@
  */
 
 import type { DashboardSummaryPart } from "../../api/dashboard-summary-types";
+import {
+  attentionTotalOf,
+  type AttentionKind,
+  type AttentionTotalBucket,
+} from "../../domains/widgets/attention-keys";
 
 /** One part of the summary line, before it is worded: the wire shape's part. */
 export type HeaderSummaryPart = DashboardSummaryPart;
@@ -25,37 +30,33 @@ export type PartRead = HeaderSummaryPart | null | "failed";
 /** How far ahead a release counts: the week from now. */
 export const RELEASES_WITHIN_DAYS = 7;
 
-/** One digest item as the attention source answers it. */
-interface AttentionItemRow {
-  readonly count?: unknown;
-  readonly atLeast?: unknown;
-  readonly failed?: unknown;
-  readonly link?: unknown;
-}
-
 /**
- * The attention part from the digest's items, most urgent first: the sum of
- * their counts, and the first item's link. Failed as a whole when any item
- * failed, since a total that leaves one out would say fewer things need the
- * reader than do; nothing to say when it sums to none.
+ * The attention part from the Needs attention card's own grouped answer: its
+ * total, by the one rule the card draws its total by (`attentionTotalOf`), so
+ * the header counts exactly what the card counts.
+ *
+ * Failed when the total is none but a floor: some lists went unread, so the
+ * card says "Not all checked" rather than "All clear", and the line must not
+ * call the reader caught up. Nothing to say when nothing is waiting.
+ *
+ * @param overdueLink where the overdue releases are listed: the line's link
+ * when the answer holds overdue releases, the kind with one list of its own.
  */
-export function attentionPart(items: readonly AttentionItemRow[]): PartRead {
-  if (items.some(item => item.failed === true)) return "failed";
-  let count = 0;
-  let atLeast = false;
-  for (const item of items) {
-    if (typeof item.count === "number" && Number.isFinite(item.count)) {
-      count += item.count;
-    }
-    if (item.atLeast === true) atLeast = true;
-  }
-  if (count === 0) return null;
-  const link = items[0]?.link;
+export function attentionPart(
+  buckets: readonly AttentionTotalBucket[],
+  overdueLink: string
+): PartRead {
+  const { count, atLeast } = attentionTotalOf(buckets);
+  if (count === 0) return atLeast ? "failed" : null;
+  const overdueKind: AttentionKind = "overdue";
+  const overdue = buckets.some(
+    bucket => bucket.value === overdueKind && bucket.count > 0
+  );
   return {
     kind: "attention",
     count,
     ...(atLeast ? { atLeast: true } : {}),
-    ...(typeof link === "string" ? { link } : {}),
+    ...(overdue ? { link: overdueLink } : {}),
   };
 }
 

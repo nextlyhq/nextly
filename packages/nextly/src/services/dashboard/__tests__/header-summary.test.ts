@@ -12,33 +12,58 @@ import {
 } from "../header-summary";
 
 describe("the attention part", () => {
-  it("sums the items' counts, a floor when any item's count is one", () => {
-    expect(attentionPart([{ count: 3 }, { count: 2 }])).toEqual({
-      kind: "attention",
-      count: 5,
-    });
-    expect(attentionPart([{ count: 3 }, { count: 99, atLeast: true }])).toEqual(
-      { kind: "attention", count: 102, atLeast: true }
-    );
-  });
+  const OVERDUE = "releases?tab=attention&reason=overdue";
 
-  it("links to the most urgent item, the digest's first", () => {
+  it("counts each kind's total from the card's grouped answer, never its parts as well", () => {
     expect(
-      attentionPart([
-        { count: 1, link: "releases/r1" },
-        { count: 4, link: "collections/posts" },
-      ])
-    ).toEqual({ kind: "attention", count: 5, link: "releases/r1" });
+      attentionPart(
+        [
+          { value: "unpublished", count: 3 },
+          { value: "unpublished:collection:posts", count: 3 },
+          { value: "scheduled", count: 2 },
+          { value: "scheduled:collection:posts", count: 2 },
+        ],
+        OVERDUE
+      )
+    ).toEqual({ kind: "attention", count: 5 });
+    expect(
+      attentionPart(
+        [
+          { value: "unpublished", count: 99, atLeast: true },
+          { value: "overdue", count: 3 },
+        ],
+        OVERDUE
+      )
+    ).toEqual({ kind: "attention", count: 102, atLeast: true, link: OVERDUE });
   });
 
-  it("fails as a whole when any item failed, so the total never leaves one out", () => {
-    expect(attentionPart([{ count: 3 }, { count: 0, failed: true }])).toBe(
-      "failed"
-    );
+  it("links to the overdue releases only when some are waiting", () => {
+    expect(
+      attentionPart(
+        [
+          { value: "unpublished", count: 4 },
+          { value: "overdue", count: 1 },
+        ],
+        OVERDUE
+      )
+    ).toEqual({ kind: "attention", count: 5, link: OVERDUE });
+    expect(
+      attentionPart([{ value: "unpublished", count: 4 }], OVERDUE)
+    ).toEqual({ kind: "attention", count: 4 });
+  });
+
+  it("fails when nothing was found but some lists went unread, as the card says Not all checked", () => {
+    expect(
+      attentionPart(
+        [{ value: "unpublished", count: 0, atLeast: true }],
+        OVERDUE
+      )
+    ).toBe("failed");
   });
 
   it("has nothing to say when nothing is waiting", () => {
-    expect(attentionPart([])).toBeNull();
+    expect(attentionPart([], OVERDUE)).toBeNull();
+    expect(attentionPart([{ value: "overdue", count: 0 }], OVERDUE)).toBeNull();
   });
 });
 

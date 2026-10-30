@@ -1,7 +1,9 @@
 /**
  * The dashboard header's summary for the signed-in reader, from
  * `GET /api/dashboard/summary`. Refreshed as the cards are: on mount and when
- * the window regains focus, since each part repeats a card's count.
+ * the window regains focus, since each part repeats a card's count; and with
+ * the layout on every layout write (`useDashboardLayout`), since a part counts
+ * for a card on the dashboard.
  *
  * @module hooks/queries/useDashboardSummary
  */

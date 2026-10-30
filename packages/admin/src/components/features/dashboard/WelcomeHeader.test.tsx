@@ -298,7 +298,7 @@ describe("the dashboard header", () => {
         failed: 0,
       },
     };
-    renderHeader({});
+    renderHeader({ cards: { "acme/forms": "c1" } });
     const line = screen.getByTestId("dashboard-summary");
     expect(line).toHaveTextContent("2 things need you · 3 new submissions");
     expect(within(line).getByRole("link")).toHaveTextContent(
@@ -307,6 +307,17 @@ describe("the dashboard header", () => {
     expect(within(line).getByRole("button")).toHaveTextContent(
       "3 new submissions"
     );
+  });
+
+  it("draws a part with no list and no card on the dashboard as words, not a control", () => {
+    summaryRead = {
+      data: { parts: [{ kind: "attention", count: 2 }], failed: 0 },
+    };
+    renderHeader({});
+    const line = screen.getByTestId("dashboard-summary");
+    expect(line).toHaveTextContent("2 things need you");
+    expect(within(line).queryByRole("button")).toBeNull();
+    expect(within(line).queryByRole("link")).toBeNull();
   });
 
   it("says how old the data is only past five minutes, once, with Refresh", () => {

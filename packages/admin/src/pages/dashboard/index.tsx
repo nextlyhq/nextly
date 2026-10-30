@@ -66,8 +66,10 @@ const DashboardPage: React.FC = () => {
       <DashboardChromeProvider>
         <PageContainer>
           {/* The header's own bottom padding is the space above the cards, as
-            the approved design draws it. */}
-          <div className="max-w-[1600px] mx-auto py-6 lg:py-10 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+            the approved design draws it. No padding of its own above or
+            below: the page container's is every admin page's, so the header
+            starts where other pages' headings do. */}
+          <div className="max-w-[1600px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-1000">
             <WelcomeHeader />
 
             {/* Every card, through ONE grid.

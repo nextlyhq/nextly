@@ -50,6 +50,18 @@ function PartLink({
   const toCard = (event: MouseEvent) => {
     if (focusCard(card)) event.preventDefault();
   };
+  // With no list to open and no card to follow to, there is nowhere to go:
+  // the part is words, not a control that does nothing.
+  if (part.href === undefined && card === undefined) {
+    return (
+      <span
+        className="text-foreground"
+        data-testid={`dashboard-summary-${part.key}`}
+      >
+        {part.text}
+      </span>
+    );
+  }
   return part.href === undefined ? (
     <button
       type="button"
