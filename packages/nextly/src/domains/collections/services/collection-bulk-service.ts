@@ -2021,7 +2021,7 @@ export class CollectionBulkService extends BaseService {
         user: params.user,
       })
     );
-    if ("refused" in rowGate) {
+    if (typeof rowGate === "object" && "refused" in rowGate) {
       return everyItemRefused(rowGate.refused, ids.length);
     }
 
@@ -2187,7 +2187,7 @@ export class CollectionBulkService extends BaseService {
         tx
       )
     );
-    if ("refused" in rowGate) {
+    if (typeof rowGate === "object" && "refused" in rowGate) {
       return everyItemRefused(rowGate.refused, ids.length);
     }
 

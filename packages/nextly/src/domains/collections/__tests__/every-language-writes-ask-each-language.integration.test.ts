@@ -377,14 +377,16 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot(dialect);
         const { withGerman, englishOnly } = await seed(t, NOT_ENGLISH);
 
-        const result = await entriesOf(t).bulkUpdateByQuery({
-          collectionName: NOT_ENGLISH,
-          where,
-          data: { title: "renamed" },
-          ...asAuthor,
-        } as never);
-
-        expect(result.successCount).toBe(0);
+        expect(
+          await refused(() =>
+            entriesOf(t).bulkUpdateByQuery({
+              collectionName: NOT_ENGLISH,
+              where,
+              data: { title: "renamed" },
+              ...asAuthor,
+            } as never)
+          )
+        ).toBe(true);
         expect(await titleOf(t, NOT_ENGLISH, withGerman)).toBe("both");
         expect(await titleOf(t, NOT_ENGLISH, englishOnly)).toBe("english");
       });

@@ -11800,18 +11800,58 @@ export class CollectionMutationService extends BaseService {
     fields: readonly { type: string; name?: string }[];
     tx?: TransactionContext;
   }): Promise<string[]> {
-    const held = await this.storedLanguageStatuses(
+    const held = await this.languagesWithRows(
       args.collectionName,
       args.entryId,
       args.tx
     );
-    return languagesToAsk(held === null ? [] : [...held.keys()], {
+    return languagesToAsk(held, {
       configured: this.localization?.locales.map(locale => locale.code) ?? [],
       reachesLocalizedFieldGroup: await this.reachesLocalizedFieldGroup(
         args.fields,
         args.tx
       ),
     });
+  }
+
+  /**
+   * The languages `entryId` holds a translation row in: none where the
+   * collection keeps no companion, or where the companion is not yet ready,
+   * as no read of it is made before it is. The locale alone is read, which
+   * every companion has, whether or not it keeps a status per language. Read
+   * on `tx` where one is given.
+   */
+  private async languagesWithRows(
+    collectionName: string,
+    entryId: string,
+    tx?: TransactionContext
+  ): Promise<string[]> {
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      tx?.getDrizzle()
+    );
+    if (
+      !companion ||
+      cachedCompanionReadiness(this.adapter, companion.companionTableName) !==
+        "ready"
+    ) {
+      return [];
+    }
+    const table = companion.table as Record<string, unknown>;
+    const db = (tx?.getDrizzle() ?? this.db) as Parameters<
+      typeof readCompanionLocaleStatusAll
+    >[0];
+    const rows = await db
+      .select({ locale: table._locale })
+      .from(companion.table)
+      .where(eq(table._parent as never, entryId));
+    return [
+      ...new Set(
+        rows
+          .map(row => row.locale)
+          .filter((locale): locale is string => typeof locale === "string")
+      ),
+    ];
   }
 
   /**
@@ -12844,6 +12884,8 @@ export class CollectionMutationService extends BaseService {
           collection.fields ||
           []) as FieldConfig[],
       };
+      // The companion is read for the entry's languages, so it is ready first.
+      await this.warmLocalizedReadiness(params.collectionName);
       const askedLanguages = await this.languagesToDelete(deleteLanguages);
       const deleteFilters: FilteredWriteCheck[] = [];
       const denied = await this.deleteRefusalInEachLanguage(deleteFilters, {
