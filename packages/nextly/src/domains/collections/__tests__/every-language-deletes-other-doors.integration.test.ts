@@ -24,11 +24,17 @@
  * delete alike. A collection whose fields reach a localized field group is
  * asked in every language, an English-only entry included.
  *
+ * The languages are read again under the entry's lock, so an entry that gains
+ * a German row by then is refused. A batch tells a rule reading `locales`
+ * each entry's own languages, as a single delete does.
+ *
  * @module domains/collections/__tests__/every-language-deletes-other-doors.integration.test
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
+
+import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -77,6 +83,9 @@ const ONLY_ENGLISH = "otherdoors_only_english";
 // A delete rule refusing German, over fields reaching a localized field group.
 const GROUPED = "otherdoors_grouped";
 const SEO = "otherdoors_seo";
+// A delete rule reading the languages it is told together, refusing where
+// German is among them.
+const BY_LOCALES = "otherdoors_by_locales";
 
 const AUTHOR = "otherdoors-author";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
@@ -144,9 +153,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           fieldGroup({ name: "seo", component: SEO }),
         ],
       }),
+      collection(
+        BY_LOCALES,
+        context => !(context.locales ?? []).includes("de")
+      ),
     ],
   });
-  const all = [...SLUGS, GROUPED];
+  const all = [...SLUGS, GROUPED, BY_LOCALES];
   await userWhoMay(current, AUTHOR, "read", all);
   await grantTo(current, AUTHOR, "delete", all);
   return current;
@@ -467,6 +480,89 @@ describe.each(getConfiguredTestDialects())(
 
         expect(await deletedInTransaction(t, NOT_GERMAN, withGerman)).toBe(409);
         expect(await stillThere(t, NOT_GERMAN, withGerman)).toBe(true);
+      });
+
+      it("refuses deleting an entry that gains German content by the time its row is locked", async () => {
+        const t = await boot(dialect);
+        const englishOnly = await entryIn(t, NOT_GERMAN, "english", false);
+        const translations = `dc_${NOT_GERMAN}_locales`;
+        const gained = { rows: 0 };
+
+        const status = await t.adapter
+          .transaction(async tx => {
+            // What a concurrent write committed just before the lock leaves
+            // behind: a German row, added once the entry's row is locked, so
+            // a check made before the lock still sees English alone.
+            const lockRow = tx.lockRow.bind(tx);
+            tx.lockRow = async (table, rowId) => {
+              await lockRow(table, rowId);
+              if (
+                table === `dc_${NOT_GERMAN}` &&
+                String(rowId) === englishOnly &&
+                gained.rows === 0
+              ) {
+                const [english] = await tx.select<Record<string, unknown>>(
+                  translations,
+                  {
+                    where: {
+                      and: [
+                        { column: "_parent", op: "=", value: englishOnly },
+                        { column: "_locale", op: "=", value: "en" },
+                      ],
+                    },
+                  }
+                );
+                await tx.insert(translations, {
+                  ...english,
+                  id: randomUUID(),
+                  _locale: "de",
+                });
+                gained.rows++;
+              }
+            };
+            return entriesOf(t).deleteEntryInTransaction(tx, {
+              collectionName: NOT_GERMAN,
+              entryId: englishOnly,
+              user: author,
+              overrideAccess: false,
+            });
+          })
+          .then(
+            result =>
+              result.success ? "deleted" : (result.statusCode ?? "failed"),
+            (error: unknown) => {
+              if (NextlyError.is(error)) return error.statusCode;
+              throw error;
+            }
+          );
+
+        // The lock was reached, and the German row it added refused the
+        // delete, which left the entry.
+        expect(gained.rows).toBe(1);
+        expect(status).not.toBe("deleted");
+        expect(await stillThere(t, NOT_GERMAN, englishOnly)).toBe(true);
+      });
+    });
+
+    describe("a rule reading every language it is told", () => {
+      it("is told each entry's own languages in a batch, as a single delete is", async () => {
+        const t = await boot(dialect);
+        const { withGerman, englishOnly } = await seed(t, BY_LOCALES);
+
+        const result = await entriesOf(t).deleteEntries(
+          { collectionName: BY_LOCALES, user: author },
+          [englishOnly, withGerman]
+        );
+
+        // The English-only entry is told English alone, so the rule allows
+        // it; the German one is told German too, and is refused.
+        expect({ ok: result.successful, failed: result.failed }).toEqual({
+          ok: 1,
+          failed: 1,
+        });
+        expect(
+          await remaining(t, BY_LOCALES, [englishOnly, withGerman])
+        ).toEqual([false, true]);
       });
     });
 
