@@ -616,9 +616,9 @@ export async function restoreVersion(
     const result = await singles.update(args.slug, payload, {
       user: args.user,
       overrideAccess: false,
-      // The route authorized the caller for this document; the update still
-      // runs its own document-level rules.
-      routeAuthorized: true,
+      // Not route-authorized: the route judged the restore in every language,
+      // and it writes the version's, so the update asks the rules again in
+      // that language.
       // Forward the actor so an API-key restore is attributed to the key, not
       // its owner — mirrors the collection branch below.
       ...(args.actor ? { actor: args.actor } : {}),
@@ -639,8 +639,10 @@ export async function restoreVersion(
         collectionName: args.slug,
         entryId: args.entryId,
         user: args.user,
+        // Not route-authorized: the route judged the restore in every
+        // language, and it writes the version's, so the update asks the rule
+        // again in that language, its filter included.
         overrideAccess: false,
-        routeAuthorized: true,
         request: args.request,
         // A snapshot that restores `status: "published"` must satisfy the key's
         // own publish grant, not the owner's RBAC.
