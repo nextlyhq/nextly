@@ -248,6 +248,25 @@ export function answeredWithin<T>(
 }
 
 /**
+ * Each offered Single, filled in when the trail recorded a save of it or its
+ * stored document was written since it was made (`fallback`); not known as a
+ * whole when any Single the trail has no save of was not answered.
+ */
+function singlesAsAnswered(
+  offered: readonly string[],
+  saved: ReadonlySet<string>,
+  fallback: ReadonlyMap<string, boolean | "unknown">
+): SetupSingle[] | NotKnown {
+  const singles: SetupSingle[] = [];
+  for (const slug of offered) {
+    const filledIn = saved.has(slug) || fallback.get(slug);
+    if (filledIn === undefined || filledIn === "unknown") return NOT_KNOWN;
+    singles.push({ slug, filledIn });
+  }
+  return singles;
+}
+
+/**
  * "Fill in your Singles": ONE step for every Single the reader may edit, in
  * the registry's order, done when every one of them has been saved.
  *
@@ -288,16 +307,8 @@ async function singlesStep(
     CONTENT_CHECK_BUDGET_MS,
     signal
   );
-  const singles: SetupSingle[] = [];
-  for (const slug of offered) {
-    if (saved.has(slug)) {
-      singles.push({ slug, filledIn: true });
-      continue;
-    }
-    const changed = fallback.get(slug);
-    if (changed === undefined || changed === "unknown") return NOT_KNOWN;
-    singles.push({ slug, filledIn: changed });
-  }
+  const singles = singlesAsAnswered(offered, saved, fallback);
+  if (singles === NOT_KNOWN) return NOT_KNOWN;
   return {
     kind: "singles",
     status: singles.every(single => single.filledIn) ? "done" : "open",
