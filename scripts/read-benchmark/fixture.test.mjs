@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MODES, TRANSLATABLE_COLUMNS, articleData, authorData, localesOf, siteFor, storesPerLanguage, translatableColumnsOf } from "./fixture.mjs";
+import { MODES, TRANSLATABLE_FIELDS, articleData, authorData, localesOf, siteFor, storesPerLanguage, translatableColumnsOf } from "./fixture.mjs";
 import { seededRandom } from "./stats.mjs";
 
 /** Builders that return what they were given, tagged, so a site's shape can be read without Nextly. */
@@ -56,12 +56,22 @@ describe("the benchmark site, by storage mode", () => {
     expect(MODES).toEqual(["main", "per-language", "e4"]);
   });
 
-  it("names the per-language tables of both the articles and the card", () => {
-    expect(TRANSLATABLE_COLUMNS).toEqual({ dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] });
-    // e4 stores every translatable field per language, the authors' among them; the others do not move them.
-    expect(translatableColumnsOf("e4")).toEqual({ ...TRANSLATABLE_COLUMNS, dc_authors: ["name", "bio"] });
-    expect(translatableColumnsOf("per-language")).toEqual(TRANSLATABLE_COLUMNS);
-    expect(translatableColumnsOf("main")).toEqual(TRANSLATABLE_COLUMNS);
+  it("reads every translatable field off the site's own definition, with the type a read returns it as", () => {
+    expect(TRANSLATABLE_FIELDS).toEqual({
+      dc_authors: { name: "string", bio: "string" },
+      dc_articles: { headline: "string", excerpt: "string", body: "object" },
+      comp_card: { heading: "string", blurb: "string" },
+    });
+  });
+
+  it("checks the tables each mode translates, with every translatable column of each", () => {
+    const articlesAndCard = { dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] };
+    // e4 moves every translatable field, the authors' among them.
+    expect(translatableColumnsOf("e4")).toEqual({ dc_authors: ["name", "bio"], ...articlesAndCard });
+    // per-language moves those of the entities it marks translatable.
+    expect(translatableColumnsOf("per-language")).toEqual(articlesAndCard);
+    // main keeps every one on its own table, where it is checked for.
+    expect(translatableColumnsOf("main")).toEqual({ dc_authors: ["name", "bio"], ...articlesAndCard });
     expect(localesOf("dc_articles")).toBe("dc_articles_locales");
   });
 });

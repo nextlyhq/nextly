@@ -83,22 +83,55 @@ export function siteFor(mode, config) {
   };
 }
 
-/**
- * The translatable columns of each table that has any: the articles' own, and
- * the card component's. A `main` site keeps them on these tables; a site that
- * stores them per language moves them to each table's translation table, where
- * its shared columns never go.
- */
-export const TRANSLATABLE_COLUMNS = { dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] };
+/** The kinds of field a site translates, and the type a read returns each as. */
+const TRANSLATABLE_KINDS = { text: "string", textarea: "string", richText: "object" };
 
 /**
- * The translatable columns a mode's site stores, by table. `e4` stores every
- * translatable field per language, the site's whole content, so the authors'
- * name and bio move too; `per-language` marks only the articles and the card
- * translatable, and `main` moves nothing.
+ * The `nextly/config` builders `siteFor` uses, standing in for them so that
+ * the site's definition can be read here: each returns what it was given,
+ * tagged with its kind.
+ */
+const DESCRIBING = Object.fromEntries(
+  ["defineCollection", "defineFieldGroup", "checkbox", "date", "fieldGroup", "number", "relationship", "richText", "text", "textarea"].map(name => [
+    name,
+    input => ({ kind: name, ...input }),
+  ])
+);
+
+/** A collection's or component's translatable fields, by name, with the type a read returns each as. */
+function translatableFieldsIn(fields) {
+  return Object.fromEntries(fields.filter(field => field.kind in TRANSLATABLE_KINDS).map(field => [field.name, TRANSLATABLE_KINDS[field.kind]]));
+}
+
+/** Each table of `site` that holds translatable fields: its collections' and its components'. */
+function tablesOf(site) {
+  return [
+    ...site.collections.map(collection => ({ table: `dc_${collection.slug}`, entity: collection })),
+    ...site.fieldGroups.map(group => ({ table: `comp_${group.slug}`, entity: group })),
+  ].filter(({ entity }) => Object.keys(translatableFieldsIn(entity.fields)).length > 0);
+}
+
+/**
+ * The site's translatable fields, by the table they belong to, each with the
+ * type a read returns it as: the articles', the card component's and the
+ * authors'. Read off the site's own definition, so every check made of them,
+ * where they are stored and whether a read returned them, covers every one.
+ */
+export const TRANSLATABLE_FIELDS = Object.fromEntries(
+  tablesOf(siteFor("main", DESCRIBING)).map(({ table, entity }) => [table, translatableFieldsIn(entity.fields)])
+);
+
+/**
+ * The tables whose translatable columns a mode's site is checked for, by
+ * table, with those columns. A `main` site keeps every one on its own table.
+ * `per-language` moves those of the entities it marks translatable, the
+ * articles and the card. `e4` moves every translatable field, the authors'
+ * name and bio among them.
  */
 export function translatableColumnsOf(mode) {
-  return mode === "e4" ? { ...TRANSLATABLE_COLUMNS, dc_authors: ["name", "bio"] } : TRANSLATABLE_COLUMNS;
+  const site = siteFor(mode, DESCRIBING);
+  const moved = tablesOf(site).filter(({ entity }) => mode !== "per-language" || entity.localized === true);
+  return Object.fromEntries(moved.map(({ table }) => [table, Object.keys(TRANSLATABLE_FIELDS[table])]));
 }
 
 /** The table a `per-language` site keeps `table`'s translatable values in. */

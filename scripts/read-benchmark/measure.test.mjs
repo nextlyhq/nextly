@@ -21,7 +21,13 @@ import {
   teardown,
 } from "./measure.mjs";
 
-const article = { headline: "A headline", excerpt: "An excerpt.", body: { root: {} }, author: { id: "a1", name: "Ada", bio: "Writes." }, card: { heading: "Card" } };
+const article = {
+  headline: "A headline",
+  excerpt: "An excerpt.",
+  body: { root: {} },
+  author: { id: "a1", name: "Ada", bio: "Writes." },
+  card: { heading: "Card", blurb: "A blurb." },
+};
 
 describe("the checks a measurement makes before it times anything", () => {
   it("reads a create's id from the item or the record", () => {
@@ -43,6 +49,10 @@ describe("the checks a measurement makes before it times anything", () => {
     expect(isCompleteArticle({ ...article, author: { id: "a1", bio: "Writes." } })).toBe(false);
     expect(isCompleteArticle({ ...article, author: { id: "a1", name: "Ada" } })).toBe(false);
     expect(isCompleteArticle({ ...article, card: {} })).toBe(false);
+    // Every translatable field of the card, not only its heading.
+    expect(isCompleteArticle({ ...article, card: { heading: "Card" } })).toBe(false);
+    // Each as the type a read returns it as.
+    expect(isCompleteArticle({ ...article, body: "a string" })).toBe(false);
   });
 
   it("wants a full page from a list read and a complete article from both", () => {
@@ -59,11 +69,15 @@ describe("the checks a measurement makes before it times anything", () => {
 
   it("refuses a site whose storage is not its mode's", () => {
     // What each mode stores, as the two sites store it.
+    const authorsOnMain = { columns: ["id", "name", "bio"], locales: null };
     const asMain = {
+      dc_authors: authorsOnMain,
       dc_articles: { columns: ["id", "headline", "excerpt", "body", "views"], locales: null },
       comp_card: { columns: ["id", "heading", "blurb"], locales: null },
     };
+    // per-language marks the articles and the card translatable, and leaves the authors on their table.
     const asPerLanguage = {
+      dc_authors: authorsOnMain,
       dc_articles: { columns: ["id", "views"], locales: { rows: 10, columns: ["_parent", "_locale", "headline", "excerpt", "body"] } },
       comp_card: { columns: ["id"], locales: { rows: 10, columns: ["_parent", "_locale", "heading", "blurb"] } },
     };
@@ -87,10 +101,9 @@ describe("the checks a measurement makes before it times anything", () => {
     expect(() => checkStorage("e4", 10, asE4)).not.toThrow();
     expect(() => checkStorage("e4", 10, { ...asMain, dc_authors: authorsPerLanguage })).toThrow(/^e4 mode: dc_articles has no translation table$/);
     expect(() => checkStorage("e4", 10, { ...fewer, dc_authors: authorsPerLanguage })).toThrow(/9 translation rows, expected 10/);
-    expect(() => checkStorage("e4", 10, asPerLanguage)).toThrow(/^e4 mode: dc_authors was not read$/);
-    expect(() => checkStorage("e4", 10, { ...asPerLanguage, dc_authors: { columns: ["id", "name", "bio"], locales: null } })).toThrow(
-      /^e4 mode: dc_authors has no translation table$/
-    );
+    const { dc_authors: _unread, ...withoutAuthors } = asE4;
+    expect(() => checkStorage("e4", 10, withoutAuthors)).toThrow(/^e4 mode: dc_authors was not read$/);
+    expect(() => checkStorage("e4", 10, asPerLanguage)).toThrow(/^e4 mode: dc_authors has no translation table$/);
     expect(() => checkStorage("e4", 10, { ...asPerLanguage, dc_authors: { ...authorsPerLanguage, locales: { ...authorsPerLanguage.locales, rows: 19 } } })).toThrow(
       /dc_authors has 19 translation rows, expected 20/
     );
@@ -115,7 +128,7 @@ describe("the checks a measurement makes before it times anything", () => {
     // e4 reads the authors' table too.
     const withAuthors = { ...tables, dc_authors: [{ id: "a1" }] };
     const e4Adapter = { tableExists: async table => table in withAuthors, select: async table => withAuthors[table] };
-    expect(Object.keys(await storageOf(e4Adapter, "e4"))).toEqual(["dc_articles", "comp_card", "dc_authors"]);
+    expect(Object.keys(await storageOf(e4Adapter, "e4"))).toEqual(["dc_authors", "dc_articles", "comp_card"]);
     // A failed read of a table that exists is not an absent table: it fails the attempt.
     const dropped = { tableExists: async () => true, select: async () => Promise.reject(new Error("connection lost")) };
     await expect(storageOf(dropped, "per-language")).rejects.toThrow(/connection lost/);

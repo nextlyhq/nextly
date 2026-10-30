@@ -23,7 +23,7 @@ import { parseArgs } from "node:util";
 
 import { isCliEntry } from "../cli-entry.mjs";
 
-import { articleData, authorData, localesOf, siteFor, storesPerLanguage, translatableColumnsOf } from "./fixture.mjs";
+import { TRANSLATABLE_FIELDS, articleData, authorData, localesOf, siteFor, storesPerLanguage, translatableColumnsOf } from "./fixture.mjs";
 import { pick, seededRandom, summarize } from "./stats.mjs";
 
 const AUTHORS = 20;
@@ -67,15 +67,23 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Whether `value` holds every translatable field of `table`, each as the type a read returns it as. */
+function hasTranslatableFields(value, table) {
+  return (
+    isRecord(value) &&
+    Object.entries(TRANSLATABLE_FIELDS[table]).every(([name, type]) => (type === "object" ? isRecord(value[name]) : typeof value[name] === type))
+  );
+}
+
 /**
- * Whether an article came back with its translatable fields, its populated
- * author and its card. The author's own name and bio, as well: under `e4` they
- * are translated too, and a read that lost them would time less than it should.
+ * Whether an article came back whole: every translatable field of its own, of
+ * its populated author and of its card, as the site defines them. A read that
+ * lost one would time less than it should, under `e4` above all, which
+ * translates them all.
  */
 export function isCompleteArticle(item) {
-  const { headline, excerpt, body, author, card } = item ?? {};
-  const authorComplete = isRecord(author) && typeof author.name === "string" && typeof author.bio === "string";
-  return [typeof headline === "string", typeof excerpt === "string", Boolean(body), authorComplete, Boolean(card?.heading)].every(Boolean);
+  const { author, card } = item ?? {};
+  return hasTranslatableFields(item, "dc_articles") && hasTranslatableFields(author, "dc_authors") && hasTranslatableFields(card, "comp_card");
 }
 
 /**
