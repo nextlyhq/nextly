@@ -398,7 +398,7 @@ export class RBACAccessControlService {
     resource: string;
     codeAccess?: CollectionAccessControl | SingleAccessControl;
   }): Promise<boolean | undefined> {
-    return (await this.codeRuleRead(params, null, false))?.allowed;
+    return (await this.codeRuleRead(params, null))?.allowed;
   }
 
   /**
@@ -428,16 +428,16 @@ export class RBACAccessControlService {
     if (params.operation === "publish" || params.operation === "unpublish") {
       return false;
     }
-    const read = await this.codeRuleRead(params, params.principal, false);
+    const read = await this.codeRuleRead(params, params.principal);
     return read?.allowed === true;
   }
 
   /**
    * The rule's own verdict for a caller with no staff user: `undefined` when
-   * no rule governs the operation, else what it allows, a read rule's filter
-   * handed back to a caller that applies it (`appliesFilter`). One evaluation
-   * for the anonymous caller and the person, so the two differ only in who
-   * the rule is told is asking and in what each does with no rule at all.
+   * no rule governs the operation, else what it allows. Neither caller applies
+   * a rule's filter, so a filter answers no. One evaluation for the anonymous
+   * caller and the person, so the two differ only in who the rule is told is
+   * asking and in what each does with no rule at all.
    */
   private async codeRuleRead(
     params: {
@@ -445,9 +445,10 @@ export class RBACAccessControlService {
       resource: string;
       codeAccess?: CollectionAccessControl | SingleAccessControl;
     },
-    principal: Principal | null,
-    appliesFilter: boolean
+    principal: Principal | null
   ): Promise<FilteredRead | undefined> {
+    // No caller of this path applies a rule's filter.
+    const appliesFilter = false;
     const { operation, resource } = params;
     const target = this.targetFor(resource, params.codeAccess);
     const rule =
