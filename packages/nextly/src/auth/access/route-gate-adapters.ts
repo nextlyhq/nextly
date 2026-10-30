@@ -559,7 +559,10 @@ async function capability(
       resource,
       rules,
       () => userHoldsPermission(caller.userId, action, resource),
-      "some-entries"
+      // A cell is a hint of what the caller may try, and the write it offers
+      // applies the rule's filter, so a cell answers yes under a filter for
+      // every action.
+      "cell"
     )
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
@@ -601,7 +604,13 @@ function gateVerdict(
     rules,
     permissionWithoutService,
     appliesFilter: readFilter === "applied",
-    asksSomeEntries: readFilter === "some-entries",
+    // A yes or no answers yes under a filter for a read alone: the caller may
+    // read the entries the filter matches. A write under a filter names no
+    // entry and applies no filter here, so its yes would let the caller act
+    // past the filter.
+    asksSomeEntries:
+      readFilter === "cell" ||
+      (readFilter === "some-entries" && action === "read"),
   });
 }
 
@@ -622,12 +631,13 @@ async function userHoldsAnswering(
 }
 
 /**
- * What an asker does with a collection read rule's filter: applies it to the
- * entries it reads (`applied`); asks only whether the caller may read the
- * collection, which the filter answers yes (`some-entries`); or neither, and
- * refuses it (`refused`).
+ * What an asker does with a collection rule's filter: applies it to the
+ * entries it reads (`applied`); asks only a yes or no, which a read's filter
+ * answers yes and a write's no (`some-entries`); shows a capability cell,
+ * which any action's filter answers yes, as the request it offers applies the
+ * filter (`cell`); or neither, and refuses it (`refused`).
  */
-type ReadFilterUse = "applied" | "some-entries" | "refused";
+type ReadFilterUse = "applied" | "some-entries" | "cell" | "refused";
 
 /**
  * The verdict for an action no rule can name. A key holds it by its stored
@@ -804,7 +814,15 @@ export async function callerMayPerform(
   const rules = getRBACService();
   const caller = probedCaller(scope, user);
   if (!action || !resource) return refusedEmpty(caller, action, resource);
-  if (!caller.key) return sessionAnswer(caller.userId, action, resource, rules);
+  if (!caller.key) {
+    return sessionAnswer(
+      caller.userId,
+      action,
+      resource,
+      rules,
+      "some-entries"
+    );
+  }
   // A key is judged on its own scope, the route gate's way, with or without
   // the service.
   return (
@@ -855,8 +873,8 @@ export async function callerHoldsAny(
 /**
  * Whether the caller holds the permission a slug names, as a dashboard
  * widget's `requiredPermission` and a document lock's release ask it. A key
- * holds it by the stored slug alone; a signed-in user is asked as
- * `ctx.caller.can` asks one.
+ * holds it by the stored slug alone; a signed-in user is asked as a
+ * capability cell asks one, a rule's filter counting as the permission held.
  */
 export function holdsPermissionAnswer(
   slug: string,
@@ -906,19 +924,25 @@ async function heldPermission(
   // Refused without the service before the slug is read, as it always was.
   if (!rules) return refusedWithoutService(user, action, resource);
   if (!action || !resource) return refusedEmpty(user, action, resource);
-  return sessionAnswer(caller.userId, action, resource, rules);
+  // Holding a permission is a hint of what the caller may do, as a capability
+  // cell is: a lock's release and the dashboard's offers read a filter as the
+  // permission held, and the write itself applies the filter.
+  return sessionAnswer(caller.userId, action, resource, rules, "cell");
 }
 
 /**
  * A signed-in user's answer to a caller check: the route gate's, a yes or a
  * no, and refused without the access-control service. A lookup that failed
- * fails the check, as it always has, rather than answering no.
+ * fails the check, as it always has, rather than answering no. `readFilter`
+ * says what a rule's filter answers: a yes or no (`some-entries`), or a hint
+ * of what the caller holds (`cell`).
  */
 async function sessionAnswer(
   userId: string,
   action: string,
   resource: string,
-  rules: RouteRules
+  rules: RouteRules,
+  readFilter: "some-entries" | "cell"
 ): Promise<boolean> {
   const caller: GateCaller = { userId };
   if (!rules) return refusedWithoutService(caller, action, resource);
@@ -928,7 +952,7 @@ async function sessionAnswer(
     resource,
     rules,
     () => Promise.resolve(false),
-    "some-entries"
+    readFilter
   );
   if (!verdict.allowed && verdict.refusal === "failed") throw verdict.error;
   return verdict.allowed;
