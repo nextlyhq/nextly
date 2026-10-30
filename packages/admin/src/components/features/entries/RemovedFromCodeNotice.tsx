@@ -31,9 +31,12 @@ function Parts({ parts }: { parts: readonly NoticePart[] }): JSX.Element {
         typeof part === "string" ? (
           <span key={index}>{part}</span>
         ) : (
+          // A migration's file name is one long word, wider than a phone's
+          // notice: it may break anywhere, and only where it has to, so a
+          // short command still keeps to one line.
           <code
             key={index}
-            className="rounded-sm border border-border bg-background px-1 py-0.5 font-mono text-xs text-foreground"
+            className="rounded-sm border border-border bg-background px-1 py-0.5 font-mono text-xs text-foreground [overflow-wrap:anywhere]"
           >
             {part.code}
           </code>
