@@ -14,18 +14,60 @@
  *   it, and whether every step is done; that last answer is said once and
  *   recorded, so the next load leaves the card out.
  *
- * Both reach the permission and database graph through a lazy import of
- * `setup-card`, so the widget list, which every reader of core's ids loads,
- * does not. The caller is the one the card's read services were bound for, so
- * an API key is judged as itself, never as the person who made it.
+ * Both are handed to this module by `setup-card` when the dashboard's widgets
+ * are registered (`provideSetupCard`), rather than imported: the widget list is
+ * read by the admin's own tests and type check and by every reader of core's
+ * ids, none of which should reach the permission and database graph the steps
+ * read through. The caller is the one the card's read services were bound for,
+ * so an API key is judged as itself, never as the person who made it.
  *
  * @module domains/widgets/core-widgets/setup
  */
 
-import { defineWidget } from "../declaration/define-widget";
+import { NextlyError } from "../../../errors/nextly-error";
+import {
+  defineWidget,
+  type WidgetReadServices,
+} from "../declaration/define-widget";
+import { processHeld } from "../process-held";
 import type { SetupCardData } from "../setup-steps";
 
 import { CORE_WIDGET_ID } from "./ids";
+
+/** The card's two reads, for the caller a card's read services were bound for. */
+interface SetupCardReads {
+  shownTo: (services: WidgetReadServices) => Promise<boolean>;
+  dataFor: (services: WidgetReadServices, now: Date) => Promise<SetupCardData>;
+}
+
+/**
+ * The reads `setup-card` provided, held for the process (`processHeld`):
+ * Next.js and Turbopack can evaluate this module in more than one server
+ * graph, and the widgets registered at boot and the card answered on a request
+ * can each hold a different copy.
+ */
+const provided = processHeld(
+  "nextly.dashboard.setupCard",
+  (): { reads?: SetupCardReads } => ({}),
+  (held): held is { reads?: SetupCardReads } =>
+    typeof held === "object" && held !== null
+);
+
+/** Hands the card its reads; `setup-card` does, when the dashboard's widgets are registered. */
+export function provideSetupCard(reads: SetupCardReads): void {
+  provided.reads = reads;
+}
+
+/** The provided reads, or a fault of the install: never a card answered on a guess. */
+function setupReads(): SetupCardReads {
+  const { reads } = provided;
+  if (reads === undefined) {
+    throw NextlyError.internal({
+      logContext: { reason: "setup-card-not-provided" },
+    });
+  }
+  return reads;
+}
 
 /** A new project, part way through, for the preview page. */
 const PART_WAY: SetupCardData = {
@@ -74,27 +116,17 @@ export const setupWidget = defineWidget({
   description:
     "The setup steps left on a new project, detected from its data. For super-admins, until setup is done.",
   icon: "ListChecks",
-  // Full width and two rows: one line of progress over one row of tiles. It
-  // may grow, as a card does in place, while the Singles' list is open.
+  // Full width and two rows: a thin progress bar over one row of tiles, the
+  // count in the header. It grows in place only while the reader has the
+  // Singles' list open, or where its tiles wrap on a narrow screen.
   size: {
     default: { w: 12, h: 2 },
     min: { w: 12, h: 2 },
     max: { w: 12, h: 4 },
   },
-  shows: async ({ services }) => {
-    const [{ setupShownTo }, { boundCaller }] = await Promise.all([
-      import("../setup-card"),
-      import("../declaration/read-services"),
-    ]);
-    return setupShownTo(boundCaller(services));
-  },
-  load: async ({ services, now }) => {
-    const [{ setupCardData }, { boundCaller }] = await Promise.all([
-      import("../setup-card"),
-      import("../declaration/read-services"),
-    ]);
-    return setupCardData(boundCaller(services), now);
-  },
+  // A read that throws leaves the card out, and is logged as the widget's.
+  shows: async ({ services }) => setupReads().shownTo(services),
+  load: async ({ services, now }) => setupReads().dataFor(services, now),
   view: { component: "core#Setup" },
   // Never empty: `shows` decides whether the card is there, and while it is
   // it always has something to say, "could not check setup" included.

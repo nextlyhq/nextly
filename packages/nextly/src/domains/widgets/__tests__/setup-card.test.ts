@@ -34,11 +34,17 @@ vi.mock("../../../di/container", () => ({
 vi.mock("../condition-probe", () => ({
   conditionProbe: () => ({ setup: steps }),
 }));
+// The caller a card's read services were bound for: the services stand for it.
+vi.mock("../declaration/read-services", () => ({
+  boundCaller: (services: { caller: unknown }) => services.caller,
+}));
 
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import { setupWidget } from "../core-widgets/setup";
 import {
   changeSetupState,
   readSetupState,
+  registerSetupCard,
   setupCardData,
   setupShownTo,
 } from "../setup-card";
@@ -148,5 +154,20 @@ describe("what a reader's card remembers", () => {
       skip: { kind: "singles", skipped: false },
     });
     expect([...(await readSetupState("ana")).skipped]).toEqual(["invite"]);
+  });
+});
+
+describe("the card's declaration", () => {
+  type LoadInput = Parameters<typeof setupWidget.load>[0];
+  /** What the frame hands `shows` and `load`: read services bound for `caller`, at `now`. */
+  const asked = (caller: ReadCaller) =>
+    ({ services: { caller }, now }) as unknown as LoadInput;
+
+  it("answers shows and load from the reads registered at boot, as the caller its services were bound for", async () => {
+    registerSetupCard();
+    expect(await setupWidget.shows?.(asked(person))).toBe(true);
+    expect(await setupWidget.shows?.(asked(key))).toBe(false);
+    const data = await setupWidget.load(asked(person));
+    expect(data).toEqual({ setup: open, collapsed: false, allSet: false });
   });
 });

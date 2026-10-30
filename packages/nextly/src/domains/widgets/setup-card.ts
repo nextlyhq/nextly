@@ -15,8 +15,9 @@
  * - `setup-retired`: when it said "You're all set". It says so once, and the
  *   next load leaves it out for good.
  *
- * Loaded lazily by the card's declaration (`core-widgets/setup`), so the
- * widget list stays free of the permission and database graph this reaches.
+ * Handed to the card's declaration (`core-widgets/setup`) when the dashboard's
+ * widgets are registered (`registerSetupCard`), so the widget list stays free
+ * of the permission and database graph this reaches.
  *
  * @module domains/widgets/setup-card
  */
@@ -30,6 +31,8 @@ import { isSuperAdminOrRefuse } from "../../services/lib/permissions";
 import { DashboardPreferences } from "../dashboard/dashboard-preferences";
 
 import { conditionProbe } from "./condition-probe";
+import { provideSetupCard } from "./core-widgets/setup";
+import { boundCaller } from "./declaration/read-services";
 import { skippedKinds, withSkips } from "./setup";
 import {
   SETUP_SKIPPABLE_KINDS,
@@ -182,4 +185,15 @@ export async function changeSetupState(
   }
   await Promise.all(writes);
   return readSetupState(userId, repository);
+}
+
+/**
+ * Hands the setup card its reads, each as the caller its card's read services
+ * were bound for. Called where the dashboard's widgets are registered.
+ */
+export function registerSetupCard(): void {
+  provideSetupCard({
+    shownTo: services => setupShownTo(boundCaller(services)),
+    dataFor: (services, now) => setupCardData(boundCaller(services), now),
+  });
 }
