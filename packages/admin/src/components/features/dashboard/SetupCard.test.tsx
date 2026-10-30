@@ -11,6 +11,8 @@ import {
   type CardCollapse,
 } from "@admin/components/features/widgets/frame/collapse";
 import { CardGrowContext } from "@admin/components/features/widgets/frame/grow";
+import { cardBodyHeightPx } from "@admin/components/features/widgets/frame/measures";
+import { CardHeightContext } from "@admin/components/features/widgets/frame/tier";
 import {
   fireEvent,
   render,
@@ -50,6 +52,12 @@ vi.mock("@admin/hooks/queries/useSingles", () => ({
   }),
 }));
 
+import {
+  SETUP_BAR,
+  SETUP_GAP,
+  SETUP_ROW_BODY_PX,
+  SETUP_TILE,
+} from "./setup/measures";
 import { SetupCard } from "./SetupCard";
 
 const SINGLES = ["home", "about", "footer", "contact", "legal"];
@@ -104,19 +112,25 @@ function draw(
     ) : (
       <CardGrowContext.Provider value={grow}>{body}</CardGrowContext.Provider>
     );
+  // At the size core declares for it, 12 × 2, as the dashboard draws it.
   return render(
-    inFrame(
-      collapse === undefined ? (
-        grown
-      ) : (
-        <CardCollapseContext.Provider value={collapse}>
-          {grown}
-        </CardCollapseContext.Provider>
-      ),
-      "Set up your project"
-    )
+    <CardHeightContext.Provider value={2}>
+      {inFrame(
+        collapse === undefined ? (
+          grown
+        ) : (
+          <CardCollapseContext.Provider value={collapse}>
+            {grown}
+          </CardCollapseContext.Provider>
+        ),
+        "Set up your project"
+      )}
+    </CardHeightContext.Provider>
   );
 }
+
+/** "N of M done", as the frame's header draws it beside the title. */
+const headerCount = () => screen.getByTestId("widget-card-title-count");
 
 /** The tiles, in order, by the step each draws. */
 const tiles = () =>
@@ -136,9 +150,11 @@ beforeEach(() => {
 describe("the setup card", () => {
   it("draws one row of tiles with N of M done and a bar, never a vertical list", () => {
     draw(dataOf());
-    expect(screen.getByTestId("setup-progress")).toHaveTextContent(
-      "1 of 5 done"
-    );
+    expect(headerCount()).toHaveTextContent("1 of 5 done");
+    // Read with the title, as the card's name.
+    expect(
+      screen.getByRole("region", { name: /Set up your project/ })
+    ).toHaveAccessibleName("Set up your project, 1 of 5 done");
     const row = screen.getByRole("list", { name: "Setup steps" });
     // One column per step from 640 px, flowing in one row; two columns below.
     expect(row.className).toContain("grid-cols-2");
@@ -189,12 +205,30 @@ describe("the setup card", () => {
     expect(screen.queryByRole("list", { name: /Your Singles/ })).toBeNull();
   });
 
-  it("asks the frame to grow the card to hold its steps while they are drawn, and not while collapsed", () => {
+  it("fits 12 × 2 at rest: a thin bar over one row of fixed-height tiles, the count in the header", () => {
+    // The body two rows give the card holds the bar, the gap and one tile, with nothing else.
+    expect(SETUP_ROW_BODY_PX).toBeLessThanOrEqual(cardBodyHeightPx(2));
+    const { container } = draw(dataOf());
+    const body = screen.getByTestId("setup-card");
+    expect(body).toHaveClass(SETUP_GAP.className);
+    expect(container.querySelector(`.${SETUP_BAR.className}`)).not.toBeNull();
+    for (const tile of tiles()) expect(tile).toHaveClass(SETUP_TILE.className);
+    // Nothing but the bar, the row and nothing else is drawn in the body at rest.
+    expect(body.children).toHaveLength(2);
+  });
+
+  it("asks the frame for no growth at rest, and grows only while the reader has the Singles' list open", () => {
     const grow = vi.fn();
     draw(dataOf(), grow);
-    // Two rows hold less than a row of tiles: the card reports what its steps need.
+    // At rest the card keeps its two rows: nothing moves as the dashboard loads.
+    expect(grow).not.toHaveBeenCalledWith(expect.any(Number));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open: Fill in your Singles" })
+    );
     expect(grow).toHaveBeenLastCalledWith(expect.any(Number));
-    fireEvent.click(screen.getByRole("button", { name: "Collapse setup" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Hide: Fill in your Singles" })
+    );
     expect(grow).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -229,9 +263,7 @@ describe("the setup card", () => {
       { kind: "entry", status: "open", collection: "posts" },
     ];
     draw(dataOf({ setup: { known: true, steps, done: 2, total: 3 } }));
-    expect(screen.getByTestId("setup-progress")).toHaveTextContent(
-      "2 of 3 done"
-    );
+    expect(headerCount()).toHaveTextContent("2 of 3 done");
     fireEvent.click(
       screen.getByRole("button", { name: "Restore: Invite a teammate" })
     );
@@ -351,9 +383,7 @@ describe("the setup card", () => {
     draw(dataOf());
     expect(tiles().map(tile => tile.dataset.setupStep)).not.toContain("sample");
     // Counted over the tiles drawn.
-    expect(screen.getByTestId("setup-progress")).toHaveTextContent(
-      "1 of 4 done"
-    );
+    expect(headerCount()).toHaveTextContent("1 of 4 done");
   });
 
   it("keeps sample content as done once someone on the site answered it, whatever the route says now", () => {
@@ -392,9 +422,7 @@ describe("the setup card", () => {
     );
     // Done here and counted, before any answer: never gone, then back.
     expect(tiles()[0]).toHaveAttribute("data-status", "done");
-    expect(screen.getByTestId("setup-progress")).toHaveTextContent(
-      "2 of 5 done"
-    );
+    expect(headerCount()).toHaveTextContent("2 of 5 done");
     expect(retry).not.toHaveBeenCalled();
     // The decline is recorded, and the card asks for its steps as they now are.
     const [onRecorded] = seed.skip.mock.calls[0] as [() => void];
@@ -407,19 +435,22 @@ describe("the setup card", () => {
     const { rerender } = draw(dataOf());
     expect(retry).toHaveBeenCalledTimes(1);
     expect(tiles()[0]).toHaveAttribute("data-status", "done");
+    // Drawn again in the same place, as a refetch draws it: the same card, not a new one.
     rerender(
-      inFrame(
-        <SetupCard
-          widgetId="core/setup"
-          placementId="core/setup"
-          settings={{}}
-          size={{ w: 12, h: 2, tier: "large" }}
-          data={dataOf()}
-          refreshing={false}
-          retry={retry}
-        />,
-        "Set up your project"
-      )
+      <CardHeightContext.Provider value={2}>
+        {inFrame(
+          <SetupCard
+            widgetId="core/setup"
+            placementId="core/setup"
+            settings={{}}
+            size={{ w: 12, h: 2, tier: "large" }}
+            data={dataOf()}
+            refreshing={false}
+            retry={retry}
+          />,
+          "Set up your project"
+        )}
+      </CardHeightContext.Provider>
     );
     expect(retry).toHaveBeenCalledTimes(1);
   });

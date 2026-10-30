@@ -108,7 +108,11 @@ import {
   useMeasuredTier,
   type RowsLayout,
 } from "./frame/tier";
-import { CardTitleCountContext, titleCountSpoken } from "./frame/title-count";
+import {
+  CardTitleCountContext,
+  titleCountSpoken,
+  type TitleCount,
+} from "./frame/title-count";
 
 export interface WidgetCardProps {
   /** The card's subject, always rendered, in every state, once. */
@@ -323,7 +327,9 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const report = useCallback((next: CardState | null) => setReported(next), []);
   // A count the body shows beside the title (`useCardTitleCount`), while it is drawn: a body that
   // stops being drawn unmounts, and its unmount withdraws the count.
-  const [titleCount, setTitleCount] = useState<number | undefined>(undefined);
+  const [titleCount, setTitleCount] = useState<TitleCount | undefined>(
+    undefined
+  );
   const given = props.state ?? READY;
   const state = shownState(given, reported);
   const drawsBody = showsBody(given);
@@ -599,7 +605,7 @@ function WidgetCardHeader({
   subtitleId: string;
   title: string;
   /** A count the body shows beside the title, muted; read after it as ", N items". */
-  titleCount?: number | undefined;
+  titleCount?: TitleCount | undefined;
   subtitle?: string | undefined;
   leading?: ReactNode;
   quick?: ReactNode;
