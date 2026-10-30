@@ -185,7 +185,7 @@ describe("budgetBreaches", () => {
     const [breach] = budgetBreaches(r, pins([]));
     expect(breach.kind).toBe("total");
     expect(breach.measured).toContain("3600.00 KB");
-    expect(breach.budget).toContain("3500");
+    expect(breach.budget).toContain(`${BUDGETS.totalMinifiedKB}`);
   });
 
   it("reports every breaching route, not only the first", () => {
@@ -210,7 +210,9 @@ describe("describeBreaches", () => {
   it("renders measured size and budget together on one line", () => {
     const r = report([], { totalKB: 3600 });
     expect(describeBreaches(budgetBreaches(r, pins([])))).toEqual([
-      expect.stringMatching(/total.*3600\.00 KB minified.*3500 KB minified/),
+      expect.stringMatching(
+        new RegExp(`total.*3600\\.00 KB minified.*${BUDGETS.totalMinifiedKB} KB minified`)
+      ),
     ]);
   });
 });

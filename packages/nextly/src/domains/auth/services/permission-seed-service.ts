@@ -150,13 +150,10 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     resource: "roles",
     description: "Permission to delete roles",
   },
-  {
-    name: "Manage Media",
-    slug: "manage-media",
-    action: "manage",
-    resource: "media",
-    description: "Permission to upload and manage media files",
-  },
+  // No `manage-` permission is seeded on media, settings, email providers or
+  // email templates: each is retired in favour of the plain read, create,
+  // update and delete below. An install that seeded one keeps its row, so
+  // `nextly upgrade` can still find the roles holding it and convert them.
   {
     name: "Create Media",
     slug: "create-media",
@@ -184,13 +181,6 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     action: "delete",
     resource: "media",
     description: "Permission to delete media files",
-  },
-  {
-    name: "Manage Settings",
-    slug: "manage-settings",
-    action: "manage",
-    resource: "settings",
-    description: "Permission to manage system settings",
   },
   {
     name: "Read Settings",
@@ -223,13 +213,6 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
       "Permission to remove settings such as image sizes, user fields and field groups",
   },
   {
-    name: "Manage Email Providers",
-    slug: "manage-email-providers",
-    action: "manage",
-    resource: "email-providers",
-    description: "Permission to manage email providers",
-  },
-  {
     name: "Create Email Providers",
     slug: "create-email-providers",
     action: "create",
@@ -256,13 +239,6 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     action: "delete",
     resource: "email-providers",
     description: "Permission to delete email providers",
-  },
-  {
-    name: "Manage Email Templates",
-    slug: "manage-email-templates",
-    action: "manage",
-    resource: "email-templates",
-    description: "Permission to manage email templates",
   },
   {
     name: "Create Email Templates",

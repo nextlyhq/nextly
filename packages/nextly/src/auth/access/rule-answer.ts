@@ -278,24 +278,6 @@ export function allowsSome(decision: Decision, action: string): boolean {
 }
 
 /**
- * A decision as a way in that applies no rule's filter answers it: allowed
- * only when the decision allows every entry. A read the decision allows only
- * for the entries a filter matches is refused there, and recorded as the
- * deviation it is. A write rule's filter is not applied yet anywhere, so it
- * refuses as the decision's answer.
- */
-export async function allowedUnfiltered(
-  decision: Decision,
-  action: string
-): Promise<boolean> {
-  if (decision.allowed) return true;
-  if (decision.reason !== "only-matching-entries" || action !== "read") {
-    return false;
-  }
-  return deviate("filter-not-applied", false, () => true);
-}
-
-/**
  * A collection read rule's filter that names a field inside a component,
  * which a rule's filter may not use yet: only the read that builds it knows
  * which fields are components, so it reports the filter as not well formed
@@ -309,6 +291,26 @@ export const FILTER_NAMES_A_COMPONENT_FIELD: RuleAnswer = Object.freeze({
       code: "FILTER_COMPONENT_IN_RULE",
       message:
         "a field inside a component cannot be used in a rule's filter yet",
+    }),
+  ]),
+});
+
+/**
+ * A collection read rule's filter that names a field stored as serialized
+ * JSON: a list (`hasMany`) or a reference to one of several collections. Its
+ * column holds a document, so an operator comparing it with one value
+ * compares the document's text, and `not_equals` would match an entry whose
+ * list holds that value. Reported as not well formed, so the filter matches
+ * no entry rather than the wrong ones.
+ */
+export const FILTER_NAMES_A_STRUCTURED_FIELD: RuleAnswer = Object.freeze({
+  kind: "malformed-filter",
+  problems: Object.freeze([
+    Object.freeze({
+      path: "where",
+      code: "FILTER_STRUCTURED_FIELD_IN_RULE",
+      message:
+        "a field stored as a list or a reference to several collections cannot be used in a rule's filter",
     }),
   ]),
 });

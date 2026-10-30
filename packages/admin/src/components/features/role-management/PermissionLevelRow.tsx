@@ -8,7 +8,7 @@ import {
   Switch,
 } from "@nextlyhq/ui";
 import * as RadioGroupPrimitive from "@radix-ui/react-radio-group";
-import { useMemo, useState, type JSX } from "react";
+import { useState, type JSX } from "react";
 
 import {
   actionLabel,
@@ -22,10 +22,14 @@ import {
   offeredLevels,
   ownWithLevel,
   rowLevel,
+  rowNotes,
   type LevelRow,
 } from "@admin/lib/permissions/level-rows";
 import { levelsFor, type AccessLevel } from "@admin/lib/permissions/levels";
 import { cn } from "@admin/lib/utils";
+import type { Permission } from "@admin/types/ui/form";
+
+import { useHeldPermissions } from "./useHeldPermissions";
 
 export interface PermissionLevelRowProps {
   row: LevelRow;
@@ -71,13 +75,7 @@ export function PermissionLevelRow({
   disabled = false,
 }: PermissionLevelRowProps): JSX.Element {
   const [eachAction, setEachAction] = useState(false);
-  const locked = useMemo(() => new Set(lockedIds), [lockedIds]);
-  const owned = useMemo(() => new Set(value), [value]);
-  // What the row shows held: the role's own and its base role's.
-  const held = useMemo(
-    () => new Set([...value, ...lockedIds]),
-    [value, lockedIds]
-  );
+  const { owned, locked, held } = useHeldPermissions(value, lockedIds);
 
   const level = rowLevel(row, held);
   const levels = levelsFor(row.kind);
@@ -95,6 +93,9 @@ export function PermissionLevelRow({
     level === "custom"
       ? customSummary(row.permissions.filter(p => held.has(p.id)))
       : "";
+  // A built-in resource's lines: a retired `manage-` permission still held,
+  // and what Settings must hold to change the schema.
+  const notes = rowNotes(row, held, owned);
 
   const setLevel = (chosen: string) => {
     const next = levels.find(candidate => candidate === chosen);
@@ -112,15 +113,19 @@ export function PermissionLevelRow({
       )}
       data-slot="permission-level-row"
     >
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-6">
+      {/* Side by side only from `xl`: below it, beside the settings menu, the
+          levels and the switch leave the name too little room, so the name
+          sits above them instead. */}
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between xl:gap-6">
         <RowHeading
           row={row}
           custom={level === "custom"}
           summary={summary}
           givers={givers}
+          notes={notes}
         />
 
-        <div className="flex flex-col gap-3 md:shrink-0 md:flex-row md:items-center md:gap-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-6 xl:shrink-0">
           <RadioGroupPrimitive.Root
             aria-label={`${name} level`}
             orientation="horizontal"
@@ -169,8 +174,8 @@ export function PermissionLevelRow({
       </div>
 
       {eachAction && (
-        <ActionSwitches
-          row={row}
+        <PermissionSwitches
+          permissions={row.permissions}
           name={name}
           held={held}
           locked={locked}
@@ -194,6 +199,7 @@ function RowHeading({
   custom,
   summary,
   givers,
+  notes,
 }: {
   row: LevelRow;
   custom: boolean;
@@ -201,17 +207,31 @@ function RowHeading({
   summary: string;
   /** The names of the bases that give the row something. */
   givers: readonly string[];
+  /** Lines shown under the row's name; see `rowNotes`. */
+  notes: readonly string[];
 }): JSX.Element {
   const narrowed = row.declaredRules.length > 0;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-foreground">{row.label}</span>
-        {custom && <Badge variant="warning">Custom</Badge>}
-        {givers.length > 0 && (
-          <Badge variant="outline">from {listed(givers)}</Badge>
+        {/* A badge keeps its words on one line; a narrow row wraps the
+            badges, not the words inside one. */}
+        {custom && (
+          <Badge variant="warning" className="whitespace-nowrap">
+            Custom
+          </Badge>
         )}
-        {narrowed && <Badge variant="outline">Narrowed in code</Badge>}
+        {givers.length > 0 && (
+          <Badge variant="outline" className="whitespace-nowrap">
+            from {listed(givers)}
+          </Badge>
+        )}
+        {narrowed && (
+          <Badge variant="outline" className="whitespace-nowrap">
+            Narrowed in code
+          </Badge>
+        )}
       </div>
       <span className="font-mono text-xs break-all text-muted-foreground">
         {row.slug}
@@ -227,28 +247,37 @@ function RowHeading({
           {narrowedInCode(row.kind, row.declaredRules)}
         </span>
       )}
+      {notes.map(note => (
+        <span key={note} className="text-xs text-muted-foreground">
+          {note}
+        </span>
+      ))}
     </div>
   );
 }
 
 /**
- * A switch for each of the row's permissions, under "Each action". A base
- * role's grant shows held; where the role also holds it, turning it off takes
- * away the role's own copy, and where the base gives it alone it is locked,
- * since the way to drop it is to change the base.
+ * A switch for each of `permissions`: a row's, under "Each action", or those
+ * a plugin declares of its own. A base role's grant shows held; where the
+ * role also holds it, turning it off takes away the role's own copy, and
+ * where the base gives it alone it is locked, since the way to drop it is to
+ * change the base.
  */
-function ActionSwitches({
-  row,
+export function PermissionSwitches({
+  permissions,
   name,
+  labelOf = actionLabel,
   held,
   locked,
   owned,
   disabled,
   onChange,
 }: {
-  row: LevelRow;
-  /** The row's accessible name, label and slug. */
+  permissions: readonly Permission[];
+  /** What the switches belong to, which each switch's name begins with. */
   name: string;
+  /** What each switch is called: its action's name unless told otherwise. */
+  labelOf?: (permission: Permission) => string;
   held: ReadonlySet<string>;
   locked: ReadonlySet<string>;
   owned: ReadonlySet<string>;
@@ -257,8 +286,8 @@ function ActionSwitches({
 }): JSX.Element {
   return (
     <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-      {inActionOrder(row.permissions).map(permission => {
-        const action = actionLabel(permission);
+      {inActionOrder(permissions).map(permission => {
+        const action = labelOf(permission);
         const baseOnly = locked.has(permission.id) && !owned.has(permission.id);
         return (
           <label
@@ -267,7 +296,15 @@ function ActionSwitches({
           >
             <span aria-hidden="true">{action}</span>
             <Switch
-              aria-label={`${name}: ${action}`}
+              // A permission that takes data off the site is marked in the
+              // host's own words, as the grid's cell marks it, on the
+              // accessible name so it is not colour alone.
+              aria-label={
+                permission.danger
+                  ? `${name}: ${action} — grant with care, this gives access to data beyond this site`
+                  : `${name}: ${action}`
+              }
+              data-danger={permission.danger ? "true" : undefined}
               checked={held.has(permission.id)}
               disabled={disabled || baseOnly}
               onCheckedChange={on => onChange(permission.id, on)}

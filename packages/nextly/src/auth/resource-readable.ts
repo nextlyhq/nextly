@@ -13,7 +13,7 @@
 
 import { container } from "../di/container";
 
-import { holdsPermission } from "./access/actor";
+import { holdsPermission, isSuperAdmin } from "./access/actor";
 import { storedSlugHolds } from "./access/answering-permissions";
 import { decidePermission } from "./access/decide";
 import { deviate } from "./access/deviations";
@@ -25,6 +25,7 @@ import {
 } from "./access/resolve-actor";
 import { readsSystemResource } from "./access/system-resource-read";
 import {
+  scopeHoldsSuperAdmin,
   scopeRowsAgree,
   slugGrants,
   type AuthenticatedScope,
@@ -74,7 +75,11 @@ export async function canReadSystemResource(
           userId: user.id,
           grants: slugGrants(authenticatedScope.permissions),
           roles: authenticatedScope.roles ?? [],
+          superAdmin: scopeHoldsSuperAdmin(authenticatedScope),
         });
+    // A key carrying its maker's super-admin authority reads what a
+    // super-admin's session does.
+    if (isSuperAdmin(actor)) return readsSystemResource(actor, read);
     // A key holds the read by its stored slug, `read-<resource>`, or the
     // resource's `manage-` slug where that counts as its read, as at every
     // gate. The decision reads a grant's action and resource, which agree

@@ -119,9 +119,47 @@ A read by id, through the Direct API, a plugin service or REST, reads an entry t
 matches and answers one it does not match exactly as an entry that does not exist. It
 returns the published entry the filter matched, and does not show a pending draft of it yet. A
 populated relationship shows the related rows the filter matches, and a row it does not match
-comes back as a row the caller may not read does. Every other REST route still refuses a
-caller whose rule answers with a filter, as it did before. The rule's type still says it
-returns a boolean.
+comes back as a row the caller may not read does. A check of whether the caller may read the
+collection at all answers yes: `ctx.caller.can`, `GET /me/capabilities`, which collections the
+dashboard and its widgets count and list, and the entity reader behind versions, translations
+and content events. What those then read is limited to the entries the filter matches, and a
+document lock is read only for a document the filter matches. Every other REST route still
+refuses a caller whose rule answers with a filter, as it did before.
+
+`defineCollection` types the filter by the collection's own fields, so a misspelt field or
+operator, or a value of the wrong kind, fails to compile:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Notes = defineCollection({
+  slug: "notes",
+  fields: [text({ name: "title" })],
+  access: {
+    // A signed-in reader sees the notes they created; a visitor sees none.
+    read: ({ user }) => (user ? { createdBy: { equals: user.id } } : false),
+  },
+});
+```
+
+A rule may be `async` and look things up before it answers, such as the caller's team in
+another collection, returning `{ team: { equals: team } }`. The filter it returns names
+fields of its own collection.
+
+The keys are the collection's top-level fields, declared with a field factory or written
+inline, and the system fields `id`, `title`, `slug`, `createdAt`, `updatedAt`, `createdBy`
+and `status` (which matches only on a collection with `status: true`). A field inside a
+group (`"seo.title"`) isn't typed yet, and rich text, JSON, password, chips, repeater, group
+and component fields aren't keys. Where the checker can't know the field names, because the
+fields are built at runtime or typed as `FieldConfig[]`, the filter is untyped and is checked
+when the rule runs.
+
+Only a collection's `read` rule may answer a filter. Its `create`, `update`, `delete`,
+`publish` and `unpublish` rules, a Single's rules and a field's rules answer `true` or
+`false`: a filter from one is a type error, and is refused when the rule runs.
+
+The filter is part of every read of the collection, so index the fields it names
+(`index: true` on a field you declare).
 
 A rule's filter can't use `near` or `within` yet, nor a field inside a component, nor the
 keys a list's `where` reserves for a request's own view: `_translated`, `_pendingChange` and

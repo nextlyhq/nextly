@@ -14,7 +14,8 @@
  *   `/admin-meta/...`  answered from the verb wrappers, GET across the whole
  *                      subtree and PATCH on one path.
  *   `/dev-reload`      the development reload stream, from the GET wrapper.
- *   `/_dev/...`        the development schema endpoints, from POST and DELETE.
+ *   `/_dev/...`        the development endpoints: the schema ones from POST
+ *                      and DELETE, and the widget previews read from GET.
  *
  * Refused at boot rather than left to fail silently at request time: a plugin
  * author who declares a route and gets no traffic has nothing to look at, and
@@ -57,7 +58,7 @@ const UNREACHABLE_FIRST_SEGMENTS: Readonly<Record<string, string>> = {
     "the admin metadata endpoints answer from the verb wrappers, and the GET branch claims the whole subtree, so the fallback this route waits for is never reached",
   "dev-reload":
     "the development reload stream answers from the GET wrapper before the fallback exists",
-  _dev: "the development schema endpoints answer from the POST and DELETE wrappers before the fallback exists",
+  _dev: "the development endpoints answer from the GET, POST and DELETE wrappers before the fallback exists",
 };
 
 /**

@@ -134,8 +134,9 @@ export function resetWidgetRegistries(
   // above: a hot reload must not accumulate the previous boot's plugins.
   setContributedWidgets(contributedWidgetSummaries(plugins));
   // The resolved list the admin's component-map check reads, so it judges
-  // the generated map against the plugins this boot runs.
-  setAdminComponentPlugins(plugins);
+  // the generated map against the plugins this boot runs, and the dashboard
+  // as registered here, a widget a plugin's setup() adds included.
+  setAdminComponentPlugins(plugins, dashboard);
 
   // The domains that answer a source of their own publish it here, after the
   // stores are empty and BEFORE core's widgets: a widget's settings are
