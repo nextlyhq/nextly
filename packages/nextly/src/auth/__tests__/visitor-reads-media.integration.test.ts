@@ -126,6 +126,22 @@ describe.each(getConfiguredTestDialects())(
         expect(res.status).toBe(401);
       });
 
+      it.each([
+        ["a Basic credential", "Basic dXNlcjpwYXNz"],
+        ["a Bearer scheme with no key", "Bearer"],
+      ])(
+        "asks a request carrying %s and no session to sign in again, as it is no visitor",
+        async (_label, authorization) => {
+          // An Authorization header is a credential the request presents,
+          // whatever its scheme: one that is not a valid key is asked to sign
+          // in again, never served what the Public role grants.
+          for (const path of [[], [fileId]]) {
+            const res = await visitorGet(path, { authorization });
+            expect(res.status).toBe(401);
+          }
+        }
+      );
+
       it("lists and opens the file through a checked Direct API call naming nobody", async () => {
         const found = await visitor().media.find({});
         expect(found.items.map(item => item.id)).toContain(fileId);
