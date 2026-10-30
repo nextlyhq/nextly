@@ -54,10 +54,13 @@ const NOT_GERMAN = "otherdoors_not_german";
 const ANY_LANGUAGE = "otherdoors_any_language";
 // A delete rule refusing every language.
 const NO_LANGUAGE = "otherdoors_no_language";
+// A delete rule allowing English alone, which answers no when it is told no
+// language, so a cell asked that way would refuse what a delete allows.
+const ONLY_ENGLISH = "otherdoors_only_english";
 
 const AUTHOR = "otherdoors-author";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
-const SLUGS = [NOT_GERMAN, ANY_LANGUAGE, NO_LANGUAGE];
+const SLUGS = [NOT_GERMAN, ANY_LANGUAGE, NO_LANGUAGE, ONLY_ENGLISH];
 
 /** The collection service a plugin is handed, kept from its `init`. */
 let services: PluginRouteContext["services"]["collections"] | undefined;
@@ -104,6 +107,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       collection(NOT_GERMAN, notGerman),
       collection(ANY_LANGUAGE, () => true),
       collection(NO_LANGUAGE, () => false),
+      collection(ONLY_ENGLISH, context => context.locale === "en"),
     ],
   });
   await userWhoMay(current, AUTHOR, "read", SLUGS);
@@ -308,10 +312,12 @@ describe.each(getConfiguredTestDialects())(
           [NOT_GERMAN]: true,
           [ANY_LANGUAGE]: true,
           [NO_LANGUAGE]: false,
+          [ONLY_ENGLISH]: true,
         };
 
-        // An English-only entry is one the author may delete, so the cell
-        // offers the delete whichever language the admin is shown in.
+        // An English-only entry is one the author may delete under the rules
+        // refusing German and allowing English alone, so the cell offers the
+        // delete whichever language the admin is shown in.
         expect(await deleteCells("de")).toEqual(expected);
         expect(await deleteCells("en")).toEqual(expected);
       });
