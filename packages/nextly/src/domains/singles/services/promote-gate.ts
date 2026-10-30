@@ -91,6 +91,8 @@ export function promoteCallerFor(args: {
     authenticatedScope?: AuthenticatedScope;
   };
   grants?: () => Promise<CallerGrants>;
+  /** See {@link PromoteGateContext.readsEntry}. */
+  readsEntry?: boolean;
 }): Pick<
   PromoteGateContext,
   | "slug"
@@ -101,6 +103,7 @@ export function promoteCallerFor(args: {
   | "overrideAccess"
   | "authenticatedScope"
   | "grants"
+  | "readsEntry"
 > {
   return {
     slug: args.slug,
@@ -120,6 +123,7 @@ export function promoteCallerFor(args: {
     authenticatedScope: args.options.authenticatedScope,
     // Resolved on the pooled connection before the transaction opened.
     grants: args.grants,
+    readsEntry: args.readsEntry,
   };
 }
 
@@ -221,6 +225,12 @@ export interface PromoteGateContext {
    * transaction is holding: the publish hangs rather than fails.
    */
   grants?: () => Promise<CallerGrants>;
+  /**
+   * Whether the caller may read the Single at all, answered by its read gate
+   * before the transaction opened. A refusal tells one who may not no field of
+   * it. Absent, the field rules alone decide.
+   */
+  readsEntry?: boolean;
   /**
    * The scope an API key arrived with, so a key is judged on ITS grants rather
    * than on the database roles of whoever owns it. There is no request-local
@@ -559,6 +569,9 @@ async function schemaIssues(
     slug: ctx.slug,
     document: view,
     entryId: ctx.entryId,
+    ...(ctx.readsEntry === undefined
+      ? {}
+      : { rowReadable: () => Promise.resolve(ctx.readsEntry === true) }),
     fields: ctx.fields,
     ...(ctx.componentFields === undefined
       ? {}

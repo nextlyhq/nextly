@@ -44,6 +44,7 @@ function told(
     overrideAccess?: boolean;
     fieldGroups?: Record<string, FieldConfig[]>;
     entryId?: string;
+    rowReadable?: boolean;
   } = {}
 ) {
   const groups = options.fieldGroups;
@@ -61,6 +62,9 @@ function told(
         }
       : {}),
     ...(options.entryId === undefined ? {} : { entryId: options.entryId }),
+    ...(options.rowReadable === undefined
+      ? {}
+      : { rowReadable: () => Promise.resolve(options.rowReadable === true) }),
     reader: {
       ...reader,
       ...(options.overrideAccess === undefined
@@ -282,5 +286,55 @@ describe("issuesTheReaderMaySee", () => {
     const logged = JSON.stringify(info.mock.calls);
     expect(logged).toContain("secret");
     expect(logged).not.toContain("TOPSECRET");
+  });
+  it("withholds every issue on a field where the reader may not read the entry at all", async () => {
+    registerFieldFunctions("collection", SLUG, fields);
+
+    expect(
+      await told(
+        [issue(""), issue("title"), issue("rows[0].label")],
+        { title: "t", rows: [{ label: "a" }] },
+        fields,
+        { rowReadable: false }
+      )
+    ).toEqual([issue(""), UNREADABLE_FIELD_ISSUE]);
+  });
+
+  it("withholds an issue on a password, which no read shows", async () => {
+    const withPassword = [
+      { name: "title", type: "text" },
+      { name: "pin", type: "password" },
+    ] as unknown as FieldConfig[];
+
+    expect(
+      await told(
+        [issue("title"), issue("pin", "Pin $2b$10$hash is too weak.")],
+        { title: "t", pin: "$2b$10$hash" },
+        withPassword
+      )
+    ).toEqual([issue("title"), UNREADABLE_FIELD_ISSUE]);
+  });
+
+  it("withholds every issue on a field with a read rule where a field has an afterRead hook", async () => {
+    // A read runs its hooks between two judgements, and a hook can change
+    // what a rule decides: the rule's answer here may not be the read's.
+    const hooked = [
+      {
+        name: "title",
+        type: "text",
+        hooks: { afterRead: [({ value }: { value: unknown }) => value] },
+      },
+      { name: "summary", type: "text" },
+      { name: "note", type: "text", access: { read: () => true } },
+    ] as unknown as FieldConfig[];
+    registerFieldFunctions("collection", SLUG, hooked);
+
+    expect(
+      await told(
+        [issue("summary"), issue("note")],
+        { title: "t", summary: "s", note: "n" },
+        hooked
+      )
+    ).toEqual([issue("summary"), UNREADABLE_FIELD_ISSUE]);
   });
 });

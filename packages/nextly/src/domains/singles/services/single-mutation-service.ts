@@ -1201,6 +1201,7 @@ export class SingleMutationService extends BaseService {
       undefined,
       this.fieldRuleVisitor
     );
+    const readsEntry = await this.readsSingle(params.slug, params);
     // Read in a transaction of its own, which writes nothing: the gate reads
     // the live document through one.
     return this.adapter.transaction(async tx => {
@@ -1238,7 +1239,14 @@ export class SingleMutationService extends BaseService {
       const issues = await refusalIssues(() =>
         promotionIssues(drafts, {
           // The caller the release's write has: the member's author, checked.
-          ...this.promotionGate(setup, tx, row, { user: params.user }, grants),
+          ...this.promotionGate(
+            setup,
+            tx,
+            row,
+            { user: params.user },
+            grants,
+            readsEntry
+          ),
           // Every language goes live, so none falls back to another.
           enforceLocalizedRequired: true,
         })
@@ -1292,6 +1300,7 @@ export class SingleMutationService extends BaseService {
       params.user,
       params.authenticatedScope
     );
+    const readsEntry = await this.readsSingle(params.slug, params);
     // Read in a transaction of its own, which writes nothing: the gate reads
     // the stored document through one.
     return this.adapter.transaction(async tx => {
@@ -1309,7 +1318,8 @@ export class SingleMutationService extends BaseService {
                 user: params.user,
                 authenticatedScope: params.authenticatedScope,
               },
-              grants
+              grants,
+              readsEntry
             ),
             // One language goes live; the others keep what they hold.
             enforceLocalizedRequired: false,
@@ -1383,7 +1393,9 @@ export class SingleMutationService extends BaseService {
     tx: TransactionContext,
     row: SingleDocument,
     caller: { user: UserContext; authenticatedScope?: AuthenticatedScope },
-    grants: () => Promise<CallerGrants>
+    grants: () => Promise<CallerGrants>,
+    /** Whether the caller may read the Single; see `readsSingle`. */
+    readsEntry: boolean
   ): Omit<PromoteGateContext, "enforceLocalizedRequired"> {
     const { slug, meta, fieldConfigs, companion, companionExists } = setup;
     return {
@@ -1396,6 +1408,7 @@ export class SingleMutationService extends BaseService {
           setup.componentSchemas?.get(componentSlug)?.fields,
         options: { ...caller, overrideAccess: false },
         grants,
+        readsEntry,
       }),
       entryId: row.id,
       toLogical: doc =>
@@ -1423,6 +1436,30 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * Whether `caller` may read the Single at all, as its read gate answers: a
+   * validation refusal tells one who may not no field of it.
+   */
+  private async readsSingle(
+    slug: string,
+    caller: {
+      user?: UpdateSingleOptions["user"];
+      authenticatedScope?: AuthenticatedScope;
+    }
+  ): Promise<boolean> {
+    const refused = await checkSingleAccess({
+      slug,
+      operation: "read",
+      user: caller.user,
+      overrideAccess: false,
+      rbacAccessControlService: this.rbacAccessControlService,
+      visitor: this.fieldRuleVisitor,
+      authenticatedScope: caller.authenticatedScope,
+      logger: this.logger,
+    });
+    return refused === null;
+  }
+
+  /**
    * Refuse a save whose values break the Single's declared rules: the same
    * gate the collection write paths run. Singles updates are PATCH
    * semantics, so absent keys stay untouched and provided keys must hold. An
@@ -1437,6 +1474,7 @@ export class SingleMutationService extends BaseService {
     enforceLocalizedRequired: boolean;
     /** The Single's stored document id, which a read rule is handed. */
     entryId: string;
+    user: UpdateSingleOptions["user"];
     /** Who the refusal is told to, with the scope a key arrived with. */
     reader: IssueReader;
   }): Promise<void> {
@@ -1447,7 +1485,7 @@ export class SingleMutationService extends BaseService {
       attachFieldValidators("single", slug, fieldConfigs),
       {
         mode: "update",
-        req: args.reader.user ? { user: args.reader.user } : {},
+        req: args.user ? { user: args.user } : {},
         // A component inside a group or repeater is judged here, since no
         // component write reaches it. On the pool, as this is.
         componentFields: await containedComponentResolver(
@@ -1478,6 +1516,12 @@ export class SingleMutationService extends BaseService {
       fields: fieldConfigs,
       fieldGroups: this.fieldGroupDataService,
       entryId: args.entryId,
+      // A Single the reader may not read is shown to them in no part.
+      rowReadable: () =>
+        this.readsSingle(slug, {
+          user: args.user,
+          authenticatedScope: args.reader.authenticatedScope,
+        }),
       reader: args.reader,
     });
     if (validationIssues.length > 0) {
@@ -1919,10 +1963,12 @@ export class SingleMutationService extends BaseService {
         localizedFieldNames,
         enforceLocalizedRequired,
         entryId: String(documentId),
+        user: options.user,
         reader: {
           user: options.user,
           overrideAccess: options.overrideAccess,
           authenticatedScope: options.authenticatedScope,
+          grants: writeGrants,
         },
       });
 
@@ -1955,6 +2001,15 @@ export class SingleMutationService extends BaseService {
             this.fieldRuleVisitor
           )
         : undefined;
+      // Whether the caller may read the Single, which decides what a refusal
+      // of the promotion may name; asked here for the same reason. Wherever
+      // the Single has a status, since a publish with nothing pending is
+      // judged as a promotion too, drafts or none.
+      const promoteReads =
+        (singleMeta as { status?: boolean }).status === true &&
+        options.overrideAccess !== true
+          ? await this.readsSingle(slug, options)
+          : undefined;
 
       // 6.25. Single-level beforeChange hooks, on data the validation gate has
       // just passed. The declaration used to register onto `beforeUpdate`,
@@ -2766,6 +2821,7 @@ export class SingleMutationService extends BaseService {
                   singleComponentSchemas?.get(componentSlug)?.fields,
                 options,
                 grants: promoteGrants,
+                readsEntry: promoteReads,
               }),
               entryId: promotedInto.id,
               // A snapshot belongs to this document, so its identity is

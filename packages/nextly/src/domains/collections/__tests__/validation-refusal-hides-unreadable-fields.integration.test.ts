@@ -13,7 +13,14 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, number, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  number,
+  text,
+} from "../../../config";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import {
   createTestNextly,
@@ -33,6 +40,10 @@ const ENTRIES = "hiddenfieldreports";
 const BANNER = "hiddenfieldbanner";
 const PUBLISHER = { id: "hidden-publisher", isActive: true };
 const READER = { id: "hidden-reader", isActive: true };
+/** May create, update and publish both, but read neither. */
+const WRITER = { id: "hidden-writer", isActive: true };
+/** A field group whose one field READER alone may read. */
+const META = "hiddenfieldmeta";
 const ALLOW = () => true;
 
 // The stored values the schema now refuses, as left by a schema that has
@@ -54,18 +65,22 @@ const readerOnly = {
   }) => user?.id === READER.id && permissions.includes(`unpublish-${BANNER}`),
 };
 
+/** A validator that names the value it refuses. */
+const namesTheValue = (value: unknown) =>
+  typeof value === "string" && value.length > 5
+    ? `Code ${value} is not allowed`
+    : true;
+
 const fields = () => [
   text({ name: "headline" }),
+  fieldGroup({ name: "meta", component: META }),
   number({ name: "visibleCount", max: 5 }),
   number({ name: "internalScore", max: 10, access: readerOnly }),
   text({ name: "internalNote", required: true, access: readerOnly }),
   text({
     name: "secretCode",
     access: readerOnly,
-    validate: (value: unknown) =>
-      typeof value === "string" && value.length > 5
-        ? `Code ${value} is not allowed`
-        : true,
+    validate: namesTheValue,
   }),
 ];
 
@@ -144,6 +159,18 @@ describe.each(getConfiguredTestDialects())(
       t = await createTestNextly({
         dialect,
         localization: { locales: ["en", "de"], defaultLocale: "en" },
+        fieldGroups: [
+          defineFieldGroup({
+            slug: META,
+            fields: [
+              text({
+                name: "metaCode",
+                access: readerOnly,
+                validate: namesTheValue,
+              }),
+            ],
+          }),
+        ],
         collections: [
           defineCollection({
             slug: ENTRIES,
@@ -174,6 +201,10 @@ describe.each(getConfiguredTestDialects())(
         for (const action of ["create", "update", "publish", "unpublish"]) {
           await grantTo(t, caller.id, action, [ENTRIES, BANNER]);
         }
+      }
+      await userWhoMay(t, WRITER.id, "update", [ENTRIES, BANNER]);
+      for (const action of ["create", "publish", "unpublish"]) {
+        await grantTo(t, WRITER.id, action, [ENTRIES, BANNER]);
       }
 
       // A valid draft of each, written by trusted code...
@@ -334,6 +365,59 @@ describe.each(getConfiguredTestDialects())(
           expectEveryIssue(await issuesOf(run));
         }
       );
+    });
+
+    describe("to a writer who may not read the entry at all", () => {
+      // A read shows them no field of it, readable or not.
+      it("a collection update that publishes reports every field issue as one generic issue", async () => {
+        expect(
+          await issuesOf(() =>
+            handler(t).updateEntry(
+              { collectionName: ENTRIES, entryId, ...as(WRITER) },
+              { headline: "changed", status: "published" }
+            )
+          )
+        ).toEqual([GENERIC]);
+      });
+
+      it("a Single save that publishes reports every field issue as one generic issue", async () => {
+        expect(
+          await issuesOf(() =>
+            singles(t).update(
+              BANNER,
+              { headline: "changed", status: "published" },
+              as(WRITER)
+            )
+          )
+        ).toEqual([GENERIC]);
+      });
+    });
+
+    describe("a field group's field the publisher may not read", () => {
+      // A field group placed directly on the entry is judged by its own
+      // write, which refuses on the issues it finds there.
+      it("is reported as one generic issue on a collection update", async () => {
+        expect(
+          await issuesOf(() =>
+            handler(t).updateEntry(
+              { collectionName: ENTRIES, entryId, ...as(PUBLISHER) },
+              { meta: { metaCode: SECRET } }
+            )
+          )
+        ).toEqual([GENERIC]);
+      });
+
+      it("is reported as one generic issue on a Single save", async () => {
+        expect(
+          await issuesOf(() =>
+            singles(t).update(
+              BANNER,
+              { meta: { metaCode: SECRET } },
+              as(PUBLISHER)
+            )
+          )
+        ).toEqual([GENERIC]);
+      });
     });
 
     describe("to an API key READER made, whose own scope may not read the hidden fields", () => {

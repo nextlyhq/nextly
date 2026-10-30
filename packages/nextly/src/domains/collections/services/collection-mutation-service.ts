@@ -1999,7 +1999,32 @@ export class CollectionMutationService extends BaseService {
       },
       executor: args.tx?.getDrizzle(),
       entryId: args.id,
-      reader: args.reader,
+      // A stored entry the reader may not read is shown to them in no part.
+      // A read limited to a filter is not matched against this entry here,
+      // so it is judged as one that may not reach it.
+      rowReadable:
+        args.id === undefined
+          ? undefined
+          : async () => {
+              const read = await this.accessService.checkCollectionRead({
+                collectionName: args.collectionName,
+                user: args.user,
+                authenticatedScope: args.reader.authenticatedScope,
+                executor: args.tx?.getDrizzle(),
+              });
+              return read.denied === null && read.filter === undefined;
+            },
+      // Judged by the Public role this service's own gate reads.
+      reader: {
+        ...args.reader,
+        grants:
+          args.reader.grants ??
+          this.callerGrants(
+            args.reader.user,
+            args.reader.authenticatedScope,
+            args.tx?.getDrizzle()
+          ),
+      },
     });
   }
 
