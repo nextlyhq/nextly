@@ -289,9 +289,11 @@ export function forgetCompanionReadiness(
  * Forgets that verdict when it is, so the next write resolves readiness again and meets the
  * refusal an unready companion gets.
  *
- * Narrow on purpose: a missing table by the dialect's own error code (`isMissingTable`), and one
- * whose error names this companion. Any other failure, a missing main table included, is not
- * this companion's to explain and is left to propagate.
+ * Narrow on purpose: a missing table by the dialect's own error code (`isMissingTable`), named
+ * as this companion by the very error that carries that code. A query wrapper's message names
+ * every table its statement reads, so a trigger's missing table, or the main table's, would
+ * otherwise pass for the companion's. Any other failure is not this companion's to explain and
+ * is left to propagate.
  */
 export function companionFoundMissing(
   scope: ReadinessScope,
@@ -299,28 +301,32 @@ export function companionFoundMissing(
   companionTableName: string,
   error: unknown
 ): boolean {
-  if (!isMissingTable(error, dialect)) return false;
-  if (!errorNamesTable(error, companionTableName)) return false;
+  const missing = missingTableLink(error, dialect);
+  if (!(missing instanceof Error)) return false;
+  if (!missing.message.includes(companionTableName)) return false;
   forgetCompanionReadiness(scope, companionTableName);
   return true;
 }
 
 /**
- * Whether any error in `error`'s cause chain names `table` in its message. Every dialect's
- * missing-table message names the table it could not find. Bounded, as `isMissingTable` is,
- * because a cyclic `cause` is a hang.
+ * The error in `error`'s cause chain that says a table is missing: the deepest one
+ * `isMissingTable` still holds for, since it looks down the chain, and a wrapper above the
+ * driver's error holds only through it. `undefined` where none does. Bounded, as
+ * `isMissingTable` is, because a cyclic `cause` is a hang.
  */
-function errorNamesTable(error: unknown, table: string): boolean {
+function missingTableLink(error: unknown, dialect: MigrationDialect): unknown {
+  let found: unknown;
   let link: unknown = error;
   for (
     let depth = 0;
     depth < 5 && link !== null && link !== undefined;
     depth++
   ) {
-    if (link instanceof Error && link.message.includes(table)) return true;
+    if (!isMissingTable(link, dialect)) break;
+    found = link;
     link = (link as { cause?: unknown }).cause;
   }
-  return false;
+  return found;
 }
 
 /** Test seam: drop every verdict for this connection and re-verify on the next resolve. */

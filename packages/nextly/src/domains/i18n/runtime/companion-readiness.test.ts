@@ -177,6 +177,25 @@ describe("companionFoundMissing", () => {
     expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
   });
 
+  it("leaves a statement on the companion that finds another table missing alone", async () => {
+    // A trigger on the companion reading a table that is gone: the query's
+    // wrapper names the companion, and the error carrying the code names the
+    // other table, which is the one missing.
+    const adapter = await readyAdapter();
+    const error = new Error(
+      'Failed query: insert into "dc_posts_locales" ("_parent") values ($1)',
+      {
+        cause: Object.assign(new Error('relation "audit_log" does not exist'), {
+          code: "42P01",
+        }),
+      }
+    );
+    expect(
+      companionFoundMissing(adapter, "postgresql", "dc_posts_locales", error)
+    ).toBe(false);
+    expect(cachedCompanionReadiness(adapter, "dc_posts_locales")).toBe("ready");
+  });
+
   it("leaves any other failure on the companion alone", async () => {
     // A missing column names the table too, and is no missing table.
     const adapter = await readyAdapter();

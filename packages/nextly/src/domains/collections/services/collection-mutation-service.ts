@@ -172,6 +172,7 @@ import {
   liveFieldGroupReadPass,
   sharedPerTransaction,
 } from "../../field-groups/live-read-access";
+import { isMissingTable } from "../../field-groups/migration/session";
 import { passwordReachOf } from "../../field-groups/password-reach";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import {
@@ -11756,12 +11757,16 @@ export class CollectionMutationService extends BaseService {
       }
       // A translation table dropped after its `ready` verdict was remembered
       // fails the write at its first statement on it: answered, after the
-      // rollback, as a write to a table that is not there is answered.
-      const companionGone = await this.companionGoneRefusal(
-        params.collectionName,
-        params.locale,
-        error
-      );
+      // rollback, as a write to a table that is not there is answered. Only
+      // for a write that did not commit; a later step's failure keeps the
+      // committed write's answer below.
+      const companionGone = committedWrite
+        ? undefined
+        : await this.companionGoneRefusal(
+            params.collectionName,
+            params.locale,
+            error
+          );
       if (companionGone) {
         return errorToServiceResult(
           companionGone,
@@ -11797,6 +11802,10 @@ export class CollectionMutationService extends BaseService {
     error: unknown
   ): Promise<NextlyError | undefined> {
     if (!this.localization) return undefined;
+    // Classified before anything is read: a failure that is no missing table,
+    // a lost connection among them, keeps its own answer rather than meeting
+    // a second failure on the metadata read.
+    if (!isMissingTable(error, this.adapter.dialect)) return undefined;
     const companion =
       await this.fileManager.loadCompanionSchema(collectionName);
     if (
