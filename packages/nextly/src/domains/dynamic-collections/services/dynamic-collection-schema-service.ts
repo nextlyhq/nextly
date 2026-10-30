@@ -1033,16 +1033,17 @@ export class DynamicCollectionSchemaService {
             ? `DEFAULT ${this.formatDefaultValue(f.default, f.type)}`
             : "";
 
-        // Add CHECK constraints for validation
+        // Add CHECK constraints for validation, on the field's column: a name
+        // kept in camelCase is stored in its snake_case column.
         if (f.validation) {
           if (f.validation.min !== undefined) {
             checks.push(
-              `${this.quoteIdentifier(f.name)} >= ${f.validation.min}`
+              `${this.quoteIdentifier(toSnakeCase(f.name))} >= ${f.validation.min}`
             );
           }
           if (f.validation.max !== undefined) {
             checks.push(
-              `${this.quoteIdentifier(f.name)} <= ${f.validation.max}`
+              `${this.quoteIdentifier(toSnakeCase(f.name))} <= ${f.validation.max}`
             );
           }
           if (
@@ -1054,7 +1055,7 @@ export class DynamicCollectionSchemaService {
               f.type === "code")
           ) {
             checks.push(
-              `LENGTH(${this.quoteIdentifier(f.name)}) >= ${f.validation.minLength}`
+              `LENGTH(${this.quoteIdentifier(toSnakeCase(f.name))}) >= ${f.validation.minLength}`
             );
           }
           if (f.validation.regex && this.dialect !== "sqlite") {
