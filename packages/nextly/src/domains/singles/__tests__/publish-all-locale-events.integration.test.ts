@@ -1,17 +1,21 @@
-// Publishing every language of a Single tells a language's subscribers when
-// its live content changes, not only when it first goes live.
+// Publishing every language of a Single tells each language's subscribers
+// what a publish of that one language would have told them.
 //
 // A language already live whose pending change is promoted shows new content
-// to its readers, exactly as a one-language publish of that change would. The
-// plausible broken implementation emits a language's event only on its first
-// publication, and builds the event's prior state after the promotion, so the
-// "before" a subscriber diffs against already holds the new values.
+// to its readers. The expectation is derived from a one-language publish of
+// the same change, on a second Single in the same app, so the event's type is
+// never hard-coded here. The plausible broken implementations emit a
+// language's event only on its first publication, or build an event's prior
+// state after the promotion, so the "before" a subscriber diffs against
+// already holds the new values.
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineSingle, text } from "../../../config";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { WebhookEvent } from "../../webhooks/types";
@@ -23,19 +27,25 @@ afterEach(async () => {
   current = undefined;
 });
 
-const SLUG = "preferences";
+/** Published one language at a time. */
+const ONE = "preferences-one";
+/** Published every language at once. */
+const EVERY = "preferences-every";
 
-async function boot(): Promise<SingleEntryService> {
+function preferences(slug: string) {
+  return defineSingle({
+    slug,
+    localized: true,
+    status: true,
+    versions: { drafts: true },
+    fields: [text({ name: "siteName", localized: true })],
+  });
+}
+
+async function boot(dialect: TestDialect): Promise<SingleEntryService> {
   current = await createTestNextly({
-    singles: [
-      defineSingle({
-        slug: SLUG,
-        localized: true,
-        status: true,
-        versions: { drafts: true },
-        fields: [text({ name: "siteName", localized: true })],
-      }),
-    ],
+    dialect,
+    singles: [preferences(ONE), preferences(EVERY)],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
   });
   return current.getService("singleEntryService");
@@ -55,51 +65,115 @@ function envelopeOf(row: EventRow): WebhookEvent {
   ) as WebhookEvent;
 }
 
-/** The `single.published` events tagged with a language. */
-async function publishedIn(locale: string): Promise<WebhookEvent[]> {
+async function eventIds(): Promise<Set<string>> {
   const rows = await current!.adapter.select<EventRow>("nextly_events");
-  return rows
-    .filter(row => row.type === "single.published")
-    .map(envelopeOf)
-    .filter(event => event.resource.locale === locale);
+  return new Set(rows.map(row => row.id));
 }
 
-describe("publishing every language of a Single, as its subscribers see it", () => {
-  it("tells a live language's subscribers its pending change went live, with what it showed before", async () => {
-    const singles = await boot();
-    for (const [locale, siteName] of [
-      ["en", "Hello"],
-      ["de", "Hallo"],
-    ] as const) {
-      const live = await singles.update(
-        SLUG,
-        { siteName, status: "published" },
-        { locale, overrideAccess: true }
-      );
-      expect(live.success, JSON.stringify(live)).toBe(true);
-    }
-    // English's pending change: held, not yet live.
-    const held = await singles.update(
-      SLUG,
-      { siteName: "Hello again" },
-      { locale: "en", overrideAccess: true }
+/** One event as a subscriber diffs it: its type, language and both sides. */
+interface Seen {
+  type: string;
+  locale: string | undefined;
+  data: unknown;
+  previous: unknown;
+}
+
+/**
+ * The events recorded for a Single since `before`, sorted so two publishes
+ * compare whatever order the database returns them in. By id, not by
+ * position: a select has no order on every dialect.
+ */
+async function eventsSince(
+  before: ReadonlySet<string>,
+  slug: string
+): Promise<Seen[]> {
+  const rows = await current!.adapter.select<EventRow>("nextly_events");
+  return rows
+    .filter(row => !before.has(row.id))
+    .map(envelopeOf)
+    .filter(
+      event => event.resource.kind === "single" && event.resource.slug === slug
+    )
+    .map(event => ({
+      type: event.type,
+      locale: event.resource.locale,
+      data: event.data.siteName,
+      previous: event.previous?.siteName,
+    }))
+    .sort((a, b) =>
+      `${a.locale ?? ""}:${a.type}`.localeCompare(`${b.locale ?? ""}:${b.type}`)
     );
-    expect(held.success, JSON.stringify(held)).toBe(true);
-    const englishBefore = (await publishedIn("en")).length;
-    const germanBefore = (await publishedIn("de")).length;
+}
 
-    const published = await singles.publishAllLocales(SLUG, {
-      overrideAccess: true,
+describe.each(getConfiguredTestDialects())(
+  "publishing every language of a Single, as its subscribers see it (integration, %s)",
+  dialect => {
+    it("tells a live language's subscribers what a publish of that language alone tells them", async () => {
+      const singles = await boot(dialect);
+      for (const slug of [ONE, EVERY]) {
+        for (const [locale, siteName] of [
+          ["en", "Hello"],
+          ["de", "Hallo"],
+        ] as const) {
+          const live = await singles.update(
+            slug,
+            { siteName, status: "published" },
+            { locale, overrideAccess: true }
+          );
+          expect(live.success, JSON.stringify(live)).toBe(true);
+        }
+        // English's pending change: held, not yet live.
+        const held = await singles.update(
+          slug,
+          { siteName: "Hello again" },
+          { locale: "en", overrideAccess: true }
+        );
+        expect(held.success, JSON.stringify(held)).toBe(true);
+      }
+      const before = await eventIds();
+
+      const alone = await singles.update(
+        ONE,
+        { status: "published" },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(alone.success, JSON.stringify(alone)).toBe(true);
+      const every = await singles.publishAllLocales(EVERY, {
+        overrideAccess: true,
+      });
+      expect(every.success, JSON.stringify(every)).toBe(true);
+
+      // What the one-language publish tells English's subscribers: its new
+      // content, against what its readers saw before. German's didn't change.
+      const told = (await eventsSince(before, ONE)).filter(
+        event => event.locale !== undefined
+      );
+      expect(told).toContainEqual(
+        expect.objectContaining({
+          locale: "en",
+          data: "Hello again",
+          previous: "Hello",
+        })
+      );
+      expect(told.filter(event => event.locale === "de")).toEqual([]);
+
+      const everyEvents = await eventsSince(before, EVERY);
+      expect(everyEvents.filter(event => event.locale !== undefined)).toEqual(
+        told
+      );
+      // The untagged event describes the default language, and its prior
+      // state is the content readers saw before the publish too.
+      const untagged = everyEvents.filter(
+        event => event.locale === undefined && event.type === "single.updated"
+      );
+      expect(untagged).toEqual([
+        {
+          type: "single.updated",
+          locale: undefined,
+          data: "Hello again",
+          previous: "Hello",
+        },
+      ]);
     });
-    expect(published.success, JSON.stringify(published)).toBe(true);
-
-    // English's live content changed: one event, new content after, the
-    // content its readers saw before.
-    const english = (await publishedIn("en")).slice(englishBefore);
-    expect(english).toHaveLength(1);
-    expect(english[0]?.data.siteName).toBe("Hello again");
-    expect(english[0]?.previous?.siteName).toBe("Hello");
-    // German's didn't: nothing to tell its subscribers.
-    expect((await publishedIn("de")).length).toBe(germanBefore);
-  });
-});
+  }
+);
