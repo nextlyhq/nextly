@@ -858,9 +858,17 @@ function httpMessageSummary(value: object): unknown {
  * domain literal (`john@[192.0.2.1]`, `john@[IPv6:2001:db8::1]`) is an
  * address too, while an index such as `arr@[0]` is not. Bounded on both sides
  * so a longer run of address characters is not split into a match.
+ *
+ * A quoted local part is read for at most 64 characters or escapes between
+ * its quotes. RFC 5321 (section 4.5.3.1.1) caps a local part at 64 octets,
+ * its quotes included, so no address a mail system must carry is longer. The
+ * bound is what keeps a line's cost linear: the read may start at any quote,
+ * and an escaped quote does not end it, so read with no bound along a stretch
+ * of escaped quotes it would run from each of them to the stretch's end, and
+ * cost the line's length squared. Bounded, each quote costs at most 64 steps.
  */
 const EMAIL_PATTERN =
-  /(?<![\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.)+"|[\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?\.)+(?:[Xx][Nn]--[A-Za-z0-9-]+|\p{L}[\p{L}\p{M}]+)|\[(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]*[A-Za-z0-9]:[^[\]\s\\]+)\])(?![\p{L}\p{M}\p{N}-])/gu;
+  /(?<![\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.){1,64}"|[\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?\.)+(?:[Xx][Nn]--[A-Za-z0-9-]+|\p{L}[\p{L}\p{M}]+)|\[(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]*[A-Za-z0-9]:[^[\]\s\\]+)\])(?![\p{L}\p{M}\p{N}-])/gu;
 
 /** Whether this environment's logs mask addresses. */
 export function emailMaskingEnabled(nodeEnv: string | undefined): boolean {
