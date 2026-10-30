@@ -9,7 +9,10 @@
  * cards before the layout is handed over, so the first paint is final, and the
  * verdict is held for the visit: an item that arrives or clears while the
  * reader is looking changes the card's own content, never the page around it.
- * The next visit reads the verdict anew.
+ * The next visit reads the verdict anew. One thing moves a hidden card back
+ * onto the page during the visit: an answer that finds it with something, a
+ * later layout read's or the card's own batch answer, judged by the rule the
+ * layout read hid it by (`cardAnswerIsEmpty`). New work is worth the one move.
  *
  * A widget the layout read cannot answer (one of the `registerWidget` or
  * `contributes.admin.widgets` channel) is named in its `hiddenWhenAnswerEmpty`
@@ -19,6 +22,7 @@
  * @module components/features/widgets/hidden-while-empty
  */
 
+import { cardAnswerIsEmpty, type WidgetSlot } from "nextly/widget-result";
 import { createContext, useContext, useMemo, useState } from "react";
 
 import type { DashboardLayoutResponse } from "../../../types/dashboard/widgets";
@@ -27,8 +31,7 @@ const NONE: ReadonlySet<string> = new Set();
 
 /**
  * The cards a dashboard is drawn without while empty (`hidden`), and those it was drawn without
- * and has since shown because a later layout read found them with something waiting
- * (`revealed`); and the widgets whose cards leave by their own answer instead
+ * and has since shown because a later answer found them with something waiting (`revealed`); and the widgets whose cards leave by their own answer instead
  * (`hiddenWhenAnswerEmpty`), from the latest layout answer.
  */
 export interface HeldVerdict {
@@ -81,7 +84,11 @@ export function useRevealedWhileViewed(
  *
  * Each later answer (the refetch a return visit makes, a save, a focus) may only show a card,
  * never take one away. A card hidden at first that a later read finds with something waiting
- * is shown: new work for the reader is worth the one move of the cards after it. A card shown
+ * is shown: new work for the reader is worth the one move of the cards after it. So is one
+ * whose own batch answer (`answers`) holds something, once that card is not being asked any
+ * more: its load found work the layout read had not, and a refetch of the batch is the reader's
+ * one way to learn of it while on the page. An answer still being asked is not judged, since it
+ * may be the previous load's, carried while the new one runs. A card shown
  * at first that a later read finds empty stays, saying nothing is waiting, until the next visit,
  * so what the reader is looking at never jumps up. A dashboard drawn without any answer (the
  * layout could not be read) hides nothing, and so does one drawn from an answer that judged no
@@ -89,7 +96,8 @@ export function useRevealedWhileViewed(
  * no verdict, so arriving later it shows nothing it hid either.
  */
 export function useHiddenWhileEmptyAtFirstPaint(
-  layout: DashboardLayoutResponse | undefined
+  layout: DashboardLayoutResponse | undefined,
+  answers: CardAnswers = NO_ANSWERS
 ): HeldVerdict {
   const [held, setHeld] = useState<Pick<HeldVerdict, "hidden" | "revealed">>(
     () => ({
@@ -102,14 +110,19 @@ export function useHiddenWhileEmptyAtFirstPaint(
     [layout?.hiddenWhenAnswerEmpty]
   );
   const fresh = layout === undefined ? undefined : verdictOf(layout);
-  const appearing =
-    fresh === undefined ? [] : [...held.hidden].filter(id => !fresh.has(id));
+  const appearing = new Set(
+    [...held.hidden].filter(
+      id =>
+        (fresh !== undefined && !fresh.has(id)) ||
+        answeredSomething(answers, id)
+    )
+  );
   // Set during render, React's way to keep what an earlier render saw: it renders again before
   // anything is painted, so no frame draws the card hidden after its answer showed it.
   const kept =
-    appearing.length > 0
+    appearing.size > 0
       ? {
-          hidden: new Set([...held.hidden].filter(id => fresh?.has(id))),
+          hidden: new Set([...held.hidden].filter(id => !appearing.has(id))),
           revealed: new Set([...held.revealed, ...appearing]),
         }
       : held;
@@ -120,6 +133,28 @@ export function useHiddenWhileEmptyAtFirstPaint(
     () => ({ ...held, hiddenWhenAnswerEmpty: ownAnswer }),
     [held, ownAnswer]
   );
+}
+
+/**
+ * The batch's answers the dashboard's cards are drawn from: each card's slot by its placement,
+ * and the placements still being asked.
+ */
+export interface CardAnswers {
+  slots: Readonly<Record<string, WidgetSlot>>;
+  fetching: ReadonlySet<string>;
+}
+
+const NO_ANSWERS: CardAnswers = { slots: {}, fetching: NONE };
+
+/**
+ * Whether the card at `placementId` has its own answer and it holds something, by the rule the
+ * layout read judged it by. A card still being asked is not judged: its slot may be the answer
+ * the previous load left, carried while this one's request runs.
+ */
+function answeredSomething(answers: CardAnswers, placementId: string): boolean {
+  if (answers.fetching.has(placementId)) return false;
+  const slot = answers.slots[placementId];
+  return slot?.ok === true && !cardAnswerIsEmpty(slot);
 }
 
 /** The cards an answer found empty, or `undefined` for an answer that judged none. */

@@ -4,7 +4,14 @@
  *
  * Kept apart from the component so the reading is tested without rendering:
  * which links are drawn, how a count reads, and which items are failed.
+ *
+ * Which items are drawn at all is `isDrawnAttentionItem`, from
+ * `nextly/attention-keys`: the same test the dashboard header counts the
+ * digest's items by (`digestTotal`), so the card's row count, shown in its
+ * title, and the header's number are the same items.
  */
+
+import { isDrawnAttentionItem } from "nextly/attention-keys";
 
 import { adminHref } from "@admin/constants/routes";
 
@@ -38,7 +45,7 @@ const isText = (value: unknown): value is string =>
 
 /** One item of the answer, or `null` for anything the card cannot draw. */
 function attentionRow(item: unknown): AttentionRow | null {
-  if (!isRecord(item) || !isText(item.id) || !isText(item.label)) return null;
+  if (!isDrawnAttentionItem(item)) return null;
   const failed = item.failed === true;
   return {
     id: item.id,

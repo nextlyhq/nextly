@@ -22,7 +22,6 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { callerMayReadReleases } from "../domains/releases/releases-widget-source";
 import { createBatchScope } from "../domains/widgets/batch-scope";
 import { refreshContentSources } from "../domains/widgets/content-sources";
-import { needsAttentionWidget } from "../domains/widgets/core-widgets/needs-attention";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import { bindReadServices } from "../domains/widgets/declaration/read-services";
 import { executeWidgetQuery } from "../domains/widgets/execute";
@@ -32,7 +31,7 @@ import { isUnavailableSourceRefusal } from "../domains/widgets/sources";
 import { RELEASES_SOURCE_ID } from "../domains/widgets/system-source-ids";
 import { NextlyError } from "../errors/nextly-error";
 import { getHandlerConfig } from "../route-handler/auth-handler";
-import { releasesAttentionLink } from "../services/dashboard/attention-source";
+import { readAttentionDigest } from "../services/dashboard/attention-source";
 import {
   attentionPart,
   releasesPart,
@@ -59,7 +58,7 @@ export const getDashboardSummary = withErrorHandler(async (req: Request) => {
   await refreshContentSources();
   const now = new Date();
   const reads = await Promise.all([
-    settled(signal => attentionRead(reader, signal), req.signal),
+    settled(signal => attentionRead(reader, signal, now), req.signal),
     settled(signal => releasesRead(reader, signal, now), req.signal),
     ...(await widgetSummaryReads(auth, reader, req.signal, now)),
   ]);
@@ -140,20 +139,17 @@ function isRefusal(error: unknown): boolean {
 }
 
 /**
- * The attention total, from the Needs attention card's own query to its own
- * source: the same grouped answer the card draws, as the same reader, totalled
- * by the rule the card totals it by (`attentionPart`).
+ * The attention part, from the one read of the attention digest the Needs your
+ * attention card draws (`readAttentionDigest`), as the same reader its card is
+ * answered for, at the summary's instant: one number, how many items it holds
+ * (`attentionPart`), which is the count the card's title shows.
  */
 async function attentionRead(
   reader: ReadCaller,
-  signal: AbortSignal
+  signal: AbortSignal,
+  now: Date
 ): Promise<PartRead> {
-  const result = await executeWidgetQuery(needsAttentionWidget.query, reader, {
-    signal,
-  });
-  return result.op === "groupBy"
-    ? attentionPart(result.buckets, releasesAttentionLink("overdue"))
-    : "failed";
+  return attentionPart(await readAttentionDigest(reader, { signal, now }));
 }
 
 /**

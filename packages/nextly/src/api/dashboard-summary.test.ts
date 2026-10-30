@@ -10,7 +10,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
-import { executeWidgetQuery } from "../domains/widgets/execute";
 
 import { getDashboardSummary } from "./dashboard-summary";
 import { cardIsShownTo } from "./widget-cards";
@@ -33,7 +32,16 @@ vi.mock("../domains/releases/releases-widget-source", () => ({
   callerMayReadReleases: vi.fn(async () => false),
 }));
 vi.mock("../services/dashboard/attention-source", () => ({
-  releasesAttentionLink: (reason: string) => `releases?reason=${reason}`,
+  readAttentionDigest: vi.fn(async () => [
+    {
+      id: "core/overdue-releases",
+      kind: "overdue",
+      label: "Overdue releases",
+      count: 2,
+      severity: "critical",
+      link: "releases?reason=overdue",
+    },
+  ]),
 }));
 vi.mock("./widget-layout", () => ({ askableCards: vi.fn() }));
 vi.mock("./widget-cards", () => ({ cardIsShownTo: vi.fn() }));
@@ -76,10 +84,6 @@ function request() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(executeWidgetQuery).mockResolvedValue({
-    op: "groupBy",
-    buckets: [{ value: "overdue", count: 2 }],
-  });
   vi.mocked(declaredWidget).mockReturnValue({
     owner: "plugin @acme/forms",
     declaration: {
@@ -114,7 +118,7 @@ describe("GET /api/dashboard/summary, part by part", () => {
       parts: [
         {
           kind: "attention",
-          count: 2,
+          count: 1,
           link: "releases?reason=overdue",
         },
       ],

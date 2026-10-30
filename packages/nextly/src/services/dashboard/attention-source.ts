@@ -51,8 +51,8 @@
  * that stopped and overdue releases, both critical and both the releases
  * domain's own counts; plugins' items follow as warnings. Unpublished changes
  * and entries publishing this week are not in it: they belong to the Content
- * table and Upcoming releases. The grouped answer above stays as it is for the
- * card that reads it today.
+ * table and Upcoming releases. The grouped answer above stays as it is, for a
+ * widget that asks the source with `groupBy`.
  *
  * @module services/dashboard/attention-source
  * @experimental The card's kinds and bucket keys may change until plugin
@@ -493,10 +493,10 @@ const RELEASE_KINDS = [
 /**
  * Where the releases of one attention reason are listed, relative to the
  * admin: the Releases list's Needs attention tab, filtered to that reason.
- * The digest's release items link here, and so does the dashboard header's
- * attention part when overdue releases are waiting.
+ * The digest's release items link here, and the dashboard header's attention
+ * part follows the overdue item's own link.
  */
-export function releasesAttentionLink(
+function releasesAttentionLink(
   reason: (typeof RELEASE_KINDS)[number]["kind"]
 ): string {
   return `releases?tab=attention&reason=${reason}`;
@@ -527,10 +527,14 @@ function releaseReaders(caller: ReadCaller): DigestReader[] {
 
 /**
  * Every item waiting for `caller`, most urgent first: the one read of the
- * digest, which the source's list answer and the Needs attention card both
- * make, so they cannot disagree about what is waiting.
+ * digest, which the source's list answer, the Needs attention card and the
+ * dashboard header's attention part all make, so they cannot disagree about
+ * what is waiting.
+ *
+ * Internal to core, never on an entry point: a plugin holding it could ask the
+ * digest as anyone.
  */
-async function readAttentionDigest(
+export async function readAttentionDigest(
   caller: ReadCaller,
   opts?: { signal?: AbortSignal; now?: Date }
 ): Promise<AttentionDigestItem[]> {

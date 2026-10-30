@@ -2,6 +2,7 @@
  * How the Needs your attention card reads its answer: the server's order kept, counts as the
  * card writes them, failed items and reasons, and only links inside the admin.
  */
+import { digestTotal } from "nextly/attention-keys";
 import { describe, expect, it } from "vitest";
 
 import { attentionRows } from "./needs-attention-model";
@@ -80,5 +81,25 @@ describe("attentionRows", () => {
     expect(rows[2]).not.toHaveProperty("href");
     expect(attentionRows(undefined)).toEqual([]);
     expect(attentionRows({ items: "x" })).toEqual([]);
+  });
+
+  it("draws exactly the items the dashboard header counts, whatever else the answer holds", () => {
+    // The header's number is `digestTotal` over the same items; the card's
+    // title count is its row count. Undrawable entries of every shape, so a
+    // card that drew one the header skips, or skipped one it counts, differs.
+    const items: unknown[] = [
+      item({ id: "a/1" }),
+      item({ id: "a/2", count: 0, failed: true }),
+      item({ id: "" }),
+      item({ id: "a/4", label: "" }),
+      item({ id: "a/5", label: 7 }),
+      { id: "a/6" },
+      [item({ id: "a/7" })],
+      "not an item",
+      null,
+    ];
+    const rows = attentionRows({ items });
+    expect(rows.map(row => row.id)).toEqual(["a/1", "a/2"]);
+    expect(rows).toHaveLength(digestTotal(items).count);
   });
 });

@@ -140,6 +140,81 @@ async function readCardAsEmpty(page: Page): Promise<void> {
   });
 }
 
+/** A batch answered whole, `{ results }`, or `undefined` for one streamed as lines. */
+function wholeAnswer(text: string): { results: unknown[] } | undefined {
+  try {
+    const body = JSON.parse(text) as { results?: unknown };
+    return Array.isArray(body.results)
+      ? { ...body, results: body.results }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The dashboard's batch of card answers. */
+const isBatchRead = (url: URL) => url.pathname.endsWith("/dashboard/query");
+
+/** The card's answer with no item in it, which its own empty test holds for. */
+const EMPTY_ANSWER = {
+  ok: true,
+  result: { op: "data", data: { items: [] } },
+  empty: true,
+};
+
+/**
+ * Passes the dashboard's batch through as one that found the card with nothing waiting, as
+ * `readCardAsEmpty` does the layout read: a card hidden while empty is shown once its own batch
+ * answer holds something, so the batch must agree with the layout read for the card to stay off.
+ */
+async function answerCardAsEmpty(page: Page): Promise<void> {
+  await page.route(isBatchRead, async (route: Route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    const asked =
+      (
+        route.request().postDataJSON() as {
+          queries?: Array<{ widget?: string }>;
+        }
+      ).queries ?? [];
+    const at = asked.findIndex(entry => entry.widget === CARD);
+    // Aborted rather than thrown when the read is given up, as in `readCardAsEmpty`.
+    let response: Awaited<ReturnType<Route["fetch"]>>;
+    try {
+      response = await route.fetch();
+    } catch {
+      await route.abort().catch(() => {});
+      return;
+    }
+    if (at === -1) return route.fulfill({ response });
+    await route.fulfill({
+      response,
+      body: withCardEmpty(await response.text(), at),
+    });
+  });
+}
+
+/**
+ * A batch answer with the slot at `at` answered empty: in a whole `{ results }` answer, or in the
+ * `{ index, slot }` line that carries it when the answer is streamed.
+ */
+function withCardEmpty(text: string, at: number): string {
+  const whole = wholeAnswer(text);
+  if (whole !== undefined) {
+    whole.results[at] = EMPTY_ANSWER;
+    return JSON.stringify(whole);
+  }
+  return text
+    .split("\n")
+    .map(line => {
+      if (line.trim() === "") return line;
+      const settled = JSON.parse(line) as { index: number };
+      return settled.index === at
+        ? JSON.stringify({ index: at, slot: EMPTY_ANSWER })
+        : line;
+    })
+    .join("\n");
+}
+
 /** An overdue release left as the runner would leave it, for this spec to cancel. */
 async function overdueRelease(page: Page, stamp: string) {
   const postId = await post(page, stamp);
@@ -155,6 +230,7 @@ test("a return that finds new work waiting shows the card, and says so", async (
   const id = await overdueRelease(page, Date.now().toString(36));
   try {
     await readCardAsEmpty(page);
+    await answerCardAsEmpty(page);
     await gotoAdmin(page, "");
     // Drawn cards only: a card the page is drawn without keeps a cell it never shows.
     const card = page
@@ -173,6 +249,7 @@ test("a return that finds new work waiting shows the card, and says so", async (
     await followLink(page, "/admin/collections/posts");
     await page.waitForURL(/\/admin\/collections\/posts/);
     await page.unroute(isLayoutRead);
+    await page.unroute(isBatchRead);
     await followLink(page, "/admin");
     await page.waitForURL(/\/admin\/?$/);
 
@@ -182,6 +259,7 @@ test("a return that finds new work waiting shows the card, and says so", async (
     ).toBeAttached();
   } finally {
     await page.unroute(isLayoutRead).catch(() => {});
+    await page.unroute(isBatchRead).catch(() => {});
     await cancel(page, id);
   }
 });

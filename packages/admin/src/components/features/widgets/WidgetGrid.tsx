@@ -67,6 +67,7 @@ import { usePublishGridChrome } from "./grid-chrome";
 import {
   HiddenWhileEmptyContext,
   useHiddenWhileEmptyAtFirstPaint,
+  type CardAnswers,
 } from "./hidden-while-empty";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
@@ -345,20 +346,23 @@ function ArrangementLoading() {
 /**
  * What every card under the grid reads beside its props: where a card that fails to draw reports
  * it, and which cards the dashboard is drawn without while empty: those the first layout answer
- * found empty, less any a later answer finds with something waiting (`hidden-while-empty`).
+ * found empty, less any a later layout answer, or the card's own batch answer (`answers`), finds
+ * with something waiting (`hidden-while-empty`).
  * Mounted with the grid, which waits for that answer, so the verdict is taken before any card is
  * drawn.
  */
 function CardContexts({
   reportDraw,
   layout,
+  answers,
   children,
 }: {
   reportDraw: ComponentProps<typeof DrawFailureContext.Provider>["value"];
   layout: DashboardLayoutResponse | undefined;
+  answers: CardAnswers;
   children: ReactNode;
 }): JSX.Element {
-  const hiddenWhileEmpty = useHiddenWhileEmptyAtFirstPaint(layout);
+  const hiddenWhileEmpty = useHiddenWhileEmptyAtFirstPaint(layout, answers);
   return (
     <DrawFailureContext.Provider value={reportDraw}>
       <HiddenWhileEmptyContext.Provider value={hiddenWhileEmpty}>
@@ -593,7 +597,11 @@ export function WidgetGrid(): JSX.Element {
 
           <CardDragContext drag={drag}>
             <AtRestSettingsWriteProvider value={settingsWrite}>
-              <CardContexts reportDraw={reportDraw} layout={layout.layout}>
+              <CardContexts
+                reportDraw={reportDraw}
+                layout={layout.layout}
+                answers={{ slots, fetching: fetchingPlacementIds }}
+              >
                 <ArrangedGrid
                   rows={visible}
                   placements={editor.placements}

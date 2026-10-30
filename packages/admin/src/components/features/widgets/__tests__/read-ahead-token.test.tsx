@@ -6,6 +6,9 @@
  * ahead only to a batch naming that read's token, so a batch asked under the token held before
  * draws a card the fresh layout revealed from an answer that layout never judged. The batch is
  * asked again, once, under the fresh token, and the revealed card is drawn from that answer.
+ *
+ * And a card the layout read hid is shown by its own batch answer once that holds something, the
+ * layout read's verdict unchanged.
  */
 import {
   focusManager,
@@ -103,12 +106,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   // The server's answer for the count: under `load-2`, the load whose layout read found an order
   // waiting, the batch is handed that read's answer; asked under any other token, or none, it was
-  // read before the order arrived.
+  // read before the order arrived. None waiting is an answer the card's own empty test holds for,
+  // as the layout read judged it, so that answer never shows the card it hid.
   api.post.mockImplementation((_url, body) => {
     const { readAheadToken } = body as { readAheadToken?: string };
     const total = readAheadToken === "load-2" ? 3 : 0;
     return Promise.resolve({
-      results: [{ ok: true, result: { op: "count", total } }],
+      results: [
+        {
+          ok: true,
+          result: { op: "count", total },
+          ...(total === 0 ? { empty: true } : {}),
+        },
+      ],
     });
   });
 });
@@ -162,5 +172,46 @@ describe("a focus whose layout read lands after the batch was asked again", () =
     );
     expect(revealed).not.toHaveAttribute("data-hidden-empty");
     expect(postedTokens()).toEqual(["load-1", "load-1", "load-2"]);
+  });
+});
+
+describe("a card the layout read found empty", () => {
+  it("is shown once its own batch answer holds something, the layout read's verdict unchanged", async () => {
+    // Every layout read finds the card empty, under the one load.
+    api.get.mockResolvedValue(layoutOf("load-1", true));
+    let total = 0;
+    api.post.mockImplementation(() =>
+      Promise.resolve({
+        results: [
+          {
+            ok: true,
+            result: { op: "count", total },
+            ...(total === 0 ? { empty: true } : {}),
+          },
+        ],
+      })
+    );
+    renderGrid();
+    const card = await screen.findByRole("region", { name: "Orders waiting" });
+    await waitFor(() => expect(postedTokens()).toEqual(["load-1"]));
+    // Answered, and its own empty test held: still off the page.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(card).toHaveAttribute("data-hidden-empty");
+
+    // An order arrives, and a focus asks the batch again; the layout read still finds the card
+    // empty, so only the card's own answer can show it.
+    total = 2;
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    await waitFor(() => expect(postedTokens()).toEqual(["load-1", "load-1"]));
+    const shown = screen.getByRole("region", { name: "Orders waiting" });
+    await waitFor(() => expect(shown).not.toHaveAttribute("data-hidden-empty"));
+    expect(within(shown).getByTestId("widget-metric-value")).toHaveTextContent(
+      "2"
+    );
   });
 });
