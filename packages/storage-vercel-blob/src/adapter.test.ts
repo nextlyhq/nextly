@@ -374,4 +374,35 @@ describe("VercelBlobStorageAdapter — credentials are checked at first use", ()
     });
     expect(result.url).toContain("test.public.blob.vercel-storage.com");
   });
+
+  it("refuses exists() instead of answering false when the token is absent", async () => {
+    /*
+     * `exists` wraps `head` in a catch that answers `false`, because that is
+     * what a lookup failure means about the blob. The credential check is a
+     * precondition, not a lookup result: if it ran inside the catch's reach,
+     * a missing token would be reported as the blob simply not being there —
+     * which an upload path would act on. Asserted on the REFUSAL escaping,
+     * so an implementation that hoists the check passes and one that leaves
+     * it inside the try fails.
+     */
+    const plugin = vercelBlobStorage({ collections: { media: true } });
+    const outcome = await plugin.adapter.exists("a.png").then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect((outcome as Error).message).toContain("token is required");
+  });
+
+  it("refuses getMetadata() instead of answering null when the token is absent", async () => {
+    /*
+     * The metadata variant of the case above: the same catch answers `null`,
+     * and `null` here means "no such blob", not "no credential".
+     */
+    const plugin = vercelBlobStorage({ collections: { media: true } });
+    const outcome = await plugin.adapter.getMetadata("a.png").then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect((outcome as Error).message).toContain("token is required");
+  });
 });

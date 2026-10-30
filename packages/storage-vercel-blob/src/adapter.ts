@@ -258,9 +258,14 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @returns true if file exists, false otherwise
    */
   async exists(filePath: string): Promise<boolean> {
+    // Resolved BEFORE the not-found catch, which answers "the blob is not
+    // there" for lookup failures: a missing credential is a configuration
+    // error, and the refusal must escape rather than be reported as that
+    // answer.
+    const token = this.ensureToken();
     try {
       await head(filePath, {
-        token: this.ensureToken(),
+        token,
       });
       return true;
     } catch {
@@ -412,9 +417,13 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @returns File metadata or null if file not found
    */
   async getMetadata(filePath: string): Promise<FileMetadata | null> {
+    // Resolved BEFORE the not-found catch, for the same reason as
+    // {@link exists}: `null` here means "no such blob", never "no
+    // credential".
+    const token = this.ensureToken();
     try {
       const result = await head(filePath, {
-        token: this.ensureToken(),
+        token,
       });
 
       // Extract filename from pathname
