@@ -586,9 +586,27 @@ export interface DeleteRowFilter {
   readonly read?: ReadReach;
 }
 
+/** The delete gate's answer, as one ask of it gives it. */
+type DeleteGateAnswer = Awaited<
+  ReturnType<CollectionAccessService["checkCollectionWrite"]>
+>;
+
+/**
+ * A delete batch's gate asked in each language its collection keeps, each
+ * time told that one: each row is judged by the answers of the languages it
+ * holds, as a delete removes each of them.
+ */
+export interface DeleteRowLanguages {
+  readonly byLanguage: ReadonlyMap<string, DeleteGateAnswer>;
+}
+
 interface DeleteEntryWriteOptions {
   /** Which shape of the row gate to apply — see the comment at its use. */
-  rowGate: "access-service" | "batch-hoisted" | DeleteRowFilter;
+  rowGate:
+    | "access-service"
+    | "batch-hoisted"
+    | DeleteRowFilter
+    | DeleteRowLanguages;
   /** Run user hooks. Access and recording are NOT hooks and always run. */
   runHooks: boolean;
   /** Name the missing id in a 404, so a failing batch item is identifiable. */
@@ -11830,6 +11848,141 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * A delete batch's gate, asked before its rows: in each language the
+   * collection keeps, each time told that one, since each row is judged by
+   * the languages it holds; once, in the operation's languages, for a
+   * collection that keeps none. Read on `tx` where the batch runs in its
+   * caller's transaction.
+   */
+  async deleteBatchGate(
+    gate: Parameters<CollectionAccessService["checkCollectionWrite"]>[0],
+    tx?: TransactionContext
+  ): Promise<DeleteGateAnswer | DeleteRowLanguages> {
+    const collection = await this.collectionService.getCollection(
+      gate.collectionName,
+      tx?.getDrizzle()
+    );
+    const configured =
+      this.localization?.locales.map(locale => locale.code) ?? [];
+    const keepsLanguages =
+      configured.length > 0 &&
+      ((collection as { localized?: boolean }).localized === true ||
+        (await this.reachesLocalizedFieldGroup(
+          (collection.schemaDefinition?.fields ||
+            collection.fields ||
+            []) as FieldConfig[],
+          tx
+        )));
+    if (!keepsLanguages) return this.accessService.checkCollectionWrite(gate);
+    const byLanguage = new Map<string, DeleteGateAnswer>();
+    for (const locale of configured) {
+      byLanguage.set(
+        locale,
+        await withRuleLanguage({ locale, locales: configured }, () =>
+          this.accessService.checkCollectionWrite(gate)
+        )
+      );
+    }
+    return { byLanguage };
+  }
+
+  /**
+   * The refusal of deleting `entryId` inside a transaction, or `null` where
+   * it may go: judged in each language the entry holds, as a delete removes
+   * each, by the batch's answer for it or, where nothing was asked before,
+   * by the gate asked now on the transaction, told that language. A language
+   * refused, or whose filter the entry is outside, matched in it under the
+   * row lock, refuses the delete. A language the batch was not asked about
+   * refuses it as a conflict.
+   */
+  private async deleteRowRefusalInTransaction(
+    tx: TransactionContext,
+    args: {
+      tableName: string;
+      entryId: string;
+      fields: readonly { type: string; name?: string }[];
+      accessParams: Parameters<
+        CollectionAccessService["checkCollectionWrite"]
+      >[0] & { operation: "delete"; entryId: string };
+      rowGate: "access-service" | DeleteRowFilter | DeleteRowLanguages;
+    }
+  ): Promise<CollectionServiceResult | null> {
+    const { rowGate } = args;
+    if (typeof rowGate === "object" && !("byLanguage" in rowGate)) {
+      return this.deleteRowRefusalIn(tx, args, rowGate, undefined);
+    }
+    const held = await this.languagesToDelete({
+      collectionName: args.accessParams.collectionName,
+      entryId: args.entryId,
+      fields: args.fields,
+      tx,
+    });
+    // An entry holding no row of its own in any language is judged by every
+    // language the batch was asked in.
+    const languages =
+      held.length > 0
+        ? held
+        : typeof rowGate === "object"
+          ? [...rowGate.byLanguage.keys()]
+          : [];
+    if (languages.length === 0) {
+      return this.deleteRowRefusalIn(
+        tx,
+        args,
+        await this.accessService.checkCollectionWrite(args.accessParams),
+        undefined
+      );
+    }
+    for (const locale of languages) {
+      const access =
+        typeof rowGate === "object"
+          ? rowGate.byLanguage.get(locale)
+          : await withRuleLanguage({ locale, locales: languages }, () =>
+              this.accessService.checkCollectionWrite(args.accessParams)
+            );
+      const refused =
+        access === undefined
+          ? errorToServiceResult(
+              languagesChangedConflict([locale]),
+              { defaultMessage: "Failed to delete entry" },
+              this.dialect
+            )
+          : await this.deleteRowRefusalIn(tx, args, access, locale);
+      if (refused) return refused;
+    }
+    return null;
+  }
+
+  /**
+   * The refusal of deleting `args.entryId` by one answer of its gate: the
+   * answer's own refusal, or that of an entry outside the filter it
+   * answered, matched in `locale` on the transaction under the row lock.
+   */
+  private async deleteRowRefusalIn(
+    tx: TransactionContext,
+    args: {
+      tableName: string;
+      entryId: string;
+      accessParams: Parameters<
+        CollectionAccessService["checkCollectionWrite"]
+      >[0] & { operation: "delete"; entryId: string };
+    },
+    access: DeleteGateAnswer | DeleteRowFilter,
+    locale: string | undefined
+  ): Promise<CollectionServiceResult | null> {
+    if (access.denied) return access.denied;
+    if (!access.filter) return null;
+    return this.refusalOutsideFilterInTransaction(
+      tx,
+      args.tableName,
+      args.entryId,
+      access,
+      args.accessParams,
+      locale
+    );
+  }
+
+  /**
    * The delete gate's answer: allowed, with the delete rule's filter to match
    * the entry against where it answered one, or the refusal to hand back.
    * Where the delete does not apply a filter, the gate that refuses one is
@@ -11949,13 +12102,17 @@ export class CollectionMutationService extends BaseService {
     access: { filter?: RuleFilter; read?: ReadReach },
     accessParams: Parameters<
       CollectionAccessService["refusalOutsideFilter"]
-    >[0] & { operation: FilteredWrite }
+    >[0] & { operation: FilteredWrite },
+    // The language a filter on a translated field is matched in; the
+    // default where none is named.
+    locale?: string
   ): Promise<CollectionServiceResult<T> | null> {
     const prepared = await this.matchInTransaction(
       tx,
       accessParams.operation,
       access,
-      accessParams.collectionName
+      accessParams.collectionName,
+      locale
     );
     if (!prepared) return null;
     await tx.lockRow(tableName, entryId);
@@ -15057,33 +15214,23 @@ export class CollectionMutationService extends BaseService {
           executor: tx.getDrizzle(),
         };
         // A batch asked its gate before its transaction opened and hands each
-        // row the filter it answered; anything else asks here.
-        const access =
-          options.rowGate === "access-service"
-            ? await this.accessService.checkCollectionWrite<{
-                deleted: boolean;
-              }>(accessParams)
-            : options.rowGate;
-        if (access.denied) {
+        // row its answers; anything else asks here. Asked, or read, in each
+        // language the entry holds, before any hook runs.
+        const refused = await this.deleteRowRefusalInTransaction(tx, {
+          tableName,
+          entryId,
+          fields: (collection.schemaDefinition?.fields ||
+            collection.fields ||
+            []) as FieldConfig[],
+          accessParams,
+          rowGate: options.rowGate,
+        });
+        if (refused) {
           return asMissingItem(
-            access.denied,
+            refused as CollectionServiceResult<{ deleted: boolean }>,
             entryId,
             options.identifyMissingEntry
           );
-        }
-        // A delete rule's filter allows only the entries it matches. Matched on
-        // the caller's transaction under the row lock, before any hook runs.
-        if (access.filter) {
-          const refused = await this.refusalOutsideFilterInTransaction<{
-            deleted: boolean;
-          }>(tx, tableName, entryId, access, accessParams);
-          if (refused) {
-            return asMissingItem(
-              refused,
-              entryId,
-              options.identifyMissingEntry
-            );
-          }
         }
       }
 
@@ -15529,7 +15676,10 @@ export class CollectionMutationService extends BaseService {
     params: DeleteEntryWriteParams,
     entryId: string,
     skipHooks: boolean,
-    rowGate: "batch-hoisted" | DeleteRowFilter = "batch-hoisted"
+    rowGate:
+      | "batch-hoisted"
+      | DeleteRowFilter
+      | DeleteRowLanguages = "batch-hoisted"
   ): Promise<CollectionServiceResult<{ deleted: boolean }>> {
     return runWithCallerScope(params.authenticatedScope, () =>
       this.deleteEntryWrite(tx, params, entryId, {
