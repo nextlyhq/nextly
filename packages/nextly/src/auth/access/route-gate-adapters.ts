@@ -521,6 +521,12 @@ async function entityCapabilities(
       kind === "single" || !hasLifecycle(slug)
     );
     if (kind === "collection") {
+      answered.delete = await deletesInSomeLanguage(
+        caller,
+        slug,
+        rules,
+        languageOf("deleteEntry", "none")
+      );
       answered.duplicate = await duplicates(
         caller,
         slug,
@@ -532,6 +538,33 @@ async function entityCapabilities(
     byEntity[slug] = { kind, ...answered } as EntityCapabilities;
   }
   return byEntity;
+}
+
+/**
+ * Whether `caller` may delete some entry of `resource`, as a hint: a delete
+ * is asked in each language its entry holds, which a collection's cell
+ * cannot know, so it answers yes where the rule allows a delete in any of
+ * `everyLanguage`, each asked as that one. The delete itself is judged entry
+ * by entry. With no language, asked once, as a delete is.
+ */
+async function deletesInSomeLanguage(
+  caller: GateCaller,
+  resource: string,
+  rules: RouteRules,
+  everyLanguage: RuleLanguage
+): Promise<boolean> {
+  const ask = () => capability(caller, "delete", resource, rules);
+  if (everyLanguage.locales.length === 0) {
+    return withRuleLanguage(everyLanguage, ask);
+  }
+  for (const locale of everyLanguage.locales) {
+    const allowed = await withRuleLanguage(
+      { locale, locales: everyLanguage.locales },
+      ask
+    );
+    if (allowed) return true;
+  }
+  return false;
 }
 
 /**

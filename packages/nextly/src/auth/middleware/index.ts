@@ -39,6 +39,7 @@ import {
 import {
   everyLanguage,
   registeredReadLanguagesFor,
+  registeredQueryWriteLanguages,
   registeredWriteAsNamedLanguagesFor,
   registeredWriteLanguagesFor,
   currentRuleLanguage,
@@ -783,6 +784,7 @@ type OperationLanguage =
   | "write"
   | "as-named"
   | "default-write"
+  | "query-write"
   | "duplicate"
   | "filtered-history";
 
@@ -807,9 +809,10 @@ type OperationLanguage =
  *   default a write resolves it to. A preview link naming no language is
  *   shared with no operation named, so it is told every language.
  * - `default-write`: a bulk update of named entries, which takes no locale
- *   and writes the default language. A bulk update by query is not one: its
- *   filter, in the request body, may choose its rows by any language's
- *   translation state, so it is told every language.
+ *   and writes the default language.
+ * - `query-write`: a bulk update by query, which writes the default language,
+ *   judged in it, and is told every language as well: its filter, in the
+ *   request body, may choose its rows by any language's translation state.
  * - `duplicate`: writes the default language, copying what a read of the
  *   source shows there, so it is told the default and its fallbacks.
  * - `filtered-history`: a history list, which `?locale=` filters to one
@@ -833,6 +836,7 @@ const OPERATION_LANGUAGES: ReadonlyMap<string, OperationLanguage> = new Map([
   ["discardSingleWorkingDraft", "as-named"],
   ["sharePreviewLink", "as-named"],
   ["bulkUpdateEntries", "default-write"],
+  ["bulkUpdateByQuery", "query-write"],
   ["duplicateEntry", "duplicate"],
   ["listEntryVersions", "filtered-history"],
   ["listSingleVersions", "filtered-history"],
@@ -863,6 +867,7 @@ const LANGUAGES_OF: Record<
   write: asked => registeredWriteLanguagesFor(asked.locale),
   "as-named": asked => registeredWriteAsNamedLanguagesFor(asked.locale),
   "default-write": () => registeredWriteLanguagesFor(undefined),
+  "query-write": () => registeredQueryWriteLanguages(),
   duplicate: () => registeredReadLanguagesFor(undefined),
   // A history list filters by language and falls back to none.
   "filtered-history": asked =>
@@ -1163,20 +1168,23 @@ export async function requireLifecycleAccess(
 }
 
 /**
- * The access check for a route whose write's language only its service
- * knows: a restore, which writes the restored version's language. By the
- * grant alone, since the update the restore makes asks the rule in that
- * language before it writes. Told every language here, a rule allowing only
- * the version's language would refuse what the update allows.
+ * The access check for a route whose write's languages only its service
+ * knows: a restore, which writes the restored version's language, and a
+ * delete, which removes each language its entry holds. By the grant alone,
+ * since the write asks the rule in those languages before it writes. Told
+ * every language here, a rule allowing only some of them would refuse what
+ * the write allows. A visitor is answered as at any gate that admits one.
  */
 export async function requireGrantAccess(
   req: Request,
   action: string,
   collectionSlug: string,
   operation?: RouteOperation
-): Promise<AuthContext | ErrorResponse> {
+): Promise<AuthContext | ErrorResponse | null> {
   const authResult = await requireAuthentication(req);
-  if ("statusCode" in authResult) return authResult;
+  if ("statusCode" in authResult) {
+    return visitorAnswer(authResult, action, collectionSlug, operation);
+  }
   // The languages still matter to the read a refusal is answered by.
   return withRuleLanguage(requestLanguage(operation), () =>
     authorizeCallerOnGrant(
