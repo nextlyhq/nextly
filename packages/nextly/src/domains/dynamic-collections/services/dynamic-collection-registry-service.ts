@@ -646,22 +646,26 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
-    // The setting the row holds, read from the table rather than the row
-    // cache, for the expiry below.
-    const [row] = await this.db
-      .select({ revalidate: this.dynamicCollections.revalidate })
-      .from(this.dynamicCollections)
-      .where(eq(this.dynamicCollections.slug, slug))
-      .limit(1);
-    // Cleared once the delete has run, as after an insert.
+    // The setting and the delete in one transaction, the row locked between
+    // them: the expiry below uses the setting the deleted row held, and a
+    // second delete racing this one waits, then finds nothing to remove.
+    const where = {
+      and: [{ column: "slug", op: "=" as const, value: slug }],
+    };
     let removed = 0;
+    let stored: unknown;
+    // Cleared once the delete has run, as after an insert.
     try {
-      removed = affectedRowCount(
-        await this.db
-          .delete(this.dynamicCollections)
-          .where(eq(this.dynamicCollections.slug, slug)),
-        this.dialect
-      );
+      ({ removed, stored } = await this.adapter.transaction(async tx => {
+        const [row] = await tx.select<{ revalidate: unknown }>(
+          "dynamic_collections",
+          { columns: ["revalidate"], where, forUpdate: true }
+        );
+        return {
+          removed: await tx.delete("dynamic_collections", where),
+          stored: row?.revalidate,
+        };
+      }));
     } finally {
       clearRegistryRowCache();
     }
@@ -675,9 +679,9 @@ export class DynamicCollectionRegistryService extends BaseService {
     // Every cached read of it now describes rows that are gone. Only when this
     // call removed the row, with the setting it held: a repeated delete finds
     // nothing and expires nothing.
-    if (removed > 0 && row !== undefined) {
+    if (removed > 0) {
       await flushContentChange(
-        deletedEntityIntent("collection", slug, row.revalidate),
+        deletedEntityIntent("collection", slug, stored),
         this.logger,
         "a collection was deleted"
       );

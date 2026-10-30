@@ -116,7 +116,7 @@ describe("deleting a collection (sqlite)", () => {
     expect(spy.tags).toContain("nextly:drafts");
   });
 
-  it("expires once when the Builder's delete runs twice for one collection", async () => {
+  it("expires once when two Builder deletes of one collection race", async () => {
     const h = await handler();
     const created = await h.createCollection({
       name: "pairs",
@@ -126,14 +126,17 @@ describe("deleting a collection (sqlite)", () => {
     expect(created.success, JSON.stringify(created)).toBe(true);
     spy.flushed.length = 0;
 
-    // Two deletes of one row, as two racing Builder deletes reach it: the
-    // second removes nothing, so it expires nothing.
+    // Two Builder deletes of one row, started together so each can read the
+    // row before either deletes it. Only the one that removes the row may
+    // expire: a delete that decided from its read alone would expire twice.
     const registry = new DynamicCollectionRegistryService(
       adapter as never,
       handle!.getService("logger")
     );
-    await registry.unregisterCollection("pairs");
-    await registry.unregisterCollection("pairs");
+    await Promise.all([
+      registry.unregisterCollection("pairs"),
+      registry.unregisterCollection("pairs"),
+    ]);
 
     expect(spy.tags.filter(tag => tag === "nextly:pairs")).toHaveLength(1);
   });

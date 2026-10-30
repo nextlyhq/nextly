@@ -942,6 +942,14 @@ export class CollectionSyncService extends BaseService {
             const { expire } = await this.adapter.transaction(tx =>
               deleteEntityRegistryRow(tx, "collection", slug, tables)
             );
+            // Its cached reads describe a collection that is gone from the
+            // registry: expired now, before the table drop, which can fail
+            // and would otherwise leave them live.
+            await flushContentChange(
+              expire,
+              this.logger,
+              "an orphaned collection was deleted"
+            );
 
             const capabilities = this.adapter.getCapabilities();
             const q = capabilities.dialect === "mysql" ? "`" : '"';
@@ -954,12 +962,6 @@ export class CollectionSyncService extends BaseService {
             deletedSlugs.add(slug);
             this.logger.info(
               `Deleted orphaned collection: ${slug} (table: ${tableName})`
-            );
-            // Its cached reads describe a collection that is gone.
-            await flushContentChange(
-              expire,
-              this.logger,
-              "an orphaned collection was deleted"
             );
           } catch (error) {
             const warning = `Failed to delete collection "${slug}": ${error instanceof Error ? error.message : String(error)}`;

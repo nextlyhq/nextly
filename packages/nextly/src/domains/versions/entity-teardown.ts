@@ -61,11 +61,13 @@ export async function deleteEntityRegistryRow(
 ): Promise<DeletedEntity> {
   const registry = REGISTRY_TABLES[scopeKind];
   if (registry === undefined) return { deleted: 0, expire: undefined };
-  // Read before the delete, on the same transaction, so the setting is the
-  // one the deleted row held.
+  // Read before the delete, on the same transaction and locking the row, so
+  // the setting is the latest committed one and nothing changes it before
+  // the delete (a plain read on MySQL would see the transaction's snapshot).
   const [row] = await tx.select<{ revalidate: unknown }>(registry, {
     columns: ["revalidate"],
     where: { and: [{ column: "slug", op: "=" as const, value: scopeSlug }] },
+    forUpdate: true,
   });
   const deleted = await tx.delete(registry, {
     and: [{ column: "slug", op: "=" as const, value: scopeSlug }],
