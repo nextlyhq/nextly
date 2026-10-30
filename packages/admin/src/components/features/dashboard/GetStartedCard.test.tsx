@@ -283,14 +283,14 @@ describe("the Get started card", () => {
         if (this.getAttribute("data-testid") === "widget-card-body") {
           return rect(0, 300);
         }
-        if (this.hasAttribute("data-step-row")) {
+        if (this.hasAttribute("data-fold-row")) {
           const index = [
-            ...(this.parentElement?.querySelectorAll("[data-step-row]") ?? []),
+            ...(this.parentElement?.querySelectorAll("[data-fold-row]") ?? []),
           ].indexOf(this);
           return rect(60 + 50 * index, 60 + 50 * (index + 1));
         }
         if (this.hasAttribute("aria-controls")) {
-          const rows = this.parentElement?.querySelectorAll("[data-step-row]");
+          const rows = this.parentElement?.querySelectorAll("[data-fold-row]");
           const last = 60 + 50 * (rows?.length ?? 0);
           return rect(last + 12, last + 44);
         }

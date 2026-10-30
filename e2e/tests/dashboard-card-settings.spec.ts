@@ -159,11 +159,11 @@ for (const viewport of WIDTHS) {
     await expect(rows(page)).toHaveCount(3);
     const sent = watchRequests(page);
 
-    const accent = cell(page).getByRole("combobox", {
+    // A choice of two is drawn as a segmented control: both options in view.
+    const accent = cell(page).getByRole("radiogroup", {
       name: `Accent for ${TITLE}`,
     });
-    await accent.click();
-    await page.getByRole("option", { name: "Bold" }).click();
+    await accent.getByRole("radio", { name: "Bold" }).click();
 
     await expect(page.getByTestId("widget-grid-live")).toHaveText(
       `${TITLE}: Accent set to Bold.`
@@ -176,13 +176,13 @@ for (const viewport of WIDTHS) {
     // sent after the write carries this card's question alone.
     const asked = queriesAfterWrite(sent).map(
       request =>
-        (request.postDataJSON() as { queries?: Array<{ source?: string }> })
+        (request.postDataJSON() as { queries?: Array<{ widget?: string }> })
           .queries ?? []
     );
+    // A declared widget's card is asked for by its widget's id.
     expect(
       asked.filter(
-        queries =>
-          queries.length !== 1 || queries[0]?.source !== "collection:posts"
+        queries => queries.length !== 1 || queries[0]?.widget !== CARD
       ),
       `requests that asked other cards: ${JSON.stringify(asked)}`
     ).toEqual([]);
@@ -190,8 +190,10 @@ for (const viewport of WIDTHS) {
     // Saved for this reader: it is there after a reload.
     await page.reload();
     await expect(
-      cell(page).getByRole("combobox", { name: `Accent for ${TITLE}` })
-    ).toHaveText(/Bold/);
+      cell(page)
+        .getByRole("radiogroup", { name: `Accent for ${TITLE}` })
+        .getByRole("radio", { name: "Bold" })
+    ).toHaveAttribute("aria-checked", "true");
   });
 }
 

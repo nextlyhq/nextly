@@ -68,6 +68,7 @@ const serverEntries = [
   "src/api/email-providers.ts",
   "src/api/email-provider-types.ts",
   "src/api/email-template-preview-types.ts",
+  "src/api/dashboard-summary-types.ts",
   "src/api/jobs-list-types.ts",
   "src/api/auth-ui-types.ts",
   "src/api/email-providers-detail.ts",
@@ -216,6 +217,12 @@ const clientEntries = [
   // `nextly/zod`: the Zod generated schema files import, so they compile in an
   // app that depends on `nextly` and not on `zod`. Pure, so browser-safe.
   "src/zod.ts",
+  // `nextly/testing/widget-card`: a widget's card described and answered as
+  // the dashboard does, for the SDK's card helper. A card test runs under
+  // jsdom, where `nextly/testing`'s harness refuses to load, so this half of
+  // the test surface is its own entry and is held to this list's boundary.
+  // For tests only; no production entry imports it.
+  "src/plugins/test-widget-card.ts",
 ];
 
 // Packages this build never bundles: each name and its subpaths. Exported for

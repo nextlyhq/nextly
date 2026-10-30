@@ -11,7 +11,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
+import { registerContinueWidgetSource } from "../../../services/dashboard/continue-widget-source";
 import { allWidgets } from "../canonical";
 import { CORE_WIDGETS } from "../core-widgets";
 import { clearWidgets, registerWidget } from "../registry";
@@ -24,7 +24,7 @@ beforeEach(() => {
   // against the filters its source declares.
   clearSources();
   clearSystemResolvers();
-  registerRecentEditsWidgetSource();
+  registerContinueWidgetSource();
   for (const definition of CORE_WIDGETS) registerWidget(definition);
 });
 
@@ -45,7 +45,7 @@ describe("what the admin is told about dismissal", () => {
     // Absent rather than `false`, matching how every other optional field on
     // the summary travels -- a reader of the payload sees which cards made a
     // claim instead of inferring it from a default.
-    expect(summaryFor("core/content")).not.toHaveProperty("dismissible");
+    expect(summaryFor("core/content-table")).not.toHaveProperty("dismissible");
   });
 
   it("travels beside a lifecycle without being implied by it", () => {
@@ -57,7 +57,7 @@ describe("what the admin is told about dismissal", () => {
     expect(started).not.toHaveProperty("visibleWhen");
     expect(started.dismissible).toBe(true);
 
-    const content = summaryFor("core/content");
+    const content = summaryFor("core/content-table");
     expect(content.lifecycle).toBe("conditional");
     expect(content).not.toHaveProperty("dismissible");
   });

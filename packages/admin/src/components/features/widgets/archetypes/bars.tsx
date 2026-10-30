@@ -20,6 +20,8 @@
  * @module components/features/widgets/archetypes/bars
  */
 
+import { answerHasNothing } from "nextly/widget-result";
+
 import { WithCollectionUnit } from "../charts/chart-unit";
 import { GroupsChart, type GroupsChartGroup } from "../charts/groups-chart";
 import type { CardEmptyContent } from "../frame/states";
@@ -132,7 +134,9 @@ export const barsBody: ArchetypeBody = (result, definition) => {
     bucketRow(bucket.value, bucket.count, result.field?.choices)
   );
 
-  if (rows.length === 0) {
+  if (answerHasNothing(result)) {
+    // The frame's one empty state, worded for groups (`groupsEmpty`); a source that stopped at a
+    // work bound says what was checked rather than claim that nothing matches.
     return { ok: true, empty: groupsEmpty(result.atLeast === true) };
   }
 

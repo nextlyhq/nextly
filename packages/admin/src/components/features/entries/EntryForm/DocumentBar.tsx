@@ -165,6 +165,12 @@ export interface DocumentBarProps {
    * past version as it withholds every other write.
    */
   documentLocked?: boolean;
+  /**
+   * Whether the server refuses every write to the document whoever asks (its
+   * collection or Single was removed from code): the history panel offers no
+   * restore and no version naming, whatever the user's permissions.
+   */
+  writesRefused?: boolean;
 
   /** Whether the document panel is out of the way (folded, or not opened). */
   isRailCollapsed?: boolean;
@@ -752,8 +758,10 @@ function DocumentBarHistory({
       // Authoritative localized signal for the panel's locale filter.
       entityLocalized={props.localized}
       // Restore reuses the ordinary edit permission, so a caller who may only
-      // read history is not offered a write that would be refused.
-      canRestore={canUpdateDocument}
+      // read history is not offered a write that would be refused. Naming a
+      // version rides the same answer, so a removed entity's history offers
+      // neither.
+      canRestore={canUpdateDocument && props.writesRefused !== true}
       // The restore's confirmation must disclose what happens to unsaved work
       // in the live editor — the WHOLE unsaved-work state, not just form
       // dirtiness: state a field holds outside the form is lost the same way.

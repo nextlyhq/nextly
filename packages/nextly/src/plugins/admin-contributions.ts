@@ -482,7 +482,11 @@ export type PluginAdminDeclarativeWidget =
   | PluginAdminQuerylessWidget;
 
 /**
- * @experimental A plugin-contributed dashboard widget, drawn one of two ways.
+ * @experimental The older dashboard widget shape, drawn one of two ways.
+ *
+ * No contribution key takes it: a plugin declares its widgets with
+ * `defineWidget` under `contributes.dashboard`, and startup refuses
+ * `contributes.admin.widgets`.
  *
  * A union rather than one interface with everything optional, because "either a
  * component, or an archetype and a query" is the actual rule and an interface
@@ -589,11 +593,11 @@ export interface PluginFieldTypeDocumentView extends PluginDocumentView {
  * @public Declarative admin-UI contributions. Introspectable
  * by the host without running the plugin.
  *
- * Consumed: `menu`, `pages` + `settings`, `views`, `widgets`.
- * `widgets` is consumed twice over: the admin grid draws the card and the
- * server validates and executes `query`. `component` is CONDITIONAL -- required
- * only for a widget the plugin draws itself -- because that archetype-driven
- * grid now exists (see `PluginAdminWidget`).
+ * Consumed: `menu`, `pages` + `settings`, `views`.
+ *
+ * Dashboard widgets are not declared here: a plugin declares each with
+ * `defineWidget` under `contributes.dashboard`. Startup refuses a plugin that
+ * still carries `admin.widgets`, so the older key cannot add a card silently.
  */
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
@@ -602,11 +606,6 @@ export interface PluginAdminContributions {
   pages?: PluginAdminPage[];
   /** Plugin settings UI rendered at `/admin/plugins/<slug>`. */
   settings?: { component: ComponentPath };
-  /**
-   * @experimental Dashboard widgets — rendered by `WidgetGrid` on the admin
-   * dashboard, permission-gated. Graduates per D55.
-   */
-  widgets?: PluginAdminWidget[];
   /** Per-collection view overrides + injection points, keyed by slug. */
   views?: Record<string, PluginCollectionView>;
   /**
