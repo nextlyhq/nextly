@@ -13,6 +13,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
+  Activity,
   useEffect,
   type ComponentProps,
   type ReactElement,
@@ -784,6 +785,44 @@ describe("a field-type view on a document with two fields of its type", () => {
       expect(window.history.length).toBe(depth);
     }
   );
+
+  it("leaves an address that is no longer the view's alone when the view is shown again", () => {
+    // Next keeps a visited page mounted but hidden under Cache Components
+    // (React's Activity), and shows it again on Back with the effects it had,
+    // before the admin's router has drawn the page Back went to. The view's
+    // correction then sees the document's own address, with no field named.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=layout"
+    );
+    const view = (mode: "visible" | "hidden") => (
+      <Activity mode={mode}>
+        <EntryForm
+          collection={
+            {
+              name: "pages",
+              fields: [{ name: "layout", type: "blocks" }],
+            } as never
+          }
+          entry={entry}
+          mode="edit"
+          onCancel={onCancel}
+          documentView={{ component: VIEW, onExit, fieldType: "blocks" }}
+        />
+      </Activity>
+    );
+    const { rerender } = render(view("visible"), { wrapper: Providers });
+    rerender(view("hidden"));
+    // Back, to the document's form.
+    window.history.pushState(null, "", "/admin/collections/pages/e1");
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    rerender(view("visible"));
+    expect(window.location.pathname).toBe("/admin/collections/pages/e1");
+    expect(window.location.search).toBe("");
+  });
 
   it("opens the only field of its type without asking", () => {
     window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
