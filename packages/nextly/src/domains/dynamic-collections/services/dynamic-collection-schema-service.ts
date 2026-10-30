@@ -62,10 +62,16 @@ import {
   uniqueIndexNameForColumn,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
-import { backfillDefaultForType } from "../../schema/utils/backfill-default";
+import {
+  backfillDefaultForType,
+  backfillValueForType,
+} from "../../schema/utils/backfill-default";
 import { quoteExpressionSqlDefault } from "../../schema/utils/sql-literal";
 
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+
+/** A field-group field renamed with no column of its own: its instances move with it. */
+type AssociationRename = { from: FieldDefinition; to: FieldDefinition };
 
 /**
  * Field types this service stores in a JSON array column (see its column-type
@@ -919,6 +925,79 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
+   * A field-group field's association moved to its new name, when the change renames one and
+   * renames no column: a field group's instances are keyed by the field name in its own table, so
+   * a rename that emits no DDL would leave every existing row keyed by the old name and reads would
+   * return no nested data. Only an unambiguous removed/added pair whose referenced slugs are
+   * identical is moved; anything else is a remove and an add of different field groups.
+   */
+  private associationMove(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: {
+      associationRename?: AssociationRename;
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+    }
+  ): { rename: AssociationRename; statements: string[] } | null {
+    // The caller's pair wins: it was detected from the save's full field lists, which these
+    // arguments may be a filtered subset of.
+    const groupRename =
+      options?.associationRename ??
+      this.detectFieldGroupAssociationRename(oldFields, newFields);
+    if (!groupRename) return null;
+    const statements: string[] = [];
+    for (const slug of fieldGroupSlugList(groupRename.to)) {
+      // The registry resolves the physical table: comp_ today, fg_ or a historical custom name
+      // once the storage migration has run, so the name is passed in per slug rather than derived
+      // here. A slug with no resolved name has no record and no table: nothing to move.
+      const groupTable = options?.fieldGroupTableNames?.get(slug);
+      if (groupTable === undefined) continue;
+      statements.push(
+        `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
+          `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
+          `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
+          `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
+      );
+    }
+    return { rename: groupRename, statements };
+  }
+
+  /**
+   * What a collection change needs beside the schema pipeline's push, which leaves these tables
+   * out of its diff: a renamed field-group field's association, and the junction tables of
+   * many-to-many fields. The same statements the change's migration file carries for them, from
+   * the same lists, so this database and one built from the files end alike.
+   *
+   * `oldFields` / `newFields` are the lists the main diff is planned on; the junctions are decided
+   * on the full lists when those are a localized collection's shared subset.
+   */
+  statementsBesideThePush(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options?: {
+      associationRename?: AssociationRename;
+      fieldGroupTableNames?: ReadonlyMap<string, string>;
+      junctionFields?: { old: FieldDefinition[]; new: FieldDefinition[] };
+    }
+  ): string[] {
+    // The association moves only when no column is renamed, as the file decides it.
+    const association =
+      this.detectFieldRename(oldFields, newFields) === null
+        ? this.associationMove(tableName, oldFields, newFields, options)
+        : null;
+    return [
+      ...(association?.statements ?? []),
+      ...this.junctionLifecycle(
+        tableName,
+        options?.junctionFields?.old ?? oldFields,
+        options?.junctionFields?.new ?? newFields
+      ),
+    ];
+  }
+
+  /**
    * The literal that backfills existing rows when a required column is added, or null when the
    * field's type states none.
    *
@@ -935,6 +1014,30 @@ export class DynamicCollectionSchemaService {
     return field.required || field.default !== undefined
       ? this.requiredColumnBackfill(field)
       : null;
+  }
+
+  /**
+   * The value the rows already there are filled with when this required column is added, bound by
+   * the apply rather than written into the column's definition: the field's stated default, or
+   * the empty its type backfills with, as `requiredColumnBackfill` writes it in SQL. `undefined`
+   * where nothing satisfies NOT NULL.
+   */
+  addedColumnFillValue(field: FieldDefinition, now: Date): unknown {
+    if (field.default !== undefined) {
+      // SQLite's driver binds no boolean.
+      return this.dialect === "sqlite" && typeof field.default === "boolean"
+        ? Number(field.default)
+        : field.default;
+    }
+    return backfillValueForType(
+      {
+        type: field.type,
+        field,
+        dialect: this.dialect,
+        jsonArrayTypes: COLLECTION_JSON_ARRAY_TYPES,
+      },
+      now
+    );
   }
 
   private requiredColumnBackfill(field: FieldDefinition): string | null {
@@ -1560,26 +1663,16 @@ ${allColumnDefs.join(",\n")}
       // stays with the loops.
       // The caller's pair wins: it was detected from the save's full field
       // lists, which these arguments may be a filtered subset of.
-      const groupRename =
-        options?.associationRename ??
-        this.detectFieldGroupAssociationRename(oldFields, newFields);
-      if (groupRename) {
-        renamedFromName = groupRename.from.name;
-        renamedToName = groupRename.to.name;
-        for (const slug of fieldGroupSlugList(groupRename.to)) {
-          // The registry resolves the physical table: comp_ today, fg_ or a
-          // historical custom name once the storage migration has run, so the
-          // name is passed in per slug rather than derived here. A slug with
-          // no resolved name has no record and no table — nothing to migrate.
-          const groupTable = options?.fieldGroupTableNames?.get(slug);
-          if (groupTable === undefined) continue;
-          statements.push(
-            `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
-              `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
-              `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
-              `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
-          );
-        }
+      const association = this.associationMove(
+        tableName,
+        oldFields,
+        newFields,
+        options
+      );
+      if (association) {
+        renamedFromName = association.rename.from.name;
+        renamedToName = association.rename.to.name;
+        statements.push(...association.statements);
       }
     }
 

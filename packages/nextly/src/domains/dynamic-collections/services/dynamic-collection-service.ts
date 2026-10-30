@@ -37,30 +37,30 @@ import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-tra
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
-  companionIndexFacts,
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
 import { refuseUnindexableTranslatedUnique } from "../../i18n/migration/translated-unique-preconditions";
-import {
-  companionColumnNames,
-  companionHasColumn,
-  companionHasStatusColumn,
-  localizedColumnsOnMain,
-} from "../../i18n/runtime/companion-io";
+import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
 import {
   readColumnNullState,
   readForeignKeyColumns,
   readIndexColumns,
-  readIndexUniqueness,
   readIndexNames,
   readUniqueColumns,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
+import type {
+  BrowserRenameResolution,
+  LegacyFieldResolution,
+  LegacyResolutionsBundle,
+} from "../../schema/pipeline/prompt-dispatcher/browser";
 import {
   columnsThatMayHoldNull,
   getColumnDescriptor,
+  systemColumnsForFields,
+  toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
@@ -880,117 +880,37 @@ export class DynamicCollectionService extends BaseService {
    * single-statement chunks (drivers with multi-statements disabled, e.g. MySQL, otherwise
    * reject a multi-statement chunk).
    */
-  private toBreakpointSql(statements: string[]): string {
-    return statements.map(s => `${s};`).join("\n--> statement-breakpoint\n");
-  }
-
   /**
-   * i18n: build the data-preserving companion SQL for a localization enable/disable/field-change
-   * on an existing collection (empty when there's nothing to do). Enabling seeds the companion
-   * default locale from the existing main columns then drops them; disabling restores the default
-   * onto main, archives the other languages into `nextly_i18n_archive`, then drops the companion;
-   * a field change ADDs/DROPs localized columns. Returns `needsArchive` so the caller prepends the
-   * archive table's `CREATE IF NOT EXISTS` DDL before a disable's archive INSERT.
+   * Refuse an added field whose column name an unrelated column of this table already holds, with
+   * another type: a column a save refused part-way added has the field's own type and is taken as
+   * the field's by the push, while one of another type is left from an earlier field, and taking
+   * it would keep values the new field cannot hold. A precondition, read from the live table
+   * before anything changes.
    */
-  /**
-   * A translated collection's whole migration: the main-table SQL, the archive table when the
-   * transition archives, and the companion transition, in the order `orderLocalizedMigration`
-   * sets. `localSql` is the same migration for this process's own database when the companion
-   * transition differs there.
-   */
-  private async buildLocalizedMigrationSQL(
-    main: { artefact: string; local?: string; settings?: string },
-    args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
-  ): Promise<{ sql: string; localSql?: string; needsArchive: boolean }> {
-    const { sql, localSql, beforeMainSql, localBeforeMainSql, needsArchive } =
-      await this.buildCompanionTransitionSQL(args);
-    const archive = needsArchive
-      ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
-      : "";
-    const assemble = (mainSQL: string, beforeMain: string, companion: string) =>
-      orderLocalizedMigration(args.isLocalized, {
-        main: mainSQL,
-        archive,
-        beforeMain,
-        companion,
-        settings: main.settings,
-      });
-    // What this database runs differs from the file when any part does.
-    const differs =
-      localSql !== undefined ||
-      main.local !== undefined ||
-      localBeforeMainSql !== undefined;
-    return {
-      sql: assemble(main.artefact, beforeMainSql, sql),
-      needsArchive,
-      ...(differs
-        ? {
-            localSql: assemble(
-              main.local ?? main.artefact,
-              localBeforeMainSql ?? beforeMainSql,
-              localSql ?? sql
-            ),
-          }
-        : {}),
-    };
-  }
-
-  /**
-   * The field list this database's own plan starts from: the previous fields as the live table
-   * holds them. MySQL commits each schema statement, so a save it refused part-way can have added
-   * some columns and dropped others while the registry still records the fields before the save.
-   * Planning from the registry would add a column twice or drop one that is gone, and fail again.
-   *
-   * - A field the save removes whose column is already gone is left out, so it is not dropped.
-   * - A field the save adds whose column is already there is taken as present, and as unique only
-   *   where a unique index already covers its column (asked of the catalog, since an index of the
-   *   expected name can stand on another column).
-   * - Such a column is taken only when its type is the one the field would have. A column of the
-   *   same name with another type is not a part-applied save's: removed fields once kept their
-   *   columns on MySQL, with their old values, and adopting one would record the field over a
-   *   column of the wrong type. The save is refused, naming the column.
-   */
-  private thisDatabasesStartingFields(
+  private refuseAddedColumnsTaken(
     tableName: string,
     oldFields: readonly FieldDefinition[],
     newFields: readonly FieldDefinition[],
-    facts: {
-      liveColumnTypes: ReadonlyMap<string, string>;
-      uniqueColumns: ReadonlyMap<string, string | null>;
-    }
-  ): FieldDefinition[] {
-    const columnOf = (f: FieldDefinition) =>
-      getColumnDescriptor(f, this.adapter.dialect, "collection")?.name;
-    const kept = new Set(newFields.map(f => f.name));
+    liveColumnTypes: ReadonlyMap<string, string>
+  ): void {
     const known = new Set(oldFields.map(f => f.name));
-    const stillThere = oldFields.filter(f => {
-      const column = columnOf(f);
-      return (
-        kept.has(f.name) ||
-        column === undefined ||
-        facts.liveColumnTypes.has(column)
-      );
-    });
-    const alreadyAdded = newFields.flatMap(f => {
-      const column = columnOf(f);
-      if (known.has(f.name) || column === undefined) return [];
-      const live = facts.liveColumnTypes.get(column);
-      if (live === undefined) return [];
+    for (const field of newFields) {
+      if (known.has(field.name)) continue;
+      const column = getColumnDescriptor(
+        field,
+        this.adapter.dialect,
+        "collection"
+      )?.name;
+      if (column === undefined) continue;
+      const live = liveColumnTypes.get(column);
+      if (live === undefined) continue;
       const planned = [
-        ...this.schemaService.plannedColumnTypes([f]).values(),
+        ...this.schemaService.plannedColumnTypes([field]).values(),
       ][0];
       if (normalizeType(live) !== normalizeType(planned)) {
-        throw this.columnTakenRefusal(tableName, f, column, live, planned);
+        throw this.columnTakenRefusal(tableName, field, column, live, planned);
       }
-      return [
-        {
-          ...f,
-          required: false,
-          unique: f.unique === true && facts.uniqueColumns.has(column),
-        },
-      ];
-    });
-    return [...stillThere, ...alreadyAdded];
+    }
   }
 
   /** The refusal for an added field whose column name an unrelated column already holds. */
@@ -1016,107 +936,152 @@ export class DynamicCollectionService extends BaseService {
   }
 
   /**
-   * This database's own statements for an edit, when they differ from the migration file's: the
-   * same diff, planned from the live table (`thisDatabasesStartingFields`) and skipping index
-   * changes it already shows. Undefined when the two agree, so a caller cannot run the wrong one.
+   * The answers a Builder save gives the schema pipeline's push, which asks them of a dialog's
+   * admin, made as the save has always decided them:
+   *
+   * - the field it renames is a rename, and no other pair of a removed and an added column is
+   *   taken for one;
+   * - each column leaving the main table is confirmed for its drop, as the save drops it: a removed
+   *   field's, a field joining translation's (its values are moved first), and the lifecycle column
+   *   when Draft/Published is turned off;
+   * - an added Required column fills the rows already there with the field's default, or its
+   *   type's empty, as the save's ADD did.
    */
-  private localAlterSQL(
+  private pushAnswers(
     tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
-    options: Parameters<
-      DynamicCollectionSchemaService["generateAlterTableMigration"]
-    >[3] & {
-      liveColumnTypes: ReadonlyMap<string, string>;
-      uniqueColumns: ReadonlyMap<string, string | null>;
-    },
-    artefact: string
-  ): string | undefined {
-    const local = this.schemaService.generateAlterTableMigration(
-      tableName,
-      this.thisDatabasesStartingFields(
-        tableName,
-        oldFields,
-        newFields,
-        options
-      ),
-      newFields,
-      { ...options, planFor: "database" }
-    );
-    return local === artefact ? undefined : local;
-  }
-
-  /**
-   * Which of the given fields still have a column on the main table of this database. Asked one
-   * field at a time, so the answer is keyed by the field's name rather than by a column name this
-   * service would have to derive the same way the introspection does.
-   */
-  private async leavingFieldsRetainedOnMain(
-    tableName: string,
-    fields: readonly FieldDefinition[]
-  ): Promise<Set<string>> {
-    const retained = new Set<string>();
-    for (const field of fields) {
-      const present = await localizedColumnsOnMain(this.adapter, tableName, [
-        field,
-      ]);
-      if (present.length > 0) retained.add(field.name);
-    }
-    return retained;
-  }
-
-  /**
-   * Which fields this save makes translated already have their companion column here. The same
-   * presence question as for the main table, asked of the companion: a save MySQL refused
-   * part-way can have added the column, and the next save plans from it.
-   */
-  private async joiningColumnsOnCompanion(
-    companionTable: string | null,
-    args: {
+    change: {
+      oldFields: FieldDefinition[];
       newFields: FieldDefinition[];
-      isLocalized: boolean;
       wasLocalized: boolean;
-    },
-    localizedOldNames: ReadonlySet<string>
-  ): Promise<string[]> {
-    if (companionTable === null || !args.wasLocalized) return [];
-    const joining = new Set(
-      resolveLocalizedFieldNames(args.newFields, args.isLocalized)
+      isLocalized: boolean;
+      wasStatus: boolean;
+      hasStatus: boolean;
+      renamed: FieldRename | null;
+    }
+  ): {
+    renameResolutions: BrowserRenameResolution[];
+    legacyResolutions: LegacyResolutionsBundle;
+  } {
+    const onMain = (fields: FieldDefinition[], localized: boolean) => {
+      const translated = new Set(resolveLocalizedFieldNames(fields, localized));
+      return fields.filter(f => !translated.has(f.name));
+    };
+    const before = onMain(change.oldFields, change.wasLocalized);
+    const after = onMain(change.newFields, change.isLocalized);
+    const beforeNames = new Set(before.map(f => f.name));
+    const afterNames = new Set(after.map(f => f.name));
+    const removed = before.filter(
+      f => !afterNames.has(f.name) && f.name !== change.renamed?.from
     );
-    const added = args.newFields.filter(
-      f => joining.has(f.name) && !localizedOldNames.has(f.name)
+    const added = after.filter(
+      f => !beforeNames.has(f.name) && f.name !== change.renamed?.to
     );
-    return (
-      await localizedColumnsOnMain(this.adapter, companionTable, added)
-    ).map(c => c.name);
-  }
-
-  /**
-   * The joining fields' statements as this database needs them, when its companion already has
-   * some of their columns (a run that stopped part-way, or the unattended reconcile at boot):
-   * adding a column twice fails on every dialect. Undefined when it has none, so the file's
-   * statements stand.
-   */
-  private async localJoiningStatements(
-    joinArgs: Parameters<typeof buildFieldsJoiningTranslationStatements>[0],
-    columns: readonly string[],
-    companionTable: string | null
-  ): Promise<
-    ReturnType<typeof buildFieldsJoiningTranslationStatements> | undefined
-  > {
-    if (companionTable === null) return undefined;
-    const present = new Set<string>();
-    for (const column of columns) {
-      if (await companionHasColumn(this.adapter, companionTable, column)) {
-        present.add(column);
+    const column = (f: FieldDefinition) => toSnakeCase(f.name);
+    const renameResolutions: BrowserRenameResolution[] = [
+      ...(change.renamed
+        ? [
+            {
+              tableName,
+              fromColumn: toSnakeCase(change.renamed.from),
+              toColumn: toSnakeCase(change.renamed.to),
+              choice: "rename" as const,
+            },
+          ]
+        : []),
+      // Every other removed column against every column the save adds, the renamed field's new
+      // one included: the pipeline offers each such pair, and a pair left unanswered stops it.
+      ...removed.flatMap(from =>
+        [
+          ...added.map(column),
+          ...(change.renamed ? [toSnakeCase(change.renamed.to)] : []),
+        ].map(toColumn => ({
+          tableName,
+          fromColumn: column(from),
+          toColumn,
+          choice: "drop_and_add" as const,
+        }))
+      ),
+    ];
+    const now = new Date();
+    const byFieldName: Record<string, LegacyFieldResolution> = {};
+    for (const field of removed)
+      byFieldName[field.name] = { action: "confirm_drop" };
+    // Every column the lifecycle brings, when Draft/Published is turned off: the system columns
+    // the table has with it and not without it, as the schema derives them.
+    if (change.wasStatus && !change.hasStatus) {
+      const systemColumns = (hasStatus: boolean) =>
+        systemColumnsForFields(change.newFields, this.adapter.dialect, {
+          builtBy: "collection",
+          hasStatus,
+          isSingle: false,
+        }).map(column => column.name);
+      const without = new Set(systemColumns(false));
+      for (const name of systemColumns(true)) {
+        if (!without.has(name)) byFieldName[name] = { action: "confirm_drop" };
       }
     }
-    return present.size > 0
-      ? buildFieldsJoiningTranslationStatements({
-          ...joinArgs,
-          companionColumns: present,
-        })
-      : undefined;
+    for (const field of added) {
+      if (field.required !== true) continue;
+      const value = this.schemaService.addedColumnFillValue(field, now);
+      if (value !== undefined) {
+        byFieldName[field.name] = { action: "provide_default", value };
+      }
+    }
+    return {
+      renameResolutions,
+      legacyResolutions: { tableName, byFieldName },
+    };
+  }
+
+  /**
+   * Statements the ALTER generator wrote, each already `;`-terminated, joined as its migration
+   * joins them, or null when there are none.
+   */
+  private joinedStatements(statements: string[]): string | null {
+    return statements.length === 0
+      ? null
+      : statements.join("\n--> statement-breakpoint\n");
+  }
+
+  private toBreakpointSql(statements: string[]): string {
+    return statements.map(s => `${s};`).join("\n--> statement-breakpoint\n");
+  }
+
+  /**
+   * i18n: build the data-preserving companion SQL for a localization enable/disable/field-change
+   * on an existing collection (empty when there's nothing to do). Enabling seeds the companion
+   * default locale from the existing main columns then drops them; disabling restores the default
+   * onto main, archives the other languages into `nextly_i18n_archive`, then drops the companion;
+   * a field change ADDs/DROPs localized columns. Returns `needsArchive` so the caller prepends the
+   * archive table's `CREATE IF NOT EXISTS` DDL before a disable's archive INSERT.
+   */
+  /**
+   * A translated collection's whole migration: the main-table SQL, the archive table when the
+   * transition archives, and the companion transition, in the order `orderLocalizedMigration`
+   * sets. `localSql` is the same migration for this process's own database when the companion
+   * transition differs there.
+   */
+  private async buildLocalizedMigrationSQL(
+    main: { artefact: string; settings?: string },
+    args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
+  ): Promise<{ sql: string; needsArchive: boolean }> {
+    const { sql, beforeMainSql, needsArchive } =
+      await this.buildCompanionTransitionSQL(args);
+    const archive = needsArchive
+      ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
+      : "";
+    const assemble = (mainSQL: string, beforeMain: string, companion: string) =>
+      orderLocalizedMigration(args.isLocalized, {
+        main: mainSQL,
+        archive,
+        beforeMain,
+        companion,
+        settings: main.settings,
+      });
+    return {
+      sql: assemble(main.artefact, beforeMainSql, sql),
+      needsArchive,
+    };
   }
 
   private async buildCompanionTransitionSQL(args: {
@@ -1133,10 +1098,7 @@ export class DynamicCollectionService extends BaseService {
     renamed?: FieldRename;
   }): Promise<{
     sql: string;
-    localSql?: string;
     beforeMainSql: string;
-    /** What this database runs before main, when it differs from the file's. */
-    localBeforeMainSql?: string;
     needsArchive: boolean;
   }> {
     const companionTable = `${args.tableName}_locales`;
@@ -1147,13 +1109,8 @@ export class DynamicCollectionService extends BaseService {
       companionExists && args.wasLocalized && args.isLocalized
         ? await companionHasStatusColumn(this.adapter, companionTable)
         : undefined;
-    const localizedOldNames = new Set(
-      resolveLocalizedFieldNames(args.oldFields, args.wasLocalized)
-    );
     // Fields becoming translated: their values move into the default language's companion rows
-    // before the main table loses their columns. The file adds each companion column; this
-    // database skips one its companion already has (a run that stopped part-way, or the
-    // unattended reconcile at boot), since adding a column twice fails on every dialect.
+    // before the main table loses their columns, and the file adds each companion column.
     const joinArgs = {
       slug: args.slug,
       tableName: args.tableName,
@@ -1175,11 +1132,6 @@ export class DynamicCollectionService extends BaseService {
             createsCompanion: false,
             statements: [],
           };
-    const localJoining = await this.localJoiningStatements(
-      joinArgs,
-      joining.columns,
-      companionExists ? companionTable : null
-    );
     const common = {
       // This service owns Schema Builder collections, so the companion mirrors that builder.
       builtBy: "collection" as const,
@@ -1204,63 +1156,19 @@ export class DynamicCollectionService extends BaseService {
       renamed: args.renamed,
     };
 
-    // Which translatable columns the main table still carries. A disable must not re-add one that
-    // is already there, and must still restore it: presence says the column exists, never that its
-    // value is current, because every localized write went to the companion alone.
-    const { artefact, local } = buildCompanionTransitionPlans({
-      ...common,
-      // Only the fields that were TRANSLATABLE before this save. The helper reports whichever of
-      // the names it is given exist on the main table, so handing it every old field would put
-      // ordinary shared columns into the list and let the local plan diverge from the artefact
-      // over columns no transition ever touched.
-      existingMainColumns: await localizedColumnsOnMain(
-        this.adapter,
-        args.tableName,
-        args.oldFields.filter(f => localizedOldNames.has(f.name))
-      ).then(cols => cols.map(c => c.name)),
-      presentOnCompanion: await this.joiningColumnsOnCompanion(
-        companionExists ? companionTable : null,
-        args,
-        localizedOldNames
-      ),
-      // The companion as this database has it, so a rename, a move or a drop an earlier run
-      // already made is not made again; the file is planned from history alone.
-      liveCompanionColumns: companionExists
-        ? await companionColumnNames(this.adapter, args.tableName)
-        : undefined,
-      // Its indexes too, so a per-language unique index is created only where it is missing, and
-      // one under its name that is not unique is replaced.
-      ...(companionExists
-        ? companionIndexFacts(
-            await readIndexUniqueness(
-              this.adapter.getDrizzle(),
-              this.adapter.dialect,
-              companionTable
-            )
-          )
-        : {}),
-    });
+    // The file, planned from history alone: this database's companion is brought in step by the
+    // apply, from what it holds now (`liveCompanionShape`).
+    const { artefact } = buildCompanionTransitionPlans(common);
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
     // is split on `--> statement-breakpoint` and each chunk is run as ONE statement, so a
     // multi-statement chunk is rejected by drivers with multi-statements disabled (e.g. MySQL).
     return {
       sql: this.toBreakpointSql(artefact.statements),
-      ...(local ? { localSql: this.toBreakpointSql(local.statements) } : {}),
       beforeMainSql: this.toBreakpointSql([
         ...(artefact.beforeMain ?? []),
         ...joining.statements,
       ]),
-      // This database's own run differs when its joining columns or its companion transition do;
-      // the transition's archive writes, and a rename made before them, go ahead of main.
-      ...(localJoining || local
-        ? {
-            localBeforeMainSql: this.toBreakpointSql([
-              ...((local ?? artefact).beforeMain ?? []),
-              ...(localJoining ?? joining).statements,
-            ]),
-          }
-        : {}),
       needsArchive: artefact.needsArchive,
     };
   }
@@ -1274,15 +1182,18 @@ export class DynamicCollectionService extends BaseService {
   ): Promise<{
     migrationSQL: string | null;
     /**
-     * What to run against THIS database, when it differs from the artefact.
-     *
-     * Present only where the local schema is in a shape migration history cannot produce:
-     * unattended provisioning retains the columns it copied into a companion, so a later disable
-     * meets a main table that already has them while the file — which must be replayable on a
-     * database that only ever ran migrations — re-adds them. Null means the artefact is correct
-     * here too, which is every case but that one.
+     * The statements this database runs beside the schema pipeline's push, which leaves these
+     * tables out of its diff: a renamed field-group field's association and the junction tables
+     * of many-to-many fields, as the file carries them. Null when the save has none.
      */
-    localMigrationSQL: string | null;
+    besideStatements: string | null;
+    /** The field the save renames, which the push is answered with; null when none. */
+    renamedField: FieldRename | null;
+    /** The answers this save gives the schema pipeline's push (`pushAnswers`). */
+    pushAnswers: {
+      renameResolutions: BrowserRenameResolution[];
+      legacyResolutions: LegacyResolutionsBundle;
+    };
     migrationFileName: string | null;
     /**
      * What the registry row is updated with. `fields`, when the save changes them, is the list as
@@ -1442,9 +1353,8 @@ export class DynamicCollectionService extends BaseService {
     }
 
     let migrationSQL: string | null = null;
-    // Set only where this database is in a shape migration history cannot produce — see the
-    // return type. Null everywhere else, so the caller runs the artefact itself.
-    let localMigrationSQL: string | null = null;
+    let besideStatements: string | null = null;
+    let renamedField: FieldRename | null = null;
     let needsArchive = false;
     let migrationFileName: string | null = null;
 
@@ -1458,6 +1368,24 @@ export class DynamicCollectionService extends BaseService {
         // What the pending create artefact builds from, for the not-yet-deployed case.
         collection.fields ?? []
       ));
+    // The facts the migration file is planned from. What the table IS comes from the fields the
+    // registry records, as every database built from the migrations has it, never from this
+    // database's table, which a save refused part-way can have changed. Whether it holds rows, and
+    // which columns hold a null, are this database's entries, which the change is judged against.
+    const historyFacts = async () => {
+      const live = await liveTable();
+      const recorded = collection.fields ?? [];
+      return {
+        tableHasRows: live.tableHasRows,
+        columnsContainingNull: live.columnsContainingNull,
+        columnsAbsentFromTable: new Set<string>(),
+        liveColumnTypes: this.schemaService.plannedColumnTypes(recorded),
+        ...this.schemaService.plannedAttachments(
+          collection.tableName,
+          recorded
+        ),
+      };
+    };
 
     // Why: the alter-table block runs when fields change, but a status-only
     // flip also needs a migration (ADD/DROP status column) so the data
@@ -1497,6 +1425,20 @@ export class DynamicCollectionService extends BaseService {
     const existingUserFieldsForTransition = (collection.fields || []).filter(
       (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
     );
+    // A save that changes no field still answers for what its flags drop: the lifecycle column,
+    // or the translatable columns an enable moves to the companion.
+    let pushAnswers = this.pushAnswers(collection.tableName, {
+      oldFields: existingUserFieldsForTransition,
+      newFields: existingUserFieldsForTransition,
+      wasLocalized: collectionWasLocalized,
+      isLocalized: collectionIsLocalized,
+      wasStatus: wasStatusForUpdate,
+      hasStatus:
+        updates.status !== undefined
+          ? updates.status === true
+          : wasStatusForUpdate,
+      renamed: null,
+    });
 
     if (updates.fields !== undefined) {
       const userDefinedFields = this.userFieldsOf(
@@ -1588,6 +1530,14 @@ export class DynamicCollectionService extends BaseService {
             addedColumnBackfill: field =>
               this.schemaService.addedColumnBackfill(field),
           });
+      if (tableDeployed) {
+        this.refuseAddedColumnsTaken(
+          collection.tableName,
+          mainBefore,
+          mainAfter,
+          (await liveTable()).liveColumnTypes
+        );
+      }
       if (refusals.length > 0) {
         throw NextlyError.validation({
           errors: refusals.map(r => r.error),
@@ -1662,7 +1612,7 @@ export class DynamicCollectionService extends BaseService {
           // The junction tables are decided on the full lists: a localized
           // many-to-many sits in neither shared list and still has one.
           junctionFields: { old: oldUserFields, new: userDefinedFields },
-          ...(await liveTable()),
+          ...(await historyFacts()),
           // Strict only when an association rename will occur: the table
           // names are a precondition of THAT migration, and requiring them
           // for every edit would refuse saves unrelated to renames.
@@ -1709,30 +1659,17 @@ export class DynamicCollectionService extends BaseService {
               }
             )
           : undefined;
-        // A leaving field whose column unattended provisioning left on THIS database's main table.
-        // The migration file still adds the column, because a database built from migrations does
-        // not have it; this database runs a main diff that treats it as present, and the copy that
-        // follows replaces its stale value with the default language's.
-        const retainedOnMain = await this.leavingFieldsRetainedOnMain(
-          collection.tableName,
-          oldUserFields.filter(f => leavingTranslation.has(f.name))
-        );
-        const localOldShared = [
-          ...oldShared,
-          ...withoutLeavingConstraints(
-            userDefinedFields.filter(f => retainedOnMain.has(f.name)),
-            leavingTranslation
-          ),
-        ];
-        const localMainSQL = this.localAlterSQL(
-          collection.tableName,
-          localOldShared,
-          sharedUnconstrained,
-          mainOptions,
-          mainSQL
+        // What this database needs beside the push, from the lists the main diff is planned on.
+        besideStatements = this.joinedStatements(
+          this.schemaService.statementsBesideThePush(
+            collection.tableName,
+            oldShared,
+            sharedUnconstrained,
+            mainOptions
+          )
         );
         const localizedMigration = await this.buildLocalizedMigrationSQL(
-          { artefact: mainSQL, local: localMainSQL, settings: settingsSQL },
+          { artefact: mainSQL, settings: settingsSQL },
           {
             slug: collectionName,
             tableName: collection.tableName,
@@ -1747,9 +1684,6 @@ export class DynamicCollectionService extends BaseService {
         );
         migrationSQL = localizedMigration.sql;
         needsArchive = localizedMigration.needsArchive;
-        if (localizedMigration.localSql !== undefined) {
-          localMigrationSQL = localizedMigration.localSql;
-        }
       } else {
         const groupAssociationRename =
           this.schemaService.detectFieldGroupAssociationRename(
@@ -1759,7 +1693,7 @@ export class DynamicCollectionService extends BaseService {
         const alterOptions = {
           wasStatus,
           hasStatus,
-          ...(await liveTable()),
+          ...(await historyFacts()),
           associationRename: groupAssociationRename ?? undefined,
           fieldGroupTableNames: groupAssociationRename
             ? await this.resolveFieldGroupTableNames([
@@ -1774,17 +1708,25 @@ export class DynamicCollectionService extends BaseService {
           userDefinedFields,
           alterOptions
         );
-        // The file is planned from the registry; this database, which a save MySQL stopped
-        // part-way can have changed already, plans from the table as it is.
-        localMigrationSQL =
-          this.localAlterSQL(
+        besideStatements = this.joinedStatements(
+          this.schemaService.statementsBesideThePush(
             collection.tableName,
             oldUserFields,
             userDefinedFields,
-            alterOptions,
-            migrationSQL
-          ) ?? null;
+            alterOptions
+          )
+        );
       }
+      renamedField = changeRename ?? null;
+      pushAnswers = this.pushAnswers(collection.tableName, {
+        oldFields: oldUserFields,
+        newFields: userDefinedFields,
+        wasLocalized: collectionWasLocalized,
+        isLocalized: collectionIsLocalized,
+        wasStatus,
+        hasStatus,
+        renamed: renamedField,
+      });
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
 
       metadataUpdates.fields = userDefinedFields;
@@ -1844,9 +1786,6 @@ export class DynamicCollectionService extends BaseService {
       );
       migrationSQL = localizedMigration.sql;
       needsArchive = localizedMigration.needsArchive;
-      if (localizedMigration.localSql !== undefined) {
-        localMigrationSQL = localizedMigration.localSql;
-      }
       migrationFileName = `${Date.now()}_i18n_${collectionName}.sql`;
     } else if (statusFlipped) {
       // No field changes, but status toggled — emit an alter that just
@@ -1873,21 +1812,14 @@ export class DynamicCollectionService extends BaseService {
         existingUserFields,
         statusOptions
       );
-      // A save MySQL stopped part-way can have added or dropped the lifecycle column already.
-      localMigrationSQL =
-        this.localAlterSQL(
-          collection.tableName,
-          existingUserFields,
-          existingUserFields,
-          { ...statusOptions, ...(await liveTable()) },
-          migrationSQL
-        ) ?? null;
       migrationFileName = `${Date.now()}_status_${collectionName}.sql`;
     }
 
     return {
       migrationSQL,
-      localMigrationSQL,
+      besideStatements,
+      renamedField,
+      pushAnswers,
       migrationFileName,
       metadataUpdates,
       needsArchive,

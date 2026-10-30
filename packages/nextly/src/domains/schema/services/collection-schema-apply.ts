@@ -54,6 +54,7 @@ import {
   type LegacyResolutionsBundle,
 } from "../pipeline/prompt-dispatcher/browser";
 import { PushSchemaPipeline } from "../pipeline/pushschema-pipeline";
+import type { PromptDispatcher } from "../pipeline/pushschema-pipeline-interfaces";
 import {
   noopMigrationJournal,
   noopPreRenameExecutor,
@@ -78,6 +79,103 @@ export function recordedFieldsOf(collection: {
     : [];
 }
 
+/**
+ * The prompt dispatcher, watched for what another table's drift does to the apply.
+ *
+ * The apply diffs the whole database, so a table the change does not touch can stop it: a column
+ * no definition has would be dropped, unconfirmed, and a pair of columns no change renamed is a
+ * question nobody answered. The dispatcher refuses to proceed either way. This records which other
+ * tables stopped it, so the refusal names them rather than reading as the change's own.
+ */
+class DriftWatchingDispatcher implements PromptDispatcher {
+  drifted: string[] = [];
+
+  constructor(
+    private readonly inner: PromptDispatcher,
+    private readonly tableName: string,
+    private readonly confirmed: ReadonlySet<string>
+  ) {}
+
+  async dispatch(
+    args: Parameters<PromptDispatcher["dispatch"]>[0]
+  ): ReturnType<PromptDispatcher["dispatch"]> {
+    const result = await this.inner.dispatch(args);
+    if (result.proceed) return result;
+    this.drifted = [
+      ...args.events.flatMap(event =>
+        event.kind === "destructive_drop" &&
+        event.tableName !== this.tableName &&
+        !this.confirmed.has(event.id)
+          ? [
+              `${event.tableName} has a column "${event.columnName}" its definition does not`,
+            ]
+          : []
+      ),
+      ...args.candidates.flatMap(candidate =>
+        candidate.tableName !== this.tableName
+          ? [
+              `${candidate.tableName} has a column "${candidate.fromColumn}" where its definition has "${candidate.toColumn}"`,
+            ]
+          : []
+      ),
+    ];
+    return result;
+  }
+}
+
+/**
+ * The answers a change arrives with, and for a caller that decides every pair of columns itself
+ * (the Builder save), `drop_and_add` for each pair on the collection's own table it left
+ * unanswered. Such a save has never renamed a column it did not detect as a rename, and the
+ * pipeline also offers pairs the save never sees, such as a removed column against a lifecycle
+ * column the save adds. Another table's pairs stay unanswered, so its drift stops the apply.
+ */
+class AnsweringDispatcher implements PromptDispatcher {
+  constructor(
+    private readonly renameResolutions: BrowserRenameResolution[],
+    private readonly eventResolutions: Resolution[],
+    private readonly legacyResolutions: LegacyResolutionsBundle | undefined,
+    private readonly ownTable: string | undefined
+  ) {}
+
+  dispatch(
+    args: Parameters<PromptDispatcher["dispatch"]>[0]
+  ): ReturnType<PromptDispatcher["dispatch"]> {
+    const key = (r: {
+      tableName: string;
+      fromColumn: string;
+      toColumn: string;
+    }) => `${r.tableName}::${r.fromColumn}::${r.toColumn}`;
+    const answered = new Set(this.renameResolutions.map(key));
+    const renamedFrom = new Set(
+      this.renameResolutions
+        .filter(r => r.choice === "rename")
+        .map(r => `${r.tableName}::${r.fromColumn}`)
+    );
+    const rest: BrowserRenameResolution[] =
+      this.ownTable === undefined
+        ? []
+        : args.candidates
+            .filter(
+              c =>
+                c.tableName === this.ownTable &&
+                !answered.has(key(c)) &&
+                !renamedFrom.has(`${c.tableName}::${c.fromColumn}`)
+            )
+            .map(c => ({
+              tableName: c.tableName,
+              fromColumn: c.fromColumn,
+              toColumn: c.toColumn,
+              choice: "drop_and_add" as const,
+            }));
+    return new BrowserPromptDispatcher(
+      [...this.renameResolutions, ...rest],
+      this.eventResolutions,
+      this.legacyResolutions
+    ).dispatch(args);
+  }
+}
+
 /** One collection's schema change, as either of its callers states it. */
 export interface CollectionSchemaChange {
   slug: string;
@@ -95,6 +193,11 @@ export interface CollectionSchemaChange {
   renameResolutions: BrowserRenameResolution[];
   eventResolutions: Resolution[];
   legacyResolutions?: LegacyResolutionsBundle;
+  /**
+   * Whether every pair of columns on the collection's own table not answered above is a drop and
+   * an add: the Builder save's rule, which detects its own renames. The dialog asks the admin.
+   */
+  dropAndAddUnansweredRenames?: boolean;
 }
 
 /**
@@ -138,10 +241,19 @@ export async function applyCollectionSchemaChange(
 
   // The answers arrive with the change, so nothing is asked mid-apply: the dialog collected them
   // from the admin, and the save makes them itself.
-  const promptDispatcher = new BrowserPromptDispatcher(
-    change.renameResolutions,
-    change.eventResolutions,
-    change.legacyResolutions
+  const promptDispatcher = new DriftWatchingDispatcher(
+    new AnsweringDispatcher(
+      change.renameResolutions,
+      change.eventResolutions,
+      change.legacyResolutions,
+      change.dropAndAddUnansweredRenames === true ? tableName : undefined
+    ),
+    tableName,
+    new Set(
+      change.eventResolutions
+        .filter(resolution => resolution.kind === "confirm_drop")
+        .map(resolution => resolution.eventId)
+    )
   );
   const apply = createApplyDesiredSchema({
     applyPipeline: (desiredArg, sourceArg, channelArg) => {
@@ -245,6 +357,19 @@ export async function applyCollectionSchemaChange(
 
   const result = await apply(desired, "ui", { promptChannel: "auto" });
   if (!result.success) {
+    // Another table stopped it: named, with what differs and the way on, so the change is not
+    // taken for the one refused.
+    if (promptDispatcher.drifted.length > 0) {
+      throw new NextlyError({
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+        publicMessage:
+          `This change was not applied, because another table differs from what was recorded ` +
+          `for it: ${promptDispatcher.drifted.join("; ")}. Bring that table in step first, by ` +
+          `applying its own change in its editor or running \`nextly db:sync\`, then save ` +
+          `this change again.`,
+        logContext: { collection: slug, drifted: promptDispatcher.drifted },
+      });
+    }
     // The push's own words, under the code its status already was: what a refused apply tells
     // the admin is the only account of it they get.
     throw new NextlyError({
