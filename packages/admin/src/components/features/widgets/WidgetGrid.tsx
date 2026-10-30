@@ -29,6 +29,7 @@ import type { PublishedContentSource } from "nextly/config";
 import {
   useMemo,
   useRef,
+  useState,
   type ComponentProps,
   type ReactNode,
   type JSX,
@@ -198,6 +199,38 @@ function askedWith(
   });
 }
 
+/** A layout answer's verdict on the cards hidden while empty, as one comparable value. */
+function verdictOf(layout: DashboardLayoutResponse | undefined): string {
+  const hidden = layout?.hiddenWhileEmpty;
+  // Absent is no verdict at all, which is not the verdict that hides nothing.
+  return hidden === undefined ? "none" : JSON.stringify([...hidden].sort());
+}
+
+/**
+ * The token the batch is asked under: the layout answer's, taken from a fresh answer only when
+ * that answer's verdict on the cards hidden while empty differs from the one the batch was asked
+ * under. Every layout read has a token of its own, and the layout is read again after each of
+ * the reader's own writes, so taking every new token asked every card again for one card's
+ * change. A fresh answer with the same verdict hides and reveals nothing, so the cards' answers
+ * under the token held are as good as any it read ahead; one that reveals or hides a card is a
+ * new load, whose cards the batch is asked for again, once, under its token. A held token whose
+ * read-ahead has closed is answered fresh by the server, so holding it is always safe.
+ */
+function useBatchToken(
+  layout: DashboardLayoutResponse | undefined
+): string | undefined {
+  const token = layout?.readAheadToken;
+  const verdict = verdictOf(layout);
+  const [held, setHeld] = useState({ token, verdict });
+  // React's pattern for state that follows a prop, so no render asks under a token it drops.
+  const adopt =
+    token !== undefined &&
+    token !== held.token &&
+    (held.token === undefined || verdict !== held.verdict);
+  if (adopt) setHeld({ token, verdict });
+  return adopt ? token : (held.token ?? token);
+}
+
 /** Nothing to ask yet: the batch's input while the dashboard has no width. */
 const NO_CARDS: [] = [];
 
@@ -237,10 +270,11 @@ function useCardsAtDashboardWidth(
     dashboardRef,
     dashboardWidth,
     drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
-    // Asked under the token of the layout answer the cards are drawn from, and again under each
-    // new one: a layout read that lands after the batch started is the load the cards are then
-    // drawn from, and the server answers a card that load read ahead only under its token.
-    ...useWidgetBatch(cards, draws.failed, layout?.readAheadToken),
+    // Asked under the token of the layout answer the cards are drawn from, and again under a new
+    // one that hides or reveals a card: a layout read that lands after the batch started is then
+    // the load the cards are drawn from, and the server answers a card that load read ahead only
+    // under its token (`useBatchToken`).
+    ...useWidgetBatch(cards, draws.failed, useBatchToken(layout)),
     reportDraw: draws.report,
   };
 }
