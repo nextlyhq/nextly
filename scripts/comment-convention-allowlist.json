@@ -300,8 +300,8 @@
     ]
   },
   "packages/nextly/src/di/registrations/register-collections.ts": {
-    "count": 3,
-    "digests": ["09db9bb23ff09965", "6e9fd7109cc9fc33", "94ff8525e044b8a0"]
+    "count": 2,
+    "digests": ["6e9fd7109cc9fc33", "94ff8525e044b8a0"]
   },
   "packages/nextly/src/direct-api/__tests__/auth.test.ts": {
     "count": 8,
@@ -1070,11 +1070,10 @@
     "digests": ["00bbf87050b2aa4e", "9780f092f71bb287", "b64ae3ab9c465ebb"]
   },
   "packages/nextly/src/services/collections-handler.ts": {
-    "count": 10,
+    "count": 9,
     "digests": [
       "452725d4fc8fc3c7",
       "7e24d0d33b9cfad2",
-      "8efa878f3f94f2c2",
       "943a6aa9cb1cd7bd",
       "9d2d27923a2a7341",
       "c0d7765e95047d06",

@@ -4710,7 +4710,7 @@ export class CollectionQueryService extends BaseService {
             companionRows: joined.companionRows,
             localizedFields: companion.localizedFields,
             localeChain: joinedLocaleChain,
-            // i18n M6: per-locale published filter
+            // A read scoped to published content takes only the languages published.
             statusValues:
               companion.hasStatus && statusFilter?.values
                 ? statusFilter.values
