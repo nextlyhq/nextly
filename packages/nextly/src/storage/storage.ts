@@ -114,6 +114,71 @@ function adapterType(adapter: IStorageAdapter): string {
   }
 }
 
+/** A write that answered but did not fully succeed: the error to record. */
+type PartialFailure = { error: unknown } | undefined;
+
+/**
+ * Run one server-side write through `adapter` and record it for System
+ * health: a throw, or an answer `partialFailure` reads as failed, as the
+ * adapter's last failed write; full success as clearing it. The record is
+ * kept per process (`last-write-failure`), and the write's own answer or
+ * error reaches the caller as it always did.
+ */
+async function recordedWrite<T>(
+  adapter: IStorageAdapter,
+  write: () => Promise<T>,
+  partialFailure: (result: T) => PartialFailure = () => undefined
+): Promise<T> {
+  let result: T;
+  try {
+    result = await write();
+  } catch (error) {
+    recordStorageWriteFailure(adapterType(adapter), error);
+    throw error;
+  }
+  const failure = partialFailure(result);
+  if (failure === undefined) recordStorageWriteSuccess();
+  else recordStorageWriteFailure(adapterType(adapter), failure.error);
+  return result;
+}
+
+/** How many of the fallback's deletes run at once. */
+const FALLBACK_DELETES_AT_ONCE = 10;
+
+/**
+ * Delete each file through the adapter's single delete, for an adapter with
+ * no bulk delete of its own: every file is tried, and each that is refused is
+ * named with why, none stopping the rest. Also answers the first refusal
+ * itself, which a bulk result keeps only as text.
+ */
+async function deleteEach(
+  adapter: IStorageAdapter,
+  filePaths: readonly string[]
+): Promise<{ result: BulkDeleteResult; firstRejection: PartialFailure }> {
+  const result: BulkDeleteResult = { successful: [], failed: [] };
+  let firstRejection: PartialFailure;
+  for (let at = 0; at < filePaths.length; at += FALLBACK_DELETES_AT_ONCE) {
+    const batch = filePaths.slice(at, at + FALLBACK_DELETES_AT_ONCE);
+    const outcomes = await Promise.allSettled(
+      batch.map(path => adapter.delete(path))
+    );
+    for (const [index, outcome] of outcomes.entries()) {
+      const filePath = batch[index];
+      if (outcome.status === "fulfilled") {
+        result.successful.push(filePath);
+        continue;
+      }
+      const reason: unknown = outcome.reason;
+      firstRejection ??= { error: reason };
+      result.failed.push({
+        filePath,
+        error: reason instanceof Error ? reason.message : String(reason),
+      });
+    }
+  }
+  return { result, firstRejection };
+}
+
 // ============================================================
 // MediaStorage Class
 // ============================================================
@@ -305,18 +370,7 @@ export class MediaStorage {
       uploadOptions.folder = config.prefix + (options.folder || "");
     }
 
-    // Every server-side write is recorded for System health: a failure as
-    // the adapter's last failed write, a success as clearing it. The record is
-    // kept per process (`last-write-failure`), and the error still reaches the
-    // caller as it always did.
-    try {
-      const result = await adapter.upload(buffer, uploadOptions);
-      recordStorageWriteSuccess();
-      return result;
-    } catch (error) {
-      recordStorageWriteFailure(adapterType(adapter), error);
-      throw error;
-    }
+    return recordedWrite(adapter, () => adapter.upload(buffer, uploadOptions));
   }
 
   /**
@@ -329,7 +383,8 @@ export class MediaStorage {
    */
   async delete(filePath: string, collection?: string): Promise<void> {
     const adapter = this.getAdapterForCollection(collection);
-    return adapter.delete(filePath);
+    // A delete is a write too, recorded as an upload is.
+    return recordedWrite(adapter, () => adapter.delete(filePath));
   }
 
   /**
@@ -342,39 +397,32 @@ export class MediaStorage {
     collection?: string
   ): Promise<BulkDeleteResult> {
     const adapter = this.getAdapterForCollection(collection);
+    // Asked to delete nothing, nothing was written: a past failure stands.
+    if (filePaths.length === 0) return { successful: [], failed: [] };
 
+    // Recorded as an upload is; a file the adapter answered as not deleted
+    // is a failed write, though the call itself returned.
     if (adapter.bulkDelete) {
-      return adapter.bulkDelete(filePaths);
-    }
-
-    // Fallback: sequential deletes in chunks of 10
-    const successful: string[] = [];
-    const failed: Array<{ filePath: string; error: string }> = [];
-    const chunkSize = 10;
-
-    for (let i = 0; i < filePaths.length; i += chunkSize) {
-      const chunk = filePaths.slice(i, i + chunkSize);
-      const results = await Promise.allSettled(
-        chunk.map(fp => adapter.delete(fp))
+      const bulkDelete = adapter.bulkDelete.bind(adapter);
+      return recordedWrite(
+        adapter,
+        () => bulkDelete(filePaths),
+        result => (result.failed.length > 0 ? { error: undefined } : undefined)
       );
-
-      results.forEach((result, idx) => {
-        const fp = chunk[idx];
-        if (result.status === "fulfilled") {
-          successful.push(fp);
-        } else {
-          failed.push({
-            filePath: fp,
-            error:
-              result.reason instanceof Error
-                ? result.reason.message
-                : String(result.reason),
-          });
-        }
-      });
     }
 
-    return { successful, failed };
+    // Fallback: the adapter's own deletes, ten at a time. The first
+    // rejection is kept so the record's reason is chosen from its code.
+    let firstRejection: PartialFailure;
+    return recordedWrite(
+      adapter,
+      async () => {
+        const run = await deleteEach(adapter, filePaths);
+        firstRejection = run.firstRejection;
+        return run.result;
+      },
+      () => firstRejection
+    );
   }
 
   /**

@@ -12,7 +12,7 @@
  *   (`readSchemaProblems`, by each migration's standing, as `migrate:status`
  *   reads it).
  * - **Schema changes:** the ledger's collections whose newest schema change
- *   failed, from the same read.
+ *   failed or was interrupted, from the same read.
  * - **Storage:** the storage layer's last failed write, which it keeps per
  *   process (`lastStorageWriteFailure`).
  *
@@ -51,7 +51,7 @@ import { lastStorageWriteFailure } from "../../storage/last-write-failure";
 import type { ReadCaller } from "./readable-resources";
 
 /** How many failed collections the card names; past it, it says how many more. */
-export const SYSTEM_HEALTH_LISTED_COLLECTIONS = 3;
+const SYSTEM_HEALTH_LISTED_COLLECTIONS = 3;
 
 /** The boot migrations gate's state, read without waiting on it. */
 type BootGateState = "settled" | "pending" | "refused";
@@ -133,7 +133,7 @@ function storageLine(): SystemHealthData["storage"] {
  * The install's health, as System health draws it and the attention kind
  * counts it. Takes no caller: who may see it is decided before it is asked.
  */
-export async function readSystemHealth(): Promise<SystemHealthData> {
+async function readSystemHealth(): Promise<SystemHealthData> {
   const adapter = container.get<AdapterLike>("adapter");
   const gate = bootGateState();
   const problems = await readSchemaProblems({
@@ -160,32 +160,33 @@ function maySeeSystemHealth(caller: ReadCaller): Promise<boolean> {
   return callerIsSuperAdmin(readAccessCaller(caller));
 }
 
-/** Where the attention items about migrations lead: the dashboard, at System health. */
-export const SYSTEM_HEALTH_LINK = "#system-health";
-
 /**
  * The "System problems" kind: one item per problem System health reports,
  * each critical, each with why it matters and where to go about it.
+ *
+ * A migration has no page in the admin, and the System health card may not
+ * be placed, so a migration's item links nowhere: its reason names the
+ * command that says which migrations, and what to do about them.
  */
 const SYSTEM_PROBLEMS: readonly {
   id: string;
   label: string;
   reason: string;
-  link: string;
+  link?: string;
   count: (health: SystemHealthData) => number;
 }[] = [
   {
     id: "core/system-migrations-failed",
     label: "Failed migrations",
-    reason: "A migration did not finish applying or rolling back.",
-    link: SYSTEM_HEALTH_LINK,
+    reason:
+      "A migration did not finish applying or rolling back. Run nextly migrate:status to see which.",
     count: health => health.migrations.failed,
   },
   {
     id: "core/system-migrations-pending",
     label: "Pending migrations",
-    reason: "Migrations are still being applied.",
-    link: SYSTEM_HEALTH_LINK,
+    reason:
+      "Migrations are still being applied. Run nextly migrate:status to see which.",
     // Pending with no attempt recorded yet is still one thing waiting.
     count: health =>
       health.migrations.status === "pending"
@@ -195,7 +196,7 @@ const SYSTEM_PROBLEMS: readonly {
   {
     id: "core/system-schema-changes",
     label: "Failed schema changes",
-    reason: "A collection's last schema change did not apply.",
+    reason: "A collection's last schema change failed or did not finish.",
     link: "builder/collections",
     count: health =>
       health.schemaChanges.failed.length + health.schemaChanges.more,
@@ -228,7 +229,7 @@ export function systemProblemReaders(caller: ReadCaller): DigestReader[] {
     label: problem.label,
     reason: problem.reason,
     severity: "critical" as const,
-    link: problem.link,
+    ...(problem.link === undefined ? {} : { link: problem.link }),
     owner: "core",
     visible,
     read: async () => problem.count(await read()),

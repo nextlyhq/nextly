@@ -1,9 +1,10 @@
 /**
  * The storage adapter's last failed write, as this process saw it.
  *
- * `MediaStorage.upload` records every server-side write it routes: a write
- * that throws leaves a record of when, through which adapter, and a short
- * reason; the next write that succeeds clears it. System health reads it to
+ * `MediaStorage` records every server-side write it routes, an upload, a
+ * delete or a bulk delete: a write that throws, or a bulk delete that answers
+ * any file not deleted, leaves a record of when, through which adapter, and a
+ * short reason; the next write that succeeds clears it. System health reads it to
  * say whether storage is working, and Needs your attention shows it to a
  * super-admin while it stands.
  *
@@ -56,7 +57,7 @@ function held(): Held {
 const ADAPTER_NAME_MAX = 40;
 
 /** The reason for a failure whose code says nothing more particular. */
-const UNKNOWN_REASON = "The storage adapter could not save the file.";
+const UNKNOWN_REASON = "The storage adapter could not save or delete the file.";
 
 /**
  * Each reason, by the codes and names that mean it: Node's network and file

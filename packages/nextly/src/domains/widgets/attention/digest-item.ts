@@ -29,8 +29,12 @@ export interface AttentionDigestItem {
   /** The count is a floor: counting stopped at a bound. */
   atLeast?: true;
   severity: AttentionSeverity;
-  /** Where the reader goes about it: a path relative to the admin, which the admin resolves. */
-  link: string;
+  /**
+   * Where the reader goes about it: a path relative to the admin, which the
+   * admin resolves. Absent when no admin page is the place to act, and the
+   * item's reason then names what to do.
+   */
+  link?: string;
   /** One line saying why it is waiting; absent when its owner gave none. */
   reason?: string;
   /** The count could not be read: it failed, timed out or was not a count. */

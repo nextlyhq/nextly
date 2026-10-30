@@ -1,15 +1,22 @@
 /**
  * What the schema ledger says is wrong now, judged from events newest first:
  * each migration by its standing, as `migrate:status` reads the ledger, and
- * each collection by its newest schema change.
+ * each collection by its newest schema change; and read from a real ledger,
+ * each key by its own current state however many events came after it.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
+import { createTestDb } from "../../../../__tests__/fixtures/db";
 import type {
   SchemaEventStatus,
   SchemaEventType,
 } from "../../../../schemas/schema-events/types";
-import { problemsFromNewestFirst } from "../schema-problems";
+import {
+  problemsFromNewestFirst,
+  readSchemaProblems,
+  SCHEMA_CHANGE_STALE_MS,
+} from "../schema-problems";
+import { SchemaEventsRepository } from "../schema-events-repository";
 
 /**
  * A migration's record, `at` seconds in. Newest first is the reader's order,
@@ -26,6 +33,7 @@ const record = (
   status,
   filename,
   startedAt: new Date(at * 1000),
+  endedAt: null,
   supersededEventIds,
   scopeKind: null,
   scopeSlug: null,
@@ -38,12 +46,14 @@ const rollback = (filename: string, status: SchemaEventStatus, at: number) =>
 const change = (
   slug: string,
   status: SchemaEventStatus,
-  eventType: SchemaEventType = "ui_save"
+  eventType: SchemaEventType = "ui_save",
+  startedAt: Date = new Date(0)
 ) => ({
   eventType,
   status,
   filename: null,
-  startedAt: new Date(0),
+  startedAt,
+  endedAt: null,
   supersededEventIds: null,
   scopeKind: "collection",
   scopeSlug: slug,
@@ -140,5 +150,156 @@ describe("schema problems", () => {
         { ...change("home", "failed"), scopeKind: "single" },
       ]).failedCollectionChanges
     ).toEqual([]);
+  });
+  it("names a collection whose newest change was interrupted: still open, with no end, past the stale threshold", () => {
+    const now = new Date("2026-10-30T12:00:00.000Z");
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    // 🔴 Marked seen and skipped as not failed, an interrupted save read as
+    // healthy and hid the older failure behind it.
+    expect(
+      problemsFromNewestFirst(
+        [
+          change(
+            "posts",
+            "in_progress",
+            "ui_save",
+            ago(SCHEMA_CHANGE_STALE_MS + 1)
+          ),
+          change("posts", "failed", "ui_save", ago(SCHEMA_CHANGE_STALE_MS + 2)),
+        ],
+        now
+      ).failedCollectionChanges
+    ).toEqual(["posts"]);
+  });
+
+  it("reads a recently started change as running, not a problem", () => {
+    const now = new Date("2026-10-30T12:00:00.000Z");
+    expect(
+      problemsFromNewestFirst(
+        [
+          change(
+            "posts",
+            "in_progress",
+            "dev_push",
+            new Date(now.getTime() - 1000)
+          ),
+          change("posts", "failed", "ui_save", new Date(now.getTime() - 2000)),
+        ],
+        now
+      ).failedCollectionChanges
+    ).toEqual([]);
+  });
+});
+
+describe("schema problems, read from the ledger", () => {
+  let ledger: SchemaEventsRepository;
+  let db: unknown;
+  const BASE = Date.parse("2026-10-01T00:00:00.000Z");
+  const at = (minutes: number) => new Date(BASE + minutes * 60_000);
+
+  beforeEach(async () => {
+    db = (await createTestDb()).db;
+    ledger = new SchemaEventsRepository(db, "sqlite");
+  });
+
+  const insert = (values: Record<string, unknown>) =>
+    ledger.insertEvent({ source: "cli-migrate", ...values });
+
+  const read = (now: Date = at(10_000)) =>
+    readSchemaProblems({ db, dialect: "sqlite", now });
+
+  it("finds an older unresolved failure behind 600 newer unrelated events", async () => {
+    await insert({
+      eventType: "file_apply",
+      status: "failed",
+      filename: "0001_old.sql",
+      startedAt: at(0),
+    });
+    await insert({
+      eventType: "ui_save",
+      source: "admin-ui",
+      status: "failed",
+      scopeKind: "collection",
+      scopeSlug: "posts",
+      startedAt: at(1),
+    });
+    // 🔴 Read from a window of the 500 newest events, these pushed both
+    // failures out of it, and the install read as healthy.
+    for (let i = 0; i < 600; i += 1) {
+      await insert(
+        i % 2 === 0
+          ? {
+              eventType: "file_apply",
+              status: "applied",
+              filename: `1${String(i).padStart(4, "0")}_new.sql`,
+              startedAt: at(10 + i),
+            }
+          : {
+              eventType: "ui_save",
+              source: "admin-ui",
+              status: "applied",
+              scopeKind: "collection",
+              scopeSlug: "pages",
+              startedAt: at(10 + i),
+            }
+      );
+    }
+    expect(await read()).toEqual({
+      unfinishedMigrations: ["0001_old.sql"],
+      failedCollectionChanges: ["posts"],
+    });
+  });
+
+  it("leaves out a failure its own key resolved since, however far back", async () => {
+    await insert({
+      eventType: "file_apply",
+      status: "failed",
+      filename: "0001_a.sql",
+      startedAt: at(0),
+    });
+    await insert({
+      eventType: "file_apply",
+      status: "applied",
+      filename: "0001_a.sql",
+      startedAt: at(1),
+    });
+    await insert({
+      eventType: "ui_save",
+      source: "admin-ui",
+      status: "failed",
+      scopeKind: "collection",
+      scopeSlug: "posts",
+      startedAt: at(2),
+    });
+    await insert({
+      eventType: "dev_push",
+      source: "dev-server",
+      status: "applied",
+      scopeKind: "collection",
+      scopeSlug: "posts",
+      startedAt: at(3),
+    });
+    expect(await read()).toEqual({
+      unfinishedMigrations: [],
+      failedCollectionChanges: [],
+    });
+  });
+
+  it("names an interrupted schema change, and not one still running", async () => {
+    await insert({
+      eventType: "ui_save",
+      source: "admin-ui",
+      status: "in_progress",
+      scopeKind: "collection",
+      scopeSlug: "posts",
+      startedAt: at(0),
+    });
+    // Ten minutes and a moment on: interrupted.
+    expect(
+      (await read(new Date(at(0).getTime() + SCHEMA_CHANGE_STALE_MS + 1)))
+        .failedCollectionChanges
+    ).toEqual(["posts"]);
+    // A minute on: still running.
+    expect((await read(at(1))).failedCollectionChanges).toEqual([]);
   });
 });

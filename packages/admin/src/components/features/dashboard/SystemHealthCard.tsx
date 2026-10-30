@@ -24,16 +24,13 @@ import {
  * the three lines `load` answered, always all three, since "up to date" and
  * "working" are answers too. Each line leads with its severity, by shape as
  * well as colour, then its name and state, and a link for each problem.
- *
- * The root carries the `system-health` anchor that the system problems in
- * Needs your attention link to.
  */
 export const SystemHealthCard: React.FC<DeclaredComponentProps> = ({
   data,
 }) => {
   const lines = useMemo(() => systemHealthLines(data), [data]);
   return (
-    <div id="system-health" data-testid="system-health">
+    <div data-testid="system-health">
       <ul className="grid divide-y divide-border">
         {lines.map(line => (
           <HealthRow key={line.id} line={line} />
@@ -49,6 +46,7 @@ SystemHealthCard.displayName = "SystemHealthCard";
 function severityName(severity: HealthSeverity): string {
   if (severity === "critical") return "Problem";
   if (severity === "warning") return "Warning";
+  if (severity === "unknown") return "Unknown";
   return "OK";
 }
 
@@ -113,8 +111,9 @@ function HealthRow({ line }: { line: HealthLine }) {
 /**
  * A line's severity, told apart by shape as well as colour, so a reader who
  * cannot tell green from red still can: a check when all is well, a triangle
- * for a warning, and "!" in a filled circle for a problem. Its name is said in
- * words to assistive technology.
+ * for a warning, "!" in a filled circle for a problem, and "?" in an outlined
+ * circle for a line that could not be checked. Its name is said in words to
+ * assistive technology.
  */
 function SeverityMark({ severity }: { severity: HealthSeverity }) {
   return (
@@ -140,6 +139,15 @@ function SeverityMark({ severity }: { severity: HealthSeverity }) {
           data-shape="triangle"
           className="size-4 text-warning"
         />
+      )}
+      {severity === "unknown" && (
+        <span
+          aria-hidden="true"
+          data-shape="outlined-circle"
+          className="flex size-4 items-center justify-center rounded-full border border-muted-foreground text-[10px] font-bold text-muted-foreground"
+        >
+          ?
+        </span>
       )}
       {severity === "ok" && (
         <Check

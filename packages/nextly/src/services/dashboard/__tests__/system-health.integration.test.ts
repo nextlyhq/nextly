@@ -5,7 +5,8 @@
  *
  * What only a database can settle: that the ledger's own rows are read as the
  * schema domain writes them (a migration's apply or rollback that failed or
- * never finished, a collection's failed schema change), on every dialect, and that
+ * never finished, a collection's failed or interrupted schema change, each
+ * found by its own rows however many events came after), on every dialect, and that
  * the one super-admin decision reads the roles the database holds.
  *
  * Runs against whichever dialects the integration run configures; CI covers
@@ -26,6 +27,7 @@ import {
 import { readAccessCaller } from "../../../auth/entity-read-access";
 import { recordRollbackFailed } from "../../../cli/commands/plugin-module-rollback";
 import { defineCollection, text } from "../../../config";
+import { SCHEMA_CHANGE_STALE_MS } from "../../../domains/schema/events/schema-problems";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { runDigest } from "../../../domains/widgets/attention/digest";
 import { createBatchScope } from "../../../domains/widgets/batch-scope";
@@ -211,11 +213,52 @@ describe.each(getConfiguredTestDialects())(
           id: "core/system-migrations-failed",
           count: 1,
           severity: "critical",
-          reason: "A migration did not finish applying or rolling back.",
-          link: "#system-health",
+          reason:
+            "A migration did not finish applying or rolling back. Run nextly migrate:status to see which.",
         }),
       ]);
+      // No admin page is the place to act on a migration, so it links nowhere.
+      expect((await systemItemsFor(admin))[0]).not.toHaveProperty("link");
       await editorSeesNothing(editor);
+    });
+
+    it("still reports an older failed migration and schema change behind many newer events", async () => {
+      const { admin, ledger } = await boot();
+      const failedApply = await ledger.recordStart({
+        eventType: "file_apply",
+        source: "cli-migrate",
+        filename: "0004_shi_old.sql",
+      });
+      await ledger.markFailed(failedApply, { errorCode: "TEST" });
+      const failedSave = await ledger.recordStart({
+        eventType: "ui_save",
+        source: "admin-ui",
+        scopeKind: "collection",
+        scopeSlug: NOTES,
+      });
+      await ledger.markFailed(failedSave, { errorCode: "TEST" });
+      // More newer, unrelated, successful events than any one window of the
+      // ledger's newest: each key is judged by its own rows.
+      for (let i = 0; i < 600; i += 1) {
+        await ledger.insertEvent({
+          eventType: "ui_save",
+          source: "admin-ui",
+          status: "applied",
+          scopeKind: "collection",
+          scopeSlug: "shi_other",
+          startedAt: new Date(Date.now() + 1000 + i),
+        });
+      }
+
+      const health = await healthFor(admin);
+      expect(health.migrations).toEqual({
+        status: "failed",
+        failed: 1,
+        pending: 0,
+      });
+      expect(health.schemaChanges.failed).toEqual([
+        { slug: NOTES, label: expect.any(String) },
+      ]);
     });
 
     it("reports an applied migration whose migrate:down failed, as migrate:status warns of it", async () => {
@@ -300,6 +343,31 @@ describe.each(getConfiguredTestDialects())(
         }),
       ]);
       await editorSeesNothing(editor);
+    });
+
+    it("reports an interrupted schema change, and not one still running", async () => {
+      const { admin, ledger } = await boot();
+      // Started and never ended: its process stopped between start and end.
+      await ledger.insertEvent({
+        eventType: "dev_push",
+        source: "dev-server",
+        status: "in_progress",
+        scopeKind: "collection",
+        scopeSlug: NOTES,
+        startedAt: new Date(Date.now() - SCHEMA_CHANGE_STALE_MS - 60_000),
+      });
+      expect((await healthFor(admin)).schemaChanges.failed).toEqual([
+        { slug: NOTES, label: expect.any(String) },
+      ]);
+
+      // A change started a moment ago is running, and is the newest.
+      await ledger.recordStart({
+        eventType: "ui_save",
+        source: "admin-ui",
+        scopeKind: "collection",
+        scopeSlug: NOTES,
+      });
+      expect((await healthFor(admin)).schemaChanges.failed).toEqual([]);
     });
 
     it("reports the storage adapter's failed write until a write succeeds", async () => {

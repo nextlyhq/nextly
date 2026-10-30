@@ -4,7 +4,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { MIGRATIONS_DOCS, systemHealthLines } from "./system-health-model";
+import {
+  COULD_NOT_CHECK,
+  MIGRATIONS_DOCS,
+  systemHealthLines,
+} from "./system-health-model";
 
 const NOW = Date.parse("2026-10-30T10:00:00.000Z");
 
@@ -89,6 +93,46 @@ describe("System health's lines", () => {
           { label: "Fix Posts", href: "/admin/builder/collections/posts" },
           { label: "2 more", href: "/admin/builder/collections" },
         ],
+      });
+    });
+  });
+
+  describe("a line the answer did not settle", () => {
+    // 🔴 Read as fallthroughs, a missing line or a status from a newer server
+    // drew "Up to date" and "Working": confirmed health from no reading.
+    it.each([
+      ["absent", { version: "1.2.3", schemaChanges: { failed: [], more: 0 } }],
+      ["not an object", { ...HEALTHY, migrations: "ok", storage: "ok" }],
+      [
+        "an unknown status",
+        {
+          ...HEALTHY,
+          migrations: { status: "later" },
+          storage: { status: "degraded" },
+        },
+      ],
+    ])(
+      "reads couldn't check, never healthy, when the line is %s",
+      (_case, data) => {
+        for (const id of ["migrations", "storage"] as const) {
+          expect(line(data, id)).toMatchObject({
+            value: COULD_NOT_CHECK,
+            severity: "unknown",
+            links: [],
+          });
+        }
+      }
+    );
+
+    it("still reads failed for a collection's failed schema change when the migrations line is absent", () => {
+      const data = {
+        version: "1.2.3",
+        schemaChanges: { failed: [{ slug: "posts", label: "Posts" }], more: 0 },
+        storage: { status: "ok" },
+      };
+      expect(line(data, "migrations")).toMatchObject({
+        value: "Failed",
+        severity: "critical",
       });
     });
   });

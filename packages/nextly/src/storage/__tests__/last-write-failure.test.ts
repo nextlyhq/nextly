@@ -1,7 +1,8 @@
 /**
- * The storage adapter's last failed write, as `MediaStorage.upload` records
- * it: set when a write throws, cleared by the next write that succeeds, and
- * never carrying what the adapter's error said.
+ * The storage adapter's last failed write, as `MediaStorage` records it for
+ * an upload, a delete and a bulk delete: set when a write throws, or a bulk
+ * delete leaves a file, cleared by the next write that succeeds, and never
+ * carrying what the adapter's error said.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -120,7 +121,82 @@ describe("the storage adapter's last failed write", () => {
     );
     // A message alone says nothing it may repeat.
     expect(storageFailureReason(new Error("disk /var/secret full"))).toBe(
-      "The storage adapter could not save the file."
+      "The storage adapter could not save or delete the file."
     );
+  });
+});
+
+describe("a delete, as a write", () => {
+  /** Storage routing `media` to an `s3` adapter with these delete answers. */
+  function deleting(
+    remove: IStorageAdapter["delete"],
+    bulkDelete?: IStorageAdapter["bulkDelete"]
+  ) {
+    const plugin: StoragePlugin = {
+      name: "s3-storage",
+      type: "s3",
+      adapter: {
+        ...adapter("s3", ok),
+        delete: remove,
+        ...(bulkDelete === undefined ? {} : { bulkDelete }),
+      },
+      collections: { media: true },
+    };
+    return new MediaStorage({ plugins: [plugin] });
+  }
+  const unreachable = () =>
+    Promise.reject(Object.assign(new Error("down"), { code: "ECONNREFUSED" }));
+  const REACH = "The storage service could not be reached.";
+
+  it("records a failed delete, and clears it on the next that succeeds", async () => {
+    // 🔴 Only uploads were recorded: a failing delete left the card "Working".
+    await expect(
+      deleting(unreachable).delete("a.jpg", "media")
+    ).rejects.toThrow("down");
+    expect(lastStorageWriteFailure()).toMatchObject({
+      adapter: "s3",
+      reason: REACH,
+    });
+    await deleting(() => Promise.resolve()).delete("a.jpg", "media");
+    expect(lastStorageWriteFailure()).toBeUndefined();
+  });
+
+  it("records a bulk delete that left a file, through the fallback, by its first rejection", async () => {
+    const remove = vi.fn((path: string) =>
+      path === "b.jpg" ? unreachable() : Promise.resolve()
+    );
+    const result = await deleting(remove).bulkDelete(
+      ["a.jpg", "b.jpg"],
+      "media"
+    );
+    expect(result.failed.map(entry => entry.filePath)).toEqual(["b.jpg"]);
+    expect(lastStorageWriteFailure()).toMatchObject({ reason: REACH });
+
+    await deleting(() => Promise.resolve()).bulkDelete(["a.jpg"], "media");
+    expect(lastStorageWriteFailure()).toBeUndefined();
+  });
+
+  it("records the adapter's own bulk delete when it leaves a file or throws, and clears it when all go", async () => {
+    const leaves = deleting(
+      () => Promise.resolve(),
+      paths =>
+        Promise.resolve({
+          successful: paths.slice(1),
+          failed: [{ filePath: paths[0] ?? "", error: "denied" }],
+        })
+    );
+    await leaves.bulkDelete(["a.jpg", "b.jpg"], "media");
+    expect(lastStorageWriteFailure()).toMatchObject({ adapter: "s3" });
+
+    const clears = deleting(
+      () => Promise.resolve(),
+      paths => Promise.resolve({ successful: paths, failed: [] })
+    );
+    await clears.bulkDelete(["a.jpg"], "media");
+    expect(lastStorageWriteFailure()).toBeUndefined();
+
+    const throws = deleting(() => Promise.resolve(), unreachable);
+    await expect(throws.bulkDelete(["a.jpg"], "media")).rejects.toThrow("down");
+    expect(lastStorageWriteFailure()).toMatchObject({ reason: REACH });
   });
 });

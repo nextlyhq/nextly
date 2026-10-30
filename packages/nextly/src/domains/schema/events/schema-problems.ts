@@ -1,6 +1,7 @@
 /**
  * What the schema ledger says is wrong now: migrations with an attempt that
- * did not finish, and collections whose last schema change failed.
+ * did not finish, and collections whose last schema change failed or was
+ * interrupted.
  *
  * A read accessor over `nextly_schema_events`, the record the schema domain
  * already keeps of every migration and schema change, for System health. It
@@ -16,22 +17,34 @@
  *   the migration is still applied, as `migrate:status` warns of it;
  * - a collection is a problem when its NEWEST schema change (a Schema Builder
  *   save, a dev push or a `db:sync`, the events the admin's schema journal
- *   lists) failed.
+ *   lists) failed, or was interrupted: it is still `in_progress`, with no
+ *   end, {@link SCHEMA_CHANGE_STALE_MS} after it started. One that started
+ *   more recently is running, not a problem.
  *
- * ## Bounded
+ * ## Each key's current state, in three bounded reads
  *
- * One query over the newest {@link SCHEMA_PROBLEM_EVENTS} events of those
- * types, newest first on the indexed `started_at`, selecting only the columns
- * the rules read. A standing reads a file's records newest first and stops at
- * the first that resolves an attempt, so the window answers it as the whole
- * ledger would, for every file with an attempt inside it. A file or
- * collection whose every event is older than that window has changed nothing
- * since, and `nextly migrate:status` still reports it.
+ * A window over the whole ledger's newest events would let unrelated newer
+ * events push an older unresolved failure out of it, and the card would call
+ * the install healthy while `migrate:status` did not. So the state is read
+ * per key, from the few rows that could be a problem:
+ *
+ * 1. the candidates: the newest {@link SCHEMA_PROBLEM_CANDIDATES} rows that
+ *    failed or are still `in_progress`, newest first on the indexed
+ *    `started_at`. Most events succeed, so these are few, and every key with
+ *    a problem has one among them however many events came after it;
+ * 2. for the migrations among them (at most {@link SCHEMA_PROBLEM_KEYS}), each
+ *    one's own records, by filename, which its standing is read from;
+ * 3. for the collections among them (as many), which have had a schema change
+ *    since their newest candidate, by the indexed scope, one row per
+ *    collection at most.
+ *
+ * `filename` has no index of its own beyond the applied rows' unique one; the
+ * second read narrows by it as the repository's own per-file reads do.
  *
  * @module domains/schema/events/schema-problems
  */
 
-import { desc, inArray } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, ne, or } from "drizzle-orm";
 
 import { schemaEventsTables } from "../../../schemas/schema-events";
 import type {
@@ -42,8 +55,23 @@ import type {
 import { standingsByFilename } from "./migration-state";
 import type { SchemaEventRow } from "./schema-events-repository";
 
-/** How many of the newest events one read looks at. */
-export const SCHEMA_PROBLEM_EVENTS = 500;
+/** How many of the newest failed or unfinished rows one read looks at. */
+const SCHEMA_PROBLEM_CANDIDATES = 200;
+
+/** How many migrations, and how many collections, one read judges. */
+const SCHEMA_PROBLEM_KEYS = 25;
+
+/** How many of one migration's newest records its standing is read from. */
+const RECORDS_PER_MIGRATION = 100;
+
+/**
+ * How long a schema change may stay `in_progress` before it reads as
+ * interrupted. A Schema Builder save, a dev push or a `db:sync` finishes in
+ * seconds; one still open ten minutes on lost its process (killed, out of
+ * memory, a dropped connection) after `recordStart` and before `recordEnd`,
+ * and may have applied part of its change.
+ */
+export const SCHEMA_CHANGE_STALE_MS = 10 * 60 * 1000;
 
 /** The events that record a schema change to one collection, as the admin's journal lists them. */
 const SCHEMA_CHANGE_EVENTS = ["ui_save", "dev_push", "db_sync"] as const;
@@ -57,6 +85,12 @@ const READ_EVENTS: readonly SchemaEventType[] = [
   ...SCHEMA_CHANGE_EVENTS,
 ];
 
+/** The statuses a candidate can be in: a problem, or one if it never ends. */
+const CANDIDATE_STATUSES: readonly SchemaEventStatus[] = [
+  "failed",
+  "in_progress",
+];
+
 /** What the ledger says is wrong now. */
 export interface SchemaProblems {
   /**
@@ -64,18 +98,23 @@ export interface SchemaProblems {
    * rollback's, by ledger key, the most recently recorded first.
    */
   unfinishedMigrations: string[];
-  /** Collections whose newest schema change failed, by slug, newest first. */
+  /**
+   * Collections whose newest schema change failed or was interrupted, by
+   * slug, newest first.
+   */
   failedCollectionChanges: string[];
 }
 
-/** The one select chain this read makes, in the form all three dialects share. */
+/** A read's rows, as each chain this read makes ends. */
+type Rows = Promise<Record<string, unknown>[]>;
+
+/** The select chains this read makes, in the form all three dialects share. */
 interface ProblemsDb {
   select: (fields: Record<string, unknown>) => {
     from: (table: unknown) => {
       where: (clause: unknown) => {
-        orderBy: (order: unknown) => {
-          limit: (n: number) => Promise<Record<string, unknown>[]>;
-        };
+        orderBy: (order: unknown) => { limit: (n: number) => Rows };
+        groupBy: (column: unknown) => Rows;
       };
     };
   };
@@ -86,6 +125,7 @@ type ProblemEvent = Pick<
   SchemaEventRow,
   "eventType" | "status" | "filename" | "startedAt" | "supersededEventIds"
 > & {
+  endedAt: Date | null;
   scopeKind: string | null;
   scopeSlug: string | null;
 };
@@ -93,19 +133,24 @@ type ProblemEvent = Pick<
 const textOrNull = (value: unknown): string | null =>
   typeof value === "string" && value !== "" ? value : null;
 
+const dateOf = (value: unknown): Date =>
+  value instanceof Date ? value : new Date(String(value));
+
 /**
  * A row read back, as the fields the rules read. The query names the event
  * types and the columns, so each is the column's own type as the dialect's
  * table maps it; the values are carried as they came.
  */
 function asEvent(row: Record<string, unknown>): ProblemEvent {
-  const startedAt = row.startedAt;
   return {
     eventType: row.eventType as SchemaEventType,
     status: row.status as SchemaEventStatus,
     filename: textOrNull(row.filename),
-    startedAt:
-      startedAt instanceof Date ? startedAt : new Date(String(startedAt)),
+    startedAt: dateOf(row.startedAt),
+    endedAt:
+      row.endedAt === null || row.endedAt === undefined
+        ? null
+        : dateOf(row.endedAt),
     supersededEventIds: Array.isArray(row.supersededEventIds)
       ? row.supersededEventIds.filter(
           (id): id is string => typeof id === "string"
@@ -119,13 +164,33 @@ function asEvent(row: Record<string, unknown>): ProblemEvent {
 const isMigrationEvent = (event: ProblemEvent): boolean =>
   (MIGRATION_EVENTS as readonly string[]).includes(event.eventType);
 
+/** A collection's slug, when the event is a schema change to one. */
+const collectionOf = (event: ProblemEvent): string | null =>
+  !isMigrationEvent(event) && event.scopeKind === "collection"
+    ? event.scopeSlug
+    : null;
+
+/**
+ * Whether a collection's newest schema change is a problem: it failed, or it
+ * is still open with no end {@link SCHEMA_CHANGE_STALE_MS} after it started.
+ */
+function changeIsProblem(event: ProblemEvent, now: Date): boolean {
+  if (event.status === "failed") return true;
+  return (
+    event.status === "in_progress" &&
+    event.endedAt === null &&
+    now.getTime() - event.startedAt.getTime() > SCHEMA_CHANGE_STALE_MS
+  );
+}
+
 /**
  * Which migrations and collections are a problem, from events newest first:
  * each migration by its standing (`standingsByFilename`), each collection by
- * the first (newest) schema change met for it.
+ * the first (newest) schema change met for it, judged at `now`.
  */
 export function problemsFromNewestFirst(
-  events: readonly ProblemEvent[]
+  events: readonly ProblemEvent[],
+  now: Date = new Date()
 ): SchemaProblems {
   const unfinishedMigrations: string[] = [];
   // In the order each file is first met, which newest first is the order of
@@ -140,39 +205,138 @@ export function problemsFromNewestFirst(
   const seenCollections = new Set<string>();
   const failedCollectionChanges: string[] = [];
   for (const event of events) {
-    if (isMigrationEvent(event)) continue;
-    if (event.scopeKind !== "collection" || event.scopeSlug === null) continue;
-    if (seenCollections.has(event.scopeSlug)) continue;
-    seenCollections.add(event.scopeSlug);
-    if (event.status === "failed") {
-      failedCollectionChanges.push(event.scopeSlug);
-    }
+    const slug = collectionOf(event);
+    if (slug === null || seenCollections.has(slug)) continue;
+    seenCollections.add(slug);
+    if (changeIsProblem(event, now)) failedCollectionChanges.push(slug);
   }
   return { unfinishedMigrations, failedCollectionChanges };
 }
 
-/** What the schema ledger says is wrong now, in one bounded read. */
+/** A candidate collection: its newest failed or unfinished change, and that row's id. */
+interface CandidateChange {
+  id: string;
+  event: ProblemEvent;
+}
+
+/**
+ * The keys the candidates name, each in the order of its newest candidate
+ * (newest first), at most {@link SCHEMA_PROBLEM_KEYS} of each kind; for a
+ * collection, its newest candidate row.
+ */
+function candidateKeys(rows: readonly Record<string, unknown>[]): {
+  migrations: string[];
+  collections: Map<string, CandidateChange>;
+} {
+  const migrations = new Set<string>();
+  const collections = new Map<string, CandidateChange>();
+  for (const row of rows) {
+    const event = asEvent(row);
+    const migration = isMigrationEvent(event) ? event.filename : null;
+    if (migration !== null && migrations.size < SCHEMA_PROBLEM_KEYS) {
+      migrations.add(migration);
+    }
+    const slug = collectionOf(event);
+    if (
+      slug !== null &&
+      !collections.has(slug) &&
+      collections.size < SCHEMA_PROBLEM_KEYS
+    ) {
+      collections.set(slug, { id: String(row.id), event });
+    }
+  }
+  return { migrations: [...migrations], collections };
+}
+
+/** What the schema ledger says is wrong now, each key by its current state, in bounded reads. */
 export async function readSchemaProblems(args: {
   db: unknown;
   dialect: "postgresql" | "mysql" | "sqlite";
+  /** When an open schema change is judged from; now, unless a test says. */
+  now?: Date;
 }): Promise<SchemaProblems> {
   const table = schemaEventsTables(args.dialect).nextlySchemaEvents;
   // The handle arrives untyped so this layer leaks no dialect's Drizzle type;
-  // read through the one chain it makes, as the ledger's repository does.
+  // read through the chains it makes, as the ledger's repository does.
   const db = args.db as ProblemsDb;
-  const rows = await db
-    .select({
-      eventType: table.eventType,
-      status: table.status,
-      filename: table.filename,
-      startedAt: table.startedAt,
-      supersededEventIds: table.supersededEventIds,
-      scopeKind: table.scopeKind,
-      scopeSlug: table.scopeSlug,
-    })
+  const columns = {
+    eventType: table.eventType,
+    status: table.status,
+    filename: table.filename,
+    startedAt: table.startedAt,
+    endedAt: table.endedAt,
+    supersededEventIds: table.supersededEventIds,
+    scopeKind: table.scopeKind,
+    scopeSlug: table.scopeSlug,
+  };
+
+  const candidates = await db
+    .select({ id: table.id, ...columns })
     .from(table)
-    .where(inArray(table.eventType, [...READ_EVENTS]))
+    .where(
+      and(
+        inArray(table.eventType, [...READ_EVENTS]),
+        inArray(table.status, [...CANDIDATE_STATUSES])
+      )
+    )
     .orderBy(desc(table.startedAt))
-    .limit(SCHEMA_PROBLEM_EVENTS);
-  return problemsFromNewestFirst(rows.map(asEvent));
+    .limit(SCHEMA_PROBLEM_CANDIDATES);
+  const keys = candidateKeys(candidates);
+
+  // Every record of each candidate migration, newest first: its standing
+  // reads them back to the first that resolves an attempt.
+  const migrationRows =
+    keys.migrations.length === 0
+      ? []
+      : await db
+          .select(columns)
+          .from(table)
+          .where(
+            and(
+              inArray(table.filename, keys.migrations),
+              inArray(table.eventType, [...MIGRATION_EVENTS])
+            )
+          )
+          .orderBy(desc(table.startedAt))
+          .limit(keys.migrations.length * RECORDS_PER_MIGRATION);
+
+  // The candidate collections with a schema change after their newest
+  // candidate, which is then not their newest change. The candidate's own
+  // row is excluded by id, so a column that keeps finer time than the value
+  // read back cannot count it as newer than itself.
+  const changedSince =
+    keys.collections.size === 0
+      ? []
+      : await db
+          .select({ scopeSlug: table.scopeSlug })
+          .from(table)
+          .where(
+            and(
+              inArray(table.eventType, [...SCHEMA_CHANGE_EVENTS]),
+              eq(table.scopeKind, "collection"),
+              or(
+                ...[...keys.collections].map(([slug, { id, event }]) =>
+                  and(
+                    eq(table.scopeSlug, slug),
+                    gt(table.startedAt, event.startedAt),
+                    ne(table.id, id)
+                  )
+                )
+              )
+            )
+          )
+          .groupBy(table.scopeSlug);
+  const superseded = new Set(
+    changedSince.map(row => textOrNull(row.scopeSlug))
+  );
+
+  return problemsFromNewestFirst(
+    [
+      ...migrationRows.map(asEvent),
+      ...[...keys.collections]
+        .filter(([slug]) => !superseded.has(slug))
+        .map(([, candidate]) => candidate.event),
+    ],
+    args.now
+  );
 }

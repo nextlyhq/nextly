@@ -168,4 +168,27 @@ describe("only a super-admin is told System health exists", () => {
     const asAdmin = systemProblemReaders(person);
     expect(await asAdmin[0]?.visible?.(signal)).toBe(true);
   });
+
+  it("links a migration's item nowhere, naming the command instead, and the others to their admin page", () => {
+    // 🔴 Linked to the card's anchor, a migration's Review led nowhere on any
+    // dashboard without the card, the default one included.
+    const byId = new Map(
+      systemProblemReaders(person).map(reader => [reader.id, reader])
+    );
+    for (const id of [
+      "core/system-migrations-failed",
+      "core/system-migrations-pending",
+    ]) {
+      const reader = byId.get(id);
+      expect(reader).toBeDefined();
+      expect(reader).not.toHaveProperty("link");
+      expect(reader?.reason).toContain(
+        "Run nextly migrate:status to see which."
+      );
+    }
+    expect(byId.get("core/system-schema-changes")?.link).toBe(
+      "builder/collections"
+    );
+    expect(byId.get("core/system-storage")?.link).toBe("media");
+  });
 });

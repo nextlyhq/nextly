@@ -45,7 +45,7 @@ const WITH_PROBLEMS = {
   },
 };
 
-/** The shape a line's severity is drawn as: "check", "triangle" or "filled-circle". */
+/** The shape a line's severity is drawn as: "check", "triangle", "filled-circle" or "outlined-circle". */
 function shapeOf(row: HTMLElement): string | null {
   return row.querySelector("[data-shape]")?.getAttribute("data-shape") ?? null;
 }
@@ -116,8 +116,14 @@ describe("the System health card", () => {
     expect(within(lines.migrations).getByText("Warning")).toBeTruthy();
   });
 
-  it("carries the anchor Needs your attention's system problems link to", () => {
-    draw(HEALTHY);
-    expect(screen.getByTestId("system-health").id).toBe("system-health");
+  it("marks a line it could not check by a question mark in an outlined circle, named Unknown", () => {
+    const lines = draw({ version: "1.2.3", migrations: { status: "later" } });
+    for (const row of [lines.migrations, lines.storage]) {
+      expect(row.textContent).toContain("Couldn't check");
+      expect(within(row).getByTestId("system-health-unknown")).toBeTruthy();
+      expect(shapeOf(row)).toBe("outlined-circle");
+      expect(row.querySelector("[data-shape]")?.textContent).toBe("?");
+      expect(within(row).getByText("Unknown").className).toContain("sr-only");
+    }
   });
 });

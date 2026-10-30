@@ -51,7 +51,7 @@ export function attentionPart(items: readonly AttentionDigestItem[]): PartRead {
     kind: "attention",
     count,
     ...(atLeast ? { atLeast: true } : {}),
-    ...(overdue === undefined ? {} : { link: overdue.link }),
+    ...(overdue?.link === undefined ? {} : { link: overdue.link }),
   };
 }
 

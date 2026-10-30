@@ -10,8 +10,13 @@
 import { adminHref } from "@admin/constants/routes";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 
-/** How a line stands: all well, waiting, or broken. */
-export type HealthSeverity = "ok" | "warning" | "critical";
+import { isRecord, isText } from "./answer-guards";
+
+/**
+ * How a line stands: all well, waiting, broken, or unknown, when the answer
+ * did not say: a line absent, or a status this admin does not know.
+ */
+export type HealthSeverity = "ok" | "warning" | "critical" | "unknown";
 
 /** One place a problem leads. */
 export interface HealthLink {
@@ -36,14 +41,22 @@ export interface HealthLine {
 export const MIGRATIONS_DOCS =
   "https://nextlyhq.com/docs/guides/production-migrations";
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const isText = (value: unknown): value is string =>
-  typeof value === "string" && value !== "";
-
 const whole = (value: unknown): number =>
   typeof value === "number" && Number.isInteger(value) && value > 0 ? value : 0;
+
+/** What a line says when its answer gave no status this admin knows. */
+export const COULD_NOT_CHECK = "Couldn't check";
+
+/** A line whose status is unknown: never read as healthy. */
+function uncheckedLine(id: HealthLine["id"], label: string): HealthLine {
+  return {
+    id,
+    label,
+    value: COULD_NOT_CHECK,
+    severity: "unknown",
+    links: [],
+  };
+}
 
 /** An admin link, when the path is one the admin draws. */
 function adminLink(label: string, path: string): HealthLink[] {
@@ -83,8 +96,9 @@ function schemaChangeLinks(schema: unknown): HealthLink[] {
 
 /**
  * The migrations line: failed when a migration or a collection's schema
- * change did not apply, pending while migrations are still applying, and up
- * to date otherwise.
+ * change did not apply, pending while migrations are still applying, up to
+ * date only when the answer says "ok", and unchecked otherwise: a missing
+ * line or an unknown status is not a healthy one.
  */
 function migrationsLine(data: Record<string, unknown>): HealthLine {
   const migrations = isRecord(data.migrations) ? data.migrations : {};
@@ -120,6 +134,8 @@ function migrationsLine(data: Record<string, unknown>): HealthLine {
       links: [],
     };
   }
+  if (migrations.status !== "ok")
+    return uncheckedLine("migrations", "Migrations");
   return {
     id: "migrations",
     label: "Migrations",
@@ -129,10 +145,14 @@ function migrationsLine(data: Record<string, unknown>): HealthLine {
   };
 }
 
-/** The storage line: working, or when its last write failed, why, and where. */
+/**
+ * The storage line: when its last write failed, why, and where; working only
+ * when the answer says "ok"; and unchecked for anything else.
+ */
 function storageLine(data: Record<string, unknown>, now: number): HealthLine {
   const storage = isRecord(data.storage) ? data.storage : {};
   if (storage.status !== "failed") {
+    if (storage.status !== "ok") return uncheckedLine("storage", "Storage");
     return {
       id: "storage",
       label: "Storage",
