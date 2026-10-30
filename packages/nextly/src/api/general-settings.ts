@@ -16,7 +16,10 @@ import { z } from "zod";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { SYSTEM_READ_POLICY, SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -80,7 +83,9 @@ const updateSettingsSchema = z.object({
  * Auth: read-settings permission.
  */
 export const getGeneralSettings = withErrorHandler(async (req: Request) => {
-  const authResult = await requireAnyPermission(req, [...SYSTEM_READ_POLICY.settings.read.anyOf]);
+  const authResult = await requireAnyPermission(req, [
+    ...SYSTEM_READ_POLICY.settings.read.anyOf,
+  ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   const service = await getGeneralSettingsService();
@@ -100,7 +105,9 @@ export const getGeneralSettings = withErrorHandler(async (req: Request) => {
  * Auth: update-settings permission.
  */
 export const updateGeneralSettings = withErrorHandler(async (req: Request) => {
-  const authResult = await requireAnyPermission(req, [...SYSTEM_WRITE_POLICY.settings.update.anyOf]);
+  const authResult = await requireAnyPermission(req, [
+    ...SYSTEM_WRITE_POLICY.settings.update.anyOf,
+  ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
   const text = await req.text();

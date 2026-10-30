@@ -6,8 +6,32 @@ import { defineConfig } from "vitest/config";
 // The supported ranges, as the build inlines them.
 import { frameworkRanges } from "../../scripts/framework-ranges.mjs";
 
+// With forward slashes, as Vite writes every module id it hands a plugin: on
+// Windows `fileURLToPath` answers with backslashes, and an importer such as
+// `D:/repo/templates/blog/src/lib/rss.ts` would never start with them.
+const BLOG_LIB = fileURLToPath(
+  new URL("../../templates/blog/src/lib/", import.meta.url)
+).replaceAll("\\", "/");
+const BASE_SITE_URL = fileURLToPath(
+  new URL("../../templates/base/src/lib/site-url.ts", import.meta.url)
+);
+
 export default defineConfig({
-  plugins: [tsconfigPaths()],
+  plugins: [
+    tsconfigPaths(),
+    // A scaffolded blog gets `lib/site-url` from the base template, laid over
+    // the blog's own `lib`, so blog code imports it from beside itself; the
+    // blog's source does not carry it. Resolved here as the scaffold lays it.
+    {
+      name: "blog-lib-from-base",
+      resolveId(source, importer) {
+        return source === "./site-url" &&
+          importer?.replaceAll("\\", "/").startsWith(BLOG_LIB)
+          ? BASE_SITE_URL
+          : null;
+      },
+    },
+  ],
   define: {
     __NEXTLY_FRAMEWORK_RANGES__: JSON.stringify(frameworkRanges()),
   },

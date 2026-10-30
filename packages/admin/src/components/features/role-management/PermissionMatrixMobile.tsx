@@ -277,7 +277,12 @@ export function PermissionMatrixMobile({
                 >
                   {selectedCount}/{totalCount}
                 </Badge>
-                <AccordionTrigger className="hover:no-underline [&>svg]:ml-0" />
+                {/* Named for its row: the trigger draws only a chevron, and
+                    the name beside it sits outside the button. */}
+                <AccordionTrigger
+                  className="hover:no-underline [&>svg]:ml-0"
+                  aria-label={`${contentType.name} permissions`}
+                />
               </div>
             </div>
 

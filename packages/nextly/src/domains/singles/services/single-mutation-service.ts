@@ -1724,7 +1724,9 @@ export class SingleMutationService extends BaseService {
         this.fieldRuleVisitor
       );
       const singleWriteAccess = {
-        ...fieldGroupWriteAccessOf(options),
+        // The visitor's loader too, so this access judges one Public role
+        // whether or not a save is handed `writeGrants` with it.
+        ...fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
         grants: writeGrants,
       };
       // The Single's row alone carries no field-group instance, so what an
@@ -3358,8 +3360,9 @@ export class SingleMutationService extends BaseService {
               // top-level field rule sees.
               req: options.user ? { user: options.user } : {},
               // Who the write is made as, for each instance's own field rules:
-              // the caller and trust the Single's own fields are judged with.
-              access: fieldGroupWriteAccessOf(options),
+              // the caller and trust the Single's own fields are judged with,
+              // a visitor by the same Public role as the Single's gate.
+              access: fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
             });
             if (
               !holdEdit &&
@@ -3705,7 +3708,8 @@ export class SingleMutationService extends BaseService {
                 fields: fieldConfigs,
                 fieldGroupFields: { get: componentResolver },
                 access: {
-                  ...fieldGroupWriteAccessOf(options),
+                  // The visitor's loader too, kept with the grants below.
+                  ...fieldGroupWriteAccessOf(options, this.fieldRuleVisitor),
                   // Inside the write's transaction.
                   grants: callerAccessGrants(
                     options.user,

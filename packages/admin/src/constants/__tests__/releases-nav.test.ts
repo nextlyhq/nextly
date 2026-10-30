@@ -192,9 +192,9 @@ describe("the OTHER navigation render, which the rail test cannot see", () => {
   it("authorizes Email for a caller who may only read emails", () => {
     // Settings and the Email hub are system resources, absent from the
     // per-collection map: their permissions are asked as the guards ask them.
-    expect(visibleTo(["read-email-templates"]).map(item => item.href)).toContain(
-      ROUTES.EMAIL
-    );
+    expect(
+      visibleTo(["read-email-templates"]).map(item => item.href)
+    ).toContain(ROUTES.EMAIL);
     // The control: a caller with no email permission is not shown it.
     expect(visibleTo(["read-media"]).map(item => item.href)).not.toContain(
       ROUTES.EMAIL

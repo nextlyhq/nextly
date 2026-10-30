@@ -18,19 +18,30 @@
  *
  * Control: with an access-control service the gate and the field rules read
  * Public on the pool, so production keeps the process's cached read.
+ *
+ * A visitor's update is judged the same way all the way down: the rules
+ * declared on a field group's own fields are handed the Public role of the
+ * service's database too, so a field group the Single saves is never judged
+ * by another instance's grants while the Single itself is judged by its own.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { loadDialectTables } from "../../../database/dialect-tables";
+import { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import {
   clearFieldFunctions,
   registerFieldFunctions,
 } from "../../../shared/lib/field-level-registry";
 import type { AccessRuleContext } from "../../../shared/types/access";
+import {
+  createMockComponentRegistry,
+  createMockRelationshipService,
+} from "../../field-groups/__tests__/field-group-test-helpers";
 import { SingleEntryService } from "../services/single-entry-service";
 
 import {
+  componentFieldDef,
   createMockAdapter,
   createMockHookRegistry,
   createMockRBACService,
@@ -183,5 +194,111 @@ describe("a visitor's Single read with an access-control service", () => {
 
     expect(result.statusCode).toBe(200);
     expect(result.data).toMatchObject({ siteName: "Nextly", price: 100 });
+  });
+});
+
+const UPDATE_SITE_SETTINGS: GrantedPermission = {
+  slug: "update-site-settings",
+  action: "update",
+  resource: "site-settings",
+};
+const EDIT_CANONICAL_LINKS: GrantedPermission = {
+  slug: "update-canonical-links",
+  action: "update",
+  resource: "canonical-links",
+};
+
+/**
+ * The `seo` field group: `metaTitle`, and a `canonical` only a writer holding
+ * `update-canonical-links` may set, whether its instance is new or stored.
+ */
+const SEO_FIELDS = [textField("metaTitle"), textField("canonical")];
+const writesCanonicalLinks = ({ permissions }: AccessRuleContext) =>
+  permissions.includes("update-canonical-links");
+const SEO_FIELD_RULES = [
+  {
+    name: "canonical",
+    access: { create: writesCanonicalLinks, update: writesCanonicalLinks },
+  },
+];
+const SEO_SINGLE_FIELDS = [textField("siteName"), componentFieldDef("seo")];
+
+/**
+ * A visitor's checked update of a Single holding the `seo` field group,
+ * through a service over its own mocked database with no access-control
+ * service, saved by a real field-group service so the group's own rules run.
+ * Answers the row the group's instance was stored with.
+ */
+async function visitorUpdatesSeo(): Promise<Record<string, unknown>> {
+  const registry = createMockSingleRegistry();
+  registry.registerSingle(
+    "site-settings",
+    siteSettingsMeta({ fields: SEO_SINGLE_FIELDS })
+  );
+  // No instance stored yet, so the visitor's value creates one.
+  const adapter = createMockAdapter({
+    selectOne: vi.fn().mockResolvedValue({
+      id: "doc-1",
+      siteName: "Nextly",
+      status: null,
+      updated_at: "2026-01-01T00:00:00.000Z",
+    }),
+  });
+  const components = createMockComponentRegistry();
+  components.registerComponent("seo", {
+    slug: "seo",
+    tableName: "comp_seo",
+    fields: SEO_FIELDS,
+  });
+  registerFieldFunctions("fieldGroup", "seo", SEO_FIELD_RULES);
+  type GroupCtor = ConstructorParameters<typeof FieldGroupDataService>;
+  const fieldGroups = new FieldGroupDataService(
+    adapter as unknown as GroupCtor[0],
+    createSilentLogger(),
+    components as unknown as GroupCtor[2],
+    createMockRelationshipService() as unknown as GroupCtor[3]
+  );
+  const service = new SingleEntryService(
+    adapter as unknown as Ctor[0],
+    createSilentLogger(),
+    registry as unknown as Ctor[2],
+    createMockHookRegistry() as unknown as Ctor[3],
+    fieldGroups as unknown as Ctor[4]
+  );
+
+  await service.update(
+    "site-settings",
+    { seo: { metaTitle: "Home", canonical: "https://example.com/" } },
+    { overrideAccess: false }
+  );
+
+  const stored = adapter.insert.mock.calls.find(
+    ([table]: [string]) => table === "comp_seo"
+  );
+  expect(stored).toBeDefined();
+  return stored?.[1] as Record<string, unknown>;
+}
+
+describe("a visitor's field-group rule on a Single update with no access-control service", () => {
+  it("stores a field the Public role on the service's own database grants", async () => {
+    publicRole.ownDatabase = [UPDATE_SITE_SETTINGS, EDIT_CANONICAL_LINKS];
+    publicRole.process = [UPDATE_SITE_SETTINGS];
+
+    const row = await visitorUpdatesSeo();
+
+    expect(row).toMatchObject({
+      meta_title: "Home",
+      canonical: "https://example.com/",
+    });
+  });
+
+  it("does not store a field only another instance's Public role grants", async () => {
+    publicRole.ownDatabase = [UPDATE_SITE_SETTINGS];
+    publicRole.process = [UPDATE_SITE_SETTINGS, EDIT_CANONICAL_LINKS];
+
+    const row = await visitorUpdatesSeo();
+
+    expect(row).toMatchObject({ meta_title: "Home" });
+    expect(row.canonical ?? null).toBeNull();
   });
 });

@@ -10,7 +10,8 @@
  *   a request those lookups are kept, so an actor costs no query after the
  *   request's first; outside a request they run per call, as they always have;
  * - a key's come from its scope exactly as authentication resolved them, and
- *   a key never holds super-admin authority, whoever made it;
+ *   only a full-access key whose maker is an active super-admin holds
+ *   super-admin authority, as authentication found it;
  * - a visitor's permissions are the Public role's, read once per request as a
  *   user's are, and kept per process behind the role version;
  * - a plugin's person carries no lookup at all.
@@ -31,7 +32,11 @@ import {
   type PublicRoleDatabase,
 } from "../../services/lib/permissions";
 import { consoleLogger } from "../../shared/types";
-import { scopeGrants, type AuthenticatedScope } from "../authenticated-scope";
+import {
+  scopeGrants,
+  scopeHoldsSuperAdmin,
+  type AuthenticatedScope,
+} from "../authenticated-scope";
 import { currentPrincipal } from "../principal-scope";
 
 import {
@@ -174,19 +179,23 @@ export function userIsSuperAdmin(
 
 /**
  * An API key's actor, from what authentication resolved for it: the key's
- * own permissions and roles, and the user who made it.
+ * own permissions and roles, the user who made it, and whether it carries
+ * that user's super-admin authority. Required, so every way a key's actor is
+ * made says where that answer came from.
  */
 export function actorForKey(fields: {
   keyId: string;
   userId: string;
   grants: readonly PermissionGrant[];
   roles: readonly string[];
+  superAdmin: boolean;
 }): KeyActor {
   return keyActor({
     keyId: fields.keyId,
     userId: fields.userId,
     roles: fields.roles,
     permissions: fields.grants,
+    superAdmin: fields.superAdmin,
   });
 }
 
@@ -197,7 +206,9 @@ export function actorForKey(fields: {
  * and grant rows disagree is refused here, as it is wherever it is read.
  *
  * A gate holds the key's scope but not its id, so the actor names none; a
- * way in that knows the id builds the actor with {@link actorForKey}.
+ * way in that knows the id builds the actor with {@link actorForKey}. The
+ * key's super-admin authority is the scope's, which only authentication can
+ * give, so a scope built by hand or narrowed carries none.
  */
 export function actorForScope(
   scope: AuthenticatedScope,
@@ -209,6 +220,7 @@ export function actorForScope(
     userId: user.id,
     grants: scope.grants ?? [],
     roles: scope.roles ?? user.roles ?? [],
+    superAdmin: scopeHoldsSuperAdmin(scope),
   });
 }
 

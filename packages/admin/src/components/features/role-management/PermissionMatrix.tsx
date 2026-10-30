@@ -23,11 +23,15 @@ export function PermissionMatrix({
   value = [],
   onChange,
   disabled = false,
+  readOnly = false,
   lockedIds = [],
 }: PermissionMatrixProps): JSX.Element {
+  // A read-only matrix can still be searched; only its changes are held.
+  const changesHeld = disabled || readOnly;
   const {
     searchTerm,
     setSearchTerm,
+    organizedPermissions,
     activeTab,
     setActiveTab,
     filteredContentTypes,
@@ -41,13 +45,24 @@ export function PermissionMatrix({
     shown,
   } = usePermissionMatrix({ permissions, value, onChange, lockedIds });
 
+  // The grid may hold only some of the role's permissions, the rest being
+  // set elsewhere on the screen, so it offers only the tabs it has something
+  // in, as the hook groups them, and clearing takes away its own ids alone.
+  // An empty grid keeps every tab, so each says it has nothing to show.
+  const withContent = PERMISSION_CATEGORIES.filter(
+    category => (organizedPermissions[category]?.length ?? 0) > 0
+  );
+  const tabs = withContent.length > 0 ? withContent : PERMISSION_CATEGORIES;
+  const tab = tabs.find(category => category === activeTab) ?? tabs[0];
+  const own = new Set(permissions.map(permission => permission.id));
+
   return (
     <div className="flex flex-col">
       {/* Tabs and Search Row */}
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+      <Tabs value={tab} onValueChange={setActiveTab} className="w-full">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-4 px-6">
           <TabsList>
-            {PERMISSION_CATEGORIES.map(category => (
+            {tabs.map(category => (
               <TabsTrigger key={category} value={category}>
                 {PERMISSION_CATEGORY_LABELS[category]}
               </TabsTrigger>
@@ -87,7 +102,7 @@ export function PermissionMatrix({
                 )
               }
               disabled={
-                disabled || permissions.every(p => shown.includes(p.id))
+                changesHeld || permissions.every(p => shown.includes(p.id))
               }
               aria-label="Select all permissions"
             >
@@ -98,10 +113,10 @@ export function PermissionMatrix({
               type="button"
               variant="outline"
               size="md"
-              // The value is the role's own permissions, so clearing takes all
-              // of them away; inherited ones stay shown, as the base gives them.
-              onClick={() => onChange([])}
-              disabled={disabled || value.length === 0}
+              // The value is the role's own permissions, so clearing takes the
+              // grid's away; inherited ones stay shown, as the base gives them.
+              onClick={() => onChange(value.filter(id => !own.has(id)))}
+              disabled={changesHeld || !value.some(id => own.has(id))}
               aria-label="Clear all permissions"
             >
               Clear All
@@ -111,7 +126,7 @@ export function PermissionMatrix({
 
         {/* Tab Contents */}
         <div className="mt-4">
-          {PERMISSION_CATEGORIES.map(category => (
+          {tabs.map(category => (
             <TabsContent
               key={category}
               value={category}
@@ -121,7 +136,7 @@ export function PermissionMatrix({
                 contentTypes={filteredContentTypes[category] ?? []}
                 value={shown}
                 lockedIds={lockedIds}
-                disabled={disabled}
+                disabled={changesHeld}
                 searchTerm={searchTerm}
                 onClearSearch={() => setSearchTerm("")}
                 onTogglePermission={togglePermission}

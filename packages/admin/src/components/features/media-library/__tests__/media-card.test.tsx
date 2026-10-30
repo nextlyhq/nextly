@@ -109,4 +109,26 @@ describe("a library tile", () => {
     fireEvent.keyDown(tile, { key: " " });
     expect(onClick).toHaveBeenCalledTimes(2);
   });
+
+  it("is named by the file's own name, as it shows it, not by where it is stored", () => {
+    // An upload is stored under a path of the storage's making; the tile
+    // shows the name the file was uploaded with, and a screen reader, voice
+    // control or a search by name must find it by that same name.
+    render(
+      <MediaCard
+        media={media({ filename: "uploads/2026/10/f81d4fae-coast.jpg" })}
+        onSelectionChange={vi.fn()}
+      />
+    );
+
+    // POSITIVE CONTROL: the tile shows the uploaded name.
+    expect(screen.getByText("coast.jpg")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^coast\.jpg/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Select coast.jpg" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /f81d4fae/ })).toBeNull();
+  });
 });

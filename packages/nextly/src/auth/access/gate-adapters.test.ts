@@ -425,6 +425,70 @@ describe("a super-admin named only by id", () => {
   });
 });
 
+describe("a yes-or-no asker under a read rule that answers a filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  beforeEach(() => {
+    callerMay("read");
+  });
+
+  it("answers yes: the caller may read the entries the filter matches", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+  });
+
+  it("is refused without the flag, where the asker neither applies nor only asks", async () => {
+    // The control: the yes above is the flag's.
+    const verdict = await collectionGateVerdict(
+      asked({ read: () => OWN as unknown as boolean }, { user: { id: "u1" } })
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("still refuses a caller without the read permission", async () => {
+    callerMayNot("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { user: { id: "u1" }, asksSomeEntries: true }
+      )
+    );
+    expect(verdict.allowed).toBe(false);
+  });
+
+  it("answers a visitor yes where the Public role grants the read, naming no refusal", async () => {
+    // A visitor is judged as a signed-in user is: Public's read held, the
+    // filter answers yes to a yes-or-no asker, and no "now refused" notice
+    // is named for an answer that refuses nothing.
+    clearRuleAnswerNotices();
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    publicHolds("read");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: true });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("still refuses a visitor the Public role does not grant the read", async () => {
+    const verdict = await collectionGateVerdict(
+      asked(
+        { read: () => OWN as unknown as boolean },
+        { asksSomeEntries: true }
+      )
+    );
+    expect(verdict).toEqual({ allowed: false, refusal: "unauthenticated" });
+  });
+});
+
 describe("a read whose route already authorized it", () => {
   const OWN = { author: { equals: "u1" } };
   const filtering = () => vi.fn(() => OWN as unknown as boolean);
@@ -782,6 +846,108 @@ describe("a read whose route already authorized it", () => {
     );
     expect(verdict.allowed).toBe(true);
     expect(rule).not.toHaveBeenCalled();
+  });
+});
+
+describe("a write rule's filter", () => {
+  const OWN = { author: { equals: "u1" } };
+  const filtering = () => vi.fn(() => OWN as unknown as boolean);
+
+  it("is handed back for a delete to an asker that matches its entry against it", async () => {
+    callerMay("delete");
+    const verdict = await collectionGateVerdict(
+      asked(
+        { delete: filtering() },
+        { action: "delete", user: { id: "u1" }, appliesFilter: true }
+      )
+    );
+    expect(verdict).toEqual({
+      allowed: false,
+      refusal: "only-matching-entries",
+      filter: OWN,
+    });
+  });
+
+  it("refuses a delete to an asker that cannot match its entry against it", async () => {
+    // The control: the filter is handed back only where it is applied.
+    callerMay("delete");
+    const verdict = await collectionGateVerdict(
+      asked({ delete: filtering() }, { action: "delete", user: { id: "u1" } })
+    );
+    expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+  });
+
+  it.each(["update", "publish", "unpublish"] as const)(
+    "is handed back for a user's %s to an asker that matches its entry against it",
+    async action => {
+      callerMay(action);
+      const verdict = await collectionGateVerdict(
+        asked(
+          { [action]: filtering() },
+          { action, user: { id: "u1" }, appliesFilter: true }
+        )
+      );
+      expect(verdict).toEqual({
+        allowed: false,
+        refusal: "only-matching-entries",
+        filter: OWN,
+      });
+    }
+  );
+
+  describe("for a key holding the grant", () => {
+    const keyScope = (action: string) =>
+      apiKeyScope(
+        [{ slug: `${action}-posts`, action, resource: "posts" }],
+        ["editor"]
+      );
+
+    it.each(["update", "publish", "unpublish"] as const)(
+      "is handed back for its %s to an asker that matches its entry against it",
+      async action => {
+        // A publish or unpublish is judged by its own rule alone, so this is
+        // a path of its own beside an update's.
+        const verdict = await collectionGateVerdict(
+          asked(
+            { [action]: filtering() },
+            {
+              action,
+              user: { id: "owner" },
+              scope: keyScope(action),
+              appliesFilter: true,
+            }
+          )
+        );
+        expect(verdict).toEqual({
+          allowed: false,
+          refusal: "only-matching-entries",
+          filter: OWN,
+        });
+      }
+    );
+
+    it("refuses its publish to an asker that cannot match its entry against it", async () => {
+      // The control: the filter is handed back only where it is applied.
+      const verdict = await collectionGateVerdict(
+        asked(
+          { publish: filtering() },
+          {
+            action: "publish",
+            user: { id: "owner" },
+            scope: keyScope("publish"),
+          }
+        )
+      );
+      expect(verdict).toEqual({ allowed: false, refusal: "insufficient" });
+    });
+  });
+
+  it("refuses a visitor's delete, whose writes no filter limits yet", async () => {
+    const verdict = await collectionGateVerdict(
+      asked({ delete: filtering() }, { action: "delete", appliesFilter: true })
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(verdict).not.toHaveProperty("filter");
   });
 });
 

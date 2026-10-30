@@ -293,6 +293,34 @@ async function patchSingleStandalone(
 
 const SYSTEM = { as: "system" } as const;
 
+/** A filter no entry matches: a write by query that finds nothing to change. */
+const MATCHES_NOTHING = { id: { equals: "no-such-entry" } };
+
+/**
+ * A batch's result, as a throw when any item failed: a batch reports an
+ * item's refusal among its counts rather than throwing it, and the table
+ * reads every operation one way.
+ */
+function batchSucceeded(result: {
+  failed: number;
+  errors: Array<{ error: string }>;
+}): typeof result {
+  if (result.failed > 0) {
+    throw new Error(`batch item refused: ${result.errors[0]?.error}`);
+  }
+  return result;
+}
+
+/** The founder, as the services take a caller. */
+function founderUser() {
+  return { id: founder, roles: ["super-admin"] };
+}
+
+/** The collection entry service the batch writes are reached through. */
+function entryService() {
+  return t().getService("collectionsHandler").getEntryService();
+}
+
 function collectionRef(target: Target) {
   return {
     scopeKind: "collection" as const,
@@ -328,6 +356,12 @@ interface Operation {
   name: string;
   kind: "collection" | "single";
   run(target: Target): Promise<unknown>;
+  /**
+   * The code a declared entity answers this operation with, where that is not
+   * success: a write by query that matches nothing is "not found" through the
+   * Direct API. Absent, the declared entity's write succeeds.
+   */
+  declaredAnswer?: string;
 }
 
 /**
@@ -411,6 +445,16 @@ const OPERATIONS: Operation[] = [
         "bulkUpdateByQuery",
         { collectionName: x.collection },
         { where: { id: { equals: x.entryId } }, data: { headline: "Query" } }
+      ),
+  },
+  {
+    name: "REST bulkUpdateByQuery matching nothing",
+    kind: "collection",
+    run: x =>
+      restCollection(
+        "bulkUpdateByQuery",
+        { collectionName: x.collection },
+        { where: MATCHES_NOTHING, data: { headline: "Query" } }
       ),
   },
   {
@@ -631,6 +675,26 @@ const OPERATIONS: Operation[] = [
       }),
   },
   {
+    name: "Direct update by where matching nothing",
+    kind: "collection",
+    declaredAnswer: "NOT_FOUND",
+    run: x =>
+      t().nextly.update({
+        collection: x.collection as never,
+        where: MATCHES_NOTHING as never,
+        data: { headline: "Changed" } as never,
+      }),
+  },
+  {
+    name: "Direct delete by where matching nothing",
+    kind: "collection",
+    run: x =>
+      t().nextly.delete({
+        collection: x.collection as never,
+        where: MATCHES_NOTHING as never,
+      }),
+  },
+  {
     name: "Direct duplicate",
     kind: "collection",
     run: x =>
@@ -827,6 +891,61 @@ const OPERATIONS: Operation[] = [
     kind: "single",
     run: x => pinning((holder, opts) => holder.releaseAll(singleRef(x), opts)),
   },
+  // The collection entry service's batch writes, which no entry point above
+  // reaches today; a feature that exposes one is refused all the same.
+  {
+    name: "Entry service createEntriesInTransaction",
+    kind: "collection",
+    run: x =>
+      t().adapter.transaction(async tx =>
+        batchSucceeded(
+          await entryService().createEntriesInTransaction(
+            tx,
+            { collectionName: x.collection, user: founderUser() },
+            [{ title: "New", headline: "New" }]
+          )
+        )
+      ),
+  },
+  {
+    name: "Entry service updateEntriesInTransaction",
+    kind: "collection",
+    run: x =>
+      t().adapter.transaction(async tx =>
+        batchSucceeded(
+          await entryService().updateEntriesInTransaction(
+            tx,
+            { collectionName: x.collection, user: founderUser() },
+            [{ id: x.entryId, data: { headline: "Changed" } }]
+          )
+        )
+      ),
+  },
+  {
+    name: "Entry service deleteEntries",
+    kind: "collection",
+    run: async x =>
+      batchSucceeded(
+        await entryService().deleteEntries(
+          { collectionName: x.collection, user: founderUser() },
+          [x.entryId]
+        )
+      ),
+  },
+  {
+    name: "Entry service deleteEntriesInTransaction",
+    kind: "collection",
+    run: x =>
+      t().adapter.transaction(async tx =>
+        batchSucceeded(
+          await entryService().deleteEntriesInTransaction(
+            tx,
+            { collectionName: x.collection, user: founderUser() },
+            [x.entryId]
+          )
+        )
+      ),
+  },
 ];
 
 // --- The database each case owns, across its two boots ---------------------
@@ -904,7 +1023,15 @@ async function everyRow(
 ): Promise<Record<string, string[]>> {
   const tables: Record<string, string[]> = {};
   for (const table of [...(await adapter.listTables())].sort()) {
-    const rows = await adapter.select<Record<string, unknown>>(table, {});
+    // Read raw, not through the registered schema, so a table whose shape a
+    // case changed by hand is read as it is.
+    const quoted =
+      adapter.getCapabilities().dialect === "mysql"
+        ? `\`${table}\``
+        : `"${table}"`;
+    const rows = (await adapter.executeQuery(
+      `SELECT * FROM ${quoted}`
+    )) as Array<Record<string, unknown>>;
     tables[table] = rows
       .map(row =>
         JSON.stringify(
@@ -1139,7 +1266,7 @@ function refusalOf(error: unknown): {
     code: e.code,
     data: e.publicData,
     status: e.statusCode,
-    message: e.publicMessage,
+    message: e.publicMessage ?? (error as Error).message,
   };
 }
 
@@ -1251,6 +1378,43 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 300_000);
 
+    it("refuses unpublishing every language before reading the translation table's shape", async () => {
+      // A translation table without its per-language status, as a collection
+      // localized before Draft/Published was turned on has: unpublishing every
+      // language of a declared collection answers that conflict. A removed one
+      // answers as removed from code, whatever its tables hold.
+      const quote = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      for (const slug of [REMOVED.collection, DECLARED.collection]) {
+        await caseDb().adapter.executeQuery(
+          `ALTER TABLE ${quote(`dc_${slug}_locales`)} DROP COLUMN ${quote("_status")}`
+        );
+      }
+      const unpublish = (target: Target) =>
+        restCollection("unpublishAllLocales", {
+          collectionName: target.collection,
+          entryId: target.entryId,
+        });
+
+      // The control: the shape is what a declared collection is refused on.
+      expect(refusalOf(await refusedWith(unpublish(declared)))).toMatchObject({
+        code: "CONFLICT",
+        status: 409,
+      });
+
+      const before = await everyRow(caseDb().adapter);
+      hookCalls.length = 0;
+      expect(refusalOf(await refusedWith(unpublish(removed)))).toMatchObject({
+        code: "ENTITY_REMOVED_FROM_CODE",
+        data: { kind: "collection", slug: REMOVED.collection },
+        status: 409,
+      });
+      expect(changedTables(before, await everyRow(caseDb().adapter))).toEqual(
+        []
+      );
+      expect(hookCalls, "no write hook ran").toEqual([]);
+    }, 300_000);
+
     it("refuses the release engine's write, leaving the entry as it was", async () => {
       // A release holding the removed collection's entry and the removed
       // Single, due now, run by the engine under the configuration that
@@ -1344,12 +1508,17 @@ describe.each(getConfiguredTestDialects())(
             : await seedSingle(DECLARED.single)),
         };
         const error = await refusedWith(operation.run(target));
+        const answer =
+          error === undefined ? "succeeded" : refusalOf(error).code;
         expect
           .soft(
-            error === undefined ? "succeeded" : refusalOf(error),
-            `${operation.name} succeeds on a declared ${operation.kind}`
+            answer,
+            `${operation.name} succeeds on a declared ${operation.kind}` +
+              (error === undefined
+                ? ""
+                : `: ${JSON.stringify(refusalOf(error))}`)
           )
-          .toBe("succeeded");
+          .toBe(operation.declaredAnswer ?? "succeeded");
       }
       // The probe's hooks do run for these writes, so their silence above is
       // the refusal's and not a hook that never fires.

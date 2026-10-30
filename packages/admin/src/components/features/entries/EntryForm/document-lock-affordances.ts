@@ -127,7 +127,7 @@ const AWAITED: DocumentLockAffordances = {
  * offered at all. It names no role or permission, so it reads the same for
  * one role or several.
  */
-export const READ_ONLY_FOR_READER: DocumentLockAffordances = {
+const READ_ONLY_FOR_READER: DocumentLockAffordances = {
   readOnly: true,
   actionsDisabled: false,
   notice: {
@@ -138,6 +138,37 @@ export const READ_ONLY_FOR_READER: DocumentLockAffordances = {
     accessRequest: null,
   },
 };
+
+/**
+ * A reader's affordances, given who holds the document. A reader who may
+ * publish writes its status, and that write waits while a colleague holds the
+ * document, or until the lock has been read: a publish then would put a change
+ * still being made live.
+ */
+export function readerAffordances(
+  holder: DocumentLockHolder | null | undefined
+): DocumentLockAffordances {
+  if (holder === null) return READ_ONLY_FOR_READER;
+  return {
+    ...READ_ONLY_FOR_READER,
+    actionsDisabled: true,
+    ...(holder === undefined
+      ? {}
+      : {
+          notice: {
+            tone: "reader",
+            // Named when the server named them, and promising nothing: a
+            // reader may hold no publish to make once they are done.
+            message:
+              holder.ownerLabel === null
+                ? "Someone is editing this document right now."
+                : `${holder.ownerLabel} is editing this document right now.`,
+            takeOverLabel: null,
+            accessRequest: null,
+          },
+        }),
+  };
+}
 
 /** Everything a colleague's claim withholds, with the sentence that explains it. */
 function withheld(

@@ -60,6 +60,80 @@ describe("PermissionMatrix", () => {
     expect(onChange).toHaveBeenCalledWith([]);
   });
 
+  it("clears only its own permissions, leaving those set elsewhere on the screen", async () => {
+    // The roles screen sets collections and Singles by level above the grid,
+    // so the role's value holds ids the grid does not show.
+    const onChange = vi.fn();
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={["p1", "pages-read"]}
+        onChange={onChange}
+      />
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Clear all permissions" })
+    );
+
+    expect(onChange).toHaveBeenCalledWith(["pages-read"]);
+  });
+
+  it("has nothing to clear while it holds none of its own", () => {
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={["pages-read"]}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Clear all permissions" })
+    ).toBeDisabled();
+  });
+
+  it("names the button that opens each row on a phone", () => {
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+      />
+    );
+
+    // The phone layout's expand button holds only an icon, so its name is
+    // all a screen reader has to say which row it opens.
+    expect(
+      screen.getByRole("button", { name: "posts permissions" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "tags permissions" })
+    ).toBeInTheDocument();
+  });
+
+  it("offers only the tabs it has permissions in", () => {
+    render(
+      <PermissionMatrix
+        permissions={[
+          {
+            id: "s1",
+            name: "Read settings",
+            resource: "settings",
+            action: "read",
+            category: "settings",
+          },
+        ]}
+        value={[]}
+        onChange={vi.fn()}
+      />
+    );
+
+    expect(screen.getAllByRole("tab").map(tab => tab.textContent)).toEqual([
+      "Settings",
+    ]);
+  });
+
   it("has nothing to clear once the role holds nothing itself", () => {
     render(
       <PermissionMatrix
@@ -114,5 +188,48 @@ describe("PermissionMatrix", () => {
     await userEvent.click(row);
 
     expect(onChange).toHaveBeenCalledWith(["p4"]);
+  });
+
+  it("lets the keyboard reach its scrolling table while every control is disabled", () => {
+    // A read-only role's table has no control left to focus, so the region
+    // that scrolls it takes the focus itself, by its name.
+    const { unmount } = render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+        disabled
+      />
+    );
+    const region = screen.getByRole("region", { name: "Permissions table" });
+    expect(region).toHaveAttribute("tabindex", "0");
+    unmount();
+
+    // CONTROL: an editable table's controls take the focus, and the region
+    // adds no stop of its own.
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole("region", { name: "Permissions table" })
+    ).not.toHaveAttribute("tabindex");
+  });
+
+  it("keeps Search open on a read-only role, while its permissions can't change", () => {
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+        readOnly
+      />
+    );
+
+    expect(screen.getByPlaceholderText("Search...")).toBeEnabled();
+    expect(readTags()).toBeDisabled();
   });
 });

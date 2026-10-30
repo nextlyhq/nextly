@@ -11,7 +11,10 @@
 
 import { runWithAccessMemo } from "../../auth/access/request-memo";
 import { readsAsVisitor } from "../../auth/access/resolve-actor";
-import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import {
+  scopeHoldsSuperAdmin,
+  type AuthenticatedScope,
+} from "../../auth/authenticated-scope";
 import {
   authorizeCaller,
   authorizeCallerForAny,
@@ -22,7 +25,10 @@ import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { visitorReadsSystemResource } from "../../auth/resource-readable";
-import { isAssignableRole } from "../../domains/auth/services/public-role";
+import {
+  builtInMarkOf,
+  isAssignableRole,
+} from "../../domains/auth/services/public-role";
 import {
   roleChangeCallerFor,
   runAsRoleChangeCaller,
@@ -280,6 +286,9 @@ function asRouteCaller(userId: string, access: AccessOptions): AuthContext {
       permissions: [...scope.permissions],
       ...(scope.grants ? { grants: scope.grants } : {}),
       roles: [...(scope.roles ?? [])],
+      // Only a scope authentication made for a super-admin's full-access key
+      // carries that authority; one built by hand or narrowed carries none.
+      keyHoldsSuperAdmin: scopeHoldsSuperAdmin(scope),
     };
   }
   return {
@@ -668,6 +677,7 @@ export function mapRole(role: RawRoleRecord): Role {
     // Derived here rather than carried from the read, so a role a create or
     // update returns says it as a listed one does.
     assignable: isAssignableRole(role),
+    ...builtInMarkOf(role),
   };
 }
 

@@ -810,7 +810,9 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       priorCompanionStatuses,
       pending,
-      fieldGroupWriteAccessOf(options)
+      // A visitor's promoted field groups judged by the Public role this
+      // service's gate reads.
+      fieldGroupWriteAccessOf(options, this.fieldRuleVisitor)
     );
 
     let publishVersionNo: number | null = null;

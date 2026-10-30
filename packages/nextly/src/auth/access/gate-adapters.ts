@@ -17,6 +17,7 @@ import type { AccessOperation } from "../../services/access/types";
 import { canonicalJson } from "../../shared/lib/canonical-json";
 import {
   apiKeyWriteAllowed,
+  scopeHoldsSuperAdmin,
   scopeRowsAgree,
   slugGrants,
   type AuthenticatedScope,
@@ -25,6 +26,7 @@ import { effectiveCallerScope } from "../caller-scope";
 
 import {
   holdsPermission,
+  isSuperAdmin,
   type Actor,
   type KeyActor,
   type UserActor,
@@ -71,7 +73,7 @@ import {
 
 /**
  * Allowed, refused with the kind of refusal the gate words, or allowed only
- * for the entries a read rule's filter matches. The last is handed only to an
+ * for the entries a rule's filter matches. The last is handed only to an
  * asker that applies the filter ({@link GateQuestion.appliesFilter}), and is
  * not `allowed`, which means every entry.
  */
@@ -145,26 +147,58 @@ const isLifecycle = (action: AccessOperation) =>
   action === "publish" || action === "unpublish";
 
 /**
- * The filter a collection's read rule answered, where it answered a
- * well-formed one; `undefined` for any other answer, action or target.
+ * The actions whose rule's filter the gate hands to an asker that applies it:
+ * a read, which lists only the matching entries, and a write that matches the
+ * entry it changes against the filter first, and an update after it too. A
+ * create has no entry to match, so its rule's filter refuses.
  */
-function readFilterOf(
+const FILTER_APPLIED: ReadonlySet<AccessOperation> = new Set<AccessOperation>([
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+]);
+
+/**
+ * The filter a collection's rule for `action` answered, where it answered a
+ * well-formed one and the action is one whose filter is applied; `undefined`
+ * for any other answer, action or target.
+ */
+function appliedFilterOf(
   target: AccessTarget,
   action: AccessOperation,
   outcome: RuleOutcome
 ): RuleFilter | undefined {
-  if (action !== "read" || !mayAnswerFilter(target.kind, action)) return;
+  if (!FILTER_APPLIED.has(action) || !mayAnswerFilter(target.kind, action)) {
+    return;
+  }
   if (!outcome.declared || "threw" in outcome) return;
   const answer = outcomeAnswer(outcome);
   return answer.kind === "filter" ? answer.filter : undefined;
 }
 
 /**
- * A read rule's filter as the gate answers it: the filter, to an asker that
+ * The filter a collection's read rule answered, where it answered a
+ * well-formed one. A visitor is limited by a read filter alone: its writes
+ * are not judged by a filter yet.
+ */
+function readFilterOf(
+  target: AccessTarget,
+  action: AccessOperation,
+  outcome: RuleOutcome
+): RuleFilter | undefined {
+  return action === "read"
+    ? appliedFilterOf(target, action, outcome)
+    : undefined;
+}
+
+/**
+ * A rule's filter as the gate answers it: the filter, to an asker that
  * applies it, and a refusal to any other. That refusal differs from the
  * decision, which allows the entries the filter matches to a caller it lets
- * read the collection (`decisionAllows`), so it is recorded as the deviation
- * it is.
+ * act on the collection (`decisionAllows`), so it is recorded as the
+ * deviation it is.
  */
 async function onlyMatching(
   q: GateQuestion,
@@ -174,6 +208,9 @@ async function onlyMatching(
   if (q.appliesFilter) {
     return { allowed: false, refusal: "only-matching-entries", filter };
   }
+  // A yes or no to "may the caller read the collection" is yes: the caller
+  // may read the entries the filter matches, as the decision says.
+  if (q.asksSomeEntries) return ALLOWED;
   await deviate("filter-not-applied", false, () => decisionAllows);
   return INSUFFICIENT;
 }
@@ -199,11 +236,19 @@ export interface GateQuestion {
   /** The caller's transaction, when the gate is asked inside one. */
   readonly executor?: unknown;
   /**
-   * The asker applies a collection read rule's filter to the entries it
-   * reads, so the gate hands the filter back. Any other asker is refused it,
-   * as it cannot limit what it reads to the entries the filter matches.
+   * The asker applies a collection rule's filter to the entries it acts on:
+   * a read lists only the matching entries, and a delete matches the entry it
+   * removes against the filter first. So the gate hands the filter back. Any
+   * other asker is refused it, as it cannot limit what it acts on to the
+   * entries the filter matches.
    */
   readonly appliesFilter?: boolean;
+  /**
+   * The asker wants only a yes or no to "may the caller read the
+   * collection", and reads no entries on the answer, so a read rule's filter
+   * answers yes: the caller may read the entries it matches.
+   */
+  readonly asksSomeEntries?: boolean;
   /** The access-control service's rules; absent without the service. */
   readonly rules?: RuleSource;
   /**
@@ -433,15 +478,15 @@ function askedOnce<T>(
 }
 
 /**
- * The decision's answer as the gate gives it. A filter it names for a read is
- * handed to an asker that applies it; a write rule's filter is not applied
- * yet, so it refuses.
+ * The decision's answer as the gate gives it. A filter it names for an action
+ * whose filter is applied is handed to an asker that applies it; any other
+ * rule's filter is not applied yet, so it refuses.
  */
 function answerOf(q: GateQuestion, decision: Decision): Promise<GateVerdict> {
   if (
     !decision.allowed &&
     decision.reason === "only-matching-entries" &&
-    q.action === "read"
+    FILTER_APPLIED.has(q.action)
   ) {
     return onlyMatching(q, decision.filter, true);
   }
@@ -475,7 +520,19 @@ async function visitorVerdict(
     "rules"
   );
   if (outcomes === null) return UNAUTHENTICATED;
-  const outcome = outcomes.action;
+  return visitorRuleVerdict(visitor, q, target, outcomes.action);
+}
+
+/**
+ * A visitor the Public role grants the action, judged by its rule's outcome,
+ * already asked.
+ */
+function visitorRuleVerdict(
+  visitor: VisitorActor,
+  q: GateQuestion,
+  target: AccessTarget,
+  outcome: RuleOutcome
+): GateVerdict | Promise<GateVerdict> {
   // A rule that answers `false` or fails refuses a visitor outright.
   if (outcome.declared && ("threw" in outcome || outcome.value === false)) {
     return INSUFFICIENT;
@@ -505,7 +562,8 @@ function visitorOf(q: GateQuestion): Promise<VisitorActor> {
 /**
  * A visitor whose read rule answered a filter, and whom the Public role
  * grants the action. An asker that applies it shows the visitor the entries
- * it matches; any other asker refuses, as the decision does.
+ * it matches, one asking only whether the visitor may read some entries is
+ * told yes, and any other asker refuses, as the decision does.
  */
 function visitorFilterVerdict(
   q: GateQuestion,
@@ -514,7 +572,7 @@ function visitorFilterVerdict(
 ): Promise<GateVerdict> {
   // The Public role's permission for the action was asked before the rule,
   // so the visitor holds it: the filter alone narrows what it is shown.
-  if (!q.appliesFilter) {
+  if (!q.appliesFilter && !q.asksSomeEntries) {
     noticeWhereRuleAllowedBefore(outcome, allowedVisitorBefore, q, "visitor");
   }
   return onlyMatching(q, filter, true);
@@ -549,6 +607,9 @@ async function keyVerdict(
 ): Promise<GateVerdict> {
   const rows = scopeRowsAgree(scope);
   const actor = keyActorOf(scope, user);
+  // A key carrying its maker's super-admin authority passes every collection
+  // and Single rule, as the decision gives a super-admin.
+  if (isSuperAdmin(actor)) return ALLOWED;
   // A key holds an action by its stored slug, `<action>-<target>`. The
   // decision reads the grant's action and target, which agree with the slug
   // unless the grant was stored under a slug of its own.
@@ -573,6 +634,7 @@ function keyActorOf(
         userId: user.id,
         grants: slugGrants(scope.permissions),
         roles: scope.roles ?? user.roles ?? [],
+        superAdmin: scopeHoldsSuperAdmin(scope),
       });
 }
 
@@ -613,7 +675,10 @@ async function grantJudgedVerdict(
     // A key without the grant is refused before its rule is read, as today
     // and as the decision does: it lacks the permission either way.
     if (!slugHolds) return INSUFFICIENT;
-    return verdictOf(outcomeAllows(await askRule(actor, q.action, target)));
+    const outcome = await askRule(actor, q.action, target);
+    const filter = appliedFilterOf(target, q.action, outcome);
+    if (filter) return onlyMatching(q, filter, true);
+    return verdictOf(outcomeAllows(outcome));
   }
   const answer = judge(
     actor,
@@ -793,9 +858,9 @@ async function ruleVerdict({
     () => askRule(actor, q.action, target),
     "rule"
   );
-  const filter = readFilterOf(target, q.action, outcome);
+  const filter = appliedFilterOf(target, q.action, outcome);
   if (filter) {
-    if (!q.appliesFilter) {
+    if (!q.appliesFilter && !q.asksSomeEntries) {
       noticeWhereRuleAllowedBefore(
         outcome,
         allowedUserBefore,

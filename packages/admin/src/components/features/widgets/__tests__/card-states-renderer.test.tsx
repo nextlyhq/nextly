@@ -155,6 +155,49 @@ describe("card states from a widget's answer", () => {
       "rows"
     );
   });
+
+  it.each([
+    ["metric", "figure"],
+    ["bars", "bars"],
+    ["timeseries", "chart"],
+  ])(
+    "draws a declared card's first load in the shape its sketch, %s, names",
+    (sketch, shape) => {
+      // A widget drawn by its own component has no archetype of its own to
+      // shape a skeleton by: its declaration's `skeleton`, published as its
+      // `sketch`, says what it looks like.
+      const declared: DashboardWidget = {
+        id: "acme/orders",
+        title: "Orders",
+        archetype: "custom",
+        component: "acme#Orders",
+        serverData: true,
+        sketch,
+        size: gridBounds(4),
+      };
+      render(<WidgetRenderer definition={declared} slot={undefined} />);
+      expect(screen.getByTestId("card-skeleton")).toHaveAttribute(
+        "data-shape",
+        shape
+      );
+    }
+  );
+
+  it("draws a declared card that states no sketch in the frame's own generic shape", () => {
+    const declared: DashboardWidget = {
+      id: "acme/orders",
+      title: "Orders",
+      archetype: "custom",
+      component: "acme#Orders",
+      serverData: true,
+      size: gridBounds(4),
+    };
+    render(<WidgetRenderer definition={declared} slot={undefined} />);
+    expect(screen.getByTestId("card-skeleton")).toHaveAttribute(
+      "data-shape",
+      "rows"
+    );
+  });
 });
 
 describe("an empty card whose declared action opens its settings", () => {

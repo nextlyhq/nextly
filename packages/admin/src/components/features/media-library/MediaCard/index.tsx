@@ -117,7 +117,9 @@ export function MediaCard({
       // The attribute the list view's rows carry too, so the library finds
       // an item's entry the same way in either view.
       data-row-id={media.id}
-      aria-label={`${media.filename} - ${media.mimeType}`}
+      // The name the tile shows, which is the one a person searches or
+      // speaks; `filename` is the storage's path for the file.
+      aria-label={`${name} - ${media.mimeType}`}
       aria-selected={isSelected}
       // The tile whose details are open beside the grid.
       aria-current={isCurrent ? "true" : undefined}
@@ -184,7 +186,7 @@ export function MediaCard({
             <Checkbox
               checked={isSelected}
               onCheckedChange={() => onSelectionChange?.(media.id)}
-              aria-label={`Select ${media.filename}`}
+              aria-label={`Select ${name}`}
               className="h-5 w-5 bg-background data-[state=checked]:bg-primary border-border transition-all"
               onClick={e => e.stopPropagation()}
             />

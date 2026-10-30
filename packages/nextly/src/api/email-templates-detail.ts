@@ -21,7 +21,10 @@ import { z } from "zod";
 
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
-import { SYSTEM_READ_POLICY, SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
@@ -83,7 +86,9 @@ async function getEmailTemplateService(): Promise<EmailTemplateService> {
  */
 export const GET = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    await requireRouteAnyPermission(request, [...SYSTEM_READ_POLICY.emailTemplates.read.anyOf]);
+    await requireRouteAnyPermission(request, [
+      ...SYSTEM_READ_POLICY.emailTemplates.read.anyOf,
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailTemplateService();
@@ -115,7 +120,9 @@ export const GET = withErrorHandler(
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    const auth = await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailTemplates.update.anyOf]);
+    const auth = await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.emailTemplates.update.anyOf,
+    ]);
 
     const { id } = await context.params;
     const body = await readJsonBody<Record<string, unknown>>(request);
@@ -174,7 +181,9 @@ export const PATCH = withErrorHandler(
  */
 export const DELETE = withErrorHandler(
   async (request: Request, context: RouteContext): Promise<Response> => {
-    const auth = await requireRouteAnyPermission(request, [...SYSTEM_WRITE_POLICY.emailTemplates.delete.anyOf]);
+    const auth = await requireRouteAnyPermission(request, [
+      ...SYSTEM_WRITE_POLICY.emailTemplates.delete.anyOf,
+    ]);
 
     const { id } = await context.params;
     const service = await getEmailTemplateService();
