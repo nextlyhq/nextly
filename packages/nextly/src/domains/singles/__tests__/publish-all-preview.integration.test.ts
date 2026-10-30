@@ -51,6 +51,12 @@ async function boot(
           text({ name: "siteName", localized: true }),
           // Shared by every language.
           text({ name: "tagline", localized: false }),
+          // Shared, readable, and no caller may write it.
+          text({
+            name: "lockState",
+            localized: false,
+            access: { update: () => false },
+          }),
           // Shared, and no caller may read it.
           number({
             name: "internalScore",
@@ -257,6 +263,37 @@ describe.each(getConfiguredTestDialects())(
         languages: expect.arrayContaining([
           { locale: "en", outcome: "goes-live-with-pending-change" },
         ]),
+      });
+    });
+
+    it("reports a pending change the caller may not publish, as the publish refuses it", async () => {
+      const singles = await boot(dialect);
+      await save(singles, "en", {
+        siteName: "Hello",
+        lockState: "open",
+        status: "published",
+      });
+      // English's pending change edits a field no caller may write.
+      await save(singles, "en", { siteName: "Hello again", lockState: "shut" });
+      const publisher = { id: "publisher-1", email: "publisher@x.test" };
+      await userWhoMay(current!, publisher.id, "publish", [SLUG]);
+      const options = { user: publisher, overrideAccess: false };
+
+      const preview = await singles.previewPublishAllLocales(SLUG, options);
+      expect(preview.success, JSON.stringify(preview)).toBe(true);
+      expect(preview.data?.blockers).toEqual([
+        { reason: "pending-change-forbidden", fields: ["lockState"] },
+      ]);
+
+      await expect(
+        singles.publishAllLocales(SLUG, options)
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        publicData: {
+          errors: [
+            expect.objectContaining({ path: "lockState", code: "FORBIDDEN" }),
+          ],
+        },
       });
     });
   }

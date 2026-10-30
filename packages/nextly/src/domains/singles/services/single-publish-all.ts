@@ -97,9 +97,12 @@ import {
   type PendingChange,
   pendingChangesInSaveOrder,
   type PublishableShape,
+  type PromotionIssue,
+  promotionBlockers,
   type PublishAllBlocker,
   type RefuseSharedFields,
   sharedStateForPublish,
+  withVerdictState,
 } from "../../versions/publish-all-plan";
 import {
   type FieldNameReader,
@@ -1590,8 +1593,10 @@ export class SinglePublishAllService extends BaseService {
 
   /**
    * What publishing every language would do, read on one transaction that
-   * writes nothing and locks nothing: the planner's verdict on the pending
-   * changes, named as the caller may read it, and each language's outcome.
+   * writes nothing and locks nothing, judged in the order the publish judges
+   * it: the planner's verdict on the shared values, then, where that refuses
+   * nothing, the promotion's own gate on what the write would leave. Every
+   * refusal is named as the caller may read it.
    */
   private async previewIn(
     tx: TransactionContext,
@@ -1607,36 +1612,94 @@ export class SinglePublishAllService extends BaseService {
             plan.slug
           )
         : new Map<string, string | null>();
+    const mainRow =
+      (await tx.selectOne<Record<string, unknown>>(plan.singleMeta.tableName, {
+        where: this.whereEq("id", plan.existingDoc.id),
+      })) ?? plan.existingDoc;
     const stored = await this.pendingChanges(tx, plan);
     const document =
       stored.length > 0 ? await this.liveSharedDocument(tx, plan) : null;
-    const named: NamedVerdict = document
-      ? await nameVerdict(
-          await judgeSharedValues(
-            tx,
-            this.workingDraftRef(plan),
-            stored,
-            document
-          ),
-          fields =>
-            readableFieldNames(
-              this.fieldNameReader(plan, caller),
-              fields,
-              document.live
-            )
+    const reader = this.fieldNameReader(plan, caller);
+    const nameIn =
+      (live: Record<string, unknown>) => (fields: readonly string[]) =>
+        readableFieldNames(reader, fields, live);
+    const verdict = document
+      ? await judgeSharedValues(
+          tx,
+          this.workingDraftRef(plan),
+          stored,
+          document
         )
+      : null;
+    const named: NamedVerdict = verdict
+      ? await nameVerdict(verdict, nameIn(document!.live))
       : { outOfDate: new Map(), blockers: [] };
+    const blockers = [...named.blockers];
+    // The gate runs only where the shared values refuse nothing, as in the
+    // publish, which refuses on them first.
+    if (named.outOfDate.size === 0 && blockers.length === 0) {
+      blockers.push(
+        ...(await this.promotionBlockersOf(
+          tx,
+          plan,
+          mainRow,
+          [
+            ...(verdict ? withVerdictState(stored, verdict) : stored),
+            ...languagesGoingLiveAsStored(
+              publishableShape(plan),
+              stored,
+              { mainStatus: mainRow.status, companion: prior },
+              new Set(this.localization?.locales.map(l => l.code) ?? [])
+            ),
+          ],
+          caller,
+          nameIn(document?.live ?? mainRow)
+        ))
+      );
+    }
     return {
       languages: await this.languagesOf(
         tx,
         plan,
         stored,
         prior,
-        (plan.existingDoc as { status?: unknown }).status,
+        mainRow.status,
         named.outOfDate
       ),
-      blockers: named.blockers,
+      blockers,
     };
+  }
+
+  /**
+   * What the promotion's gate would refuse, asked as the publish asks it, as
+   * blockers rather than a refusal. A refusal that names no field is not one
+   * the preview can report, so it is thrown as the publish would throw it.
+   */
+  private async promotionBlockersOf(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    mainRow: Record<string, unknown>,
+    judged: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
+    caller: SharedFieldsCaller,
+    name: (
+      fields: readonly string[]
+    ) => Promise<{ named: string[]; hidden: number }>
+  ): Promise<PublishAllBlocker[]> {
+    try {
+      await this.assertPendingChangesMayBePromoted(
+        tx,
+        plan,
+        mainRow,
+        judged,
+        caller.options,
+        caller.promoteGrants
+      );
+      return [];
+    } catch (error) {
+      const issues = promotionIssuesOf(error);
+      if (!issues) throw error;
+      return promotionBlockers(issues, name);
+    }
   }
 
   private workingDraftRef(plan: PublishPlan) {
@@ -2157,6 +2220,34 @@ export class SinglePublishAllService extends BaseService {
     }
     return recorded;
   }
+}
+
+/**
+ * The fields a promotion's gate refusal lists, or undefined for any other
+ * error: the gate refuses as a validation error, one issue per field.
+ */
+function promotionIssuesOf(error: unknown): PromotionIssue[] | undefined {
+  if (!NextlyError.is(error) || error.code !== "VALIDATION_ERROR") {
+    return undefined;
+  }
+  const errors = (error.publicData as { errors?: unknown } | undefined)?.errors;
+  if (!Array.isArray(errors)) return undefined;
+  const issues = errors.flatMap(issue =>
+    issue &&
+    typeof issue === "object" &&
+    typeof (issue as { path?: unknown }).path === "string"
+      ? [
+          {
+            path: (issue as { path: string }).path,
+            code:
+              typeof (issue as { code?: unknown }).code === "string"
+                ? (issue as { code: string }).code
+                : "",
+          },
+        ]
+      : []
+  );
+  return issues.length > 0 ? issues : undefined;
 }
 
 /**

@@ -255,6 +255,17 @@ export async function sharedStateForPublish(
       reason: "shared-edits-unordered",
     });
   }
+  return withVerdictState(pending, verdict);
+}
+
+/**
+ * The pending changes each carrying the one shared state a verdict leaves,
+ * as a publish writes them once nothing refuses.
+ */
+export function withVerdictState(
+  pending: readonly PendingChange[],
+  verdict: SharedVerdict
+): PendingChange[] {
   return pending.map(draft =>
     withSharedState(draft, verdict.merged, verdict.state)
   );
@@ -281,10 +292,60 @@ export type LanguageOutcome =
   | { locale: string; outcome: "goes-live" }
   | { locale: string; outcome: "shows-fallback"; fallback: string | null };
 
-/** What refuses a publish of every language as a whole, whichever languages it reaches. */
+/**
+ * What refuses a publish of every language as a whole, whichever languages it
+ * reaches: shared edits that can't be combined or ordered, and a pending
+ * change the promotion's own gate refuses, because it edits a field the
+ * caller may not write (`pending-change-forbidden`) or the document it would
+ * leave is invalid (`pending-change-invalid`).
+ */
 export type PublishAllBlocker = {
-  reason: "shared-edits-unmergeable" | "shared-edits-unordered";
+  reason:
+    | "shared-edits-unmergeable"
+    | "shared-edits-unordered"
+    | "pending-change-forbidden"
+    | "pending-change-invalid";
 } & NamedFields;
+
+/** One field a promotion's gate refuses, as its validation refusal lists it. */
+export interface PromotionIssue {
+  path: string;
+  code: string;
+}
+
+/**
+ * The blockers a promotion's gate refusal amounts to, each field named as the
+ * caller may read it: those the caller may not write, and those the document
+ * would leave invalid. A nested path counts as its top-level field.
+ */
+export async function promotionBlockers(
+  issues: readonly PromotionIssue[],
+  name: (
+    fields: readonly string[]
+  ) => Promise<{ named: string[]; hidden: number }>
+): Promise<PublishAllBlocker[]> {
+  const fieldsOf = (forbidden: boolean) => [
+    ...new Set(
+      issues
+        .filter(issue => (issue.code === "FORBIDDEN") === forbidden)
+        .map(issue => issue.path.split(".")[0] ?? issue.path)
+    ),
+  ];
+  const blockers: PublishAllBlocker[] = [];
+  for (const [reason, fields] of [
+    ["pending-change-forbidden", fieldsOf(true)],
+    ["pending-change-invalid", fieldsOf(false)],
+  ] as const) {
+    if (fields.length === 0) continue;
+    const { named, hidden } = await name(fields);
+    blockers.push({
+      reason,
+      fields: named,
+      ...(hidden > 0 ? { hiddenCount: hidden } : {}),
+    });
+  }
+  return blockers;
+}
 
 /** A verdict's fields named as the caller may read them. */
 export interface NamedVerdict {
