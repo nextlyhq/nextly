@@ -16,7 +16,7 @@ import {
   unregisterComponent,
 } from "@admin/lib/plugins/component-registry";
 
-import { WidgetSettingsSheet } from "../WidgetSettingsSheet";
+import { SettingsPanel } from "../SettingsPanel";
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({ widgetSources: [] }),
@@ -72,13 +72,14 @@ function open(
 ) {
   const onSave = vi.fn();
   render(
-    <WidgetSettingsSheet
+    <SettingsPanel
+      placementId="p1"
       open
       onOpenChange={() => {}}
       title="Goal"
       settings={settings}
       config={config}
-      onDone={onSave}
+      onDone={(kept, settled) => onSave(kept.config, settled)}
     />
   );
   return onSave;

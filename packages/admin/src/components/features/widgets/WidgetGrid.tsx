@@ -51,6 +51,10 @@ import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { CardDragContext } from "./edit/drag/CardDragContext";
 import { useCardDrag } from "./edit/drag/useCardDrag";
 import { RemovalNotice } from "./edit/RemovalNotice";
+import {
+  bringRefusedPanelForward,
+  useSettingsPanelHoldsChanges,
+} from "./edit/SettingsPanel";
 import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
 import { useCardRemoval } from "./edit/useCardRemoval";
 import { useCardSettingsWrite } from "./edit/useCardSettingsWrite";
@@ -64,7 +68,7 @@ import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { cardRowStyle, drawnSize, GRID_CLASS } from "./sizes";
-import { useDashboardWidth } from "./useDashboardWidth";
+import { DashboardWidthProvider, useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
 import { widgetAsAsked } from "./widget-as-asked";
@@ -223,6 +227,7 @@ function useCardsAtDashboardWidth(
   const draws = useDrawFailures();
   return {
     dashboardRef,
+    dashboardWidth,
     drag: useCardDrag({ rows: visible, width: dashboardWidth, ...carry }),
     ...useWidgetBatch(cards, draws.failed),
     reportDraw: draws.report,
@@ -302,9 +307,17 @@ function useSettingsWriteAtRest(
   const cardSettingsWrite = useCardSettingsWrite(layout);
   if (!layout.layout || editor.isEditing) return undefined;
   return {
-    write: (placementId, title, config, callbacks) =>
+    write: (placementId, title, config, callbacks, ownTitle) =>
       cardSettingsWrite.write(
-        { placementId, title, change: { kind: "settings", config } },
+        {
+          placementId,
+          title,
+          change: {
+            kind: "settings",
+            config,
+            ...(ownTitle === undefined ? {} : { ownTitle }),
+          },
+        },
         callbacks
       ),
     // The same write, of the card's size: the request customise mode's Save sends for it.
@@ -377,6 +390,8 @@ export function WidgetGrid(): JSX.Element {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();
+  // Whether a card's settings panel holds a change Done has not kept; see the leave prompt below.
+  const panelHoldsChanges = useSettingsPanelHoldsChanges();
 
   // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
   // and the registry `registerWidget` writes to. Reading only the first made the
@@ -430,6 +445,7 @@ export function WidgetGrid(): JSX.Element {
   // The dashboard's own width, the cards asked at it, and dragging them by their handles.
   const {
     dashboardRef,
+    dashboardWidth,
     drag,
     slots,
     cellSlots,
@@ -509,9 +525,18 @@ export function WidgetGrid(): JSX.Element {
           the page is leaving and the next one speaks for itself; reload and
           close get the browser's own prompt. */}
       <UnsavedChangesGuard
-        isDirty={editor.hasUnsavedChanges}
+        // A card's settings panel holding a change counts while customising, where the panel
+        // leaves the asking to this prompt: one leave, one question.
+        isDirty={
+          editor.hasUnsavedChanges || (editor.isEditing && panelHoldsChanges)
+        }
         onDiscard={editor.cancel}
+        // The bar's Save and this prompt's are one request, which keeps an open settings
+        // panel's change with the draft (`useSaveRequest`).
         onSave={saveRequest.request}
+        // A Save the prompt could not make, because a settings panel refused its change, leaves
+        // the reader in that panel, on what it refused.
+        onCancel={bringRefusedPanelForward}
       >
         <div className="space-y-4">
           <DashboardEditChrome
@@ -533,36 +558,38 @@ export function WidgetGrid(): JSX.Element {
           />
 
           <CardDragContext drag={drag}>
-            <AtRestSettingsWriteProvider value={settingsWrite}>
-              <DrawFailureContext.Provider value={reportDraw}>
-                <ArrangedGrid
-                  rows={visible}
-                  placements={editor.placements}
-                  isDrawn={arrangement.isDrawn}
-                  isEditing={editor.isEditing}
-                  writes={{
-                    isWriting: editor.isWriting,
-                    singleCardWriteBlocked: singleCardWriteBlocked(
-                      layout.isUnreadable
-                    ),
-                    settings: settingsWrite,
-                  }}
-                  slots={slots}
-                  cellSlots={cellSlots}
-                  requested={requested}
-                  updatedAtFor={updatedAtFor}
-                  fetchedSizeFor={fetchedSizeFor}
-                  fetchingPlacementIds={fetchingPlacementIds}
-                  retry={retry}
-                  announcement={announcement}
-                  focus={focus}
-                  gridRef={focus.gridRef}
-                  highlightedId={ring.highlightedId}
-                  drag={drag}
-                  on={cardActions(arrangement, removal, editor)}
-                />
-              </DrawFailureContext.Provider>
-            </AtRestSettingsWriteProvider>
+            <DashboardWidthProvider value={dashboardWidth}>
+              <AtRestSettingsWriteProvider value={settingsWrite}>
+                <DrawFailureContext.Provider value={reportDraw}>
+                  <ArrangedGrid
+                    rows={visible}
+                    placements={editor.placements}
+                    isDrawn={arrangement.isDrawn}
+                    isEditing={editor.isEditing}
+                    writes={{
+                      isWriting: editor.isWriting,
+                      singleCardWriteBlocked: singleCardWriteBlocked(
+                        layout.isUnreadable
+                      ),
+                      settings: settingsWrite,
+                    }}
+                    slots={slots}
+                    cellSlots={cellSlots}
+                    requested={requested}
+                    updatedAtFor={updatedAtFor}
+                    fetchedSizeFor={fetchedSizeFor}
+                    fetchingPlacementIds={fetchingPlacementIds}
+                    retry={retry}
+                    announcement={announcement}
+                    focus={focus}
+                    gridRef={focus.gridRef}
+                    highlightedId={ring.highlightedId}
+                    drag={drag}
+                    on={cardActions(arrangement, removal, editor)}
+                  />
+                </DrawFailureContext.Provider>
+              </AtRestSettingsWriteProvider>
+            </DashboardWidthProvider>
           </CardDragContext>
 
           <DashboardAddPanel

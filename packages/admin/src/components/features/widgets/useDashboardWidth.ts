@@ -8,7 +8,12 @@
  *
  * @module components/features/widgets/useDashboardWidth
  */
-import type { RefObject } from "react";
+import {
+  createContext,
+  useContext,
+  type Provider,
+  type RefObject,
+} from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 
@@ -22,4 +27,19 @@ export function useDashboardWidth(
   ref: RefObject<HTMLElement | null>
 ): number | undefined {
   return useMeasuredWidth(ref) ?? undefined;
+}
+
+/**
+ * The dashboard's width, as the grid measured it, to the cards inside it: what a card that is
+ * drawn somewhere else as well, as its settings panel's preview is, reads its real width from
+ * (`cardOuterWidth`). `undefined` outside a dashboard and before it is measured.
+ */
+const DashboardWidthContext = createContext<number | undefined>(undefined);
+
+export const DashboardWidthProvider: Provider<number | undefined> =
+  DashboardWidthContext.Provider;
+
+/** The width of the dashboard this is drawn in, or `undefined`; see `DashboardWidthContext`. */
+export function useDashboardWidthAround(): number | undefined {
+  return useContext(DashboardWidthContext);
 }

@@ -28,6 +28,7 @@ import { useState } from "react";
 import * as Icons from "@admin/components/icons";
 
 import { DashboardEditBar } from "./DashboardEditBar";
+import { useSettingsPanelHoldsChanges } from "./SettingsPanel";
 import type { DashboardFocus } from "./useDashboardFocus";
 import type { LayoutEditor } from "./useLayoutEditor";
 import type { SaveRequest } from "./useSaveRequest";
@@ -218,13 +219,18 @@ export function DashboardEditChrome({
 }: DashboardEditChromeProps): JSX.Element {
   const [askingReset, setAskingReset] = useState(false);
   const requestSave = () => void saveRequest.request();
+  // A card's open settings panel holding a change is an unsaved change of the dashboard's too:
+  // Save keeps it with the draft (`useSaveRequest`), so Save is offered for it.
+  const panelHoldsChanges = useSettingsPanelHoldsChanges();
 
   return (
     <>
       {hasArrangement ? (
         <DashboardEditBar
           isEditing={editor.isEditing}
-          hasUnsavedChanges={editor.hasUnsavedChanges}
+          hasUnsavedChanges={
+            editor.hasUnsavedChanges || (editor.isEditing && panelHoldsChanges)
+          }
           isResetStaged={editor.isResetStaged}
           isSaving={editor.isSaving}
           isWriting={editor.isWriting}

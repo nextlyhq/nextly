@@ -12,7 +12,7 @@ import {
   initialValues,
   resetToDefaults,
   toStoredConfig,
-} from "../WidgetSettingsSheet";
+} from "../SettingsPanel";
 import type {
   AnyWidgetSetting,
   PublishedContentSource,

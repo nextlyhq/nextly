@@ -226,9 +226,31 @@ the card loads in the frame's generic shape.
 
 All of these are experimental.
 
+## Where a setting is drawn
+
+A card's More settings panel draws its settings in three sections: **Data**, what the card reads;
+**Display**, how it shows it (every card's title is there too); and **Advanced**, folded until a
+reader opens it. Name a setting's section with `section`:
+
+```ts
+density: setting.select({
+  label: "Density",
+  options: [
+    { label: "Default", value: "default" },
+    { label: "Compact", value: "compact" },
+  ],
+  defaultValue: "default",
+  section: "advanced",
+}),
+```
+
+Without one, a Collection, Filter, Sort, Group by or Field setting and a `setting.dateRange` are
+drawn under Data, and every other setting under Display. A setting is folded under Advanced only
+when it says so. Startup refuses a `section` other than `"data"`, `"display"` or `"advanced"`.
+
 ## A setting's own editor
 
-A setting is drawn in the card's settings sheet by the field its builder names: a number input
+A setting is drawn in the card's settings panel by the field its builder names: a number input
 for `setting.number`, a picker for `setting.collection`. Where none of those fits, a setting can
 name a component of your own with `editor` (**experimental**), drawn in the sheet in its place.
 The component is handed `SettingEditorProps` of the setting's value: the value, an `onChange`, the

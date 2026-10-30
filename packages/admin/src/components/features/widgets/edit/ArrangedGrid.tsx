@@ -87,7 +87,9 @@ export interface ArrangedGridProps {
             placementId: string,
             title: string,
             config: Record<string, unknown>,
-            callbacks: CardSettingsWriteCallbacks
+            callbacks: CardSettingsWriteCallbacks,
+            /** The title the reader gave the card, where the change sets it. */
+            ownTitle?: string
           ) => void;
           /**
            * Save a card's size at once: the card menu's and the quick popover's Size. Absent
@@ -137,9 +139,11 @@ export interface ArrangedGridProps {
     remove: (placementId: string) => void;
     /** ABSENT before an arrangement has been read. */
     dismiss?: (placementId: string, title: string) => void;
+    /** A card's settings, and its own title where the change sets one. */
     saveSettings: (
       placementId: string,
-      config: Record<string, unknown>
+      config: Record<string, unknown>,
+      ownTitle?: string
     ) => void;
   };
 }
@@ -216,12 +220,13 @@ function cellSettingsWrite(
   const { resize } = settingsWrite;
   return {
     settingsWrite: {
-      write: (config, callbacks) =>
+      write: (config, callbacks, ownTitle) =>
         settingsWrite.write(
           row.placementId,
           row.widget.title,
           config,
-          callbacks
+          callbacks,
+          ownTitle
         ),
       ...(resize === undefined
         ? {}
@@ -407,7 +412,8 @@ export function ArrangedGrid({
                       on.dismiss?.(row.placementId, row.widget.title),
                   }
                 : {}),
-              saveSettings: config => on.saveSettings(row.placementId, config),
+              saveSettings: (config, ownTitle) =>
+                on.saveSettings(row.placementId, config, ownTitle),
             }}
           />
         ))}

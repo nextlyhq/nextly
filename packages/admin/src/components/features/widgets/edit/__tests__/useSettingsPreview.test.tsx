@@ -13,6 +13,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { queryForTier } from "../../tier-query";
 import { useSettingsPreview } from "../useSettingsPreview";
 import { gridBounds } from "../../__tests__/grid-bounds";
 
@@ -77,9 +78,12 @@ function preview(
   {
     widget = WIDGET,
     shown = {},
+    tier,
   }: {
     widget?: DashboardWidget;
     shown?: { answerSize?: { tier: "small" | "medium" | "large" } };
+    /** The tier the card's real width gives it. */
+    tier?: "small" | "medium" | "large";
   } = {}
 ) {
   return renderHook(
@@ -90,6 +94,7 @@ function preview(
         stored: undefined,
         draft,
         shown: { slot: SHOWN, updatedAt: null, isFetching: false, ...shown },
+        ...(tier === undefined ? {} : { tier }),
       }),
     { wrapper, initialProps: { draft: initialDraft } }
   );
@@ -126,12 +131,35 @@ describe("the settings sheet's preview", () => {
     // One request, for the settled question only, with the settings it would keep. Sized as a
     // card the dashboard draws: one row more than the ten it draws of the twelve chosen (ten
     // being the most any card draws), which is how a list learns that more exist, at the widest
-    // tier, which serves whatever width the sheet gives it.
+    // tier, which serves any width while the card's own is not known.
     expect(sent()).toEqual([
       [{ source: "collection:posts", op: "list", limit: 11 }],
     ]);
-    expect(result.current.answerSize).toEqual({ tier: "large" });
+    expect(result.current.answerSize).toEqual({
+      tier: "large",
+      density: "default",
+    });
     expect(result.current.placement.settings).toMatchObject({ limit: 12 });
+  });
+
+  it("asks a changed question at the tier the card's real width gives it, not the widest", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const query = {
+      source: "collection:posts",
+      op: "list" as const,
+      limit: 10,
+    };
+    const small = queryForTier(query, "small").limit;
+    // The control: the two tiers ask for different rows, so the request says which was used.
+    expect(small).not.toBe(queryForTier(query, "large").limit);
+    const { result, rerender } = preview({}, { tier: "small" });
+    rerender({ draft: { limit: 10 } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    await waitFor(() => expect(sent()).toHaveLength(1));
+    expect(sent()[0]?.[0]?.limit).toBe(small);
+    expect(result.current.answerSize).toMatchObject({ tier: "small" });
   });
 
   it("draws the card's own answer with the tier it was fetched at", () => {

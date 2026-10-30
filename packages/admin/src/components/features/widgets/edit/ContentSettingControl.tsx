@@ -9,7 +9,8 @@
  * Collection, Sort and Group by are drawn as ordinary select fields through
  * `FieldRenderer`, the same input every other setting uses: a select setting
  * is a field definition, and building one keeps a reader on inputs they know.
- * Filter is one condition row, written as the query's `where`.
+ * Filter is a list of conditions, each a chip ("Status is Draft ✕"), joined
+ * with AND and written as the query's `where`.
  */
 import { Button } from "@nextlyhq/ui";
 import {
@@ -19,7 +20,7 @@ import {
   type SelectFieldConfig,
 } from "nextly/config";
 import type { JSX } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useController, useWatch } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
@@ -27,10 +28,11 @@ import { ConditionRow, type ConditionValue } from "@admin/components/field-ui";
 import { fieldLabel } from "@admin/lib/field-label";
 
 import {
-  conditionToWhere,
+  chipText,
+  conditionsToWhere,
   conditionTypeOf,
   filterOperatorsFor,
-  whereToCondition,
+  whereToConditions,
 } from "./content-filter";
 import { fieldFits, sameSettingValue } from "./content-settings";
 
@@ -210,6 +212,45 @@ function typesOf(fields: readonly Field[]) {
   };
 }
 
+/** The row's description of each field the reader may filter by. */
+function conditionSources(fields: readonly Field[]) {
+  return fields.map(source => ({
+    name: source.name,
+    label: labelOf(source),
+    type: conditionTypeOf(source),
+    ...(source.choices === undefined
+      ? {}
+      : {
+          // A blank value is dropped: the select reserves the empty value for
+          // clearing, and an item carrying one throws.
+          options: source.choices
+            .filter(choice => choice.value.trim() !== "")
+            .map(choice => ({ value: choice.value, label: choice.label })),
+        }),
+  }));
+}
+
+/** What a chip says for `condition`, every name in the reader's words. */
+function chipFor(condition: ConditionValue, fields: readonly Field[]): string {
+  const fieldNamed = (name: string) =>
+    fields.find(candidate => candidate.name === name);
+  return chipText(
+    condition,
+    name => {
+      const found = fieldNamed(name);
+      return found === undefined ? name : labelOf(found);
+    },
+    (name, value) =>
+      fieldNamed(name)?.choices?.find(choice => choice.value === value)
+        ?.label ?? value
+  );
+}
+
+/** Whether a condition can be written yet: a chip says only what a complete one filters on. */
+function isComplete(condition: ConditionValue | undefined): boolean {
+  return conditionsToWhere([condition]) !== undefined;
+}
+
 function FilterControl({
   setting,
   fields,
@@ -217,51 +258,63 @@ function FilterControl({
   setting: Extract<ContentSetting, { type: "filter" }>;
   fields: readonly Field[];
 }) {
-  const { field } = useController({ name: setting.name });
+  // A chip begun and not finished (a field chosen, its value not yet given) writes nothing, so
+  // Done would keep the card without it while the panel shows it: refused instead, until it is
+  // finished or removed. Read through a ref, since the rule is asked when the form is checked.
+  const unfinished = useRef(false);
+  const { field, fieldState } = useController({
+    name: setting.name,
+    rules: {
+      validate: () =>
+        unfinished.current ? "Finish this filter, or remove it." : true,
+    },
+  });
+  const labelId = useId();
 
-  // The row a person is building, kept here rather than read back from the
-  // form: a condition with a field and an operator but no value yet writes no
-  // `where`, so reading the row from the form would clear the field the moment
-  // it was chosen. The form holds only what can be written; this holds the
-  // rest of the row until it can.
-  const [draft, setDraft] = useState<ConditionValue | undefined>(() =>
-    whereToCondition(field.value, typesOf(fields))
+  // The chips as a person is building them, kept here rather than read back from the form: a
+  // condition with a field and an operator but no value yet writes no `where`, so reading the
+  // list from the form would drop a chip the moment its field was chosen. The form holds only
+  // what can be written; this holds the rest until it can.
+  const [conditions, setConditions] = useState<(ConditionValue | undefined)[]>(
+    () => whereToConditions(field.value, typesOf(fields)) ?? []
   );
-  // What this row last wrote, so a change made elsewhere -- a reset, another
-  // collection, the sheet reopening -- is told apart from the row's own
-  // writes and redraws the row from the form.
+  unfinished.current = conditions.some(
+    condition => condition !== undefined && !isComplete(condition)
+  );
+  // The chip open for editing, by its place in the list, or none.
+  const [editing, setEditing] = useState<number | undefined>(undefined);
+  // What the chips last wrote, so a change made elsewhere -- a reset, another collection, the
+  // panel reopening -- is told apart from their own writes and redraws them from the form.
   const written = useRef<unknown>(field.value);
   useEffect(() => {
     if (sameSettingValue(field.value, written.current)) return;
     written.current = field.value;
-    setDraft(whereToCondition(field.value, typesOf(fields)));
+    setConditions(whereToConditions(field.value, typesOf(fields)) ?? []);
+    setEditing(undefined);
   }, [field.value, fields]);
 
-  /**
-   * Keep the row as built, and write what of it can be written: an incomplete
-   * row stores nothing, so the card keeps reading every row until the
-   * condition is complete.
-   */
-  const write = (next: ConditionValue | undefined) => {
-    setDraft(next);
-    const where = conditionToWhere(next) ?? "";
+  /** Keep the chips as built, and write what of them can be written. */
+  const write = (next: (ConditionValue | undefined)[]) => {
+    setConditions(next);
+    const where = conditionsToWhere(next) ?? "";
     written.current = where;
     field.onChange(where);
   };
 
-  // A stored filter the one row cannot show (several conditions, or an
-  // operator it has no name for) still filters the card. Said so, with a way
-  // to clear it, rather than drawn as an empty row over a filter that applies.
-  const unshown =
-    draft === undefined &&
-    typeof field.value === "object" &&
-    field.value !== null &&
-    Object.keys(field.value).length > 0;
+  // A stored filter the chips cannot show (an `or`, or an operator they have no name for) still
+  // filters the card. Said so, with a way to clear it, rather than drawn as no chips over a
+  // filter that applies.
+  const unshown = whereToConditions(field.value, typesOf(fields)) === undefined;
+  const label = setting.label ?? setting.name;
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-sm font-medium">
-        {setting.label ?? setting.name}
+    <div
+      role="group"
+      aria-labelledby={labelId}
+      className="flex flex-col gap-1.5"
+    >
+      <span id={labelId} className="text-sm font-medium">
+        {label}
       </span>
       {/* Drawn here as `FieldRenderer` draws it for the other settings, which
           this custom control does not go through. */}
@@ -279,40 +332,130 @@ function FilterControl({
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => write(undefined)}
+            onClick={() => write([])}
           >
             Clear filter
           </Button>
         </div>
       ) : (
-        <ConditionRow
-          // The sheet is narrow at every screen width, so the row is laid out
-          // for the sheet, not the screen: the field across the whole row,
-          // where "Choose a field…" fits on one line, and the operator and
-          // value side by side beneath it.
-          className="grid grid-cols-2 gap-2 [&>*:first-child]:col-span-2"
-          condition={draft}
-          sources={fields.map(source => ({
-            name: source.name,
-            label: labelOf(source),
-            type: conditionTypeOf(source),
-            ...(source.choices === undefined
-              ? {}
-              : {
-                  // A blank value is dropped: the select reserves the empty
-                  // value for clearing, and an item carrying one throws.
-                  options: source.choices
-                    .filter(choice => choice.value.trim() !== "")
-                    .map(choice => ({
-                      value: choice.value,
-                      label: choice.label,
-                    })),
-                }),
-          }))}
-          operatorsFor={filterOperatorsFor}
+        <FilterChips
+          conditions={conditions}
+          editing={editing}
+          fields={fields}
+          onEdit={setEditing}
           onChange={write}
         />
       )}
+      {fieldState.error?.message === undefined ? null : (
+        <p role="alert" className="text-sm text-destructive">
+          {fieldState.error.message}
+        </p>
+      )}
     </div>
+  );
+}
+
+/**
+ * The chips, the one open for editing as a condition row beneath them, and "+ Add filter". A
+ * chip being built, which writes nothing yet, is drawn as its row alone.
+ */
+function FilterChips({
+  conditions,
+  editing,
+  fields,
+  onEdit,
+  onChange,
+}: {
+  conditions: readonly (ConditionValue | undefined)[];
+  editing: number | undefined;
+  fields: readonly Field[];
+  onEdit: (index: number | undefined) => void;
+  onChange: (next: (ConditionValue | undefined)[]) => void;
+}) {
+  const open = editing === undefined ? undefined : conditions[editing];
+  return (
+    <>
+      {conditions.some(isComplete) ? (
+        <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
+          {conditions.map((condition, index) =>
+            condition === undefined || !isComplete(condition) ? null : (
+              <li
+                key={index}
+                className="inline-flex items-center rounded-full border border-border bg-muted text-sm text-foreground"
+              >
+                <button
+                  type="button"
+                  className="rounded-l-full px-2.5 py-1 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-pressed={editing === index}
+                  onClick={() => onEdit(editing === index ? undefined : index)}
+                >
+                  {chipFor(condition, fields)}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Remove filter: ${chipFor(condition, fields)}`}
+                  className="rounded-r-full px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => {
+                    onEdit(undefined);
+                    onChange(conditions.filter((_, at) => at !== index));
+                  }}
+                >
+                  <span aria-hidden>✕</span>
+                </button>
+              </li>
+            )
+          )}
+        </ul>
+      ) : null}
+      {editing === undefined ? null : (
+        <ConditionRow
+          // One row per chip: another chip opened starts its own row.
+          key={editing}
+          // The panel is narrow at every screen width, so the row is laid out for the panel, not
+          // the screen: the field across the whole row, where "Choose a field…" fits on one
+          // line, and the operator and value side by side beneath it.
+          className="grid grid-cols-2 gap-2 [&>*:first-child]:col-span-2"
+          condition={open}
+          sources={conditionSources(fields)}
+          operatorsFor={filterOperatorsFor}
+          onChange={next =>
+            onChange(
+              conditions.map((condition, at) =>
+                at === editing ? next : condition
+              )
+            )
+          }
+        />
+      )}
+      {editing === undefined || isComplete(open) ? null : (
+        // A chip being built has no ✕ of its own yet, so it is removed here.
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              onEdit(undefined);
+              onChange(conditions.filter((_, at) => at !== editing));
+            }}
+          >
+            Remove this filter
+          </Button>
+        </div>
+      )}
+      <div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            onEdit(conditions.length);
+            onChange([...conditions, undefined]);
+          }}
+        >
+          + Add filter
+        </Button>
+      </div>
+    </>
   );
 }

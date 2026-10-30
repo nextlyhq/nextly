@@ -731,6 +731,141 @@ describe("leaving with unsaved changes", () => {
     expect(window.location.pathname).toBe(DASHBOARD);
   });
 
+  /** Opens Notes' settings panel while customising and changes its Heading, keeping it open. */
+  async function panelChanged(user: User): Promise<void> {
+    await choose(user, "Notes", "Settings");
+    const popover = await screen.findByRole("dialog", {
+      name: "Quick settings for Notes",
+    });
+    await user.click(
+      within(popover).getByRole("button", { name: "More settings" })
+    );
+    const panel = await screen.findByRole("dialog", { name: /settings$/ });
+    await user.type(within(panel).getByLabelText(/Heading/), "Mine");
+  }
+
+  it("asks once, in the dashboard's own prompt, for a settings panel holding a change", async () => {
+    // Nothing else changed: the panel's change alone is what the prompt is for.
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+
+    await screen.findByRole("alertdialog");
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(window.location.pathname).toBe(DASHBOARD);
+  });
+
+  it("asks once when the dashboard and a settings panel both hold changes, and Save leaves", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    // The dashboard's prompt, whose Save keeps the arrangement and leaves. A panel asking for
+    // itself first would stage its change on Save and leave the dashboard's prompt to ask again.
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  /** The placements the last layout write sent. */
+  function sentPlacements(): Array<{
+    widgetId: string;
+    config?: Record<string, unknown>;
+  }> {
+    const body = api.put.mock.calls.at(-1)?.[1] as
+      | {
+          placements?: Array<{
+            widgetId: string;
+            config?: Record<string, unknown>;
+          }>;
+        }
+      | undefined;
+    return body?.placements ?? [];
+  }
+
+  it("Save in the prompt keeps a settings panel's change in the arrangement it saves", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(api.put).toHaveBeenCalledTimes(1);
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+        ?.config
+    ).toEqual({ heading: "Mine" });
+  });
+
+  it("Save in the prompt stops, saying why in the panel, when the panel's change is refused", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const title = within(panel).getByLabelText("Title");
+    await user.click(title);
+    await user.paste("x".repeat(81));
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    // Nothing written, still here, and the panel says what to fix, with focus on it.
+    expect(
+      await within(panel).findByText("A title can be at most 80 characters.")
+    ).toBeTruthy();
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(api.put).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe(DASHBOARD);
+  });
+
+  it("the bar's Save keeps a settings panel's change too, as the prompt's does", async () => {
+    // One Save: the bar and the prompt treat a panel holding a change alike.
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    await user.click(saveButton());
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    expect(
+      sentPlacements().find(placement => placement.widgetId === "core/c")
+        ?.config
+    ).toEqual({ heading: "Mine" });
+  });
+
+  it("the bar's Save stops, with the panel saying why, when the panel's change is refused", async () => {
+    renderDashboard();
+    const user = await beginEditing();
+    await panelChanged(user);
+    const panel = screen.getByRole("dialog", { name: /settings$/ });
+    const title = within(panel).getByLabelText("Title");
+    await user.click(title);
+    await user.paste("x".repeat(81));
+    await user.click(saveButton());
+    expect(
+      await within(panel).findByText("A title can be at most 80 characters.")
+    ).toBeTruthy();
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
+  it("Discard in the prompt drops the dashboard's changes and the panel's alike", async () => {
+    const user = await changed();
+    await panelChanged(user);
+    navigate(ELSEWHERE);
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Discard Changes" })
+    );
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(api.put).not.toHaveBeenCalled();
+  });
+
   it("lets the reader leave without asking when nothing changed", async () => {
     renderDashboard();
     await beginEditing();
