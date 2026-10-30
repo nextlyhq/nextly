@@ -11,7 +11,7 @@
  *
  * @module plugins/database/content-target
  */
-import type { SQL, Table } from "drizzle-orm";
+import type { AnyColumn, SQL, Table } from "drizzle-orm";
 import { eq, getColumns } from "drizzle-orm";
 
 import type { EntityOwner } from "../../domains/schema/extension/build-extension-schema";
@@ -93,6 +93,20 @@ async function readParent(
   deps: ContentTargetDeps
 ): Promise<{ table: string; id: string } | undefined> {
   const runtime = deps.entityTable(tableName);
+  const columns = parentColumns(runtime);
+  if (columns === undefined) return undefined;
+  const [row] = await (deps.db() as SelectOne)
+    .select({ table: columns.parentTable, id: columns.parentId })
+    .from(runtime)
+    .where(eq(columns.key, id))
+    .limit(1);
+  return parentOf(row);
+}
+
+/** A field group table's key and parent columns, or undefined without them. */
+function parentColumns(
+  runtime: unknown
+): { key: AnyColumn; parentTable: AnyColumn; parentId: AnyColumn } | undefined {
   if (runtime === undefined || runtime === null) return undefined;
   const columns = Object.values(getColumns(runtime as Table));
   const named = (name: string) => columns.find(column => column.name === name);
@@ -100,16 +114,16 @@ async function readParent(
   const parentTable = named(STORAGE_FORMAT.columns.parentTable);
   const parentId = named(STORAGE_FORMAT.columns.parentId);
   if (!key || !parentTable || !parentId) return undefined;
-  const [row] = await (deps.db() as SelectOne)
-    .select({ table: parentTable, id: parentId })
-    .from(runtime)
-    .where(eq(key, id))
-    .limit(1);
+  return { key, parentTable, parentId };
+}
+
+/** The parent a read row names, when it names a table and a row of it. */
+function parentOf(
+  row: Record<string, unknown> | undefined
+): { table: string; id: string } | undefined {
   const table = row?.table;
   const parent = row?.id;
   if (typeof table !== "string" || table === "") return undefined;
-  if (typeof parent !== "string" && typeof parent !== "number") {
-    return undefined;
-  }
-  return { table, id: String(parent) };
+  const named = typeof parent === "string" || typeof parent === "number";
+  return named ? { table, id: String(parent) } : undefined;
 }
