@@ -58,11 +58,14 @@ import { LIST_READ_GATES, requireListRead } from "../auth/list-read-gates";
 import {
   createJsonErrorResponse,
   isErrorResponse,
+  isVisitorRefusal,
   requirePermission,
 } from "../auth/middleware";
 import { actorFromAuthContext, type RequestActor } from "../auth/request-actor";
+import { visitorReadsSystemResource } from "../auth/resource-readable";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import { getService } from "../di";
+import { SYSTEM_READ_POLICY } from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly, getNextly, type GetNextlyOptions } from "../init";
 import { withTimezoneFormatting } from "../lib/date-formatting";
@@ -170,7 +173,12 @@ const READ_ROUTE_TYPES = new Set<ParsedMediaRoute["type"]>([
  *   `requirePermission(req, action, "media")`, which authenticates the session
  *   or API key and verifies the matching `{action}-media` permission. On
  *   success the acting user id is returned so writes attribute to the real
- *   caller, never a client-supplied `uploadedBy`/`createdBy`.
+ *   caller, never a client-supplied `uploadedBy`/`createdBy`. A read by a
+ *   visitor, a request carrying no credential, is judged by the one decision
+ *   with the Public role's grants (`read-media`), as a checked Direct API read
+ *   naming nobody is: allowed, it is served with no caller; refused, it keeps
+ *   the sign-in answer, since signing in could grant it. A write always needs
+ *   a signed-in caller.
  *
  * Returns a `Response` to short-circuit (401/403), or the acting identity.
  */
@@ -203,6 +211,15 @@ async function gateMediaRoute(
       ? await requireListRead(request, LIST_READ_GATES.media)
       : await requirePermission(request, action, "media");
   if (isErrorResponse(auth)) {
+    if (
+      READ_ROUTE_TYPES.has(route.type) &&
+      isVisitorRefusal(auth) &&
+      // The resource the media read policy names, so a visitor's read is
+      // asked of the same grant an authenticated reader's is.
+      (await visitorReadsSystemResource(SYSTEM_READ_POLICY.media.read.resource))
+    ) {
+      return {};
+    }
     return createJsonErrorResponse(auth, request);
   }
   // Surface both the acting user id (for uploader attribution on the DB row)
