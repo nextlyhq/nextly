@@ -41,6 +41,7 @@ import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
 import { registerPluginsCommand } from "./commands/plugins";
 import { registerPruneCommand } from "./commands/prune";
+import { registerRepairColumnsCommand } from "./commands/repair-columns";
 import { registerSetupTokenCommand } from "./commands/setup-token";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
@@ -191,6 +192,7 @@ function registerCommands(program: Command): void {
   registerCreateAdminCommand(program, createContext); // create the first administrator from the CLI
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
+  registerRepairColumnsCommand(program, createContext); // report columns whose type or nullability differs from their field
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass
   registerSetupTokenCommand(program, createContext); // replace or generate the production setup token
   registerMigrateFreshCommand(program);

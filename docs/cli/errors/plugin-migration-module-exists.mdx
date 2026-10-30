@@ -1,0 +1,23 @@
+---
+title: PLUGIN_MIGRATION_MODULE_EXISTS
+description: "`nextly migrate:create --plugin` would write a migration module where one already exists, so it wrote nothing."
+---
+
+## Cause
+
+`nextly migrate:create --plugin` would write a migration module where one already exists, so it wrote nothing.
+
+`nextly migrate:create --plugin` never overwrites an existing module: it may already have run on a database, and its checksum is recorded there.
+
+## Fix
+
+Run the command again so it writes a module with a new name, or remove the existing file if it has never been applied anywhere.
+
+## Example
+
+```text
+✗ A migration module already exists at src/migrations/0003_add_redirects.ts, and it was left as it is.
+  Why:  An existing module is never overwritten: it may already have run on a database.
+  Next: Run the command again for a module with a new name.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-module-exists  (PLUGIN_MIGRATION_MODULE_EXISTS)
+```

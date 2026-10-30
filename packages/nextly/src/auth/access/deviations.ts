@@ -16,15 +16,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export const DEVIATIONS = [
-  // A visitor's read that the target's rule does not refuse, with no rule or
-  // one answering `true`, is allowed, where the decision reads the Public
-  // role's permissions. Reads only: a visitor's write with no rule naming it
-  // is refused, as the decision refuses it.
-  "visitor-public-default",
-  // A visitor's create, update or delete is allowed by a target rule that
-  // answers `true` alone, where the decision also reads the Public role's
-  // permissions.
-  "visitor-write-by-rule",
   // Without the access-control service, no rule is read, and a signed-in
   // user's grants are read only where a way in reads them without it: the
   // collection gate and relationship population judge them alone, while the
@@ -40,7 +31,8 @@ export const DEVIATIONS = [
   // or keys, even where the target declares one.
   "any-of-skips-rules",
   // A read with no caller, a visitor or a plugin's person, keeps the media
-  // rows it populates, where the decision refuses a caller with no grant.
+  // rows it populates, where the decision refuses a caller with no grant; and
+  // a visitor never reads a user, where the decision reads Public's grants.
   "visitor-keeps-media",
   // Without the access-control service, `ctx.caller.can` and a held
   // permission refuse a signed-in user, where a route reads their permission.

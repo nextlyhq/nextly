@@ -12,10 +12,15 @@ import {
   groupLevel,
   type PluginGroup,
 } from "@admin/lib/permissions/level-rows";
+import { offeredSwitches } from "@admin/lib/roles/role-screen-mode";
 import { cn } from "@admin/lib/utils";
 import type { Permission } from "@admin/types/ui/form";
 
-import { PermissionLevelRow, PermissionSwitches } from "./PermissionLevelRow";
+import {
+  PermissionLevelRow,
+  PermissionSwitches,
+  VisitorWriteWarning,
+} from "./PermissionLevelRow";
 import { useHeldPermissions } from "./useHeldPermissions";
 
 export interface PluginLevelGroupProps {
@@ -28,6 +33,8 @@ export interface PluginLevelGroupProps {
   lockedIds?: readonly string[];
   bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
+  /** The Public role's rows: see {@link PermissionLevelRow}'s `visitors`. */
+  visitors?: boolean;
 }
 
 /**
@@ -44,6 +51,7 @@ export function PluginLevelGroup({
   lockedIds = [],
   bases,
   disabled = false,
+  visitors = false,
 }: PluginLevelGroupProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const { owned, locked, held } = useHeldPermissions(value, lockedIds);
@@ -75,6 +83,10 @@ export function PluginLevelGroup({
       ? `${permission.name} (${permission.resource})`
       : permission.name;
   };
+
+  // The plugin's own switches, and for the Public role the warning where one
+  // of them gives visitors a write, as a level row warns of its own.
+  const ownSwitches = offeredSwitches(group.permissions, visitors);
 
   const setOwn = (id: string, on: boolean) => {
     onChange(on ? [...value, id] : value.filter(kept => kept !== id));
@@ -124,6 +136,7 @@ export function PluginLevelGroup({
             lockedIds={lockedIds}
             bases={bases}
             disabled={disabled}
+            visitors={visitors}
           />
         ))}
         {ownCount > 0 && (
@@ -131,8 +144,11 @@ export function PluginLevelGroup({
             <span className="text-sm font-medium text-foreground">
               {`${displayName}'s own permissions`}
             </span>
+            {visitors && (
+              <VisitorWriteWarning permissions={ownSwitches} held={held} />
+            )}
             <PermissionSwitches
-              permissions={group.permissions}
+              permissions={ownSwitches}
               name={displayName}
               // A plugin's own action has no level to be named after: its
               // permission's own name says what it does.

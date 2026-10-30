@@ -40,6 +40,19 @@ export function readAuthenticatedScope(): AuthenticatedScope | undefined {
  * unpublish alone, and the service then asks its own gate for the write.
  */
 export function routeAdmittedUpdate(): boolean {
-  const action = currentRequestCaller()?.routeAction;
+  const caller = currentRequestCaller();
+  // A visitor the route admitted is no caller: the route vouched for no one,
+  // so the service judges the write as the visitor's.
+  if (!caller) return false;
+  const action = caller.routeAction;
   return action === undefined || action === "update";
+}
+
+/**
+ * Whether the route authenticated a caller and ran the gate for them, so a
+ * service may skip that re-check. A visitor the route admitted is no caller,
+ * and the service judges its call as the visitor's.
+ */
+export function routeVouched(): boolean {
+  return currentRequestCaller() !== undefined;
 }

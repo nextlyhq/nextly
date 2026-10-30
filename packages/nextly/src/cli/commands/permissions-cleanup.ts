@@ -2,12 +2,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { Command } from "commander";
 
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
+import { exitWithError } from "../errors";
 import { createContext } from "../program";
-import {
-  createCliAdapter,
-  validateDatabaseEnv,
-  type CLIDatabaseAdapter,
-} from "../utils/adapter";
+import { createCliAdapter, type CLIDatabaseAdapter } from "../utils/adapter";
+import { databaseEnvOrThrow } from "../utils/command-prerequisites";
 import { loadConfig } from "../utils/config-loader";
 
 /**
@@ -33,11 +31,13 @@ export function createPermissionsCleanupCommand(): Command {
         });
 
         context.logger.info("Validating database environment...");
-        const dbValidation = validateDatabaseEnv();
+        const dbValidation = databaseEnvOrThrow();
+        const dialect = dbValidation.dialect;
 
         context.logger.info("Creating database adapter...");
+        // A failure here already carries its code: `createCliAdapter` gives it one.
         adapter = await createCliAdapter({
-          dialect: dbValidation.dialect,
+          dialect,
           databaseUrl: dbValidation.databaseUrl,
           logger: context.options.verbose ? context.logger : undefined,
         });
@@ -82,14 +82,10 @@ export function createPermissionsCleanupCommand(): Command {
         await adapter.disconnect();
         process.exit(0);
       } catch (error) {
-        context.logger.error("Failed to cleanup permissions");
-        context.logger.newline();
-        console.error(error);
-
         if (adapter) {
           await adapter.disconnect();
         }
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 

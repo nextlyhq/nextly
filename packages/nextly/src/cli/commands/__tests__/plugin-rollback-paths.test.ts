@@ -47,6 +47,21 @@ const state = vi.hoisted(() => ({
 // reports what it reports when another process kept it for the whole wait —
 // it did not run the work — after warning as it does. Otherwise the real
 // lock runs the work.
+// `program` imports every command, `migrate` with its whole graph among them;
+// the command under test takes only its context factory from it, and is
+// handed its context here.
+vi.mock("../../program", () => ({
+  createContext: () => ({
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      success: () => {},
+    },
+  }),
+}));
+
 vi.mock("../../../domains/schema/pipeline/locks", async importOriginal => {
   const real =
     await importOriginal<

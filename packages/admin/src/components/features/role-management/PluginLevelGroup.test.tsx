@@ -66,9 +66,11 @@ let saved: string[] = [];
 function Harness({
   group = GROUP,
   initial,
+  visitors = false,
 }: {
   group?: PluginGroup;
   initial: string[];
+  visitors?: boolean;
 }) {
   const [value, setValue] = useState(initial);
   saved = value;
@@ -77,6 +79,7 @@ function Harness({
       group={group}
       displayName="Form builder"
       value={value}
+      visitors={visitors}
       onChange={next => {
         saved = next;
         setValue(next);
@@ -270,5 +273,28 @@ describe("PluginLevelGroup", () => {
     expect(
       screen.getByRole("switch", { name: "Form builder: Export submissions" })
     ).toBeInTheDocument();
+  });
+
+  it("warns that visitors can change entries where the Public role holds one of the plugin's own writes", async () => {
+    const user = userEvent.setup();
+    const manage = permission("accounts", "manage", FORMS);
+    const group = { ...GROUP, rows: [], permissions: [manage] };
+    const warning = /Visitors who aren't signed in can change/;
+
+    const { unmount } = render(
+      <Harness group={group} initial={[manage.id]} visitors />
+    );
+    await user.click(fold());
+    expect(screen.getByText(warning)).toBeInTheDocument();
+    unmount();
+
+    // CONTROLS: not held, or held by a signed-in role, nothing is warned of.
+    const first = render(<Harness group={group} initial={[]} visitors />);
+    await user.click(fold());
+    expect(screen.queryByText(warning)).toBeNull();
+    first.unmount();
+    render(<Harness group={group} initial={[manage.id]} />);
+    await user.click(fold());
+    expect(screen.queryByText(warning)).toBeNull();
   });
 });
