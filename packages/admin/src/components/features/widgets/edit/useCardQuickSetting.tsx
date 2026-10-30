@@ -199,6 +199,11 @@ function valueLabel(
   return quickValueLabel(setting, value);
 }
 
+/** The one toast a card's changes share, which entering customise mode takes down. */
+function changeToastId(placementId: string): string {
+  return `card-change-${placementId}`;
+}
+
 /**
  * Say a change, in the grid's own sentence (`settingChangedSentence`), with Undo where it has
  * one. One toast per card, so a later change replaces the earlier one's: Undo always puts back
@@ -210,7 +215,7 @@ function tellChange(
   undo: (() => void) | undefined
 ) {
   toast.success(sentence, {
-    id: `card-change-${placementId}`,
+    id: changeToastId(placementId),
     duration: UNDO_SHOWN_MS,
     ...(undo ? { action: { label: "Undo", onClick: undo } } : {}),
   });
@@ -502,6 +507,18 @@ export function useCardQuickSetting(args: {
   useEffect(() => {
     latestConfig.current = args.config;
   });
+  // An Undo is an at-rest write. Once customising begins the draft holds the card, and a write
+  // underneath it would move the stored version the draft's Save is checked against, so the
+  // card's toast goes, one not yet said is dropped, and an Undo pressed anyway does nothing.
+  // Remove's notice is cleared on the same change of mode by its own owner.
+  const editing = useRef(isEditing);
+  const { placementId } = args;
+  useEffect(() => {
+    editing.current = isEditing;
+    if (!isEditing) return;
+    toast.dismiss(changeToastId(placementId));
+    setPending(null);
+  }, [isEditing, placementId]);
 
   // Nowhere to keep a change: at rest before an arrangement has been read.
   if (!isEditing && !settingsWrite) return {};
@@ -525,7 +542,11 @@ export function useCardQuickSetting(args: {
         asksAgain,
         seenFetching: false,
         shownAt,
-        undo,
+        undo:
+          undo &&
+          (() => {
+            if (!editing.current) undo();
+          }),
       }),
   };
   const resolved = resolveWidgetSettings(settings, args.config);

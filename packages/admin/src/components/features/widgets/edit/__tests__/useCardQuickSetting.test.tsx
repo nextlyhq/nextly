@@ -24,7 +24,11 @@ import {
   type CellStagedWrite,
 } from "../useCardQuickSetting";
 
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const toast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  dismiss: vi.fn(),
+}));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
   toast,
@@ -332,6 +336,60 @@ describe("the card's size, changed at rest", () => {
     });
     // Nothing quick and nothing to resize: no popover at all.
     expect(fixed.result.current.popover).toBeUndefined();
+  });
+});
+
+describe("an Undo offered at rest, once customising begins", () => {
+  // Customising hands the card to the draft and takes its at-rest write away, as the grid does.
+  const customising = { isEditing: true, settingsWrite: undefined };
+
+  it("is taken down, and writes nothing under the draft when pressed anyway", () => {
+    const { settingsWrite, write } = landingWrite();
+    const props = base(settingsWrite, { config: { range: "30d" } });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSetting(range, "90d"));
+    const changed = { ...props, config: { range: "90d" } };
+    settle(rerender, changed, new Date(2_000));
+    expect(toasts()).toEqual(["Activity: Date range set to Last 90 days."]);
+
+    rerender({ ...changed, updatedAt: new Date(2_000), ...customising });
+    expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
+    pressUndo();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("does the same for a size", () => {
+    const { settingsWrite, resize } = landingWrite();
+    const props = base(settingsWrite, { size: { w: 4, h: 3 } });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSize({ w: 12, h: 3 }));
+    rerender({ ...props, size: { w: 12, h: 3 }, ...customising });
+    expect(toast.dismiss).toHaveBeenCalledWith("card-change-p1");
+    pressUndo();
+    expect(resize).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not said, nor offered later, when customising begins before the card shows the change", () => {
+    const { settingsWrite } = landingWrite();
+    const props = base(settingsWrite, { config: { range: "30d" } });
+    const { result, rerender } = renderHook(p => useCardQuickSetting(p), {
+      initialProps: props,
+    });
+    act(() => result.current.popover?.changeSetting(range, "90d"));
+    // The write landed and the card is still asking again when customising begins.
+    rerender({ ...props, config: { range: "90d" }, isFetching: true });
+    rerender({ ...props, config: { range: "90d" }, ...customising });
+    // Back at rest, with the card's new answer in: the change from before is not said then.
+    rerender({
+      ...props,
+      config: { range: "90d" },
+      updatedAt: new Date(2_000),
+    });
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
 

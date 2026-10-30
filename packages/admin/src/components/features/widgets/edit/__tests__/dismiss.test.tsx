@@ -40,7 +40,11 @@ let layoutResponse: DashboardLayoutResponse | undefined;
 
 // `vi.hoisted`, because `vi.mock` is lifted above every other statement in the
 // file and a plain `const` here is not yet initialised when the factory runs.
-const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+const toast = vi.hoisted(() => ({
+  error: vi.fn(),
+  success: vi.fn(),
+  dismiss: vi.fn(),
+}));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
