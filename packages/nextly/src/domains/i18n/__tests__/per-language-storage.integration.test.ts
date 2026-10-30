@@ -6,6 +6,10 @@
  * a component's. The Direct API writes and reads them there. With the setting off, the same site
  * stores as it always has.
  */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,8 +27,11 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { createAdapter } from "../../../database/factory";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { NextlyError } from "../../../errors/nextly-error";
+import { _resetEnvCache } from "../../../shared/lib/env";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { reconcileCompanionUniqueIndexes } from "../runtime/companion-unique-reconcile";
 import { perLanguageStorageEnabled } from "../per-language-storage";
@@ -330,6 +337,58 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toMatchObject({ code: "DUPLICATE" });
       await t.nextly.create({ collection: "codes", data: { code: "A-2" } });
     });
+
+    // A database laid out before the setting keeps a collection's translatable values on its main
+    // table. Booting it with the setting on is refused before any schema work, naming them.
+    it.runIf(dialect === "sqlite")(
+      "refuses to boot over a database that keeps translatable values on a main table",
+      async () => {
+        const folder = mkdtempSync(join(tmpdir(), "nextly-per-language-"));
+        const url = `file:${join(folder, "site.db")}`;
+        vi.stubEnv("DB_DIALECT", "sqlite");
+        vi.stubEnv("DATABASE_URL", url);
+        _resetEnvCache();
+        const onFile = async () =>
+          createAdapter({ type: "sqlite", url } as Parameters<
+            typeof createAdapter
+          >[0]);
+        const site = {
+          collections: [
+            defineCollection({
+              slug: "articles",
+              fields: [text({ name: "headline" }), number({ name: "views" })],
+            }),
+          ],
+        };
+        try {
+          const before = await createTestNextly({
+            ...site,
+            adapter: await onFile(),
+          });
+          await before.destroy();
+
+          let refused: unknown;
+          try {
+            current = await createTestNextly({
+              ...site,
+              adapter: await onFile(),
+              perLanguageStorage: true,
+            });
+          } catch (error) {
+            refused = error;
+          }
+          expect(
+            NextlyError.isCode(refused, "NEXTLY_PER_LANGUAGE_STORAGE_MIXED")
+          ).toBe(true);
+          expect((refused as Error).message).toMatch(
+            /the collection "articles" \(headline\)/
+          );
+        } finally {
+          _resetEnvCache();
+          rmSync(folder, { recursive: true, force: true });
+        }
+      }
+    );
 
     it("stores as it always has with the setting off", async () => {
       const t = await boot(dialect, false);

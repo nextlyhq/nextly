@@ -1060,6 +1060,11 @@ async function registerServicesOnce(
   // Published before any service registers, since registration already decides where translatable
   // values are stored, and chosen here once: a reload refuses to change it.
   setPerLanguageStorage(transformedConfig.perLanguageStorage === true);
+  // Before any schema work: the push that follows would plan to drop translatable columns a
+  // database laid out before the setting still holds on its main tables.
+  if (transformedConfig.perLanguageStorage === true) {
+    await refuseMixedStorageInConfig(adapter, transformedConfig);
+  }
   const ctx: RegistrationContext = {
     adapter,
     adapterDrizzleDb,
@@ -5049,4 +5054,61 @@ function handleUnresolvedExtends(
         `Fix the slug or remove the extend (set NEXTLY_STRICT_PLUGIN_TARGETS=1 to fail fast).`
     );
   }
+}
+
+/**
+ * Refuses the boot of a site keeping every translatable field per language over a database whose
+ * main tables still hold the translatable columns of an entity its configuration declares.
+ */
+async function refuseMixedStorageInConfig(
+  adapter: DrizzleAdapter,
+  config: NextlyServiceConfig
+): Promise<void> {
+  const [
+    { refuseMixedStorage },
+    { resolveSingleTableName },
+    { resolveCollectionTableName, resolveComponentTableName },
+  ] = await Promise.all([
+    import("../domains/i18n/per-language-storage-layout"),
+    import("../domains/singles/services/resolve-single-table-name"),
+    import("../domains/schema/utils/resolve-table-name"),
+  ]);
+  type Entity = Parameters<typeof refuseMixedStorage>[1][number];
+  const fieldsOf = (entity: { fields?: unknown }) =>
+    (entity.fields ?? []) as Entity["fields"];
+  await refuseMixedStorage(adapter, [
+    ...(config.collections ?? []).map(
+      (c): Entity => ({
+        kind: "collection",
+        slug: c.slug,
+        tableName: resolveCollectionTableName(
+          c.slug,
+          (c as { dbName?: string }).dbName
+        ),
+        fields: fieldsOf(c),
+        localized: (c as { localized?: unknown }).localized,
+      })
+    ),
+    ...(config.singles ?? []).map(
+      (s): Entity => ({
+        kind: "single",
+        slug: s.slug,
+        tableName: resolveSingleTableName({
+          slug: s.slug,
+          dbName: (s as { dbName?: string }).dbName,
+        }),
+        fields: fieldsOf(s),
+        localized: (s as { localized?: unknown }).localized,
+      })
+    ),
+    ...(config.fieldGroups ?? []).map(
+      (g): Entity => ({
+        kind: "component",
+        slug: g.slug,
+        tableName: resolveComponentTableName(g.slug),
+        fields: fieldsOf(g),
+        localized: (g as { localized?: unknown }).localized,
+      })
+    ),
+  ]);
 }
