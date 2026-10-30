@@ -88,7 +88,7 @@ const twoWrites = definePlugin({
               }
             );
           await write("first");
-          if (!(await ctx.caller.can("create", "notes"))) {
+          if (!(await ctx.caller?.can("create", "notes"))) {
             return Response.json({ refused: "second" }, { status: 403 });
           }
           await write("second");

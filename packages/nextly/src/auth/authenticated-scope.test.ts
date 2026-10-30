@@ -18,6 +18,7 @@ import {
   apiKeyScope,
   apiKeyScopeAllows,
   apiKeyScopeFrom,
+  keyCallerHoldsSuperAdmin,
   narrowScope,
   scopeGrants,
   scopeHoldsSuperAdmin,
@@ -219,6 +220,54 @@ describe("a key's super-admin authority over time", () => {
     // A later request asks again, once the bound has passed.
     runWithAccessMemo(() => {
       expect(scopeHoldsSuperAdmin(scope)).toBe(false);
+    });
+  });
+
+  it("stands as first answered for every scope of the key a request builds, made before the bound or after it", () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const caller = {
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+      keyStandingAskedAt: performance.now(),
+      apiKeyId: "key-1",
+    };
+    const first = apiKeyScopeFrom(caller);
+
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(first)).toBe(true);
+      vi.advanceTimersByTime(SESSION_CUTOFF_SECONDS * 1000 + 1);
+      // A door later in the request builds its own scope for the key, after
+      // the bound has passed, and is answered as the first door was.
+      expect(scopeHoldsSuperAdmin(apiKeyScopeFrom(caller))).toBe(true);
+      expect(keyCallerHoldsSuperAdmin(caller)).toBe(true);
+      // POPULATION CONTROL: another key, made with the same bound and first
+      // asked now, is judged on the clock.
+      expect(
+        scopeHoldsSuperAdmin(apiKeyScopeFrom({ ...caller, apiKeyId: "key-2" }))
+      ).toBe(false);
+    });
+    // A later request asks again, through any of them.
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(first)).toBe(false);
+      expect(scopeHoldsSuperAdmin(apiKeyScopeFrom(caller))).toBe(false);
+    });
+  });
+
+  it("is refused at every scope of the key a request builds where its first ask came past the bound", () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const caller = {
+      grants: [{ slug: "read-posts", action: "read", resource: "posts" }],
+      keyHoldsSuperAdmin: true,
+      keyStandingAskedAt: performance.now(),
+      apiKeyId: "key-1",
+    };
+    const early = apiKeyScopeFrom(caller);
+    vi.advanceTimersByTime(SESSION_CUTOFF_SECONDS * 1000 + 1);
+
+    runWithAccessMemo(() => {
+      expect(scopeHoldsSuperAdmin(apiKeyScopeFrom(caller))).toBe(false);
+      // A scope made before the bound gives the request's first answer too.
+      expect(scopeHoldsSuperAdmin(early)).toBe(false);
     });
   });
 
