@@ -212,6 +212,39 @@ export const Posts = defineCollection({
 - A release admits a document as a member only where its author's filter matches it, and
   the release's run judges each member again as it writes it.
 
+### Rules that answer by language
+
+A rule is told the language a request acts in, as `locale`, and every language it
+involves, as `locales`. A write in one language, such as an update with `?locale=de`, is
+told that language. A write that changes more than one language asks the rule once in each
+language it changes, told that one as `locale`, and goes ahead only where every answer
+allows it: a delete is asked in each language its entry holds, and a delete or a bulk
+delete of several entries judges each entry by its own languages. Where the rule answers
+a filter in each language, the entry must match each language's filter. An update by query
+writes the default language, so it is asked in that language. A collection that keeps no
+languages is asked once.
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  localized: true,
+  fields: [text({ name: "title" })],
+  access: {
+    read: () => true,
+    // Nobody changes the German content through these rules.
+    update: ({ locale }) => locale !== "de",
+    delete: ({ locale }) => locale !== "de",
+  },
+});
+```
+
+Here an entry with a German translation can't be deleted, and an entry with English
+content alone can. An admin screen's offer to delete is a hint: it shows where the rule
+allows a delete in some language, and each delete is still judged by its entry's
+languages.
+
 ## Related rows
 
 A populated relationship is read with the same check as reading the related collection
