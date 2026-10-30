@@ -237,7 +237,7 @@ function find(plugins: LifecyclePlugin[], name: string): LifecyclePlugin {
     message: `No plugin named "${name}" is configured. Configured: ${
       plugins.map(p => p.name).join(", ") || "(none)"
     }`,
-    logContext: { plugin: name },
+    logContext: { reason: "plugin-not-configured", plugin: name },
   });
 }
 

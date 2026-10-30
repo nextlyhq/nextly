@@ -11,9 +11,30 @@ import { immediateMessage } from "../../../errors/describe-error";
 import { NextlyError } from "../../../errors/nextly-error";
 import { CliError } from "../cli-error";
 import { defineCodes } from "../define";
-import { messageWithCause } from "../messages";
+import { messageWithCause, sentences } from "../messages";
 
 export const GENERAL_CODES = defineCodes({
+  INPUT_REFUSED: {
+    cause:
+      "A command refused something it was given or read as not valid, for the reason its message names.",
+    from: [
+      {
+        // What is left of INVALID_INPUT once every code reading a reason or a shape has had it:
+        // still a refusal of the input, never a fault in Nextly.
+        code: "INVALID_INPUT",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why:
+              rest.join(" ") ||
+              "The check that refused it gave no more detail.",
+            next: "Correct what the message names, then run the command again; `--verbose` shows where it was refused.",
+          };
+        },
+      },
+    ],
+  },
   UNEXPECTED_ERROR: {
     cause: "The command stopped on an error that no other code describes.",
   },

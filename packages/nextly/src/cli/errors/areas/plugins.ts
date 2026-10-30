@@ -21,6 +21,8 @@ import {
   sentences,
 } from "../messages";
 
+import { dataLossParts } from "./migrations";
+
 /** The sentence a refusal ends with to say the run changed nothing. */
 const NOTHING_CHANGED = /^Nothing was (?:changed|applied)\.$/;
 
@@ -185,6 +187,60 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
+  OWNERSHIP_TAKEOVER_REFUSED: {
+    cause:
+      "A table or element recorded as one owner's would pass to another, so the change was refused.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "table-owner-would-change",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "Each table and element has one owner, recorded in `nextly_schema_owners`, so no plugin or app takes over another's.",
+            next:
+              rest.join(" ") ||
+              "Remove the earlier owner's rows from `nextly_schema_owners` if it was removed and its tables are meant to pass on.",
+          };
+        },
+      },
+      {
+        code: "CONFLICT",
+        reason: "element-owner-would-change",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "Each table and element has one owner, recorded in `nextly_schema_owners`, so no plugin or app takes over another's.",
+            next:
+              rest.join(" ") ||
+              "Remove the earlier owner's rows from `nextly_schema_owners` if it was removed and its tables are meant to pass on.",
+          };
+        },
+      },
+    ],
+  },
+  PLUGIN_COLUMN_NOT_MIGRATED: {
+    cause:
+      "A column a plugin contributes to a table is not in the database, because the migration that adds it has not been applied.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "contributed-column-not-migrated",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "The app's migrations add what a plugin contributes to the app's tables, and this one has not been applied here.",
+            next:
+              rest.join(" ") ||
+              "Run `nextly migrate:create`, then `nextly migrate`.",
+          };
+        },
+      },
+    ],
+  },
   PLUGIN_NEEDS_MIGRATED_DATABASE: {
     cause:
       "A plugin was installed or uninstalled on a database `nextly migrate` has not run on yet.",
@@ -205,6 +261,23 @@ export const PLUGIN_CODES = defineCodes({
   PLUGIN_NOT_FOUND: {
     cause:
       "The plugin named on the command line is not among the plugins the configuration lists.",
+    from: [
+      {
+        // `plugins install` and `plugins uninstall` look the name up in the configuration.
+        code: "NOT_FOUND",
+        reason: "plugin-not-configured",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why:
+              rest.join(" ") ||
+              "The configuration registers no plugin by that name.",
+            next: "Run `nextly plugins list` to see the configured plugins, and give one of their names exactly.",
+          };
+        },
+      },
+    ],
   },
   PLUGIN_INSTALL_TARGET_UNCLEAR: {
     cause:
@@ -253,10 +326,23 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_UNINSTALL_DECLINED: {
+  PLUGIN_UNINSTALL_UNCONFIRMED: {
     cause:
-      "The uninstall's prompt to delete the plugin's tables was answered no.",
+      "A full plugin uninstall would delete data, and the deletion was not confirmed or consented to, so nothing changed.",
     from: [
+      {
+        // No consent covers the drops, with no terminal to ask, or the consent leaves one out.
+        code: "PLUGIN_UNINSTALL_UNCONFIRMED",
+        reason: "data-loss-needs-consent",
+        describe: error => dataLossParts(error.publicMessage),
+      },
+      {
+        // No consent covers the drops, with no terminal to ask, or the consent leaves one out.
+        code: "PLUGIN_UNINSTALL_UNCONFIRMED",
+        reason: "data-loss-not-covered",
+        describe: error => dataLossParts(error.publicMessage),
+      },
+
       {
         code: "PLUGIN_UNINSTALL_UNCONFIRMED",
         when: error => error.logContext?.verdict === "declined",
@@ -456,7 +542,7 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_UNINSTALLED_BUT_CONFIGURED: {
+  PLUGIN_SCHEMA_UNINSTALLED: {
     cause:
       "A plugin that has been uninstalled is still listed in the configuration.",
     from: [
@@ -484,7 +570,7 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_SHIPS_NO_MIGRATIONS: {
+  PLUGIN_MIGRATIONS_UNAVAILABLE: {
     cause:
       "A plugin declares tables or table elements and ships no migrations to create them.",
     from: [
@@ -516,9 +602,9 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_MIGRATION_CHANGED: {
+  MIGRATION_CHECKSUM_MISMATCH: {
     cause:
-      "A plugin's migration module has changed since it was generated, so its checksum no longer matches its content.",
+      "A plugin's migration changed after it was generated or after it was applied.",
     from: [
       {
         code: "MIGRATION_CHECKSUM_MISMATCH",
@@ -530,12 +616,6 @@ export const PLUGIN_CODES = defineCodes({
             why: "An edited module is refused rather than re-hashed, so the SQL that runs is the SQL that was reviewed. Nothing was applied.",
           }),
       },
-    ],
-  },
-  PLUGIN_APPLIED_MIGRATION_CHANGED: {
-    cause:
-      "A plugin migration recorded as applied no longer matches the module that ran on this database.",
-    from: [
       {
         code: "MIGRATION_CHECKSUM_MISMATCH",
         // Against the ledger: the refusal records the checksum of what ran as `applied`.

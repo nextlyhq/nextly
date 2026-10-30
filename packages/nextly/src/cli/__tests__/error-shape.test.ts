@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cliErrorSlug,
   formatCliError,
+  reportCliError,
   toCliError,
   type CliErrorCode,
 } from "../errors";
@@ -40,7 +41,9 @@ import {
 } from "../errors/areas/commands";
 
 import { ERROR_CASES } from "./error-cases";
-import { uninstallRefused } from "./error-cases/plugins";
+import { MIGRATION_MERGED_CASES } from "./error-cases/migrations";
+import { PLUGIN_CONFIG_MERGED_CASES } from "./error-cases/plugin-config";
+import { PLUGIN_MERGED_CASES, uninstallRefused } from "./error-cases/plugins";
 
 /** `process.exit`, stopped: the test's run ends where the command's would. */
 class Exited extends Error {
@@ -286,18 +289,22 @@ describe("a rollback refused for want of consent", () => {
 });
 
 describe("a plugin uninstall refused for want of consent", () => {
-  // The uninstall judges its drops with the same consent as every command, so it ends with the
-  // same codes, keeping its own way out (`--keep-data`) in the Next line.
-  it.each([
-    [undefined, "DATA_LOSS_CONSENT_REQUIRED"],
-    ["seo_settings", "DATA_LOSS_CONSENT_NOT_COVERED"],
-  ] as const)("with consent %s ends as %s", async (flag, code) => {
-    const error = toCliError(await uninstallRefused(flag));
-    expect(error.code).toBe(code);
-    const text = formatCliError(error);
-    expectTheShape(text, code, cliErrorSlug(code));
-    expect(shapeOf(text).next).toContain("--keep-data");
-  });
+  // The guides document this refusal as PLUGIN_UNINSTALL_UNCONFIRMED, whichever consent was
+  // missing, so it ends with that code and keeps its own way out (`--keep-data`) in Next.
+  it.each([undefined, "seo_settings"] as const)(
+    "with consent %s ends as PLUGIN_UNINSTALL_UNCONFIRMED",
+    async flag => {
+      const error = toCliError(await uninstallRefused(flag));
+      expect(error.code).toBe("PLUGIN_UNINSTALL_UNCONFIRMED");
+      const text = formatCliError(error);
+      expectTheShape(
+        text,
+        "PLUGIN_UNINSTALL_UNCONFIRMED",
+        "plugin-uninstall-unconfirmed"
+      );
+      expect(shapeOf(text).next).toContain("--keep-data");
+    }
+  );
 });
 
 describe("the shape in colour", () => {
@@ -428,5 +435,42 @@ describe("a block manifest that cannot be read", () => {
     expect(error.code).toBe("BLOCK_MANIFEST_UNREADABLE");
     expect(error.what).toContain("blocks.manifest.json");
     expect(error.why).toMatch(/EISDIR/);
+  });
+});
+
+describe("the error's last lines", () => {
+  it("are written before the exit can cut them off: standard error blocks first", () => {
+    // On a pipe, a write may still be pending when `process.exit` ends the process.
+    const order: string[] = [];
+    const stream = process.stderr as unknown as { _handle?: unknown };
+    const original = stream._handle;
+    stream._handle = {
+      setBlocking: (on: boolean) => order.push(`blocking ${on}`),
+    };
+    vi.spyOn(console, "error").mockImplementation(() => order.push("write"));
+    try {
+      reportCliError(new Error("boom"));
+    } finally {
+      stream._handle = original;
+    }
+    expect(order).toEqual(["blocking true", "write"]);
+  });
+});
+
+describe("each cause a documented code covers, as a command ends with it", () => {
+  // A code the guides already document keeps every cause they name under it; each cause still
+  // has a reading of its own, which must reach that code in the shape.
+  const merged = {
+    ...MIGRATION_MERGED_CASES,
+    ...PLUGIN_CONFIG_MERGED_CASES,
+    ...PLUGIN_MERGED_CASES,
+  };
+  it.each(Object.entries(merged))("%s", async (_cause, { code, make }) => {
+    const error = toCliError(await make());
+    expect(error.code).toBe(code);
+    const text = formatCliError(error);
+    expectTheShape(text, code, cliErrorSlug(code));
+    expect(error.what).not.toContain("\n");
+    expect(text).toMatchSnapshot();
   });
 });

@@ -216,7 +216,37 @@ export const CONFIG_CODES = defineCodes({
   },
   CONFIG_INVALID: {
     cause:
-      "The configuration declares something Nextly cannot use, such as a field type no installed plugin offers.",
+      "The configuration, or a definition it loads, declares something Nextly cannot use.",
+    from: [
+      {
+        // A validation failure no narrower code reads: the issues it lists, by their path.
+        code: "VALIDATION_ERROR",
+        describe: error => {
+          const issues = (
+            (
+              error.publicData as
+                | { errors?: Array<{ path?: string; message?: string }> }
+                | undefined
+            )?.errors ?? []
+          ).filter(issue => typeof issue.message === "string");
+          return {
+            what:
+              issues.length === 1
+                ? "A declaration Nextly cannot use was found."
+                : `${issues.length || "Some"} declarations Nextly cannot use were found.`,
+            why:
+              issues
+                .map(issue =>
+                  issue.path
+                    ? `${issue.path}: ${issue.message ?? ""}`
+                    : (issue.message ?? "")
+                )
+                .join("\n") || error.publicMessage,
+            next: "Fix each declaration listed, in `nextly.config.ts` or the plugin that declares it, then run the command again.",
+          };
+        },
+      },
+    ],
   },
   WORKFLOW_CANNOT_ATTACH: {
     cause:

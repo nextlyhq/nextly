@@ -1,13 +1,13 @@
 ---
 title: CONFIG_INVALID
-description: "The configuration declares something Nextly cannot use, such as a field type no installed plugin offers."
+description: "The configuration, or a definition it loads, declares something Nextly cannot use."
 ---
 
 ## Cause
 
-The configuration declares something Nextly cannot use, such as a field type no installed plugin offers.
+The configuration, or a definition it loads, declares something Nextly cannot use.
 
-Before it acts, the command checks each declaration in the configuration. A field's `type` must be a built-in type or one an installed plugin offers, and each option must be one its type accepts. The Why line names each declaration at fault by its path in the configuration.
+Before it acts, the command checks each declaration in the configuration, and in the definitions it loads: plugins, the Schema Builder's file, blocks. A field's `type` must be a built-in type or one an installed plugin offers, and each option must be one its type accepts. The Why line names each declaration at fault by its path in the configuration.
 
 ## Fix
 

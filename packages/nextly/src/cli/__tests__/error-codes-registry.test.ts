@@ -26,6 +26,8 @@ import { CLI_ERROR_MAPPINGS } from "../errors/from-thrown";
 import { CLI_ERROR_AREAS } from "../errors/registry";
 import releasedCodes from "../errors/released-codes.json";
 
+import { createProgram } from "../program";
+
 import { ERROR_CASES } from "./error-cases";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -234,6 +236,8 @@ describe("the errors a command can end with", () => {
       readFileSync(file, "utf8")
         .split("\n")
         .forEach((line, i) => {
+          // A comment that names an exit is not one.
+          if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
           if (literal.test(line)) found.push(`${path}:${i + 1}`);
           else if (computed.test(line) && !verdicts.has(path)) {
             found.push(`${path}:${i + 1} (a computed status)`);
@@ -252,6 +256,7 @@ describe("the errors a command can end with", () => {
 /** The code each `NextlyError` factory gives what it builds. */
 const FACTORY_CODES: Record<string, string> = {
   invalidInput: "INVALID_INPUT",
+  notFound: "NOT_FOUND",
   conflict: "CONFLICT",
   validation: "VALIDATION_ERROR",
   serviceUnavailable: "SERVICE_UNAVAILABLE",
@@ -269,21 +274,44 @@ function callAt(text: string, from: number): string {
   return text.slice(from);
 }
 
-/** The `logContext.reason` a call gives: a literal, or the fixed start of a template. */
-function reasonOf(call: string): { reason?: string; prefix?: string } {
+/**
+ * The `logContext.reason` a call gives: a literal, or the fixed start of a template. `conflict()`
+ * puts its own `reason` there when the context names none.
+ */
+function reasonOf(call: string): {
+  reason?: string;
+  reasons?: string[];
+  prefix?: string;
+} {
   const at = call.indexOf("logContext");
-  if (at === -1) return {};
-  const context = call.slice(at);
-  return {
-    reason: /\breason:\s*"([^"]+)"/.exec(context)?.[1],
-    prefix: /\breason:\s*`([^`$]*)\$\{/.exec(context)?.[1],
-  };
+  const context = at === -1 ? "" : call.slice(at);
+  const prefix = /\breason:\s*`([^`$]*)\$\{/.exec(context)?.[1];
+  // The reason's expression, up to the comma that ends the property: a literal, or a choice
+  // between literals (`kind === "table" ? "table-…" : "element-…"`), each of which is thrown.
+  const expression = /\breason:\s*([^,}]*)/.exec(context)?.[1] ?? "";
+  // In a choice, the literals after `?` are the reasons; one before it is only compared.
+  const choices = expression.includes("?")
+    ? expression.slice(expression.indexOf("?"))
+    : expression;
+  const reasons = [...choices.matchAll(/"([^"]+)"/g)].map(m => m[1]);
+  if (reasons.length > 0 || prefix !== undefined) {
+    return { reason: reasons[0], reasons, prefix };
+  }
+  if (call.startsWith("NextlyError.conflict(")) {
+    return { reason: /\breason:\s*"([^"]+)"/.exec(call)?.[1] };
+  }
+  return {};
 }
 
 /** Each `NextlyError` built in `text`, with its code and the reason it is given. */
-function constructions(
-  text: string
-): Array<{ code: string; reason?: string; prefix?: string; at: number }> {
+function constructions(text: string): Array<{
+  code: string;
+  reason?: string;
+  prefix?: string;
+  reasons?: string[];
+  at: number;
+  form: string;
+}> {
   return [...text.matchAll(/new NextlyError\(|NextlyError\.(\w+)\(/g)].flatMap(
     match => {
       const call = callAt(text, match.index);
@@ -293,42 +321,79 @@ function constructions(
           : FACTORY_CODES[match[1]];
       return code === undefined
         ? []
-        : [{ code, ...reasonOf(call), at: match.index }];
+        : [
+            {
+              code,
+              ...reasonOf(call),
+              at: match.index,
+              form: match[1] ?? "new",
+            },
+          ];
     }
   );
 }
 
 describe("the reasons a mapping reads", () => {
-  it("every INVALID_INPUT or CONFLICT a command throws carries a reason a mapping reads", () => {
-    // These codes stand for many causes at once, so one without a reason, or with one nothing
-    // maps, ends as UNEXPECTED_ERROR: an ordinary refusal told it was not expected.
+  it("every error of a code shared by many causes, where commands run, reads as a code of its own", () => {
+    // INVALID_INPUT, CONFLICT and NOT_FOUND each stand for many causes. One with no reason, or a
+    // reason nothing maps, ends as a catch-all: an ordinary refusal read as unexpected.
+    //
+    // A command's own throws (under cli/) carry a reason a code reads. Below the CLI, CONFLICT and
+    // NOT_FOUND have no catch-all of their own and must too; a reason-less INVALID_INPUT there
+    // is read by its shape where a code knows it, and is otherwise INPUT_REFUSED, still a refusal.
+    // These are raised only while a request is served or by a test helper, never by a command.
+    const notCommands = new Set([
+      join("plugins", "routes", "dispatch.ts"),
+      join("plugins", "principals", "recognise.ts"),
+      join("plugins", "plugin-version-pins.ts"),
+      join("plugins", "test-nextly.ts"),
+      join("plugins", "plugin-versions.ts"),
+      join("plugins", "security", "one-time-secrets.ts"),
+    ]);
+    const shared = new Set(["INVALID_INPUT", "CONFLICT", "NOT_FOUND"]);
     const unread: string[] = [];
-    let seen = 0;
-    for (const file of sourceFiles(join(SRC, "cli"))) {
-      const path = relative(SRC, file);
-      if (path.startsWith(join("cli", "errors"))) continue;
-      const text = readFileSync(file, "utf8");
-      for (const built of constructions(text)) {
-        if (built.code !== "INVALID_INPUT" && built.code !== "CONFLICT")
+    const forms = new Set<string>();
+    for (const dir of COMMAND_PATHS) {
+      for (const file of sourceFiles(join(SRC, dir))) {
+        const path = relative(SRC, file);
+        if (path.startsWith(join("cli", "errors")) || notCommands.has(path))
           continue;
-        seen += 1;
-        const read = CLI_ERROR_MAPPINGS.some(
-          m =>
-            m.code === built.code &&
-            m.reason !== undefined &&
-            (m.reason === built.reason ||
-              (built.prefix !== undefined && m.reason.startsWith(built.prefix)))
-        );
-        if (!read) {
-          const line = text.slice(0, built.at).split("\n").length;
-          unread.push(
-            `${path}:${line} ${built.code} reason=${built.reason ?? built.prefix ?? "none"}`
-          );
+        const text = readFileSync(file, "utf8");
+        const inCli = path.startsWith("cli");
+        for (const built of constructions(text)) {
+          if (!shared.has(built.code)) continue;
+          forms.add(built.form);
+          if (!inCli && built.code === "INVALID_INPUT") continue;
+          const mapsReason = (reason: string) =>
+            CLI_ERROR_MAPPINGS.some(
+              m => m.code === built.code && m.reason === reason
+            );
+          const read =
+            built.reasons !== undefined && built.reasons.length > 0
+              ? built.reasons.every(mapsReason)
+              : built.prefix !== undefined
+                ? CLI_ERROR_MAPPINGS.some(
+                    m =>
+                      m.code === built.code &&
+                      m.reason?.startsWith(built.prefix ?? "") === true
+                  )
+                : built.reason !== undefined && mapsReason(built.reason);
+          if (!read) {
+            const line = text.slice(0, built.at).split("\n").length;
+            unread.push(
+              `${path}:${line} ${built.code} reason=${built.reasons?.join("|") || built.reason || built.prefix || "none"}`
+            );
+          }
         }
       }
     }
-    // The scan reaches the throws it reads: the commands throw dozens of these.
-    expect(seen).toBeGreaterThan(10);
+    // The scan reads every form these are built in: each factory, and the constructor.
+    expect([...forms].sort()).toEqual([
+      "conflict",
+      "invalidInput",
+      "new",
+      "notFound",
+    ]);
     expect(unread).toEqual([]);
   });
 
@@ -356,5 +421,157 @@ describe("the reasons a mapping reads", () => {
         !(/^data-loss-/.test(reason) && product.includes("`data-loss-${"))
     );
     expect(unwritten).toEqual([]);
+  });
+});
+
+/** Every command path the program defines (`migrate:create`, `plugins install`), and every flag. */
+function definedSurface(): { commands: Set<string>; flags: Set<string> } {
+  const commands = new Set<string>();
+  const flags = new Set<string>(["--help", "--version"]);
+  type Node = ReturnType<typeof createProgram>;
+  const walk = (node: Node, path: string[]) => {
+    for (const option of node.options) {
+      if (option.long) flags.add(option.long);
+      // A negatable flag is also spelt without its `no-`.
+      if (option.long?.startsWith("--no-"))
+        flags.add(`--${option.long.slice(5)}`);
+    }
+    for (const child of node.commands) {
+      const names = [child.name(), ...child.aliases()];
+      for (const name of names) {
+        commands.add([...path, name].join(" "));
+        walk(child, [...path, name]);
+      }
+    }
+  };
+  walk(createProgram(), []);
+  return { commands, flags };
+}
+
+describe("what a message tells the user to type", () => {
+  it("names only flags and commands the CLI defines, in every message and docs page", async () => {
+    // A message is followed to the letter, so a flag or a command it names that the CLI does not
+    // define sends the reader to an error of another kind.
+    const { commands, flags } = definedSurface();
+    const texts = [
+      ...(await Promise.all(
+        codes.map(async code =>
+          formatCliError(toCliError(await ERROR_CASES[code]()))
+        )
+      )),
+      ...readdirSync(DOCS)
+        .filter(name => name.endsWith(".mdx"))
+        // Without the frontmatter, whose description is prose about commands, not one to type.
+        .map(name =>
+          readFileSync(join(DOCS, name), "utf8").replace(
+            /^---\n[\s\S]*?\n---\n/,
+            ""
+          )
+        ),
+    ];
+    const unknown = new Set<string>();
+    for (const text of texts) {
+      // A whole flag only: `tsc --noEmit` is another tool's, and not a nextly flag cut short.
+      for (const [flag] of text.matchAll(
+        /(?<![\w-])--[a-z][a-z-]*[a-z](?![\w-])/g
+      )) {
+        if (!flags.has(flag)) unknown.add(flag);
+      }
+      for (const match of text.matchAll(
+        /\bnextly ([a-z][a-z0-9:-]*)(?: ([a-z][a-z0-9-]*))?/g
+      )) {
+        const [, name, sub] = match;
+        const named =
+          sub !== undefined && commands.has(`${name} ${sub}`)
+            ? `${name} ${sub}`
+            : name;
+        if (!commands.has(named)) unknown.add(`nextly ${named}`);
+      }
+    }
+    // The surface is read, not assumed: it holds what the messages name most.
+    expect(commands.has("migrate:create")).toBe(true);
+    expect(flags.has("--accept-data-loss")).toBe(true);
+    expect([...unknown].sort()).toEqual([]);
+  });
+
+  it("raises every code from product code, except the two the guides reserve", () => {
+    // A released code nothing raises is a promise about an error that never happens. A code is
+    // raised by a mapping, or by its name in a CliError a command or an area's helper builds.
+    const reserved = new Set(["MIGRATION_TAMPERED", "MIGRATION_MISSING"]);
+    const product = sourceFiles(join(SRC, "cli"))
+      .filter(file => !file.endsWith(join("errors", "registry.ts")))
+      .map(file => readFileSync(file, "utf8"))
+      .join("\n");
+    const mapped = new Set(CLI_ERROR_MAPPINGS.map(m => m.to));
+    const unraised = codes.filter(
+      code =>
+        !reserved.has(code) &&
+        !mapped.has(code) &&
+        !product.includes(`new CliError("${code}"`) &&
+        !new RegExp(`new CliError\\(\\s*"${code}"`).test(product) &&
+        !new RegExp(`"${code}"\\s*:\\s*"${code}"`).test(product)
+    );
+    expect(unraised).toEqual([]);
+  });
+});
+
+/** Every backticked code-shaped name the docs outside the CLI's own error pages mention. */
+function documentedNames(): Map<string, string> {
+  const named = new Map<string, string>();
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) {
+        if (path !== DOCS) walk(path);
+      } else if (name.endsWith(".mdx")) {
+        for (const [, code] of readFileSync(path, "utf8").matchAll(
+          /`([A-Z][A-Z0-9_]{3,})`/g
+        )) {
+          if (!named.has(code)) named.set(code, relative(REPO, path));
+        }
+      }
+    }
+  };
+  walk(join(REPO, "docs"));
+  return named;
+}
+
+describe("the codes the guides already document", () => {
+  it("keeps every code a guide names for what a command prints", () => {
+    // Named in a guide as what `migrate:check`, `nextly migrate`, `migrate:resolve` or a plugin
+    // command prints: each stays a CLI code, with the guide still naming it.
+    const guides: Record<string, string> = {
+      MIGRATION_TAMPERED: "docs/guides/production-migrations.mdx",
+      MIGRATION_MISSING: "docs/guides/production-migrations.mdx",
+      CHECKSUM_MISMATCH: "docs/guides/production-migrations.mdx",
+      MISSING_SNAPSHOT: "docs/guides/production-migrations.mdx",
+      INVALID_SNAPSHOT: "docs/guides/production-migrations.mdx",
+      MISSING_MIGRATION: "docs/guides/production-migrations.mdx",
+      SCHEMA_DRIFT: "docs/guides/production-migrations.mdx",
+      REFUSED_STATEMENT: "docs/guides/production-migrations.mdx",
+      NEXTLY_CORE_DESTRUCTIVE_REFUSED: "docs/guides/production-migrations.mdx",
+      NEXTLY_MIGRATE_LOCK_BUSY: "docs/guides/production-migrations.mdx",
+      NEXTLY_MIGRATION_SNAPSHOT_MISSING:
+        "docs/guides/production-migrations.mdx",
+      PLUGIN_UNINSTALL_UNCONFIRMED: "docs/plugins/schema.mdx",
+      PLUGIN_RESOLUTION_ERROR: "docs/plugins/security.mdx",
+    };
+    for (const [code, guide] of Object.entries(guides)) {
+      expect(codes, `${code}, which ${guide} documents`).toContain(code);
+      expect(readFileSync(join(REPO, guide), "utf8"), guide).toContain(
+        `\`${code}\``
+      );
+    }
+  });
+
+  it("prints a documented error's own code, wherever a guide names one the CLI reads", () => {
+    // A guide that names an error's code for a cause the CLI reads tells the reader what they
+    // will see; a CLI code of another name for it would be two names for one error.
+    const read = new Set(CLI_ERROR_MAPPINGS.map(m => m.code));
+    const renamed = [...documentedNames()]
+      .filter(([code]) => read.has(code) && !SHARED_CODES.has(code))
+      .filter(([code]) => !codes.includes(code as CliErrorCode))
+      .map(([code, guide]) => `${code} (${guide})`);
+    expect(renamed).toEqual([]);
   });
 });

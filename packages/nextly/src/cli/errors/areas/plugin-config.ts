@@ -21,6 +21,7 @@ import {
   contextNames,
   contextNumber,
   contextString,
+  sentences,
 } from "../messages";
 
 /** A string the error's log context carries under `key`, or `fallback`. */
@@ -116,8 +117,119 @@ function notJson(error: NextlyError, declared: string): CliErrorParts {
   };
 }
 
+/**
+ * A plugin declaration refusal whose message opens with its own stable prefix
+ * (`NEXTLY_JOB_COLLISION: …`): known by that prefix, and read as the sentence after it.
+ */
+const prefixed = (prefix: string, why: string, next: string) => [
+  {
+    code: "INVALID_INPUT",
+    when: (error: NextlyError) => error.publicMessage.startsWith(`${prefix}:`),
+    describe: (error: NextlyError) => ({
+      what: asSentence(error.publicMessage.slice(prefix.length + 1)),
+      why,
+      next,
+    }),
+  },
+];
+
 export const PLUGIN_CONFIG_CODES = defineCodes({
-  PLUGIN_ROUTE_COLLISION: {
+  PLUGIN_JOB_SLUG_TAKEN: {
+    cause:
+      "A plugin declares a job slug that another plugin, a reserved namespace or a built-in job type already uses.",
+    from: prefixed(
+      "NEXTLY_JOB_COLLISION",
+      "Jobs are queued and run by their slug, so each slug names one job.",
+      "Rename the plugin's job, or remove one of the two plugins that declare it."
+    ),
+  },
+  PLUGIN_WIDGET_SOURCE_INVALID: {
+    cause:
+      "A plugin contributes a widget source with no id, or without the resolver functions a source needs.",
+    from: prefixed(
+      "NEXTLY_WIDGET_SOURCE_INVALID",
+      "The dashboard reads a widget's data through its source's resolver, found by the source's id.",
+      "Give the source an `id` and a `resolve` function (and `resolveMany`, if it declares one, as a function), or update the plugin."
+    ),
+  },
+  PLUGIN_WIDGET_SOURCE_RESERVED: {
+    cause:
+      "A plugin contributes a widget source in a namespace Nextly reserves.",
+    from: prefixed(
+      "NEXTLY_WIDGET_SOURCE_RESERVED",
+      "Nextly's own widget sources live in that namespace, so a plugin's would shadow one.",
+      "Give the source an id in the plugin's own namespace, or update the plugin."
+    ),
+  },
+  PLUGIN_WIDGET_SOURCE_NAMESPACE: {
+    cause:
+      "A plugin contributes a widget source whose id is not in the plugin's own namespace.",
+    from: prefixed(
+      "NEXTLY_WIDGET_SOURCE_NAMESPACE",
+      "A contributed source's id starts with its plugin's name, so two plugins' sources cannot collide.",
+      "Prefix the source's id with the plugin's name, or update the plugin."
+    ),
+  },
+  PLUGIN_WIDGET_SOURCE_KIND: {
+    cause:
+      "A plugin contributes a widget source of a kind the dashboard does not draw.",
+    from: prefixed(
+      "NEXTLY_WIDGET_SOURCE_KIND",
+      "The dashboard draws a source by its kind, and knows only its own kinds.",
+      "Give the source one of the kinds the plugin SDK lists, or update the plugin."
+    ),
+  },
+  PLUGIN_WIDGET_SOURCE_COLLISION: {
+    cause: "Two plugins contribute a widget source with the same id.",
+    from: prefixed(
+      "NEXTLY_WIDGET_SOURCE_COLLISION",
+      "A widget finds its data by its source's id, so each id names one source.",
+      "Rename one of the two sources, or remove one of the plugins."
+    ),
+  },
+  PLUGIN_MIGRATION_NAME_DUPLICATE: {
+    cause: "A plugin ships two migrations with the same name, ignoring case.",
+    from: [
+      {
+        code: "INVALID_INPUT",
+        when: error => typeof error.logContext?.clashesWith === "string",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why:
+              rest[0] ??
+              "Each module's name is its key in the migration ledger.",
+            next:
+              rest.slice(1).join(" ") ||
+              "Rename one, then reseal it with `migrationChecksum`.",
+          };
+        },
+      },
+    ],
+  },
+  PLUGIN_MIGRATION_MODULE_EXISTS: {
+    cause:
+      "`nextly migrate:create --plugin` would write a migration module where one already exists, so it wrote nothing.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "state",
+        when: error => typeof error.logContext?.modulePath === "string",
+        describe: error => {
+          const [what, ...rest] = sentences(error.publicMessage);
+          return {
+            what: what ?? error.publicMessage,
+            why: "An existing module is never overwritten: it may already have run on a database.",
+            next:
+              rest.join(" ") ||
+              "Run the command again for a module with a new name.",
+          };
+        },
+      },
+    ],
+  },
+  NEXTLY_ROUTE_COLLISION: {
     cause: "Two plugin routes answer the same method and path.",
     from: [
       {
@@ -130,7 +242,7 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_ROUTE_PATH_INVALID: {
+  NEXTLY_ROUTE_INVALID_PATH: {
     cause: "A plugin declares a route whose path does not start with `/`.",
     from: [
       {
@@ -183,23 +295,310 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_ROUTE_OPTIONS_INVALID: {
+  PLUGIN_RESOLUTION_ERROR: {
     cause:
-      "A plugin declares a route option that cannot mean what it says, such as a raw body on a method without one.",
-    from: resolved("invalid-route-options", error => {
-      const route = cut(detail(error), ": ");
-      return {
-        what:
-          route === undefined
-            ? asSentence(detail(error))
-            : `${route[0]} declares an option that cannot apply.`,
-        why: closed(route?.[1] ?? field(error, "problem")),
-        next: "Correct the option named in the route's declaration in the plugin.",
-      };
-    }),
+      "A plugin's declaration could not be resolved: a dependency, a version range, a capability, a name or a setting it declares is missing, in conflict or not valid.",
+    from: [
+      ...resolved("invalid-route-options", error => {
+        const route = cut(detail(error), ": ");
+        return {
+          what:
+            route === undefined
+              ? asSentence(detail(error))
+              : `${route[0]} declares an option that cannot apply.`,
+          why: closed(route?.[1] ?? field(error, "problem")),
+          next: "Correct the option named in the route's declaration in the plugin.",
+        };
+      }),
+      ...resolved("missing-dependency", error => ({
+        what: detail(error),
+        why: `"${field(error, "dependency")}" is in the \`dependsOn\` of "${field(error, "plugin")}", and not in \`plugins\` in \`nextly.config.ts\`.`,
+        next: `Add "${field(error, "dependency")}" to \`plugins\` in \`nextly.config.ts\`, or install a release of "${field(error, "plugin")}" that does not need it.`,
+      })),
+      ...resolved("dependency-cycle", error => ({
+        what: detail(error),
+        why: "Each plugin is set up after the plugins it depends on, so in a cycle none of them can be set up first.",
+        next: "Remove one `dependsOn` or `optionalDependsOn` entry from a plugin in the cycle.",
+      })),
+      ...resolved("invalid-nextly-range", error => ({
+        what: detail(error),
+        why: "`nextly` must be a semver range, such as `^1.2.0`, so it can be checked against the installed version.",
+        next: `Correct the \`nextly\` range of "${field(error, "plugin")}", or install a release of it that declares a valid one.`,
+      })),
+      ...resolved("core-incompatible", error => ({
+        what: detail(error),
+        why: `The installed \`nextly\` is outside the plugin's \`nextly\` range, ${field(error, "range")}.`,
+        next: `Install a release of "${field(error, "plugin")}" that supports Nextly ${field(error, "coreVersion")}, or a version of \`nextly\` in ${field(error, "range")}.`,
+      })),
+      ...resolved("version-incompatible", error => ({
+        what: detail(error),
+        why: `The configured "${field(error, "dependency")}" is outside the range the \`dependsOn\` of "${field(error, "plugin")}" accepts.`,
+        next: `Install a version of "${field(error, "dependency")}" in ${field(error, "range")}, or a release of "${field(error, "plugin")}" that accepts ${field(error, "actual")}.`,
+      })),
+      ...resolved("optional-version-incompatible", error => ({
+        what: detail(error),
+        why: `An optional dependency need not be configured, but once it is, its version must be in the plugin's \`optionalDependsOn\` range.`,
+        next: `Install a version of "${field(error, "dependency")}" in ${field(error, "range")}, or a release of "${field(error, "plugin")}" that accepts ${field(error, "actual")}.`,
+      })),
+      ...resolved("menu-item-unowned-collection", error => ({
+        ...whatThenNext(
+          detail(error),
+          " Name one of: ",
+          "Name one of the plugin's own collections in the menu item."
+        ),
+        why: "A plugin's menu items link only to the collections the plugin itself contributes.",
+      })),
+      ...resolved("settings-permission-without-settings", error => ({
+        what: detail(error),
+        why: "`settingsPermission` guards the plugin's settings, and the plugin declares no `contributes.settings`.",
+        next: "Add the settings schema under `contributes.settings`, or remove `settingsPermission`.",
+      })),
+      ...resolved("settings-permission-undeclared", error => ({
+        what: detail(error),
+        why: "`settingsPermission` must name a permission the plugin declares itself, so that a role can be given it.",
+        next: `Declare "${field(error, "settingsPermission")}" among the plugin's own permissions, or set \`settingsPermission\` to one it already declares.`,
+      })),
+      ...resolved("limit-rule-invalid", error => ({
+        what: detail(error),
+        why: "A limit rule is checked when the configuration loads, so a rule that cannot be enforced stops the start rather than letting every request past.",
+        next: `Correct the limit rule "${field(error, "rule")}" so that it does what the message says it must.`,
+      })),
+      ...resolved("duplicate-admin-slug", error => ({
+        ...whatThenNext(detail(error), " Rename one", "Rename one of them."),
+        why: "A plugin's admin slug is made from its name, and these two names make the same one.",
+      })),
+      ...resolved("plugin-event-name-reserved", error => ({
+        what: detail(error),
+        why: "Events under that prefix are Nextly's own, so a plugin's would be taken for one of them.",
+        next: "Rename the event so that it starts with the plugin's admin slug and a dot.",
+      })),
+      ...resolved("plugin-event-outside-namespace", error => ({
+        what: detail(error),
+        why: "A plugin's events are named under its admin slug, so no two plugins emit the same event.",
+        next: `Rename the event "${field(error, "event")}" so that it starts with "${field(error, "expectedPrefix")}".`,
+      })),
+      ...resolved("plugin-challenge-id-reserved", error => ({
+        what: detail(error),
+        why: "A challenge is looked up by its id, so the plugin's would stand in for Nextly's own.",
+        next: `Give the challenge "${field(error, "challengeId")}" another id.`,
+      })),
+      ...resolved("plugin-challenge-id-duplicate", error => {
+        const [first, second] = names(error, "plugins");
+        return {
+          what: detail(error),
+          why: "A challenge is looked up by its id, so each id names one challenge.",
+          next:
+            first === second
+              ? `Declare the challenge "${field(error, "challengeId")}" once in "${first}".`
+              : `Rename the challenge "${field(error, "challengeId")}" in one of the two plugins.`,
+        };
+      }),
+      ...resolved("hook-point-reserved", error => ({
+        what: detail(error),
+        why: "Hook points under that prefix are Nextly's own seams, so a plugin's would be taken for one of them.",
+        next: `Rename the hook point "${field(error, "hookPoint")}" so that it starts with the plugin's admin slug and a dot.`,
+      })),
+      ...resolved("hook-point-outside-prefix", error => ({
+        what: detail(error),
+        why: "A plugin's hook points are named under its admin slug, so no two plugins declare the same one.",
+        next: `Rename the hook point "${field(error, "hookPoint")}" so that it starts with "${field(error, "expectedPrefix")}.".`,
+      })),
+      ...resolved("hook-point-collision", error => ({
+        what: detail(error),
+        why: "A hook point is looked up by its name, so each name is declared by one plugin.",
+        next: `Rename the hook point "${field(error, "hookPoint")}" in one of the two plugins.`,
+      })),
+      ...resolved("hook-point-kind-mismatch", error => {
+        const parts = cut(detail(error), ". ");
+        return {
+          what: parts === undefined ? detail(error) : `${parts[0]}.`,
+          why:
+            parts?.[1] ??
+            "A hook point runs only as the kind its plugin declares.",
+          next: `Execute "${field(error, "point")}" as a ${field(error, "declared")}, the kind its plugin declares.`,
+        };
+      }),
+      ...resolved("principal-kind-invalid", error => {
+        const parts = cut(detail(error), " cannot be used: ");
+        return {
+          what:
+            parts === undefined ? detail(error) : `${parts[0]} cannot be used.`,
+          why: closed(parts?.[1] ?? field(error, "problem")),
+          next: "Correct the plugin's `contributes.principals` entry as the Why line says.",
+        };
+      }),
+      ...resolved("principal-kind-collision", error => ({
+        what: detail(error),
+        why: "A kind of signed-in person is recognised by its full name, so each name is registered once.",
+        next: `Rename the kind "${field(error, "principalKind")}" in one of the two plugins.`,
+      })),
+      ...resolved("plugin-audit-kind-outside-prefix", error => ({
+        what: detail(error),
+        why: "A plugin's audit kinds are named under its admin slug, so no two plugins record the same kind.",
+        next: `Rename the audit kind "${field(error, "auditKind")}" so that it starts with "${field(error, "expectedPrefix")}.".`,
+      })),
+      ...resolved("plugin-audit-kind-invalid", error => {
+        const parts = cut(detail(error), "; ");
+        return {
+          what: parts === undefined ? detail(error) : `${parts[0]}.`,
+          why: asSentence(
+            parts?.[1] ??
+              "A kind may use only lowercase letters, digits, dots, underscores and dashes"
+          ),
+          next: "Rename the audit kind using only those characters.",
+        };
+      }),
+      ...resolved("plugin-audit-kind-too-long", error => ({
+        what: detail(error),
+        why: "The audit trail stores each entry's kind in a column of that width.",
+        next: `Shorten the audit kind to ${count(error, "maxLength")} characters or fewer.`,
+      })),
+      ...resolved("plugin-audit-kind-declared-twice", error => ({
+        ...whatThenNext(
+          detail(error),
+          "; ",
+          "Declare it once with the full list of metadata keys."
+        ),
+        why: "An audit kind is declared once, with every metadata key it records.",
+      })),
+      ...resolved("capability-not-listed", error => ({
+        ...whatThenNext(
+          detail(error),
+          " Review the plugin, then ",
+          "Review the plugin, then list it for the capability in `nextly.config.ts`."
+        ),
+        why: "A capability that reaches this far is granted only to the plugins the app lists for it by name.",
+      })),
+      ...resolved("plugin-code-replaced-by-setup", error => {
+        const head = cut(detail(error), " That capability grants ");
+        const tail =
+          head === undefined
+            ? undefined
+            : cut(head[1], " Leave the definitions ");
+        return {
+          what: head?.[0] ?? detail(error),
+          why:
+            tail === undefined
+              ? "The app's consent covers the plugin it configured, with that plugin's own code."
+              : `That capability grants ${tail[0]}`,
+          next:
+            tail === undefined
+              ? "Leave the definitions of plugins that declare the capability as configured in setup transformers."
+              : `Leave the definitions ${tail[1]}`,
+        };
+      }),
+      ...resolved("capability-added-by-setup", error => {
+        const head = cut(detail(error), " That capability grants ");
+        const tail = head === undefined ? undefined : cut(head[1], " Declare ");
+        return {
+          what: head?.[0] ?? detail(error),
+          why:
+            tail === undefined
+              ? "The app's consent covers only a plugin that declares the capability in its own manifest."
+              : `That capability grants ${tail[0]}`,
+          next:
+            tail === undefined
+              ? "Declare the capability in the manifest of the plugin the app configures, rather than in a setup transformer."
+              : `Declare ${tail[1]}`,
+        };
+      }),
+      ...resolved("unknown-capability", error => ({
+        what: detail(error),
+        why: "`capabilities` accepts only the capabilities Nextly defines: `net`, `db`, `secrets` and `auth`.",
+        next: `Remove "${field(error, "capability")}" from the plugin's \`capabilities\`, or correct its spelling.`,
+      })),
+      ...resolved("invalid-schema-version", error => {
+        const parts = cut(detail(error), "; ");
+        return {
+          what: parts === undefined ? detail(error) : `${parts[0]}.`,
+          why: asSentence(parts?.[1] ?? "It must be a positive integer"),
+          next: "Set the plugin's `schemaVersion` to a positive integer, such as `1`, or install a release of the plugin that does.",
+        };
+      }),
+      ...resolved("invalid-manifest", error => {
+        const parts = cut(detail(error), `at "${field(error, "path")}": `);
+        return {
+          what:
+            parts === undefined
+              ? detail(error)
+              : `${parts[0]}at "${field(error, "path")}".`,
+          why: asSentence(parts?.[1] ?? field(error, "issue")),
+          next: `Correct \`${field(error, "path")}\` in the plugin's definition, or install a release of the plugin whose definition is valid.`,
+        };
+      }),
+      ...resolved("invalid-outbound-host", error => ({
+        what: detail(error),
+        why: "Each `capabilities.net.outbound` entry is a hostname, with an optional port, such as `api.example.com:443`; not a URL or an IP address.",
+        next: `Replace "${field(error, "host")}" with the hostname alone, and its port if it needs one.`,
+      })),
+      ...resolved("secrets-without-settings", error => ({
+        what: detail(error),
+        why: "A secret path names a setting to encrypt, so without `contributes.settings` it names nothing.",
+        next: "Add the settings schema under `contributes.settings`, or remove `capabilities.secrets`.",
+      })),
+      {
+        code: "PLUGIN_RESOLUTION_ERROR",
+        reason: "invalid-secret-path",
+        when: error => typeof error.logContext?.path === "string",
+        describe: error => ({
+          what: detail(error),
+          why: "Each setting is encrypted once, so each path is listed once.",
+          next: `Remove the second "${field(error, "path")}" from \`capabilities.secrets\`.`,
+        }),
+      },
+      ...resolved("invalid-secret-path", error => ({
+        what: detail(error),
+        why: "Each entry in `capabilities.secrets` names a setting by its dotted path in `contributes.settings`.",
+        next: "Remove the empty entry from `capabilities.secrets`, or write the path of the setting it is for.",
+      })),
+      ...resolved("unknown-secret-path", error => ({
+        what: detail(error),
+        why: "A secret path the schema does not have would leave the credential it is for stored in plain text.",
+        next: `Correct "${field(error, "path")}" to the path of a setting in \`contributes.settings\`, or add that setting.`,
+      })),
+      ...resolved("secret-path-names-group", error => ({
+        ...whatThenNext(detail(error), "; ", "Name the value inside it."),
+        why: "A secret is one stored value, so its path ends at a single setting.",
+      })),
+      ...resolved("secret-path-not-string", error => {
+        const parts = cut(detail(error), "; ");
+        return {
+          what: parts === undefined ? detail(error) : `${parts[0]}.`,
+          why: asSentence(parts?.[1] ?? "a secret is stored as a string"),
+          next: `Point "${field(error, "path")}" at a text setting, or make the setting it names a string.`,
+        };
+      }),
+      ...resolved("plugin-name-too-long-for-settings", error => ({
+        what: detail(error),
+        why: "Settings are stored under the plugin's name, in a column of that width.",
+        next: `Use a release of the plugin whose name is ${count(error, "maxLength")} characters or fewer.`,
+      })),
+      ...resolved("settings-key-too-long", error => ({
+        what: detail(error),
+        why: "Settings are stored by key, in a column of that width.",
+        next: `Shorten "${field(error, "key")}" to ${count(error, "maxLength")} characters or fewer.`,
+      })),
+      ...resolved("capability-provided-twice", error => ({
+        what: detail(error),
+        why: "Each capability has one provider, so a plugin that requires it knows which implementation it gets.",
+        next: `Configure only one of ${names(error, "providers")
+          .map(name => `"${name}"`)
+          .join(" and ")}, or disable one of them.`,
+      })),
+      ...resolved("missing-capability", error => ({
+        what: detail(error),
+        why: `"${field(error, "capability")}" is in the \`requires\` of "${field(error, "plugin")}", and no enabled plugin lists it in \`provides\`.`,
+        next: `Add and enable a plugin that provides "${field(error, "capability")}", or install a release of "${field(error, "plugin")}" that does not require it.`,
+      })),
+      ...resolved("capability-version-incompatible", error => ({
+        what: detail(error),
+        why: `The provider's version is outside the range in the \`requires\` of "${field(error, "plugin")}".`,
+        next: `Install a version of "${field(error, "provider")}" in ${field(error, "range")}, or a release of "${field(error, "plugin")}" that accepts ${field(error, "providerVersion")}.`,
+      })),
+    ],
   },
 
-  PLUGIN_SLUG_COLLISION: {
+  NEXTLY_SCHEMA_SLUG_COLLISION: {
     cause:
       "A plugin contributes an entity whose slug the configuration or another plugin already uses.",
     from: [
@@ -213,7 +612,7 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_EXTEND_TARGET_UNKNOWN: {
+  NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN: {
     cause:
       "A plugin extends an entity that neither the configuration, a plugin nor the Schema Builder declares.",
     from: [
@@ -230,7 +629,7 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_EXTEND_FIELD_DUPLICATE: {
+  NEXTLY_SCHEMA_EXTEND_FIELD_DUPLICATE: {
     cause:
       "A plugin extends an entity with a field whose name the entity already has.",
     from: [
@@ -244,7 +643,7 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       },
     ],
   },
-  RELATION_TARGET_UNKNOWN: {
+  NEXTLY_SCHEMA_RELATION_TARGET_MISSING: {
     cause:
       "A relationship field in the configuration or a plugin names a collection that does not exist.",
     from: [
@@ -258,7 +657,7 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_RENAME_TARGET_UNKNOWN: {
+  NEXTLY_SCHEMA_RENAME_UNKNOWN_TARGET: {
     cause:
       "A plugin's `.rename()` names an entity the plugin does not contribute.",
     from: [
@@ -272,7 +671,7 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       },
     ],
   },
-  PLUGIN_RELATION_DEPENDENCY_UNDECLARED: {
+  NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION: {
     cause:
       "A plugin relates to another plugin's entity without declaring that plugin in `dependsOn`.",
     from: [
@@ -295,8 +694,9 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
       "A relationship field in `ui-schema.json` names a collection that neither file declares.",
   },
 
-  PLUGIN_PERMISSION_DUPLICATE: {
-    cause: "The same custom permission is declared twice.",
+  NEXTLY_PERMISSION_COLLISION: {
+    cause:
+      "A plugin's custom permission repeats another, targets a resource Nextly reserves, or repeats one Nextly creates itself.",
     from: [
       {
         code: "NEXTLY_PERMISSION_COLLISION",
@@ -307,12 +707,6 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
           next: "Remove one of the two declarations, or give one of them another action or resource.",
         }),
       },
-    ],
-  },
-  PLUGIN_PERMISSION_SYSTEM_RESOURCE: {
-    cause:
-      "A custom permission is declared on a resource Nextly reserves for its own permissions.",
-    from: [
       {
         code: "NEXTLY_PERMISSION_COLLISION",
         reason: "system-resource-reserved",
@@ -322,12 +716,6 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
           next: "Declare the permission on a resource of the plugin's own.",
         }),
       },
-    ],
-  },
-  PLUGIN_PERMISSION_CRUD_RESERVED: {
-    cause:
-      "A custom permission repeats one Nextly creates itself for a collection or single.",
-    from: [
       {
         code: "NEXTLY_PERMISSION_COLLISION",
         reason: "crud-permission-reserved",
@@ -465,447 +853,6 @@ export const PLUGIN_CONFIG_CODES = defineCodes({
         }),
       },
     ],
-  },
-
-  PLUGIN_DEPENDENCY_MISSING: {
-    cause:
-      "A plugin depends on another plugin that the configuration does not list.",
-    from: resolved("missing-dependency", error => ({
-      what: detail(error),
-      why: `"${field(error, "dependency")}" is in the \`dependsOn\` of "${field(error, "plugin")}", and not in \`plugins\` in \`nextly.config.ts\`.`,
-      next: `Add "${field(error, "dependency")}" to \`plugins\` in \`nextly.config.ts\`, or install a release of "${field(error, "plugin")}" that does not need it.`,
-    })),
-  },
-  PLUGIN_DEPENDENCY_CYCLE: {
-    cause: "Plugins depend on one another in a cycle.",
-    from: resolved("dependency-cycle", error => ({
-      what: detail(error),
-      why: "Each plugin is set up after the plugins it depends on, so in a cycle none of them can be set up first.",
-      next: "Remove one `dependsOn` or `optionalDependsOn` entry from a plugin in the cycle.",
-    })),
-  },
-  PLUGIN_NEXTLY_RANGE_INVALID: {
-    cause: "A plugin's `nextly` field is not a valid range of Nextly versions.",
-    from: resolved("invalid-nextly-range", error => ({
-      what: detail(error),
-      why: "`nextly` must be a semver range, such as `^1.2.0`, so it can be checked against the installed version.",
-      next: `Correct the \`nextly\` range of "${field(error, "plugin")}", or install a release of it that declares a valid one.`,
-    })),
-  },
-  PLUGIN_NEXTLY_INCOMPATIBLE: {
-    cause:
-      "A plugin requires a version of Nextly other than the one installed.",
-    from: resolved("core-incompatible", error => ({
-      what: detail(error),
-      why: `The installed \`nextly\` is outside the plugin's \`nextly\` range, ${field(error, "range")}.`,
-      next: `Install a release of "${field(error, "plugin")}" that supports Nextly ${field(error, "coreVersion")}, or a version of \`nextly\` in ${field(error, "range")}.`,
-    })),
-  },
-  PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE: {
-    cause:
-      "A plugin depends on another plugin at a version other than the one configured.",
-    from: resolved("version-incompatible", error => ({
-      what: detail(error),
-      why: `The configured "${field(error, "dependency")}" is outside the range the \`dependsOn\` of "${field(error, "plugin")}" accepts.`,
-      next: `Install a version of "${field(error, "dependency")}" in ${field(error, "range")}, or a release of "${field(error, "plugin")}" that accepts ${field(error, "actual")}.`,
-    })),
-  },
-  PLUGIN_OPTIONAL_DEPENDENCY_VERSION_INCOMPATIBLE: {
-    cause:
-      "A plugin optionally depends on another plugin, and the configured version is outside the range it accepts.",
-    from: resolved("optional-version-incompatible", error => ({
-      what: detail(error),
-      why: `An optional dependency need not be configured, but once it is, its version must be in the plugin's \`optionalDependsOn\` range.`,
-      next: `Install a version of "${field(error, "dependency")}" in ${field(error, "range")}, or a release of "${field(error, "plugin")}" that accepts ${field(error, "actual")}.`,
-    })),
-  },
-  PLUGIN_MENU_COLLECTION_UNOWNED: {
-    cause:
-      "A plugin's menu item names a collection the plugin does not contribute.",
-    from: resolved("menu-item-unowned-collection", error => ({
-      ...whatThenNext(
-        detail(error),
-        " Name one of: ",
-        "Name one of the plugin's own collections in the menu item."
-      ),
-      why: "A plugin's menu items link only to the collections the plugin itself contributes.",
-    })),
-  },
-  PLUGIN_SETTINGS_PERMISSION_WITHOUT_SETTINGS: {
-    cause:
-      "A plugin declares `settingsPermission` but no settings schema for it to guard.",
-    from: resolved("settings-permission-without-settings", error => ({
-      what: detail(error),
-      why: "`settingsPermission` guards the plugin's settings, and the plugin declares no `contributes.settings`.",
-      next: "Add the settings schema under `contributes.settings`, or remove `settingsPermission`.",
-    })),
-  },
-  PLUGIN_SETTINGS_PERMISSION_UNDECLARED: {
-    cause:
-      "A plugin's `settingsPermission` is not one of the permissions the plugin declares.",
-    from: resolved("settings-permission-undeclared", error => ({
-      what: detail(error),
-      why: "`settingsPermission` must name a permission the plugin declares itself, so that a role can be given it.",
-      next: `Declare "${field(error, "settingsPermission")}" among the plugin's own permissions, or set \`settingsPermission\` to one it already declares.`,
-    })),
-  },
-  PLUGIN_LIMIT_RULE_INVALID: {
-    cause: "A plugin declares a limit rule that cannot be enforced.",
-    from: resolved("limit-rule-invalid", error => ({
-      what: detail(error),
-      why: "A limit rule is checked when the configuration loads, so a rule that cannot be enforced stops the start rather than letting every request past.",
-      next: `Correct the limit rule "${field(error, "rule")}" so that it does what the message says it must.`,
-    })),
-  },
-  PLUGIN_ADMIN_SLUG_COLLISION: {
-    cause: "Two plugins' names resolve to the same admin slug.",
-    from: resolved("duplicate-admin-slug", error => ({
-      ...whatThenNext(detail(error), " Rename one", "Rename one of them."),
-      why: "A plugin's admin slug is made from its name, and these two names make the same one.",
-    })),
-  },
-  PLUGIN_EVENT_NAME_RESERVED: {
-    cause: "A plugin declares an event under the prefix Nextly reserves.",
-    from: resolved("plugin-event-name-reserved", error => ({
-      what: detail(error),
-      why: "Events under that prefix are Nextly's own, so a plugin's would be taken for one of them.",
-      next: "Rename the event so that it starts with the plugin's admin slug and a dot.",
-    })),
-  },
-  PLUGIN_EVENT_OUTSIDE_NAMESPACE: {
-    cause:
-      "A plugin declares an event whose name does not start with the plugin's prefix.",
-    from: resolved("plugin-event-outside-namespace", error => ({
-      what: detail(error),
-      why: "A plugin's events are named under its admin slug, so no two plugins emit the same event.",
-      next: `Rename the event "${field(error, "event")}" so that it starts with "${field(error, "expectedPrefix")}".`,
-    })),
-  },
-  PLUGIN_CHALLENGE_ID_RESERVED: {
-    cause:
-      "A plugin declares a sign-in challenge under the id Nextly reserves for its forced password change.",
-    from: resolved("plugin-challenge-id-reserved", error => ({
-      what: detail(error),
-      why: "A challenge is looked up by its id, so the plugin's would stand in for Nextly's own.",
-      next: `Give the challenge "${field(error, "challengeId")}" another id.`,
-    })),
-  },
-  PLUGIN_CHALLENGE_ID_DUPLICATE: {
-    cause: "A sign-in challenge id is declared more than once.",
-    from: resolved("plugin-challenge-id-duplicate", error => {
-      const [first, second] = names(error, "plugins");
-      return {
-        what: detail(error),
-        why: "A challenge is looked up by its id, so each id names one challenge.",
-        next:
-          first === second
-            ? `Declare the challenge "${field(error, "challengeId")}" once in "${first}".`
-            : `Rename the challenge "${field(error, "challengeId")}" in one of the two plugins.`,
-      };
-    }),
-  },
-  PLUGIN_HOOK_POINT_RESERVED: {
-    cause: "A plugin declares a hook point under the prefix Nextly reserves.",
-    from: resolved("hook-point-reserved", error => ({
-      what: detail(error),
-      why: "Hook points under that prefix are Nextly's own seams, so a plugin's would be taken for one of them.",
-      next: `Rename the hook point "${field(error, "hookPoint")}" so that it starts with the plugin's admin slug and a dot.`,
-    })),
-  },
-  PLUGIN_HOOK_POINT_OUTSIDE_NAMESPACE: {
-    cause:
-      "A plugin declares a hook point whose name does not start with the plugin's prefix.",
-    from: resolved("hook-point-outside-prefix", error => ({
-      what: detail(error),
-      why: "A plugin's hook points are named under its admin slug, so no two plugins declare the same one.",
-      next: `Rename the hook point "${field(error, "hookPoint")}" so that it starts with "${field(error, "expectedPrefix")}.".`,
-    })),
-  },
-  PLUGIN_HOOK_POINT_COLLISION: {
-    cause: "Two plugins declare the same hook point.",
-    from: resolved("hook-point-collision", error => ({
-      what: detail(error),
-      why: "A hook point is looked up by its name, so each name is declared by one plugin.",
-      next: `Rename the hook point "${field(error, "hookPoint")}" in one of the two plugins.`,
-    })),
-  },
-  PLUGIN_HOOK_POINT_KIND_MISMATCH: {
-    cause:
-      "A hook point was executed as a kind other than the one its plugin declares.",
-    from: resolved("hook-point-kind-mismatch", error => {
-      const parts = cut(detail(error), ". ");
-      return {
-        what: parts === undefined ? detail(error) : `${parts[0]}.`,
-        why:
-          parts?.[1] ??
-          "A hook point runs only as the kind its plugin declares.",
-        next: `Execute "${field(error, "point")}" as a ${field(error, "declared")}, the kind its plugin declares.`,
-      };
-    }),
-  },
-  PLUGIN_PRINCIPAL_KIND_INVALID: {
-    cause: "A plugin registers a kind of signed-in person that cannot be used.",
-    from: resolved("principal-kind-invalid", error => {
-      const parts = cut(detail(error), " cannot be used: ");
-      return {
-        what:
-          parts === undefined ? detail(error) : `${parts[0]} cannot be used.`,
-        why: closed(parts?.[1] ?? field(error, "problem")),
-        next: "Correct the plugin's `contributes.principals` entry as the Why line says.",
-      };
-    }),
-  },
-  PLUGIN_PRINCIPAL_KIND_COLLISION: {
-    cause: "Two plugins register the same kind of signed-in person.",
-    from: resolved("principal-kind-collision", error => ({
-      what: detail(error),
-      why: "A kind of signed-in person is recognised by its full name, so each name is registered once.",
-      next: `Rename the kind "${field(error, "principalKind")}" in one of the two plugins.`,
-    })),
-  },
-  PLUGIN_AUDIT_KIND_OUTSIDE_NAMESPACE: {
-    cause:
-      "A plugin declares an audit kind whose name does not start with the plugin's prefix.",
-    from: resolved("plugin-audit-kind-outside-prefix", error => ({
-      what: detail(error),
-      why: "A plugin's audit kinds are named under its admin slug, so no two plugins record the same kind.",
-      next: `Rename the audit kind "${field(error, "auditKind")}" so that it starts with "${field(error, "expectedPrefix")}.".`,
-    })),
-  },
-  PLUGIN_AUDIT_KIND_INVALID: {
-    cause:
-      "A plugin declares an audit kind with characters an audit kind cannot hold.",
-    from: resolved("plugin-audit-kind-invalid", error => {
-      const parts = cut(detail(error), "; ");
-      return {
-        what: parts === undefined ? detail(error) : `${parts[0]}.`,
-        why: asSentence(
-          parts?.[1] ??
-            "A kind may use only lowercase letters, digits, dots, underscores and dashes"
-        ),
-        next: "Rename the audit kind using only those characters.",
-      };
-    }),
-  },
-  PLUGIN_AUDIT_KIND_TOO_LONG: {
-    cause:
-      "A plugin declares an audit kind longer than the audit trail can store.",
-    from: resolved("plugin-audit-kind-too-long", error => ({
-      what: detail(error),
-      why: "The audit trail stores each entry's kind in a column of that width.",
-      next: `Shorten the audit kind to ${count(error, "maxLength")} characters or fewer.`,
-    })),
-  },
-  PLUGIN_AUDIT_KIND_DUPLICATE: {
-    cause: "A plugin declares the same audit kind more than once.",
-    from: resolved("plugin-audit-kind-declared-twice", error => ({
-      ...whatThenNext(
-        detail(error),
-        "; ",
-        "Declare it once with the full list of metadata keys."
-      ),
-      why: "An audit kind is declared once, with every metadata key it records.",
-    })),
-  },
-  PLUGIN_CAPABILITY_NOT_CONSENTED: {
-    cause:
-      "A plugin declares a capability that needs the app's consent, and `nextly.config.ts` does not give it.",
-    from: resolved("capability-not-listed", error => ({
-      ...whatThenNext(
-        detail(error),
-        " Review the plugin, then ",
-        "Review the plugin, then list it for the capability in `nextly.config.ts`."
-      ),
-      why: "A capability that reaches this far is granted only to the plugins the app lists for it by name.",
-    })),
-  },
-  PLUGIN_CODE_REPLACED_BY_SETUP: {
-    cause:
-      "A `setup` transformer changed the code of a plugin that holds a capability the app consented to.",
-    from: resolved("plugin-code-replaced-by-setup", error => {
-      const head = cut(detail(error), " That capability grants ");
-      const tail =
-        head === undefined
-          ? undefined
-          : cut(head[1], " Leave the definitions ");
-      return {
-        what: head?.[0] ?? detail(error),
-        why:
-          tail === undefined
-            ? "The app's consent covers the plugin it configured, with that plugin's own code."
-            : `That capability grants ${tail[0]}`,
-        next:
-          tail === undefined
-            ? "Leave the definitions of plugins that declare the capability as configured in setup transformers."
-            : `Leave the definitions ${tail[1]}`,
-      };
-    }),
-  },
-  PLUGIN_CAPABILITY_ADDED_BY_SETUP: {
-    cause:
-      "A `setup` transformer gave a plugin a capability that needs the app's consent.",
-    from: resolved("capability-added-by-setup", error => {
-      const head = cut(detail(error), " That capability grants ");
-      const tail = head === undefined ? undefined : cut(head[1], " Declare ");
-      return {
-        what: head?.[0] ?? detail(error),
-        why:
-          tail === undefined
-            ? "The app's consent covers only a plugin that declares the capability in its own manifest."
-            : `That capability grants ${tail[0]}`,
-        next:
-          tail === undefined
-            ? "Declare the capability in the manifest of the plugin the app configures, rather than in a setup transformer."
-            : `Declare ${tail[1]}`,
-      };
-    }),
-  },
-  PLUGIN_CAPABILITY_UNKNOWN: {
-    cause: "A plugin declares a capability Nextly does not define.",
-    from: resolved("unknown-capability", error => ({
-      what: detail(error),
-      why: "`capabilities` accepts only the capabilities Nextly defines: `net`, `db`, `secrets` and `auth`.",
-      next: `Remove "${field(error, "capability")}" from the plugin's \`capabilities\`, or correct its spelling.`,
-    })),
-  },
-  PLUGIN_SCHEMA_VERSION_INVALID: {
-    cause: "A plugin's `schemaVersion` is not a positive integer.",
-    from: resolved("invalid-schema-version", error => {
-      const parts = cut(detail(error), "; ");
-      return {
-        what: parts === undefined ? detail(error) : `${parts[0]}.`,
-        why: asSentence(parts?.[1] ?? "It must be a positive integer"),
-        next: "Set the plugin's `schemaVersion` to a positive integer, such as `1`, or install a release of the plugin that does.",
-      };
-    }),
-  },
-  PLUGIN_MANIFEST_INVALID: {
-    cause: "A plugin's definition has a field of the wrong shape.",
-    from: resolved("invalid-manifest", error => {
-      const parts = cut(detail(error), `at "${field(error, "path")}": `);
-      return {
-        what:
-          parts === undefined
-            ? detail(error)
-            : `${parts[0]}at "${field(error, "path")}".`,
-        why: asSentence(parts?.[1] ?? field(error, "issue")),
-        next: `Correct \`${field(error, "path")}\` in the plugin's definition, or install a release of the plugin whose definition is valid.`,
-      };
-    }),
-  },
-  PLUGIN_OUTBOUND_HOST_INVALID: {
-    cause:
-      "A plugin declares an outbound host that is not a hostname with an optional port.",
-    from: resolved("invalid-outbound-host", error => ({
-      what: detail(error),
-      why: "Each `capabilities.net.outbound` entry is a hostname, with an optional port, such as `api.example.com:443`; not a URL or an IP address.",
-      next: `Replace "${field(error, "host")}" with the hostname alone, and its port if it needs one.`,
-    })),
-  },
-  PLUGIN_SECRETS_WITHOUT_SETTINGS: {
-    cause: "A plugin declares secret paths but no settings schema.",
-    from: resolved("secrets-without-settings", error => ({
-      what: detail(error),
-      why: "A secret path names a setting to encrypt, so without `contributes.settings` it names nothing.",
-      next: "Add the settings schema under `contributes.settings`, or remove `capabilities.secrets`.",
-    })),
-  },
-  PLUGIN_SECRET_PATH_DUPLICATE: {
-    cause: "A plugin declares the same secret path twice.",
-    from: [
-      {
-        code: "PLUGIN_RESOLUTION_ERROR",
-        reason: "invalid-secret-path",
-        when: error => typeof error.logContext?.path === "string",
-        describe: error => ({
-          what: detail(error),
-          why: "Each setting is encrypted once, so each path is listed once.",
-          next: `Remove the second "${field(error, "path")}" from \`capabilities.secrets\`.`,
-        }),
-      },
-    ],
-  },
-  PLUGIN_SECRET_PATH_EMPTY: {
-    cause: "A plugin declares an empty secret path.",
-    from: resolved("invalid-secret-path", error => ({
-      what: detail(error),
-      why: "Each entry in `capabilities.secrets` names a setting by its dotted path in `contributes.settings`.",
-      next: "Remove the empty entry from `capabilities.secrets`, or write the path of the setting it is for.",
-    })),
-  },
-  PLUGIN_SECRET_PATH_UNKNOWN: {
-    cause:
-      "A plugin declares a secret path its settings schema does not contain.",
-    from: resolved("unknown-secret-path", error => ({
-      what: detail(error),
-      why: "A secret path the schema does not have would leave the credential it is for stored in plain text.",
-      next: `Correct "${field(error, "path")}" to the path of a setting in \`contributes.settings\`, or add that setting.`,
-    })),
-  },
-  PLUGIN_SECRET_PATH_NAMES_GROUP: {
-    cause:
-      "A plugin's secret path names a group of settings rather than one value.",
-    from: resolved("secret-path-names-group", error => ({
-      ...whatThenNext(detail(error), "; ", "Name the value inside it."),
-      why: "A secret is one stored value, so its path ends at a single setting.",
-    })),
-  },
-  PLUGIN_SECRET_PATH_NOT_STRING: {
-    cause:
-      "A plugin's secret path names a setting whose value cannot be a string.",
-    from: resolved("secret-path-not-string", error => {
-      const parts = cut(detail(error), "; ");
-      return {
-        what: parts === undefined ? detail(error) : `${parts[0]}.`,
-        why: asSentence(parts?.[1] ?? "a secret is stored as a string"),
-        next: `Point "${field(error, "path")}" at a text setting, or make the setting it names a string.`,
-      };
-    }),
-  },
-  PLUGIN_NAME_TOO_LONG_FOR_SETTINGS: {
-    cause:
-      "A plugin that stores settings has a name longer than the settings storage holds.",
-    from: resolved("plugin-name-too-long-for-settings", error => ({
-      what: detail(error),
-      why: "Settings are stored under the plugin's name, in a column of that width.",
-      next: `Use a release of the plugin whose name is ${count(error, "maxLength")} characters or fewer.`,
-    })),
-  },
-  PLUGIN_SETTINGS_KEY_TOO_LONG: {
-    cause:
-      "A plugin declares a settings key longer than the settings storage holds.",
-    from: resolved("settings-key-too-long", error => ({
-      what: detail(error),
-      why: "Settings are stored by key, in a column of that width.",
-      next: `Shorten "${field(error, "key")}" to ${count(error, "maxLength")} characters or fewer.`,
-    })),
-  },
-  PLUGIN_CAPABILITY_PROVIDED_TWICE: {
-    cause: "Two plugins provide the same capability.",
-    from: resolved("capability-provided-twice", error => ({
-      what: detail(error),
-      why: "Each capability has one provider, so a plugin that requires it knows which implementation it gets.",
-      next: `Configure only one of ${names(error, "providers")
-        .map(name => `"${name}"`)
-        .join(" and ")}, or disable one of them.`,
-    })),
-  },
-  PLUGIN_CAPABILITY_MISSING: {
-    cause: "A plugin requires a capability that no enabled plugin provides.",
-    from: resolved("missing-capability", error => ({
-      what: detail(error),
-      why: `"${field(error, "capability")}" is in the \`requires\` of "${field(error, "plugin")}", and no enabled plugin lists it in \`provides\`.`,
-      next: `Add and enable a plugin that provides "${field(error, "capability")}", or install a release of "${field(error, "plugin")}" that does not require it.`,
-    })),
-  },
-  PLUGIN_CAPABILITY_VERSION_INCOMPATIBLE: {
-    cause:
-      "A plugin requires a capability at a version other than the one its provider offers.",
-    from: resolved("capability-version-incompatible", error => ({
-      what: detail(error),
-      why: `The provider's version is outside the range in the \`requires\` of "${field(error, "plugin")}".`,
-      next: `Install a version of "${field(error, "provider")}" in ${field(error, "range")}, or a release of "${field(error, "plugin")}" that accepts ${field(error, "providerVersion")}.`,
-    })),
   },
 });
 

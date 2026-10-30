@@ -212,7 +212,7 @@ describe("runChecks (F11 PR 4)", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("(MIGRATION_FILE_EDITED)")
+        expect.stringContaining("(CHECKSUM_MISMATCH)")
       );
     });
   });
@@ -235,7 +235,7 @@ describe("runChecks (F11 PR 4)", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("(MIGRATION_SNAPSHOT_MISSING)")
+        expect.stringContaining("(MISSING_SNAPSHOT)")
       );
     });
   });
@@ -267,7 +267,7 @@ describe("runChecks (F11 PR 4)", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("(MIGRATION_SNAPSHOT_INVALID)")
+        expect.stringContaining("(INVALID_SNAPSHOT)")
       );
       expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("JSON parse failed")
@@ -304,7 +304,7 @@ describe("runChecks (F11 PR 4)", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("(MIGRATION_SNAPSHOT_INVALID)")
+        expect.stringContaining("(INVALID_SNAPSHOT)")
       );
       expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("expected version: 1, got 2")
@@ -330,7 +330,7 @@ describe("runChecks (F11 PR 4)", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("(SNAPSHOT_WITHOUT_MIGRATION)")
+        expect.stringContaining("(MISSING_MIGRATION)")
       );
     });
   });
@@ -348,7 +348,7 @@ describe("runChecks (F11 PR 4)", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("(SCHEMA_CHANGE_WITHOUT_MIGRATION)")
+        expect.stringContaining("(SCHEMA_DRIFT)")
       );
       expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("add_table dc_posts")
@@ -379,7 +379,7 @@ describe("runChecks (F11 PR 4)", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
-        expect.stringContaining("(SCHEMA_CHANGE_WITHOUT_MIGRATION)")
+        expect.stringContaining("(SCHEMA_DRIFT)")
       );
       expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("Run `nextly migrate:create")

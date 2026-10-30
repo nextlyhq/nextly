@@ -80,7 +80,7 @@ describe.each(LOCK_DIALECTS)("a held schema lock on %s", dialect => {
     );
 
     const error = toCliError(thrown);
-    expect(error.code).toBe("SCHEMA_LOCK_HELD");
+    expect(error.code).toBe("NEXTLY_MIGRATE_LOCK_BUSY");
     const lines = formatCliError(error).split("\n");
     expect(lines[0]).toMatch(
       /^✗ `nextly migrate` did not start, and changed nothing: the schema lock is still held/
@@ -88,7 +88,7 @@ describe.each(LOCK_DIALECTS)("a held schema lock on %s", dialect => {
     expect(lines[1]).toMatch(/^ {2}Why: {2}`nextly db:sync` holds it \(/);
     expect(lines[2]).toBe("  Next: Run it again once that finishes.");
     expect(lines[3]).toBe(
-      "  Docs: https://nextlyhq.com/docs/cli/errors/schema-lock-held  (SCHEMA_LOCK_HELD)"
+      "  Docs: https://nextlyhq.com/docs/cli/errors/nextly-migrate-lock-busy  (NEXTLY_MIGRATE_LOCK_BUSY)"
     );
     expect(lines).toHaveLength(4);
 

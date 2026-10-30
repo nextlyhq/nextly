@@ -24,7 +24,9 @@ import {
   pluginNotFound,
 } from "../../errors/areas/plugins";
 
-import type { ErrorCases } from "./types";
+import type { CliErrorCode } from "../../errors";
+
+import type { ErrorCase, ErrorCases } from "./types";
 
 const PLUGIN = "@acme/seo";
 const MODULE = "20261020_120000_add_redirects";
@@ -133,7 +135,7 @@ export const PLUGIN_CASES = {
       },
     }),
   // As `consentToDeletions` in `cli/commands/plugin-lifecycle.ts` throws it for a "no".
-  PLUGIN_UNINSTALL_DECLINED: () =>
+  PLUGIN_UNINSTALL_UNCONFIRMED: () =>
     new NextlyError({
       code: "PLUGIN_UNINSTALL_UNCONFIRMED",
       publicMessage:
@@ -258,7 +260,7 @@ export const PLUGIN_CASES = {
         warn: () => {},
       })
     ),
-  PLUGIN_UNINSTALLED_BUT_CONFIGURED: () =>
+  PLUGIN_SCHEMA_UNINSTALLED: () =>
     thrown(() =>
       assertPluginsInstalled({
         plugins: [{ name: PLUGIN }],
@@ -275,7 +277,7 @@ export const PLUGIN_CASES = {
       )
     ),
   // As `cli/commands/migrate.ts` throws it, before any plugin migration runs.
-  PLUGIN_SHIPS_NO_MIGRATIONS: () =>
+  PLUGIN_MIGRATIONS_UNAVAILABLE: () =>
     new NextlyError({
       code: "PLUGIN_MIGRATIONS_UNAVAILABLE",
       publicMessage:
@@ -283,7 +285,7 @@ export const PLUGIN_CASES = {
       logContext: { tables: ["seo_redirects", "dc_posts.seo_title"] },
     }),
   // As `assertModuleIntact` in `domains/schema/migrate/plugin/plugin-migration.ts` throws it.
-  PLUGIN_MIGRATION_CHANGED: () =>
+  MIGRATION_CHECKSUM_MISMATCH: () =>
     new NextlyError({
       code: "MIGRATION_CHECKSUM_MISMATCH",
       publicMessage: `Plugin "${PLUGIN}" migration ${MODULE}: a plugin migration has been changed since it was generated. Regenerate it, or restore the original. A module written or edited by hand is sealed with \`migrationChecksum\` from \`@nextlyhq/plugin-sdk/schema\` — \`checksum: migrationChecksum(content)\` over the module without its checksum — which is the form \`nextly migrate:create --plugin <entry> --blank\` and \`--no-transaction\` write.`,
@@ -292,18 +294,6 @@ export const PLUGIN_CASES = {
         migration: MODULE,
         expected: "9f2c4e1a",
         actual: "4b7d0c3e",
-      },
-    }),
-  // As `assertAppliedUnchanged` in the same file throws it.
-  PLUGIN_APPLIED_MIGRATION_CHANGED: () =>
-    new NextlyError({
-      code: "MIGRATION_CHECKSUM_MISMATCH",
-      publicMessage: `Plugin "${PLUGIN}" migration ${MODULE}: a plugin migration that has already been applied no longer matches what was applied. The database does not match the file that claims to describe it. Restore the migration as it was when it ran.`,
-      logContext: {
-        plugin: PLUGIN,
-        migration: MODULE,
-        applied: "9f2c4e1a",
-        onDisk: "4b7d0c3e",
       },
     }),
   // As `appliedModuleMissing` in `domains/schema/migrate/plugin/plugin-history.ts` builds it.
@@ -429,4 +419,52 @@ export const PLUGIN_CASES = {
         hook: "onUninstall",
       },
     }),
+  // As `ownershipConflict` in `domains/schema/ownership/owner-registry.ts` builds it.
+  OWNERSHIP_TAKEOVER_REFUSED: () =>
+    NextlyError.conflict({
+      message:
+        'The table "seo_redirects" is recorded as belonging to "@acme/seo", so "@acme/redirects" cannot take it over. If "@acme/seo" was removed and its table is meant to pass to "@acme/redirects", delete "@acme/seo"\'s rows from nextly_schema_owners first.',
+      logContext: {
+        reason: "table-owner-would-change",
+        table: "seo_redirects",
+        elementKind: "table",
+        elementName: "",
+      },
+    }),
+  // As `plugins/database/plugin-database.ts` throws it for a contributed column the database lacks.
+  PLUGIN_COLUMN_NOT_MIGRATED: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        'The column "seo_title" contributed to "dc_posts" is not in the database yet. Apply the app\'s migration that adds it (`nextly migrate:create`, then `nextly migrate`).',
+      logContext: {
+        reason: "contributed-column-not-migrated",
+        table: "dc_posts",
+        column: "seo_title",
+      },
+    }),
 } satisfies ErrorCases;
+
+/**
+ * The causes that were codes of their own before the guides' documented code was kept for them:
+ * each still has its own reading, so each still has its case, under the code it now ends as.
+ */
+export const PLUGIN_MERGED_CASES: Record<
+  string,
+  { code: CliErrorCode; make: ErrorCase }
+> = {
+  PLUGIN_APPLIED_MIGRATION_CHANGED: {
+    code: "MIGRATION_CHECKSUM_MISMATCH",
+    make: () =>
+      new NextlyError({
+        code: "MIGRATION_CHECKSUM_MISMATCH",
+        publicMessage: `Plugin "${PLUGIN}" migration ${MODULE}: a plugin migration that has already been applied no longer matches what was applied. The database does not match the file that claims to describe it. Restore the migration as it was when it ran.`,
+        logContext: {
+          plugin: PLUGIN,
+          migration: MODULE,
+          applied: "9f2c4e1a",
+          onDisk: "4b7d0c3e",
+        },
+      }),
+  },
+};

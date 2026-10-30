@@ -307,8 +307,8 @@ export async function runMigrateCheck(
  * spinning up the loadConfig + validateDatabaseEnv plumbing.
  *
  * The CLI entry point (`runMigrateCheck`) loads config + dialect, builds
- * the desired snapshot, then delegates here. Every failing exit
- * happens inside this function — callers don't need to handle exit codes.
+ * the desired snapshot, then delegates here. All `process.exit(1)` calls
+ * happen inside this function — callers don't need to handle exit codes.
  */
 export async function runChecks(args: {
   migrationsDir: string;

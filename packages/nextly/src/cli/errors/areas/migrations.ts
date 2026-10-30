@@ -45,7 +45,7 @@ function lockRefusal(error: NextlyError): CliErrorParts {
  * …". The header's first sentence is what happened, the list and "Nothing was changed." are why,
  * and the consent to give is next.
  */
-function dataLossParts(message: string): CliErrorParts {
+export function dataLossParts(message: string): CliErrorParts {
   const lines = message.split("\n");
   const header = lines[0] ?? message;
   const last = lines.length > 1 ? lines[lines.length - 1] : "";
@@ -404,7 +404,7 @@ function malformedConsentParts(message: string): CliErrorParts {
 }
 
 export const MIGRATION_CODES = defineCodes({
-  SCHEMA_LOCK_HELD: {
+  NEXTLY_MIGRATE_LOCK_BUSY: {
     cause:
       "Another run holds the schema lock, so the command did not start and changed nothing.",
     from: [{ code: "NEXTLY_MIGRATE_LOCK_BUSY", describe: lockRefusal }],
@@ -418,12 +418,6 @@ export const MIGRATION_CODES = defineCodes({
         reason: "data-loss-needs-consent",
         describe: error => dataLossParts(error.publicMessage),
       },
-      // A full plugin uninstall's refusal is the same verdict, with the `--keep-data` way out.
-      {
-        code: "PLUGIN_UNINSTALL_UNCONFIRMED",
-        reason: "data-loss-needs-consent",
-        describe: error => dataLossParts(error.publicMessage),
-      },
     ],
   },
   DATA_LOSS_CONSENT_NOT_COVERED: {
@@ -432,12 +426,6 @@ export const MIGRATION_CODES = defineCodes({
     from: [
       {
         code: "INVALID_INPUT",
-        reason: "data-loss-not-covered",
-        describe: error => dataLossParts(error.publicMessage),
-      },
-      // A full plugin uninstall's refusal is the same verdict, with the `--keep-data` way out.
-      {
-        code: "PLUGIN_UNINSTALL_UNCONFIRMED",
         reason: "data-loss-not-covered",
         describe: error => dataLossParts(error.publicMessage),
       },
@@ -455,6 +443,33 @@ export const MIGRATION_CODES = defineCodes({
             error.publicMessage
           ),
         describe: error => malformedConsentParts(error.publicMessage),
+      },
+    ],
+  },
+  REFUSED_STATEMENT: {
+    cause:
+      "A migration holds a statement the runner refuses to run where it is, so nothing in it ran.",
+    from: [
+      {
+        // `assertRunnableStatements` names each refused statement and its fix; read by the
+        // refusals it lists, not by its wording.
+        code: "INVALID_INPUT",
+        when: error => Array.isArray(error.logContext?.refusals),
+        describe: error => {
+          const source = error.logContext?.source;
+          const message = error.publicMessage;
+          const at = message.indexOf(" was refused, and nothing in it ran. ");
+          return {
+            what: `${typeof source === "string" ? `\`${source}\`` : "A migration"} was refused, and nothing in it ran.`,
+            why:
+              at === -1
+                ? message
+                : message.slice(
+                    at + " was refused, and nothing in it ran. ".length
+                  ),
+            next: "Change each statement as its line above says, then run the command again.",
+          };
+        },
       },
     ],
   },
@@ -495,7 +510,7 @@ export const MIGRATION_CODES = defineCodes({
       },
     ],
   },
-  RESOLVE_SNAPSHOT_MISSING: {
+  NEXTLY_MIGRATION_SNAPSHOT_MISSING: {
     cause:
       "`nextly migrate:resolve --applied` has no snapshot to compare the live schema with.",
     from: [
@@ -622,7 +637,7 @@ export const MIGRATION_CODES = defineCodes({
       },
     ],
   },
-  CORE_DESTRUCTIVE_CHANGE_REFUSED: {
+  NEXTLY_CORE_DESTRUCTIVE_REFUSED: {
     cause:
       "Bringing Nextly's own tables up to date needs a destructive change, which `nextly migrate` makes only with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`.",
     from: [
@@ -681,37 +696,16 @@ export const MIGRATION_CODES = defineCodes({
       },
     ],
   },
-  MIGRATION_CONCURRENT_RUN: {
+  NEXTLY_MIGRATION_CONCURRENT_RUN: {
     cause:
       "Another run recorded the same migration while this one was running it.",
     from: [
       { code: "NEXTLY_MIGRATION_CONCURRENT_RUN", describe: concurrentRunParts },
     ],
   },
-  MIGRATION_ATTEMPT_UNFINISHED: {
+  NEXTLY_MIGRATION_PARTIALLY_APPLIED: {
     cause:
-      "A migration's last attempt may have stopped part-way, so it is neither run again nor recorded as applied.",
-    from: [
-      {
-        code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-        reason: "partially-applied",
-        describe: unfinishedAttemptParts,
-      },
-      {
-        code: "NEXTLY_MIGRATION_APPLY_FAILED",
-        when: error =>
-          wraps(
-            error,
-            "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-            "partially-applied"
-          ) && wrapped(error)?.logContext?.failedStatement === undefined,
-        describe: error => unfinishedAttemptParts(wrapped(error) ?? error),
-      },
-    ],
-  },
-  MIGRATION_PARTIALLY_APPLIED: {
-    cause:
-      "A migration run outside a transaction failed part-way, and the statements before the failing one stayed applied.",
+      "A migration that runs outside a transaction failed part-way, now or in its newest attempt, and the statements before the failure stayed applied.",
     from: [
       {
         code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
@@ -729,11 +723,26 @@ export const MIGRATION_CODES = defineCodes({
           ) && wrapped(error)?.logContext?.failedStatement !== undefined,
         describe: error => partialRunParts(wrapped(error) ?? error),
       },
+      {
+        code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+        reason: "partially-applied",
+        describe: unfinishedAttemptParts,
+      },
+      {
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+        when: error =>
+          wraps(
+            error,
+            "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+            "partially-applied"
+          ) && wrapped(error)?.logContext?.failedStatement === undefined,
+        describe: error => unfinishedAttemptParts(wrapped(error) ?? error),
+      },
     ],
   },
-  MIGRATION_FOREIGN_KEY_VIOLATION: {
+  NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION: {
     cause:
-      "A migration would leave rows that reference rows that do not exist.",
+      "On SQLite, a migration left rows that reference rows that do not exist, or foreign-key enforcement could not be switched off for it.",
     from: [
       {
         code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
@@ -750,12 +759,6 @@ export const MIGRATION_CODES = defineCodes({
           ),
         describe: error => danglingReferenceParts(wrapped(error) ?? error),
       },
-    ],
-  },
-  SQLITE_FOREIGN_KEYS_STILL_ON: {
-    cause:
-      "SQLite's foreign-key enforcement could not be switched off for a migration, because another transaction was open on the connection.",
-    from: [
       {
         code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
         reason: "enforcement-still-on",
@@ -812,21 +815,21 @@ export const MIGRATION_CODES = defineCodes({
       },
     ],
   },
-  MIGRATION_FILE_EDITED: {
+  CHECKSUM_MISMATCH: {
     cause:
       "A migration file no longer matches the checksum `migrate:create` recorded in its snapshot.",
   },
-  MIGRATION_SNAPSHOT_MISSING: {
+  MISSING_SNAPSHOT: {
     cause: "A migration file has no snapshot file beside it in `meta/`.",
   },
-  MIGRATION_SNAPSHOT_INVALID: {
+  INVALID_SNAPSHOT: {
     cause:
       "A migration's snapshot file is not valid JSON, or not a snapshot this version of Nextly reads.",
   },
-  SNAPSHOT_WITHOUT_MIGRATION: {
+  MISSING_MIGRATION: {
     cause: "A snapshot file in `meta/` has no migration file beside it.",
   },
-  SCHEMA_CHANGE_WITHOUT_MIGRATION: {
+  SCHEMA_DRIFT: {
     cause:
       "The configuration has schema changes that no migration file holds yet.",
   },
@@ -880,7 +883,7 @@ export function migrationFileEdited(
   expected: string | undefined,
   actual: string
 ): CliError {
-  return new CliError("MIGRATION_FILE_EDITED", {
+  return new CliError("CHECKSUM_MISMATCH", {
     what: `The migration file \`${sqlName}\` was edited after generation.`,
     why: `Expected SHA-256: ${expected ?? "none recorded"}\nActual SHA-256:   ${actual}`,
     next: 'Either revert the edit, or delete this file and re-generate via `nextly migrate:create --name="<migration-name>"`.',
@@ -892,7 +895,7 @@ export function migrationSnapshotMissing(
   sqlName: string,
   metaDir: string
 ): CliError {
-  return new CliError("MIGRATION_SNAPSHOT_MISSING", {
+  return new CliError("MISSING_SNAPSHOT", {
     what: `\`${sqlName}\` has no paired snapshot file in ${metaDir}.`,
     why: `Nothing is at \`${sqlName.replace(/\.sql$/, "")}.snapshot.json\`, which \`migrate:create\` writes beside every migration; a migration generated before it wrote snapshots has none.`,
     next: "Either delete it, or re-create it with `nextly migrate:create --blank` and copy the SQL across.",
@@ -902,7 +905,7 @@ export function migrationSnapshotMissing(
 /** A snapshot file that could not be read, in `SnapshotFileError`'s words. */
 export function migrationSnapshotInvalid(message: string): CliError {
   const read = /^snapshot file (.+?) is invalid: ([\s\S]*)$/.exec(message);
-  return new CliError("MIGRATION_SNAPSHOT_INVALID", {
+  return new CliError("INVALID_SNAPSHOT", {
     what:
       read === null
         ? "A snapshot file is invalid."
@@ -917,7 +920,7 @@ export function snapshotWithoutMigration(
   snapName: string,
   baseName: string
 ): CliError {
-  return new CliError("SNAPSHOT_WITHOUT_MIGRATION", {
+  return new CliError("MISSING_MIGRATION", {
     what: `The snapshot \`${snapName}\` exists but \`${baseName}.sql\` does not.`,
     why: "A snapshot is written beside the migration it describes, and this one's migration was deleted or never committed.",
     next: "Restore the .sql file from version control, or delete the orphan snapshot.",
@@ -933,7 +936,7 @@ export function schemaChangeWithoutMigration(
   count: number,
   lines: readonly string[]
 ): CliError {
-  return new CliError("SCHEMA_CHANGE_WITHOUT_MIGRATION", {
+  return new CliError("SCHEMA_DRIFT", {
     what: `${count} pending schema change(s) detected.`,
     why: lines.join("\n"),
     next: CREATE_MIGRATION,

@@ -23,7 +23,7 @@ import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
 import { NextlyError } from "../../../errors/nextly-error";
 import { refusalOf } from "../../commands/migrate-down";
-import { CliError, dataLossRefusal } from "../../errors";
+import { CliError, dataLossRefusal, type CliErrorCode } from "../../errors";
 import {
   migrationFileEdited,
   migrationSnapshotInvalid,
@@ -35,7 +35,8 @@ import {
 } from "../../errors/areas/migrations";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 
-import { PROJECT, type ErrorCases } from "./types";
+import { PROJECT, type ErrorCase, type ErrorCases } from "./types";
+import { assertRunnableStatements } from "../../../domains/schema/migrate/split-sql";
 
 /** A fixed clock, so the holder's start and lapse times read the same in every run. */
 const NOW = Date.UTC(2026, 9, 29, 10, 2, 0);
@@ -134,7 +135,7 @@ async function thrown(thrower: () => Promise<unknown>): Promise<unknown> {
 export const MIGRATION_CASES = {
   // As `refusalFor` in `domains/schema/pipeline/schema-lock.ts` builds it, with the holder in the
   // lock's own words.
-  SCHEMA_LOCK_HELD: () => {
+  NEXTLY_MIGRATE_LOCK_BUSY: () => {
     const holder = {
       kind: "schema" as const,
       owner: "build-01:4242#6f1c",
@@ -208,7 +209,7 @@ export const MIGRATION_CASES = {
         builderMigrationRemedy(BUILDER_FILE),
       logContext: { files: [BUILDER_FILE] },
     }),
-  RESOLVE_SNAPSHOT_MISSING: () => resolving({ mode: "applied" }),
+  NEXTLY_MIGRATION_SNAPSHOT_MISSING: () => resolving({ mode: "applied" }),
   RESOLVE_FILE_NOT_FOUND: () =>
     resolving({
       mode: "applied",
@@ -233,7 +234,7 @@ export const MIGRATION_CASES = {
     ),
   // As `reconcileCore` in `domains/schema/migrate/core-reconcile.ts` throws it in production-strict
   // mode, with the classifier's reasons.
-  CORE_DESTRUCTIVE_CHANGE_REFUSED: () =>
+  NEXTLY_CORE_DESTRUCTIVE_REFUSED: () =>
     new NextlyError({
       code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED",
       publicMessage:
@@ -283,19 +284,10 @@ export const MIGRATION_CASES = {
       driftItems: [{ kind: "+", detail: "table 'dc_posts' present in DB" }],
       unadoptedDatabase: true,
     }),
-  MIGRATION_CONCURRENT_RUN: () =>
+  NEXTLY_MIGRATION_CONCURRENT_RUN: () =>
     concurrentRunError({ filename: FILE, direction: "up", partial: false }),
-  MIGRATION_ATTEMPT_UNFINISHED: () =>
-    thrown(() =>
-      assertNotPartiallyApplied(
-        { filename: FILE, transaction: false },
-        "postgresql",
-        { findFileApplies: () => Promise.resolve([FAILED_ATTEMPT]) },
-        "rerun"
-      )
-    ),
   // As `partialFailure` in `domains/schema/migrate/migration-transaction.ts` builds it.
-  MIGRATION_PARTIALLY_APPLIED: () => {
+  NEXTLY_MIGRATION_PARTIALLY_APPLIED: () => {
     const cause = new Error(
       'column "summary" of relation "dc_posts" already exists'
     );
@@ -318,7 +310,7 @@ export const MIGRATION_CASES = {
   },
   // As `executeTransaction` in `domains/schema/migrate/migration-transaction.ts` has
   // `refusingNewDanglingReferences` throw it on SQLite.
-  MIGRATION_FOREIGN_KEY_VIOLATION: () =>
+  NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION: () =>
     new NextlyError({
       code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
       publicMessage:
@@ -327,14 +319,6 @@ export const MIGRATION_CASES = {
         reason: "dangling-reference",
         added: [{ table: "dc_posts", parent: "dc_authors", rows: 3 }],
       },
-    }),
-  // As `assertForeignKeysOff` in `domains/schema/migrate/migration-transaction.ts` throws it.
-  SQLITE_FOREIGN_KEYS_STILL_ON: () =>
-    new NextlyError({
-      code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
-      publicMessage:
-        "Foreign-key enforcement could not be switched off for this migration, because another transaction was open on the connection. Nothing was applied; re-run it once that transaction has finished.",
-      logContext: { reason: "enforcement-still-on" },
     }),
   MIGRATION_IRREVERSIBLE: () =>
     refusalOf(
@@ -348,15 +332,14 @@ export const MIGRATION_CASES = {
         "Refusing to roll back in production without --yes. Prefer rolling forward with a corrective migration, or restore from backup. Re-run with --yes to override.",
       logContext: { reason: "production-needs-yes" },
     }),
-  MIGRATION_FILE_EDITED: () =>
+  CHECKSUM_MISMATCH: () =>
     migrationFileEdited(
       FILE,
       "9f2c4e1a7b3d5f60812a4c6e8b0d2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c2e4b6d",
       "3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d"
     ),
-  MIGRATION_SNAPSHOT_MISSING: () =>
-    migrationSnapshotMissing(FILE, `${MIGRATIONS}/meta`),
-  MIGRATION_SNAPSHOT_INVALID: () => {
+  MISSING_SNAPSHOT: () => migrationSnapshotMissing(FILE, `${MIGRATIONS}/meta`),
+  INVALID_SNAPSHOT: () => {
     try {
       parseSnapshotFile("{", "20261020_120000_add_posts.snapshot.json");
     } catch (error) {
@@ -366,16 +349,61 @@ export const MIGRATION_CASES = {
     }
     throw new Error("expected the snapshot to be refused");
   },
-  SNAPSHOT_WITHOUT_MIGRATION: () =>
+  MISSING_MIGRATION: () =>
     snapshotWithoutMigration(
       "20261020_120000_add_posts.snapshot.json",
       "20261020_120000_add_posts"
     ),
-  SCHEMA_CHANGE_WITHOUT_MIGRATION: () =>
+  SCHEMA_DRIFT: () =>
     schemaChangeWithoutMigration(2, [
       "+ add_column dc_posts.subtitle (text)",
       "+ add_table dc_authors",
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  // The runner's own check, run for real on a file that holds a statement no transaction can.
+  REFUSED_STATEMENT: () => {
+    try {
+      assertRunnableStatements(
+        ["VACUUM"],
+        "sqlite",
+        "20261029_090000_compact.sql"
+      );
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected the statements to be refused");
+  },
 } satisfies ErrorCases;
+
+/**
+ * The causes that were codes of their own before the guides' documented code was kept for them:
+ * each still has its own reading, so each still has its case, under the code it now ends as.
+ */
+export const MIGRATION_MERGED_CASES: Record<
+  string,
+  { code: CliErrorCode; make: ErrorCase }
+> = {
+  MIGRATION_ATTEMPT_UNFINISHED: {
+    code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+    make: () =>
+      thrown(() =>
+        assertNotPartiallyApplied(
+          { filename: FILE, transaction: false },
+          "postgresql",
+          { findFileApplies: () => Promise.resolve([FAILED_ATTEMPT]) },
+          "rerun"
+        )
+      ),
+  },
+  SQLITE_FOREIGN_KEYS_STILL_ON: {
+    code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
+    make: () =>
+      new NextlyError({
+        code: "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION",
+        publicMessage:
+          "Foreign-key enforcement could not be switched off for this migration, because another transaction was open on the connection. Nothing was applied; re-run it once that transaction has finished.",
+        logContext: { reason: "enforcement-still-on" },
+      }),
+  },
+};

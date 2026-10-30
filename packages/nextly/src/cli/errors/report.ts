@@ -25,6 +25,19 @@ function colorsOnStandardError(): boolean {
   return pc.isColorSupported && process.stderr.isTTY === true;
 }
 
+/**
+ * Makes `stream`'s writes finish before they return. Written to a pipe, as under CI or a
+ * caller capturing output, they may otherwise still be pending when `process.exit` ends the
+ * process, cutting the error's last lines off. Node's handle offers it; nothing changes where it
+ * does not.
+ */
+function finishWritesBeforeExit(stream: NodeJS.WriteStream): void {
+  const handle = (
+    stream as { _handle?: { setBlocking?: (on: boolean) => void } }
+  )._handle;
+  handle?.setBlocking?.(true);
+}
+
 export interface ReportOptions {
   verbose?: boolean;
   noColor?: boolean;
@@ -40,6 +53,8 @@ export function reportCliError(
   options: ReportOptions = {}
 ): CliError {
   const cliError = toCliError(error);
+  // Every caller exits right after, or ends soon: the lines must not be left pending.
+  finishWritesBeforeExit(process.stderr);
   const debug = process.env.DEBUG === "true" || process.env.DEBUG === "1";
   console.error(
     formatCliError(cliError, {
@@ -58,7 +73,9 @@ export function printCliError(
   logger: Pick<Logger, "getOptions">,
   error: unknown
 ): CliError {
-  const { verbose, noColor } = logger.getOptions();
+  // A logger without options (a caller's stub) reads as the defaults.
+  const { verbose, noColor } =
+    typeof logger.getOptions === "function" ? logger.getOptions() : {};
   return reportCliError(error, { verbose, noColor });
 }
 
@@ -84,10 +101,13 @@ export function failWithError(
 }
 
 /**
- * Exits 1 after a `--json` command has printed its one document, which carries the error. The
- * shape is not printed as well: a caller reading standard output and error together must still
- * get exactly one JSON document.
+ * Ends a `--json` command that failed: prints its one document, which carries the error, and
+ * exits 1. The shape is not printed as well, so a caller reading standard output and error
+ * together still gets exactly one JSON document.
  */
-export function exitAfterJsonError(): never {
+export function exitWithJsonError(document: unknown): never {
+  // Before the write, so the document arrives whole even on a pipe.
+  finishWritesBeforeExit(process.stdout);
+  console.log(JSON.stringify(document, null, 2));
   return process.exit(1);
 }

@@ -60,7 +60,7 @@ import type {
   MigrationErrorJson,
   MigrationRecordStatus,
 } from "../../schemas/dynamic-collections/types";
-import { databaseEnvError, exitAfterJsonError, exitWithError } from "../errors";
+import { databaseEnvError, exitWithError, exitWithJsonError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -233,8 +233,7 @@ function endWithError(
   error: unknown
 ): never {
   if (!options.json) exitWithError(logger, error);
-  console.log(JSON.stringify({ error: jsonError }, null, 2));
-  exitAfterJsonError();
+  exitWithJsonError({ error: jsonError });
 }
 
 /**
