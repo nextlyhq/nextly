@@ -7157,12 +7157,42 @@ export class CollectionMutationService extends BaseService {
       const companion = await this.fileManager.loadCompanionSchema(
         params.collectionName
       );
+      const companionReady =
+        !!companion &&
+        (await isCompanionReady(this.adapter, companion.companionTableName));
       const companionPublishable =
         !!companion &&
         companion.hasStatus &&
         // Only `ready` matters: a companion that is not there has no per-locale publish
         // lifecycle, and why it is not there changes nothing about that.
-        (await isCompanionReady(this.adapter, companion.companionTableName));
+        companionReady;
+      // A localized collection whose translations table isn't there has nowhere
+      // to put any language but the default, so publishing every language is
+      // refused, with the remedy, as a write of one other language is.
+      const otherLanguages =
+        this.localization?.locales.some(
+          locale => locale.code !== this.localization?.defaultLocale
+        ) ?? false;
+      if (
+        direction.nextStatus === "published" &&
+        companion &&
+        !companionReady &&
+        otherLanguages
+      ) {
+        return errorToServiceResult(
+          NextlyError.conflict({
+            reason: "state",
+            message: companionNotReadyMessage("collection"),
+            logContext: {
+              cause: "localized-write-without-companion",
+              collection: params.collectionName,
+              companionTable: companion.companionTableName,
+            },
+          }),
+          { defaultMessage: "Failed to publish all languages" },
+          this.dialect
+        );
+      }
 
       if (!hasMainStatus && !companionPublishable) {
         // Nothing to publish — the collection has no status concept. Returned
@@ -8475,6 +8505,20 @@ export class CollectionMutationService extends BaseService {
             authenticatedScope: params.authenticatedScope,
           })
         : (publishRefused ?? error);
+      // A translation table dropped after its `ready` verdict was remembered
+      // fails the publish at its first statement on it: answered, after the
+      // rollback, as a write of one language to a table that is not there is
+      // answered. Only for a publish that did not commit.
+      const companionGone = await this.companionGoneResult(
+        {
+          collectionName: params.collectionName,
+          locale: undefined,
+          committed: committedWrite,
+          defaultMessage: "Failed to publish all languages",
+        },
+        refusal
+      );
+      if (companionGone) return companionGone;
       // A publish the database is not migrated for answers as such.
       const thrown = await asNotMigrated(
         refusal,

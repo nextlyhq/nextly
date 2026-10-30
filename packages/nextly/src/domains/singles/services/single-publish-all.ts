@@ -81,6 +81,8 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
+  companionFoundMissing,
+  companionNotReadyMessage,
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
@@ -306,11 +308,14 @@ export class SinglePublishAllService extends BaseService {
     // A refusal inside the transaction (the languages going live changed under
     // the lock) is kept here, since the rollback re-wraps what it throws.
     const refused: { denied?: SingleResult<PublishAllSingleResult> } = {};
+    // The Single's translations table, once known, for the catch below.
+    let translationsTable: string | undefined;
 
     try {
       const resolved = await this.resolvePublishTarget(slug, options);
       if ("result" in resolved) return resolved.result;
       const plan = resolved.plan;
+      translationsTable = plan.companion?.companionTableName;
 
       // The publish permission and rule, asked once for each language this
       // puts live, before the transaction and off its connection: a rule is
@@ -396,6 +401,8 @@ export class SinglePublishAllService extends BaseService {
       };
     } catch (error) {
       if (refused.denied) return refused.denied;
+      const gone = this.translationsGoneRefusal(slug, translationsTable, error);
+      if (gone) throw gone;
       throw await publishAllFailure(
         error,
         singleNotMigrated(this.singleRegistryService, slug, {
@@ -420,10 +427,12 @@ export class SinglePublishAllService extends BaseService {
     options: PublishAllSingleLocalesOptions = {}
   ): Promise<SingleResult<PublishAllSinglePreview>> {
     await refuseWriteIfRemovedFromCode("single", slug);
+    let translationsTable: string | undefined;
     try {
       const resolved = await this.resolvePublishTarget(slug, options);
       if ("result" in resolved) return previewOf(resolved.result);
       const { plan } = resolved;
+      translationsTable = plan.companion?.companionTableName;
       const askedLanguages = await this.languagesAsStored(
         this.adapter,
         plan,
@@ -452,8 +461,11 @@ export class SinglePublishAllService extends BaseService {
         data: { id: plan.existingDoc.id, ...preview },
       };
     } catch (error) {
-      // Answered as the publish answers it: a database not migrated for the
-      // Single is named as such, anything else untyped is internal.
+      // Answered as the publish answers it: a translations table found
+      // missing, then a database not migrated for the Single, are named as
+      // such; anything else untyped is internal.
+      const gone = this.translationsGoneRefusal(slug, translationsTable, error);
+      if (gone) throw gone;
       throw await publishAllFailure(
         error,
         singleNotMigrated(this.singleRegistryService, slug, {
@@ -461,6 +473,42 @@ export class SinglePublishAllService extends BaseService {
         })
       );
     }
+  }
+
+  /**
+   * The refusal for a publish of every language (or its preview) that `error`
+   * failed because this Single's translations table is missing: dropped after
+   * its `ready` verdict was remembered, so the publish met it at its first
+   * statement on it. The same 409, with the same remedy, as a write of one
+   * language gets (`companionFoundMissing` forgets the verdict, so the next
+   * request resolves readiness again). Undefined for any other failure.
+   */
+  private translationsGoneRefusal(
+    slug: string,
+    translationsTable: string | undefined,
+    error: unknown
+  ): NextlyError | undefined {
+    if (!translationsTable || !this.localization) return undefined;
+    if (
+      !companionFoundMissing(
+        this.adapter,
+        this.adapter.dialect,
+        translationsTable,
+        error
+      )
+    ) {
+      return undefined;
+    }
+    return NextlyError.conflict({
+      reason: "state",
+      message: companionNotReadyMessage("single"),
+      logContext: {
+        cause: "localized-write-without-companion",
+        single: slug,
+        defaultLocale: this.localization.defaultLocale,
+        companionTable: translationsTable,
+      },
+    });
   }
 
   /**
@@ -620,10 +668,29 @@ export class SinglePublishAllService extends BaseService {
     // Only `ready` matters here: a companion that is not there has no
     // per-locale publish lifecycle, and why it is not there changes nothing
     // about that.
-    const companionPublishable =
+    const companionReady =
       !!companion &&
-      companion.hasStatus &&
       (await isCompanionReady(this.adapter, companion.companionTableName));
+    const companionPublishable =
+      !!companion && companion.hasStatus && companionReady;
+    // A localized Single whose translations table isn't there has nowhere to
+    // put any language but the default, so publishing every language is
+    // refused, with the remedy, as a write of one other language is.
+    const otherLanguages =
+      this.localization?.locales.some(
+        locale => locale.code !== this.localization?.defaultLocale
+      ) ?? false;
+    if (companion && !companionReady && otherLanguages) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message: companionNotReadyMessage("single"),
+        logContext: {
+          cause: "localized-write-without-companion",
+          single: slug,
+          companionTable: companion.companionTableName,
+        },
+      });
+    }
     return { hasMainStatus, companion, companionPublishable };
   }
 
