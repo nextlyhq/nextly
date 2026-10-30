@@ -14,7 +14,7 @@ import { registerRecentEditsWidgetSource } from "../../../services/dashboard/rec
 import { parsePermissionSlug } from "../../../plugins/routes/permission-slug";
 import { RELEASES_RESOURCE } from "../../releases/services/releases-service";
 import { CORE_DECLARATIONS, CORE_WIDGETS } from "../core-widgets";
-import { CORE_DEFAULT_LAYOUT } from "../core-widgets/ids";
+import { CORE_DEFAULT_LAYOUT, CORE_WIDGET_IDS } from "../core-widgets/ids";
 import {
   chromeFieldProblem,
   requiredPermissionSlugs,
@@ -236,7 +236,7 @@ describe("the list cards' Density", () => {
   // `core-declarations.test.ts`.
   it.each([
     "core/recently-edited",
-    "core/recent-activity",
+    "core/team-activity",
     "core/upcoming-releases",
   ])("%s offers the shared choice, one option for every density", id => {
     // 🔴 Restated by hand, a density added to the list would not reach core's list cards.
@@ -269,19 +269,37 @@ describe("the content card", () => {
   });
 });
 
-describe("the recent activity card", () => {
+describe("the team activity card", () => {
   it("is asked like core's own lists, so it can say more exist at every size", () => {
     // Its component draws the rows its size allows and says more exist from
     // the one row more; asked exactly its "Number of items", that row never
     // comes at medium or large and the card can never say it.
     const card = CORE_WIDGETS.find(
-      widget => widget.id === "core/recent-activity"
+      widget => widget.id === "core/team-activity"
     );
     expect(card).toMatchObject({
       archetype: "custom",
       sizedQuery: true,
       query: { op: "list" },
     });
+  });
+});
+
+describe("the upcoming releases card", () => {
+  it("hides while nothing is scheduled, stopped or overdue, its answer then being empty", () => {
+    expect(card("core/upcoming-releases").hidesWhenEmpty).toBe(true);
+  });
+});
+
+describe("the removed Recent activity card", () => {
+  it("is no core widget: Team activity replaced it, with no alias", () => {
+    const ids: readonly string[] = CORE_WIDGET_IDS;
+    expect(ids).not.toContain("core/recent-activity");
+    expect(CORE_WIDGETS.map(widget => widget.id)).not.toContain(
+      "core/recent-activity"
+    );
+    // The control: its replacement is.
+    expect(ids).toContain("core/team-activity");
   });
 });
 
@@ -306,10 +324,11 @@ describe("the default dashboard", () => {
     // A list card is four to eight rows tall, its body holding four to ten rows; five rows by
     // default.
     ["core/recently-edited", [6, 5], [4, 4], [12, 8]],
-    ["core/recent-activity", [6, 5], [4, 4], [12, 8]],
+    ["core/team-activity", [6, 5], [4, 4], [12, 8]],
     ["core/content", [12, 4], [6, 3], [12, 6]],
     // Alone on its row: Team, for the people who manage the team, is not on the default.
-    ["core/upcoming-releases", [4, 4], [4, 4], [8, 8]],
+    // Up to the full row, so the dashboard may widen it to 12 when it shows alone in its row.
+    ["core/upcoming-releases", [4, 4], [4, 4], [12, 8]],
   ] as const;
 
   const unit = ([w, h]: readonly [number, number]) => ({ w, h });

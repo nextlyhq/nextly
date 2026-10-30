@@ -44,7 +44,7 @@ const AGREED = [
   ["core/needs-attention", "8x3"],
   ["core/quick-create", "4x3"],
   ["core/recently-edited", "6x5"],
-  ["core/recent-activity", "6x5"],
+  ["core/team-activity", "6x5"],
   ["core/content", "12x4"],
   ["core/upcoming-releases", "4x4"],
 ] as const;
@@ -177,14 +177,14 @@ describe.each(getConfiguredTestDialects())(
       expect(await defaultFor(editor)).toEqual([
         ["core/needs-attention", "8x3"],
         ["core/recently-edited", "6x5"],
-        ["core/recent-activity", "6x5"],
+        ["core/team-activity", "6x5"],
       ]);
 
       // One collection to read and none to write in: Needs attention and Content, never Create.
       expect(await defaultFor(readerId)).toEqual([
         ["core/needs-attention", "8x3"],
         ["core/recently-edited", "6x5"],
-        ["core/recent-activity", "6x5"],
+        ["core/team-activity", "6x5"],
         ["core/content", "12x4"],
       ]);
     });
