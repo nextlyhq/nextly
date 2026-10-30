@@ -197,6 +197,7 @@ export async function assertShellReady(
   page: Page,
   { timeout = SHELL_READY_TIMEOUT_MS }: { timeout?: number } = {}
 ): Promise<void> {
+  const until = Date.now() + timeout;
   try {
     await page
       .getByRole("navigation", { name: REGION_NAMES.rail })
@@ -211,7 +212,44 @@ export async function assertShellReady(
     await diagnoseUnrenderedPage(page);
   }
 
-  assertPainted(await measureShellRender(page));
+  assertPainted(await paintedBy(page, until));
+}
+
+/** How often a shell not yet painted is measured again. */
+const PAINT_POLL_MS = 100;
+
+/** Whether a measurement shows the shell drawn: present, sized and coloured. */
+function isPainted(measurement: ShellRenderMeasurement): boolean {
+  const { present, box } = measurement;
+  return (
+    present &&
+    box !== null &&
+    box.width > 0 &&
+    box.height > 0 &&
+    !isUnpainted(measurement)
+  );
+}
+
+/**
+ * The shell measured until it is painted, or until `until`: the LAST
+ * measurement either way, for `assertPainted` to judge.
+ *
+ * A visible rail does not mean the shell's root has its box yet. On a loaded
+ * machine the root was measured in the instant between the two and read as
+ * "rendered without usable styles", failing whichever test happened to land
+ * there. Waiting is bounded by the same allowance as the rail, and a shell
+ * that never paints still reaches `assertPainted` unpainted, so it fails with
+ * the same diagnosis rather than passing on a timeout.
+ */
+async function paintedBy(
+  page: Page,
+  until: number
+): Promise<ShellRenderMeasurement> {
+  for (;;) {
+    const measurement = await measureShellRender(page);
+    if (isPainted(measurement) || Date.now() >= until) return measurement;
+    await page.waitForTimeout(PAINT_POLL_MS);
+  }
 }
 
 /** Report a page with no shell in it, without naming a cause it cannot see. */

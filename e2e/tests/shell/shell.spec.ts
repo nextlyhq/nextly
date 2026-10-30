@@ -483,6 +483,44 @@ test.describe("the readiness diagnostic itself", () => {
     expect(String(error)).toMatch(/Timeout|exceeded/i);
     expect(String(error)).not.toContain("not in the DOM");
   });
+
+  /** A visible rail beside a painted shell root that has no box yet. */
+  const railBesideUnsizedChrome = (script = "") =>
+    `<html><body><nav aria-label="Editor panels">Rail</nav>
+     <div class="nx-builder-chrome"
+       style="background-color:rgb(255, 255, 255);width:0;height:0"></div>
+     ${script}</body></html>`;
+
+  test("waits for a shell root that gets its box after its rail shows", async ({
+    page,
+  }) => {
+    // The rail is visible before the root has laid out, as it is on a loaded
+    // machine. Measured once, at that instant, the root read as unstyled and
+    // failed whichever test landed there.
+    await page.setContent(
+      railBesideUnsizedChrome(
+        `<script>setTimeout(() => {
+           const chrome = document.querySelector(".nx-builder-chrome");
+           chrome.style.width = "800px";
+           chrome.style.height = "600px";
+         }, 300);</script>`
+      )
+    );
+
+    await expect(assertShellReady(page, { timeout: 5_000 })).resolves.toBe(
+      undefined
+    );
+  });
+
+  test("still names a shell root that never gets its box", async ({ page }) => {
+    // The wait is bounded, and running out of it is a failure with the same
+    // diagnosis, never a pass.
+    await page.setContent(railBesideUnsizedChrome());
+
+    await expect(assertShellReady(page, NEVER_READY)).rejects.toThrow(
+      /no layout box/
+    );
+  });
 });
 
 test.describe("the unpainted predicate", () => {
