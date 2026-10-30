@@ -8,7 +8,11 @@
  *
  * Every write here is to `notes`, whose rules refuse everyone: only
  * super-admin authority passes them, so a write that lands says the key
- * carried that authority at that gate, and a refusal says it did not.
+ * carried that authority at that gate, and a refusal says it did not. Each
+ * case is one whose gates ask through more than one scope for the key: a
+ * REST publish (the write route's gate, then the service's publish gate), a
+ * plugin route gated on a permission whose handler writes, asks
+ * `ctx.caller.can()` and writes again, and a REST bulk publish.
  *
  * The clock is the monotonic one the bound is timed on. While a case
  * crosses, the request's first ask about the key's authority reads it before
@@ -50,11 +54,18 @@ const notes = defineCollection({
     create: () => false,
     update: () => false,
     delete: () => false,
+    publish: () => false,
+    unpublish: () => false,
   },
+  status: true,
   fields: [text({ name: "title" })],
 });
 
-/** A plugin route whose handler writes `notes` twice, as the request's key. */
+/**
+ * A plugin route, gated on creating `notes`, whose handler writes `notes`,
+ * asks whether it may create another as a plugin author would before a
+ * second write, and makes it, as the request's key.
+ */
 const twoWrites = definePlugin({
   name: PLUGIN,
   version: "1.0.0",
@@ -64,9 +75,10 @@ const twoWrites = definePlugin({
       {
         method: "POST",
         path: "/write-twice",
+        requiredPermission: "create-notes",
         handler: async (_req, ctx) => {
-          for (const title of ["first", "second"]) {
-            await ctx.services.collections.createEntry(
+          const write = (title: string) =>
+            ctx.services.collections.createEntry(
               "notes",
               { title },
               {
@@ -75,7 +87,11 @@ const twoWrites = definePlugin({
                 authenticatedScope: ctx.authenticatedScope,
               }
             );
+          await write("first");
+          if (!(await ctx.caller.can("create", "notes"))) {
+            return Response.json({ refused: "second" }, { status: 403 });
           }
+          await write("second");
           return Response.json({});
         },
       },
@@ -192,91 +208,117 @@ describe.each(getConfiguredTestDialects())(
       return { t, key };
     }
 
-    /** The titles stored in `notes`, read past every rule. */
+    /** The titles stored in `notes`, drafts included, read past every rule. */
     async function titles(t: TestNextly): Promise<string[]> {
-      const found = await t.nextly.find({ collection: "notes", limit: 100 });
+      const found = await t.nextly.find({
+        collection: "notes",
+        limit: 100,
+        status: "all",
+      });
       return (found.items as { title?: string }[])
         .map(item => item.title ?? "")
         .sort();
     }
 
-    it("passes the route gate and then the service write it admitted", async () => {
-      const { t, key } = await boot();
-      controlClock("crossing");
+    /** Entries of `notes` made past every rule, as drafts; their ids. */
+    async function drafts(t: TestNextly, count: number): Promise<string[]> {
+      const ids: string[] = [];
+      for (let n = 0; n < count; n += 1) {
+        const made = await t.nextly.create({
+          collection: "notes",
+          data: { title: `draft ${n}`, status: "draft" },
+        });
+        ids.push(String((made.item as { id: string | number }).id));
+      }
+      return ids;
+    }
 
-      const res = await rest("POST", ["collections", "notes", "entries"], key, {
-        title: "written",
+    /** The statuses stored in `notes`, read past every rule. */
+    async function statuses(t: TestNextly): Promise<string[]> {
+      const found = await t.nextly.find({
+        collection: "notes",
+        limit: 100,
+        status: "all",
+      });
+      return (found.items as { status?: string }[])
+        .map(item => item.status ?? "")
+        .sort();
+    }
+
+    const publish = (key: string, id: string) =>
+      rest("PATCH", ["collections", "notes", "entries", id], key, {
+        status: "published",
       });
 
-      expect(res.status).toBeLessThan(300);
-      // The clock was read past the bound by every ask after the first.
+    const writeTwice = (key: string) =>
+      rest("POST", ["plugins", ...PLUGIN.split("/"), "write-twice"], key);
+
+    const bulkPublish = (key: string, ids: string[]) =>
+      rest("POST", ["collections", "notes", "entries", "bulk-update"], key, {
+        ids,
+        data: { status: "published" },
+      });
+
+    it("passes a write route's gate and then the service's publish gate", async () => {
+      const { t, key } = await boot();
+      const [id] = await drafts(t, 1);
+      controlClock("crossing");
+
+      const res = await publish(key, id);
+
+      expect(res.status).toBe(200);
+      // The request asked about the key once; every later gate reused it.
       expect(asksSeen).toBe(1);
-      expect(await titles(t)).toEqual(["written"]);
+      expect(await statuses(t)).toEqual(["published"]);
     });
 
-    it("passes both writes a plugin route's handler makes", async () => {
+    it("passes a plugin route's gate, both its writes and its can() between them", async () => {
       const { t, key } = await boot();
       controlClock("crossing");
 
-      const res = await rest(
-        "POST",
-        ["plugins", ...PLUGIN.split("/"), "write-twice"],
-        key
-      );
+      const res = await writeTwice(key);
 
       expect(res.status).toBe(200);
       expect(asksSeen).toBe(1);
       expect(await titles(t)).toEqual(["first", "second"]);
     });
 
-    it("passes every entry of a bulk write", async () => {
+    it("passes every entry of a bulk publish", async () => {
       const { t, key } = await boot();
-      const ids: string[] = [];
-      for (const title of ["a", "b", "c"]) {
-        const made = await t.nextly.create({
-          collection: "notes",
-          data: { title },
-        });
-        ids.push(String((made.item as { id: string | number }).id));
-      }
+      const ids = await drafts(t, 3);
       controlClock("crossing");
 
-      const res = await rest(
-        "POST",
-        ["collections", "notes", "entries", "bulk-update"],
-        key,
-        { ids, data: { title: "bulk" } }
-      );
+      const res = await bulkPublish(key, ids);
       const body = (await res.json()) as { errors?: unknown[] };
 
       expect(res.status).toBe(200);
       expect(body.errors).toEqual([]);
       expect(asksSeen).toBe(1);
-      expect(await titles(t)).toEqual(["bulk", "bulk", "bulk"]);
+      expect(await statuses(t)).toEqual([
+        "published",
+        "published",
+        "published",
+      ]);
     });
 
-    it("refuses a request that starts past the bound at its first gate, before any write", async () => {
+    it("refuses each of them where the request starts past the bound, at its first gate, before any write", async () => {
       const { t, key } = await boot();
+      const ids = await drafts(t, 3);
       controlClock("past");
 
-      const single = await rest(
-        "POST",
-        ["collections", "notes", "entries"],
-        key,
-        { title: "refused" }
-      );
-      const twice = await rest(
-        "POST",
-        ["plugins", ...PLUGIN.split("/"), "write-twice"],
-        key
-      );
+      const published = await publish(key, ids[0]);
+      const twice = await writeTwice(key);
+      const bulk = await bulkPublish(key, ids);
+      const bulkBody = (await bulk.json()) as { items?: unknown[] };
 
-      expect(single.status).toBe(403);
-      expect(twice.status).toBe(403);
-      // The control for the cases above: the clock this file controls is
-      // the one the bound is read on, so past it the key is refused.
+      // The control for the cases above: the clock this file controls is the
+      // one the bound is read on, so past it the key is refused at once.
       expect(asksSeen).toBeGreaterThan(0);
-      expect(await titles(t)).toEqual([]);
+      expect(published.status).toBeGreaterThanOrEqual(400);
+      expect(twice.status).toBe(403);
+      expect(bulkBody.items ?? []).toEqual([]);
+      expect(await statuses(t)).toEqual(["draft", "draft", "draft"]);
+      expect(await titles(t)).toEqual(["draft 0", "draft 1", "draft 2"]);
     });
   }
 );
