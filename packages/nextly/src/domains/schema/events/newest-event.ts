@@ -1,5 +1,6 @@
-// Event-sourced "current state" rule shared by the migration bookkeeping:
-// the newest file_apply event (by startedAt) decides whether a file is applied.
+// Newest-event ordering shared by the migration bookkeeping. The newest
+// file_apply event (by startedAt) decides whether a plugin module is applied;
+// an app migration's state is its latest outcome (migration-state.ts).
 import type { SchemaEventRow } from "./schema-events-repository";
 
 /**
@@ -48,8 +49,9 @@ export function newestEventsByFilename(
 }
 
 /**
- * Filenames whose NEWEST event is `applied` — what "is this file applied?"
- * means everywhere the ledger is read.
+ * Filenames whose NEWEST event is `applied` — what "is this module applied?"
+ * means for a plugin's history, which keeps that rule. An app migration's
+ * state is its latest outcome instead (`migration-state.ts`).
  *
  * Not "has an `applied` row": `migrate:down` and `plugins uninstall` record a
  * rollback by INSERTING a `rolled_back` event after the `applied` one, and a

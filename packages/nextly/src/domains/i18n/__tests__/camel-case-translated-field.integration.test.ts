@@ -2,11 +2,11 @@
  * A translated field whose name has capitals, in a Schema Builder collection, takes writes in
  * every language in the process that created or changed it, without a restart.
  *
- * The Builder stores field names lowercased (`subTitle` becomes `subtitle`), and the database and
- * the registry name its column from that. The tables this process keeps for reads and writes have
- * to be built from the same stored names: built from the names as the request spelled them, the
- * companion's column read `sub_title`, and every write in a language other than the default one
- * failed until the process restarted and rebuilt them from the registry.
+ * A field keeps the name it was given (`subTitle`), and its column is the snake_case form the
+ * write path uses (`sub_title`), in the main table and the companion alike. The tables this process
+ * keeps for reads and writes have to be built from the same stored names as a restart builds them
+ * from the registry: when the two disagreed, every write in a language other than the default one
+ * failed until the process restarted.
  */
 import { getColumns, type Table } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -104,7 +104,7 @@ describeEachDialect("a translated field named with capitals", dialect => {
     });
     expect(read.success, JSON.stringify(read)).toBe(true);
     const data = read.data as Record<string, unknown>;
-    return { heading: data.heading, subtitle: data.subtitle };
+    return { heading: data.heading, subtitle: data.subTitle };
   }
 
   /** Writes English, then Spanish, under the name the field is stored by. */
@@ -112,7 +112,7 @@ describeEachDialect("a translated field named with capitals", dialect => {
     const entries = handler().getEntryService();
     const created = await entries.createEntry(
       { collectionName: "posts", overrideAccess: true, locale: "en" },
-      { heading: "Hello", subtitle: "In English" }
+      { heading: "Hello", subTitle: "In English" }
     );
     expect(created.success, JSON.stringify(created)).toBe(true);
     const id = String((created.data as { id: unknown }).id);
@@ -123,7 +123,7 @@ describeEachDialect("a translated field named with capitals", dialect => {
         overrideAccess: true,
         locale: "es",
       },
-      { heading: "Hola", subtitle: "En español" }
+      { heading: "Hola", subTitle: "En español" }
     );
     expect(spanish.success, JSON.stringify(spanish)).toBe(true);
     return id;
@@ -214,8 +214,8 @@ describeEachDialect("a translated field named with capitals", dialect => {
       companion: columnNames((await files.loadCompanionSchema("posts"))?.table),
     };
 
-    expect(rebuilt.companion).toContain("subtitle");
-    expect(rebuilt.main).toContain("metatitle");
+    expect(rebuilt.companion).toContain("sub_title");
+    expect(rebuilt.main).toContain("meta_title");
     expect(kept).toEqual(rebuilt);
   });
 });

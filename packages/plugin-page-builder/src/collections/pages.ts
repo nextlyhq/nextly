@@ -120,6 +120,13 @@ export function pagesCollection(
       blocks({ name: "content", label: "Page Builder" }),
     ],
     status: true,
+    // Pages are what a site shows its visitors, so anyone may read one. A
+    // visitor is judged by the Public role, which boot grants a collection's
+    // read only where its rule answers `true`; with no rule, every page would
+    // answer a visitor 404. The rule needs no condition on the page's state: a
+    // visitor's read is held to published content whatever it asks for, so a
+    // draft, and the working draft of a published page, stay unseen.
+    access: { read: () => true },
     // A save keeps a working draft and publishing is its own act, as it is for
     // the components and Layouts a page is built from. Without the split, saving
     // a published page puts the edit live at once while a header it embeds waits

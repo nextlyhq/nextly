@@ -43,6 +43,7 @@ import {
   isFilterRule,
   RULES,
   TARGETS,
+  WRITING_DOORS,
   publicHolds,
   type Action,
   type Caller,
@@ -699,7 +700,7 @@ async function seedCollections(
   };
   for (const rule of RULES) {
     const slug = collectionOf(rule, setup);
-    const keys = ["rest", "direct", "service"].flatMap(door =>
+    const keys = WRITING_DOORS.flatMap(door =>
       CALLERS_OF[setup].flatMap(caller =>
         (["delete", "publish", "unpublish"] as const).map(action =>
           ownKey(door, caller, action)
@@ -718,7 +719,7 @@ async function seedCollections(
     // A filtered write asks a twin outside the filter too, for the filter
     // rule kinds alone: under any other rule it would answer as its twin does.
     if (isFilterRule(rule)) {
-      const twins = ["rest", "direct", "service"].flatMap(door =>
+      const twins = WRITING_DOORS.flatMap(door =>
         CALLERS.flatMap(caller =>
           [...FILTERED_WRITES].map(action => outsideKey(door, caller, action))
         )

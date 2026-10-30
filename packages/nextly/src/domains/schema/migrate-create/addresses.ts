@@ -141,8 +141,8 @@ export function assertMigrationAddresses(
 /**
  * `migrate:check`'s check: warns once for each existing address the rule
  * refuses (it keeps working) and logs each new one it refuses, naming the
- * address and the reason. Answers whether the check may pass; with no
- * entities to judge, it may.
+ * address and the reason. Answers the new addresses it refused, for the
+ * command to end with `addressRefusalsError`; none, with no entities to judge.
  */
 export function reportMigrationAddresses(
   merged:
@@ -150,8 +150,8 @@ export function reportMigrationAddresses(
     | undefined,
   latest: LatestSnapshot,
   logger: { warn(message: string): void; error(message: string): void }
-): boolean {
-  if (merged === undefined) return true;
+): readonly JudgedAddress[] {
+  if (merged === undefined) return [];
   const { refused, existing } = judgeMigrationAddresses(merged, latest);
   for (const line of describeJudgedAddresses(existing)) {
     logger.warn(
@@ -160,5 +160,5 @@ export function reportMigrationAddresses(
   }
   for (const line of describeJudgedAddresses(refused)) logger.error(line);
   if (refused.length > 0) logger.error(REFUSED_ADDRESS_NEXT_STEP);
-  return refused.length === 0;
+  return refused;
 }

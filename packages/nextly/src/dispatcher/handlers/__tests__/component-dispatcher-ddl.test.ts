@@ -101,6 +101,8 @@ function wireRegistry() {
     listComponents: vi.fn(),
     registerComponent: vi.fn(async (row: unknown) => row),
     getComponent: vi.fn(),
+    // A schema save reads the component as stored, past the registry row cache.
+    getComponentForWrite: vi.fn(),
     updateComponent: vi.fn(),
     deleteComponent: vi.fn(),
     // "No such slug" and "no field group owns that table", so a create reaches the DDL path.
@@ -278,7 +280,7 @@ describe("a diverged field group and the routes that move its storage", () => {
       adapter as unknown as ReturnType<typeof getAdapterFromDI>
     );
     const registry = wireRegistry();
-    registry.getComponent.mockResolvedValue(diverged);
+    registry.getComponentForWrite.mockResolvedValue(diverged);
 
     await expect(
       dispatchComponents(
@@ -327,7 +329,7 @@ describe("a diverged field group and the routes that move its storage", () => {
     // anything. Asserting after the request would pass on a handler that read the status first and
     // took the lock afterwards.
     let ownerWhenStatusRead: string | null = null;
-    registry.getComponent.mockImplementation(() => {
+    registry.getComponentForWrite.mockImplementation(() => {
       ownerWhenStatusRead = adapter.migrationLock.ownerNow();
       return Promise.resolve(diverged);
     });
@@ -341,9 +343,9 @@ describe("a diverged field group and the routes that move its storage", () => {
     ).rejects.toMatchObject({ code: "CONFLICT" });
 
     // Positive control: the read the assertion is about actually happened. Without it a handler
-    // that never reached `getComponent` would leave the sample at its initial value and satisfy
+    // that never reached `getComponentForWrite` would leave the sample at its initial value and satisfy
     // nothing while appearing to.
-    expect(registry.getComponent).toHaveBeenCalledTimes(1);
+    expect(registry.getComponentForWrite).toHaveBeenCalledTimes(1);
     expect(ownerWhenStatusRead).toMatch(/^apply schema changes to field group/);
   });
 
@@ -382,7 +384,7 @@ describe("a diverged field group and the routes that move its storage", () => {
       // Nothing was issued and nothing was read: no lock DDL, and the component was never fetched.
       expect(executed).toEqual([]);
       expect(adapter.migrationLock.ownerNow()).toBeNull();
-      expect(registry.getComponent).not.toHaveBeenCalled();
+      expect(registry.getComponentForWrite).not.toHaveBeenCalled();
     }
   );
 

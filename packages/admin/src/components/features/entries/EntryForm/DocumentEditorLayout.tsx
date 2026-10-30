@@ -15,6 +15,7 @@
 import type { JSX, ReactNode } from "react";
 
 import { DOCUMENT_EDITOR_FRAME_ATTRIBUTE } from "./document-bar-height";
+import type { DocumentPanelMode } from "./document-panel-mode";
 
 /**
  * How the document panel's inner column sticks: under the bar rather than
@@ -55,6 +56,13 @@ export interface DocumentEditorLayoutProps {
   notices?: ReactNode;
   /** The field column and the document panel, laid out side by side. */
   children: ReactNode;
+  /**
+   * Measures the frame, whose width decides how the document panel sits
+   * (`useDocumentPanel`). Absent where nothing reads it.
+   */
+  frameRef?: (element: HTMLElement | null) => void;
+  /** That mode, said on the frame for what styles or tests read it. */
+  panelMode?: DocumentPanelMode;
 }
 
 export function DocumentEditorLayout({
@@ -62,6 +70,8 @@ export function DocumentEditorLayout({
   banners,
   notices,
   children,
+  frameRef,
+  panelMode,
 }: DocumentEditorLayoutProps): JSX.Element {
   return (
     // Vertical only: from `@4xl` the editor cancels the page's `py-8`, so the
@@ -69,13 +79,17 @@ export function DocumentEditorLayout({
     // floor is the scroll area's height (see `DOCUMENT_PANEL_STICKY`).
     // The frame is also where the bar publishes its height for the panel.
     <div
+      ref={frameRef}
       {...{ [DOCUMENT_EDITOR_FRAME_ATTRIBUTE]: "" }}
+      {...(panelMode === undefined ? {} : { "data-panel-mode": panelMode })}
       className="flex flex-col @4xl/content:-my-8 @4xl/content:min-h-[var(--editor-scrollport,calc(100vh-4rem))]"
     >
       {bar}
       {banners}
       {notices}
-      <div className="flex flex-1 flex-col items-stretch @4xl/content:flex-row">
+      {/* `relative`: a floating panel's column spans this row, over the
+          fields, rather than the page. */}
+      <div className="relative flex flex-1 flex-col items-stretch @4xl/content:flex-row">
         {children}
       </div>
     </div>

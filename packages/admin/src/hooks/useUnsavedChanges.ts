@@ -485,6 +485,76 @@ function popStateHandler(track: PopStateTrack): (event: PopStateEvent) => void {
 }
 
 /**
+ * The Navigation API, where the browser has one: what reports a Back or
+ * Forward before it moves, and lets the page cancel it.
+ */
+interface NavigationTarget extends EventTarget {
+  currentEntry?: { index: number } | null;
+}
+
+/** A `navigate` event, as much of it as the guard reads. */
+interface NavigateEvent extends Event {
+  navigationType: string;
+  destination: { url: string; index: number };
+}
+
+/**
+ * The Navigation API where it can report events: a `navigation` without them,
+ * as a partial stand-in has, is as good as none, and Back is held on
+ * `popstate` alone.
+ */
+function navigationApi(): NavigationTarget | undefined {
+  const navigation = (window as { navigation?: Partial<NavigationTarget> })
+    .navigation;
+  return typeof navigation?.addEventListener === "function" &&
+    typeof navigation.removeEventListener === "function"
+    ? (navigation as NavigationTarget)
+    : undefined;
+}
+
+/**
+ * The guard's `navigate` handler: a Back or Forward that would leave unsaved
+ * changes is cancelled before it moves, and asked about.
+ *
+ * 🔴 This is what holds Back wherever the admin's code arrives after the
+ * host's router. `popstate` reaches `window`'s listeners in the order they
+ * were added, and a page rendered with Cache Components streams the admin in
+ * after Next's App Router has added its listener, so the router hears a Back
+ * first, draws the page it goes to and hides this one, guard and all. A
+ * cancelled traversal moves nothing and fires no `popstate`, so no router
+ * hears it whatever order the listeners are in.
+ *
+ * Only a traversal the browser lets the page cancel is held here. A browser
+ * lets a page cancel Back only after the reader has used the page since the
+ * last time it did, so that a page can never trap Back; one it does not let
+ * cancel moves, and the `popstate` handler asks about it as before.
+ */
+function navigateHandler(track: PopStateTrack): (event: Event) => void {
+  return event => {
+    const navigate = event as NavigateEvent;
+    if (navigate.navigationType !== "traverse" || !navigate.cancelable) return;
+    if (
+      !track.isDirty ||
+      track.isNavigating.current ||
+      // The guard's own traversal: a confirmed leave going ahead.
+      track.traversal.current !== "none" ||
+      !movesElsewhere(navigate.destination.url, track.fields.current)
+    ) {
+      return;
+    }
+    navigate.preventDefault();
+    const now = historyIndex();
+    const steps =
+      now === undefined || navigate.destination.index < 0
+        ? undefined
+        : navigate.destination.index - now;
+    track.hold(
+      steps === undefined ? { type: "popstate" } : { type: "popstate", steps }
+    );
+  };
+}
+
+/**
  * The guards' one `popstate` listener, registered when this module loads, and
  * the handlers of the guards mounted now, in the order they mounted.
  *
@@ -495,9 +565,10 @@ function popStateHandler(track: PopStateTrack): (event: PopStateEvent) => void {
  * listener when the app mounts. During `popstate` React renders
  * synchronously, so the router drew the page Back was going to and unmounted
  * this one, taking the guard's listener with it, before the guard was asked:
- * a Back with unsaved changes left without a word. The admin's module has to
- * load before any page can draw it, so a listener added here is ahead of every
- * router by construction.
+ * a Back with unsaved changes left without a word. A listener added here is
+ * ahead of every router that is added when the admin draws. It is not ahead of
+ * one added before the admin's code arrives, as Next's App Router is on a page
+ * rendered with Cache Components; `navigateHandler` holds Back there.
  *
  * Kept on `globalThis` so a module evaluated again (a hot reload) reuses the
  * one listener and its list rather than adding a second.
@@ -701,15 +772,23 @@ export function useUnsavedChanges({
       writes
     );
 
-    // Back and Forward: held and undone, `popStateHandler` says how.
-    const handlePopState = popStateHandler({
+    // A confirmed leave whose `popstate` this guard never heard, because a
+    // router heard it first and hid the page (`navigateHandler`), is long
+    // over by the time the page is shown again.
+    if (traversal.current === "releasing") traversal.current = "none";
+
+    // Back and Forward: cancelled before they move where the browser allows
+    // it (`navigateHandler`), held and undone after (`popStateHandler`).
+    const traversals = {
       isDirty,
       isNavigating,
       traversal,
       lastLocation,
       fields: fieldsRef,
       hold,
-    });
+    };
+    const handlePopState = popStateHandler(traversals);
+    const handleNavigate = navigateHandler(traversals);
 
     // Handle browser close/refresh
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -729,6 +808,9 @@ export function useUnsavedChanges({
     // load; see `popStateGuards` for why a listener added here is too late.
     const guards = popStateGuards();
     guards.push(handlePopState);
+    // Absent where the browser has no Navigation API; `popstate` alone then.
+    const navigation = navigationApi();
+    navigation?.addEventListener("navigate", handleNavigate);
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     // Cleanup
@@ -742,6 +824,7 @@ export function useUnsavedChanges({
       }
       const at = guards.indexOf(handlePopState);
       if (at !== -1) guards.splice(at, 1);
+      navigation?.removeEventListener("navigate", handleNavigate);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [isDirty, disabled]);
