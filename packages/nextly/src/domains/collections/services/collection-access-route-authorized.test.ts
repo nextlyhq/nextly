@@ -37,6 +37,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     const fake = await import("../__tests__/collection-test-helpers");
     return {
       actorForUser: fake.fakeActorForUser,
+      actorForVisitor: fake.fakeActorForVisitor,
       userHoldsPermission: fake.fakeUserHoldsPermission,
       userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
@@ -52,7 +53,6 @@ beforeEach(() => {
 function buildAccessService() {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   const rbac = {
-    checkAccess: vi.fn().mockResolvedValue(true),
     // Answers `undefined`: no code-defined rule governs the operation.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     // No code-defined access by default: a scoped API key is judged on its
@@ -242,8 +242,8 @@ describe("checkCollectionAccess — scoped API key", () => {
   it("still enforces a code-defined access rule for a scoped key that holds the grant", async () => {
     const { service, rbac } = buildAccessService();
     // The key HAS publish-posts, but the collection's code-defined
-    // `access.publish` denies. The grant must not bypass that rule (which
-    // `rbac.checkAccess` — the path the API-key branch replaces — would have run).
+    // `access.publish` denies. The grant must not bypass that rule (which the
+    // session decision — the path the API-key branch replaces — would have run).
     rbac.getRegisteredAccess.mockReturnValue({ publish: () => false });
 
     const result = await service.checkCollectionAccess({

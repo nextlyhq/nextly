@@ -42,6 +42,7 @@ const SNAPSHOTTED = [
   "routing.ts",
   "schema.ts",
   "testing.ts",
+  "testing/admin.ts",
   "widgets.ts",
 ];
 
@@ -123,6 +124,10 @@ describe("plugin-sdk public export surface", () => {
 
   it("`./testing` surface is unchanged", () => {
     expect(exportedNames("testing.ts")).toMatchSnapshot();
+  });
+
+  it("`./testing/admin` surface is unchanged", () => {
+    expect(exportedNames("testing/admin.ts")).toMatchSnapshot();
   });
 
   it("snapshots every subpath the package publishes", () => {

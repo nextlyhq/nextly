@@ -12,7 +12,8 @@
  * id), never a 401 or 403; a gate that refuses answers 403.
  *
  * The controls: a role holding only `read-settings` is refused every change,
- * and a role holding the `manage-` permissions is still let through.
+ * and so is a role still holding only the retired `manage-` permissions, not
+ * yet converted by `nextly upgrade`.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -20,6 +21,10 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import {
+  plantRetiredManagePermissions,
+  plantRole,
+} from "../../domains/auth/__tests__/retired-manage-rows";
 import { seedAllPermissions } from "../../init/seed-permissions";
 import {
   createTestNextly,
@@ -80,7 +85,16 @@ async function sessionFor(
   const role = await t.nextly.roles.create({
     data: { name, slug: name, permissionIds: await permissionIds(t, slugs) },
   });
-  const roleId = String(role.item.id);
+  return sessionForRole(t, services, name, String(role.item.id));
+}
+
+/** A signed-in session for a new user holding the role `roleId`. */
+async function sessionForRole(
+  t: TestNextly,
+  services: ServiceContainer,
+  name: string,
+  roleId: string
+): Promise<Headers> {
   const made = await t.nextly.users.create({
     email: `${name}@plain-settings.test`,
     password: "Password123!",
@@ -158,7 +172,7 @@ for (const dialect of getConfiguredTestDialects()) {
     };
     /** May read and update email providers and templates. */
     let emailUpdater: Headers;
-    /** Holds the `manage-` permissions on settings and email. */
+    /** Holds only the retired `manage-` permissions on settings and email. */
     let manager: Headers;
     let templateId: string;
     let providerId: string;
@@ -183,6 +197,8 @@ for (const dialect of getConfiguredTestDialects()) {
           delete: refuseAndCount,
         });
         await seedAllPermissions();
+        // An install upgraded from a release that seeded the retired ones.
+        const retired = await plantRetiredManagePermissions(t.adapter);
         // The first user an install makes is its super-admin, who passes
         // every check, so one is made before the users under test.
         await t.nextly.users.create({
@@ -224,11 +240,18 @@ for (const dialect of getConfiguredTestDialects()) {
           "read-email-templates",
           "update-email-templates",
         ]);
-        manager = await sessionFor(t, services, "manager", [
-          "manage-settings",
-          "manage-email-providers",
-          "manage-email-templates",
-        ]);
+        // Stored as an earlier release stored it: every role writer now
+        // stores these as the plain four, which would let the role through.
+        manager = await sessionForRole(
+          t,
+          services,
+          "manager",
+          await plantRole(t.adapter, "manager", [
+            retired.get("manage-settings")!,
+            retired.get("manage-email-providers")!,
+            retired.get("manage-email-templates")!,
+          ])
+        );
         const template = await t.nextly.emailTemplates.create({
           data: {
             name: "Newsletter",
@@ -301,9 +324,9 @@ for (const dialect of getConfiguredTestDialects()) {
           if (other === change) continue;
           expect(await rest(method, path, only[other], body), other).toBe(403);
         }
-        // The controls: a reader is refused, a manager let through.
+        // The controls: a reader is refused, and so is an unconverted manager.
         expect(await rest(method, path, settingsReader, body)).toBe(403);
-        expect(REFUSED).not.toContain(await rest(method, path, manager, body));
+        expect(await rest(method, path, manager, body)).toBe(403);
       });
     }
 
@@ -337,7 +360,7 @@ for (const dialect of getConfiguredTestDialects()) {
             403
           );
         }
-        expect(REFUSED).not.toContain(await rest("POST", path, manager, {}));
+        expect(await rest("POST", path, manager, {})).toBe(403);
       });
     }
 

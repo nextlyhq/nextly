@@ -11,6 +11,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
@@ -100,6 +101,20 @@ export function createDebouncedSync(
             releaseOnInterrupt: true,
           },
           async () => {
+            // Every entity as the registry records it before the syncs below rewrite it, so the
+            // companion pass after them can tell a field this edit newly translates.
+            const recordedBefore =
+              options.autoSync !== false
+                ? await readRecordedEntities(
+                    adapter as unknown as DrizzleAdapter,
+                    configToSync.config,
+                    error =>
+                      logger.warn(
+                        `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+                      )
+                  )
+                : undefined;
+
             // Before the pushes, for the same reason the one-shot `db:sync` does it: a watched
             // edit that enables localization removes the translatable columns from the desired
             // schema, so the push wants to drop them. Copying first makes that drop a cleanup
@@ -109,7 +124,8 @@ export function createDebouncedSync(
                 configToSync.config,
                 adapter,
                 context,
-                "beforeApply"
+                "beforeApply",
+                { recordedBefore }
               );
             }
 
@@ -133,7 +149,9 @@ export function createDebouncedSync(
               await ensureLocalizedCompanions(
                 configToSync.config,
                 adapter,
-                context
+                context,
+                "afterApply",
+                { recordedBefore }
               );
             }
 

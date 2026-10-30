@@ -17,6 +17,25 @@ export {
 } from "./plugins/test-nextly";
 
 /**
+ * One card of a widget answered for a given person, exactly as the dashboard
+ * answers it. @experimental
+ */
+export {
+  runWidgetLoad,
+  type RunWidgetLoadOptions,
+  type WidgetLoadResult,
+} from "./plugins/test-widget-load";
+
+/**
+ * A widget as the registry publishes it to the admin, for the SDK's card
+ * helper. @internal Not a runtime API: only this test entry exports it.
+ */
+export {
+  publishedWidgetDefinition,
+  widgetCardSlot,
+} from "./plugins/test-widget-load";
+
+/**
  * The aborted-transaction guard, for suites running against a real PostgreSQL server.
  *
  * `createTestNextly` records any transaction it leaves in PostgreSQL's aborted state, but

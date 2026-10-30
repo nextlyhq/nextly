@@ -72,7 +72,7 @@ export function reads(
   return {
     liveAuthors: async ids => new Set(ids),
     actingAs: async id => ({ id, roles: [] }),
-    mayPerform: async () => true,
+    mayPerform: async (_user, _scope, _action, entryIds) => new Set(entryIds),
     existing: async refs => new Set(refs.map(documentRefKey)),
     declaresLifecycle: async () => true,
     publishProblems: perEntry(() => []),

@@ -79,7 +79,7 @@ describe("the Background Jobs settings entry", () => {
     // everyone.
     expect(item).toBeDefined();
     if (!item) return;
-    expect(isSettingsNavItemVisible(item, only("manage-settings"))).toBe(false);
+    expect(isSettingsNavItemVisible(item, only("read-settings"))).toBe(false);
   });
 });
 
@@ -140,7 +140,7 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
     // Adding to this list must not narrow it. One representative grant per
     // group it already covered. (Email left the panel for its own rail entry,
     // so its grants no longer reveal it.)
-    for (const grant of ["manage-settings", "read-api-keys"]) {
+    for (const grant of ["read-settings", "read-api-keys"]) {
       expect(
         buildCapabilities([grant], false, undefined).canViewSettings,
         grant

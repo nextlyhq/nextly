@@ -22,6 +22,7 @@ import {
   actorForScope,
   actorForUserFailingClosed,
   actorForVisitor,
+  actorForVisitorFailingClosed,
 } from "./access/resolve-actor";
 import { readsSystemResource } from "./access/system-resource-read";
 import {
@@ -37,10 +38,11 @@ import {
  *
  * The caller becomes an actor: a scoped API key from its OWN scope, never its
  * owner's roles, so a narrowly scoped key belonging to a super-admin cannot
- * read a resource its scope excludes; a caller with no id a visitor, who holds
- * no grant; anyone else the signed-in user, whose grant decides and whose
- * super-admin authority passes. A system resource declares no code rule, so
- * the permission is the whole decision.
+ * read a resource its scope excludes; a caller with no id a visitor, who reads
+ * media by the Public role's grant and never a user, whatever Public holds;
+ * anyone else the signed-in user, whose grant decides and whose super-admin
+ * authority passes. A system resource declares no code rule, so the
+ * permission is the whole decision.
  *
  * Without the RBAC service a signed-in user is refused, as before: a boot may
  * legitimately omit it, and the callers above use this to decide whether to
@@ -97,7 +99,11 @@ export async function canReadSystemResource(
     }
     return readsSystemResource(actor, read);
   }
-  if (userId === undefined) return readsSystemResource(actorForVisitor(), read);
+  // A visitor holds the Public role's grants, which reach media alone; ones
+  // that could not be read refuse, as a user's failed lookup does below.
+  if (userId === undefined) {
+    return readsSystemResource(await actorForVisitorFailingClosed(), read);
+  }
   if (!read.serviceRegistered) {
     // Without the service a signed-in user is refused whatever they hold, as
     // before, so nothing is looked up to say so. The decision it is compared
@@ -116,4 +122,23 @@ export async function canReadSystemResource(
   // Each lookup that fails refuses only what it would have given, so a
   // relationship withholds the row and the read goes on rather than failing.
   return readsSystemResource(await actorForUserFailingClosed(userId), read);
+}
+
+/**
+ * Whether a visitor may read a system resource at a door that serves it: a
+ * REST route or a checked Direct API read naming nobody. The one decision with
+ * the Public role's grants, as {@link canReadSystemResource} answers a caller
+ * with no id, except that grants which could not be read fail the request
+ * rather than refuse it, as a door's own lookups do: a refusal there would
+ * tell a visitor to sign in for a fault of the server's.
+ *
+ * @param resource - Resource name as it appears in a permission slug (`media`).
+ */
+export async function visitorReadsSystemResource(
+  resource: string
+): Promise<boolean> {
+  return readsSystemResource(await actorForVisitor(), {
+    resource,
+    serviceRegistered: container.has("rbacAccessControlService"),
+  });
 }
