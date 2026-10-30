@@ -192,6 +192,10 @@ const LIST_DATA = z.looseObject({
   // count of at least zero, and whether it is a floor.
   total: z.number().int().nonnegative().optional(),
   atLeast: z.boolean().optional(),
+  // How `total` divides among the rows' kinds: a plain object of whole counts of at least
+  // zero, each a count as `total` is. The admin keeps an answer's breakdown by the same rule
+  // (`asCountsByKind` in admin's `hooks/queries/useWidgetQueries.ts`) and drops any other.
+  totalByKind: z.record(z.string(), z.number().int().nonnegative()).optional(),
 });
 
 const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
