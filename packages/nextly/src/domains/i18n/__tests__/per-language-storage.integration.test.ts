@@ -26,6 +26,7 @@ import {
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { reconcileCompanionUniqueIndexes } from "../runtime/companion-unique-reconcile";
 import { perLanguageStorageEnabled } from "../per-language-storage";
 
 let current: TestNextly | undefined;
@@ -292,6 +293,42 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await t.nextly.findByID({ collection: "posts", id })
       ).toMatchObject({ heading: "Made in the Builder", count: 4 });
+    });
+
+    // A unique translatable field is unique within each language, as on a translated collection.
+    it("refuses a second entry with the same value of a unique translatable field", async () => {
+      current = await createTestNextly({
+        dialect,
+        perLanguageStorage: true,
+        collections: [
+          defineCollection({
+            slug: "codes",
+            fields: [text({ name: "code", unique: true })],
+          }),
+        ],
+      });
+      const t = current;
+      const columns = await columnsOf(t, ["dc_codes", "dc_codes_locales"]);
+      expect(columns.dc_codes).not.toContain("code");
+      expect(columns.dc_codes_locales).toContain("code");
+
+      // Its per-language index, from the reconcile `db:sync` and the dev reload run.
+      await reconcileCompanionUniqueIndexes(
+        t.adapter,
+        {
+          builtBy: "codeFirst",
+          tableName: "dc_codes",
+          fields: [{ name: "code", type: "text", unique: true }],
+        },
+        error => {
+          throw error;
+        }
+      );
+      await t.nextly.create({ collection: "codes", data: { code: "A-1" } });
+      await expect(
+        t.nextly.create({ collection: "codes", data: { code: "A-1" } })
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
+      await t.nextly.create({ collection: "codes", data: { code: "A-2" } });
     });
 
     it("stores as it always has with the setting off", async () => {
