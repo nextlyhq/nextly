@@ -23,17 +23,22 @@ export {
 export {
   runWidgetLoad,
   type RunWidgetLoadOptions,
-  type WidgetLoadResult,
 } from "./plugins/test-widget-load";
+// The answer's states, declared beside the card helpers that draw them.
+export type { WidgetLoadResult } from "./plugins/test-widget-card";
 
 /**
  * A widget as the registry publishes it to the admin, for the SDK's card
- * helper. @internal Not a runtime API: only this test entry exports it.
+ * helper. @internal Not a runtime API: only the test entries export it.
+ *
+ * Also published alone as `nextly/testing/widget-card`, which a test under
+ * jsdom can load: this entry's harness cannot be loaded where `window` is
+ * defined. Re-exported here so what this entry exported stays as it was.
  */
 export {
   publishedWidgetDefinition,
   widgetCardSlot,
-} from "./plugins/test-widget-load";
+} from "./plugins/test-widget-card";
 
 /**
  * The aborted-transaction guard, for suites running against a real PostgreSQL server.

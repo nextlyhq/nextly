@@ -19,6 +19,10 @@
       "types": "./dist/testing.d.mts",
       "import": "./dist/testing.mjs"
     },
+    "./testing/widget-card": {
+      "types": "./dist/plugins/test-widget-card.d.mts",
+      "import": "./dist/plugins/test-widget-card.mjs"
+    },
     "./config": {
       "types": "./dist/config.d.mts",
       "import": "./dist/config.mjs"
