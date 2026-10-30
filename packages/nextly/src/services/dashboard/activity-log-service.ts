@@ -42,11 +42,11 @@ import {
   activityEventOf,
   activityMetadataOf,
   isContentSave,
+  isSettingsNamespace,
   type ActivityEvent,
 } from "./activity-changes";
 import {
   afterRun,
-  isSettingsNamespace,
   runKeyOf,
   runsOf,
   type ActivityRun,
@@ -85,10 +85,11 @@ export interface ActivityLogEntry {
   action: ActivityLogAction;
   /**
    * What the row says happened, as a reader is told it (`activityEventOf`):
-   * created, saved, published, unpublished or deleted. Absent from an update
-   * of a document that no longer exists, whose marks were dropped with its
-   * title (see `historyOfRemovedDocuments`), so the row says no more than its
-   * action does.
+   * created, saved, published, unpublished or deleted. Absent from a
+   * settings change, and from an update whose record leaves open what it did:
+   * one written before its changed fields were recorded, or one of a document
+   * that no longer exists, whose marks were dropped with its title (see
+   * `historyOfRemovedDocuments`). Such a row says no more than its action.
    */
   event?: ActivityEvent;
   collection: string;
@@ -433,14 +434,6 @@ export interface RecentActivityCount {
 }
 
 const TABLE = "activity_log";
-
-/**
- * The trail rows `historyOfRemovedDocuments` kept for documents that no longer
- * exist, redacted. Held by identity, so the row reads as one only inside the
- * request that redacted it, and `mapRow` names no event its dropped marks
- * would have decided.
- */
-const removedDocumentRows = new WeakSet<Record<string, unknown>>();
 
 /**
  * Rows read per refill round.
@@ -1057,8 +1050,12 @@ function eventOf(
   row: Record<string, unknown>,
   metadata: Record<string, unknown> | null
 ): { event?: ActivityEvent } {
-  if (removedDocumentRows.has(row) && row.action === "update") return {};
-  const event = activityEventOf(row.action, metadata);
+  const event = activityEventOf({
+    action: row.action,
+    metadata,
+    subjectKind: row.subjectKind,
+    collection: row.collection,
+  });
   return event === undefined ? {} : { event };
 }
 
@@ -1741,14 +1738,12 @@ export class ActivityLogService extends BaseService {
           // `userName` and `userEmail` stay, deliberately: an audit trail that
           // cannot say WHO deleted something is not one, and that is the
           // trade this redaction was chosen to make.
-          const redacted = {
+          kept.set(entry.row, {
             ...entry.row,
             entryId: null,
             entryTitle: null,
             metadata: null,
-          };
-          removedDocumentRows.add(redacted);
-          kept.set(entry.row, redacted);
+          });
         }
       }
     }
@@ -1815,9 +1810,9 @@ export class ActivityLogService extends BaseService {
       userName: toNullableString(row.userName),
       userEmail: toNullableString(row.userEmail),
       action: String(row.action) as ActivityLogAction,
-      // Named from the marks this row still carries. A removed document's
-      // update carries none, and an event read from their absence would call
-      // its publish or unpublish a save, so it names none.
+      // Named from the marks this row still carries, by the rule the runs read
+      // it by: an update that carries none, a removed document's among them,
+      // names none rather than calling its publish or unpublish a save.
       ...eventOf(row, metadata),
       collection: String(row.collection),
       // Type-narrow before stringification so we don't fall through to

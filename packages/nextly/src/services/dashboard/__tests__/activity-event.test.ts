@@ -1,19 +1,29 @@
 /**
  * The event a trail row records, as Team activity names it: read from the
  * row's action and the marks a publish writes, the same marks Recently edited
- * reads to tell a publish from a save.
+ * reads to tell a publish from a save. None for a row whose record leaves the
+ * operation open, by the rule the feed's runs read it by, and none for an
+ * install-level settings change, which is no entry's or Single's event.
  */
 import { describe, expect, it } from "vitest";
 
+import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../../../domains/email/provider-activity";
 import { activityEventOf, isContentSave } from "../activity-changes";
+import { runKeyOf } from "../activity-runs";
+
+/** An entry's row of the trail, as the feed reads it. */
+const entryRow = (action: string, metadata: unknown) => ({
+  action,
+  metadata,
+  subjectKind: "collection",
+  collection: "posts",
+});
 
 describe("the event a trail row records", () => {
   it.each([
     ["a create", "create", null, "created"],
     ["a delete", "delete", null, "deleted"],
     ["an edit", "update", { changedFields: ["title"] }, "saved"],
-    // Written before the changed fields were recorded: a person still saved it.
-    ["an update that does not say what it changed", "update", null, "saved"],
     [
       "a first publish",
       "update",
@@ -47,20 +57,22 @@ describe("the event a trail row records", () => {
       "unpublished",
     ],
   ])("names %s", (_, action, metadata, event) => {
-    expect(activityEventOf(action, metadata)).toBe(event);
+    expect(activityEventOf(entryRow(action, metadata))).toBe(event);
   });
 
   it("reads metadata stored as JSON text as the decoded object", () => {
     expect(
       activityEventOf(
-        "update",
-        JSON.stringify({ changedFields: ["status"], published: true })
+        entryRow(
+          "update",
+          JSON.stringify({ changedFields: ["status"], published: true })
+        )
       )
     ).toBe("published");
   });
 
   it("names nothing for an action the trail does not write", () => {
-    expect(activityEventOf("login", null)).toBeUndefined();
+    expect(activityEventOf(entryRow("login", null))).toBeUndefined();
   });
 
   it("never calls a row a save that Recently edited declines to call one", () => {
@@ -71,7 +83,69 @@ describe("the event a trail row records", () => {
       { changedFields: ["title"], published: true },
     ]) {
       expect(isContentSave("update", metadata)).toBe(false);
-      expect(activityEventOf("update", metadata)).toBe("published");
+      expect(activityEventOf(entryRow("update", metadata))).toBe("published");
     }
   });
+
+  it("names nothing for an entry's update that does not say what it did, as the runs read it", () => {
+    // Written before the changed fields were recorded, or by a save that changed nothing: it may
+    // have been a publish or an unpublish, so it is no save. The runs keep it out of a run for
+    // the same reason, by the same rule; an edit that says what it changed is the control.
+    for (const metadata of [null, {}, JSON.stringify({})]) {
+      const row = {
+        ...entryRow("update", metadata),
+        entryId: "p1",
+        userId: "u1",
+      };
+      expect(activityEventOf(row)).toBeUndefined();
+      expect(runKeyOf(row)).toBeUndefined();
+    }
+    const edit = {
+      ...entryRow("update", { changedFields: ["title"] }),
+      entryId: "p1",
+      userId: "u1",
+    };
+    expect(activityEventOf(edit)).toBe("saved");
+    expect(runKeyOf(edit)).toBeDefined();
+  });
+
+  it("reads a Single's update that does not say what it did as a save, as its runs always have", () => {
+    const row = {
+      action: "update",
+      metadata: null,
+      subjectKind: "single",
+      collection: "home",
+      entryId: "s1",
+      userId: "u1",
+    };
+    expect(activityEventOf(row)).toBe("saved");
+    expect(runKeyOf(row)).toBeDefined();
+  });
+
+  it.each(["create", "update", "delete"])(
+    "names nothing for a settings change's %s, which is no entry's or Single's event",
+    action => {
+      // Stated as a settings change, and one filed under a settings namespace before the kind was
+      // recorded; the same change recorded against an entry is the control.
+      expect(
+        activityEventOf({
+          action,
+          metadata: { changedFields: ["host"] },
+          subjectKind: "settings",
+          collection: EMAIL_PROVIDER_ACTIVITY_COLLECTION,
+        })
+      ).toBeUndefined();
+      expect(
+        activityEventOf({
+          action,
+          metadata: { changedFields: ["host"] },
+          subjectKind: null,
+          collection: EMAIL_PROVIDER_ACTIVITY_COLLECTION,
+        })
+      ).toBeUndefined();
+      expect(
+        activityEventOf(entryRow(action, { changedFields: ["host"] }))
+      ).toBeDefined();
+    }
+  );
 });

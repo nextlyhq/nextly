@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../../config";
+import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../../../domains/email/provider-activity";
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
 import type { WidgetResult } from "../../../domains/widgets/result";
 import {
@@ -25,8 +26,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { readActivitySubjects } from "../activity-subjects";
 import { ACTIVITY_SOURCE_ID } from "../activity-widget-source";
-import type { ReadCaller } from "../readable-resources";
+import { someResources, type ReadCaller } from "../readable-resources";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run on a reused database.
 const POSTS = "ta_posts";
@@ -196,6 +198,52 @@ describe.each(getConfiguredTestDialects())(
         [POSTS, "delete", "deleted", null],
         [POSTS, "update", undefined, null],
         [POSTS, "create", "created", null],
+      ]);
+    });
+
+    it("names no event for an entry's update that does not say what it did, nor for a settings change", async () => {
+      const t = await boot(dialect);
+      const id = await writesTo(t, POSTS).create(at(4), { title: "Post" });
+      const log = t.getService("activityLogService");
+      // An update recorded before the changed fields were: it may have been a publish.
+      await written(t, at(3), () =>
+        log.logActivity({
+          actorType: "user",
+          userId: ANA.id,
+          action: "update",
+          collection: POSTS,
+          entryId: id,
+          entryTitle: "Post",
+          subjectKind: "collection",
+        })
+      );
+      // An install-level settings change, which is no entry's or Single's event.
+      await written(t, at(2), () =>
+        log.logActivity({
+          actorType: "user",
+          userId: ANA.id,
+          action: "update",
+          collection: EMAIL_PROVIDER_ACTIVITY_COLLECTION,
+          subjectKind: "settings",
+          metadata: { changedFields: ["host"] },
+        })
+      );
+      // The control: a save that says what it changed is named one.
+      await writesTo(t, POSTS).update(at(1), id, { title: "Post 2" });
+
+      const { activities } = await log.getRecentActivity({
+        limit: 10,
+        scope: someResources([POSTS, EMAIL_PROVIDER_ACTIVITY_COLLECTION]),
+        caller: as(BOSS),
+        ...(await readActivitySubjects()),
+      });
+      expect(
+        activities.map(row => [row.collection, row.action, row.event])
+      ).toEqual([
+        [POSTS, "update", "saved"],
+        [EMAIL_PROVIDER_ACTIVITY_COLLECTION, "update", undefined],
+        [POSTS, "update", undefined],
+        [POSTS, "create", "created"],
       ]);
     });
 
