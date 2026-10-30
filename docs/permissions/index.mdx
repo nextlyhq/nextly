@@ -167,6 +167,73 @@ keys a list's `where` reserves for a request's own view: `_translated`, `_pendin
 filter does is refused, and the refusal is logged once with the collection and the
 operation.
 
+### What `status` means in a filter
+
+On a collection with `status: true`, a filter may name `status`. It matches the entry's own
+Draft/Published state, `"draft"` or `"published"`. On a collection without `status: true`, a filter
+on `status` matches nothing.
+
+In a read rule, `status` is added to the read's own Draft/Published scope; it never widens it. A
+visitor reads published entries whatever the rule says. A rule can keep a signed-in reader to
+published entries even when they ask for drafts:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const Articles = defineCollection({
+  slug: "articles",
+  status: true,
+  fields: [text({ name: "title" })],
+  access: {
+    // Editors see drafts; everyone else sees only what is published, even with status: "all".
+    read: ({ permissions }) =>
+      permissions.includes("update-articles")
+        ? true
+        : { status: { equals: "published" } },
+  },
+});
+```
+
+A published entry with an edit held for review is still `"published"`. A reader the filter admits
+gets the published version, not the held edit.
+
+In a write rule, the entry has to match before the write and still match after it. That makes
+`status` a poor choice in a write filter:
+
+- `update: () => ({ status: { equals: "draft" } })` lets the caller edit drafts. It refuses an
+  edit that also publishes, because the entry would leave the filter.
+- A `publish` rule filtering on `status: { equals: "draft" }` refuses every publish, because
+  publishing moves the entry out of that filter. Limit publishing by who owns the entry or by
+  another field instead.
+
+`status` is the entry's own state. With `localized: true`, a translation's own Draft/Published
+state isn't a filter key, and neither are the reserved keys `_translated`, `_pendingChange` and
+`_inRelease`. A rule that uses any of them is refused.
+
+### Yes-or-no questions under a filter
+
+Some checks ask only whether the caller may act on a collection, and name no entry. A filter can't
+answer them exactly, so they answer as follows:
+
+- **A read** answers yes: the caller may read the entries the filter matches. This covers
+  `ctx.caller.can`, `nextly.access.check`, `GET /me/capabilities` and the dashboard's counts.
+- **An update, delete, publish or unpublish** answers **no** from `ctx.caller.can(...)` in a plugin
+  route and from `nextly.access.check(...)`. A yes there would let code act past the filter, since
+  that answer applies none.
+- **The admin's hints answer yes**, a filter counting as the permission held: the capability cells,
+  a dashboard widget's or attention item's offer, and giving up a document lock. The write they lead
+  to applies the filter itself.
+
+So for an author whose update rule answers a filter:
+
+```ts
+const mayEdit = await ctx.caller.can("update", "posts");
+// false: the answer would cover every post, and the author may change only their own.
+```
+
+The capability cell for `posts` still offers the author the Edit action. The write it leads to
+applies the filter.
+
 ## Only their own entries
 
 A grant covers a whole collection: `update-posts` lets a role edit every post. To let
