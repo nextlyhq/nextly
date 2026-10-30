@@ -173,12 +173,36 @@ describe("a Field setting judged against the reader's collections", () => {
   });
 
   it("finds a field the collection does not offer, or one in a collection the reader may not read", () => {
-    // Removed, or not offered to this reader: either way not among its published fields.
-    expect(stale({ collection: "orders", field: "cost" })).toEqual(["field"]);
+    // Removed, or not offered to this reader: either way not among its published fields. With no
+    // default, each is replaced by no value at all.
+    expect(stale({ collection: "orders", field: "cost" })).toEqual([
+      ["field", undefined],
+    ]);
     // A collection with no published source of the reader's.
     expect(stale({ collection: "invoices", field: "state" })).toEqual([
-      "field",
+      ["field", undefined],
     ]);
+  });
+
+  it("replaces a stale field with a default the collection offers, as the settings sheet does", () => {
+    const defaulted = (defaultValue: string, value: string) =>
+      staleFieldSettings(
+        {
+          collection: settings.collection,
+          field: setting.fieldOf({
+            of: "collection",
+            label: "Field",
+            defaultValue,
+          }),
+        },
+        { collection: "orders", field: value },
+        [orders]
+      );
+    expect(defaulted("state", "cost")).toEqual([["field", "state"]]);
+    // The must-differ halves: a default the collection does not offer, and a
+    // stale value that is the default itself, are each replaced by none.
+    expect(defaulted("gone", "cost")).toEqual([["field", undefined]]);
+    expect(defaulted("gone", "gone")).toEqual([["field", undefined]]);
   });
 
   it("judges only a Field setting with a value", () => {

@@ -298,6 +298,8 @@ export type {
 export {
   contentFieldFits,
   type PublishedContentSource,
+  staleValueTakesDefault,
+  startsAtDefault,
   unfitContentField,
 } from "./domains/widgets/published-content-source";
 // The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
@@ -352,6 +354,9 @@ export {
   MAX_CHOSEN_FIELDS,
   naturalGroupBy,
   resolveWidgetSettings,
+  // The rule a stored value is read back by, asked before it is kept: the
+  // settings sheet holds a setting's own editor to it on Done.
+  settingValueProblem,
   type AppliedQuery,
 } from "./domains/widgets/settings";
 // Whether a link a plugin wrote stays inside the admin: asked at startup and

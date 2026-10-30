@@ -48,6 +48,13 @@ function GoalEditor({
   );
 }
 
+const TARGET_EDITOR = "@acme/goals/admin#TargetEditor";
+
+/** Says what kind of value it was handed, for a setting with no default and no value. */
+function TargetEditor({ value }: SettingEditorProps<number>) {
+  return <p>Target is {typeof value}</p>;
+}
+
 const declared: AnyWidgetSetting[] = [
   { name: "title", type: "text", label: "Title", defaultValue: "" },
   {
@@ -59,14 +66,17 @@ const declared: AnyWidgetSetting[] = [
   },
 ];
 
-function open(config: Record<string, unknown>) {
+function open(
+  config: Record<string, unknown>,
+  settings: AnyWidgetSetting[] = declared
+) {
   const onSave = vi.fn();
   render(
     <WidgetSettingsSheet
       open
       onOpenChange={() => {}}
       title="Goal"
-      settings={declared}
+      settings={settings}
       config={config}
       onDone={onSave}
     />
@@ -76,9 +86,11 @@ function open(config: Record<string, unknown>) {
 
 beforeEach(() => {
   registerComponent(EDITOR, GoalEditor as never);
+  registerComponent(TARGET_EDITOR, TargetEditor as never);
 });
 afterEach(() => {
   unregisterComponent(EDITOR);
+  unregisterComponent(TARGET_EDITOR);
 });
 
 describe("a setting with its own editor", () => {
@@ -94,6 +106,39 @@ describe("a setting with its own editor", () => {
     await userEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave.mock.calls.at(-1)?.[0]).toMatchObject({ goal: 50 });
+  });
+
+  it("names a value its setting does not take on Done, and saves nothing", async () => {
+    // Doubled past the setting's declared max of 30: the layout write would
+    // refuse it, and the card's read would set it aside.
+    const onSave = open(
+      { title: "Q4", goal: 20 },
+      declared.map(setting =>
+        setting.name === "goal" && setting.type === "number"
+          ? { ...setting, max: 30 }
+          : setting
+      )
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Double" }));
+    expect(screen.getByText("Goal: 40 for Q4")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(
+      await screen.findByText('"Goal" is at most 30.', { selector: "p" })
+    ).toBeTruthy();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("is handed no value, never the form's blank, for a setting with none", () => {
+    open({ title: "Q4" }, [
+      { name: "title", type: "text", label: "Title", defaultValue: "" },
+      {
+        name: "target",
+        type: "number",
+        label: "Target",
+        editor: { component: TARGET_EDITOR },
+      },
+    ]);
+    expect(screen.getByText("Target is undefined")).toBeTruthy();
   });
 
   it("says it cannot be changed here when its editor was never registered", () => {

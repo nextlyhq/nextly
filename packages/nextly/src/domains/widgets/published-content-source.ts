@@ -84,3 +84,44 @@ export function unfitContentField(
     );
   });
 }
+
+/**
+ * Whether a content setting over `source` starts at its declared default
+ * rather than at none: where every field the default names (`defaultNames`)
+ * is one `source` offers it ({@link unfitContentField}), and where there is
+ * no source to judge the default by.
+ *
+ * @experimental While the settings sheet's content controls are built on it.
+ */
+export function startsAtDefault(
+  settingType: string,
+  defaultNames: readonly string[],
+  source: PublishedContentSource | undefined
+): boolean {
+  return (
+    source === undefined ||
+    unfitContentField(settingType, defaultNames, source) === undefined
+  );
+}
+
+/**
+ * Whether a stored value naming a field `source` does not offer is replaced
+ * by the setting's default, rather than by none: where the default fits
+ * ({@link startsAtDefault}), unless the stale value IS the default, which is
+ * then what failed.
+ *
+ * The one replacement rule, read by the settings sheet as it opens on a stale
+ * value and by the server before a card's `load` is handed one, so the card
+ * loads with what the sheet would show.
+ *
+ * @experimental While the settings sheet's content controls are built on it.
+ */
+export function staleValueTakesDefault(
+  settingType: string,
+  stale: { isDefault: boolean; defaultNames: readonly string[] },
+  source: PublishedContentSource | undefined
+): boolean {
+  return (
+    !stale.isDefault && startsAtDefault(settingType, stale.defaultNames, source)
+  );
+}

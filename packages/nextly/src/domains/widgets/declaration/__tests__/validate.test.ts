@@ -1002,6 +1002,40 @@ describe("startup with several declarations", () => {
     ]);
   });
 
+  it("refuses one component drawn both as a view and as a setting's editor, naming both", () => {
+    /** A valid widget with a Goal setting edited by `editor`. */
+    const editedBy = (editor: string) =>
+      valid({
+        id: "acme/goal",
+        settings: {
+          ...(valid() as { settings: Record<string, unknown> }).settings,
+          goal: {
+            type: "number",
+            label: "Goal",
+            editor: { component: editor },
+          },
+        },
+      });
+    const groups = (editor: string) => [
+      { owner: 'plugin "@acme/shop"', declarations: [validComponent()] },
+      { owner: "the site config", declarations: [editedBy(editor)] },
+    ];
+    expect(
+      collectWidgetDeclarationFaults(groups("@acme/shop/admin#RevenueCard"))
+    ).toEqual([
+      {
+        owner: "the site config",
+        widget: "acme/goal",
+        problem:
+          'component "@acme/shop/admin#RevenueCard" is the editor of setting "goal" of widget "acme/goal" of the site config and the view of widget "acme/revenue" of plugin "@acme/shop"; a view and a setting editor are handed different props, so one component cannot be both',
+      },
+    ]);
+    // The must-differ half: an editor of its own passes beside the view.
+    expect(
+      collectWidgetDeclarationFaults(groups("@acme/shop/admin#GoalEditor"))
+    ).toEqual([]);
+  });
+
   it("throws one error whose detail lists every fault", () => {
     const groups = [
       {

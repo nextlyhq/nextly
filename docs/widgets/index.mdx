@@ -232,14 +232,22 @@ A setting is drawn in the card's settings sheet by the field its builder names: 
 for `setting.number`, a picker for `setting.collection`. Where none of those fits, a setting can
 name a component of your own with `editor` (**experimental**), drawn in the sheet in its place.
 The component is handed `SettingEditorProps` of the setting's value: the value, an `onChange`, the
-card's other settings as the sheet holds them now, and whether the sheet is saving. A change is
-saved with the rest of the settings when the reader saves.
+card's other settings as the sheet holds them now, and whether the sheet is saving. A setting with
+no value is handed `undefined`. A change is held to the setting's own rules (its type, `min` and
+`max`, its options, and for a Field setting the fields its collection offers the reader) and saved
+with the rest of the settings when the reader saves; a value that breaks them is named under the
+editor, and the server refuses it too.
 
 ```ts
 import { defineWidget, setting } from "@nextlyhq/plugin-sdk";
 
 export const salesGoal = defineWidget({
-  // ...
+  id: "acme/sales-goal",
+  title: "Sales goal",
+  description:
+    "Orders over the last 30 days, against the goal the reader sets.",
+  size: { default: { w: 3, h: 2 } },
+  view: "figure",
   settings: {
     goal: setting.number({
       label: "Goal",
@@ -247,6 +255,9 @@ export const salesGoal = defineWidget({
       editor: { component: "@acme/nextly-plugin-shop/admin#GoalEditor" },
     }),
   },
+  load: async ({ services }) => ({
+    total: await services.count("orders", { window: { range: "30d" } }),
+  }),
 });
 ```
 
@@ -265,7 +276,9 @@ export function GoalEditor({
 
 The editor is registered like the widget's own component, from your admin entry, and the
 component map holds it to the setting's value: an editor written for another setting's value
-fails to compile. Startup refuses an `editor` that names no component.
+fails to compile. Startup refuses an `editor` that names no component, one component used both
+as a widget's view and as a setting's editor, and an `editor` on a widget given to `registerWidget`
+or `contributes.admin.widgets`: custom setting editors need a `defineWidget` declaration.
 
 ## Testing a widget
 

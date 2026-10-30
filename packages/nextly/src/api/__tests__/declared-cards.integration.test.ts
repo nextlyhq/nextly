@@ -581,6 +581,73 @@ describe("a declared card's Field setting, judged before its data is read", () =
   });
 });
 
+describe("a declared card's Field setting, held on the layout write", () => {
+  /** The owner's layout endpoint, as their own session asks it. */
+  async function layout(method: "GET" | "PUT", body?: unknown) {
+    const { session } = await sessionOf(ownerId!);
+    const request = new Request("http://localhost/api/dashboard/layout", {
+      method,
+      headers: {
+        cookie: session,
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const context = {
+      params: Promise.resolve({ params: ["dashboard", "layout"] }),
+    };
+    return method === "GET"
+      ? handlers().GET(request, context)
+      : handlers().PUT(request, context);
+  }
+
+  /** Saves the layout the owner was handed with a by-field card over orders added. */
+  async function saveField(field: string): Promise<Response> {
+    const read = await layout("GET");
+    expect(read.status).toBe(200);
+    const seen = (await read.json()) as {
+      placements: unknown[];
+      version: number;
+      scope: string;
+    };
+    return layout("PUT", {
+      placements: [
+        ...seen.placements,
+        {
+          id: "c-field",
+          widgetId: "acme/by-field",
+          w: 12,
+          h: 3,
+          removed: false,
+          config: { collection: ORDERS, field },
+        },
+      ],
+      version: seen.version,
+      scope: seen.scope,
+    });
+  }
+
+  it("saves a field the chosen collection offers its reader", async () => {
+    // The control: without it, a write refused for any reason would pass the
+    // cases below.
+    expect((await saveField("state")).status).toBe(200);
+  });
+
+  it.each([
+    ["one its reader may not read", "cost"],
+    ["one the collection does not have", "removed"],
+  ])(
+    "refuses %s, naming the setting, with one answer",
+    async (_case, field) => {
+      const res = await saveField(field);
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(await res.json())).toContain(
+        '\\"Field\\" names a field that is not available.'
+      );
+    }
+  );
+});
+
 describe("a reader who leaves gives a declared card up", () => {
   it.each([
     ["the JSON answer", false],
