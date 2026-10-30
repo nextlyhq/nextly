@@ -205,7 +205,12 @@ export const Posts = defineCollection({
 - The Direct API, a plugin service and REST apply these filters, REST for an entry's
   update, delete, publish and unpublish, and for restoring a version, discarding or
   autosaving a held edit, and taking the live shared values into it.
-- Bulk and batch writes, and a release's members, still refuse a write rule's filter.
+- Bulk and batch writes match each entry they name or find against the filter, as a single
+  write does: the entries it matches are written, and each other one fails on its own,
+  with a 403 or as a missing entry as a single write would. A write by query picks only the
+  entries its filter matches, and each is judged again as it is written.
+- A release admits a document as a member only where its author's filter matches it, and
+  the release's run judges each member again as it writes it.
 
 ## Related rows
 
