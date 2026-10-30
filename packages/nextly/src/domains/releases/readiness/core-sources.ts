@@ -150,9 +150,9 @@ export const CORE_AUTHOR_SOURCE = defineReleaseCheckSource({
 /**
  * Whether each member's author may still perform its action.
  *
- * Asked once per author, scope and action rather than per member: the gate
- * answers for a scope, so a release of two hundred documents by three people
- * in one collection costs a handful of questions.
+ * Asked once per author, scope and action rather than per member, with the
+ * group's documents together: a release of two hundred documents by three
+ * people in one collection costs a handful of questions.
  */
 export const CORE_PERMISSION_SOURCE = defineReleaseCheckSource({
   key: "core.permission",
@@ -170,8 +170,16 @@ export const CORE_PERMISSION_SOURCE = defineReleaseCheckSource({
       const [first] = members;
       const user = await actingAs(first.createdBy);
       if (user === null) continue;
-      if (await ctx.reads.mayPerform(user, first, first.action)) continue;
+      // A rule that answers a filter admits some of the group's documents and
+      // not others, so each member is answered by its own document.
+      const allowed = await ctx.reads.mayPerform(
+        user,
+        first,
+        first.action,
+        members.map(member => member.entryId)
+      );
       for (const member of members) {
+        if (allowed.has(member.entryId)) continue;
         findings.push({ memberId: member.id, code: "AUTHOR_MAY_NOT_ACT" });
       }
     }
