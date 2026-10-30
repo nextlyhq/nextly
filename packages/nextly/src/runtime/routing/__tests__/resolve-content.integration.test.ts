@@ -12,10 +12,15 @@ import {
 import { resolveContent } from "../resolve-content";
 import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-grant";
 
+/**
+ * Content anyone may read: its read rule answers `true`, so boot seeding
+ * grants the Public role its read, which a visitor's lookup needs.
+ */
 const pages = () =>
   defineCollection({
     slug: "pages",
     status: true,
+    access: { read: () => true },
     fields: [text({ name: "slug" }), text({ name: "title" })],
   });
 
@@ -27,7 +32,12 @@ afterEach(async () => {
 
 describe("resolveContent (integration)", () => {
   it("resolves a published entry by slug and ignores drafts", async () => {
-    current = await createTestNextly({ collections: [pages()] });
+    // The lookup reads as a visitor, judged by the Public role a real boot
+    // makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     await current.nextly.create({
       collection: "pages",
       data: { slug: "about", title: "About", status: "published" },
@@ -56,10 +66,14 @@ describe("resolveContent (integration)", () => {
     // No `status: true` lifecycle — the collection defines its OWN ordinary
     // `status` field. The default `status: "published"` scope is lifecycle-aware,
     // so it does NOT filter this collection and the live row is returned.
+    // The lookup reads as a visitor, judged by the Public role a real boot
+    // makes, which reads `docs` by its rule.
     current = await createTestNextly({
+      seedPublic: true,
       collections: [
         defineCollection({
           slug: "docs",
+          access: { read: () => true },
           fields: [
             text({ name: "slug" }),
             text({ name: "title" }),
@@ -84,7 +98,12 @@ describe("resolveContent (integration)", () => {
     // where-clause), which the query service uses to constrain the companion
     // `_status` too. Here we assert the published main row resolves; the
     // per-locale companion enforcement itself is covered by the i18n suite.
-    current = await createTestNextly({ collections: [pages()] });
+    // The lookup reads as a visitor, judged by the Public role a real boot
+    // makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     await current.nextly.create({
       collection: "pages",
       data: { slug: "hello", title: "Hello", status: "published" },
@@ -96,7 +115,12 @@ describe("resolveContent (integration)", () => {
   });
 
   it("resolves duplicate published slugs deterministically (lowest id)", async () => {
-    current = await createTestNextly({ collections: [pages()] });
+    // The lookup reads as a visitor, judged by the Public role a real boot
+    // makes, which reads `pages` by its rule.
+    current = await createTestNextly({
+      collections: [pages()],
+      seedPublic: true,
+    });
     // Collection tables now materialize their canonical UNIQUE slug index on
     // every dialect (SQLite/MySQL used to skip it on the drizzle-kit create
     // path), so duplicate slugs can only exist as LEGACY data written before

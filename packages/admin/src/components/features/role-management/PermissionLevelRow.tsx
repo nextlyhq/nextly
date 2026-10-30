@@ -26,6 +26,12 @@ import {
   type LevelRow,
 } from "@admin/lib/permissions/level-rows";
 import { levelsFor, type AccessLevel } from "@admin/lib/permissions/levels";
+import {
+  givesVisitorsAWrite,
+  offeredSwitches,
+  VISITOR_LEVELS,
+  VISITOR_WRITE_WARNING,
+} from "@admin/lib/roles/role-screen-mode";
 import { cn } from "@admin/lib/utils";
 import type { Permission } from "@admin/types/ui/form";
 
@@ -47,6 +53,13 @@ export interface PermissionLevelRowProps {
    */
   bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
+  /**
+   * The row is the Public role's: it offers No access and Can view alone,
+   * no publish or unpublish switch, and warns where a switch gives visitors
+   * a write. Its level is still read over every level, so a write held reads
+   * Custom.
+   */
+  visitors?: boolean;
 }
 
 /**
@@ -73,13 +86,19 @@ export function PermissionLevelRow({
   lockedIds = [],
   bases = [],
   disabled = false,
+  visitors = false,
 }: PermissionLevelRowProps): JSX.Element {
   const [eachAction, setEachAction] = useState(false);
   const { owned, locked, held } = useHeldPermissions(value, lockedIds);
 
   const level = rowLevel(row, held);
-  const levels = levelsFor(row.kind);
-  const offered = offeredLevels(row, lockedIds);
+  const forRole = (candidates: readonly AccessLevel[]) =>
+    visitors
+      ? candidates.filter(candidate => VISITOR_LEVELS.includes(candidate))
+      : [...candidates];
+  const levels = forRole(levelsFor(row.kind));
+  const offered = forRole(offeredLevels(row, lockedIds));
+  const switches = offeredSwitches(row.permissions, visitors);
   // The bases that give this row something, each named for its own grants.
   const rowIds = new Set(row.permissions.map(permission => permission.id));
   const givers = bases
@@ -95,7 +114,7 @@ export function PermissionLevelRow({
       : "";
   // A built-in resource's lines: a retired `manage-` permission still held,
   // and what Settings must hold to change the schema.
-  const notes = rowNotes(row, held, owned);
+  const notes = rowNotes(row, held, owned, { visitors });
 
   const setLevel = (chosen: string) => {
     const next = levels.find(candidate => candidate === chosen);
@@ -173,9 +192,11 @@ export function PermissionLevelRow({
         </div>
       </div>
 
+      {visitors && <VisitorWriteWarning permissions={switches} held={held} />}
+
       {eachAction && (
         <PermissionSwitches
-          permissions={row.permissions}
+          permissions={switches}
           name={name}
           held={held}
           locked={locked}
@@ -253,6 +274,28 @@ function RowHeading({
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * The Public role's warning where `held` gives visitors a write among
+ * `permissions`: a level row's switches, a plugin's own permissions or the
+ * table of other permissions, so each warns of the same write alike.
+ */
+export function VisitorWriteWarning({
+  permissions,
+  held,
+  className,
+}: {
+  permissions: readonly Permission[];
+  held: ReadonlySet<string>;
+  className?: string;
+}): JSX.Element | null {
+  if (!givesVisitorsAWrite(permissions, held)) return null;
+  return (
+    <p role="note" className={cn("text-sm text-destructive", className)}>
+      {VISITOR_WRITE_WARNING}
+    </p>
   );
 }
 

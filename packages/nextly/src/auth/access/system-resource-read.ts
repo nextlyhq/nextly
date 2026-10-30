@@ -5,7 +5,7 @@
  * A system resource is not an entry and declares no code rule, so the
  * decision about it is `decidePermission`'s: the permission alone, a
  * super-admin past it, and a key only by its own grant, never its maker's
- * authority. That is what these readers answer, but for the deviation kept
+ * authority. That is what these readers answer, but for the deviations kept
  * below.
  *
  * @module auth/access/system-resource-read
@@ -34,10 +34,17 @@ export async function readsSystemResource(
 ): Promise<boolean> {
   const decided = decidePermission(actor, "read", resource).allowed;
   // Without the service a signed-in user's grant is never asked, so the read
-  // is refused, super-admin included. A key is judged by its own scope, which
-  // needs no service, and a visitor holds no grant either way.
+  // is refused, super-admin included. A key is judged by its own scope, and a
+  // visitor by the Public role's grants, neither of which needs the service.
   if (!serviceRegistered && actor.kind === "user") {
     return deviate("no-service", false, () => decided);
+  }
+  // Media is the one system resource a visitor reads, by the Public role's
+  // `read-media`: a user row carries a person's address, so it is refused to
+  // a visitor whatever Public was granted, as relationship population
+  // refuses it.
+  if (actor.kind === "visitor" && resource !== "media") {
+    return deviate("visitor-keeps-media", false, () => decided);
   }
   return decided;
 }
