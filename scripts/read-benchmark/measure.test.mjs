@@ -9,25 +9,48 @@ import { DEFAULT_API_KEYS_CONFIG } from "../../packages/nextly/src/shared/types/
 import {
   KEY_REQUESTS_PER_HOUR,
   PAGE_SIZE,
+  checkContent,
+  checkEveryPage,
   checkKeyBudget,
-  checkShape,
   checkStorage,
+  expectedArticles,
   idOf,
-  isCompleteArticle,
   optionsFrom,
   readsFor,
   removingOnFailure,
+  seedSite,
+  seededContent,
   storageOf,
   teardown,
 } from "./measure.mjs";
 
-const article = {
-  headline: "A headline",
-  excerpt: "An excerpt.",
-  body: { root: {} },
-  author: { id: "a1", name: "Ada", bio: "Writes." },
-  card: { heading: "Card", blurb: "A blurb." },
-};
+// Two pages of seeded articles, as the benchmark seeds them, and the content each must read back as.
+const content = seededContent({ seed: 1, docs: 2 * PAGE_SIZE });
+const ids = content.articles.map((_, i) => `a${i}`);
+const expected = expectedArticles(content, ids);
+
+/**
+ * Article `i` as a read returns it: its seeded values, with the ids and times a read adds beside
+ * them, and its date spelled otherwise than it was seeded.
+ */
+function readBack(i) {
+  const seeded = expected.get(ids[i]);
+  const added = { createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-02T00:00:00.000Z" };
+  return {
+    ...seeded,
+    ...added,
+    id: ids[i],
+    publishedOn: seeded.publishedOn.replace("Z", "+00:00"),
+    author: { ...seeded.author, ...added, id: `author-${i}` },
+    card: { ...seeded.card, id: `card-${i}` },
+  };
+}
+
+/** Page `page` of the seeded articles, as a list read returns it. */
+function pageOf(page) {
+  const first = (page - 1) * PAGE_SIZE;
+  return { items: ids.slice(first, first + PAGE_SIZE).map((_, i) => readBack(first + i)) };
+}
 
 describe("the checks a measurement makes before it times anything", () => {
   it("reads a create's id from the item or the record", () => {
@@ -36,35 +59,68 @@ describe("the checks a measurement makes before it times anything", () => {
     expect(() => idOf({ item: {} })).toThrow(/no id/);
   });
 
-  it("counts an article complete only with its translatable fields, author and card", () => {
-    expect(isCompleteArticle(article)).toBe(true);
-    expect(isCompleteArticle({ ...article, headline: undefined })).toBe(false);
-    expect(isCompleteArticle({ ...article, excerpt: undefined })).toBe(false);
-    expect(isCompleteArticle({ ...article, body: null })).toBe(false);
-    expect(isCompleteArticle({ ...article, author: "a1" })).toBe(false);
-    // A relationship that failed to populate comes back null, which is also an "object".
-    expect(isCompleteArticle({ ...article, author: null })).toBe(false);
-    expect(isCompleteArticle({ ...article, author: [] })).toBe(false);
-    // The author's own translatable fields, which e4 moves too.
-    expect(isCompleteArticle({ ...article, author: { id: "a1", bio: "Writes." } })).toBe(false);
-    expect(isCompleteArticle({ ...article, author: { id: "a1", name: "Ada" } })).toBe(false);
-    expect(isCompleteArticle({ ...article, card: {} })).toBe(false);
-    // Every translatable field of the card, not only its heading.
-    expect(isCompleteArticle({ ...article, card: { heading: "Card" } })).toBe(false);
-    // Each as the type a read returns it as.
-    expect(isCompleteArticle({ ...article, body: "a string" })).toBe(false);
+  it("seeds exactly the content it expects, each article pointing at its author", async () => {
+    // The same seed makes the same content, so a measurement's expectation is its seeding's.
+    expect(seededContent({ seed: 1, docs: 2 * PAGE_SIZE })).toEqual(content);
+    const creates = [];
+    const nextly = { create: async ({ collection, data }) => (creates.push({ collection, data }), { item: { id: `${collection}-${creates.length}` } }) };
+    const articleIds = await seedSite(nextly, content);
+    expect(creates.filter(({ collection }) => collection === "authors").map(({ data }) => data)).toEqual(content.authors);
+    const articles = creates.filter(({ collection }) => collection === "articles");
+    const withoutAuthor = ({ author: _author, ...values }) => values;
+    expect(articles.map(({ data }) => withoutAuthor(data))).toEqual(content.articles.map(withoutAuthor));
+    // Each article's author is the id its author was created with.
+    expect(articles.map(({ data }) => data.author)).toEqual(content.articles.map(article => `authors-${article.author + 1}`));
+    expect(articleIds).toEqual(articles.map((_, i) => `articles-${content.authors.length + i + 1}`));
+    // What each must read back as carries its author's values.
+    expect(expected.get("a0").author).toEqual(content.authors[content.articles[0].author]);
   });
 
-  it("wants a full page from a list read and a complete article from both", () => {
-    const page = Array.from({ length: PAGE_SIZE }, () => article);
-    expect(() => checkShape("direct list", { items: page })).not.toThrow();
-    expect(() => checkShape("rest list", { items: page.slice(1) })).toThrow(/items, not/);
-    expect(() => checkShape("direct list", { items: [{}, ...page.slice(1)] })).toThrow(/without its fields/);
-    // Every article of the page, not only the first.
-    expect(() => checkShape("rest list", { items: [...page.slice(1), { ...article, author: null }] })).toThrow(/without its fields/);
-    expect(() => checkShape("direct detail", article)).not.toThrow();
-    expect(() => checkShape("rest detail", { item: article })).not.toThrow();
-    expect(() => checkShape("rest detail", { item: {} })).toThrow(/without its fields/);
+  it("takes an article that reads back as seeded, whatever a read adds beside it", () => {
+    expect(() => checkContent("direct detail", readBack(0), expected)).not.toThrow();
+    expect(() => checkContent("rest detail", { item: readBack(1) }, expected)).not.toThrow();
+    expect(() => checkContent("direct list", pageOf(1), expected)).not.toThrow();
+    expect(() => checkContent("rest list", pageOf(2), expected)).not.toThrow();
+  });
+
+  it("refuses an article whose content is not what was seeded, at any depth", () => {
+    const article = readBack(0);
+    // An empty translated value, of the article's card.
+    expect(() => checkContent("direct detail", { ...article, card: { ...article.card, heading: "" } }, expected)).toThrow(/at card\.heading/);
+    // A dropped value, of the populated author.
+    const { name: _name, ...nameless } = article.author;
+    expect(() => checkContent("rest detail", { item: { ...article, author: nameless } }, expected)).toThrow(/at author\.name/);
+    // The right field from the wrong row: another article's headline served for this one.
+    expect(() => checkContent("direct detail", { ...article, headline: readBack(1).headline }, expected)).toThrow(/a0 with other content than seeded, at headline/);
+    // An empty rich-text body, and one short of a paragraph.
+    expect(() => checkContent("direct detail", { ...article, body: {} }, expected)).toThrow(/at body\.root/);
+    const children = article.body.root.children.slice(1);
+    expect(() => checkContent("direct detail", { ...article, body: { root: { ...article.body.root, children } } }, expected)).toThrow(/at body\.root\.children/);
+    // An author left unpopulated, a shared value changed, and a date naming another time.
+    expect(() => checkContent("direct detail", { ...article, author: "author-0" }, expected)).toThrow(/at author: expected a record/);
+    expect(() => checkContent("direct detail", { ...article, views: article.views + 1 }, expected)).toThrow(/at views/);
+    expect(() => checkContent("direct detail", { ...article, publishedOn: "2024-01-01T00:00:00.000Z" }, expected)).toThrow(/at publishedOn/);
+    // An article the site never seeded.
+    expect(() => checkContent("direct detail", { ...article, id: "zz" }, expected)).toThrow(/did not seed/);
+    // Every article of a page, not only the first, and a page that is full.
+    const page = pageOf(1);
+    page.items[PAGE_SIZE - 1] = { ...page.items[PAGE_SIZE - 1], excerpt: "" };
+    expect(() => checkContent("rest list", page, expected)).toThrow(/at excerpt/);
+    expect(() => checkContent("direct list", { items: pageOf(1).items.slice(1) }, expected)).toThrow(/items, not/);
+  });
+
+  it("walks every list page before timing, and refuses one that loses or repeats an article", async () => {
+    const asked = [];
+    const site = pages => ({ find: async query => (asked.push(query), pages(query.page)) });
+    await checkEveryPage(site(pageOf), expected);
+    expect(asked.map(({ page }) => page)).toEqual([1, 2]);
+    expect(asked[0]).toMatchObject({ collection: "articles", limit: PAGE_SIZE, sort: "publishedOn", depth: 1 });
+    // A page that serves an article of the first page again no longer holds every article once.
+    const repeated = page => (page === 2 ? { items: [readBack(0), ...pageOf(2).items.slice(1)] } : pageOf(page));
+    await expect(checkEveryPage(site(repeated), expected)).rejects.toThrow(/held 39 of the 40/);
+    // A swapped value on the last page, which no timed read's first answer may reach.
+    const swapped = page => (page === 2 ? { items: [...pageOf(2).items.slice(0, -1), { ...readBack(39), headline: readBack(38).headline }] } : pageOf(page));
+    await expect(checkEveryPage(site(swapped), expected)).rejects.toThrow(/a39 with other content than seeded, at headline/);
   });
 
   it("refuses a site whose storage is not its mode's", () => {
@@ -193,7 +249,7 @@ describe("the checks a measurement makes before it times anything", () => {
   });
 
   it("keeps each REST read inside one key's hourly allowance, and refuses settings that are not", () => {
-    // The defaults: 300 warm-up, the shape check and 600 timed reads, 901 requests.
+    // The defaults: 300 warm-up, the content check and 600 timed reads, 901 requests.
     expect(() => checkKeyBudget(optionsFrom(["--mode", "main", "--dialect", "sqlite"]))).not.toThrow();
     expect(() => checkKeyBudget({ warmup: 300, restIterations: KEY_REQUESTS_PER_HOUR - 300 - 1 })).not.toThrow();
     expect(() => checkKeyBudget({ warmup: 300, restIterations: KEY_REQUESTS_PER_HOUR - 300 })).toThrow(new RegExp(`over its ${KEY_REQUESTS_PER_HOUR} an hour`));

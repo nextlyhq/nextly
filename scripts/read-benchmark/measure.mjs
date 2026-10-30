@@ -23,7 +23,7 @@ import { parseArgs } from "node:util";
 
 import { isCliEntry } from "../cli-entry.mjs";
 
-import { TRANSLATABLE_FIELDS, articleData, authorData, localesOf, siteFor, storageContractOf } from "./fixture.mjs";
+import { DATE_FIELDS, TRANSLATABLE_FIELDS, articleData, authorData, localesOf, siteFor, storageContractOf } from "./fixture.mjs";
 import { pick, seededRandom, summarize } from "./stats.mjs";
 
 const AUTHORS = 20;
@@ -40,7 +40,7 @@ const LIST_SORT = "publishedOn";
  * (`apiKeys.rateLimit`), which a test boot does not: Nextly's
  * `DEFAULT_API_KEYS_CONFIG.requestsPerHour`, which the test holds this to. It
  * is not read from the build, which does not export it. Each REST read gets
- * its own key, and its warm-up, shape check and timed reads must fit under it.
+ * its own key, and its warm-up, content check and timed reads must fit under it.
  */
 export const KEY_REQUESTS_PER_HOUR = 1000;
 const NEXTLY_DIST = new URL("../../packages/nextly/dist/", import.meta.url);
@@ -67,32 +67,100 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Whether `value` holds every translatable field of `table`, each as the type a read returns it as. */
-function hasTranslatableFields(value, table) {
-  return (
-    isRecord(value) &&
-    Object.entries(TRANSLATABLE_FIELDS[table]).every(([name, type]) => (type === "object" ? isRecord(value[name]) : typeof value[name] === type))
+/**
+ * The site's content as the seed makes it: each author's values, then each article's, with its
+ * author given as an index into the authors. Seeding writes exactly this, and the content check
+ * compares every read against it, so what is written and what is expected cannot drift apart.
+ */
+export function seededContent(options) {
+  const random = seededRandom(options.seed);
+  const authors = Array.from({ length: AUTHORS }, () => authorData(random));
+  const authorIndexes = authors.map((_, i) => i);
+  const articles = Array.from({ length: options.docs }, (_, i) => articleData(random, i, authorIndexes));
+  return { authors, articles };
+}
+
+/** What each seeded article must read back as, by its id: its values, with its author's values in place of the author. */
+export function expectedArticles(content, articleIds) {
+  return new Map(
+    articleIds.map((id, i) => {
+      const article = content.articles[i];
+      return [id, { ...article, author: content.authors[article.author] }];
+    })
   );
 }
 
-/**
- * Whether an article came back whole: every translatable field of its own, of
- * its populated author and of its card, as the site defines them. A read that
- * lost one would time less than it should, under `e4` above all, which
- * translates them all.
- */
-export function isCompleteArticle(item) {
-  const { author, card } = item ?? {};
-  return hasTranslatableFields(item, "dc_articles") && hasTranslatableFields(author, "dc_authors") && hasTranslatableFields(card, "comp_card");
+/** A value as a difference shows it, cut short. */
+function shown(value) {
+  return JSON.stringify(value)?.slice(0, 120);
+}
+
+/** The difference at `path` between two values that should have been the same. */
+function mismatch(path, expected, actual) {
+  return `${path}: expected ${shown(expected)}, got ${shown(actual)}`;
+}
+
+/** Whether two spellings of a date name the same time. */
+function sameTime(expected, actual) {
+  const time = new Date(actual).getTime();
+  return !Number.isNaN(time) && time === new Date(expected).getTime();
 }
 
 /**
- * What a read returns, checked once before timing: a list read gives a full
- * page, a detail read its article, each article complete. A read that came
- * back empty would time nothing.
+ * Where a read's `actual` departs from the `expected` content, as a path and the two values, or
+ * null where it holds every seeded value: each key at every depth, the rich-text body included, a
+ * list item for item and of the same length, and a date by the time it names. What a read adds
+ * beside the seeded values, its ids, its created and updated times and any column of its own, is
+ * not compared: it cannot make a read time less content than was seeded.
  */
-export function checkShape(name, result) {
-  for (const item of articlesOf(name, result)) checkArticle(name, item);
+function contentDifference(expected, actual, path = "") {
+  if (Array.isArray(expected)) return listDifference(expected, actual, path);
+  if (isRecord(expected)) return recordDifference(expected, actual, path);
+  return Object.is(expected, actual) ? null : mismatch(path, expected, actual);
+}
+
+/** Where a list departs from the expected one: in its length, or at its first item that does. */
+function listDifference(expected, actual, path) {
+  if (!Array.isArray(actual) || actual.length !== expected.length) return `${path}: expected ${expected.length} items, got ${shown(actual)}`;
+  for (let i = 0; i < expected.length; i++) {
+    const difference = contentDifference(expected[i], actual[i], `${path}[${i}]`);
+    if (difference !== null) return difference;
+  }
+  return null;
+}
+
+/** Where a record departs from the expected one: at its first seeded field that does. */
+function recordDifference(expected, actual, path) {
+  if (!isRecord(actual)) return `${path}: expected a record, got ${shown(actual)}`;
+  for (const [key, value] of Object.entries(expected)) {
+    const difference = fieldDifference(key, value, actual[key], path ? `${path}.${key}` : key);
+    if (difference !== null) return difference;
+  }
+  return null;
+}
+
+/** Where a field departs from its seeded value: a date by the time it names, any other by its content. */
+function fieldDifference(key, expected, actual, path) {
+  if (!DATE_FIELDS.has(key)) return contentDifference(expected, actual, path);
+  return sameTime(expected, actual) ? null : mismatch(path, expected, actual);
+}
+
+/** Refuses an article that is not one the site seeded, or that reads back as other content than seeded. */
+function checkArticle(name, item, expected) {
+  const seeded = expected.get(item?.id);
+  if (seeded === undefined) throw new Error(`${name} returned an article the site did not seed: ${JSON.stringify(item)?.slice(0, 300)}`);
+  const difference = contentDifference(seeded, item);
+  if (difference !== null) throw new Error(`${name} returned article ${item.id} with other content than seeded, at ${difference}`);
+}
+
+/**
+ * What a read returns, checked against the seeded content once before timing: a list read gives
+ * a full page and a detail read its article, each article, with its author and its card, exactly
+ * as seeded. A read that lost, emptied or swapped a value would time less than it should, under
+ * `e4` above all, which moves every translatable value.
+ */
+export function checkContent(name, result, expected) {
+  for (const item of articlesOf(name, result)) checkArticle(name, item, expected);
 }
 
 /** The articles a read returned: every one of a list read's full page, or a detail read's one. */
@@ -107,9 +175,26 @@ function fullPage(name, result) {
   return items;
 }
 
-/** Refuses an article that came back without its fields. */
-function checkArticle(name, item) {
-  if (!isCompleteArticle(item)) throw new Error(`${name} returned an article without its fields: ${JSON.stringify(item).slice(0, 300)}`);
+/**
+ * Reads every page the Direct API list read can draw, before anything is timed, and refuses the
+ * site unless each article on them reads back exactly as seeded and the pages hold every seeded
+ * article once. Each timed read's first answer is checked as well, through `checkContent`, so the
+ * detail and REST reads are held to the same content.
+ */
+export async function checkEveryPage(nextly, expected) {
+  const seen = new Set();
+  for (let page = 1; page <= Math.ceil(expected.size / PAGE_SIZE); page++) {
+    for (const item of itemsOf(await directList(nextly, page))) {
+      checkArticle("direct list", item, expected);
+      seen.add(item.id);
+    }
+  }
+  if (seen.size !== expected.size) throw new Error(`direct list pages held ${seen.size} of the ${expected.size} seeded articles`);
+}
+
+/** The Direct API list read the benchmark times: one page of articles in the seeded order, authors populated. */
+function directList(nextly, page) {
+  return nextly.find({ collection: "articles", limit: PAGE_SIZE, page, sort: LIST_SORT, depth: 1 });
 }
 
 /**
@@ -145,16 +230,13 @@ async function boot(options) {
   return { handle: await createTestNextly({ ...site, dialect: options.dialect }), cleanup: () => {} };
 }
 
-/** Seeds the authors and articles, all from the one seed. */
-async function seedSite(nextly, options) {
-  const random = seededRandom(options.seed);
+/** Creates the seeded authors and articles, each article pointing at its author's id. */
+export async function seedSite(nextly, content) {
   const authorIds = [];
-  for (let i = 0; i < AUTHORS; i++) {
-    authorIds.push(idOf(await nextly.create({ collection: "authors", data: authorData(random) })));
-  }
+  for (const data of content.authors) authorIds.push(idOf(await nextly.create({ collection: "authors", data })));
   const articleIds = [];
-  for (let i = 0; i < options.docs; i++) {
-    articleIds.push(idOf(await nextly.create({ collection: "articles", data: articleData(random, i, authorIds) })));
+  for (const data of content.articles) {
+    articleIds.push(idOf(await nextly.create({ collection: "articles", data: { ...data, author: authorIds[data.author] } })));
   }
   return articleIds;
 }
@@ -290,7 +372,7 @@ export function readsFor({ nextly, handlers, keys, articleIds, options }) {
     return { iterations: count, next: () => call(random) };
   };
   return {
-    "direct list": read(1, options.iterations, r => nextly.find({ collection: "articles", limit: PAGE_SIZE, page: page(r), sort: LIST_SORT, depth: 1 })),
+    "direct list": read(1, options.iterations, r => directList(nextly, page(r))),
     "direct detail": read(2, options.iterations, r => nextly.findByID({ collection: "articles", id: id(r), depth: 1 })),
     "rest list": read(3, options.restIterations, r => restGet(handlers, keys.list, entries, `limit=${PAGE_SIZE}&page=${page(r)}&sort=${LIST_SORT}&depth=1`)),
     "rest detail": read(4, options.restIterations, r => restGet(handlers, keys.detail, [...entries, id(r)], "depth=1")),
@@ -350,14 +432,17 @@ async function main(argv) {
   const loadStart = loadavg()[0];
   const { handle, cleanup } = await boot(options);
   try {
-    const articleIds = await seedSite(handle.nextly, options);
+    const content = seededContent(options);
+    const articleIds = await seedSite(handle.nextly, content);
+    const expected = expectedArticles(content, articleIds);
     const storage = await storageOf(handle.adapter);
     checkStorage(options.mode, options.docs, storage);
     const { createDynamicHandlers } = await import(new URL("runtime.mjs", NEXTLY_DIST).href);
+    await checkEveryPage(handle.nextly, expected);
     const reads = readsFor({ nextly: handle.nextly, handlers: createDynamicHandlers(), keys: await readOnlyKeys(handle), articleIds, options });
     const results = {};
     for (const [name, read] of Object.entries(reads)) {
-      checkShape(name, await read.next());
+      checkContent(name, await read.next(), expected);
       results[name] = summarize(await time(read, options.warmup));
     }
     console.log(JSON.stringify({ mode: options.mode, dialect: options.dialect, docs: options.docs, seed: options.seed, translationRows: translationRows(storage), loadStart, loadEnd: loadavg()[0], results }));

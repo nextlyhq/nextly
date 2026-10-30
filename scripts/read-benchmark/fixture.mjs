@@ -136,6 +136,17 @@ export function storageContractOf(mode) {
   );
 }
 
+/**
+ * The names of the site's date fields, read off its definition. A read may spell a date otherwise
+ * than it was seeded (another precision, a timezone offset, a Date), so the content check compares
+ * a date by the time it names.
+ */
+export const DATE_FIELDS = (() => {
+  const site = siteFor("main", DESCRIBING);
+  const fields = [...site.collections, ...site.fieldGroups].flatMap(entity => entity.fields);
+  return new Set(fields.filter(field => field.kind === "date").map(field => field.name));
+})();
+
 /** The table a `per-language` site keeps `table`'s translatable values in. */
 export function localesOf(table) {
   return `${table}_locales`;
