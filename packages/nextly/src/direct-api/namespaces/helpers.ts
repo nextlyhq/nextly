@@ -24,7 +24,7 @@ import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import {
-  builtInRoleOf,
+  builtInMarkOf,
   isAssignableRole,
 } from "../../domains/auth/services/public-role";
 import {
@@ -644,7 +644,7 @@ export function mapRole(role: RawRoleRecord): Role {
     // Derived here rather than carried from the read, so a role a create or
     // update returns says it as a listed one does.
     assignable: isAssignableRole(role),
-    builtIn: builtInRoleOf(role),
+    ...builtInMarkOf(role),
   };
 }
 

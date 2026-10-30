@@ -11,7 +11,7 @@ import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 import {
-  builtInRoleOf,
+  builtInMarkOf,
   isAssignableRole,
   type BuiltInRole,
 } from "../public-role";
@@ -74,7 +74,7 @@ export class RoleQueryService extends BaseService {
       isSystem: boolean;
       /** Whether it may be given to someone or inherited (`isAssignableRole`). */
       assignable: boolean;
-      /** Which built-in role it is, if one (`builtInRoleOf`). */
+      /** Which built-in role it is, if one (`builtInMarkOf`). */
       builtIn?: BuiltInRole;
     }>;
     meta: {
@@ -229,7 +229,7 @@ export class RoleQueryService extends BaseService {
           level: row.level,
           isSystem: Boolean(row.isSystem),
           assignable: isAssignableRole({ slug: String(row.slug) }),
-          builtIn: builtInRoleOf({ slug: String(row.slug) }),
+          ...builtInMarkOf({ slug: String(row.slug) }),
           childRoleIds: childRolesMap.get(roleId) ?? [],
           ...(includePermissions && {
             permissionIds: permissionsMap.get(roleId) ?? [],
@@ -269,7 +269,7 @@ export class RoleQueryService extends BaseService {
     isSystem: boolean;
     /** Whether it may be given to someone or inherited (`isAssignableRole`). */
     assignable: boolean;
-    /** Which built-in role it is, if one (`builtInRoleOf`). */
+    /** Which built-in role it is, if one (`builtInMarkOf`). */
     builtIn?: BuiltInRole;
   }> {
     try {
@@ -326,7 +326,7 @@ export class RoleQueryService extends BaseService {
         level: role.level,
         isSystem: Boolean(role.isSystem),
         assignable: isAssignableRole({ slug: String(role.slug) }),
-        builtIn: builtInRoleOf({ slug: String(role.slug) }),
+        ...builtInMarkOf({ slug: String(role.slug) }),
       };
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Map raw DB errors via fromDatabaseError.

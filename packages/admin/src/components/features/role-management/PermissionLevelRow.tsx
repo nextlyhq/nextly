@@ -99,7 +99,6 @@ export function PermissionLevelRow({
   const levels = forRole(levelsFor(row.kind));
   const offered = forRole(offeredLevels(row, lockedIds));
   const switches = offeredSwitches(row.permissions, visitors);
-  const visitorsWrite = visitors && givesVisitorsAWrite(switches, held);
   // The bases that give this row something, each named for its own grants.
   const rowIds = new Set(row.permissions.map(permission => permission.id));
   const givers = bases
@@ -193,11 +192,7 @@ export function PermissionLevelRow({
         </div>
       </div>
 
-      {visitorsWrite && (
-        <p role="note" className="text-sm text-destructive">
-          {VISITOR_WRITE_WARNING}
-        </p>
-      )}
+      {visitors && <VisitorWriteWarning permissions={switches} held={held} />}
 
       {eachAction && (
         <PermissionSwitches
@@ -279,6 +274,28 @@ function RowHeading({
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * The Public role's warning where `held` gives visitors a write among
+ * `permissions`: a level row's switches, a plugin's own permissions or the
+ * table of other permissions, so each warns of the same write alike.
+ */
+export function VisitorWriteWarning({
+  permissions,
+  held,
+  className,
+}: {
+  permissions: readonly Permission[];
+  held: ReadonlySet<string>;
+  className?: string;
+}): JSX.Element | null {
+  if (!givesVisitorsAWrite(permissions, held)) return null;
+  return (
+    <p role="note" className={cn("text-sm text-destructive", className)}>
+      {VISITOR_WRITE_WARNING}
+    </p>
   );
 }
 

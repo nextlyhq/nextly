@@ -12,6 +12,7 @@ import type { LevelRow, PluginGroup } from "@admin/lib/permissions/level-rows";
 import { offeredSwitches } from "@admin/lib/roles/role-screen-mode";
 import type { Permission } from "@admin/types/ui/form";
 
+import { VisitorWriteWarning } from "./PermissionLevelRow";
 import { PermissionLevelRows } from "./PermissionLevelRows";
 import { PermissionMatrix } from "./PermissionMatrix";
 
@@ -55,42 +56,59 @@ export function RolePermissionsSection({
     <FormField
       control={form.control}
       name="permissions"
-      render={({ field }) => (
-        <FormItem>
-          <FormControl>
-            <div className="flex flex-col gap-8">
-              <PermissionLevelRows
-                rows={levelRows}
-                groups={pluginGroups}
-                pluginNames={pluginNames}
-                value={field.value || []}
-                onChange={field.onChange}
-                lockedIds={lockedPermissionIds}
-                bases={bases}
-                disabled={isLoading}
-                readOnly={readOnly}
-                visitors={visitors}
-              />
-              <div className="flex flex-col gap-4">
-                <h3 className="px-6 text-base font-semibold text-foreground">
-                  Other permissions
-                </h3>
-                <PermissionMatrix
-                  // The Public role's table offers what its rows offer: a
-                  // visitor never publishes.
-                  permissions={[...offeredSwitches(otherPermissions, visitors)]}
+      render={({ field }) => {
+        // The Public role's table offers what its rows offer: a visitor
+        // never publishes.
+        const offered = offeredSwitches(otherPermissions, visitors);
+        return (
+          <FormItem>
+            <FormControl>
+              <div className="flex flex-col gap-8">
+                <PermissionLevelRows
+                  rows={levelRows}
+                  groups={pluginGroups}
+                  pluginNames={pluginNames}
                   value={field.value || []}
                   onChange={field.onChange}
+                  lockedIds={lockedPermissionIds}
+                  bases={bases}
                   disabled={isLoading}
                   readOnly={readOnly}
-                  lockedIds={lockedPermissionIds}
+                  visitors={visitors}
                 />
+                <div className="flex flex-col gap-4">
+                  <h3 className="px-6 text-base font-semibold text-foreground">
+                    Other permissions
+                  </h3>
+                  {/* A write held here is warned of as a row's is: what
+                      the role and any base role give, together. */}
+                  {visitors && (
+                    <VisitorWriteWarning
+                      className="px-6"
+                      permissions={offered}
+                      held={
+                        new Set([
+                          ...(field.value || []),
+                          ...lockedPermissionIds,
+                        ])
+                      }
+                    />
+                  )}
+                  <PermissionMatrix
+                    permissions={[...offered]}
+                    value={field.value || []}
+                    onChange={field.onChange}
+                    disabled={isLoading}
+                    readOnly={readOnly}
+                    lockedIds={lockedPermissionIds}
+                  />
+                </div>
               </div>
-            </div>
-          </FormControl>
-          <FormMessage />
-        </FormItem>
-      )}
+            </FormControl>
+            <FormMessage />
+          </FormItem>
+        );
+      }}
     />
   );
 }
