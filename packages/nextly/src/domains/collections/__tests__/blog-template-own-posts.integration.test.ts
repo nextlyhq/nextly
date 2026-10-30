@@ -256,9 +256,11 @@ describe.each(getConfiguredTestDialects())(
       expect(await restUpdate(author, posts.own, { title: "Edited" })).toBe(
         200
       );
-      expect(await restUpdate(author, posts.others, { title: "Edited" })).toBe(
-        403
-      );
+      // A title of its own, so a slug derived from it can't collide with the
+      // one just written and answer for the refusal.
+      expect(
+        await restUpdate(author, posts.others, { title: "Taken over" })
+      ).toBe(403);
       expect((await stored(t, posts.own))?.title).toBe("Edited");
       expect(await stored(t, posts.others)).toEqual(theirs);
     });
