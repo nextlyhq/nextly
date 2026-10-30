@@ -155,15 +155,17 @@ export interface ContentTableRow {
   identityErasedAt?: string | null;
 }
 
-/** The Content table's rows, and how many it could have drawn. */
+/** The Content table's rows, and how many collections lie behind them. */
 export interface ContentTable {
   /** The rows drawn, in the table's order. */
   rows: ContentTableRow[];
   /**
-   * Every collection and Single this caller may see on the dashboard, counted
-   * from the registries without reading a single entry: the "View all (N)".
+   * Every collection this caller may see on the dashboard, counted from the
+   * registry without reading a single entry: the "View all (N)", whose link
+   * opens the collections. Singles are left out, since that page lists none
+   * and each Single is reached from its own row.
    */
-  total: number;
+  collections: number;
 }
 
 /**
@@ -189,6 +191,19 @@ type EntryCount = "all" | "published" | "draft";
 type ContentSubject =
   | { kind: "collection"; slug: string; label: string; info: CollectionInfo }
   | { kind: "single"; slug: string; label: string; tableName?: string };
+
+/** A collection's newest entry, or a Single's document: its id, and when it was last updated. */
+interface OwnUpdate {
+  id: string;
+  updatedAt?: string;
+}
+
+/**
+ * A subject with its own last update, read before the page is chosen: a
+ * collection's newest entry this caller may read, or a Single's document;
+ * `own` is undefined while there is none.
+ */
+type DatedSubject = ContentSubject & { own: OwnUpdate | undefined };
 
 /** What every read of the trail for the Content table is narrowed by. */
 interface TrailSubjects {
@@ -259,7 +274,7 @@ function isoInstant(value: unknown): string | undefined {
     : date.toISOString();
 }
 
-/** Ascending by label, then slug, for subjects the trail gives no save. */
+/** Ascending by label, then slug, for subjects with nothing to date them. */
 function byLabel(
   a: { label: string; slug: string },
   b: { label: string; slug: string }
@@ -268,17 +283,17 @@ function byLabel(
 }
 
 /**
- * The subjects in the table's order: those with a known save, newest first,
- * then the rest by label. Every instant compared is the trail's own ISO
- * string, so comparing the strings compares the instants.
+ * The subjects with a known last update, newest first, then the rest by
+ * label. Every instant compared is an ISO string (`isoInstant`), so comparing
+ * the strings compares the instants.
  */
-function byLastSave<T extends { slug: string; label: string }>(
+function byLastUpdate<T extends { slug: string; label: string }>(
   subjects: readonly T[],
-  savedAt: (subject: T) => string | undefined
+  updatedAt: (subject: T) => string | undefined
 ): T[] {
   return [...subjects].sort((a, b) => {
-    const at = savedAt(a);
-    const bt = savedAt(b);
+    const at = updatedAt(a);
+    const bt = updatedAt(b);
     if (at !== undefined && bt !== undefined && at !== bt) {
       return at < bt ? 1 : -1;
     }
@@ -289,16 +304,21 @@ function byLastSave<T extends { slug: string; label: string }>(
 }
 
 /**
- * `rows` with the collections holding no entries this caller may read moved
- * after the rest, each part keeping its order: an empty collection is the one
- * row with nothing to open, so it goes last however recently it was touched.
+ * The subjects in the table's order, each ranked by its OWN last update: the
+ * newest first, then those with nothing to date them by label, and the
+ * collections holding no entries this caller may read after all of them, since
+ * an empty collection is the one row with nothing to open. A collection whose
+ * newest entry the reader may read holds at least that entry, so having no
+ * newest entry is having none to read.
  */
-function emptyCollectionsLast(
-  rows: readonly ContentTableRow[]
-): ContentTableRow[] {
-  const empty = (row: ContentTableRow) =>
-    row.kind === "collection" && row.count === 0;
-  return [...rows.filter(row => !empty(row)), ...rows.filter(empty)];
+function inTableOrder(subjects: readonly DatedSubject[]): DatedSubject[] {
+  const ordered = byLastUpdate(subjects, subject => subject.own?.updatedAt);
+  const empty = (subject: DatedSubject) =>
+    subject.kind === "collection" && subject.own === undefined;
+  return [
+    ...ordered.filter(subject => !empty(subject)),
+    ...ordered.filter(empty),
+  ];
 }
 
 /**
@@ -990,25 +1010,30 @@ export class DashboardService extends BaseService {
    *
    * The rows are every collection and Single this caller may read on the
    * dashboard (the registry reads `/stats` makes, so one kept off the
-   * dashboard is absent here as it is there), at most `limit` of them. Only
-   * then is anything read, and only for the rows drawn: each collection on the
-   * page costs its total, its drafts, its newest entry and its create
-   * decision, and each Single its own document's last update, so reading
-   * every collection and keeping a page would grow the dashboard's work with
-   * the install rather than with the card.
+   * dashboard is absent here as it is there), at most `limit` of them.
    *
-   * Which rows make the page comes from ONE bounded read of the activity trail
-   * (`latestSaves`): the documents most recently saved, as this caller may see
-   * them, so the page holds where the work is. Those with a save in it come
-   * first, newest first, then the rest by label. The page is then ordered by
-   * each row's own last update, with the collections holding no entries this
-   * caller may read last.
+   * Which rows make the page comes from each one's OWN last update, read for
+   * every subject before the page is chosen: a collection's newest entry this
+   * caller may read (`getRecentFromCollection`, one entry, the access-enforced
+   * read), and a Single's document as stored. That is one bounded read per
+   * collection and one per Single, and it is the very date the row shows, so
+   * the ranking and the Updated column cannot disagree. Ranked newest first,
+   * then the rest by label, the collections holding no entries this caller may
+   * read last (`inTableOrder`). A ranking drawn from a window of the activity
+   * trail would not do: one collection saved often fills any window, and every
+   * other subject's latest save then falls outside it.
    *
-   * Updated is each row's own data, never the trail's: a collection's newest
-   * entry this caller may read (`getRecentFromCollection`, one entry), and a
-   * Single's document as stored. So a row whose last save the trail no longer
-   * holds still shows its date. The trail names who saved it, and only when its
-   * latest save of that collection is of that newest entry, or is the Single's.
+   * Only the rows drawn cost more: each collection on the page its total, its
+   * drafts and its create decision, so counting every collection and keeping
+   * a page would grow the dashboard's work with the install rather than with
+   * the card.
+   *
+   * Updated is each row's own data, never the trail's, so a row whose last
+   * save the trail no longer holds still shows its date. The trail names who
+   * saved it, and only when its latest save of that collection is of that
+   * newest entry, or is the Single's: ONE bounded read of the trail
+   * (`latestSaves`) names the drawn rows it holds a save of, and a drawn
+   * collection it does not is asked on its own (`saveOfEntry`).
    *
    * Every number is the caller's own: the counts through the access-enforced
    * count, the drafts by the collection list's Draft filter, the newest entry
@@ -1065,36 +1090,43 @@ export class DashboardService extends BaseService {
         complete: keptOffCollections.complete,
       },
     };
-    const recent = await this.latestSaves(trail, MAX_WIDGET_LIMIT);
+    // Every subject's own last update, and the trail's latest saves for naming
+    // who saved the drawn rows, read side by side.
+    const [dated, recent] = await Promise.all([
+      Promise.all(
+        subjects.map(subject => this.withOwnUpdate(subject, options.caller))
+      ),
+      this.latestSaves(trail, MAX_WIDGET_LIMIT),
+    ]);
     const saved = latestSaveOf(recent.saves);
-    const page = byLastSave(
-      subjects,
-      subject => saved.get(subjectKey(subject.kind, subject.slug))?.createdAt
-    ).slice(0, effectiveWidgetLimit(options.limit));
+    const page = inTableOrder(dated).slice(
+      0,
+      effectiveWidgetLimit(options.limit)
+    );
 
     const mayCreate = await this.createDecision(options.caller);
+    // In the page's order, which is already the table's.
     const rows = await Promise.all(
       page.map(async (subject): Promise<ContentTableRow> => {
         const save = saved.get(subjectKey(subject.kind, subject.slug));
         if (subject.kind === "single") return this.singleRow(subject, save);
-        const [count, draft, newest, canCreate] = await Promise.all([
+        const [count, draft, canCreate] = await Promise.all([
           this.countReadableEntries(subject.info, options.caller),
           subject.info.hasStatus
             ? this.countReadableEntries(subject.info, options.caller, "draft")
             : Promise.resolve(null),
-          this.getRecentFromCollection(subject.info, 1, options.caller),
           mayCreate(subject.slug),
         ]);
-        const updatedAt = isoInstant(newest[0]?.updatedAt);
+        const newest = subject.own;
         const saver =
-          newest[0] === undefined
+          newest === undefined
             ? undefined
             : await this.saveOfEntry(
                 trail,
                 recent,
                 save,
                 subject.slug,
-                newest[0].id
+                newest.id
               );
         return {
           kind: "collection",
@@ -1104,15 +1136,38 @@ export class DashboardService extends BaseService {
           count,
           draft,
           canCreate,
-          ...(updatedAt === undefined ? {} : { updatedAt }),
+          ...(newest?.updatedAt === undefined
+            ? {}
+            : { updatedAt: newest.updatedAt }),
           ...saverFields(saver),
         };
       })
     );
+    return { rows, collections: collections.length };
+  }
+
+  /**
+   * `subject` with its own last update: a collection's newest entry this
+   * caller may read, through the ordinary access-enforced read, or a Single's
+   * document as stored.
+   */
+  private async withOwnUpdate(
+    subject: ContentSubject,
+    caller: ReadCaller
+  ): Promise<DatedSubject> {
+    if (subject.kind === "single") {
+      return { ...subject, own: await this.singleDocument(subject) };
+    }
+    const [newest] = await this.getRecentFromCollection(
+      subject.info,
+      1,
+      caller
+    );
+    if (newest === undefined) return { ...subject, own: undefined };
+    const updatedAt = isoInstant(newest.updatedAt);
     return {
-      // Ordered by each row's own last update, the empty collections after the rest.
-      rows: emptyCollectionsLast(byLastSave(rows, row => row.updatedAt)),
-      total: subjects.length,
+      ...subject,
+      own: { id: newest.id, ...(updatedAt === undefined ? {} : { updatedAt }) },
     };
   }
 
@@ -1123,11 +1178,11 @@ export class DashboardService extends BaseService {
    * document it had before, and those name nobody here, as a save of another
    * entry names nobody on a collection's row.
    */
-  private async singleRow(
-    subject: Extract<ContentSubject, { kind: "single" }>,
+  private singleRow(
+    subject: Extract<DatedSubject, { kind: "single" }>,
     save: RecentEdit | undefined
-  ): Promise<ContentTableRow> {
-    const document = await this.singleDocument(subject);
+  ): ContentTableRow {
+    const document = subject.own;
     const updatedAt = document?.updatedAt;
     const saver =
       document !== undefined && save?.entryId === document.id
@@ -1150,7 +1205,7 @@ export class DashboardService extends BaseService {
    * Read from the table rather than through `findSingle`, because that read
    * creates a missing document, and a dashboard load must not write. The
    * caller's read of the Single was already decided by the scope that put it
-   * on the page, and a Single has one document, with no rule over its rows, so
+   * on the table, and a Single has one document, with no rule over its rows, so
    * the two columns read here are what that read would return for it.
    */
   private async singleDocument(single: {

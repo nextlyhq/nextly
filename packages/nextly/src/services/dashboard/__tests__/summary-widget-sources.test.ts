@@ -2,7 +2,8 @@
  * The dashboard's summary sources. `system:team` asks the Team card's own gate
  * before it counts anyone and gives the roles figure only to a reader who may
  * see roles; `system:content` answers the service's Content table within the
- * reader's scope, with its total. Both refuse what they cannot answer.
+ * reader's scope, with how many collections there are. Both refuse what they
+ * cannot answer.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -84,7 +85,7 @@ beforeEach(() => {
     Promise.resolve(figure === "users" ? 12 : 3)
   );
   resolveReadableResources.mockResolvedValue(SCOPE);
-  getContentTable.mockResolvedValue({ rows: [POSTS], total: 1 });
+  getContentTable.mockResolvedValue({ rows: [POSTS], collections: 1 });
   clearSources();
   clearSystemResolvers();
   registerSummaryWidgetSources();
@@ -137,8 +138,8 @@ describe("the content source", () => {
       caller
     );
 
-  it("asks the service within the scope the access layer gives this reader, and answers its rows and total", async () => {
-    getContentTable.mockResolvedValue({ rows: [POSTS, HOME], total: 14 });
+  it("asks the service within the scope the access layer gives this reader, and answers its rows and the collections' total", async () => {
+    getContentTable.mockResolvedValue({ rows: [POSTS, HOME], collections: 14 });
     const answer = await askContent();
     expect(resolveReadableResources).toHaveBeenCalledWith(caller);
     expect(getContentTable).toHaveBeenCalledWith(
@@ -148,8 +149,8 @@ describe("the content source", () => {
     // route's JSON sends it, rather than a key holding `undefined`, which
     // `toEqual` would not tell apart.
     expect(rows(answer)).toStrictEqual([POSTS, HOME]);
-    // Every collection and Single the reader may see, not the rows answered:
-    // the card's "View all (N)".
+    // Every collection the reader may see, not the rows answered: the card's
+    // "View all (N)", to the collections.
     expect((answer as { total?: number }).total).toBe(14);
   });
 
@@ -163,7 +164,7 @@ describe("the content source", () => {
   it("answers only the fields a query selected, at most its limit", async () => {
     getContentTable.mockResolvedValue({
       rows: [POSTS, { ...POSTS, slug: "pages", label: "Pages" }],
-      total: 2,
+      collections: 2,
     });
     expect(
       rows(await askContent({ select: ["slug", "draft"], limit: 1 }))
@@ -175,7 +176,7 @@ describe("the content source", () => {
     // could not be told apart.
     getContentTable.mockResolvedValue({
       rows: [POSTS, { ...HOME, slug: "posts", label: "Posts page" }],
-      total: 2,
+      collections: 2,
     });
     expect(
       rows(await askContent({ select: ["slug", "label"], limit: 5 }))

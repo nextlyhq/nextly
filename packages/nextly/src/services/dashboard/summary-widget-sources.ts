@@ -25,10 +25,13 @@
  * collection list's Draft filter, and whether the reader may create in it,
  * counted for the rows answered and no others; every row carries its own last
  * update, and who saved it where the activity trail names them. Each row says which `kind` it is, since a collection
- * and a Single may share a slug, and the answer's `total` is every one the
- * reader may see, so the card's "View all (N)" needs no count of its own. It
- * adds no access rule of its own: the scope, every count and every save are
- * the service's, read as the reader.
+ * and a Single may share a slug. The answer's `total` is every COLLECTION the
+ * reader may see, the list its "View all (N)" opens, so the card needs no
+ * count of its own: Singles are left out of it, since that list holds none
+ * and each Single is reached from its own row, and a reader with no
+ * collection is answered 0, a list with nothing to open. It adds no access
+ * rule of its own: the scope, every count and every save are the service's,
+ * read as the reader.
  *
  * @module services/dashboard/summary-widget-sources
  */
@@ -151,7 +154,7 @@ async function resolveTeam(
 
 /**
  * Answer the Content card: the rows of the Content table this reader may see, at most the
- * query's limit, and how many there are in all.
+ * query's limit, and how many collections there are in all.
  */
 async function resolveContent(
   query: WidgetQuery,
@@ -177,7 +180,8 @@ async function resolveContent(
         ? { ...query, select: [...select, "kind"] }
         : query
     ),
-    total: table.total,
+    // The collections alone: the list the card's View all opens.
+    total: table.collections,
   };
 }
 

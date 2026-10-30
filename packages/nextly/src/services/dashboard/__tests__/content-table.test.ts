@@ -1,12 +1,12 @@
 /**
  * The Content table's reading, `DashboardService.getContentTable`: which rows
- * make the page, each row's own last update, and reads made for the rows drawn
- * and no others.
+ * make the page, ranked by each one's own last update, and counts made for the
+ * rows drawn and no others.
  *
  * Every collaborator answers from a fixture, so each property is watched at
  * the call it depends on: which collections are counted and read, by which
  * rule the drafts are, whose create decision is asked, where a row's date comes
- * from, and how often the activity trail is read. A table that read every
+ * from, and how often the activity trail is read. A table that counted every
  * collection and kept a page answers the same rows; only the calls tell the
  * two apart.
  */
@@ -32,6 +32,7 @@ vi.mock("../../../domains/widgets/reader-content", () => ({
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { MAX_WIDGET_LIMIT } from "../../../domains/widgets/query-limits";
 import type { Logger } from "../../shared";
 import type { RecentEdit, RecentEditsOptions } from "../activity-log-service";
 import { DashboardService } from "../dashboard-service";
@@ -202,7 +203,7 @@ describe("the Content table's bounded read", () => {
     );
   });
 
-  it("counts and reads only the collections it draws, out of sixty", async () => {
+  it("counts only the collections it draws, out of sixty, and reads each one's newest entry once", async () => {
     const answer = await table(6);
     const page = [...SAVED, "c00"];
 
@@ -211,8 +212,9 @@ describe("the Content table's bounded read", () => {
     // the same rows, and only the calls tell the two apart.
     expect([...collectionsOf(count)].sort()).toEqual([...page].sort());
     expect(count.mock.calls.length).toBeLessThanOrEqual(12);
-    expect([...collectionsOf(find)].sort()).toEqual([...page].sort());
-    expect(find).toHaveBeenCalledTimes(6);
+    // Each collection's own last update ranks the page, so each is read once.
+    expect(collectionsOf(find)).toEqual(new Set(SIXTY.map(c => c.slug)));
+    expect(find).toHaveBeenCalledTimes(60);
     // The newest entry, one, as the reader, every state.
     expect(find).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -226,8 +228,8 @@ describe("the Content table's bounded read", () => {
     expect(new Set(verdict.mock.calls.map(([slug]) => slug))).toEqual(
       new Set(page)
     );
-    // Every collection and Single the reader may see, counted without a count.
-    expect(answer.total).toBe(60);
+    // Every collection the reader may see, counted without a count.
+    expect(answer.collections).toBe(60);
   });
 
   it("reads the trail once when its window reached the trail's end", async () => {
@@ -256,6 +258,45 @@ describe("the Content table's bounded read", () => {
     expect(answer.rows.at(-1)).toMatchObject({
       slug: "c00",
       updatedAt: "2026-10-01T09:00:00.000Z",
+      userName: "Ben",
+    });
+  });
+});
+
+describe("which rows make the page", () => {
+  it("ranks each subject by its own last update, though one collection's saves fill the trail's window", async () => {
+    collections = [
+      collection("busy", "Busy"),
+      collection("archive", "Archive"),
+      collection("news", "News"),
+    ];
+    // More saves of busy than the window holds, newest first: every save in it
+    // is busy's, and news's latest save lies past it.
+    const busyAt = (i: number) =>
+      `2026-10-29T10:${String(MAX_WIDGET_LIMIT - 1 - i).padStart(2, "0")}:00.000Z`;
+    windowAnswer = {
+      edits: Array.from({ length: MAX_WIDGET_LIMIT }, (_, i) =>
+        save("busy", busyAt(i), { entryId: `doc-busy-${i}` })
+      ),
+      hasMore: true,
+    };
+    newest = {
+      busy: { id: "doc-busy-0", updatedAt: busyAt(0) },
+      news: { id: "doc-news", updatedAt: "2026-10-29T09:00:00.000Z" },
+      // Untouched for years, and first by label.
+      archive: { id: "doc-archive", updatedAt: "2024-01-05T08:00:00.000Z" },
+    };
+    narrowed = {
+      news: [save("news", "2026-10-29T09:00:00.000Z", { userName: "Ben" })],
+    };
+
+    const answer = await table(2);
+
+    // 🔴 News, saved more recently than Archive, is drawn and Archive is not,
+    // though the window holds no save of either.
+    expect(answer.rows.map(row => row.slug)).toEqual(["busy", "news"]);
+    expect(answer.rows[1]).toMatchObject({
+      updatedAt: "2026-10-29T09:00:00.000Z",
       userName: "Ben",
     });
   });
@@ -408,7 +449,8 @@ describe("the Content table's rows", () => {
     // A Single carries no count and no create decision.
     expect(answer.rows[0]).not.toHaveProperty("count");
     expect(answer.rows[0]).not.toHaveProperty("canCreate");
-    expect(answer.total).toBe(5);
+    // The collections alone: the Single is reached from its own row.
+    expect(answer.collections).toBe(4);
   });
 
   it("counts drafts by the collection list's Draft filter, and none for a collection without the lifecycle", async () => {
@@ -482,6 +524,6 @@ describe("the Content table's rows", () => {
 
     expect(answer.rows.map(row => row.slug)).toEqual(["posts"]);
     expect(collectionsOf(count)).toEqual(new Set(["posts"]));
-    expect(answer.total).toBe(1);
+    expect(answer.collections).toBe(1);
   });
 });

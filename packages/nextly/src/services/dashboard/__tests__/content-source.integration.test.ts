@@ -4,8 +4,10 @@
  * by the collection list's own Draft filter, each row's last update from its
  * own data (a collection's newest entry that reader may read, a Single's
  * document), who saved it as the trail lets that reader see, and a + only where
- * they may create. Then the bound: with sixty collections, one load counts and
- * reads the rows it draws and no others.
+ * they may create. Then the ranking: each row by its own last update, though
+ * one collection's saves fill the trail's window. Then the bound: with sixty
+ * collections, one load counts the rows it draws and no others, and reads each
+ * collection's newest entry once.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +16,7 @@ import { runWithAccessMemo } from "../../../auth/access/request-memo";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { refreshCollectionSources } from "../../../domains/widgets/collection-sources";
 import { executeWidgetQuery } from "../../../domains/widgets/execute";
+import { MAX_WIDGET_LIMIT } from "../../../domains/widgets/query-limits";
 import { CONTENT_SOURCE_ID } from "../../../domains/widgets/system-source-ids";
 import {
   createTestNextly,
@@ -29,6 +32,9 @@ const TAGS = "cs_tags";
 const EMPTY = "cs_empty";
 const HIDDEN = "cs_hidden";
 const HOME = "cs-home";
+const BUSY = "cs_busy";
+const ARCHIVE = "cs_archive";
+const NEWS = "cs_news";
 /** Sixty collections, more than any page of the card. */
 const SIXTY = Array.from(
   { length: 60 },
@@ -168,10 +174,7 @@ interface TrailRow {
   id: string;
 }
 
-/**
- * `person` saving `entryId` at `when`, as the trail records a save: written
- * through the service, then given its instant, so the order is the case's own.
- */
+/** `person` saving `entryId` at `when`, as `savedEach` records it. */
 async function saved(
   t: TestNextly,
   person: typeof ANA,
@@ -179,18 +182,35 @@ async function saved(
   entryId: string,
   when: Date
 ): Promise<void> {
+  await savedEach(t, person, collection, [entryId], when);
+}
+
+/**
+ * `person` saving each of `entryIds` at `when`, as the trail records a save:
+ * written through the service, then given its instant, so the order is the
+ * case's own.
+ */
+async function savedEach(
+  t: TestNextly,
+  person: typeof ANA,
+  collection: string,
+  entryIds: readonly string[],
+  when: Date
+): Promise<void> {
   const trail = () => t.adapter.select<TrailRow>("activity_log");
   const before = new Set((await trail()).map(row => row.id));
-  await t.getService("activityLogService").logActivity({
-    actorType: "user",
-    userId: person.id,
-    action: "update",
-    collection,
-    entryId,
-    entryTitle: "Saved",
-    subjectKind: "collection",
-    metadata: { changedFields: ["title"] },
-  });
+  for (const entryId of entryIds) {
+    await t.getService("activityLogService").logActivity({
+      actorType: "user",
+      userId: person.id,
+      action: "update",
+      collection,
+      entryId,
+      entryTitle: "Saved",
+      subjectKind: "collection",
+      metadata: { changedFields: ["title"] },
+    });
+  }
   for (const row of (await trail()).filter(row => !before.has(row.id))) {
     await t.adapter.update(
       "activity_log",
@@ -284,7 +304,8 @@ describe.each(getConfiguredTestDialects())(
       expect(ana.items[3]).toMatchObject({ count: 0 });
       // Kept off the dashboard for every reader, though readable to this one.
       expect(ana.items.some(row => row.slug === HIDDEN)).toBe(false);
-      expect(ana.total).toBe(4);
+      // The collections alone, the list View all opens: Home is reached from its row.
+      expect(ana.total).toBe(3);
 
       const ben = await contentTable(as(BEN));
       const benArticles = ben.items.find(row => row.slug === ARTICLES);
@@ -341,9 +362,52 @@ describe.each(getConfiguredTestDialects())(
 );
 
 describe.each(getConfiguredTestDialects())(
+  "the Content table's ranking (integration, %s)",
+  dialect => {
+    it("ranks each collection by its own last update, though one collection's saves fill the trail's window", async () => {
+      const slugs = [BUSY, ARCHIVE, NEWS];
+      const t = await createTestNextly({
+        dialect,
+        collections: slugs.map(slug =>
+          defineCollection({
+            slug,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          })
+        ),
+      });
+      current = t;
+      await t.adapter.insert("users", { ...ANA, is_active: true });
+      await grantTo(t, ANA.id, "read", slugs);
+      // First by label, and untouched for years.
+      await entry(t, ARCHIVE, { title: "old" }, LONG_AGO);
+      const news = await entry(t, NEWS, { title: "news" }, at(30));
+      await saved(t, ANA, NEWS, news, at(30));
+      // More entries of busy, each saved since, than the trail's window holds,
+      // so news's latest save lies past the window.
+      const busy: string[] = [];
+      for (let i = 0; i <= MAX_WIDGET_LIMIT; i++) {
+        busy.push(await entry(t, BUSY, { title: `busy ${i}` }, at(5)));
+      }
+      await savedEach(t, ANA, BUSY, busy, at(5));
+
+      const answer = await contentTable(as(ANA), 2);
+
+      // 🔴 News is drawn, after busy and in place of the older archive.
+      expect(answer.items.map(row => row.slug)).toEqual([BUSY, NEWS]);
+      expect(answer.items[1]).toMatchObject({
+        updatedAt: at(30).toISOString(),
+        userName: ANA.name,
+      });
+      expect(answer.total).toBe(3);
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
   "the Content table's bounded load (integration, %s)",
   dialect => {
-    it("counts and reads the rows it draws and no others, with sixty collections", async () => {
+    it("counts the rows it draws and no others, and reads each collection's newest entry once, with sixty collections", async () => {
       const t = await createTestNextly({
         dialect,
         collections: SIXTY.map(slug =>
@@ -382,14 +446,14 @@ describe.each(getConfiguredTestDialects())(
       expect(new Set(counted)).toEqual(new Set(drawn));
       // Entries alone here: no collection has the lifecycle, so no drafts.
       expect(counted).toHaveLength(6);
-      // The newest entry is read for the drawn collections alone, too.
-      const read = new Set(
-        find.mock.calls.map(([args]) =>
-          String((args as { collection: unknown }).collection)
-        )
-      );
-      expect([...read].every(slug => drawn.includes(slug))).toBe(true);
-      expect(read.size).toBe(6);
+      // Each collection's newest entry ranks the page: read once for each. The
+      // trail's own reads, which authorize a save by its id, ask by `where`.
+      const read = find.mock.calls
+        .map(([args]) => args as { collection: unknown; sort?: unknown })
+        .filter(args => args.sort === "-updatedAt")
+        .map(args => String(args.collection));
+      expect(new Set(read)).toEqual(new Set(SIXTY));
+      expect(read).toHaveLength(60);
       // "View all (N)" counts every collection without counting an entry.
       expect(answer.total).toBe(60);
     });
