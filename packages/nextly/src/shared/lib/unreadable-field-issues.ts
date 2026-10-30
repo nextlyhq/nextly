@@ -24,8 +24,8 @@
  * @module shared/lib/unreadable-field-issues
  */
 import {
-  registeredReadLanguagesFor,
   withRuleLanguage,
+  type RuleLanguage,
 } from "../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { FieldConfig } from "../../collections/fields/types";
@@ -36,7 +36,7 @@ import {
 import { resolveComponentFieldMap } from "../../domains/versions/tag-component-types";
 import { consoleLogger } from "../types";
 
-import type { ValidationIssue } from "./entry-validation";
+import { issueOrigin, type ValidationIssue } from "./entry-validation";
 import {
   applyFieldReadAccess,
   callerAccessGrants,
@@ -44,7 +44,10 @@ import {
   type CallerGrants,
   type FieldFunctions,
 } from "./field-level-registry";
-import { stripPasswordFieldValues } from "./password-fields";
+import {
+  stripPasswordFieldValues,
+  stripServerOnlyColumns,
+} from "./password-fields";
 
 /** The one issue every withheld issue is told as. */
 export const UNREADABLE_FIELD_ISSUE: ValidationIssue = {
@@ -180,7 +183,12 @@ export async function issuesTheReaderMaySee(
   if (issues.length === 0 || args.reader.overrideAccess === true) {
     return issues;
   }
-  const located = issues.map(issue => ({ issue, steps: stepsOf(issue.path) }));
+  // Judged by the field that found each issue, which a plugin type's
+  // validator may tell somewhere else.
+  const located = issues.map(issue => ({
+    issue,
+    steps: stepsOf(issueOrigin(issue)),
+  }));
   const judge = async () => {
     const judged = await judgedDocument(args);
     if (!judged) return collapse(located, () => true, args);
@@ -189,9 +197,9 @@ export async function issuesTheReaderMaySee(
   };
   // Judged as a read of the document in its own language would be: a rule
   // can answer one language differently from every language at once.
-  return args.readLocale === undefined
+  return args.readLanguage === undefined
     ? judge()
-    : withRuleLanguage(registeredReadLanguagesFor(args.readLocale), judge);
+    : withRuleLanguage(args.readLanguage, judge);
 }
 
 /** What {@link issuesTheReaderMaySee} judges issues by. */
@@ -217,11 +225,17 @@ interface IssueJudgement {
    */
   rowReadable?: () => Promise<boolean>;
   /**
-   * The language the document is one of, where a write judges several in
-   * turn: its rules and read gate are asked as a read in that language.
-   * Absent, they are asked in the write's own languages.
+   * The languages a read of the document asks, where a write judges several
+   * languages in turn: its rules and read gate are asked as that read. Built
+   * by the calling service from its own localization. Absent, they are asked
+   * in the write's own languages.
    */
-  readLocale?: string;
+  readLanguage?: RuleLanguage;
+  /**
+   * The table the document is stored in, so the columns a read never shows
+   * are taken out of what the rules see, as a read takes them out.
+   */
+  tableName?: string;
   reader: IssueReader;
 }
 
@@ -244,6 +258,9 @@ async function judgedDocument(
   }
   if (args.entryId !== undefined && !holds(judged, "id")) {
     judged.id = args.entryId;
+  }
+  if (args.tableName !== undefined) {
+    stripServerOnlyColumns(judged, args.tableName);
   }
   return judged;
 }

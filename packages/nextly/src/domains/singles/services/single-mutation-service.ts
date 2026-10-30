@@ -1410,6 +1410,8 @@ export class SingleMutationService extends BaseService {
         options: { ...caller, overrideAccess: false },
         grants,
         readsEntry,
+        localization: this.localization,
+        tableName: meta.tableName,
       }),
       entryId: row.id,
       toLogical: doc =>
@@ -1454,7 +1456,7 @@ export class SingleMutationService extends BaseService {
       rbacAccessControlService: this.rbacAccessControlService,
       visitor: this.fieldRuleVisitor,
       logger: this.logger,
-      languages: this.localization?.locales.map(locale => locale.code) ?? [],
+      localization: this.localization,
     });
   }
 
@@ -2821,6 +2823,8 @@ export class SingleMutationService extends BaseService {
                 options,
                 grants: promoteGrants,
                 readsEntry: promoteReads,
+                localization: this.localization,
+                tableName: singleMeta.tableName,
               }),
               entryId: promotedInto.id,
               // A snapshot belongs to this document, so its identity is

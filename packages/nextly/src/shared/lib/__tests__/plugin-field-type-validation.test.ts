@@ -24,6 +24,7 @@ import type {
   PluginFieldValidationResult,
 } from "../../../plugins/contributions";
 import {
+  issueOrigin,
   validateEntryData,
   type EntryWriteContext,
   type ValidatableField,
@@ -121,13 +122,14 @@ describe("plugin field-type validation", () => {
     ]);
   });
 
-  it("reports an issue addressed outside the field against the field", async () => {
-    // An issue names the field that found it, so whether its caller may be
-    // told it follows that field's read rules, not the path a validator chose.
+  it("tells an issue addressed outside the field at its path, and keeps the field that found it", async () => {
+    // The path is the validator's to choose; whether its caller may be told
+    // the issue follows the read rules of the field that found it.
     registerDocument(() => [
       { path: "", message: "Whole document refused" },
       { path: "title", message: "Sibling refused" },
       { path: "bodyCopy", message: "Look-alike refused" },
+      { path: "body.nodes[0]", message: "Inside refused" },
     ]);
 
     const issues = await validateEntryData(
@@ -136,7 +138,18 @@ describe("plugin field-type validation", () => {
       { mode: "create" }
     );
 
-    expect(issues.map(issue => issue.path)).toEqual(["body", "body", "body"]);
+    expect(issues.map(issue => issue.path)).toEqual([
+      "",
+      "title",
+      "bodyCopy",
+      "body.nodes[0]",
+    ]);
+    expect(issues.map(issueOrigin)).toEqual([
+      "body",
+      "body",
+      "body",
+      "body.nodes[0]",
+    ]);
   });
 
   it("gives the validator the field instance, so it can read its own options", async () => {

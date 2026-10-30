@@ -30,8 +30,9 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import {
-  registeredReadLanguagesFor,
+  readLanguagesFor,
   withRuleLanguage,
+  type RuleLanguage,
 } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -59,6 +60,7 @@ import { applyFieldGroupWriteAccessToDocument } from "../../field-groups/field-g
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupWriteAccessOf } from "../../field-groups/services/field-group-mutation-service";
 import { referencedFieldGroupFields } from "../../field-groups/storage/field-group-field-type";
+import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import {
   type ComponentFieldResolver,
@@ -88,19 +90,16 @@ export interface PromotableDraft {
  */
 export async function readsSingleInEveryLanguage(
   params: Omit<Parameters<typeof checkSingleAccess>[0], "operation"> & {
-    /** The configured language codes; none for a site without languages. */
-    languages: readonly string[];
+    /** The asking service's own localization; none for a site without. */
+    localization: SanitizedLocalizationConfig | undefined;
   }
 ): Promise<boolean> {
-  const { languages, ...gate } = params;
+  const { localization, ...gate } = params;
   const ask = () => checkSingleAccess({ ...gate, operation: "read" });
   if ((await ask()) !== null) return false;
-  for (const code of languages) {
-    if (
-      (await withRuleLanguage(registeredReadLanguagesFor(code), ask)) !== null
-    ) {
-      return false;
-    }
+  for (const { code } of localization?.locales ?? []) {
+    const read = readLanguagesFor(localization, code);
+    if ((await withRuleLanguage(read, ask)) !== null) return false;
   }
   return true;
 }
@@ -125,6 +124,10 @@ export function promoteCallerFor(args: {
   grants?: () => Promise<CallerGrants>;
   /** See {@link PromoteGateContext.readsEntry}. */
   readsEntry?: boolean;
+  /** The service's own localization, for how a read of each language asks. */
+  localization?: SanitizedLocalizationConfig;
+  /** The Single's table, for the columns a read never shows. */
+  tableName?: string;
 }): Pick<
   PromoteGateContext,
   | "slug"
@@ -137,6 +140,8 @@ export function promoteCallerFor(args: {
   | "grants"
   | "readsEntry"
   | "executor"
+  | "readLanguageOf"
+  | "tableName"
 > {
   return {
     slug: args.slug,
@@ -158,6 +163,8 @@ export function promoteCallerFor(args: {
     grants: args.grants,
     readsEntry: args.readsEntry,
     executor: args.tx.getDrizzle(),
+    readLanguageOf: locale => readLanguagesFor(args.localization, locale),
+    tableName: args.tableName,
   };
 }
 
@@ -270,6 +277,13 @@ export interface PromoteGateContext {
    * make reads on it, never on the pool the transaction is holding.
    */
   executor?: unknown;
+  /**
+   * How a read of one language asks, by the promoting service's own
+   * localization: a refusal is judged language by language as that read.
+   */
+  readLanguageOf?: (locale: string) => RuleLanguage;
+  /** The Single's table, for the columns a read never shows. */
+  tableName?: string;
   /**
    * The scope an API key arrived with, so a key is judged on ITS grants rather
    * than on the database roles of whoever owns it. There is no request-local
@@ -611,7 +625,8 @@ async function schemaIssues(
     document: view,
     entryId: ctx.entryId,
     executor: ctx.executor,
-    ...(locale === null ? {} : { readLocale: locale }),
+    tableName: ctx.tableName,
+    readLanguage: locale === null ? undefined : ctx.readLanguageOf?.(locale),
     ...(ctx.readsEntry === undefined
       ? {}
       : { rowReadable: () => Promise.resolve(ctx.readsEntry === true) }),

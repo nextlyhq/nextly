@@ -8,7 +8,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { consoleLogger } from "../../types";
-import type { ValidationIssue } from "../entry-validation";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../../domains/schema/field-types/field-type-registry";
+import { validateEntryData, type ValidationIssue } from "../entry-validation";
 import {
   clearFieldFunctions,
   registerFieldFunctions,
@@ -45,6 +49,7 @@ function told(
     fieldGroups?: Record<string, FieldConfig[]>;
     entryId?: string;
     rowReadable?: boolean;
+    tableName?: string;
   } = {}
 ) {
   const groups = options.fieldGroups;
@@ -62,6 +67,9 @@ function told(
         }
       : {}),
     ...(options.entryId === undefined ? {} : { entryId: options.entryId }),
+    ...(options.tableName === undefined
+      ? {}
+      : { tableName: options.tableName }),
     ...(options.rowReadable === undefined
       ? {}
       : { rowReadable: () => Promise.resolve(options.rowReadable === true) }),
@@ -76,6 +84,7 @@ function told(
 
 afterEach(() => {
   clearFieldFunctions();
+  clearFieldTypes();
   vi.restoreAllMocks();
 });
 
@@ -336,5 +345,59 @@ describe("issuesTheReaderMaySee", () => {
         hooked
       )
     ).toEqual([issue("summary"), UNREADABLE_FIELD_ISSUE]);
+  });
+  it("judges rules without the columns a read never shows, such as the owner", async () => {
+    // A read takes the owner column out before its rules run, so a rule
+    // reading it never allows there; it must not allow here either.
+    const byOwner = [
+      { name: "title", type: "text" },
+      {
+        name: "secret",
+        type: "text",
+        access: {
+          read: ({
+            data,
+            user,
+          }: {
+            data?: Record<string, unknown>;
+            user?: { id?: unknown } | null;
+          }) => data?.createdBy === user?.id,
+        },
+      },
+    ] as unknown as FieldConfig[];
+    registerFieldFunctions("collection", SLUG, byOwner);
+
+    expect(
+      await told(
+        [issue("secret", "Code s is not allowed.")],
+        { title: "t", secret: "s", createdBy: "author" },
+        byOwner,
+        { tableName: "dc_reports" }
+      )
+    ).toEqual([UNREADABLE_FIELD_ISSUE]);
+  });
+
+  it("judges a plugin type's issue by the field that found it, wherever it is told", async () => {
+    registerFieldType({
+      type: "document",
+      storage: "json",
+      component: "@acme/docs/admin#DocumentInput",
+      validate: value => [
+        { path: "", message: `Document ${JSON.stringify(value)} refused` },
+      ],
+    });
+    const withDocument = [
+      { name: "title", type: "text" },
+      { name: "body", type: "document", access: hidden },
+    ] as unknown as FieldConfig[];
+    registerFieldFunctions("collection", SLUG, withDocument);
+    const document = { title: "t", body: { secret: "s" } };
+    const issues = await validateEntryData(document, withDocument as never, {
+      mode: "create",
+    });
+
+    expect(await told(issues, document, withDocument)).toEqual([
+      UNREADABLE_FIELD_ISSUE,
+    ]);
   });
 });

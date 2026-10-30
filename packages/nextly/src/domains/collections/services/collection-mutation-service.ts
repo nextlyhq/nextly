@@ -40,6 +40,7 @@ import type { RuleFilter } from "../../../auth/access/rule-answer";
 import {
   askEachLanguage,
   currentRuleLanguage,
+  readLanguagesFor,
   withRuleLanguage,
   writeLanguagesFor,
 } from "../../../auth/access/rule-language";
@@ -1992,7 +1993,12 @@ export class CollectionMutationService extends BaseService {
     );
     // The document judged can hold fields the caller may not read; their
     // issues are told without naming them or their values.
+    if (issues.length === 0) return issues;
     const service = this.fieldGroupDataService;
+    const collection = await this.collectionService.getCollection(
+      args.collectionName,
+      args.tx?.getDrizzle()
+    );
     return issuesTheReaderMaySee(issues, {
       kind: "collection",
       slug: args.collectionName,
@@ -2004,7 +2010,12 @@ export class CollectionMutationService extends BaseService {
       },
       executor: args.tx?.getDrizzle(),
       entryId: args.id,
-      readLocale: args.readLocale,
+      tableName: collectionTableName(collection, args.collectionName),
+      // As this service reads the document in that language.
+      readLanguage:
+        args.readLocale === undefined
+          ? undefined
+          : readLanguagesFor(this.localization, args.readLocale),
       // A stored entry the reader may not read is shown to them in no part.
       // A read limited to a filter is not matched against this entry here,
       // so it is judged as one that may not reach it.
