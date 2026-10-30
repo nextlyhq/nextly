@@ -86,6 +86,13 @@ export interface ReadServiceBinding {
 export interface ReadAheadSide {
   side: "ahead" | "batch";
   token: string;
+  /**
+   * The credential the side's request was authenticated by, as the batch
+   * names it: an answer read ahead is handed only to a batch on the same one.
+   * Absent where it could not be named, and then nothing read ahead is
+   * reused, on either side.
+   */
+  credential?: string;
 }
 
 /** A call's own options, of which only the ones a read may carry are kept. */
@@ -421,7 +428,13 @@ export function bindReadServices(
     readAhead:
       readAhead === undefined
         ? undefined
-        : { side: readAhead.side, token: readAhead.token },
+        : {
+            side: readAhead.side,
+            token: readAhead.token,
+            ...(readAhead.credential === undefined
+              ? {}
+              : { credential: readAhead.credential }),
+          },
   });
   return services;
 }

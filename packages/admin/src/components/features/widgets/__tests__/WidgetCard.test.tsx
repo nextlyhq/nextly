@@ -437,6 +437,34 @@ describe("a card that hides while empty", () => {
     }
   });
 
+  it("of a widget the layout read cannot answer, is taken out while its own answer is empty, never while it is failed, not available or loading", () => {
+    const { unmount: drop } = render(
+      <WidgetCard title="Plugin list" state={empty} hidesWhenAnswerEmpty>
+        <p>rows</p>
+      </WidgetCard>
+    );
+    expect(screen.getByRole("region", { name: "Plugin list" })).toHaveAttribute(
+      "data-hidden-empty"
+    );
+    drop();
+    for (const state of [
+      { kind: "error", message: "Failed." },
+      { kind: "no-access" },
+      { kind: "loading" },
+    ] satisfies CardState[]) {
+      const { unmount } = render(
+        <WidgetCard title="Plugin list" state={state} hidesWhenAnswerEmpty>
+          <p>rows</p>
+        </WidgetCard>
+      );
+      expect(
+        screen.getByRole("region", { name: "Plugin list" }),
+        state.kind
+      ).not.toHaveAttribute("data-hidden-empty");
+      unmount();
+    }
+  });
+
   it("stays in place when its answer turns out empty after the first paint, saying so", () => {
     render(
       <WidgetCard title="Needs attention" state={empty}>

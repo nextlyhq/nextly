@@ -34,6 +34,7 @@ import { expect, type Page, type Request, type Route } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { isLayoutRead } from "./support/dashboard-layout";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -101,7 +102,7 @@ function trackStatusReads(page: Page): string[] {
  * first-entry step open: the step the sample-content offer is made in.
  */
 async function placeGetStartedCard(page: Page): Promise<void> {
-  await page.route("**/dashboard/layout", async (route: Route) => {
+  await page.route(isLayoutRead, async (route: Route) => {
     if (route.request().method() !== "GET") return route.fallback();
     // A read still in flight when the test ends fails its fetch. Aborted rather
     // than thrown: a throw out of the handler fails a test that had passed,

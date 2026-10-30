@@ -73,6 +73,11 @@ const trendLoad = vi.fn(
     return { total, trend: true };
   }
 );
+// Finds nothing to show in a small card, whose figure has no room for the part it reads: what it
+// answers depends on the tier it is handed.
+const roomyLoad = vi.fn(async (input: { size: { tier: string } }) => ({
+  total: input.size.tier === "small" ? 0 : 3,
+}));
 // Drawn by core's bars display and declaring no `isEmpty`: empty by the display's own rule.
 const groupsLoad = vi.fn(
   async (): Promise<{ buckets: { value: string; count: number }[] }> => ({
@@ -80,6 +85,22 @@ const groupsLoad = vi.fn(
   })
 );
 const declarations: Record<string, unknown> = {
+  "acme/roomy": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/roomy",
+      size: {
+        default: { w: 4, h: 3 },
+        min: { w: 3, h: 3 },
+        max: { w: 12, h: 6 },
+      },
+      hidesWhenEmpty: true,
+      load: roomyLoad,
+      view: "figure",
+      isEmpty: (data: { total: number }) => data.total === 0,
+    },
+  },
   "acme/groups": {
     owner: "plugin @acme/shop",
     display: "bars",
@@ -981,14 +1002,24 @@ describe("whether a card is shown to the person asking, without its load", () =>
 });
 
 describe("whether a card answers empty, asked by the layout read before the dashboard is drawn", () => {
-  /** The card of `widget`, its settings given, answered whole as the layout read answers it. */
-  function answersEmpty(widget: string, asked: CardBatch = batch) {
+  /**
+   * The card of `widget`, its settings given, answered whole as the layout read answers it, on a
+   * dashboard `dashboardWidth` wide.
+   */
+  function answersEmpty(
+    widget: string,
+    asked: CardBatch = batch,
+    {
+      w = 12,
+      dashboardWidth = 1200,
+    }: { w?: number; dashboardWidth?: number } = {}
+  ) {
     return cardAnswersEmpty(
       declarations[widget] as never,
       {
         id: `c-${widget.slice(5)}`,
         widgetId: widget,
-        w: 12,
+        w,
         h: 3,
         removed: false,
         config: { items: 3 },
@@ -998,7 +1029,8 @@ describe("whether a card answers empty, asked by the layout read before the dash
         signal: new AbortController().signal,
         scope: createBatchScope().forOwner("plugin @acme/shop"),
         now: new Date(Date.UTC(2026, 9, 22)),
-      }
+      },
+      dashboardWidth
     );
   }
 
@@ -1036,6 +1068,59 @@ describe("whether a card answers empty, asked by the layout read before the dash
     expect(gatedLoad).not.toHaveBeenCalled();
   });
 
+  it("is judged at the tier the card is drawn at on the dashboard's width, as its first query asks", async () => {
+    // Three columns: 288 px on a 1,200 px dashboard, small, and 342 px on a 1,440 px one, medium
+    // (`cardTierAt`). Judged at the unstated medium tier, both would show something.
+    await expect(
+      answersEmpty("acme/roomy", batch, { w: 3, dashboardWidth: 1200 })
+    ).resolves.toBe(true);
+    expect(roomyLoad.mock.lastCall?.[0].size).toEqual({
+      w: 3,
+      h: 3,
+      tier: "small",
+    });
+    await expect(
+      answersEmpty("acme/roomy", batch, { w: 3, dashboardWidth: 1440 })
+    ).resolves.toBe(false);
+    expect(roomyLoad.mock.lastCall?.[0].size).toEqual({
+      w: 3,
+      h: 3,
+      tier: "medium",
+    });
+  });
+
+  it("binds its read services to the credential its batch was asked on", async () => {
+    const bound: Array<ReadAheadSide | undefined> = [];
+    ordersFunction.mockImplementation(async (...args: unknown[]) => {
+      const { services } = args[0] as { services: WidgetReadServices };
+      bound.push(boundReadAhead(services));
+      return { total: 0 };
+    });
+    const readAhead = { side: "ahead", token: "load-k" } as const;
+    await answersEmpty("acme/orders", {
+      ...batch,
+      auth: { authMethod: "api-key", apiKeyId: "key-1" } as never,
+      readAhead,
+    });
+    await answersEmpty("acme/orders", {
+      ...batch,
+      auth: { authMethod: "api-key", apiKeyId: "key-2" } as never,
+      readAhead,
+    });
+    // A key authentication named no id for: no credential, so nothing read ahead is reused.
+    await answersEmpty("acme/orders", {
+      ...batch,
+      auth: { authMethod: "api-key" } as never,
+      readAhead,
+    });
+    expect(bound).toEqual([
+      { ...readAhead, credential: "api-key:key-1" },
+      { ...readAhead, credential: "api-key:key-2" },
+      readAhead,
+    ]);
+    ordersFunction.mockImplementation(async () => ({ total: 7 }));
+  });
+
   it("binds its read services to the dashboard load its batch names, on the batch's side of it", async () => {
     const bound: Array<ReadAheadSide | undefined> = [];
     ordersFunction.mockImplementation(async (...args: unknown[]) => {
@@ -1052,10 +1137,11 @@ describe("whether a card answers empty, asked by the layout read before the dash
       readAhead: { side: "batch", token: "load-b" },
     });
     await answersEmpty("acme/orders");
-    // Each load by its own token and side, and a batch of no load bound to none.
+    // Each load by its own token and side, on the session it was asked on, and a batch of no
+    // load bound to none.
     expect(bound).toEqual([
-      { side: "ahead", token: "load-a" },
-      { side: "batch", token: "load-b" },
+      { side: "ahead", token: "load-a", credential: "session" },
+      { side: "batch", token: "load-b", credential: "session" },
       undefined,
     ]);
     ordersFunction.mockImplementation(async () => ({ total: 7 }));

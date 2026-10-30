@@ -22,6 +22,7 @@ import { expect, type Locator, type Page, type Route } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
+import { isLayoutRead } from "./support/dashboard-layout";
 import { cardHeightPx, sizeBoundsOf } from "./support/dashboard-sizes";
 import { LOCK } from "./support/locks";
 
@@ -448,7 +449,7 @@ async function placeFullGetStarted(
   rows: () => number | undefined = () => undefined
 ): Promise<void> {
   const size = (await sizeBoundsOf(page, GET_STARTED)).default;
-  await page.route("**/dashboard/layout", async (route: Route) => {
+  await page.route(isLayoutRead, async (route: Route) => {
     if (route.request().method() !== "GET") return route.fallback();
     // Aborted rather than thrown when the page has gone: a throw out of the handler fails a test
     // that had passed, and its message prints the request, session cookie included.

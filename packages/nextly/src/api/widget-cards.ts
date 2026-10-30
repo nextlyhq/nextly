@@ -12,6 +12,7 @@
 import { z } from "zod";
 
 import type { AuthContext } from "../auth/middleware";
+import { cardTierAt } from "../domains/widgets/card-geometry";
 import { cardAnswerResult } from "../domains/widgets/declaration/card-answer";
 import {
   renamedCollection,
@@ -180,10 +181,35 @@ export interface CardBatch {
    * The dashboard load this batch answers, and on which side of its
    * read-ahead: the layout read's, ahead of the dashboard's own batch, or
    * that batch, carrying the token the layout read handed the dashboard. The
-   * read services each card is bound to carry it
-   * (`ReadServiceBinding.readAhead`).
+   * read services each card is bound to carry it, with the credential the
+   * batch was asked on (`readAheadFor`).
    */
-  readAhead?: ReadAheadSide;
+  readAhead?: Omit<ReadAheadSide, "credential">;
+}
+
+/**
+ * The side of a dashboard load's read-ahead a card's services are bound on:
+ * the batch's, with the credential its request was authenticated by, so an
+ * answer read ahead is reused only on the credential it was read for
+ * (`ReadAheadSide.credential`). An API key is named by its id, and a key
+ * whose id authentication did not carry by none, so nothing read ahead is
+ * reused for it. A session carries no id or token times past verification;
+ * it is told apart by its verified claims and roles, which the caller holds.
+ */
+function readAheadFor(batch: CardBatch): ReadAheadSide | undefined {
+  const { readAhead, auth } = batch;
+  if (readAhead === undefined) return undefined;
+  const credential =
+    auth.authMethod === "api-key"
+      ? auth.apiKeyId === undefined
+        ? undefined
+        : `api-key:${auth.apiKeyId}`
+      : "session";
+  return {
+    side: readAhead.side,
+    token: readAhead.token,
+    ...(credential === undefined ? {} : { credential }),
+  };
 }
 
 /**
@@ -471,6 +497,7 @@ async function judgeCard(
     return { kind: "needs-setting", label: missing.label };
   }
   const { signal, scope, now } = asked;
+  const readAhead = readAheadFor(batch);
   const input = {
     settings,
     user: batch.caller.user,
@@ -486,7 +513,7 @@ async function judgeCard(
       signal,
       now,
       ...(collections === undefined ? {} : { collections }),
-      ...(batch.readAhead === undefined ? {} : { readAhead: batch.readAhead }),
+      ...(readAhead === undefined ? {} : { readAhead }),
     }),
   };
   const { shows } = declaration;
@@ -608,15 +635,21 @@ export async function cardIsShownTo(
  * The card is then placed, and says for itself what it has.
  *
  * @param asked as `cardIsShownTo` is handed it: no browser asks, so the card is answered at the
- * placement's own size, at the unstated tier (`cardSize`).
+ * placement's own size (`cardSize`).
+ * @param dashboardWidth the dashboard's width as the admin measured it when it asked for the
+ * layout. The card is answered at the tier it is drawn at on a dashboard that wide
+ * (`cardTierAt`), the rule the admin sizes the card's first query by, so a `load` that reads
+ * its tier is judged on the answer that query gets.
  */
 export async function cardAnswersEmpty(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
-  asked: CardInput
+  asked: CardInput,
+  dashboardWidth: number
 ): Promise<boolean> {
-  const size = cardSize(declared, { placement, preview: false });
+  const grid = cardSize(declared, { placement, preview: false });
+  const size = { ...grid, tier: cardTierAt(grid.w, dashboardWidth) };
   try {
     const answer = await withinSlotBudget(
       signal =>

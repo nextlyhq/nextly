@@ -64,7 +64,11 @@ function draw(
   return render(
     props.revealed === true ? (
       <HiddenWhileEmptyContext.Provider
-        value={{ hidden: new Set(), revealed: new Set(["attention"]) }}
+        value={{
+          hidden: new Set(),
+          revealed: new Set(["attention"]),
+          hiddenWhenAnswerEmpty: new Set(),
+        }}
       >
         {card}
       </HiddenWhileEmptyContext.Provider>

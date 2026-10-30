@@ -1,12 +1,18 @@
 /**
  * Which of a reader's cards that hide while empty answer empty for them now,
- * decided when their layout is read so the dashboard's first paint is final.
+ * decided when their layout is read so the dashboard's first paint is final;
+ * and which hide by their own answer instead, since the layout read cannot
+ * answer them.
  *
  * A card that hides while empty and is drawn before its answer arrives takes
  * its place, then leaves it, and every card after it moves up; one held back
  * until its answer says it has something moves them down instead. Either is a
- * dashboard moving under its reader. The layout read asks each such card for
- * its answer first, so the admin draws it, or leaves it out, from the start.
+ * dashboard moving under its reader. The layout read asks each such card of a
+ * declared widget for its answer first, so the admin draws it, or leaves it
+ * out, from the start. A widget of the other channels (`registerWidget`,
+ * `contributes.admin.widgets`) has no answer core can give on the server: its
+ * card leaves the dashboard when its own answer, drawn in the browser, is
+ * empty.
  *
  * Loaded lazily by the layout endpoint, as `default-cards-shown` is: it
  * reaches the card endpoint, which itself reads the layout to know what a
@@ -17,6 +23,7 @@
 
 import type { AuthContext } from "../auth/middleware";
 import { createBatchScope } from "../domains/widgets/batch-scope";
+import type { CanonicalWidget } from "../domains/widgets/canonical";
 import { refreshContentSources } from "../domains/widgets/content-sources";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import type { WidgetPlacement } from "../domains/widgets/layout";
@@ -28,13 +35,58 @@ import { cardBatchFor } from "./widget-query";
 const NONE: readonly string[] = [];
 
 /**
+ * How a widget's cards leave the dashboard while empty, by its canonical
+ * summary's `hidesWhenEmpty`, whichever channel declared it: `"ahead"`, judged
+ * by the layout read, for a declared widget, whose answer core gives on the
+ * server; `"own-answer"`, by its own answer as the admin draws it, for any
+ * other; `undefined` for a widget that does not hide while empty. The one rule
+ * for which applies: the layout read's candidates and the admin's list both
+ * come from it.
+ */
+function hideRule(
+  widget: CanonicalWidget | undefined
+): "ahead" | "own-answer" | undefined {
+  if (widget?.hidesWhenEmpty !== true) return undefined;
+  return declaredWidget(widget.id) === undefined ? "own-answer" : "ahead";
+}
+
+/**
+ * The ids of the widgets among `widgets` whose cards leave the dashboard when
+ * their own answer is empty (`hideRule`): those that hide while empty and that
+ * the layout read cannot answer. In the widgets' order.
+ */
+export function hiddenWhenAnswerEmpty(
+  widgets: readonly CanonicalWidget[]
+): readonly string[] {
+  return widgets
+    .filter(widget => hideRule(widget) === "own-answer")
+    .map(widget => widget.id);
+}
+
+/** What the layout read is judging its cards with, beside the reader and their cards. */
+export interface AheadOfTheBatch {
+  /** The widgets the reader may see, as the layout read resolved them. */
+  widgets: readonly CanonicalWidget[];
+  /**
+   * The dashboard's width as the admin measured it when it asked, which each
+   * card's tier is read from (`cardAnswersEmpty`).
+   */
+  dashboardWidth: number;
+  /** The request's own signal: the read is given up with it. */
+  signal: AbortSignal;
+  /** The dashboard load the read is ahead of (`readAheadToken`). */
+  readAheadToken: string;
+}
+
+/**
  * The ids of the cards among `placements`, as handed to this reader, whose
- * declared widget hides while empty and whose answer is empty for them
+ * widget is judged ahead (`hideRule`) and whose answer is empty for them
  * (`cardAnswersEmpty`), in the placements' order. Every other card, a card
  * that failed or ran out of time included, is placed.
  *
  * Every card is asked at once, with one instant and one share scope for the
- * read, under the request's `signal`, as read ahead for the dashboard load
+ * read, under the request's `signal`, at the tier it is drawn at on a
+ * dashboard `dashboardWidth` wide, as read ahead for the dashboard load
  * `readAheadToken` names: the batch that load asks, sending the token back,
  * may be handed what was read here, and no other ask is.
  */
@@ -42,12 +94,13 @@ export async function cardsAnsweredEmpty(
   auth: AuthContext,
   reader: ReadCaller,
   placements: readonly WidgetPlacement[],
-  signal: AbortSignal,
-  readAheadToken: string
+  ahead: AheadOfTheBatch
 ): Promise<readonly string[]> {
+  const byId = new Map(ahead.widgets.map(widget => [widget.id, widget]));
   const asked = placements.flatMap(placement => {
     const declared = declaredWidget(placement.widgetId);
-    return declared?.declaration.hidesWhenEmpty === true
+    return declared !== undefined &&
+      hideRule(byId.get(placement.widgetId)) === "ahead"
       ? [{ placement, declared }]
       : [];
   });
@@ -58,17 +111,19 @@ export async function cardsAnsweredEmpty(
   // Ahead of the dashboard's own batch, which asks these cards again.
   const batch: CardBatch = {
     ...cardBatchFor(auth, reader),
-    readAhead: { side: "ahead", token: readAheadToken },
+    readAhead: { side: "ahead", token: ahead.readAheadToken },
   };
   const scope = createBatchScope();
   const now = new Date();
   const empty = await Promise.all(
     asked.map(({ placement, declared }) =>
-      cardAnswersEmpty(declared, placement, batch, {
-        signal,
-        now,
-        scope: scope.forOwner(declared.owner),
-      })
+      cardAnswersEmpty(
+        declared,
+        placement,
+        batch,
+        { signal: ahead.signal, now, scope: scope.forOwner(declared.owner) },
+        ahead.dashboardWidth
+      )
     )
   );
   return asked

@@ -104,6 +104,7 @@ import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import type { CollectionsHandler } from "../collections-handler";
 
+import { readAheadAccess } from "./read-ahead-access";
 import type { ReadCaller } from "./readable-resources";
 
 /**
@@ -501,7 +502,7 @@ const READ_AHEAD_KEPT_MS = 5_000;
 const READ_AHEAD_LOADS = 500;
 
 /**
- * Digests read ahead by the layout read, by reader and load
+ * Digests read ahead by the layout read, by access and load
  * ({@link waitingKey}), each waiting for the batch of that load. Held for the
  * process (`processHeld`), as the card's own digest read is: the layout read
  * and the batch can reach different copies of this module.
@@ -514,58 +515,59 @@ const readAhead = processHeld(
 );
 
 /**
- * Who a digest was read for: the person, their roles, and the scope that
- * judged them, an API key's grants included, so two callers that may see
- * different things never share one.
+ * Where one load's digest waits: under the whole access it was read with
+ * (`readAheadAccess`: the caller, every claim and grant it carries, the
+ * authority the access gate reads for it, and the credential it came on) AND
+ * its load's token. The access keeps a token sent under any other access, a
+ * narrower key, a changed claim or an authority that lapsed since, from
+ * reaching a digest read under this one; the token keeps two loads of one
+ * reader, two tabs or a remount racing a refetch, from taking each other's
+ * digest, read at different moments and so perhaps different.
  */
-function readerKey(caller: ReadCaller): string {
-  const { user, authenticatedScope } = caller;
-  return JSON.stringify([
-    user.id,
-    user.role ?? null,
-    user.roles ?? null,
-    authenticatedScope ?? null,
-  ]);
+function waitingKey(access: string, token: string): string {
+  return JSON.stringify([access, token]);
 }
 
 /**
- * Where one load's digest waits: under its reader AND its load's token. The
- * reader keeps a token sent by one caller from reaching a digest read for
- * another; the token keeps two loads of one reader, two tabs or a remount
- * racing a refetch, from taking each other's digest, read at different
- * moments and so perhaps different.
+ * The digest waiting under `key`, taken: gone from the map whether or not it
+ * is still fresh, and `undefined` when there was none or it is not.
  */
-function waitingKey(caller: ReadCaller, token: string): string {
-  return JSON.stringify([readerKey(caller), token]);
+function takeWaiting(key: string): AttentionDigestItem[] | undefined {
+  const waiting = readAhead.get(key);
+  readAhead.delete(key);
+  return waiting !== undefined && Date.now() - waiting.at < READ_AHEAD_KEPT_MS
+    ? waiting.items
+    : undefined;
 }
 
 /**
  * The Needs attention card's digest: read once per dashboard load. The layout
  * read answers the card ahead (`side: "ahead"`), to learn whether it is empty
- * before the dashboard is drawn, and leaves its digest under its load's token;
- * the batch of that load (`side: "batch"`, the same token) takes it, once, if
- * it is fresh. Any other ask, a batch of no load, one whose digest was taken,
- * expired or never read, a refetch or a later visit, reads anew, and no ask
- * takes or removes another load's digest. So what a reader resolved is gone
- * from the next answer they are given, and two loads of one reader each draw
- * from their own read.
+ * before the dashboard is drawn, and leaves its digest under its access and
+ * its load's token; the batch of that load (`side: "batch"`, the same token)
+ * takes it, once, if it is fresh and the batch asks under exactly the same
+ * access, read at the batch's own request. Any other ask, a batch of no load,
+ * one under any other access, one whose digest was taken, expired or never
+ * read, a refetch or a later visit, reads anew, and no ask takes or removes
+ * another load's digest. So what a reader resolved is gone from the next
+ * answer they are given, two loads of one reader each draw from their own
+ * read, and a digest is never handed to access it was not read for. A side
+ * whose access cannot be stated neither keeps nor takes one.
  */
 async function cardDigest(
   caller: ReadCaller,
   load: ReadAheadSide | undefined,
   opts: { signal: AbortSignal; now: Date }
 ): Promise<AttentionDigestItem[]> {
-  if (load?.side === "batch") {
-    const key = waitingKey(caller, load.token);
-    const waiting = readAhead.get(key);
-    readAhead.delete(key);
-    if (waiting !== undefined && Date.now() - waiting.at < READ_AHEAD_KEPT_MS) {
-      return waiting.items;
-    }
+  const access =
+    load === undefined ? undefined : readAheadAccess(caller, load.credential);
+  if (load?.side === "batch" && access !== undefined) {
+    const taken = takeWaiting(waitingKey(access, load.token));
+    if (taken !== undefined) return taken;
   }
   const items = await readAttentionDigest(caller, opts);
-  if (load?.side === "ahead") {
-    keepForBatch(waitingKey(caller, load.token), items);
+  if (load?.side === "ahead" && access !== undefined) {
+    keepForBatch(waitingKey(access, load.token), items);
   }
   return items;
 }

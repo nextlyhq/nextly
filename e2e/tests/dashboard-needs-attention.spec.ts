@@ -14,6 +14,7 @@
 import { expect, type Page, type Route } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import { isLayoutRead } from "./support/dashboard-layout";
 import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import {
@@ -115,7 +116,7 @@ async function followLink(page: Page, href: string): Promise<void> {
  * visit is drawn without it whatever the shared database holds.
  */
 async function readCardAsEmpty(page: Page): Promise<void> {
-  await page.route("**/dashboard/layout", async (route: Route) => {
+  await page.route(isLayoutRead, async (route: Route) => {
     if (route.request().method() !== "GET") return route.fallback();
     // Aborted rather than thrown when the read is given up: a throw out of the handler prints
     // the request, session cookie included.
@@ -164,13 +165,14 @@ test("a return that finds new work waiting shows the card, and says so", async (
         .getByTestId("widget-cell-core/recently-edited")
         .filter({ visible: true })
     ).toBeVisible();
-    await expect(card).toHaveCount(0);
+    // Hidden, not absent: the page keeps the card's cell, undrawn.
+    await expect(card).toBeHidden();
 
     // Away and back within the session: the return is drawn from the cached answer, which hid
     // the card, and the read it makes again finds the overdue release.
     await followLink(page, "/admin/collections/posts");
     await page.waitForURL(/\/admin\/collections\/posts/);
-    await page.unroute("**/dashboard/layout");
+    await page.unroute(isLayoutRead);
     await followLink(page, "/admin");
     await page.waitForURL(/\/admin\/?$/);
 
@@ -179,7 +181,7 @@ test("a return that finds new work waiting shows the card, and says so", async (
       card.getByText(/^\d+ items? needs? your attention$/)
     ).toBeAttached();
   } finally {
-    await page.unroute("**/dashboard/layout").catch(() => {});
+    await page.unroute(isLayoutRead).catch(() => {});
     await cancel(page, id);
   }
 });

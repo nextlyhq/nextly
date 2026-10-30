@@ -36,6 +36,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
 
+import { dashboardWidthNow } from "@admin/components/features/widgets/useDashboardWidth";
 import {
   ADMIN_WORKSPACE_KEY,
   useSchemaUpdateInvalidation,
@@ -56,9 +57,19 @@ const LAYOUT_PATH = "/dashboard/layout";
 /**
  * The layout read: one fetch for every query under {@link DASHBOARD_LAYOUT_KEY}, so a card
  * reading the same answer as the grid shares the grid's request and cache entry.
+ *
+ * Sent the dashboard's width as it measures now (`dashboardWidthNow`), for the server to judge
+ * each card that hides while empty at the tier it is drawn at. Read at the request, never part of
+ * the key, so a resize does not split the cache; asked with no dashboard drawn, it sends none and
+ * the answer judges no card.
  */
 export function fetchDashboardLayout(): Promise<DashboardLayoutResponse> {
-  return protectedApi.get<DashboardLayoutResponse>(LAYOUT_PATH);
+  const width = dashboardWidthNow();
+  return protectedApi.get<DashboardLayoutResponse>(
+    width === undefined
+      ? LAYOUT_PATH
+      : `${LAYOUT_PATH}?${new URLSearchParams({ width: String(width) })}`
+  );
 }
 
 /**

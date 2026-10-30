@@ -307,12 +307,22 @@ export interface DashboardLayoutResponse {
   getStarted?: GetStartedLayoutView;
   /**
    * The placement ids of the cards that hide while empty and were empty for
-   * this reader when the layout was read. The dashboard is drawn without them
-   * from its first paint, and every other card that hides while empty is
-   * placed and stays: neither leaves nor joins the page mid-view. Absent from
-   * a server that predates it, which reads as none.
+   * this reader when the layout was read, at the tier each is drawn at on a
+   * dashboard as wide as the one the read was sent. The dashboard is drawn
+   * without them from its first paint, and every other card that hides while
+   * empty is placed and stays: neither leaves nor joins the page mid-view.
+   * Absent when the read judged no card (it was sent no dashboard width) and
+   * from a server that predates it: no verdict, which hides nothing and
+   * reveals nothing.
    */
   hiddenWhileEmpty?: string[];
+  /**
+   * The widget ids whose cards leave the dashboard while their own answer is
+   * empty, as drawn: widgets that hide while empty and that the layout read
+   * cannot answer ahead (the `registerWidget` and `contributes.admin.widgets`
+   * channels). Absent from a server that predates it, which reads as none.
+   */
+  hiddenWhenAnswerEmpty?: string[];
   /**
    * An opaque token for this one read of the layout: the cards in
    * `hiddenWhileEmpty` were answered ahead under it, and the dashboard's batch

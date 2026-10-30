@@ -11,10 +11,15 @@
  * reader is looking changes the card's own content, never the page around it.
  * The next visit reads the verdict anew.
  *
+ * A widget the layout read cannot answer (one of the `registerWidget` or
+ * `contributes.admin.widgets` channel) is named in its `hiddenWhenAnswerEmpty`
+ * instead: its card leaves the dashboard while its own answer is empty, as it
+ * is drawn (`useHidesWhenAnswerEmpty`).
+ *
  * @module components/features/widgets/hidden-while-empty
  */
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 
 import type { DashboardLayoutResponse } from "../../../types/dashboard/widgets";
 
@@ -23,14 +28,20 @@ const NONE: ReadonlySet<string> = new Set();
 /**
  * The cards a dashboard is drawn without while empty (`hidden`), and those it was drawn without
  * and has since shown because a later layout read found them with something waiting
- * (`revealed`).
+ * (`revealed`); and the widgets whose cards leave by their own answer instead
+ * (`hiddenWhenAnswerEmpty`), from the latest layout answer.
  */
 export interface HeldVerdict {
   hidden: ReadonlySet<string>;
   revealed: ReadonlySet<string>;
+  hiddenWhenAnswerEmpty: ReadonlySet<string>;
 }
 
-const NOTHING_HELD: HeldVerdict = { hidden: NONE, revealed: NONE };
+const NOTHING_HELD: HeldVerdict = {
+  hidden: NONE,
+  revealed: NONE,
+  hiddenWhenAnswerEmpty: NONE,
+};
 
 /** The verdict this dashboard holds; nothing outside a dashboard. */
 export const HiddenWhileEmptyContext = createContext<HeldVerdict>(NOTHING_HELD);
@@ -39,6 +50,16 @@ export const HiddenWhileEmptyContext = createContext<HeldVerdict>(NOTHING_HELD);
 export function useHiddenWhileEmpty(placementId: string | undefined): boolean {
   const { hidden } = useContext(HiddenWhileEmptyContext);
   return placementId !== undefined && hidden.has(placementId);
+}
+
+/**
+ * Whether a card of the widget `widgetId` leaves the dashboard while its own answer is empty:
+ * the widget hides while empty and the layout read named it as one it cannot answer ahead.
+ */
+export function useHidesWhenAnswerEmpty(widgetId: string): boolean {
+  return useContext(HiddenWhileEmptyContext).hiddenWhenAnswerEmpty.has(
+    widgetId
+  );
 }
 
 /**
@@ -63,31 +84,49 @@ export function useRevealedWhileViewed(
  * is shown: new work for the reader is worth the one move of the cards after it. A card shown
  * at first that a later read finds empty stays, saying nothing is waiting, until the next visit,
  * so what the reader is looking at never jumps up. A dashboard drawn without any answer (the
- * layout could not be read) hides nothing.
+ * layout could not be read) hides nothing, and so does one drawn from an answer that judged no
+ * card (no `hiddenWhileEmpty`: it was asked before the dashboard had a width); such an answer is
+ * no verdict, so arriving later it shows nothing it hid either.
  */
 export function useHiddenWhileEmptyAtFirstPaint(
   layout: DashboardLayoutResponse | undefined
 ): HeldVerdict {
-  const [held, setHeld] = useState<HeldVerdict>(() => ({
-    hidden: layout === undefined ? NONE : verdictOf(layout),
-    revealed: NONE,
-  }));
+  const [held, setHeld] = useState<Pick<HeldVerdict, "hidden" | "revealed">>(
+    () => ({
+      hidden: (layout === undefined ? undefined : verdictOf(layout)) ?? NONE,
+      revealed: NONE,
+    })
+  );
+  const ownAnswer = useMemo(
+    () => new Set(layout?.hiddenWhenAnswerEmpty ?? []),
+    [layout?.hiddenWhenAnswerEmpty]
+  );
   const fresh = layout === undefined ? undefined : verdictOf(layout);
   const appearing =
     fresh === undefined ? [] : [...held.hidden].filter(id => !fresh.has(id));
   // Set during render, React's way to keep what an earlier render saw: it renders again before
   // anything is painted, so no frame draws the card hidden after its answer showed it.
-  if (appearing.length > 0) {
-    const next: HeldVerdict = {
-      hidden: new Set([...held.hidden].filter(id => fresh?.has(id))),
-      revealed: new Set([...held.revealed, ...appearing]),
-    };
-    setHeld(next);
-    return next;
-  }
-  return held;
+  const kept =
+    appearing.length > 0
+      ? {
+          hidden: new Set([...held.hidden].filter(id => fresh?.has(id))),
+          revealed: new Set([...held.revealed, ...appearing]),
+        }
+      : held;
+  if (kept !== held) setHeld(kept);
+  // Read from the held state: a render that changed it above is discarded and rendered again
+  // with it before anything is painted.
+  return useMemo(
+    () => ({ ...held, hiddenWhenAnswerEmpty: ownAnswer }),
+    [held, ownAnswer]
+  );
 }
 
-function verdictOf(layout: DashboardLayoutResponse): ReadonlySet<string> {
-  return new Set(layout.hiddenWhileEmpty ?? []);
+/** The cards an answer found empty, or `undefined` for an answer that judged none. */
+function verdictOf(
+  layout: DashboardLayoutResponse
+): ReadonlySet<string> | undefined {
+  return layout.hiddenWhileEmpty === undefined
+    ? undefined
+    : new Set(layout.hiddenWhileEmpty);
 }

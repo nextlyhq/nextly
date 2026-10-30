@@ -2,6 +2,8 @@
  * Which of a reader's cards that hide while empty answer empty for them: only
  * declared cards that hide while empty are asked, each by its own answer
  * (`cardAnswersEmpty`), all in one read, ahead of the dashboard's own batch.
+ * The widgets of the other channels that hide while empty are not asked: their
+ * cards leave by their own answer, and are named for the admin to say so.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,10 +28,15 @@ vi.mock("../domains/widgets/declaration/declared-widgets", () => ({
 }));
 
 import type { AuthContext } from "../auth/middleware";
+import type { CanonicalWidget } from "../domains/widgets/canonical";
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
-import { cardsAnsweredEmpty } from "./cards-answered-empty";
+import {
+  cardsAnsweredEmpty,
+  hiddenWhenAnswerEmpty,
+  type AheadOfTheBatch,
+} from "./cards-answered-empty";
 
 const auth = { userId: "user-1" } as unknown as AuthContext;
 const reader = { user: { id: "user-1" } } as unknown as ReadCaller;
@@ -49,6 +56,39 @@ const declared = (hidesWhenEmpty: boolean) => ({
   declaration: hidesWhenEmpty ? { hidesWhenEmpty: true } : {},
   display: {},
 });
+
+/** A widget the reader may see, as the layout read resolves it, hiding while empty or not. */
+const canonical = (id: string, hidesWhenEmpty: boolean): CanonicalWidget =>
+  ({
+    id,
+    ...(hidesWhenEmpty ? { hidesWhenEmpty: true } : {}),
+  }) as CanonicalWidget;
+
+/**
+ * The widgets of every card the cases place: declared ones of core's, as their summaries carry
+ * `hidesWhenEmpty`, and two of the other channels, `legacy/quiet` hiding while empty.
+ */
+const WIDGETS: readonly CanonicalWidget[] = [
+  canonical("core/quiet-a", true),
+  canonical("core/quiet-b", true),
+  canonical("core/quiet-busy", true),
+  canonical("core/count", false),
+  canonical("legacy/list", false),
+  canonical("legacy/quiet", true),
+];
+
+/** The layout read's own ask: a 1,200 px dashboard, under the load `token` names. */
+function aheadOf(
+  token: string,
+  signal: AbortSignal = new AbortController().signal
+): AheadOfTheBatch {
+  return {
+    widgets: WIDGETS,
+    dashboardWidth: 1200,
+    signal,
+    readAheadToken: token,
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -74,17 +114,45 @@ describe("the cards a reader's dashboard is drawn without while empty", () => {
         card("core/quiet-b"),
         card("core/count"),
         card("legacy/list"),
+        card("legacy/quiet"),
         card("core/quiet-busy"),
         card("core/quiet-a"),
       ],
-      new AbortController().signal,
-      "load-1"
+      aheadOf("load-1")
     );
     expect(hidden).toEqual(["core/quiet-b", "core/quiet-a"]);
-    // A card that shows its empty state, and one with no declaration, are
-    // never answered here: only a card that would leave the page is.
+    // A card that shows its empty state, and one with no declaration, hiding
+    // while empty or not, are never answered here: only a declared card that
+    // would leave the page is.
     expect(cardAnswersEmpty).toHaveBeenCalledTimes(3);
     expect(refreshContentSources).toHaveBeenCalledTimes(1);
+  });
+
+  it("judges a declared card by its widget's summary, as the layout read resolved it", async () => {
+    cardAnswersEmpty.mockResolvedValue(true);
+    // Declared and hiding while empty, but not hiding by the summary the
+    // reader's widgets carry: drawn, never judged.
+    const hidden = await cardsAnsweredEmpty(
+      auth,
+      reader,
+      [card("core/quiet-a")],
+      {
+        ...aheadOf("load-1"),
+        widgets: [canonical("core/quiet-a", false)],
+      }
+    );
+    expect(hidden).toEqual([]);
+    expect(cardAnswersEmpty).not.toHaveBeenCalled();
+  });
+
+  it("asks each card at the dashboard width the layout read was sent", async () => {
+    cardAnswersEmpty.mockResolvedValue(false);
+    await cardsAnsweredEmpty(auth, reader, [card("core/quiet-a")], {
+      ...aheadOf("load-1"),
+      dashboardWidth: 1440,
+    });
+    // The width, for the card's tier to be read from (`cardAnswersEmpty`).
+    expect(cardAnswersEmpty.mock.lastCall?.[4]).toBe(1440);
   });
 
   it("asks ahead of the dashboard's own batch, for the read's own load, as the reader, with the read's one instant and signal", async () => {
@@ -94,8 +162,7 @@ describe("the cards a reader's dashboard is drawn without while empty", () => {
       auth,
       reader,
       [card("core/quiet-a"), card("core/quiet-b")],
-      signal,
-      "load-7"
+      aheadOf("load-7", signal)
     );
     expect(cardBatchFor).toHaveBeenCalledWith(auth, reader);
     const asked = cardAnswersEmpty.mock.calls;
@@ -115,11 +182,19 @@ describe("the cards a reader's dashboard is drawn without while empty", () => {
       auth,
       reader,
       [card("core/count")],
-      new AbortController().signal,
-      "load-1"
+      aheadOf("load-1")
     );
     expect(hidden).toEqual([]);
     expect(refreshContentSources).not.toHaveBeenCalled();
     expect(cardAnswersEmpty).not.toHaveBeenCalled();
+  });
+});
+
+describe("the widgets whose cards leave the dashboard by their own answer", () => {
+  it("are those that hide while empty and have no declaration the layout read could answer", () => {
+    // `legacy/quiet` arrives by `registerWidget` or `contributes.admin.widgets`: the layout read
+    // cannot answer it, so its card leaves when its own answer, drawn, is empty. The declared
+    // ones are judged ahead instead, and the others never leave.
+    expect(hiddenWhenAnswerEmpty(WIDGETS)).toEqual(["legacy/quiet"]);
   });
 });

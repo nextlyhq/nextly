@@ -23,6 +23,10 @@ import {
   superAdminUser,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
+import {
+  apiKeyScopeFrom,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../config";
 import {
   publishAsItStands,
@@ -56,11 +60,38 @@ afterEach(async () => {
 
 const MINUTE = 60 * 1000;
 
-/** The layout read of the load `token` names, answering ahead of its batch. */
-const ahead = (token: string): ReadAheadSide => ({ side: "ahead", token });
+/**
+ * The layout read of the load `token` names, answering ahead of its batch, on
+ * `credential` (a session, unless a case names a key).
+ */
+const ahead = (token: string, credential = "session"): ReadAheadSide => ({
+  side: "ahead",
+  token,
+  credential,
+});
 
-/** The batch of the load `token` names. */
-const batchOf = (token: string): ReadAheadSide => ({ side: "batch", token });
+/** The batch of the load `token` names, on `credential`. */
+const batchOf = (token: string, credential = "session"): ReadAheadSide => ({
+  side: "batch",
+  token,
+  credential,
+});
+
+/**
+ * A full-access key's scope, granted only `read-<NOTES>`, as authentication
+ * makes it for a key whose maker is a super-admin: carrying that authority, or
+ * lapsed, its bound passed before the scope was made (a role of the maker's
+ * that expired).
+ */
+function keyScope(authority: "holds" | "lapsed"): AuthenticatedScope {
+  return apiKeyScopeFrom({
+    grants: [{ slug: `read-${NOTES}`, action: "read", resource: NOTES }],
+    keyHoldsSuperAdmin: true,
+    ...(authority === "lapsed"
+      ? { keyHoldsSuperAdminUntil: Date.now() - 1 }
+      : {}),
+  });
+}
 
 /**
  * The card's answer for `caller`, as a batch answers it: services bound to
@@ -255,6 +286,71 @@ describe.each(getConfiguredTestDialects())(
         ids: [],
         empty: true,
       });
+    });
+
+    it("reads anew for a batch whose verified claims changed since its layout read, the id and roles the same", async () => {
+      const t = await boot();
+      const id = await superAdminUser(t, "nac-claims");
+      // A claim a rule may decide on, refreshed between the two requests.
+      const before: ReadCaller = { user: { id, tenant: "north" } };
+      const after: ReadCaller = { user: { id, tenant: "south" } };
+      expect((await cardFor(before, ahead("load-claims"))).ids).toEqual([]);
+      await overdueRelease(t);
+
+      // Not handed the digest read for the other claim: read now, so the
+      // release made overdue in between is in it.
+      expect(await cardFor(after, batchOf("load-claims"))).toEqual({
+        ids: ["core/overdue-releases"],
+        empty: false,
+      });
+    });
+
+    it("reads anew for a key whose maker's super-admin authority lapsed since its layout read, its grants the same", async () => {
+      const t = await boot();
+      await overdueRelease(t);
+      const id = await superAdminUser(t, "nac-authority");
+      const holding: ReadCaller = {
+        user: { id },
+        authenticatedScope: keyScope("holds"),
+      };
+      const lapsed: ReadCaller = {
+        user: { id },
+        authenticatedScope: keyScope("lapsed"),
+      };
+      // With the authority, the key reads releases.
+      expect(
+        (await cardFor(holding, ahead("load-lapse", "api-key:k1"))).ids
+      ).toEqual(["core/overdue-releases"]);
+
+      // Its batch, the authority gone: judged on its grant alone, which
+      // reads no release, rather than handed what the authority read.
+      expect(
+        await cardFor(lapsed, batchOf("load-lapse", "api-key:k1"))
+      ).toEqual({ ids: [], empty: true });
+    });
+
+    it("hands a batch the digest once when it asks as the same principal, built anew for its own request", async () => {
+      const t = await boot();
+      const id = await superAdminUser(t, "nac-same");
+      // Each request builds its caller and the key's scope afresh, as
+      // authentication does: equal, never the same objects.
+      const asked = (): ReadCaller => ({
+        user: { id, tenant: "north" },
+        authenticatedScope: keyScope("holds"),
+      });
+      expect(
+        (await cardFor(asked(), ahead("load-same", "api-key:k1"))).ids
+      ).toEqual([]);
+      await overdueRelease(t);
+
+      // The digest the layout read hid the card by, not a read made now.
+      expect(
+        await cardFor(asked(), batchOf("load-same", "api-key:k1"))
+      ).toEqual({ ids: [], empty: true });
+      // Once: the next batch of the load reads anew.
+      expect(
+        await cardFor(asked(), batchOf("load-same", "api-key:k1"))
+      ).toEqual({ ids: ["core/overdue-releases"], empty: false });
     });
 
     it("never hands one reader's read-ahead digest to a caller with other grants", async () => {
