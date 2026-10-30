@@ -1,0 +1,26 @@
+---
+title: MIGRATION_TAMPERED
+description: "A migration recorded as applied has a file that no longer matches its recorded checksum."
+---
+
+## Cause
+
+A migration recorded as applied has a file that no longer matches its recorded checksum.
+
+`nextly migrate` records each migration's checksum when it applies it. A file edited after it ran no longer describes what the database holds, so the run stops before applying anything.
+
+## Fix
+
+- Restore the file as it was when it ran, for example from version control.
+- Put the change you meant to make in a new migration: `nextly migrate:create`.
+
+See [Production migrations](/docs/guides/production-migrations).
+
+## Example
+
+```text
+✗ `20261020_120000_add_posts.sql` has changed since it was applied, so `nextly migrate` ran nothing.
+  Why:  Its checksum no longer matches the one recorded when it ran on this database.
+  Next: Restore the file as it was when it ran, and put the change in a new migration with `nextly migrate:create`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-tampered  (MIGRATION_TAMPERED)
+```

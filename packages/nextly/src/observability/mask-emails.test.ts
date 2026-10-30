@@ -67,6 +67,20 @@ describe("masking addresses in text", () => {
     // masked whole, with no prefix left before the match.
     ['"john.doe"@example.com', "j***@example.com"],
     ['<"john doe"@example.com>', "<j***@example.com>"],
+    // Escaped quotes and backslashes inside a quoted local part.
+    ['"john \\"jd\\" doe"@example.com', "j***@example.com"],
+    ['"a\\\\b"@example.com', "a***@example.com"],
+    [
+      'to "john doe"@example.com and "jane"@example.com',
+      "to j***@example.com and j***@example.com",
+    ],
+    // An escaped quote before an address, which is not part of it.
+    ['say \\" hi to "jane"@example.com', 'say \\" hi to j***@example.com'],
+    // Sixty-four characters or escapes between the quotes, the most a quoted
+    // local part is read for: RFC 5321 caps a whole local part, its quotes
+    // included, at 64 octets.
+    [`"${"x".repeat(64)}"@example.com`, "x***@example.com"],
+    [`"${'x\\"'.repeat(32)}"@example.com`, "x***@example.com"],
     ["customer/department=shipping@example.com", "c***@example.com"],
     ["o'brien@example.com", "o***@example.com"],
     ["a!b#c$d%e&f*g?h^i`j{k|l}m~n@example.com", "a***@example.com"],
@@ -84,6 +98,8 @@ describe("masking addresses in text", () => {
     "no addresses here",
     "http://user@intranet:3000/admin",
     "read arr@[0] first",
+    // A quoted run longer than any local part RFC 5321 allows is not one.
+    `"${"x".repeat(65)}"@example.com`,
   ])("leaves %s unchanged", text => {
     expect(maskEmailsInText(text)).toBe(text);
   });
@@ -115,6 +131,56 @@ describe("the services' fallback console logger", () => {
     const meta = error.mock.calls[0][1] as { cause: Error };
     expect(meta.cause.message).toBe("550 <j***@example.com>: user unknown");
   });
+
+  it("masks a long line at a cost about its length", () => {
+    // Masking is on in production, so this is the cost an attacker's text in
+    // a log line can put on a server. Each unit holds addresses, plain and
+    // quoted, inside long quoted names; then comes one unbroken stretch of
+    // escaped quotes with spaces between them. A quoted local part read from
+    // every quote with no bound would read the stretch from each of its
+    // quotes to its end, and cost its length squared.
+    vi.stubEnv("NODE_ENV", "production");
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const unit = [
+      JSON.stringify({
+        [`${"a ".repeat(150)}display name`]: "jane+orders@example.com",
+        [`${"c ".repeat(150)}reply to`]: "kept",
+      }),
+      JSON.stringify(
+        JSON.stringify({
+          [`${"b ".repeat(150)}sent "to"`]: "carol@example.com",
+        })
+      ).slice(1, -1),
+      '"john \\"jd\\" doe"@example.com',
+    ].join(" ");
+    const line = (units: number) =>
+      `${Array(units).fill(unit).join(" ")} ${'\\" '.repeat(units * 20)}`;
+    /** The fastest of three runs, in milliseconds, and the last line written. */
+    const timed = (text: string): [number, string] => {
+      let best = Infinity;
+      for (let run = 0; run < 3; run++) {
+        const start = performance.now();
+        consoleLogger.info(text);
+        best = Math.min(best, performance.now() - start);
+      }
+      return [best, String(info.mock.lastCall?.[0])];
+    };
+    const [small] = timed(line(500));
+    const big = line(4_000);
+    const [large, out] = timed(big);
+    // The population control: the line is about 4 MB, masking was on, and
+    // every address in it, three to a unit, was found and masked.
+    expect(big.length).toBeGreaterThan(4_000_000);
+    expect(out.split("***@example.com").length - 1).toBe(12_000);
+    expect(out).not.toContain("jane+orders@");
+    expect(out).not.toContain("carol@");
+    expect(out).not.toContain('doe"@');
+    expect(out.split('"kept"').length - 1).toBe(4_000);
+    // Eight times the line costs about eight times as long. The bound is
+    // generous so a busy machine's timing noise can't fail it, while a cost
+    // of the length squared, sixty-four times, still does.
+    expect(large / small).toBeLessThan(20);
+  }, 120_000);
 
   it("writes them whole in development", () => {
     vi.stubEnv("NODE_ENV", "development");

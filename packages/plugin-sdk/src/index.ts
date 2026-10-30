@@ -40,9 +40,15 @@ export { defineWidget } from "nextly";
  * `sort`, `groupBy` and `fields`. `option` is the collections' own.
  */
 export { option, setting } from "nextly";
+/**
+ * @experimental `SettingEditorProps`: what a setting's own editor is handed,
+ * the component its `editor: { component }` names, drawn in the card's
+ * settings sheet in place of the setting's own field.
+ */
 export type {
   CoreView,
   GridSize,
+  SettingEditorProps,
   WidgetAccess,
   WidgetAccessGate,
   WidgetData,

@@ -1,0 +1,24 @@
+---
+title: SETUP_ALREADY_COMPLETE
+description: "This install already has an administrator, so setup is complete and the command changed nothing."
+---
+
+## Cause
+
+This install already has an administrator, so setup is complete and the command changed nothing.
+
+Setup creates the first administrator, and ends once one exists. A setup token opens only setup, and `nextly users:create-admin` creates only the first administrator, so neither has anything left to do.
+
+## Fix
+
+- Sign in to the admin as an existing administrator.
+- Add other accounts from the admin's Users page.
+
+## Example
+
+```text
+✗ Setup is already complete: this install has an administrator. Nothing was created.
+  Why:  Only the first administrator is created here, and this install has one.
+  Next: Sign in as that administrator, and add other accounts from the admin.
+  Docs: https://nextlyhq.com/docs/cli/errors/setup-already-complete  (SETUP_ALREADY_COMPLETE)
+```

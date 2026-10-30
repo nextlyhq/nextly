@@ -1,0 +1,24 @@
+---
+title: PROJECT_ALREADY_INITIALIZED
+description: "The folder already has a `nextly.config.ts`, so `nextly init` did not overwrite it."
+---
+
+## Cause
+
+The folder already has a `nextly.config.ts`, so `nextly init` did not overwrite it.
+
+`nextly init` writes `nextly.config.ts` and the folders beside it. It stops rather than overwrite a configuration that is already there, which may hold your collections.
+
+## Fix
+
+- Keep the existing configuration: the project is already set up, and `nextly init` has nothing to add.
+- To start again from the defaults, run `nextly init --force`. It overwrites `nextly.config.ts`, so commit or copy the file first.
+
+## Example
+
+```text
+✗ Nextly is already initialized in this directory.
+  Why:  /home/you/app/nextly.config.ts already exists.
+  Next: Use `--force` to overwrite the existing configuration.
+  Docs: https://nextlyhq.com/docs/cli/errors/project-already-initialized  (PROJECT_ALREADY_INITIALIZED)
+```

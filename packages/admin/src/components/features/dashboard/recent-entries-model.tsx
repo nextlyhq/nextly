@@ -1,6 +1,6 @@
 /**
- * What a Recent entries card draws from its rows: the field naming each row, where each row
- * links, and the fields beside it (when it was updated, and its status).
+ * What a Recent entries card draws from its rows: where each row links, and the fields beside its
+ * title (when it was updated, and its status).
  *
  * Kept apart from the component so the reading is tested without rendering.
  */
@@ -13,35 +13,16 @@ import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 import { asPresentedText } from "../widgets/archetypes/cell-text";
 import { presentedCell } from "../widgets/archetypes/presented-cell";
 import type { ListField, ListModel } from "../widgets/frame/list-card";
-import { collectionSlugOf } from "../widgets/frame/list-view-href";
 import { LeadingChip, StatusPill } from "../widgets/frame/row-parts";
-
-/** The query a Recent entries card asked, as far as its rows are read by it. */
-export interface RecentEntriesQuery {
-  source?: string;
-  select?: string[];
-}
-
-/**
- * The field that names each row: the first one the card asked for, which is the collection's
- * title field (the titled Collection setting asks it first). `undefined` for a card that asked
- * for none.
- */
-export function rowLabelField(
-  query: RecentEntriesQuery | undefined
-): string | undefined {
-  return query?.select?.[0];
-}
 
 /**
  * Where a row links: its entry's edit page in the collection the card reads. `undefined` for a
- * row with no id, or a card not reading one collection.
+ * row with no id, or a card set to no collection.
  */
 function entryHref(
-  query: RecentEntriesQuery | undefined,
+  slug: string | undefined,
   item: Record<string, unknown>
 ): string | undefined {
-  const slug = collectionSlugOf(query?.source);
   const id = item.id;
   if (slug === undefined) return undefined;
   if (typeof id !== "string" && typeof id !== "number") return undefined;
@@ -62,7 +43,8 @@ function entryHref(
  * entries leads with.
  */
 export function recentEntriesModel(
-  query: RecentEntriesQuery | undefined,
+  /** The collection the card reads, by its slug. */
+  slug: string | undefined,
   label: string,
   columns: readonly WidgetResultField[],
   now: number,
@@ -71,13 +53,12 @@ export function recentEntriesModel(
   lifecycle: boolean
 ): ListModel<Record<string, unknown>> {
   const title = columns.find(column => column.name === label);
-  const slug = collectionSlugOf(query?.source);
   const initial =
     slug === undefined ? undefined : labelOf(slug).charAt(0).toUpperCase();
   return {
     titleLabel: fieldLabel({ name: label, label: title?.label }),
     titleOf: item => asPresentedText(item[label], title) ?? "—",
-    hrefOf: item => entryHref(query, item),
+    hrefOf: item => entryHref(slug, item),
     ...(initial === undefined
       ? {}
       : { leadingOf: () => <LeadingChip>{initial}</LeadingChip> }),

@@ -96,7 +96,8 @@ describe("checkCollectionAccess with no user", () => {
         user: undefined,
       });
 
-      expect(result?.statusCode, operation).toBe(403);
+      // A caller with no identity is asked to sign in (401).
+      expect(result?.statusCode, operation).toBe(401);
       expect(result?.refusalReason, operation).toBe(
         `${operation} on posts requires an authenticated user`
       );
@@ -133,7 +134,8 @@ describe("checkCollectionAccess with no user", () => {
       user: undefined,
     });
 
-    expect(result?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(result?.statusCode).toBe(401);
     expect(result?.refusalReason).toBe(
       "create on posts requires an authenticated user"
     );
@@ -208,7 +210,8 @@ describe("checkCollectionAccess with no user", () => {
     });
 
     expect(result?.success).toBe(false);
-    expect(result?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(result?.statusCode).toBe(401);
     // Decided without looking any caller up.
     expect(fakeActorForUser).not.toHaveBeenCalled();
     expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
@@ -229,7 +232,8 @@ describe("checkCollectionAccess with no user", () => {
 
     expect(rule).not.toHaveBeenCalled();
     expect(result?.success).toBe(false);
-    expect(result?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(result?.statusCode).toBe(401);
   });
 
   it("refuses unpublish with no user", async () => {
@@ -242,6 +246,7 @@ describe("checkCollectionAccess with no user", () => {
     });
 
     expect(result?.success).toBe(false);
-    expect(result?.statusCode).toBe(403);
+    // A caller with no identity is asked to sign in (401).
+    expect(result?.statusCode).toBe(401);
   });
 });
