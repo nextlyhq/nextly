@@ -43,6 +43,7 @@ import {
   withRuleLanguage,
   writeLanguagesFor,
 } from "../../../auth/access/rule-language";
+import { userHoldsPermission } from "../../../auth/access/resolve-actor";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
@@ -12005,28 +12006,27 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The refusal of a delete that no configured language allows, or `null`:
-   * asked once in each, told that one alone, before an entry's languages are
-   * read. A caller without the delete grant is refused in every language, so
-   * it is refused before any of that work, whatever that work would meet. A
-   * rule allowing some language passes here, and the delete is then judged
-   * in its entry's own languages. `null` on a site that keeps no languages,
-   * whose delete is asked once by the gate itself.
+   * The refusal of a delete by a signed-in user who does not hold the delete
+   * grant, or `null`: the grant alone, read before anything about the
+   * entries' languages is, and no rule asked. A user without it is refused
+   * whatever the rule says, so the gate's own refusal answers, and none of
+   * the language reads runs for them. A key and a visitor, whose grants are
+   * read with their rule, and a caller the route already judged, are judged
+   * by the gate as before.
    */
-  private async deleteRefusedInEveryLanguage(
+  private async deleteGrantRefusal(
     gate: Parameters<CollectionAccessService["checkCollectionWrite"]>[0]
   ): Promise<CollectionServiceResult | null> {
-    const configured =
-      this.localization?.locales.map(locale => locale.code) ?? [];
-    let first: CollectionServiceResult | null = null;
-    for (const locale of configured) {
-      const access = await withRuleLanguage({ locale, locales: [locale] }, () =>
-        this.accessService.checkCollectionWrite(gate)
-      );
-      if (!access.denied) return null;
-      first ??= access.denied;
-    }
-    return first;
+    if (gate.overrideAccess || gate.routeAuthorized || !gate.user) return null;
+    if (gate.authenticatedScope?.actorType === "apiKey") return null;
+    const holds = await userHoldsPermission(
+      gate.user.id,
+      "delete",
+      gate.collectionName,
+      gate.executor === undefined ? {} : { executor: gate.executor }
+    );
+    if (holds) return null;
+    return (await this.accessService.checkCollectionWrite(gate)).denied;
   }
 
   /**
@@ -12158,8 +12158,8 @@ export class CollectionMutationService extends BaseService {
     ids: readonly string[],
     tx?: TransactionContext
   ): Promise<DeleteGateAnswer | DeleteRowLanguages> {
-    const refusedEverywhere = await this.deleteRefusedInEveryLanguage(gate);
-    if (refusedEverywhere) return { denied: refusedEverywhere };
+    const withoutGrant = await this.deleteGrantRefusal(gate);
+    if (withoutGrant) return { denied: withoutGrant };
     const collection = await this.collectionService.getCollection(
       gate.collectionName,
       tx?.getDrizzle()
@@ -12235,6 +12235,12 @@ export class CollectionMutationService extends BaseService {
     const { rowGate } = args;
     if (typeof rowGate === "object" && !("bySet" in rowGate)) {
       return this.deleteRowRefusalIn(tx, args, rowGate, undefined);
+    }
+    // Asked here, a caller without the delete grant is refused before the
+    // row is locked or its languages read.
+    if (rowGate === "access-service") {
+      const withoutGrant = await this.deleteGrantRefusal(args.accessParams);
+      if (withoutGrant) return withoutGrant;
     }
     await tx.lockRow(args.tableName, args.entryId);
     const held = await this.languagesToDelete({
@@ -13252,11 +13258,10 @@ export class CollectionMutationService extends BaseService {
           collection.fields ||
           []) as FieldConfig[],
       };
-      // A caller no language allows the delete is refused before anything
-      // about the entry's languages is read.
-      const refusedEverywhere =
-        await this.deleteRefusedInEveryLanguage(accessParams);
-      if (refusedEverywhere) return refusedEverywhere;
+      // A caller without the delete grant is refused before anything about
+      // the entry's languages is read.
+      const withoutGrant = await this.deleteGrantRefusal(accessParams);
+      if (withoutGrant) return withoutGrant;
       // The companion is read for the entry's languages, so it is ready first.
       await this.warmLocalizedReadiness(params.collectionName);
       const askedLanguages = await this.languagesToDelete(deleteLanguages);

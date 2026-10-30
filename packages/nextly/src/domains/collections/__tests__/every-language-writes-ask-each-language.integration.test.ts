@@ -27,6 +27,7 @@ import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { defineCollection, text } from "../../../config";
+import { forgetCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
@@ -55,6 +56,8 @@ const DRAFTED = "eachlang_drafted";
 const DRAFTED_NOT_FRENCH = "eachlang_drafted_not_french";
 // Refusing German, on entries only their owner may read.
 const HIDDEN = "eachlang_hidden";
+// A delete rule that reads the whole set of languages it is told.
+const BOTH_TOLD = "eachlang_both_told";
 
 const AUTHOR = "eachlang-author";
 const OTHER = "eachlang-other";
@@ -67,6 +70,7 @@ const SLUGS = [
   DRAFTED,
   DRAFTED_NOT_FRENCH,
   HIDDEN,
+  BOTH_TOLD,
 ];
 
 let current: TestNextly | undefined;
@@ -103,6 +107,10 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       collection(NOT_GERMAN, notIn("de")),
       collection(NOT_ENGLISH, notIn("en")),
       collection(ANY_LANGUAGE, () => true),
+      collection(
+        BOTH_TOLD,
+        (context: AccessControlContext) => (context.locales ?? []).length === 2
+      ),
       defineCollection({
         slug: DRAFTED,
         localized: true,
@@ -390,6 +398,46 @@ describe.each(getConfiguredTestDialects())(
         );
         vi.restoreAllMocks();
         expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
+      });
+
+      it("is refused in a transaction by its grant, not by a translation table not yet known", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, ANY_LANGUAGE);
+        const READER = "eachlang-reader";
+        await userWhoMay(t, READER, "read", [ANY_LANGUAGE]);
+        forgetCompanionReadiness(t.adapter);
+
+        const status = await t.adapter.transaction(tx =>
+          entriesOf(t)
+            .deleteEntryInTransaction(tx, {
+              collectionName: ANY_LANGUAGE,
+              entryId: withGerman,
+              user: { id: READER },
+              overrideAccess: false,
+            } as never)
+            .then((result: { statusCode?: number }) => result.statusCode)
+        );
+
+        expect(status).toBe(403);
+        expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
+      });
+    });
+
+    describe("a rule reading the whole set of languages", () => {
+      it("deletes an entry holding both languages where the rule wants both told together", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, BOTH_TOLD);
+
+        expect(
+          await refused(() =>
+            t.nextly.delete({
+              collection: BOTH_TOLD,
+              id: withGerman,
+              ...asAuthor,
+            })
+          )
+        ).toBe(false);
+        expect(await stillThere(t, BOTH_TOLD, withGerman)).toBe(false);
       });
     });
 
