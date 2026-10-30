@@ -21,6 +21,10 @@ import {
   renameEntity,
 } from "../../entity-rename/rename-entity";
 import {
+  deletedEntityIntent,
+  flushContentChange,
+} from "../../flush-content-change";
+import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
@@ -642,11 +646,22 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
+    // The setting the row holds, read from the table rather than the row
+    // cache, for the expiry below.
+    const [row] = await this.db
+      .select({ revalidate: this.dynamicCollections.revalidate })
+      .from(this.dynamicCollections)
+      .where(eq(this.dynamicCollections.slug, slug))
+      .limit(1);
     // Cleared once the delete has run, as after an insert.
+    let removed = 0;
     try {
-      await this.db
-        .delete(this.dynamicCollections)
-        .where(eq(this.dynamicCollections.slug, slug));
+      removed = affectedRowCount(
+        await this.db
+          .delete(this.dynamicCollections)
+          .where(eq(this.dynamicCollections.slug, slug)),
+        this.dialect
+      );
     } finally {
       clearRegistryRowCache();
     }
@@ -656,5 +671,16 @@ export class DynamicCollectionRegistryService extends BaseService {
     // must start from the recording default rather than inherit a suppression
     // whose row no longer exists.
     clearWebhookRecording("collection", slug);
+
+    // Every cached read of it now describes rows that are gone. Only when this
+    // call removed the row, with the setting it held: a repeated delete finds
+    // nothing and expires nothing.
+    if (removed > 0 && row !== undefined) {
+      await flushContentChange(
+        deletedEntityIntent("collection", slug, row.revalidate),
+        this.logger,
+        "a collection was deleted"
+      );
+    }
   }
 }
