@@ -32,18 +32,24 @@ describe("@nextlyhq/plugin-sdk", () => {
   });
 });
 
-describe("the dashboard widget surface is reachable from the SDK", () => {
-  // AGENTS.md: a plugin imports only from `@nextlyhq/plugin-sdk` and
-  // `@nextlyhq/ui`, never from core. The widget registry and the source
-  // registry were exported from the `nextly` root alone, so an author
-  // following that rule could not register a widget at all. Asserted through
-  // the SDK's own entry point, for the same reason the `NextlyError` case
-  // above is: importing from core would pass while the stable surface stayed
-  // empty.
-  it("re-exports the registration functions as callable values", async () => {
-    const sdk = await import("./index");
-    expect(typeof sdk.registerWidget).toBe("function");
-    expect(typeof sdk.registerSource).toBe("function");
+describe("the dashboard widget surface the SDK publishes", () => {
+  // A plugin adds a widget one way: `defineWidget`, under
+  // `contributes.dashboard`. Asserted through the SDK's own entry point, for
+  // the same reason the `NextlyError` case above is: a plugin imports only
+  // from here.
+  it("publishes defineWidget and no call that adds, changes or removes a widget or a source", async () => {
+    const sdk = (await import("./index")) as Record<string, unknown>;
+    // The control, in the same read: the module loaded and holds the one door,
+    // so the absences below are not an entry point that exports nothing.
+    expect(typeof sdk.defineWidget).toBe("function");
+    const doors = [
+      "registerWidget",
+      "overrideWidget",
+      "extendWidget",
+      "deregisterWidget",
+      "registerSource",
+    ];
+    expect(doors.filter(name => name in sdk)).toEqual([]);
   });
 
   it("re-exports the vocabularies a declaration is checked against", async () => {

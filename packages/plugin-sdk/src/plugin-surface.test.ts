@@ -130,6 +130,36 @@ describe("plugin-sdk public export surface", () => {
     expect(exportedNames("testing/admin.ts")).toMatchSnapshot();
   });
 
+  it("publishes no other way to add, change or remove a widget or a source", () => {
+    // Held by name as well as by the snapshots, because a snapshot is updated
+    // with one flag: a widget reaches the dashboard only through
+    // `contributes.dashboard`, declared with `defineWidget`, and none of these
+    // may come back on any published subpath, as a value or as a type.
+    const removed = new Set([
+      "registerWidget",
+      "overrideWidget",
+      "extendWidget",
+      "deregisterWidget",
+      "registerSource",
+      "PluginWidgetSource",
+      "PluginSourceResolver",
+      "PluginManySourceResolver",
+    ]);
+    const published = PUBLISHED_FILES.flatMap(file =>
+      exportedNames(file).map(entry => ({
+        file,
+        name: entry.replace(/ \((?:value|type)\)$/, ""),
+      }))
+    );
+    // The control: the same read finds the one door, so an extractor that
+    // read nothing cannot pass the absence below.
+    expect(published).toContainEqual({
+      file: "index.ts",
+      name: "defineWidget",
+    });
+    expect(published.filter(({ name }) => removed.has(name))).toEqual([]);
+  });
+
   it("snapshots every subpath the package publishes", () => {
     // A subpath added to `exports` without a snapshot here fails this, so
     // the surface it publishes is reviewed like every other one.
