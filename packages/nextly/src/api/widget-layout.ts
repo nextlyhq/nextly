@@ -58,10 +58,12 @@ import {
   withoutDormantCard,
 } from "../domains/widgets/get-started-card";
 import { GET_STARTED_WIDGET_ID } from "../domains/widgets/get-started-steps";
+import { sizeWithinBounds } from "../domains/widgets/grid-size";
 import {
   LAYOUT_SCHEMA_VERSION,
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
+  chosenSizeIds,
   dismissalsApplied,
   layoutIsArranged,
   resolvePlacementIds,
@@ -150,12 +152,22 @@ type LayoutSource = "own" | "default" | "unreadable";
  * the cards a caller may see and the ones they may not keep one order between
  * them, and two people's defaults differ only by the cards each may not see.
  *
- * A row nobody arranged contributes its removals and nothing else, applied to
- * the WHOLE materialization, so a card this caller cannot see keeps the
- * removal it was given, and comes back removed the day they can.
+ * A row nobody arranged contributes its choices about the default's cards
+ * (removals, settings, and the sizes the reader chose, each held to its
+ * widget's bounds) and nothing else, applied to the WHOLE materialization, so a
+ * card this caller cannot see keeps the removal it was given, and comes back
+ * removed the day they can.
  */
 function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
-  return dismissalsApplied(defaultLayoutPlacements(allWidgets()), unarranged);
+  const widgets = allWidgets();
+  const bounds = new Map(
+    widgets.map(widget => [widget.id, sizeFacts(widget).size])
+  );
+  return dismissalsApplied(
+    defaultLayoutPlacements(widgets),
+    unarranged,
+    widgetId => bounds.get(widgetId)
+  );
 }
 
 /**
@@ -1039,6 +1051,38 @@ function refuseExtraCards(
 }
 
 /**
+ * The cards of an unarranged write whose size the reader chose, refusing one whose chosen size
+ * lies outside its widget's bounds: a size chosen outside customise mode is one the card menu
+ * offered, inside them, and is judged in the write that stores it.
+ */
+function chosenSizesWithinBounds(
+  saved: readonly WidgetPlacement[],
+  submitted: readonly WidgetPlacement[],
+  sizes: Readonly<Record<string, WidgetSizeFacts>>
+): string[] {
+  const chosen = chosenSizeIds(defaultLayoutPlacements(allWidgets()), saved);
+  const own = new Map(submitted.map(placement => [placement.id, placement]));
+  for (const id of chosen) {
+    const placement = own.get(id);
+    const bounds =
+      placement === undefined ? undefined : sizes[placement.widgetId]?.size;
+    if (placement === undefined || bounds === undefined) continue;
+    if (!sizeWithinBounds({ w: placement.w, h: placement.h }, bounds)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "placements",
+            code: "INVALID_VALUE",
+            message: `"${placement.widgetId}" cannot be ${placement.w} by ${placement.h}.`,
+          },
+        ],
+      });
+    }
+  }
+  return chosen;
+}
+
+/**
  * Refuses a write that would replace an arrangement the server could not read,
  * unless the person confirmed exactly that.
  *
@@ -1176,12 +1220,18 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     carriedUnlessSubmitted(submitted, view.visibleIds),
     withheldFrom(stored.layout, view, notShown)
   );
+  // A row that still follows the default keeps only the sizes its reader chose; an arranged
+  // row's sizes are all theirs.
+  const sized = arranged
+    ? []
+    : chosenSizesWithinBounds(saved, submitted, sizesOf(view.widgets));
   const version = await service.saveLayout(
     SCOPE_KIND,
     view.caller.userId,
     saved,
     expectedVersion,
-    arranged
+    arranged,
+    sized
   );
 
   // `respondMutation`, not `respondData`: every write in this package answers
@@ -1207,6 +1257,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
                 schemaVersion: LAYOUT_SCHEMA_VERSION,
                 placements: saved,
                 unarranged: true,
+                ...(sized.length === 0 ? {} : { sized }),
               },
               req.signal
             )

@@ -607,8 +607,11 @@ export function widgetSettingsProblems(settings: unknown): string[] {
   ];
 }
 
-/** The most settings one widget may mark quick: what a card's quick popover holds. */
-const MAX_QUICK_SETTINGS = 3;
+/**
+ * The most settings one widget may mark quick: what a card's quick popover holds of them, beside
+ * the card's Collection. The admin's popover caps at this same number.
+ */
+export const MAX_QUICK_SETTINGS = 3;
 
 /**
  * Why a widget's settings mark too many as quick, or nothing when they do not.
