@@ -61,6 +61,7 @@ import type { WidgetDefinition } from "../definition";
 
 import { breakdownWidget } from "./breakdown";
 import { contentWidget } from "./content";
+import { continueWidget } from "./continue";
 import { countWidget } from "./count";
 import { getStartedWidget } from "./get-started";
 import { needsAttentionWidget } from "./needs-attention";
@@ -69,7 +70,6 @@ import { overTimeWidget } from "./over-time";
 import { quickCreateWidget } from "./quick-create";
 import { recentActivityWidget } from "./recent-activity";
 import { recentEntriesWidget } from "./recent-entries";
-import { recentlyEditedWidget } from "./recently-edited";
 import { teamWidget } from "./team";
 import { upcomingReleasesWidget } from "./upcoming-releases";
 
@@ -94,7 +94,7 @@ const CORE_WIDGET_LITERALS = [
   quickCreateWidget,
   teamWidget,
   needsAttentionWidget,
-  recentlyEditedWidget,
+  continueWidget,
   upcomingReleasesWidget,
   recentActivityWidget,
 ] as const satisfies readonly WidgetDefinition[];

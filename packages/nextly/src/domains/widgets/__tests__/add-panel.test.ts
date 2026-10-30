@@ -28,7 +28,7 @@ describe("the group each widget is listed in", () => {
       "core/quick-create": "overview",
       "core/team": "team",
       "core/needs-attention": "overview",
-      "core/recently-edited": "overview",
+      "core/continue": "overview",
       "core/upcoming-releases": "overview",
       "core/recent-activity": "team",
       // Offered per collection, inside each collection's part of Content.
@@ -73,7 +73,7 @@ describe("the group each widget is listed in", () => {
   it("carries the description and the sketch kind", () => {
     expect(
       addPanelFacts({
-        id: "core/recently-edited",
+        id: "core/continue",
         description: "The documents most recently left with unpublished edits.",
         archetype: "list",
       })
@@ -103,7 +103,7 @@ describe("the order the panel lists widgets in", () => {
       core("site/zeta"),
       core("core/team"),
       core("site/alpha"),
-      core("core/recently-edited"),
+      core("core/continue"),
       core("core/quick-create"),
       { id: "seo/issues", plugin: "@acme/seo" },
       { id: "forms/totals", plugin: "@acme/forms" },
@@ -112,7 +112,7 @@ describe("the order the panel lists widgets in", () => {
     expect(listed).toEqual([
       // Overview: built-ins in core's own order, whatever order they came in.
       "core/quick-create",
-      "core/recently-edited",
+      "core/continue",
       // Then the site's own, in the order they were declared.
       "site/zeta",
       "site/alpha",

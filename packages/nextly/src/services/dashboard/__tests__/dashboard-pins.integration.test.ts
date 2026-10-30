@@ -3,7 +3,9 @@
  * different rights.
  *
  * What only a database can settle: that pins are kept per reader and one per
- * target; that a 21st is refused while a re-pin at 20 is not; that a pin its
+ * target; that a 21st is refused while a re-pin at 20 is not, and two pins
+ * written at once at 19 keep exactly 20; that a pin whose target is gone costs
+ * nothing and is removed by a read; that a pin its
  * reader may no longer read is hidden and kept, and shown again when access
  * returns; that deleting an entry, several entries or a Single takes every
  * reader's pins of it, and no others, also inside a transaction the caller
@@ -276,6 +278,70 @@ describe.each(getConfiguredTestDialects())(
       expect((result.data as { deleted?: boolean } | null)?.deleted).toBe(true);
       expect(await stored(t)).toEqual([]);
     }, 60_000);
+
+    it("counts toward the limit only pins whose target still exists, and a read removes the rest", async () => {
+      const t = await boot();
+      const ben = as(await userWhoMay(t, "pn-ben", "read", [NOTES]));
+      const ids: string[] = [];
+      for (let i = 0; i <= MAX_PINS_PER_READER; i++) {
+        ids.push(await note(t, `Note ${i}`));
+      }
+      const pins = dashboardPinsService();
+      for (const id of ids.slice(0, MAX_PINS_PER_READER)) {
+        await pins.pin(ben, entry(id));
+      }
+      // One target removed behind the delete path's back, as a delete racing
+      // the pin would leave it: its pin is an orphan, still stored.
+      const notes = await t
+        .getService("collectionRegistryService")
+        .getCollectionBySlug(NOTES);
+      await t.adapter.delete(notes!.tableName, {
+        and: [{ column: "id", op: "=", value: ids[0]! }],
+      });
+      expect(await stored(t)).toHaveLength(MAX_PINS_PER_READER);
+
+      // 🔴 The orphan costs nothing: the 21st target pins.
+      await expect(
+        pins.pin(ben, entry(ids[MAX_PINS_PER_READER]!))
+      ).resolves.toBeUndefined();
+      expect(await stored(t)).not.toContain(`pn-ben:${NOTES}/${ids[0]}`);
+      expect(await stored(t)).toHaveLength(MAX_PINS_PER_READER);
+
+      // A pin he may not read now is not an orphan: a read keeps it.
+      refused.add("pn-ben");
+      expect(await pins.list(ben)).toEqual([]);
+      expect(await stored(t)).toHaveLength(MAX_PINS_PER_READER);
+    });
+
+    it("keeps exactly the limit when two pins at one under it are written at once", async () => {
+      const t = await boot();
+      const ana = as(await superAdminUser(t, "pn-ana"));
+      const ids: string[] = [];
+      for (let i = 0; i <= MAX_PINS_PER_READER; i++) {
+        ids.push(await note(t, `Note ${i}`));
+      }
+      const pins = dashboardPinsService();
+      for (const id of ids.slice(0, MAX_PINS_PER_READER - 1)) {
+        await pins.pin(ana, entry(id));
+      }
+
+      // 🔴 Started together: each counts 19 unless the count and the insert
+      // are one step, and then both insert and the reader keeps 21.
+      const results = await Promise.allSettled([
+        pins.pin(ana, entry(ids[MAX_PINS_PER_READER - 1]!)),
+        pins.pin(ana, entry(ids[MAX_PINS_PER_READER]!)),
+      ]);
+
+      expect(results.map(result => result.status).sort()).toEqual([
+        "fulfilled",
+        "rejected",
+      ]);
+      const refusal = results.find(result => result.status === "rejected");
+      expect(
+        ((refusal as PromiseRejectedResult).reason as Error).message
+      ).toContain(`at most ${MAX_PINS_PER_READER}`);
+      expect(await stored(t)).toHaveLength(MAX_PINS_PER_READER);
+    });
 
     it("before nextly migrate: no pins, a pin refused naming the command, and a delete still succeeds", async () => {
       const t = await boot();

@@ -93,8 +93,8 @@ export function isStatusOnlyChange(metadata: unknown): boolean {
 
 /**
  * Whether the row is a save of the document's content by whoever wrote it, the
- * row Recently edited names as the document's latest save, rather than only a
- * change to whether it is live.
+ * row Continue where you left off names as the document's latest save, rather
+ * than only a change to whether it is live.
  *
  * - A create is a save.
  * - A publish or an unpublish on its own is not, so it never takes the row of

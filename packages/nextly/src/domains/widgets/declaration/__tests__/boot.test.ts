@@ -78,7 +78,7 @@ describe("startup with plugins that declare widgets", () => {
     expect(published).not.toHaveProperty("query");
     expect(published).not.toHaveProperty("data");
     expect(widgetSource("acme/orders-by-state")).toBe('plugin "@acme/shop"');
-    expect(getWidget("core/recently-edited")).toBeDefined();
+    expect(getWidget("core/continue")).toBeDefined();
   });
 
   it("withdraws what a declaration published when the declarations are cleared, and nothing else", () => {
@@ -87,7 +87,7 @@ describe("startup with plugins that declare widgets", () => {
     clearDeclaredWidgets();
     expect(getWidget("acme/orders-by-state")).toBeUndefined();
     // Core's own cards were never a declaration's, so they stay.
-    expect(getWidget("core/recently-edited")).toBeDefined();
+    expect(getWidget("core/continue")).toBeDefined();
     // And the same declarations can be made again.
     expect(() =>
       resetWidgetRegistries([plugin("@acme/shop", { dashboard })])
