@@ -4,8 +4,9 @@
  *
  * The run performs each member at its instant as the member's recorded
  * author, through the ordinary content write: the access gate that write
- * meets (`checkCollectionAccess` / `checkSingleAccess`, for `update` and then
- * the lifecycle action), and the validation it makes of what goes live. So
+ * meets (the lifecycle action alone, its rule's filter matched against the
+ * document where the rule answers one), and the validation it makes of what
+ * goes live. So
  * these resolve the author the way the run does (`resolveRunAs`) and ask
  * those same two things, rather than a permission lookup of their own that
  * could pass a member the run then refuses.
@@ -16,9 +17,9 @@
  *
  * @module di/registrations/release-document-checks
  */
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { runDetachedFromRequest } from "../../auth/caller-scope";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
-import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { collectionTableName } from "../../domains/collections/services/collection-utils";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import type { ReleaseCheckScope } from "../../domains/releases/readiness/check-sources";
@@ -54,9 +55,9 @@ export function releaseDocumentChecks(
     },
     // Detached from the request: a read-only evaluation of a NAMED identity,
     // the author, whom the release's run acts as on nobody's request.
-    mayPerform: (user, scope, action) =>
+    mayPerform: (user, scope, action, entryIds) =>
       runDetachedFromRequest(() =>
-        authorMayPerform(adapter, logger, user, scope, action)
+        entriesMayAct(logger, { user, scope, action, entryIds })
       ),
     existing: refs => existingDocuments(adapter, logger, refs),
     // A Single's translations take another path, with no such refusal to
@@ -137,42 +138,51 @@ function singleEntries(): SingleEntryService {
 }
 
 /**
- * Whether the author passes the gate the run's write meets: the lifecycle
- * action itself, since the run writes the status alone, which is judged by
- * that action and not update; never as route-authorized, since no route
- * stands in front of the run.
+ * Which of `entryIds` in `scope` may be acted on with `action`, through the
+ * gate the run's write meets: the lifecycle action itself, since the run
+ * writes the status alone, which is judged by that action and not update;
+ * never as route-authorized, since no route stands in front of the run.
+ *
+ * Asked of `user`, and of `authenticatedScope` where a key adds the document:
+ * a key is judged by its own grants and rules. Where a collection's rule for
+ * the action answers a filter, only the entries it matches, and the asker
+ * may read, are answered; an entry the asker may not read is left out as one
+ * that is gone is. A Single's rule cannot answer a filter here: its gate
+ * answers for every entry or none.
  */
-async function authorMayPerform(
-  adapter: Adapter,
+export async function entriesMayAct(
   logger: Logger,
-  user: Author,
-  scope: ReleaseCheckScope,
-  action: ReleaseMemberAction
-): Promise<boolean> {
-  const rbac = rbacService();
-  const denied =
-    scope.scopeKind === "single"
-      ? await checkSingleAccess({
-          slug: scope.scopeSlug,
-          operation: action,
-          user,
-          overrideAccess: false,
-          routeAuthorized: false,
-          rbacAccessControlService: rbac,
-          logger,
-        })
-      : await new CollectionAccessService(
-          adapter,
-          logger,
-          rbac
-        ).checkCollectionAccess({
-          collectionName: scope.scopeSlug,
-          operation: action,
-          user,
-          overrideAccess: false,
-          routeAuthorized: false,
-        });
-  return denied === null;
+  asked: {
+    user: Author;
+    scope: ReleaseCheckScope;
+    action: ReleaseMemberAction;
+    entryIds: readonly string[];
+    authenticatedScope?: AuthenticatedScope;
+  }
+): Promise<ReadonlySet<string>> {
+  const { user, scope, action, entryIds, authenticatedScope } = asked;
+  const keyed = authenticatedScope ? { authenticatedScope } : {};
+  if (scope.scopeKind !== "single") {
+    const judged = await collections().entriesWithinWriteFilter({
+      collectionName: scope.scopeSlug,
+      action,
+      entryIds,
+      user,
+      ...keyed,
+    });
+    return "within" in judged ? judged.within : new Set();
+  }
+  const denied = await checkSingleAccess({
+    slug: scope.scopeSlug,
+    operation: action,
+    user,
+    overrideAccess: false,
+    routeAuthorized: false,
+    rbacAccessControlService: rbacService(),
+    logger,
+    ...keyed,
+  });
+  return denied === null ? new Set(entryIds) : new Set();
 }
 
 /**
