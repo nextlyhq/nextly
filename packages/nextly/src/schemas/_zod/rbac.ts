@@ -196,6 +196,11 @@ export const RoleSchema = z.object({
    * is never filled in as `true`.
    */
   assignable: z.boolean().optional(),
+  /**
+   * Which built-in role it is, where it is one: the Public role or
+   * super-admin, as the roles API sends it. Absent on every other role.
+   */
+  builtIn: z.enum(["public", "super-admin"]).optional(),
   createdAt: z.date().optional(),
   updatedAt: z.date().optional(),
 });
