@@ -26,7 +26,8 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { describeError, NextlyError } from "../../../errors";
-import { newestEvent } from "../events/newest-event";
+import { isPluginLedgerRow } from "../events/ledger-scope";
+import { standingOf } from "../events/migration-state";
 import {
   truncateErrorMessage,
   type SchemaEventRow,
@@ -181,12 +182,7 @@ export async function recordAlreadyApplied(
   repo: Pick<ReconcileRepo, "recordStart" | "markApplied" | "supersede">,
   supersedable: readonly string[] = []
 ): Promise<void> {
-  const id = await repo.recordStart({
-    eventType: "file_apply",
-    source: "cli-migrate",
-    filename: file.filename,
-    sha256: file.sha256 ?? null,
-  });
+  const id = await repo.recordStart(attemptStart(file));
   await markAppliedOrRefuse(repo, id, {
     filename: file.filename,
     statementsExecuted: 0,
@@ -242,7 +238,7 @@ export function isConcurrentRun(error: unknown): boolean {
  * inside a transaction the throw rolls back the work the row records instead
  * of committing it beside the other run's.
  */
-export async function markAppliedOrRefuse(
+async function markAppliedOrRefuse(
   repo: Pick<ReconcileRepo, "markApplied">,
   id: string,
   args: { filename: string; statementsExecuted: number; partial: boolean }
@@ -269,7 +265,7 @@ export async function markAppliedOrRefuse(
  * stayed, is recorded failed, so `nextly migrate` stops on it
  * (`assertNotPartiallyApplied`) until the operator has looked.
  */
-export async function recordAttemptFailed(
+async function recordAttemptFailed(
   repo: Pick<ReconcileRepo, "markFailed" | "discardAttempt">,
   id: string,
   error: unknown,
@@ -312,6 +308,10 @@ const PARTIAL_REFUSALS = {
  * and on MySQL inside one too, because MySQL commits each schema statement as
  * it runs. On PostgreSQL and SQLite a failed attempt in a transaction was
  * undone whole. `assertNotPartiallyApplied` explains each case.
+ *
+ * The one predicate for where an attempt can stop with part of it kept, so it
+ * also decides where an app file's attempt is recorded durably before its
+ * first statement (`startRecordedFirst`).
  */
 export function failedAttemptMayBePartial(
   file: { transaction?: boolean },
@@ -321,45 +321,48 @@ export function failedAttemptMayBePartial(
 }
 
 /**
- * Whether a ledger row is an attempt that did not finish: one that failed,
- * or one still `in_progress`, which recorded no outcome — its process
- * stopped (killed, out of memory, its connection dropped), or is still
- * running where the migrate lock does not hold it off (SQLite takes none,
- * and PostgreSQL's expires). Either way the reader cannot know what of it
- * ran, so it is treated as the failure it may be.
+ * Whether a unit's attempt is recorded before its first statement and apart
+ * from the statements' transaction, so that a stop between its statements
+ * leaves the attempt with no outcome rather than no trace.
  *
- * The one reading of "did the last attempt finish" for the partially-applied
- * refusal, and for `migrate:resolve`, which clears such attempts or records
- * past them.
+ * That is where a stop can leave statements of it committed
+ * (`failedAttemptMayBePartial`): the ledger cannot commit together with them,
+ * so it records the start durably and the outcome only after the last
+ * statement. An app file in a transaction on PostgreSQL or SQLite has its
+ * attempt and its outcome written inside that transaction instead, so a stop
+ * before COMMIT (the process killed, its connection dropped) or a failure
+ * leaves nothing of the file, its ledger row included, and the next run
+ * applies it from its start. A plugin module records every attempt first, as
+ * its history always has.
  */
-export function attemptUnfinished(
-  row: Pick<SchemaEventRow, "status"> | undefined
-): boolean {
-  return row?.status === "failed" || row?.status === "in_progress";
-}
-
-/**
- * Whether a ledger row is an attempt `migrate:resolve --failed-cleanup`
- * cleared: flipped to `rolled_back` in place, retiring nothing. A rollback
- * (`migrate:down`, `migrate:resolve --rolled-back`) is a row of its own that
- * retires the applied row it undoes, and dev push writes no row at all.
- *
- * The operator clears an attempt once they have finished its statements by
- * hand or reversed them, and where the database stands then says which: at
- * the unit's start it runs again, past it the operator has finished it.
- */
-export function attemptCleared(
-  row: Pick<SchemaEventRow, "status" | "supersededEventIds"> | undefined
+function startRecordedFirst(
+  file: { filename: string; transaction?: boolean },
+  dialect: SupportedDialect
 ): boolean {
   return (
-    row?.status === "rolled_back" && (row.supersededEventIds ?? []).length === 0
+    failedAttemptMayBePartial(file, dialect) || isPluginLedgerRow(file.filename)
   );
 }
 
+/** The attempt row a unit's run starts, wherever it is written. */
+function attemptStart(file: { filename: string; sha256?: string }) {
+  return {
+    eventType: "file_apply",
+    source: "cli-migrate",
+    filename: file.filename,
+    sha256: file.sha256 ?? null,
+  } as const;
+}
+
+// Where the plugin runner has always read it from; its one home is the
+// ledger's own rules (`migration-state.ts`).
+export { attemptCleared } from "../events/migration-state";
+
 /**
  * Refuses to record a unit as applied without running it, or to run it
- * again, when its newest attempt did not finish (`attemptUnfinished`) and may
- * have stopped part-way.
+ * again, when it has an unresolved attempt (`standingOf`: for an app file,
+ * its latest attempt failed or recorded no outcome, and no outcome has been
+ * recorded since) that may have stopped part-way.
  *
  * Such an attempt can leave the statements before the failing one applied.
  * The database can then stand at the unit's target — every schema statement
@@ -398,10 +401,16 @@ export async function assertNotPartiallyApplied(
 ): Promise<void> {
   if (!failedAttemptMayBePartial(file, dialect)) return;
   const outsideTransaction = file.transaction === false;
-  const newest = newestEvent(await repo.findFileApplies(file.filename));
-  if (!attemptUnfinished(newest)) return;
+  // `findFileApplies` returns the unit's `file_apply` rows, so each is one.
+  const rows = (await repo.findFileApplies(file.filename)).map(row => ({
+    ...row,
+    eventType: "file_apply" as const,
+    filename: file.filename,
+  }));
+  const attempt = standingOf(file.filename, rows).unresolvedAttempt;
+  if (attempt === undefined) return;
   const unfinished =
-    newest?.status === "failed"
+    attempt.status === "failed"
       ? undefined
       : "recorded no outcome (the process running it stopped, or is still running)";
   const why = outsideTransaction
@@ -514,60 +523,103 @@ function toDriftItem(op: Operation): DriftItem {
  * In a transaction the applied row is written inside it: a failure of that
  * write rolls the statements back, and a process stopping before COMMIT
  * leaves neither, so the row never stays `in_progress` over statements that
- * committed. Another run having recorded the file first fails the write
- * (`markAppliedOrRefuse`) and rolls the statements back with it. Outside
- * one, each statement has already committed by the time the row is written,
- * as it always has.
+ * committed. Where the attempt was not recorded first (`startRecordedFirst`,
+ * `id` absent), its row is started inside the transaction too. Another run
+ * having recorded the file first fails the write (`markAppliedOrRefuse`) and
+ * rolls the statements back with it. Outside one, each statement has already
+ * committed by the time the row is written, as it always has.
  */
 async function runAndRecord(
-  args: ReconcileFileArgs,
-  id: string
+  args: Pick<
+    ReconcileFileArgs,
+    "file" | "dialect" | "repo" | "executeSql" | "recordApplied"
+  >,
+  id: string | undefined
 ): Promise<void> {
   const { file, repo } = args;
   await args.executeSql(
     file.sql,
     { source: file.filename, transaction: file.transaction ?? true },
     async (db, statementsExecuted) => {
-      await markAppliedOrRefuse(repo.boundTo(db), id, {
-        filename: file.filename,
-        statementsExecuted,
-        partial: failedAttemptMayBePartial(file, args.dialect),
-      });
+      const bound = repo.boundTo(db);
+      await markAppliedOrRefuse(
+        bound,
+        id ?? (await bound.recordStart(attemptStart(file))),
+        {
+          filename: file.filename,
+          statementsExecuted,
+          partial: failedAttemptMayBePartial(file, args.dialect),
+        }
+      );
       await args.recordApplied?.(db, false);
     }
   );
 }
 
 /**
- * Run a file whose database stands at its start, and record how it ended.
- * A lost race is thrown as it is, so the caller can tell it from a failure
- * of the file's own statements.
+ * Run a file's statements as one recorded attempt, and record how it ended:
+ * the one way a file is run and recorded, with or without a snapshot to
+ * reconcile against. What it throws is the error as the run met it.
+ *
+ * The attempt is recorded before the first statement where a stop can keep
+ * some of them (`startRecordedFirst`), and recorded failed when it throws.
+ * Otherwise it is written inside the file's transaction with its outcome, so
+ * a stop or a failure rolls it back with the statements and nothing of the
+ * file is left to record.
  */
-async function runInSync(args: ReconcileFileArgs): Promise<void> {
+export async function runRecordedAttempt(
+  args: Pick<
+    ReconcileFileArgs,
+    "file" | "dialect" | "repo" | "executeSql" | "recordApplied"
+  >
+): Promise<void> {
   const { file, repo } = args;
-  const id = await repo.recordStart({
-    eventType: "file_apply",
-    source: "cli-migrate",
-    filename: file.filename,
-    sha256: file.sha256 ?? null,
-  });
+  const id = startRecordedFirst(file, args.dialect)
+    ? await repo.recordStart(attemptStart(file))
+    : undefined;
   try {
     await runAndRecord(args, id);
   } catch (err) {
-    await recordAttemptFailed(
-      repo,
-      id,
-      err,
-      failedAttemptMayBePartial(file, args.dialect)
-    );
-    if (isConcurrentRun(err)) throw err;
-    const message = err instanceof Error ? err.message : String(err);
-    throw new NextlyError({
-      code: "NEXTLY_MIGRATION_APPLY_FAILED",
-      publicMessage: `Migration ${file.filename.replace(/\.sql$/, "")} failed: ${message}`,
-      ...(err instanceof Error ? { cause: err } : {}),
-    });
+    if (id !== undefined) {
+      await recordAttemptFailed(
+        repo,
+        id,
+        err,
+        failedAttemptMayBePartial(file, args.dialect)
+      );
+    }
+    throw err;
   }
+}
+
+/**
+ * Run a file whose database stands at its start, and record how it ended
+ * (`runRecordedAttempt`). A lost race is thrown as it is, so the caller can
+ * tell it from a failure of the file's own statements.
+ */
+async function runInSync(args: ReconcileFileArgs): Promise<void> {
+  const { file } = args;
+  try {
+    await runRecordedAttempt(args);
+  } catch (err) {
+    if (isConcurrentRun(err)) throw err;
+    throw applyFailedError(file.filename, err);
+  }
+}
+
+/**
+ * The error a file's run ends with when one of its statements failed: it
+ * names the file and carries the database's reason, so the operator knows
+ * which file to fix even where nothing of it was recorded (a file run in a
+ * transaction on PostgreSQL or SQLite leaves no ledger row when it fails).
+ */
+export function applyFailedError(filename: string, err: unknown): NextlyError {
+  const message = err instanceof Error ? err.message : String(err);
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage: `Migration ${filename.replace(/\.sql$/, "")} failed: ${message}`,
+    ...(err instanceof Error ? { cause: err } : {}),
+  });
 }
 
 /**

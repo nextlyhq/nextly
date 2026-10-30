@@ -58,10 +58,9 @@ import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
 import {
   assertNotPartiallyApplied,
-  failedAttemptMayBePartial,
-  markAppliedOrRefuse,
+  applyFailedError,
   reconcileFile,
-  recordAttemptFailed,
+  runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
   outsideTransactionNotice,
@@ -2027,10 +2026,6 @@ export async function runFileMigrations(args: {
       liveTables: await readLiveTables(db, dialect, [upStatements]),
       liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
     });
-    const unit: MigrationUnit = {
-      source: filename,
-      transaction: m.transaction,
-    };
     assertRunnableStatements(upStatements, dialect, filename, {
       transaction: m.transaction,
       unit: "file",
@@ -2063,30 +2058,25 @@ export async function runFileMigrations(args: {
           ? sharedFileRecoveryAdvice(filename, m.localization.spec)
           : undefined
       );
-      const id = await repo.recordStart({
-        eventType: "file_apply",
-        source: "cli-migrate",
-        filename,
-        sha256: m.checksum,
-      });
-      const partial = failedAttemptMayBePartial(m, dialect);
+      // Recorded as the reconcile records a file it runs, with the attempt
+      // before the first statement or inside the file's transaction. A
+      // statement's own failure is named with its file, as the reconcile
+      // names it; a refusal of the run's own already says what it refused.
       try {
-        // Recorded applied inside the file's transaction when it has one, so
-        // the row commits or rolls back with its statements; another run
-        // having recorded the file first rolls them back too.
-        await executeSql(m.upSql, unit, async (handle, n) => {
-          await markAppliedOrRefuse(repo.boundTo(handle), id, {
+        await runRecordedAttempt({
+          file: {
             filename,
-            statementsExecuted: n,
-            partial,
-          });
+            sql: m.upSql,
+            path: m.filePath,
+            sha256: m.checksum,
+            transaction: m.transaction,
+          },
+          dialect,
+          repo,
+          executeSql,
         });
       } catch (err) {
-        // Recorded as the reconcile records it, bounded and without
-        // logContext: a lost race rolled back whole leaves no row, anything
-        // else a failed one.
-        await recordAttemptFailed(repo, id, err, partial);
-        throw err;
+        throw NextlyError.is(err) ? err : applyFailedError(filename, err);
       }
       applied++;
       logger.success(`Applied ${filename}`);

@@ -87,6 +87,10 @@
       "types": "./dist/collections/fields/field-label.d.mts",
       "import": "./dist/collections/fields/field-label.mjs"
     },
+    "./core-widget-data": {
+      "types": "./dist/domains/widgets/core-widgets/data.d.mts",
+      "import": "./dist/domains/widgets/core-widgets/data.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.mts",
       "import": "./dist/query/index.mjs"

@@ -35,12 +35,15 @@ import {
   pluginOfLedgerRow,
   scopeLedgerRows,
 } from "../../domains/schema/events/ledger-scope";
+import {
+  attemptUnfinished,
+  standingsByFilename,
+} from "../../domains/schema/events/migration-state";
 import { newestEventsByFilename } from "../../domains/schema/events/newest-event";
 import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
-import { attemptUnfinished } from "../../domains/schema/migrate/drift-reconcile";
 import {
   migrationChecksum,
   compareModuleNames,
@@ -494,7 +497,7 @@ export async function readStatusLedger(
   };
 }
 
-/** An applied migration whose latest rollback attempt failed. */
+/** An applied migration whose latest rollback attempt failed or stopped. */
 export interface FailedRollback {
   filename: string;
   failedAt: Date;
@@ -506,11 +509,17 @@ export interface FailedRollback {
   possiblyPartial: boolean;
   /** The DOWN ran outside a transaction, as its migration is marked to. */
   outsideTransaction: boolean;
+  /**
+   * The attempt recorded no outcome: its process stopped, or is still
+   * running. Its start is recorded only where part of a DOWN can commit
+   * before it ends, so it is `possiblyPartial` too.
+   */
+  stopped: boolean;
 }
 
 /**
- * The applied migrations whose most recent rollback failed after they were
- * applied. The failure does not change the migration's applied state — on
+ * The applied migrations whose most recent rollback failed, or stopped with
+ * no outcome, after they were applied. The failure does not change the migration's applied state — on
  * PostgreSQL and SQLite the DOWN was rolled back whole — but on MySQL part
  * of it may have committed, and the operator needs to know either way that
  * the schema was touched since.
@@ -524,18 +533,27 @@ export function failedRollbacksSinceApply(
   for (const record of applied) {
     if (record.status !== "applied") continue;
     const failure = newestFailure.get(record.filename);
-    if (failure === undefined || failure.startedAt <= record.appliedAt) {
+    // Only a newest rollback that failed or stopped is one: an attempt that
+    // ended with nothing applied resolved it, and the failures before it.
+    if (
+      failure === undefined ||
+      !attemptUnfinished(failure) ||
+      failure.startedAt <= record.appliedAt
+    ) {
       continue;
     }
+    const stopped = failure.status === "in_progress";
     failures.push({
       filename: record.filename,
       failedAt: failure.startedAt,
       note: failure.note,
       possiblyPartial:
+        stopped ||
         failure.note?.startsWith(PARTIAL_ROLLBACK_NOTE) === true ||
         failure.note?.startsWith(NO_TRANSACTION_ROLLBACK_NOTE) === true,
       outsideTransaction:
         failure.note?.startsWith(NO_TRANSACTION_ROLLBACK_NOTE) === true,
+      stopped,
     });
   }
   return failures;
@@ -551,25 +569,25 @@ function displayFailedRollbacks(
     const compare =
       "It is still recorded as applied; compare the schema with the migration before running migrate or migrate:down again.";
     context.logger.warn(
-      failure.outsideTransaction
-        ? `${failed}. Its DOWN ran outside a transaction, so the statements before the failing one stayed applied. ${compare}`
-        : failure.possiblyPartial
-          ? `${failed}, and MySQL may have committed part of its DOWN. ${compare}`
-          : `${failed} and was undone; it is still applied.`
+      failure.stopped
+        ? `${failure.filename}: a rollback started at ${formatDate(failure.failedAt)} recorded no outcome: the process running it stopped, or is still running, and part of its DOWN may have committed. ${compare}`
+        : failure.outsideTransaction
+          ? `${failed}. Its DOWN ran outside a transaction, so the statements before the failing one stayed applied. ${compare}`
+          : failure.possiblyPartial
+            ? `${failed}, and MySQL may have committed part of its DOWN. ${compare}`
+            : `${failed} and was undone; it is still applied.`
     );
   }
 }
 
 /**
- * Each migration's current state in the ledger: the NEWEST `file_apply`
- * event per filename, kept when it is `applied`, or an attempt that did not
- * finish (`attemptUnfinished`: `failed`, or still `in_progress`).
+ * Each migration's current standing in the ledger (`standingsByFilename`, the
+ * rule `migrate` and `migrate:down` read it by): the outcome that records it
+ * applied, or else its unresolved attempt (`failed`, or still `in_progress`).
+ * A migration with neither is not listed here, and reads as pending.
  *
- * Newest per filename by `newestEventsByFilename`, the rule `migrate`,
- * `migrate:down` and `plugins uninstall` read the ledger by. A rollback is
- * recorded as a `rolled_back` event after the `applied` one, and the older
- * `applied` row stays in the ledger, so only the newest event says whether a
- * migration is applied now.
+ * An app migration's state is its latest outcome, so an attempt that failed
+ * or stopped after it never makes an applied migration read as pending.
  *
  * Plugin rows belong to their own migration stream: excluded unless
  * `plugin` names one, so the app's listing never reports them as
@@ -580,12 +598,17 @@ export function ledgerRecords(
   plugin?: string
 ): MigrationRecord[] {
   const records: MigrationRecord[] = [];
-  for (const r of newestEventsByFilename(
+  for (const standing of standingsByFilename(
     scopeLedgerRows(rows, plugin)
   ).values()) {
-    // An attempt that never finished is listed as one, not as pending:
-    // `nextly migrate` may refuse it until it is finished or cleared.
-    if (r.status !== "applied" && !attemptUnfinished(r)) continue;
+    // An applied migration is listed as applied, as `nextly migrate` reads
+    // it. Otherwise an attempt that never finished is listed as one, not as
+    // pending: `nextly migrate` may refuse it until it is finished or cleared.
+    const r =
+      standing.state === "applied"
+        ? standing.outcome
+        : standing.unresolvedAttempt;
+    if (r === undefined) continue;
     records.push({
       id: r.id,
       filename: r.filename ?? "",

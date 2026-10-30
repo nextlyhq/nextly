@@ -4,25 +4,43 @@ import type React from "react";
 
 import { Clock, Hash } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
+import { useLocalization } from "@admin/hooks/useLocalization";
+import type { ReleaseDocumentRef } from "@admin/types/releases";
 
-import { DocumentLanguagePanel } from "../../LanguagePanel";
+import { useEntryLocale } from "../../EntryLocaleContext";
+import { DocumentLanguagePanel, hasLanguages } from "../../LanguagePanel";
 import { DocumentIdCopy } from "../DocumentIdCopy";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
-// "heavy" polish pass on top of that — neutral monochrome lucide icons
-// in front of each row label, a thin separator above the timestamps,
-// the entry ID rendered as a `first5…last3` shortcode with a persistent
-// copy button (not hover-gated). The document's status is not repeated
-// here: the document bar's pill says it, read from the language being edited.
+import { PanelSection } from "./PanelSection";
+import { PublishingSection } from "./PublishingSection";
+import { StatusSection, type PanelDocumentStatus } from "./StatusSection";
+
+// The document panel's sections, in the one order both editors draw them:
+// Status, then Publishing, then Language, then Details. Each section decides
+// whether it applies and draws nothing where it does not, so a document
+// without a lifecycle or languages reads the sections it has, in that order.
+
+export { pillStateFromForm, PILL_LABEL, type PillState } from "./pill-state";
 
 export interface DocumentPanelProps {
-  /** Form mode. The ID and timestamps only render in edit mode. */
+  /** Form mode. Nothing is drawn before the document exists. */
   mode: EntryFormMode;
-  /** Entry data with id, status, and timestamps. */
+  /** Entry data with id and timestamps. */
   entry?: EntryData | null;
   /** Whether the collection has the Draft/Published feature enabled, which
-   *  the language panel reads to say each language's publish state. */
+   *  the Status and Publishing sections and the language panel read. */
   hasStatus: boolean;
+  /**
+   * The status in the language being edited, as the document bar's pill reads
+   * it. The Status section says it as a sentence; absent, it is not drawn.
+   */
+  documentStatus?: PanelDocumentStatus;
+  /**
+   * The document as releases address it, which the Publishing section reads.
+   * Absent, the section is not drawn.
+   */
+  releaseDocument?: ReleaseDocumentRef;
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
   /** Switch the editor to a language, forwarded to the language panel. */
@@ -35,58 +53,20 @@ export interface DocumentPanelProps {
   publishAllDisabled?: boolean;
 }
 
-/**
- * Derive the displayed pill state from the persisted status, the form dirty
- * flag, and whether a working draft is pending.
- *
- * - "Changed" — a published entry with a persisted working draft waiting to be
- *   promoted (Payload's model). This is the authoritative divergence from live,
- *   so it wins over "Modified": the enabled Save button already signals any
- *   extra unsaved local edits.
- * - "Modified" — a published entry with local edits not yet saved. Drafts never
- *   show Modified (they are inherently work-in-progress).
- */
-export type PillState = "draft" | "modified" | "changed" | "published";
-
-/**
- * What each state is CALLED, in one place.
- *
- * Exported because the page builder covers this panel and has to report the
- * same document in the same words. Two maps of four strings agree on the day
- * they are written and drift the first time one of them is reworded, and the
- * result is one editor calling a document "Changed" while another calls it
- * "Modified" — a distinction `pillStateFromForm` is careful to make.
- */
-export const PILL_LABEL: Record<PillState, string> = {
-  draft: "Draft",
-  modified: "Modified",
-  changed: "Changed",
-  published: "Published",
-};
-export function pillStateFromForm(
-  status: string | undefined,
-  isDirty: boolean,
-  hasWorkingDraft = false
-): PillState {
-  if (status === "published" && hasWorkingDraft) return "changed";
-  if (status === "published" && isDirty) return "modified";
-  return status === "published" ? "published" : "draft";
-}
-
 export function DocumentPanel({
   mode,
   entry,
   hasStatus,
+  documentStatus,
+  releaseDocument,
   locale,
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
   publishAllDisabled = actionsDisabled,
 }: DocumentPanelProps): React.ReactElement | null {
-  const isCreate = mode === "create";
-
-  // Hide entirely on create — nothing to show until the entry exists.
-  if (isCreate) return null;
+  // Nothing to say until the document exists.
+  if (mode === "create") return null;
 
   // Per-language translation-status pills. Present only when the entry was
   // fetched with `?translation-status=1` on a localized collection; inert otherwise.
@@ -95,78 +75,54 @@ export function DocumentPanel({
     | undefined;
 
   return (
-    <div className="px-5 py-4 border-b border-border">
-      <p className="text-xs font-bold tracking-[0.1em] uppercase text-muted-foreground mb-3">
-        Document
-      </p>
-      <dl className="space-y-3">
-        {/* No status row: the document bar's pill says where the document
-            stands, read from the language being edited, and a second pill
-            here read the main row and could disagree with it. */}
-        <IdRow id={entry?.id} />
-        <Separator />
-        <TimestampRows entry={entry} />
-      </dl>
-      <TranslationsRow
-        translations={translations}
-        hasStatus={hasStatus}
-        {...(locale === undefined ? {} : { locale })}
-        {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
-        actionsDisabled={actionsDisabled}
-        navigationDisabled={navigationDisabled}
-        publishAllDisabled={publishAllDisabled}
-      />
+    <div className="flex flex-col" data-testid="document-panel-sections">
+      {hasStatus && documentStatus ? (
+        <StatusSection documentStatus={documentStatus} />
+      ) : null}
+      {/* A release publishes or unpublishes, so only a document with that
+          lifecycle has a schedule to read. */}
+      {hasStatus ? <PublishingSection document={releaseDocument} /> : null}
+      <LanguageSection>
+        <DocumentLanguagePanel
+          translations={translations}
+          locale={locale}
+          onLocaleChange={onLocaleChange}
+          hasStatus={hasStatus}
+          actionsDisabled={actionsDisabled}
+          navigationDisabled={navigationDisabled}
+          publishAllDisabled={publishAllDisabled}
+        />
+      </LanguageSection>
+      <PanelSection title="Details">
+        <dl className="space-y-3">
+          <IdRow id={entry?.id} />
+          <TimestampRows entry={entry} />
+        </dl>
+      </PanelSection>
     </div>
   );
 }
 
 /**
- * Per-language translation-status pills row. Renders nothing when localization is off
- * or the entry has no `_translations` map, so non-localized documents are unchanged.
+ * The Language section, where the document has languages to show: the
+ * language panel as the editor has always drawn it, one row per language with
+ * its state and the actions that make sense of it. The panel's own header
+ * names it on screen, so the section's heading is said only to a screen reader.
  */
-function TranslationsRow({
-  translations,
-  hasStatus,
-  locale,
-  onLocaleChange,
-  actionsDisabled = false,
-  navigationDisabled = actionsDisabled,
-  publishAllDisabled = actionsDisabled,
-}: {
-  translations?: Record<string, { translated: boolean; status?: string }>;
-  hasStatus?: boolean;
-  locale?: string;
-  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
-  actionsDisabled?: boolean;
-  navigationDisabled?: boolean;
-  publishAllDisabled?: boolean;
-}) {
-  // The panel self-hides when localization is off, so an absent map is not a
-  // reason to withhold it: a localized entry fetched without
-  // `?translation-status=1` still has languages to switch between and act on.
+function LanguageSection({ children }: { children: React.ReactNode }) {
+  const { enabled, locales } = useLocalization();
+  const { collectionLocalized } = useEntryLocale();
+  // The panel's own rule for when it draws anything, so the section and its
+  // content cannot disagree about an empty section. Without languages the
+  // panel is still mounted, as it always has been, and draws nothing itself.
+  if (!hasLanguages(enabled, collectionLocalized, locales.length)) {
+    return <>{children}</>;
+  }
   return (
-    <div className="mt-4 pt-4 border-t border-border">
-      {/* The language panel, which replaced the two loose action buttons that
-          used to sit here. They offered the actions without the state they act
-          on, so an author had to read one panel to decide and another to act.
-          The panel carries both, and the same component renders inline where
-          this rail is hidden — so neither the state nor the actions can be the
-          surface that disappears. */}
-      <DocumentLanguagePanel
-        translations={translations}
-        locale={locale}
-        onLocaleChange={onLocaleChange}
-        hasStatus={hasStatus}
-        actionsDisabled={actionsDisabled}
-        navigationDisabled={navigationDisabled}
-        publishAllDisabled={publishAllDisabled}
-      />
-    </div>
+    <PanelSection title="Language" titleHidden>
+      {children}
+    </PanelSection>
   );
-}
-
-function Separator() {
-  return <div className="border-t border-border -mx-5" aria-hidden="true" />;
 }
 
 function RowIcon({ icon: Icon }: { icon: typeof Hash }) {

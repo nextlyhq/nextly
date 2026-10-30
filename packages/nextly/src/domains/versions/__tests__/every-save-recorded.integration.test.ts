@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { defineCollection, defineSingle, text } from "../../../config";
 import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
 import {
@@ -30,6 +31,18 @@ afterEach(async () => {
 const ana = { id: "ana", roles: ["super-admin"] };
 const ben = { id: "ben", roles: ["super-admin"] };
 const superAdmin = { id: "tester", roles: ["super-admin"] };
+
+/**
+ * The super-admin a restore is made as, stored in `t` so the update gate the
+ * restore asks finds its role: role names a caller hands in grant nothing.
+ */
+async function storedSuperAdmin(
+  t: TestNextly | undefined
+): Promise<typeof superAdmin> {
+  if (!t) throw new Error("the harness is not booted");
+  await superAdminUser(t, superAdmin.id);
+  return superAdmin;
+}
 
 type VersionRow = {
   scopeSlug: string;
@@ -306,7 +319,7 @@ describe.each(getConfiguredTestDialects())(
         slug: "posts",
         entryId: id,
         versionNo: pending!.versionNo!,
-        user: superAdmin,
+        user: await storedSuperAdmin(current),
       });
 
       const [live] = (
@@ -349,7 +362,7 @@ describe.each(getConfiguredTestDialects())(
         slug: "posts",
         entryId: id,
         versionNo: pendingA!.versionNo!,
-        user: superAdmin,
+        user: await storedSuperAdmin(current),
       });
 
       const undo = (await rowsFor(current, "posts")).filter(
@@ -400,7 +413,7 @@ describe.each(getConfiguredTestDialects())(
         slug: "branding",
         entryId: pendingA!.entryId,
         versionNo: pendingA!.versionNo!,
-        user: superAdmin,
+        user: await storedSuperAdmin(current),
       });
 
       const undo = (await rowsFor(current, "branding")).filter(
@@ -450,7 +463,7 @@ describe.each(getConfiguredTestDialects())(
         slug: "notes",
         entryId: id,
         versionNo: before.length + 1,
-        user: superAdmin,
+        user: await storedSuperAdmin(current),
       }).then(
         () => undefined,
         (err: unknown) => err
