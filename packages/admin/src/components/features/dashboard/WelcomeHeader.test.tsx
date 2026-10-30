@@ -3,12 +3,11 @@
  *
  * The heading is the page's landmark for screen-reader and keyboard users:
  * jumping by heading lands on it, and every card title (an `h2`) sits under it
- * in the outline. It used to vanish whenever the sample-content card was the
- * page's call to action (offer unanswered, loading, answered, failed) and
- * while the signed-in user was still loading, which is what a first visit
- * paints first. So these render the heading WITH the sample-content card, in
- * each state the card's hook can report, against each state of the user read,
- * and count the headings on the composed page rather than on the header alone.
+ * in the outline. It used to vanish while the sample-content card was the
+ * page's call to action and while the signed-in user was still loading, which
+ * is what a first visit paints first. Sample content is now a step of the
+ * setup card, which draws no heading of its own (`SetupCard.test.tsx`), so
+ * these render the header against each state of the user read.
  */
 import {
   cleanup,
@@ -19,18 +18,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { SeedStatus } from "@admin/hooks/queries/useSeedStatus";
-import type { SeedResult } from "@admin/services/seedApi";
 import type { DashboardSummary } from "@admin/types/dashboard/summary";
-
-let seedStatus: SeedStatus = { kind: "loading" };
-vi.mock("@admin/hooks/queries/useSeedStatus", () => ({
-  useSeedStatus: () => ({
-    status: seedStatus,
-    startSeed: () => {},
-    skip: () => {},
-  }),
-}));
 
 type UserRead = {
   user: { id: string; name: string; email: string } | null;
@@ -56,48 +44,12 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 
 import { CELL_PLACEMENT_ATTRIBUTE } from "../widgets/edit/drag/useCardDrag";
 
-import { SeedDemoContentCard } from "./SeedDemoContentCard";
 import {
   DashboardChromeProvider,
   usePublishDashboardChrome,
   type DashboardChromeState,
 } from "./header/dashboard-chrome";
 import { greetingFor, WelcomeHeader } from "./WelcomeHeader";
-
-function seedResult(warnings: string[] = []): SeedResult {
-  return {
-    message: "Demo content seeded.",
-    summary: {
-      rolesCreated: 3,
-      usersCreated: 3,
-      categoriesCreated: 5,
-      tagsCreated: 8,
-      postsCreated: 12,
-      mediaUploaded: 14,
-      mediaSkipped: 0,
-      collectionsRegistered: 0,
-      singlesRegistered: 0,
-      permissionsSynced: 0,
-    },
-    warnings,
-  };
-}
-
-const SEED_STATES: Array<[string, SeedStatus]> = [
-  ["the offer still being read", { kind: "loading" }],
-  ["no offer (unavailable, loaded or declined)", { kind: "hidden" }],
-  [
-    "the offer unanswered",
-    { kind: "idle", template: { slug: "blog", label: "Blog" } },
-  ],
-  ["sample content loading", { kind: "seeding" }],
-  ["sample content loaded", { kind: "success", result: seedResult() }],
-  [
-    "sample content loaded with warnings",
-    { kind: "success", result: seedResult(["one media file skipped"]) },
-  ],
-  ["sample content failed", { kind: "error", message: "Seed failed (500)" }],
-];
 
 const USER_STATES: Array<[string, UserRead]> = [
   ["the user still loading", { user: null, isLoading: true, error: null }],
@@ -115,45 +67,35 @@ const USER_STATES: Array<[string, UserRead]> = [
   ],
 ];
 
-/** The two pieces in the order the dashboard draws them. */
+/** The top of the dashboard: its header. */
 function renderDashboardTop() {
-  return render(
-    <div>
-      <WelcomeHeader />
-      <SeedDemoContentCard />
-    </div>
-  );
+  return render(<WelcomeHeader />);
 }
 
 afterEach(() => {
-  seedStatus = { kind: "loading" };
   userRead = { user: null, isLoading: true, error: null };
   summaryRead = { data: undefined };
   appName = "Acme Site";
 });
 
 describe("the dashboard's main heading", () => {
-  for (const [seedLabel, seed] of SEED_STATES) {
-    for (const [userLabel, user] of USER_STATES) {
-      it(`is the one level-one heading with ${seedLabel} and ${userLabel}`, () => {
-        seedStatus = seed;
-        userRead = user;
-        renderDashboardTop();
+  for (const [userLabel, user] of USER_STATES) {
+    it(`is the one level-one heading with ${userLabel}`, () => {
+      userRead = user;
+      renderDashboardTop();
 
-        const mains = screen.getAllByRole("heading", { level: 1 });
-        expect(mains).toHaveLength(1);
-        const main = mains[0]!;
+      const mains = screen.getAllByRole("heading", { level: 1 });
+      expect(mains).toHaveLength(1);
+      const main = mains[0]!;
 
-        // Card titles sit below it in the outline: each comes after it in the
-        // document, and none is another level-one heading.
-        for (const title of screen.queryAllByRole("heading", { level: 2 })) {
-          expect(
-            main.compareDocumentPosition(title) &
-              Node.DOCUMENT_POSITION_FOLLOWING
-          ).toBeTruthy();
-        }
-      });
-    }
+      // Card titles sit below it in the outline: each comes after it in the
+      // document, and none is another level-one heading.
+      for (const title of screen.queryAllByRole("heading", { level: 2 })) {
+        expect(
+          main.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+      }
+    });
   }
 
   it("is the project's name, before the person is known and after", () => {

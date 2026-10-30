@@ -10,7 +10,7 @@
  * a reader who has just arrived and has no reason to know the dashboard can be
  * edited, so routing "I am done with this" through a mode they must discover
  * first means the card stays until they finish the work it describes. Shopify's
- * Setup Guide, Strapi's guided tour and this admin's own `SeedDemoContentCard`
+ * Setup Guide, Strapi's guided tour and this admin's own setup card
  * all put dismiss on the card for the same reason.
  *
  * It is drawn only where the WIDGET declared `dismissible`. The capability is

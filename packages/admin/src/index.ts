@@ -696,7 +696,6 @@ export { ContentStatsGrid } from "./components/features/dashboard/ContentStatsGr
 export { ContentStatusWidget } from "./components/features/dashboard/ContentStatusWidget";
 export { CollectionQuickLinks } from "./components/features/dashboard/CollectionQuickLinks";
 export { ProjectStatsGrid } from "./components/features/dashboard/ProjectStatsGrid";
-export { OnboardingChecklist } from "./components/features/dashboard/OnboardingChecklist";
 export {
   StatsGridSkeleton,
   ActivitySkeleton,
@@ -704,7 +703,6 @@ export {
   ContentStatusSkeleton,
   CollectionQuickLinksSkeleton,
   ProjectStatsSkeleton,
-  OnboardingChecklistSkeleton,
   DashboardPageSkeleton,
 } from "./components/features/dashboard/DashboardSkeleton";
 

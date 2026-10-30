@@ -1,5 +1,5 @@
 /**
- * seedApi — thin client for the dashboard SeedDemoContentCard.
+ * seedApi — thin client for the setup card's sample-content step.
  *
  * Wraps three project-local routes:
  * - HEAD /admin/api/seed                — probe (is seeding available?)

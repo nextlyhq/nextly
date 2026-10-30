@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * useSeedStatus — state machine for the dashboard SeedDemoContentCard.
+ * useSeedStatus — state machine for the setup card's sample-content step.
  *
  * Composes two queries (probe + meta status) and two mutations (run seed,
  * skip) into a single discriminated-union state. The card consumes

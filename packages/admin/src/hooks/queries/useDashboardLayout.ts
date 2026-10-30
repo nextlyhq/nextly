@@ -74,16 +74,6 @@ export function fetchDashboardLayout(): Promise<DashboardLayoutResponse> {
   );
 }
 
-/**
- * The layout read with the Get started steps answered even for a removed card, which the card
- * needs once it is restored in customise mode and drawn before the save that restores it.
- */
-export function fetchGetStartedOnRestore(): Promise<DashboardLayoutResponse> {
-  return protectedApi.get<DashboardLayoutResponse>(
-    `${LAYOUT_PATH}?getStarted=1`
-  );
-}
-
 export interface SaveLayoutInput {
   /** The WHOLE ordered list, removed cards included: the order is the array's. */
   placements: WidgetPlacement[];
