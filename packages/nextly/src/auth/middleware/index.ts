@@ -49,6 +49,7 @@ import {
   apiKeyScopeFrom,
   type GrantedPermission,
 } from "../authenticated-scope";
+import { readAccessTokenCookie } from "../cookies/access-token-cookie";
 import { getSession } from "../session";
 import { startServicesForAuthentication } from "../session/session-standing";
 
@@ -399,6 +400,19 @@ function sessionClaims(
   return Object.keys(claims).length > 0 ? claims : undefined;
 }
 
+/**
+ * Whether a request carries no credential at all, read without the container:
+ * a header read and a cookie parse. Any `Authorization` header counts, a key
+ * or not, so a header in another scheme is a credential that is not valid.
+ * The one test of a visitor, asked before the handler boots and after.
+ */
+export function carriesNoCredential(req: Request): boolean {
+  return (
+    req.headers.get("authorization") === null &&
+    readAccessTokenCookie(req) === null
+  );
+}
+
 export async function requireAuthentication(
   req: Request
 ): Promise<AuthContext | ErrorResponse> {
@@ -441,9 +455,10 @@ export async function requireAuthentication(
       undefined,
       "AUTH_REQUIRED"
     );
-    // A session cookie that is malformed, forged or revoked is a credential
-    // that is not valid, answered the same; only no cookie at all is none.
-    return sessionResult.reason === "no_token"
+    // A session cookie that is malformed, forged or revoked, or an
+    // `Authorization` header that presents no key, is a credential that is
+    // not valid, answered the same; only neither at all is none.
+    return carriesNoCredential(req)
       ? { ...refused, noCredential: true }
       : refused;
   }

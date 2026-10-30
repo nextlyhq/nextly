@@ -27,6 +27,7 @@ import {
   requireCollectionWriteAccess,
   requireLifecycleAccess,
   admittedActionOf,
+  carriesNoCredential,
   createJsonErrorResponse,
   isErrorResponse,
   type AuthContext,
@@ -998,17 +999,6 @@ const VISITOR_SERVICES: ReadonlySet<string> = new Set([
   "collections",
   "singles",
 ]);
-
-/**
- * Whether a request carries no credential at all, read without the container:
- * a header read and a cookie parse.
- */
-function carriesNoCredential(req: Request): boolean {
-  return (
-    req.headers.get("authorization") === null &&
-    readAccessTokenCookie(req) === null
-  );
-}
 
 async function resolveAuthorization(
   req: Request,

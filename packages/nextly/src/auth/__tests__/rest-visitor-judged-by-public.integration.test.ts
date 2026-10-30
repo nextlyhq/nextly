@@ -307,6 +307,22 @@ describe.each(getConfiguredTestDialects())(
         expect(res.status).toBe(401);
       });
 
+      // A header that presents no key is still a credential sent, so the
+      // request is asked to sign in, as it is before the handler has booted.
+      it("an authorization header in another scheme", async () => {
+        const res = await visit("GET", entries(), {
+          headers: { authorization: "Basic dmlzaXRvcjpwYXNz" },
+        });
+        expect(res.status).toBe(401);
+      });
+
+      it("a bearer header with no key after it", async () => {
+        const res = await visit("GET", entries(), {
+          headers: { authorization: "Bearer " },
+        });
+        expect(res.status).toBe(401);
+      });
+
       it("a revoked key", async () => {
         const owner = await account(t, "rv-key-owner@example.com");
         const { keys, key, id } = await keyOf(owner);
