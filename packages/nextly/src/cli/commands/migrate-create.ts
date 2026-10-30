@@ -243,6 +243,12 @@ export async function runMigrateCreate(
   const dbValidation = requireDatabaseEnv(logger);
   const dialect = dbValidation.dialect;
 
+  // Only the running dialect's table definitions are loaded, and opening a
+  // connection is what loads them elsewhere. This command never connects, so
+  // it loads them itself before compiling against the core schema.
+  const { loadDialectTables } = await import("../../database/dialect-tables");
+  await loadDialectTables(dialect);
+
   // Resolve the migration name. --name flag takes precedence over the
   // positional argument. Required for non-blank invocations.
   const name = options.name ?? nameArg;
