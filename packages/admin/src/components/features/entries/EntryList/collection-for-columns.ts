@@ -30,6 +30,8 @@ export function toCollectionForColumns(
         status?: boolean;
         /** i18n: collection has multilingual content — drives the translation-status column. */
         localized?: boolean;
+        /** Removed from code: the table offers nothing that writes. */
+        removedFromCode?: boolean;
       }
     | undefined,
   slug: string,
@@ -79,6 +81,9 @@ export function toCollectionForColumns(
     // absent, every language would read as missing, and a filter by it is
     // refused.
     localized: collection.localized === true && showsTranslationState,
+    // Forwarded so the bulk actions, and the row selection and row Delete that
+    // follow them, are withheld from a collection removed from code.
+    ...(collection.removedFromCode === true ? { removedFromCode: true } : {}),
     admin: {
       useAsTitle: collection.admin?.useAsTitle,
       defaultColumns: [

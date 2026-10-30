@@ -10,8 +10,9 @@
  * counts and contradicted the total sitting beside it in the same response.
  *
  * The fix routes the breakdown through the same access-enforced
- * `nextly.count({ overrideAccess: false, status })` path as the total, once
- * for `"published"` and once for `"draft"`. So this file drives the raw
+ * `nextly.count({ overrideAccess: false })` path as the total, once for
+ * `status: "published"` and once for the drafts, which are the collection
+ * list's Draft filter (`status: "all"` narrowed by `where`). So this file drives the raw
  * per-status counts and the access-controlled ones to DIFFERENT numbers -- a
  * test where they agreed could not tell the two implementations apart -- and
  * asserts `totalEntries === published + draft` for the CALLER, which the raw
@@ -21,6 +22,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { count } = vi.hoisted(() => ({ count: vi.fn() }));
+
+/** What a count was asked: its lifecycle, and whether it is the list's Draft filter. */
+interface CountAsked {
+  status?: "all" | "published" | "draft";
+  where?: { status?: { equals?: unknown } };
+}
+
+/** Which of a collection's entries a count read: the list's drafts, or its `status`. */
+const askedFor = ({ status, where }: CountAsked) =>
+  where?.status?.equals === "draft" ? "draft" : (status ?? "all");
 vi.mock("../../../direct-api/nextly", () => ({
   requireNextly: () => ({ count }),
 }));
@@ -106,17 +117,16 @@ beforeEach(() => {
   // The access-controlled count answers per the STATUS it was asked for --
   // Alice's one visible row, split by lifecycle. `status: "all"` is what
   // `getCollectionCounts` asks for the total.
-  count.mockImplementation(
-    ({ status }: { status?: "all" | "published" | "draft" }) => {
-      if (status === "published") {
-        return Promise.resolve({ total: ALICE_VISIBLE_PUBLISHED });
-      }
-      if (status === "draft") {
-        return Promise.resolve({ total: ALICE_VISIBLE_DRAFT });
-      }
-      return Promise.resolve({ total: ALICE_VISIBLE_TOTAL });
+  count.mockImplementation((asked: CountAsked) => {
+    const entries = askedFor(asked);
+    if (entries === "published") {
+      return Promise.resolve({ total: ALICE_VISIBLE_PUBLISHED });
     }
-  );
+    if (entries === "draft") {
+      return Promise.resolve({ total: ALICE_VISIBLE_DRAFT });
+    }
+    return Promise.resolve({ total: ALICE_VISIBLE_TOTAL });
+  });
 });
 
 describe("the status breakdown honours the caller's row-level access", () => {
@@ -149,36 +159,6 @@ describe("the status breakdown honours the caller's row-level access", () => {
     );
   });
 
-  it("is the sum of the per-collection rows the Content card reads", async () => {
-    // One reading, two consumers: the summary's breakdown is derived from the
-    // rows `system:content` answers, never counted beside them. Counts where
-    // the total is neither sum, as a due release can leave them: summing the
-    // totals instead of the published counts must not pass.
-    count.mockImplementation(
-      ({ status }: { status?: "all" | "published" | "draft" }) =>
-        Promise.resolve({
-          total: status === "published" ? 3 : status === "draft" ? 2 : 6,
-        })
-    );
-    const service = makeService(adapter);
-    const options = { scope: someResources(["posts"]), caller: CALLER };
-    const rows = await service.getContentByCollection(options);
-    const stats = await service.getStats(options);
-
-    expect(rows).toEqual([
-      expect.objectContaining({
-        slug: "posts",
-        count: 6,
-        published: 3,
-        draft: 2,
-      }),
-    ]);
-    expect(stats.status).toEqual({
-      published: rows.reduce((sum, row) => sum + row.published, 0),
-      draft: rows.reduce((sum, row) => sum + row.draft, 0),
-    });
-  });
-
   it("asks for published and draft through the access-enforced count, per collection", async () => {
     await makeService(adapter).getStats({
       scope: someResources(["posts"]),
@@ -193,13 +173,19 @@ describe("the status breakdown honours the caller's row-level access", () => {
         status: "published",
       })
     );
+    // The drafts by the collection list's Draft filter, as the Content table
+    // counts them: every entry, narrowed to those whose status is draft.
     expect(count).toHaveBeenCalledWith(
       expect.objectContaining({
         collection: "posts",
         overrideAccess: false,
         user: CALLER.user,
-        status: "draft",
+        status: "all",
+        where: { status: { equals: "draft" } },
       })
+    );
+    expect(count).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "draft" })
     );
   });
 
@@ -215,54 +201,5 @@ describe("the status breakdown honours the caller's row-level access", () => {
     for (const [sql] of rawCalls) {
       expect(String(sql).toLowerCase()).not.toContain("group by");
     }
-  });
-});
-
-describe("the Content card's page", () => {
-  // Sixty collections the registry returns in reverse slug order, so a page
-  // taken in the registry's order and one taken in slug order differ.
-  const MANY = Array.from({ length: 60 }, (_, i) => ({
-    slug: `c${String(i).padStart(2, "0")}`,
-    tableName: `c${i}`,
-    labels: { plural: `C${i}` },
-    fields: [],
-  })).reverse();
-  const FIRST_FIFTY = MANY.map(c => c.slug)
-    .sort()
-    .slice(0, 50);
-
-  beforeEach(() => {
-    containerGet.mockImplementation((name: string) => {
-      if (name === "collectionRegistryService") {
-        return { getAllCollections: vi.fn().mockResolvedValue(MANY) };
-      }
-      throw new Error(`unexpected container.get("${name}")`);
-    });
-  });
-
-  it("counts only the collections on the page it answers, the first by slug", async () => {
-    const rows = await makeService(adapter).getContentByCollection({
-      scope: someResources(MANY.map(c => c.slug)),
-      caller: CALLER,
-      limit: 50,
-    });
-
-    expect(rows.map(row => row.slug)).toEqual(FIRST_FIFTY);
-    // The separating assertion: counting all sixty and then keeping fifty
-    // answers the same rows, and only the calls tell the two apart.
-    const counted = new Set(
-      count.mock.calls.map(
-        ([options]) => (options as { collection: string }).collection
-      )
-    );
-    expect([...counted].sort()).toEqual(FIRST_FIFTY);
-  });
-
-  it("counts every collection when no limit is given, as /stats reads them", async () => {
-    const rows = await makeService(adapter).getContentByCollection({
-      scope: someResources(MANY.map(c => c.slug)),
-      caller: CALLER,
-    });
-    expect(rows).toHaveLength(60);
   });
 });

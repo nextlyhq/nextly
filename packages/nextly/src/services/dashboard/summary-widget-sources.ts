@@ -1,8 +1,8 @@
 /**
  * The dashboard's summary sources: `system:team`, how many people and roles,
- * and `system:content`, each collection with its entries and drafts. Both
- * answer from the dashboard service's own readings, so their cards and the
- * `/stats` summary cannot come to disagree.
+ * and `system:content`, the Content table's rows. Both answer from the
+ * dashboard service's own readings, so their cards and the `/stats` summary
+ * cannot come to disagree.
  *
  * ## `system:team`
  *
@@ -19,13 +19,17 @@
  *
  * ## `system:content`
  *
- * One row per collection this reader may see on the dashboard: its total, and
- * how many entries are published and how many are drafts, each counted as the
- * reader (`getContentByCollection`). Then one row per Single they may see
- * (`getContentSingles`), which has no entries to count. Each row says which
- * `kind` it is, since a collection and a Single may share a slug. It adds no
- * access rule of its own: the scope and every count are the service's, read
- * the way `/stats` reads them.
+ * The Content table (`getContentTable`): one row per collection and Single
+ * this reader may see on the dashboard, latest update first, at most the
+ * query's limit. A collection's row carries its entries, its drafts by the
+ * collection list's Draft filter, and whether the reader may create in it,
+ * counted for the rows answered and no others; every row carries its own last
+ * update, and who saved it where the activity trail names them. Each row says which `kind` it is, since a collection
+ * and a Single may share a slug. The answer's `total` is what every list
+ * answer's is, the rows the read matched: every collection AND every Single
+ * the reader may see on the dashboard, of which `items` is the first page. It
+ * adds no access rule of its own: the scope, every count and every save are
+ * the service's, read as the reader.
  *
  * @module services/dashboard/summary-widget-sources
  */
@@ -64,8 +68,10 @@ const TEAM_FIELDS = [
 ];
 
 /**
- * Each collection: what it is called, where it is grouped, and its entries. Each
- * Single: what it is called; its entry fields are absent.
+ * Each collection: what it is called, where it is grouped, its entries and
+ * drafts, and whether the reader may create in it. Each Single: what it is
+ * called; its entry fields are absent. Both: the last update, and who saved it
+ * where the trail names them.
  */
 const CONTENT_FIELDS = [
   { name: "kind", type: "string" as const, label: "Kind" },
@@ -73,8 +79,13 @@ const CONTENT_FIELDS = [
   { name: "label", type: "string" as const, label: "Name" },
   { name: "group", type: "string" as const, label: "Group" },
   { name: "count", type: "number" as const, label: "Entries" },
-  { name: "published", type: "number" as const, label: "Published" },
   { name: "draft", type: "number" as const, label: "Drafts" },
+  { name: "canCreate", type: "boolean" as const, label: "May create" },
+  { name: "updatedAt", type: "date" as const, label: "Updated" },
+  { name: "userId", type: "string" as const, label: "Saved by" },
+  { name: "userName", type: "string" as const, label: "Name of saver" },
+  { name: "actorType", type: "string" as const, label: "Saved by kind" },
+  { name: "identityErasedAt", type: "date" as const, label: "Identity erased" },
 ];
 
 /**
@@ -140,8 +151,8 @@ async function resolveTeam(
 }
 
 /**
- * Answer the Content card: each collection this reader may see, with its entries and drafts,
- * then each Single they may see.
+ * Answer the Content card: the rows of the Content table this reader may see, at most the
+ * query's limit, and how many rows it could show in all.
  */
 async function resolveContent(
   query: WidgetQuery,
@@ -149,44 +160,44 @@ async function resolveContent(
 ): Promise<WidgetResult> {
   refuseUnconsumedQueryFields(query, QUERY_FIELD_USE, CONTENT_SOURCE_ID);
   const scope = await resolveReadableResources(caller);
-  // The limit goes to the service, which picks the page before counting it; the Singles take
-  // whatever room the collections leave, so the card's one row more still says more exist.
-  const collections = await dashboard().getContentByCollection({
+  // The limit goes to the service, which picks the page before counting it, so a card asking
+  // for the rows it draws, and one more, has only those counted.
+  const table = await dashboard().getContentTable({
     scope,
     caller,
     limit: query.limit,
   });
-  const room =
-    query.limit === undefined ? undefined : query.limit - collections.length;
-  const singles =
-    room === undefined || room > 0
-      ? await dashboard().getContentSingles({ scope, limit: room })
-      : [];
-  const rows = [
-    ...collections.map(row => ({ kind: "collection", ...row })),
-    ...singles.map(single => ({ kind: "single", ...single, group: null })),
-  ];
   // `kind` stays in every row whatever was selected: a collection and a Single
   // may share a slug, and without it their rows could not be told apart.
   const select = query.select;
-  return listOf(
-    rows,
-    CONTENT_FIELDS,
-    select?.length && !select.includes("kind")
-      ? { ...query, select: [...select, "kind"] }
-      : query
-  );
+  return {
+    ...listOf(
+      table.rows,
+      CONTENT_FIELDS,
+      select?.length && !select.includes("kind")
+        ? { ...query, select: [...select, "kind"] }
+        : query
+    ),
+    // Every row the table could show, collections and Singles alike: the
+    // rows matched, of which `items` is the first page.
+    total: table.total,
+  };
 }
 
 /**
  * `rows` as a list answer: at most `query.limit` of them, each reduced to the
  * fields the query selected, or to every declared field when it selected none.
+ *
+ * A field a row does not carry stays absent rather than becoming a key with
+ * no value: a Single's row has no count and a row whose saver is unknown no
+ * name, and the answer handed to a caller in the same process then reads as
+ * the one the dashboard's route sends, where JSON drops such keys.
  */
 function listOf(
   rows: readonly object[],
   fields: readonly { name: string }[],
   query: WidgetQuery
-): WidgetResult {
+): Extract<WidgetResult, { op: "list" }> {
   const declared = fields.map(field => field.name);
   const names = query.select?.length
     ? declared.filter(name => query.select?.includes(name))
@@ -195,7 +206,11 @@ function listOf(
     op: "list",
     items: rows.slice(0, query.limit ?? rows.length).map(row => {
       const values = row as Record<string, unknown>;
-      return Object.fromEntries(names.map(name => [name, values[name]]));
+      return Object.fromEntries(
+        names
+          .filter(name => values[name] !== undefined)
+          .map(name => [name, values[name]])
+      );
     }),
   };
 }

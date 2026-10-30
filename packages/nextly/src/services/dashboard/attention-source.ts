@@ -564,6 +564,15 @@ interface WaitingDigest {
  * not from when the digest was read. Held for the process (`processHeld`), as
  * the card's own digest read is: the layout read and the batch can reach
  * different copies of this module.
+ *
+ * Per process, never shared between processes: where several instances serve
+ * the admin (several workers, or serverless), a load's batch may reach an
+ * instance its layout read did not. That batch finds no digest waiting and
+ * reads its own, as any batch without a read-ahead does. If the work was done
+ * in between, the card the layout read placed answers empty, and it stays on
+ * the page saying nothing is waiting until the next load, since a later
+ * answer only ever shows a card. The read-ahead saves a read; it is not what
+ * keeps the card's answer right.
  */
 const readAhead = processHeld(
   "nextly.dashboard.attentionReadAhead",

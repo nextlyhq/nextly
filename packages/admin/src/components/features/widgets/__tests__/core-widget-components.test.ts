@@ -26,8 +26,8 @@
  * build.
  *
  * `core-components.ts` cannot be imported at all. It sits in a PRE-EXISTING
- * import cycle -- it imports `TeamSummary` and `CollectionQuickLinks`, which
- * reach the `@admin/hooks/queries` barrel, which reaches
+ * import cycle -- it imports the dashboard's cards, and a card that
+ * reaches the `@admin/hooks/queries` barrel reaches
  * `pages/dashboard/index.tsx`, which imports `WidgetGrid`, which calls
  * `registerCoreWidgetComponents()` at module scope and so re-enters the module
  * being evaluated. Importing it from a test throws `Cannot access ... before
