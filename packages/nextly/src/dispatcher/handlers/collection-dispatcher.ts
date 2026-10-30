@@ -107,7 +107,6 @@ import {
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
-import { withRemovedFromCodeMarks } from "../helpers/removed-from-code-marks";
 import { readRequestLocalized } from "../helpers/request-localized";
 import {
   paginatedResponseToMeta,
@@ -519,6 +518,11 @@ const COLLECTIONS_METHODS: Record<
       // a condition on the query that produced both. A collection removed from
       // code stays listed, marked, so the admin can say so and name the step
       // that retires it.
+      // Loaded on first use rather than with the dispatcher, so a module that
+      // imports the dispatcher and never lists does not load the mark.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
       return respondList(
         await withRemovedFromCodeMarks("collection", items),
         toPaginationMeta(baseMeta)
@@ -545,6 +549,9 @@ const COLLECTIONS_METHODS: Record<
       );
       // Marked as the listing marks it, so the entity's own screens show the
       // notice the navigation's mark promises.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
       const [marked] = await withRemovedFromCodeMarks("collection", [
         collectionWithViews as unknown as Record<string, unknown>,
       ]);

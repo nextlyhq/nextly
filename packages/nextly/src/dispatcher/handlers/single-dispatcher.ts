@@ -101,7 +101,6 @@ import {
   getSingleMetadataServiceFromDI,
   getSingleRegistryFromDI,
 } from "../helpers/di";
-import { withRemovedFromCodeMarks } from "../helpers/removed-from-code-marks";
 import { readRequestLocalized } from "../helpers/request-localized";
 import {
   offsetPaginationToMeta,
@@ -508,7 +507,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         injectSingleDefaultFields(s as unknown as SingleWithFields)
       );
       // A Single removed from code stays listed, marked, so the admin can say
-      // so and name the step that retires it.
+      // so and name the step that retires it. The mark is loaded on first use
+      // rather than with the dispatcher, so a module that imports the
+      // dispatcher and never lists does not load it.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
       return respondList(
         await withRemovedFromCodeMarks(
           "single",
@@ -936,6 +940,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an envelope wrapper.
       // Marked as the listing marks it, so the Single's own screen shows the
       // notice the navigation's mark promises.
+      const { withRemovedFromCodeMarks } = await import(
+        "../helpers/removed-from-code-marks"
+      );
       const [marked] = await withRemovedFromCodeMarks("single", [
         {
           ...injectSingleDefaultFields(

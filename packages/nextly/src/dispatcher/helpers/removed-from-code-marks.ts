@@ -20,12 +20,10 @@
 
 import { resolve } from "node:path";
 
-import {
-  readRemovedFromCodeStates,
-  removedEntityKey,
-  type RemovedEntityRef,
-  type RemovedFromCodeState,
-  type RetirementAdapter,
+import type {
+  RemovedEntityRef,
+  RemovedFromCodeState,
+  RetirementAdapter,
 } from "../../domains/dynamic-collections/services/removed-from-code-state";
 import {
   registryRowRemovedFromCode,
@@ -100,14 +98,21 @@ export async function withRemovedFromCodeMarks<
   });
 
   const adapter = deps.adapter ?? getAdapterFromDI();
-  const states =
-    removed.length > 0 && adapter !== undefined
-      ? await readRemovedFromCodeStates({
-          adapter,
-          migrationsDir: deps.migrationsDir ?? appMigrationsDir(),
-          entities: removed,
-        })
-      : new Map<string, RemovedFromCodeState>();
+  let stateOf = (_slug: string): RemovedFromCodeState | undefined => undefined;
+  if (removed.length > 0 && adapter !== undefined) {
+    // Loaded only when a row is removed: the state reader brings the migration
+    // file discovery with it, which a listing of declared entities, nearly
+    // every request, never needs.
+    const { readRemovedFromCodeStates, removedEntityKey } = await import(
+      "../../domains/dynamic-collections/services/removed-from-code-state"
+    );
+    const states = await readRemovedFromCodeStates({
+      adapter,
+      migrationsDir: deps.migrationsDir ?? appMigrationsDir(),
+      entities: removed,
+    });
+    stateOf = slug => states.get(removedEntityKey(kind, slug));
+  }
 
   return rows.map((row, index) => {
     const { isRemoved, slug } = flags[index];
@@ -117,9 +122,9 @@ export async function withRemovedFromCodeMarks<
       removedFromCode: true,
       // A removed row with no table name or no adapter to ask is still marked;
       // only its step is left unnamed.
-      removedFromCodeState: (slug === null
-        ? undefined
-        : states.get(removedEntityKey(kind, slug))) ?? { state: "other" },
+      removedFromCodeState: (slug === null ? undefined : stateOf(slug)) ?? {
+        state: "other",
+      },
     };
   });
 }
