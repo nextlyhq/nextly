@@ -40,10 +40,18 @@ const ALLOW = () => true;
 // whose validator names it.
 const SECRET = "TOPSECRET-4411";
 
-/** Readable by READER alone. */
+/**
+ * Readable by READER alone, and only while their grants include the Single's
+ * unpublish: a key READER made without it may not read these fields.
+ */
 const readerOnly = {
-  read: ({ user }: { user?: { id?: unknown } | null }) =>
-    user?.id === READER.id,
+  read: ({
+    user,
+    permissions,
+  }: {
+    user?: { id?: unknown } | null;
+    permissions: readonly string[];
+  }) => user?.id === READER.id && permissions.includes(`unpublish-${BANNER}`),
 };
 
 const fields = () => [
@@ -326,6 +334,32 @@ describe.each(getConfiguredTestDialects())(
           expectEveryIssue(await issuesOf(run));
         }
       );
+    });
+
+    describe("to an API key READER made, whose own scope may not read the hidden fields", () => {
+      // The key's scope leaves out the Single's unpublish, which the hidden
+      // fields' read rule asks for, though READER, its maker, holds it.
+      const key = {
+        user: READER,
+        overrideAccess: false,
+        authenticatedScope: {
+          actorType: "apiKey" as const,
+          permissions: [
+            `read-${BANNER}`,
+            `update-${BANNER}`,
+            `publish-${BANNER}`,
+          ],
+        },
+      };
+
+      it("a Single save sending a hidden field reports it as one generic issue", async () => {
+        // Judged by the save's own validation, on the values it sends.
+        expect(
+          await issuesOf(() =>
+            singles(t).update(BANNER, { internalScore: 99 }, key)
+          )
+        ).toEqual([GENERIC]);
+      });
     });
 
     describe("to trusted code", () => {
