@@ -113,6 +113,15 @@ export interface RecordNoticeResult {
   id: string | null;
 }
 
+/**
+ * One notice as stored, as far as a writer's follow-up needs it: whom it is
+ * for, what it is about, and its snapshot. @experimental
+ */
+export type StoredNotice = Pick<
+  NoticeRow,
+  "id" | "userId" | "kind" | "subjectId" | "data"
+>;
+
 /** One notice as its person sees it. @experimental */
 export interface NoticeView {
   id: string;
@@ -276,6 +285,22 @@ export class NoticesService {
       return { created: false, id: null };
     }
     return { created: stored.id === row.id, id: stored.id ?? null };
+  }
+
+  /**
+   * One notice by its id, as stored, or `null` when there is none: for the
+   * follow-up work of the feature that wrote it, such as the email that copies
+   * it. Not a person's read — `find` is — so neither the person nor the kind's
+   * `visible` narrows it.
+   */
+  async byId(id: string): Promise<StoredNotice | null> {
+    if (!(await this.tablePresent())) return null;
+    const [row] = await this.deps.db.select<StoredNotice>(NOTICES_TABLE, {
+      columns: ["id", "userId", "kind", "subjectId", "data"],
+      where: { and: [{ column: "id", op: "=", value: id }] },
+      limit: 1,
+    });
+    return row ?? null;
   }
 
   /** A page of this person's notices, newest first. */

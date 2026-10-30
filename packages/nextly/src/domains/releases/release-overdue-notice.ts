@@ -52,10 +52,10 @@ export const RELEASE_OVERDUE_NOTICE =
     key: "releases.overdue",
     subjectType: "release",
     data: overdueData,
-    // Said as what happened by the time it was recorded: not run yet, or run
-    // late. A release runs when the site's jobs trigger runs, so the cause is
-    // almost always a trigger that stopped or runs too seldom, and the text
-    // says where to look.
+    // Said as what was true when it was recorded, in the past tense: the
+    // drain's pass records "missed" just before it runs what is due, so the
+    // release may have run moments later. A release runs only when the site's
+    // jobs trigger runs, so the text says where to look.
     render: (data, { subjectGone }) => {
       const gone = "The release has since been deleted.";
       if (data.ranAt === null) {
@@ -63,14 +63,14 @@ export const RELEASE_OVERDUE_NOTICE =
           title: `“${data.title}” missed its time`,
           body: subjectGone
             ? gone
-            : `It is more than ${OVERDUE_AFTER_WORDS} past its time and hasn't run. Releases run when the site's jobs trigger runs, so check that it is scheduled, or open the release and publish it now.`,
+            : `It was more than ${OVERDUE_AFTER_WORDS} past its time and had not run. Open it to see what is holding it, and check that the site's jobs trigger is scheduled: releases run only when it runs.`,
         };
       }
       return {
         title: `“${data.title}” ran late`,
         body: subjectGone
           ? gone
-          : `It ran more than ${OVERDUE_AFTER_WORDS} after its time. Releases run when the site's jobs trigger runs, so check that it runs often enough.`,
+          : `It ran more than ${OVERDUE_AFTER_WORDS} after its time. Releases run only when the site's jobs trigger runs, so check that it runs often enough.`,
       };
     },
     // Where it leads, and to whom it shows, as every release notice.

@@ -28,6 +28,12 @@ const stoppedData = z.object({
   title: z.string(),
   /** The instant the release was scheduled for, as an ISO string. */
   scheduledAt: z.string().nullable(),
+  /**
+   * The zone it was scheduled in, named, or `null` where none was given: what
+   * its email writes the instant in. Absent from a notice stored before it was
+   * kept, which is read as no zone.
+   */
+  timezone: z.string().nullable().optional(),
 });
 
 /** @experimental */

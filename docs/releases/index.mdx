@@ -628,6 +628,39 @@ status, records nothing, so the release stays scheduled however the document rea
 release in any way, rescheduling, cancelling, renaming it or adding or removing a document,
 voids those records, and the next pass writes every document of that release again.
 
+## When a release is late
+
+### The owner is told
+
+A release still scheduled more than 10 minutes after its time is overdue, by the same rule as
+the `attention` tab, and its owner (the person who created it) is given one notice of kind
+`releases.overdue` in their own [notices](/docs/notices). Two places record it, so neither a
+runner that stopped nor one that caught up late goes unreported:
+
+- Each `releases:drain` pass, before it runs anything, tells the owner of every release that is
+  overdue as it starts. The notice says the release missed its time.
+- A release published more than 10 minutes after its time tells its owner in the same
+  transaction. The notice says it ran late.
+
+Both are keyed on the instant the release missed, so the owner is told once per miss, whichever
+place sees it first, and again only if the release is rescheduled and misses its new time. A
+release with no recorded owner, or whose owner's account is gone, tells nobody. An overdue
+release is looked at again on every pass until it runs; the notice is not repeated.
+
+### The owner's email
+
+Where the site can send email, every new release notice, stopped or overdue, is also emailed to
+its person. The notice records a job in its own transaction, so it never stands without its email
+on the way: the next [jobs](/docs/jobs) pass queues the email through Nextly's queued send, and a
+process that stops before then leaves the job for the pass after. The email is sent with a key
+made from the notice's id, so a repeat of the job sends nothing more where the provider honours
+idempotency keys; elsewhere a rare duplicate is possible.
+
+The email gives what happened and the time the release was scheduled for, written in the zone it
+was scheduled in and named, since an email has no reader's zone. It links to the release only
+when `NEXT_PUBLIC_APP_URL` is set, rather than to a guessed host. With no email set up, the notice
+alone is given, and nothing fails.
+
 ## Checks before the moment
 
 > **Needs the release after 0.0.2-alpha.67.**
@@ -787,6 +820,8 @@ stop. Once per stop: the same stop seen twice, or retried, gives one notice, and
 is rescheduled and stops again gives another. A release with no recorded owner, or whose owner's
 account is gone, is still stopped, with no notice. The notice keeps the release's title and time,
 so it still reads after the release is deleted. Only people who may read releases see it.
+Where the site sends email, the notice is also emailed to them, as
+[the owner's email](#the-owners-email) describes.
 
 ### Blocking reasons
 
