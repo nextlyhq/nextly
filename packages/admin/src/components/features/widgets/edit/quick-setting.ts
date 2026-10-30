@@ -3,8 +3,9 @@
  * in the settings sheet.
  *
  * The header draws one: the first setting its widget marks `quick` that a header can hold, a
- * `select` drawn as a compact menu or a `checkbox` drawn as a toggle. The quick popover holds the
- * card's Collection, then the settings marked quick, each a choice it can draw. A setting of any
+ * `select` drawn as a compact menu (or, with exactly two options, as a segmented control
+ * showing both) or a `checkbox` drawn as a toggle. The quick popover holds the card's
+ * Collection, then the settings marked quick, each a choice it can draw. A setting of any
  * other type stays in the sheet, where every setting is drawn.
  *
  * @module components/features/widgets/edit/quick-setting

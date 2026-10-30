@@ -34,6 +34,7 @@ import { expect, type Page, type Request, type Route } from "@playwright/test";
 import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { isLayoutRead } from "./support/dashboard-layout";
 import { LOCK } from "./support/locks";
 
 // Shares state with other specs; see support/locks.ts for what each lock guards.
@@ -101,7 +102,7 @@ function trackStatusReads(page: Page): string[] {
  * first-entry step open: the step the sample-content offer is made in.
  */
 async function placeGetStartedCard(page: Page): Promise<void> {
-  await page.route("**/dashboard/layout", async (route: Route) => {
+  await page.route(isLayoutRead, async (route: Route) => {
     if (route.request().method() !== "GET") return route.fallback();
     // A read still in flight when the test ends fails its fetch. Aborted rather
     // than thrown: a throw out of the handler fails a test that had passed,
@@ -146,12 +147,14 @@ async function placeGetStartedCard(page: Page): Promise<void> {
   });
 }
 
-/** The page's level-one headings: exactly one, visible, with a name. */
+/** The page's level-one headings: exactly one, visible, named for the project. */
 async function expectOneMainHeading(page: Page): Promise<void> {
   const mains = page.getByRole("heading", { level: 1 });
   await expect(mains).toHaveCount(1);
   await expect(mains).toBeVisible();
-  await expect(mains).toHaveAccessibleName(/^Welcome/);
+  // The playground's branding name (`admin.branding.logoText`), which the
+  // header draws as the page's heading in every state.
+  await expect(mains).toHaveAccessibleName("Nextly Playground");
 }
 
 test.describe("the dashboard's main heading", () => {

@@ -47,7 +47,7 @@
  * - `core/upcoming-releases` is gated. `ReleasesService.find` authorizes by
  *   THROWING, so an ungranted reader gets a card stuck in its error state
  *   rather than an empty one -- see its own note.
- * - `core/recent-activity` is not. Its feed takes the caller's readable
+ * - `core/team-activity` is not. Its feed takes the caller's readable
  *   collections as a scope and defaults that scope to NOTHING, so a reader
  *   entitled to none of it is shown an empty feed. That is a card correctly
  *   saying there is nothing to report, which needs no gate; a gate would
@@ -61,16 +61,16 @@ import type { WidgetDefinition } from "../definition";
 
 import { breakdownWidget } from "./breakdown";
 import { contentWidget } from "./content";
+import { continueWidget } from "./continue";
 import { countWidget } from "./count";
 import { getStartedWidget } from "./get-started";
 import { needsAttentionWidget } from "./needs-attention";
 import { noteWidget } from "./note";
 import { overTimeWidget } from "./over-time";
 import { quickCreateWidget } from "./quick-create";
-import { recentActivityWidget } from "./recent-activity";
 import { recentEntriesWidget } from "./recent-entries";
-import { recentlyEditedWidget } from "./recently-edited";
 import { teamWidget } from "./team";
+import { teamActivityWidget } from "./team-activity";
 import { upcomingReleasesWidget } from "./upcoming-releases";
 
 /**
@@ -82,6 +82,7 @@ import { upcomingReleasesWidget } from "./upcoming-releases";
 export const CORE_DECLARATIONS = [
   countWidget,
   breakdownWidget,
+  needsAttentionWidget,
   noteWidget,
   recentEntriesWidget,
   overTimeWidget,
@@ -93,10 +94,9 @@ const CORE_WIDGET_LITERALS = [
   contentWidget,
   quickCreateWidget,
   teamWidget,
-  needsAttentionWidget,
-  recentlyEditedWidget,
+  continueWidget,
   upcomingReleasesWidget,
-  recentActivityWidget,
+  teamActivityWidget,
 ] as const satisfies readonly WidgetDefinition[];
 
 /**

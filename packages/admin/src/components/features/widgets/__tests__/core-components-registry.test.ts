@@ -43,8 +43,8 @@ vi.mock("@admin/components/features/dashboard/TeamSummary", () => ({
 }));
 // The card the dashboard draws, answered by `system:activity`; the section of
 // the same name is deprecated and no longer registered.
-vi.mock("@admin/components/features/dashboard/RecentActivity", () => ({
-  RecentActivityCard: stub,
+vi.mock("@admin/components/features/dashboard/TeamActivity", () => ({
+  TeamActivityCard: stub,
 }));
 vi.mock("@admin/components/features/dashboard/UpcomingReleases", () => ({
   UpcomingReleasesCard: stub,
@@ -67,7 +67,7 @@ describe("core widget components register at runtime", () => {
     // The control, BEFORE the call: every path must be absent first, or a
     // registry left populated by another module would satisfy the assertions
     // below without this function having run at all.
-    expect(hasComponent("core#RecentActivity")).toBe(false);
+    expect(hasComponent("core#TeamActivity")).toBe(false);
     expect(hasComponent("core#TeamSummary")).toBe(false);
 
     registerCoreWidgetComponents();
@@ -77,11 +77,24 @@ describe("core widget components register at runtime", () => {
       "core#CollectionQuickLinks",
       "core#QuickCreate",
       "core#TeamSummary",
-      "core#RecentActivity",
+      "core#TeamActivity",
       "core#UpcomingReleases",
     ]) {
       expect(hasComponent(path), `${path} is not registered`).toBe(true);
     }
+  });
+
+  it("registers Continue where you left off, and no longer Recently edited", async () => {
+    const { hasComponent } = await import(
+      "@admin/lib/plugins/component-registry"
+    );
+    const { registerCoreWidgetComponents } = await import("../core-components");
+
+    registerCoreWidgetComponents();
+
+    // The control: the call ran, so an absence below is the path being gone.
+    expect(hasComponent("core#ContinueCard")).toBe(true);
+    expect(hasComponent("core#RecentlyEdited")).toBe(false);
   });
 
   it("resolves each path to something renderable", async () => {
@@ -94,6 +107,6 @@ describe("core widget components register at runtime", () => {
 
     // `hasComponent` alone would pass on a path registered with `undefined`,
     // which is the shape a broken import produces.
-    expect(typeof getComponent("core#RecentActivity")).toBe("function");
+    expect(typeof getComponent("core#TeamActivity")).toBe("function");
   });
 });

@@ -17,7 +17,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GET_STARTED_WIDGET_ID } from "nextly/config";
 
-import { DASHBOARD_HEADING_ID } from "@admin/components/features/dashboard/WelcomeHeader";
+import { DashboardChromeProvider } from "@admin/components/features/dashboard/header/dashboard-chrome";
+import {
+  DASHBOARD_HEADING_ID,
+  WelcomeHeader,
+} from "@admin/components/features/dashboard/WelcomeHeader";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { AdminBranding } from "@admin/types/branding";
 import type {
@@ -40,6 +44,7 @@ const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -48,6 +53,18 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
+}));
+// The page's header beside the grid holds Customize: its own reads stubbed.
+vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
+  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
+  useDashboardSummary: () => ({ data: undefined }),
+}));
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({
+    user: { id: "u1", name: "Dev User", email: "dev@example.com" },
+    isLoading: false,
+    error: null,
+  }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -131,15 +148,17 @@ function renderGrid() {
     },
   });
   const Wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      {/* The page's heading, which a closed notice returns focus to. */}
-      <h1 id={DASHBOARD_HEADING_ID} tabIndex={-1}>
-        Welcome
-      </h1>
-      {children}
-    </QueryClientProvider>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return render(<WidgetGrid />, { wrapper: Wrapper });
+  // The page's header, whose heading a closed notice returns focus to and which holds
+  // Customize, beside the grid.
+  return render(
+    <DashboardChromeProvider>
+      <WelcomeHeader />
+      <WidgetGrid />
+    </DashboardChromeProvider>,
+    { wrapper: Wrapper }
+  );
 }
 
 /** Enters customise mode and waits for the per-card menus to exist. */

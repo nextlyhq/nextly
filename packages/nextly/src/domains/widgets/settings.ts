@@ -59,6 +59,7 @@ import {
 } from "./query";
 import {
   getSource,
+  isWidgetTab,
   sourceKindFromId,
   type WidgetSourceFilter,
 } from "./sources";
@@ -1676,6 +1677,19 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
     apply: (query, value) =>
       value === true
         ? { ...query, where: { ...query.where, onlyMine: true } }
+        : { ...query },
+  },
+  {
+    // Tab: whose work the card shows, on a source that narrows by it. Matched
+    // by NAME as well as type, as Only mine is; a value that is not one of
+    // the tabs leaves the query as declared, and the source shows its default.
+    drives: (setting, source) =>
+      setting.type === "select" &&
+      setting.name === "tab" &&
+      narrowsBy(source, "tab"),
+    apply: (query, value) =>
+      isWidgetTab(value)
+        ? { ...query, where: { ...query.where, tab: value } }
         : { ...query },
   },
 ];

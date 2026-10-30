@@ -38,7 +38,7 @@ import {
 } from "../registry";
 import type { AnyWidgetSetting } from "../settings";
 
-import type { WidgetAccessGate } from "./define-widget";
+import type { WidgetAccessGate, WidgetSummary } from "./define-widget";
 import { displayOfView, type WidgetDisplay, type WidgetView } from "./displays";
 import { WIDGET_SKELETON_SKETCH, type WidgetSkeleton } from "./skeleton";
 import {
@@ -118,6 +118,8 @@ interface DeclaredWidgetShape {
    * reader may see.
    */
   readonly preview?: readonly DeclaredPreviewCase[];
+  /** A label and a count for the dashboard's header, counted as the reader. */
+  readonly summary?: WidgetSummary;
 }
 
 /** One preview case as a declaration states it, checked at startup. */

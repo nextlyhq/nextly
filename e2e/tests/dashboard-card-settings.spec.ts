@@ -186,11 +186,11 @@ for (const viewport of WIDTHS) {
     await expect(rows(page)).toHaveCount(3);
     const sent = watchRequests(page);
 
-    const accent = cell(page).getByRole("combobox", {
+    // A choice of two is drawn as a segmented control: both options in view.
+    const accent = cell(page).getByRole("radiogroup", {
       name: `Accent for ${TITLE}`,
     });
-    await accent.click();
-    await page.getByRole("option", { name: "Bold" }).click();
+    await accent.getByRole("radio", { name: "Bold" }).click();
 
     // Said once, by the toast that offers its Undo; the grid's own live region stays silent.
     await expect(page.getByText(`${TITLE}: Accent set to Bold.`)).toBeVisible();
@@ -219,8 +219,10 @@ for (const viewport of WIDTHS) {
     // Saved for this reader: it is there after a reload.
     await page.reload();
     await expect(
-      cell(page).getByRole("combobox", { name: `Accent for ${TITLE}` })
-    ).toHaveText(/Bold/);
+      cell(page)
+        .getByRole("radiogroup", { name: `Accent for ${TITLE}` })
+        .getByRole("radio", { name: "Bold" })
+    ).toHaveAttribute("aria-checked", "true");
   });
 }
 

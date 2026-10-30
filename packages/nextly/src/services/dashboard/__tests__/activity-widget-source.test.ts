@@ -1,6 +1,7 @@
 /**
- * `system:activity`: the Recent activity card's source asks the feed exactly
- * what the activity endpoint asks it, and refuses what it cannot answer.
+ * `system:activity`: the Team activity card's source asks the feed exactly
+ * what the activity endpoint asks it, names the event each row records, and
+ * refuses what it cannot answer.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -106,6 +107,32 @@ describe("what it asks the feed", () => {
       countAtLeast: false,
       firstCreatedAt: "2026-10-22T11:50:00.000Z",
     });
+    expect(row).not.toHaveProperty("metadata");
+  });
+
+  it("answers the event the feed names for each row, and never the marks it was read from", async () => {
+    getRecentActivity.mockResolvedValue({
+      activities: [
+        { ...entry, id: "a1", event: "published" },
+        // A removed document's update, whose marks the feed dropped: no event.
+        { ...entry, id: "a2", entryId: null, metadata: null },
+      ],
+      hasMore: false,
+    });
+    const answer = await executeWidgetQuery(
+      { source: ACTIVITY_SOURCE_ID, op: "list", select: ["id", "event"] },
+      caller
+    );
+    expect((answer as { items: unknown[] }).items).toEqual([
+      { id: "a1", event: "published" },
+      { id: "a2", event: undefined },
+    ]);
+    const full = await executeWidgetQuery(
+      { source: ACTIVITY_SOURCE_ID, op: "list" },
+      caller
+    );
+    const [row] = (full as { items: Record<string, unknown>[] }).items;
+    expect(row).toMatchObject({ event: "published" });
     expect(row).not.toHaveProperty("metadata");
   });
 

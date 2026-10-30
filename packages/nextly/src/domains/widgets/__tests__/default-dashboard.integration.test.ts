@@ -41,10 +41,10 @@ import { setDefaultLayoutPlan } from "../default-layout";
  * person it is offered to.
  */
 const AGREED = [
-  ["core/needs-attention", "8x4"],
-  ["core/quick-create", "4x4"],
-  ["core/recently-edited", "6x5"],
-  ["core/recent-activity", "6x5"],
+  ["core/needs-attention", "8x3"],
+  ["core/quick-create", "4x3"],
+  ["core/continue", "6x5"],
+  ["core/team-activity", "6x5"],
   ["core/content", "12x4"],
   ["core/upcoming-releases", "4x4"],
 ] as const;
@@ -171,17 +171,20 @@ describe.each(getConfiguredTestDialects())(
         "core/team"
       );
 
-      // No grants: nothing to create, count or list, and no releases.
+      // No grants: nothing to create, count or list, and no releases. Needs attention is placed
+      // for everyone: it is the card, not the layout, that leaves the dashboard while nothing
+      // waits for its reader.
       expect(await defaultFor(editor)).toEqual([
-        ["core/recently-edited", "6x5"],
-        ["core/recent-activity", "6x5"],
+        ["core/needs-attention", "8x3"],
+        ["core/continue", "6x5"],
+        ["core/team-activity", "6x5"],
       ]);
 
       // One collection to read and none to write in: Needs attention and Content, never Create.
       expect(await defaultFor(readerId)).toEqual([
-        ["core/needs-attention", "8x4"],
-        ["core/recently-edited", "6x5"],
-        ["core/recent-activity", "6x5"],
+        ["core/needs-attention", "8x3"],
+        ["core/continue", "6x5"],
+        ["core/team-activity", "6x5"],
         ["core/content", "12x4"],
       ]);
     });

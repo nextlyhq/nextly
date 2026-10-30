@@ -25,6 +25,8 @@ import type {
 } from "@admin/types/dashboard/widgets";
 import { MAX_PLACEMENTS } from "nextly/config";
 
+import { DashboardChromeProvider } from "../../../dashboard/header/dashboard-chrome";
+import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
 import { DRAG_INSTRUCTIONS } from "../drag/drag-messages";
 import {
@@ -39,6 +41,7 @@ let layoutRejects = false;
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useAppName: () => "Acme Site",
   useBrandingStatus: () => ({
     isPending: false,
     isUnavailable: false,
@@ -47,6 +50,18 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({ hasPermission: () => true }),
+}));
+// The page's header beside the grid holds Customize: its own reads stubbed.
+vi.mock("@admin/hooks/queries/useDashboardSummary", () => ({
+  DASHBOARD_SUMMARY_KEY: ["dashboard", "summary"],
+  useDashboardSummary: () => ({ data: undefined }),
+}));
+vi.mock("@admin/hooks/useDashboardUser", () => ({
+  useDashboardUser: () => ({
+    user: { id: "u1", name: "Dev User", email: "dev@example.com" },
+    isLoading: false,
+    error: null,
+  }),
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: {
@@ -149,7 +164,17 @@ function renderGrid() {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
+  // The page's header and grid, as the page composes them: Customize is the header's.
+  return {
+    client,
+    ...render(
+      <DashboardChromeProvider>
+        <WelcomeHeader />
+        <WidgetGrid />
+      </DashboardChromeProvider>,
+      { wrapper: Wrapper }
+    ),
+  };
 }
 
 beforeEach(() => {

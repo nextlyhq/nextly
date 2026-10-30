@@ -19,7 +19,10 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@admin/lib/api/protectedApi", () => ({ protectedApi: api }));
 
+import { SCHEMA_UPDATED_EVENT } from "@admin/hooks/useSchemaUpdateInvalidation";
+
 import { useDashboardLayout } from "../useDashboardLayout";
+import { useDashboardSummary } from "../useDashboardSummary";
 
 function read(patch: Partial<DashboardLayoutResponse> = {}) {
   return {
@@ -149,5 +152,87 @@ describe("an unreadable stored arrangement", () => {
     const { result } = renderHook(() => useDashboardLayout(), { wrapper });
     await waitFor(() => expect(result.current.layout).toBeDefined());
     expect(result.current.isUnreadable).toBe(false);
+  });
+});
+
+describe("the header's summary, beside the layout", () => {
+  /** Each summary read, numbered, so a re-read is told from the first. */
+  function summaryReads() {
+    let reads = 0;
+    api.get.mockImplementation(async (path: string) => {
+      if (path !== "/dashboard/summary") return read();
+      reads += 1;
+      return { parts: [], failed: 0, read: reads };
+    });
+    return () => reads;
+  }
+
+  function mountBoth() {
+    return renderHook(
+      () => ({ layout: useDashboardLayout(), summary: useDashboardSummary() }),
+      { wrapper }
+    );
+  }
+
+  const placements = [
+    { id: "p1", widgetId: "core/a", w: 6, h: 3, removed: true },
+  ];
+
+  it.each([
+    [
+      "a save",
+      (layout: ReturnType<typeof useDashboardLayout>) =>
+        layout.save.mutateAsync({
+          placements,
+          version: 4,
+          scope: "s",
+          arranged: true,
+        }),
+    ],
+    [
+      "a dismissal",
+      (layout: ReturnType<typeof useDashboardLayout>) =>
+        layout.dismiss.mutateAsync({
+          placements,
+          version: 4,
+          scope: "s",
+          arranged: false,
+        }),
+    ],
+    [
+      "a reset",
+      (layout: ReturnType<typeof useDashboardLayout>) =>
+        layout.reset.mutateAsync({ version: 4, scope: "s" }),
+    ],
+  ])("is read again after %s, as the layout is", async (_name, write) => {
+    const reads = summaryReads();
+    const { result } = mountBoth();
+    await waitFor(() => expect(result.current.layout.layout).toBeDefined());
+    await waitFor(() => expect(result.current.summary.data).toBeDefined());
+    expect(reads()).toBe(1);
+
+    await act(async () => {
+      await write(result.current.layout);
+    });
+
+    // The summary the reader sees is the one read after the write, not the
+    // one read before it.
+    await waitFor(() =>
+      expect(result.current.summary.data).toMatchObject({ read: 2 })
+    );
+  });
+  it("is read again when the schema changes, as the layout is", async () => {
+    // Mounted alone, so nothing but its own listener can read it again: a
+    // schema change can add, remove or change what its parts count.
+    const reads = summaryReads();
+    const { result } = renderHook(() => useDashboardSummary(), { wrapper });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(reads()).toBe(1);
+
+    act(() => {
+      window.dispatchEvent(new Event(SCHEMA_UPDATED_EVENT));
+    });
+
+    await waitFor(() => expect(result.current.data).toMatchObject({ read: 2 }));
   });
 });
