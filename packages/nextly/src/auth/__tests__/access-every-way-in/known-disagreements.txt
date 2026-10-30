@@ -921,6 +921,22 @@ public visitor read single publish-false at rest
 public visitor update single publish-false at rest
 service visitor read media none at rest
 public visitor read media none at rest
+# rest-refuses-visitors at bulk: the bulk routes are REST's, and refuse a
+# visitor the same way, before the Public role is asked.
+public visitor update collection none at bulk
+public visitor delete collection none at bulk
+public visitor update collection true at bulk
+public visitor delete collection true at bulk
+public visitor update collection returns-true at bulk
+public visitor delete collection returns-true at bulk
+public visitor update collection async-true at bulk
+public visitor delete collection async-true at bulk
+public visitor delete collection other-operation at bulk
+public visitor update collection role-screen-spelling at bulk
+public visitor delete collection role-screen-spelling at bulk
+public visitor update collection publish-false at bulk
+public visitor delete collection publish-false at bulk
+
 # A collection's read rule that answers a well-formed filter allows the
 # entries it matches. Each door below refuses it still, as no read there
 # applies a rule's filter yet.

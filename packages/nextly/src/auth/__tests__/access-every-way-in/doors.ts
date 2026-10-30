@@ -1033,8 +1033,9 @@ async function bulkItemRefusal(
  * The bulk routes by ids. A request the route refuses whole answers with its
  * status, as REST does; one it lets through answers 200 whatever happened to
  * each entry, so the entry's own result among the items is the answer: `A`
- * where it was changed, the status of its failure's code where it failed. A
- * failure is compared with the same request for an entry that does not exist.
+ * where it was changed, the status of its failure's code where it failed.
+ * Every refusal is compared with the same request for an entry that does not
+ * exist.
  */
 async function bulk(world: World, row: Row, who: CallerHandle) {
   // The table asks this door only writes to existing entries.
@@ -1043,8 +1044,13 @@ async function bulk(world: World, row: Row, who: CallerHandle) {
   }
   const { slug, id } = addressOf(world, row, "bulk");
   const res = await bulkRequest(slug, row.action, id, who.headers);
+  const absent = () => bulkRequest(slug, row.action, ABSENT_ID, who.headers);
+  // A request refused whole names no entry in its path, and is compared with
+  // the same request for an entry that does not exist, so a refusal that
+  // tells the two apart shows.
   if (res.status >= 300) {
     await noteResponse(res);
+    await noteMissing(res, await absent());
     return fromStatus(res.status);
   }
   const refusal = await bulkItemRefusal(res, id);
@@ -1054,11 +1060,11 @@ async function bulk(world: World, row: Row, who: CallerHandle) {
     return changed ? "A" : "=unnamed";
   }
   noteRefusal(refusal);
-  const absent = await bulkRequest(slug, row.action, ABSENT_ID, who.headers);
+  const missing = await absent();
   noteMissingRefusal(
-    absent.status >= 300
-      ? await refusalOf(absent)
-      : await bulkItemRefusal(absent, ABSENT_ID)
+    missing.status >= 300
+      ? await refusalOf(missing)
+      : await bulkItemRefusal(missing, ABSENT_ID)
   );
   return refusal.status === 0 ? "E" : String(refusal.status);
 }
