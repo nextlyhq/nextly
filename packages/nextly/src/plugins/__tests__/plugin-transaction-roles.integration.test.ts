@@ -25,6 +25,7 @@ import {
 import { defineCollection, text } from "../../config";
 import type { CollectionService } from "../../domains/collections/services/collection-service";
 import type { AccessRuleContext } from "../../shared/types/access";
+import type { AuthUserId } from "../../types/auth";
 import { wrapCollectionsForPlugin } from "../service-opts";
 import {
   createTestNextly,
@@ -45,9 +46,9 @@ const TRUSTED = roleSlugOf("read", AUTHOR);
 
 /** Admits a caller whose request user holds {@link TRUSTED}. */
 const holdsTrustedRole = ({ req }: AccessRuleContext) =>
-  ((req.user as { roles?: unknown } | undefined)?.roles as
-    | string[]
-    | undefined)?.includes(TRUSTED) === true;
+  (
+    (req.user as { roles?: unknown } | undefined)?.roles as string[] | undefined
+  )?.includes(TRUSTED) === true;
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -91,7 +92,11 @@ async function seedAuthor(t: TestNextly) {
   return {
     id: created.item.id,
     trustedRoleId: trusted.id,
-    user: { id: AUTHOR, email: `${AUTHOR}@example.test`, name: AUTHOR },
+    user: {
+      id: AUTHOR as AuthUserId,
+      email: `${AUTHOR}@example.test`,
+      name: AUTHOR,
+    },
   };
 }
 
@@ -192,7 +197,10 @@ describe.each(getConfiguredTestDialects())(
         { guarded: "after" },
         {
           as: "user",
-          user: { id: "role-other", email: "role-other@example.test" },
+          user: {
+            id: "role-other" as AuthUserId,
+            email: "role-other@example.test",
+          },
         }
       );
 
