@@ -1,414 +1,388 @@
 /**
- * The SEO source against a real instance: boot publishes it, and its resolver
- * counts real rows through the real managed services.
+ * The SEO card and its Needs attention line against a real instance, on every
+ * configured dialect, each asked through the dashboard's own route as readers
+ * with different rights.
  *
- * 🔴 The resolver is driven through a ROUTE rather than called directly, and
- * that is the point of this file. A route handler receives the `PluginContext`
- * the host built -- the same object the boot binds a contributed resolver to --
- * so the services here are the genuine caller-scoped ones rather than a stub.
- * The unit file covers the counting rules; what only this can show is that the
- * arguments the resolver passes are ones the real service accepts.
+ * 🔴 Through the route, as a signed-in person, and that is the point of this
+ * file. The card is answered by `runWidgetLoad`, which asks the route the
+ * dashboard asks; the item by the same route's attention digest. So every gate
+ * is core's, and the services each read through are the ones bound to that
+ * person. What only this can show: that the declarations boot, that core
+ * accepts the reads the scan makes, and that two readers with different read
+ * access are given different answers, where a scan reading as the system would
+ * give them the same one.
+ *
+ * Runs against whichever dialects the integration run configures; CI covers
+ * SQLite, PostgreSQL and MySQL.
  */
-import { definePlugin, type ReadCaller } from "@nextlyhq/plugin-sdk";
+
+// Set before the harness boots (env validation reads it once): the route signs
+// each person in.
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  runWidgetLoad,
+  type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, listSources, text } from "nextly";
+import { defineCollection, text, type FieldConfig } from "nextly";
+import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, rmSync } from "node:fs";
+import path from "node:path";
+
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { defaultSeoFields } from "../fields";
 import { seoPlugin } from "../plugin";
 import { seoIssuesWidget } from "../widget-card";
-import {
-  ISSUE_FIELD,
-  ISSUE_SCAN_ROW_BUDGET,
-  SEO_ISSUES_SOURCE_ID,
-  seoIssuesWidgetSource,
-} from "../widget-source";
+import { ISSUE_SCAN_PAGE_SIZE } from "../widget-source";
 
-const PROBE_NAME = "@test/seo-probe";
-// Segments after `/api/`, matching how the catch-all splits the path. The
-// plugin name is two segments because it contains a slash.
-const PROBE_PARAMS = ["plugins", "@test", "seo-probe", "count"];
+// Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
+const PAGES = "seoi_pages";
+const POSTS = "seoi_posts";
+const COLLECTIONS = [PAGES, POSTS];
+
+/** The card, as the plugin booted below declares it. */
+const card = theCard();
+
+function theCard(): NonNullable<ReturnType<typeof seoIssuesWidget>> {
+  const declared = seoIssuesWidget(COLLECTIONS, defaultSeoFields());
+  if (declared === undefined) throw new Error("the SEO card was withheld");
+  return declared;
+}
+
+/** One item of the attention digest, as the route answers it. */
+interface DigestItem {
+  id: string;
+  label: string;
+  count: number;
+  atLeast?: true;
+  link: string;
+  failed?: true;
+}
 
 /**
- * A reader holding `read-pages`, which the collection's own `access.read` then
- * admits: a code rule only narrows the permission. Seeded by `boot`.
+ * A 1x1 PNG, the smallest file the media library accepts as an image.
  */
-let reader: ReadCaller = { user: { id: "", roles: [] } };
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64"
+);
+
+/**
+ * Where an upload lands, and the ignore file local storage writes beside it on
+ * its first upload: both under the package this suite runs in. Each is taken
+ * down after the suite when the suite was what made it.
+ */
+const UPLOADS = path.resolve("public");
+const IGNORE = path.resolve(".gitignore");
+const madeHere = { uploads: !existsSync(UPLOADS), ignore: !existsSync(IGNORE) };
 
 let current: TestNextly | undefined;
+
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
 });
 
-/**
- * A test-only plugin that answers the SEO source from its own route.
- *
- * It calls the SAME factory the SEO plugin contributes, so the resolver under
- * test is the shipped one; only the way it is reached differs.
- */
-function probePlugin(collections: string[]): unknown {
-  return definePlugin({
-    name: PROBE_NAME,
-    version: "1.0.0",
-    nextly: ">=0.0.0",
-    contributes: {
-      routes: [
-        {
-          method: "GET",
-          path: "/count",
-          public: true,
-          handler: async (req, ctx) => {
-            const { resolve } = seoIssuesWidgetSource(
-              collections,
-              defaultSeoFields()
-            );
-            // 🔴 The CARD's own cell query, taken from the card rather than
-            // rebuilt here. Reconstructing the filter would test this file's
-            // idea of what the card asks, which is the one thing the seam case
-            // exists to avoid assuming.
-            const cellKey = new URL(req.url).searchParams.get("cell");
-            const cell = seoIssuesWidget(defaultSeoFields())?.cells.find(
-              candidate => candidate.key === cellKey
-            );
-            const result = await resolve(
-              cell?.query ?? { source: SEO_ISSUES_SOURCE_ID, op: "count" },
-              reader,
-              ctx,
-              undefined
-            );
-            return new Response(JSON.stringify(result), {
-              headers: { "content-type": "application/json" },
-            });
-          },
-        },
-        {
-          // The card's five cells answered together (`resolveMany`) or one by
-          // one (`resolve`), with the pages the REAL collection service read.
-          method: "GET",
-          path: "/cells",
-          public: true,
-          handler: async (req, ctx) => {
-            const { resolve, resolveMany } = seoIssuesWidgetSource(
-              collections,
-              defaultSeoFields()
-            );
-            const cells = (
-              seoIssuesWidget(defaultSeoFields())?.cells ?? []
-            ).map(cell => cell.query);
-            // A failure here is reported in the response, since the harness keeps
-            // the server log quiet and a bare 500 would say nothing about why.
-            try {
-              const counted = countingReads(ctx);
-              const answers =
-                new URL(req.url).searchParams.get("mode") === "many" &&
-                resolveMany
-                  ? await resolveMany(cells, reader, counted.ctx, undefined)
-                  : await Promise.all(
-                      cells.map(cell =>
-                        resolve(cell, reader, counted.ctx, undefined)
-                      )
-                    );
-              return new Response(
-                JSON.stringify({ answers, pagesRead: counted.pagesRead() }),
-                { headers: { "content-type": "application/json" } }
-              );
-            } catch (error) {
-              return new Response(
-                JSON.stringify({
-                  probeError:
-                    error instanceof Error ? error.stack : String(error),
-                }),
-                { status: 500, headers: { "content-type": "application/json" } }
-              );
-            }
-          },
-        },
-        {
-          method: "GET",
-          path: "/grouped",
-          public: true,
-          handler: async (_req, ctx) => {
-            const { resolve } = seoIssuesWidgetSource(
-              collections,
-              defaultSeoFields()
-            );
-            const result = await resolve(
-              {
-                source: SEO_ISSUES_SOURCE_ID,
-                op: "groupBy",
-                groupBy: ISSUE_FIELD,
-              },
-              reader,
-              ctx,
-              undefined
-            );
-            return new Response(JSON.stringify(result), {
-              headers: { "content-type": "application/json" },
-            });
-          },
-        },
-      ],
-    },
-  });
-}
-
-/**
- * The plugin's context with its collection reads counted, the real service doing
- * the reading. A copy with `listEntries` wrapped, not a `Proxy`: the services the
- * host hands a plugin are frozen, and a proxy may not answer a frozen property
- * with anything but its own value.
- */
-function countingReads<C extends { services: object }>(ctx: C) {
-  let pages = 0;
-  const services = ctx.services as {
-    collections: { listEntries: (...args: unknown[]) => unknown };
-  };
-  const real = services.collections;
-  const collections = {
-    ...real,
-    listEntries: (...args: unknown[]) => {
-      pages += 1;
-      return real.listEntries(...args);
-    },
-  };
-  return {
-    ctx: { ...ctx, services: { ...services, collections } } as C,
-    pagesRead: () => pages,
-  };
-}
-
-async function probe(path: string, query = ""): Promise<unknown> {
-  const handlers = createDynamicHandlers();
-  const res = await handlers.GET(
-    new Request(`http://localhost/api/plugins/${PROBE_NAME}/${path}${query}`),
-    {
-      params: Promise.resolve({
-        params: ["plugins", "@test", "seo-probe", path],
-      }),
-    }
-  );
-  // A probe that failed says so, rather than handing back a body whose fields are all
-  // undefined, which two failing calls would compare equal on.
-  if (!res.ok)
-    throw new Error(`probe ${path}: ${res.status} ${await res.text()}`);
-  return (await res.json()) as unknown;
-}
-
-const pages = () =>
-  defineCollection({
-    slug: "pages",
-    access: { read: () => true, create: () => true, update: () => true },
-    fields: [text({ name: "title" })],
-  });
-
-async function boot(collections: string[]): Promise<TestNextly> {
-  const t = await createTestNextly({
-    collections: [pages()],
-    plugins: [
-      seoPlugin({ collections: ["pages"], sitemap: false }),
-      probePlugin(collections),
-    ] as never,
-  });
-  current = t;
-  // The install's first account holds super-admin, so an owner is made first,
-  // and the reader is a second account holding read-pages and nothing else.
-  await t.nextly.users.create({
-    email: "owner@example.com",
-    password: "Password123!",
-    data: { name: "Owner", isActive: true },
-  });
-  const permissions = await t.nextly.permissions.find({ limit: 1000 });
-  const readPages =
-    permissions.items.find(permission => permission.slug === "read-pages") ??
-    (
-      await t.nextly.permissions.create({
-        data: {
-          action: "read",
-          resource: "pages",
-          name: "Read pages",
-          slug: "read-pages",
-        },
-      })
-    ).item;
-  const role = await t.nextly.roles.create({
-    data: {
-      name: "Pages reader",
-      slug: "pages-reader",
-      permissionIds: [readPages.id],
-    },
-  });
-  const created = await t.nextly.users.create({
-    email: "reader@example.com",
-    password: "Password123!",
-    data: { name: "Reader", isActive: true, roles: [String(role.item.id)] },
-  });
-  reader = {
-    user: { id: String(created.item.id), roles: ["pages-reader"] },
-  };
-  return t;
-}
-
-async function write(
-  t: TestNextly,
-  title: string,
-  seo?: Record<string, unknown>
-): Promise<void> {
-  await t.nextly.create({
-    collection: "pages",
-    data: { title, ...(seo === undefined ? {} : { seo }) },
-  });
-}
-
-async function countedIssues(cellKey?: string): Promise<unknown> {
-  const handlers = createDynamicHandlers();
-  const query =
-    cellKey === undefined ? "" : `?cell=${encodeURIComponent(cellKey)}`;
-  const res = await handlers.GET(
-    new Request(`http://localhost/api/plugins/${PROBE_NAME}/count${query}`),
-    { params: Promise.resolve({ params: PROBE_PARAMS }) }
-  );
-  return (await res.json()) as unknown;
-}
-
-/** One cell's number, from the card's OWN query through the shipped resolver. */
-async function cellTotal(cellKey: string): Promise<number> {
-  const result = (await countedIssues(cellKey)) as { total: number };
-  return result.total;
-}
-
-describe("the SEO source, booted", () => {
-  it("is published by the boot, in the plugin namespace", async () => {
-    await boot(["pages"]);
-
-    const published = listSources().find(s => s.id === SEO_ISSUES_SOURCE_ID);
-    expect(published).toBeDefined();
-    expect(published?.kind).toBe("plugin");
-    expect(published?.supports).toEqual(["count", "groupBy"]);
-  });
-
-  it("counts the gaps in real rows through the real services", async () => {
-    // 🔴 The number is the evidence: it cannot be produced without a context
-    // that reaches the collection service, and it cannot be produced by a
-    // resolver whose arguments the real service rejects.
-    const t = await boot(["pages"]);
-    await write(t, "Bare");
-    await write(t, "Titled", { metaTitle: "Titled" });
-
-    // Bare: 4 gaps. Titled: canonical, description and image still missing.
-    expect(await countedIssues()).toEqual({ op: "count", total: 7 });
-  });
-
-  it("finds nothing to report when every field is filled in", async () => {
-    // The must-differ half. Without it a resolver that returned a constant, or
-    // one that counted every row regardless of its data, satisfies the case
-    // above.
-    const t = await boot(["pages"]);
-    await write(t, "Complete", {
-      metaTitle: "Complete",
-      metaDescription: "A complete page.",
-      canonical: "https://example.com/complete",
-      ogImage: "media-1",
-    });
-
-    expect(await countedIssues()).toEqual({ op: "count", total: 0 });
-  });
-
-  it("reports nothing for a collection it was not configured with", async () => {
-    // The source is bound to the collections the plugin extended. A collection
-    // with no `seo` group would otherwise report the full set of missing fields
-    // for every row it holds and drown the real answer.
-    const t = await boot([]);
-    await write(t, "Bare");
-
-    expect(await countedIssues()).toEqual({ op: "count", total: 0 });
-  });
-
-  it("draws a card whose cells the source can actually answer", async () => {
-    // 🔴 The SEAM. The card names each issue by LABEL in a `where` filter, and
-    // the resolver produces those labels independently. Nothing checks that the
-    // two spellings agree -- a renamed label leaves every cell reading zero,
-    // which looks exactly like a clean site.
-    //
-    // Reconciling the parts against the whole is what catches that: a cell whose
-    // filter matches nothing contributes nothing, so the sum falls short of the
-    // unfiltered total.
-    //
-    // Booting at all is the other half. A malformed `admin.widgets` entry fails
-    // boot, so a card that reached this line is one the host accepted.
-    const t = await boot(["pages"]);
-    await write(t, "Bare");
-    await write(t, "Titled", { metaTitle: "Titled" });
-    await write(t, "Hidden", { noindex: true });
-
-    const card = seoIssuesWidget(defaultSeoFields());
-    const cells = card?.cells ?? [];
-    expect(cells).toHaveLength(5);
-
-    const perCell = await Promise.all(cells.map(cell => cellTotal(cell.key)));
-    const whole = (await countedIssues()) as { total: number };
-
-    // Bare 4 + Titled 3 + Hidden 1.
-    expect(whole.total).toBe(8);
-    expect(perCell.reduce((sum, n) => sum + n, 0)).toBe(whole.total);
-    // And the numbers are not all zero, which would satisfy the sum trivially.
-    expect(perCell.filter(n => n > 0).length).toBeGreaterThan(1);
-  });
+afterAll(() => {
+  if (madeHere.uploads) rmSync(UPLOADS, { recursive: true, force: true });
+  if (madeHere.ignore) rmSync(IGNORE, { force: true });
 });
 
-describe("the SEO card, from one scan", () => {
-  it("answers its five cells from ONE scan, each equal to the cell asked alone", async () => {
-    const t = await boot(["pages"]);
-    await write(t, "Bare");
-    await write(t, "Titled", { metaTitle: "Titled" });
-    await write(t, "Hidden", { metaTitle: "H", noindex: true });
+describe.each(getConfiguredTestDialects())(
+  "the SEO card and its Needs attention line (%s)",
+  (dialect: TestDialect) => {
+    /**
+     * Readers by what they may read: everything (the owner, a super-admin),
+     * both collections, pages alone, neither. None but the owner may read media.
+     */
+    interface Readers {
+      owner: string;
+      both: string;
+      pagesOnly: string;
+      neither: string;
+    }
 
-    const together = (await probe("cells", "?mode=many")) as {
-      answers: unknown[];
-      pagesRead: number;
-    };
-    const alone = (await probe("cells", "?mode=each")) as {
-      answers: unknown[];
-      pagesRead: number;
-    };
+    /** An instance with the plugin on both collections, its `seo` fields `fields` when given. */
+    async function boot(
+      fields?: FieldConfig[]
+    ): Promise<{ t: TestNextly; readers: Readers }> {
+      const t = await createTestNextly({
+        dialect,
+        collections: COLLECTIONS.map(slug =>
+          defineCollection({ slug, fields: [text({ name: "title" })] })
+        ),
+        plugins: [
+          seoPlugin({
+            collections: COLLECTIONS,
+            sitemap: false,
+            ...(fields === undefined ? {} : { fields }),
+          }),
+        ],
+      });
+      current = t;
+      // The install's first account holds super-admin, so an owner is made
+      // first, and each reader after it holds only what their role grants.
+      const owner = await userWith(t, "owner", []);
+      return {
+        t,
+        readers: {
+          owner,
+          both: await userWith(t, "both", COLLECTIONS),
+          pagesOnly: await userWith(t, "pages-only", [PAGES]),
+          neither: await userWith(t, "neither", []),
+        },
+      };
+    }
 
-    expect(together.answers).toEqual(alone.answers);
-    expect(alone.answers).toHaveLength(5);
-    // The baseline was one scan per cell: five here, one when asked together.
-    expect(alone.pagesRead).toBe(5);
-    expect(together.pagesRead).toBe(1);
-  });
+    /** The id of a new account whose one role may read `collections`, or holding no role. */
+    async function userWith(
+      t: TestNextly,
+      name: string,
+      collections: readonly string[]
+    ): Promise<string> {
+      const roles =
+        collections.length === 0
+          ? []
+          : [String((await roleReading(t, name, collections)).item.id)];
+      const created = await t.nextly.users.create({
+        email: `${name}@example.com`,
+        password: "Password123!",
+        data: { name, isActive: true, roles },
+      });
+      return String(created.item.id);
+    }
 
-  it("groups the issues by kind, and says the counts are floors past the scan bound", async () => {
-    const t = await boot(["pages"]);
-    // Bare rows, each with the same four gaps, one more than the scan may read.
-    const rows = ISSUE_SCAN_ROW_BUDGET + 1;
-    for (let start = 0; start < rows; start += 100) {
-      await Promise.all(
-        Array.from({ length: Math.min(100, rows - start) }, (_, i) =>
-          write(t, `Bare ${start + i}`)
-        )
+    /** A role holding `read-<slug>` for each of `collections`, as stored. */
+    async function roleReading(
+      t: TestNextly,
+      name: string,
+      collections: readonly string[]
+    ) {
+      const permissions = await t.nextly.permissions.find({ limit: 1000 });
+      const ids: string[] = [];
+      for (const slug of collections) {
+        const found =
+          permissions.items.find(p => p.slug === `read-${slug}`) ??
+          (
+            await t.nextly.permissions.create({
+              data: {
+                action: "read",
+                resource: slug,
+                name: `Read ${slug}`,
+                slug: `read-${slug}`,
+              },
+            })
+          ).item;
+        ids.push(String(found.id));
+      }
+      return t.nextly.roles.create({
+        data: {
+          name: `Reads ${name}`,
+          slug: `reads-${name}`,
+          permissionIds: ids,
+        },
+      });
+    }
+
+    async function write(
+      t: TestNextly,
+      collection: string,
+      seo?: Record<string, unknown>
+    ): Promise<void> {
+      await t.nextly.create({
+        collection,
+        data: { title: "Entry", ...(seo === undefined ? {} : { seo }) },
+      });
+    }
+
+    /**
+     * The attention digest the dashboard's route answers `userId`: the same
+     * request the Needs attention card makes, signed in as that person the way
+     * `runWidgetLoad` signs them in.
+     */
+    async function digestFor(
+      t: TestNextly,
+      userId: string
+    ): Promise<DigestItem[]> {
+      const person = await t.nextly.users.findByID({ id: userId });
+      if (person === null) throw new Error(`no user ${userId}`);
+      const token = await signAccessToken(
+        buildClaims({
+          userId: person.id,
+          email: person.email,
+          name: person.name ?? "",
+          image: null,
+          roleIds: [],
+          sessionEpoch: 0,
+        }),
+        process.env.NEXTLY_SECRET ?? ""
+      );
+      const res = await createDynamicHandlers().POST(
+        new Request("http://localhost/api/dashboard/query", {
+          method: "POST",
+          headers: {
+            cookie: `nextly_session=${token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            queries: [{ source: "system:attention", op: "list", limit: 50 }],
+          }),
+        }),
+        { params: Promise.resolve({ params: ["dashboard", "query"] }) }
+      );
+      if (!res.ok) throw new Error(`digest: ${res.status} ${await res.text()}`);
+      const { results } = (await res.json()) as {
+        results: [{ ok: boolean; result?: { items: DigestItem[] } }];
+      };
+      if (!results[0].ok || results[0].result === undefined) {
+        throw new Error(`digest slot: ${JSON.stringify(results[0])}`);
+      }
+      return results[0].result.items;
+    }
+
+    /** The SEO line of `userId`'s digest, or `undefined` when they are shown none. */
+    async function seoItemFor(
+      t: TestNextly,
+      userId: string
+    ): Promise<DigestItem | undefined> {
+      return (await digestFor(t, userId)).find(
+        item => item.id === "seo/issues"
       );
     }
 
-    const grouped = (await probe("grouped")) as {
-      op: string;
-      buckets: { value: string; count: number }[];
-      atLeast?: boolean;
-      truncated?: boolean;
-    };
+    it("answers the card for a reader of every collection, and to no one else", async () => {
+      const { t, readers } = await boot();
+      // Pages: one bare row, four gaps. Posts: one titled row, three gaps.
+      await write(t, PAGES);
+      await write(t, POSTS, { metaTitle: "Titled" });
 
-    expect(grouped.op).toBe("groupBy");
-    expect(grouped.atLeast).toBe(true);
-    // Every kind the scan found is here; its count is what was read, a floor.
-    expect(grouped.truncated).toBeUndefined();
-    expect(grouped.buckets.map(bucket => bucket.count)).toEqual(
-      grouped.buckets.map(() => ISSUE_SCAN_ROW_BUDGET)
-    );
-    expect(grouped.buckets.length).toBeGreaterThan(0);
-  }, 120_000);
-});
+      expect(
+        await runWidgetLoad(t, card, { as: { id: readers.both } })
+      ).toEqual({
+        state: "ready",
+        data: {
+          buckets: [
+            { value: "Missing meta title", count: 1 },
+            { value: "Missing canonical URL", count: 2 },
+            { value: "Missing meta description", count: 2 },
+            { value: "Missing social image", count: 2 },
+          ],
+        },
+      });
+      // 🔴 The must-differ half. A card reading as the system would hand a
+      // reader of pages alone the same chart, describing posts they may not
+      // read; core refuses them the card before its `load` runs.
+      expect(
+        await runWidgetLoad(t, card, { as: { id: readers.pagesOnly } })
+      ).toEqual({ state: "unavailable" });
+      expect(
+        await runWidgetLoad(t, card, { as: { id: readers.neither } })
+      ).toEqual({ state: "unavailable" });
+    });
+
+    it("reads every row past what one read answers", async () => {
+      // 🔴 Core answers a widget read with fifty rows at most. A scan whose page
+      // asked for more, or that stopped at the first page core shortened, counts
+      // fifty here and says nothing of the rest.
+      const { t, readers } = await boot();
+      const rows = ISSUE_SCAN_PAGE_SIZE * 2 + 5;
+      for (let i = 0; i < rows; i++) {
+        await write(t, PAGES, { metaDescription: "D", canonical: "C" });
+      }
+
+      expect(
+        await runWidgetLoad(t, card, { as: { id: readers.both } })
+      ).toEqual({
+        state: "ready",
+        data: {
+          buckets: [
+            { value: "Missing meta title", count: rows },
+            { value: "Missing social image", count: rows },
+          ],
+        },
+      });
+    });
+
+    it("draws the card empty, and adds no line, when there is nothing to fix", async () => {
+      // Every text field filled in. The social image is an upload, which a
+      // widget's read answers populated, so the fields here leave it out
+      // rather than hand it a file this instance does not hold.
+      const { t, readers } = await boot(
+        defaultSeoFields().filter(
+          field => !("name" in field) || field.name !== "ogImage"
+        )
+      );
+      await write(t, PAGES, {
+        metaTitle: "T",
+        metaDescription: "D",
+        canonical: "C",
+      });
+
+      // No bars. The bars view's own rule judges that answer empty where the
+      // frame draws it, with the card's declared message; the browser spec
+      // draws it. The route's own verdict is the declaration's `isEmpty`
+      // alone, which a core view need not give, so it is not asserted here.
+      expect(
+        await runWidgetLoad(t, card, { as: { id: readers.both } })
+      ).toMatchObject({ data: { buckets: [] } });
+      // A zero adds no line: the digest leaves out what needs nobody.
+      expect(await seoItemFor(t, readers.both)).toBeUndefined();
+    });
+
+    it("counts a social image by the id it stores, the same for a reader who may not read media", async () => {
+      // 🔴 Read with its links expanded, a page's image comes back null to a
+      // reader without read-media, and the page with an image would count as
+      // missing one: 2 here for that reader. Read as stored ids, both readers
+      // count the one page that has none.
+      const { t, readers } = await boot();
+      const image = await t.nextly.media.upload({
+        file: {
+          data: PNG,
+          name: "seo-social.png",
+          mimetype: "image/png",
+          size: PNG.length,
+        },
+      });
+      const filled = { metaTitle: "T", metaDescription: "D", canonical: "C" };
+      await write(t, PAGES, { ...filled, ogImage: String(image.id) });
+      await write(t, PAGES, filled);
+
+      for (const id of [readers.owner, readers.both]) {
+        expect(await runWidgetLoad(t, card, { as: { id } })).toEqual({
+          state: "ready",
+          data: { buckets: [{ value: "Missing social image", count: 1 }] },
+        });
+        expect(await seoItemFor(t, id)).toMatchObject({ count: 1 });
+      }
+    });
+
+    it("counts the line as each reader reads the collections it names", async () => {
+      const { t, readers } = await boot();
+      await write(t, PAGES);
+      await write(t, POSTS, { metaTitle: "Titled" });
+
+      expect(await seoItemFor(t, readers.both)).toMatchObject({
+        id: "seo/issues",
+        label: "SEO issues in published pages",
+        count: 7,
+        link: `collections/${PAGES}`,
+      });
+      // 🔴 The must-differ half: a reader of pages alone is counted pages' four
+      // gaps, never posts' three. A count reading as the system answers 7 here.
+      expect(await seoItemFor(t, readers.pagesOnly)).toMatchObject({
+        id: "seo/issues",
+        count: 4,
+      });
+      // A reader of neither collection the line names is shown no line at all,
+      // not even its label.
+      expect(await seoItemFor(t, readers.neither)).toBeUndefined();
+    });
+  }
+);

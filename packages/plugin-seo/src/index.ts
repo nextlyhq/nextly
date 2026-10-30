@@ -20,14 +20,10 @@ export type {
   UrlForEntry,
 } from "./sitemap";
 export {
-  seoIssuesWidgetSource,
   issuesFor,
   checksFor,
-  issueFilter,
-  SEO_ISSUES_SOURCE_ID,
-  ISSUE_FIELD,
+  reportableIssues,
   ISSUE_SCAN_ROW_BUDGET,
-  ISSUE_SCAN_PAGE_SIZE,
 } from "./widget-source";
 export type { IssueChecks } from "./widget-source";
 export type {
@@ -35,5 +31,7 @@ export type {
   EntriesPage,
   EntriesQuery,
 } from "./collection-reads";
-export { seoIssuesWidget, SEO_ISSUES_WIDGET_ID } from "./widget-card";
-export { reportableIssues } from "./widget-source";
+// The dashboard card's id, for a site's `admin.dashboard` (`defaultLayout`,
+// `hide`, `overrides`). The card and its Needs attention line reach the
+// dashboard through `seoPlugin`, so neither declaration is exported.
+export { SEO_ISSUES_WIDGET_ID } from "./widget-card";

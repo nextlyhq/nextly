@@ -1,78 +1,182 @@
 /**
- * The dashboard card that draws this plugin's SEO issues.
+ * What this plugin puts on the dashboard: the SEO issues card, and its issue
+ * count as a line of the Needs attention card.
  *
- * `contributes.admin.widgets` is the presentation half of what
- * `contributes.widgetSources` publishes: the source answers a question, and the
- * card says how a reader meets the answer. The host draws it -- this plugin
- * ships no admin component, so nothing of its code enters the admin bundle and
- * the card cannot break a dashboard it is placed on.
+ * Both are declarations the host reads through `contributes.dashboard`, built
+ * from `@nextlyhq/plugin-sdk` alone. The card is drawn by core's `bars` view,
+ * so this plugin ships no admin component: nothing of its code enters the admin
+ * bundle, and the card cannot break a dashboard it is placed on.
  *
- * ## Why several numbers rather than one
+ * ## Why one bar per issue
  *
- * `stats` gives one labelled number per issue, which is the breakdown a reader
- * acts on: "eleven pages have no title" says what to do, where "twenty-three SEO
- * issues" does not.
+ * The breakdown is what a reader acts on: "eleven pages have no title" says
+ * what to do, where "twenty-three SEO issues" does not. The Needs attention
+ * line is the opposite case: one number saying there is something to look at,
+ * beside the other things that need the reader.
  *
- * 🔴 Each cell is its OWN count query, by the archetype's design -- that is what
- * keeps every number an ordinary access-controlled read rather than one
- * composite answer covering all of them. So the card costs one bounded scan per
- * cell. A grouped query would collapse them into a single scan, and this source
- * cannot answer one honestly while `WidgetResult`'s grouped arm has no way to
- * say its bucket counts are floors.
+ * ## Why the issues are computed
  *
- * ## Why the cells are computed
- *
- * From the same {@link IssueChecks} the resolver counts by, so a project that
- * replaced the default fields gets cells only for what it installed. A hand
- * written list would offer a number for a field nobody stores, and the card
- * would sit at zero forever with nothing to say why.
+ * From the same {@link IssueChecks} the scan counts by, so a project that
+ * replaced the default fields is shown only what it installed. A hand written
+ * list would offer a bar for a field nobody stores, and it would sit at zero
+ * forever with nothing to say why.
  *
  * @module widget-card
  */
 
-import type { FieldConfig, PluginAdminStatsWidget } from "@nextlyhq/plugin-sdk";
+import {
+  defineAttentionItem,
+  defineWidget,
+  type AttentionCount,
+  type AttentionItem,
+  type FieldConfig,
+  type PluginContributions,
+} from "@nextlyhq/plugin-sdk";
 
 import {
   checksFor,
-  ISSUE_FIELD,
   reportableIssues,
-  SEO_ISSUES_SOURCE_ID,
+  tallyIssues,
+  type IssueTally,
 } from "./widget-source";
 
 /** The card's id, in the `namespace/name` shape every widget id takes. */
 export const SEO_ISSUES_WIDGET_ID = "seo/issues";
 
 /**
- * The card, or nothing when no installed field can be checked.
+ * The Needs attention item's id. The same words as the card's, in the items'
+ * own registry: both say "this plugin's SEO issues".
+ */
+const SEO_ISSUES_ATTENTION_ID = "seo/issues";
+
+/**
+ * A widget as `contributes.dashboard.widgets` holds it, named from the SDK's
+ * own contribution type because the SDK publishes no name for it.
+ */
+type DashboardWidget = NonNullable<
+  NonNullable<PluginContributions["dashboard"]>["widgets"]
+>[number];
+
+/**
+ * One bar of the card: an issue, and how many there are. A type rather than an
+ * interface, so it has the implicit index signature the check of what JSON
+ * carries reads a widget's data through.
+ */
+type IssueBucket = { value: string; count: number };
+
+/**
+ * The card's data from a tally: each kind found, in the order a reader should
+ * meet them, and whether the counts are floors.
  *
- * A `stats` card with no cells is refused at boot, and rightly: it would draw an
- * empty frame. A project whose `fields` override leaves nothing this source
- * understands gets no card rather than a broken one.
+ * A kind counted at zero is left out, so a site with nothing to fix answers no
+ * bars and the frame draws the card's empty state, rather than a chart of
+ * zeros.
+ */
+function issueBuckets(
+  tally: IssueTally,
+  issues: readonly { label: string }[]
+): { buckets: IssueBucket[]; atLeast?: true } {
+  const buckets = issues
+    .map(({ label }) => ({
+      value: label,
+      count: tally.byIssue.get(label) ?? 0,
+    }))
+    .filter(bucket => bucket.count > 0);
+  return tally.bounded ? { buckets, atLeast: true } : { buckets };
+}
+
+/** Every issue in a tally, as one count, said as a floor when the scan was. */
+function issueCount(tally: IssueTally): AttentionCount {
+  let count = 0;
+  for (const found of tally.byIssue.values()) count += found;
+  return tally.bounded ? { count, atLeast: true } : count;
+}
+
+/**
+ * The card, or nothing when it would have nothing to say.
+ *
+ * Withheld when no installed field can be checked, and when no collection
+ * carries the fields: a plugin registered with no collections extends nothing,
+ * so every bar would answer zero and the card would report a clean site for a
+ * plugin that is doing nothing at all.
+ *
+ * 🔴 `access` names the collections it reads, so only a person who may read
+ * every one of them is offered the card; anyone else is told it is not
+ * available, never shown a number about content they cannot see. Its `load`
+ * reads through the services it is handed, bound to that person, so the
+ * number is theirs.
  */
 export function seoIssuesWidget(
+  collections: readonly string[],
   installed: readonly FieldConfig[]
-): PluginAdminStatsWidget | undefined {
-  const issues = reportableIssues(checksFor(installed));
-  if (issues.length === 0) return undefined;
+): DashboardWidget | undefined {
+  const checks = checksFor(installed);
+  const issues = reportableIssues(checks);
+  if (issues.length === 0 || collections.length === 0) return undefined;
 
-  return {
+  return defineWidget({
     id: SEO_ISSUES_WIDGET_ID,
-    archetype: "stats",
     title: "SEO issues",
     description: "Published pages missing search and social metadata",
-    // Half the row by default, two rows tall: a row of figures. From a third,
-    // where five figures still read, to the full width.
-    size: { default: { w: 6, h: 2 }, min: { w: 4, h: 2 } },
-    cells: issues.map(issue => ({
-      key: issue.key,
-      label: issue.label,
-      query: {
-        source: SEO_ISSUES_SOURCE_ID,
-        op: "count" as const,
-        // The published `issue` field, which the resolver honours -- this is
-        // the per-issue number a grouped query would otherwise be needed for.
-        where: { [ISSUE_FIELD]: { equals: issue.label } },
+    icon: "search",
+    category: "SEO",
+    // A third of the row by default and three rows tall, room for a bar per
+    // issue; from a quarter, where the five still read, to half the row.
+    size: {
+      default: { w: 4, h: 3 },
+      min: { w: 3, h: 3 },
+      max: { w: 6, h: 4 },
+    },
+    access: { collections: [...collections] },
+    load: async ({ services }) =>
+      issueBuckets(await tallyIssues(services, collections, checks), issues),
+    view: "bars",
+    skeleton: "bars",
+    empty: { message: "No SEO issues in published pages." },
+    preview: [
+      {
+        name: "Some pages need work",
+        data: {
+          buckets: [
+            { value: "Missing meta title", count: 11 },
+            { value: "Missing meta description", count: 7 },
+            { value: "Missing social image", count: 3 },
+          ],
+        },
       },
-    })),
-  };
+    ],
+  });
+}
+
+/**
+ * The card's issue count, as a line of the Needs attention card, or nothing
+ * when the card would have nothing to say (see {@link seoIssuesWidget}).
+ *
+ * 🔴 It names the collections it checks, and that is what decides who sees it
+ * and what it counts: core shows it only to a reader of at least one of them,
+ * hands its `count` reads bound to that reader and limited to those
+ * collections, and answers a declared collection the reader may not read as
+ * empty. So a reader of some of them is shown the issues in those alone, with
+ * no filtering written here.
+ *
+ * It links to the first of them, the list the issues are fixed in.
+ */
+export function seoIssuesAttentionItem(
+  collections: readonly string[],
+  installed: readonly FieldConfig[]
+): AttentionItem | undefined {
+  const checks = checksFor(installed);
+  const [first, ...rest] = collections;
+  if (reportableIssues(checks).length === 0 || first === undefined) {
+    return undefined;
+  }
+
+  return defineAttentionItem({
+    id: SEO_ISSUES_ATTENTION_ID,
+    label: "SEO issues in published pages",
+    collections: [first, ...rest],
+    count: async ({ services }) =>
+      issueCount(await tallyIssues(services, collections, checks)),
+    link: `collections/${first}`,
+  });
 }

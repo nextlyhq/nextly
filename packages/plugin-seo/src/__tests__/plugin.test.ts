@@ -121,28 +121,44 @@ describe("seoPlugin", () => {
 });
 
 describe("the dashboard card the plugin contributes", () => {
-  it("is contributed alongside the source it draws", () => {
-    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
-    const widgets = plugin.contributes?.admin?.widgets ?? [];
+  it("declares seo/issues and its Needs attention line through contributes.dashboard", () => {
+    const plugin = seoPlugin({
+      collections: ["pages", "posts"],
+      sitemap: false,
+    });
+    const dashboard = plugin.contributes?.dashboard;
 
-    expect(widgets).toHaveLength(1);
-    expect(widgets[0]?.archetype).toBe("stats");
+    expect(dashboard?.widgets?.map(widget => widget.id)).toEqual([
+      "seo/issues",
+    ]);
+    expect(dashboard?.attention?.map(item => item.id)).toEqual(["seo/issues"]);
+    // Bound to the collections it extends, which carry the `seo` group.
+    expect(dashboard?.attention?.[0]?.collections).toEqual(["pages", "posts"]);
+  });
+
+  it("contributes nothing through the removed widget doors", () => {
+    // The card is a declaration and nothing else: no stats card under
+    // `admin.widgets`, and no data source under `widgetSources`.
+    const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
+
+    expect(plugin.contributes?.admin).toBeUndefined();
+    expect(plugin.contributes?.widgetSources).toBeUndefined();
   });
 
   it("is withheld when no collection carries the fields", () => {
-    // 🔴 A plugin registered with no collections extends nothing, so the source
-    // has nothing to scan and every cell answers zero. A card there would report
-    // a clean site for a plugin that is doing nothing at all -- which is worse
-    // than no card, because it is an answer rather than an absence.
+    // 🔴 A plugin registered with no collections extends nothing, so the scan
+    // has nothing to read and every count answers zero. A card there would
+    // report a clean site for a plugin that is doing nothing at all -- which is
+    // worse than no card, because it is an answer rather than an absence.
     const plugin = seoPlugin({ collections: [], sitemap: false });
 
-    expect(plugin.contributes?.admin?.widgets ?? []).toHaveLength(0);
+    expect(plugin.contributes?.dashboard).toBeUndefined();
   });
 
   it("declares a core floor that cannot fall behind what it needs", () => {
     // 🔴 A hand-written floor goes stale silently in the direction that ACCEPTS:
-    // an older core satisfying the wider range registers no source for
-    // `contributes.widgetSources`, and the card queries one that does not exist.
+    // an older core satisfying the wider range does not read the dashboard
+    // contribution in the shape it is declared, and the card never appears.
     // Every package here releases at one version, so the version this plugin
     // ships at names the core built beside it.
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
