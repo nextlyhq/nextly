@@ -555,15 +555,23 @@ describe("the Content table's rows", () => {
     for (const row of answer.rows) expect(row).not.toHaveProperty("updatedAt");
   });
 
-  it("takes a collection's Updated and its name together from its latest change of any entry", async () => {
-    collections = [collection("posts", "Posts"), collection("tags", "Tags")];
+  it("takes a collection's Updated and its name together from its latest change of any entry, when that is its latest write", async () => {
+    collections = [
+      collection("posts", "Posts"),
+      collection("pages", "Pages"),
+      collection("news", "News"),
+    ];
     windowAnswer = {
       edits: [
+        // The change that made the newest entry, filed at its instant.
         save("posts", "2026-10-29T10:00:00.000Z"),
-        // A change of another tag than the newest one, and the latest the
-        // trail holds of the collection.
-        save("tags", "2026-10-28T10:00:00.000Z", {
-          entryId: "doc-older-tag",
+        // Filed just before the entry's own stamp, as one write's two
+        // instants may be stored: the same write.
+        save("pages", "2026-10-29T09:00:00.000Z", { userName: "Cara" }),
+        // A change of another entry than the newest, and newer than it: the
+        // collection's latest write.
+        save("news", "2026-10-29T08:00:00.000Z", {
+          entryId: "doc-older-news",
           userName: "Ben",
         }),
       ],
@@ -571,7 +579,8 @@ describe("the Content table's rows", () => {
     };
     newest = {
       posts: { id: "doc-posts", updatedAt: "2026-10-29T10:00:00.000Z" },
-      tags: { id: "doc-tags", updatedAt: "2026-10-29T11:00:00.000Z" },
+      pages: { id: "doc-pages", updatedAt: "2026-10-29T09:00:00.900Z" },
+      news: { id: "doc-news", updatedAt: "2026-10-29T07:00:00.000Z" },
     };
 
     const answer = await table(10);
@@ -583,12 +592,56 @@ describe("the Content table's rows", () => {
       userName: "Ana",
       actorType: "user",
     });
-    // 🔴 Never the newest entry's own date beside the name on another
-    // change: the date and the name describe the same change.
-    expect(bySlug.get("tags")).toMatchObject({
-      updatedAt: "2026-10-28T10:00:00.000Z",
+    // The control for the stale case below: older by under a second is one
+    // write, shown as the change, with its name.
+    expect(bySlug.get("pages")).toMatchObject({
+      updatedAt: "2026-10-29T09:00:00.000Z",
+      userName: "Cara",
+    });
+    // 🔴 The date and the name describe the same change, whichever entry it
+    // was of.
+    expect(bySlug.get("news")).toMatchObject({
+      updatedAt: "2026-10-29T08:00:00.000Z",
       userName: "Ben",
     });
+  });
+
+  it("shows a row's own date and no name where its latest trail change is older than it", async () => {
+    collections = [collection("tags", "Tags")];
+    singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
+    windowAnswer = {
+      edits: [
+        // Saves older than each row's own last update by a second or more:
+        // the rows were written since, by something the trail did not record.
+        save("tags", "2026-10-28T10:00:00.000Z", { userName: "Ben" }),
+        save("home", "2026-10-29T10:59:59.000Z", {
+          subjectKind: "single",
+          entryId: "doc-home",
+          userName: "Ben",
+        }),
+      ],
+      hasMore: false,
+    };
+    newest = {
+      tags: { id: "doc-tags", updatedAt: "2026-10-29T11:00:00.000Z" },
+    };
+    stored = {
+      single_home: { id: "doc-home", updated_at: "2026-10-29T11:00:00.000Z" },
+    };
+
+    const answer = await table(10);
+    const bySlug = new Map(answer.rows.map(row => [row.slug, row]));
+
+    // 🔴 The row's own, newer date, which it is ranked by, and nobody named
+    // for a write the trail does not say who made.
+    for (const slug of ["tags", "home"]) {
+      expect(bySlug.get(slug)).toMatchObject({
+        updatedAt: "2026-10-29T11:00:00.000Z",
+      });
+      expect(bySlug.get(slug)).not.toHaveProperty("userId");
+      expect(bySlug.get(slug)).not.toHaveProperty("userName");
+      expect(bySlug.get(slug)).not.toHaveProperty("event");
+    }
   });
 
   it("orders the page by each row's own last update, newest first, a Single among them, and the empty collections last", async () => {

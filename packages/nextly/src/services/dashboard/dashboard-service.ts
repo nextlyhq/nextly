@@ -365,15 +365,41 @@ function singleRow(
 }
 
 /**
+ * How much older than a row's own last update the trail's latest change of it
+ * may be and still be the change that made it: under one second.
+ *
+ * One write stamps the row and files its trail row a few milliseconds apart,
+ * and SQLite and MySQL at its default precision keep each instant to the
+ * second, so the two stored instants of one write can differ by up to a
+ * second either way. A change older by a whole second or more is an earlier
+ * write, and the row was changed since by something the trail did not record.
+ */
+const SAME_WRITE_MS = 1000;
+
+/**
+ * Whether `change` is older than the row's own last update by more than one
+ * write's two instants can differ (`SAME_WRITE_MS`): a trail that missed the
+ * row's latest write.
+ */
+function staleChange(changeAt: string, ownAt: string | undefined): boolean {
+  if (ownAt === undefined) return false;
+  return Date.parse(ownAt) - Date.parse(changeAt) >= SAME_WRITE_MS;
+}
+
+/**
  * A row's Updated and who made it, both from ONE source, so the instant and
- * the name always describe the same change. Where the trail holds a latest
- * change of the subject (`change`), its instant, its actor and what it did;
- * where it holds none, the row's own last update and no name, since nothing
- * says who made that one. Nothing for a row with no entry or document to date.
+ * the name always describe the same change. Where the trail's latest change
+ * of the subject (`change`) is the row's latest write, its instant, its actor
+ * and what it did. Where the trail holds none, or only one older than the
+ * row's own last update (`staleChange`), the row's own last update and no
+ * name, since nothing says who made that write. Nothing for a row with no
+ * entry or document to date.
  *
  * Never a mix: the row's own instant beside the name on an earlier save would
  * credit that save's author with a later change they did not make, such as a
- * publish by someone else, which also moves the row's own instant.
+ * publish by someone else, which also moves the row's own instant. And never
+ * the older change's instant on a row ranked by its newer own date, which
+ * would show a row sorted as the newest with an older time than those below.
  */
 function updateFields(
   own: OwnUpdate | undefined,
@@ -389,7 +415,11 @@ function updateFields(
 > {
   if (own === undefined) return {};
   const at = change === undefined ? undefined : isoInstant(change.createdAt);
-  if (change === undefined || at === undefined) {
+  if (
+    change === undefined ||
+    at === undefined ||
+    staleChange(at, own.updatedAt)
+  ) {
     return own.updatedAt === undefined ? {} : { updatedAt: own.updatedAt };
   }
   return { updatedAt: at, ...saverFields(change) };
@@ -1219,8 +1249,9 @@ export class DashboardService extends BaseService {
    * collection's newest entry this caller may read (`getRecentFromCollection`,
    * one entry, the access-enforced read), and a Single's document as stored.
    * A write the trail records both moves that date and files the change the
-   * Updated column then shows, so the order and the column agree wherever the
-   * trail recorded the subject's latest write. Ranked newest first, then the rest by label, the
+   * Updated column then shows, and a row whose latest write the trail missed
+   * shows that date itself (`updateFields`), so the column never shows a row
+   * older than the order ranks it. Ranked newest first, then the rest by label, the
    * collections holding no entries this caller may read last (`inTableOrder`).
    * A ranking drawn from a window of the activity trail alone would not do:
    * one collection saved often fills any window, and every other subject's

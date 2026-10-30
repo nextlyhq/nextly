@@ -754,6 +754,85 @@ describe("useWidgetQueries", () => {
      * it: those hand the fields straight to the archetype and never cross this
      * boundary.
      */
+    /*
+     * 🔴 The same loss one property over: the Content card's subtitle reads how the list's total
+     * divides by kind, and a renderer test hands that straight to the card without crossing this
+     * boundary.
+     */
+    it("carries how a list's total divides by kind through", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ slug: "posts" }],
+            total: 13,
+            totalByKind: { collection: 8, single: 5 },
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ slug: "posts" }],
+          total: 13,
+          totalByKind: { collection: 8, single: 5 },
+        },
+      });
+    });
+
+    it.each([
+      ["a part that is not a whole count", { collection: 8, single: 1.5 }],
+      ["a negative part", { collection: -1 }],
+      ["a part that is text", { collection: "8" }],
+      ["a list where an object belongs", [8, 5]],
+      ["a number where an object belongs", 13],
+    ])(
+      "leaves out a breakdown with %s, and keeps the rest of the list",
+      async (_case, totalByKind) => {
+        expect(
+          await slotFor({
+            ok: true,
+            result: {
+              op: "list",
+              items: [{ slug: "posts" }],
+              total: 13,
+              totalByKind,
+            },
+          })
+        ).toEqual({
+          ok: true,
+          result: { op: "list", items: [{ slug: "posts" }], total: 13 },
+        });
+      }
+    );
+
+    it("keeps the window a list was read within, which a card's empty text names", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "list", items: [], window: { days: 90 } },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "list", items: [], window: { days: 90 } },
+      });
+    });
+
+    it.each([
+      ["days that are not whole", { days: 1.5 }],
+      ["no days", {}],
+      ["days of zero", { days: 0 }],
+      ["a number where an object belongs", 90],
+    ])("leaves out a window with %s", async (_case, window) => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "list", items: [], window },
+        })
+      ).toEqual({ ok: true, result: { op: "list", items: [] } });
+    });
+
     it("carries the column's declared type through", async () => {
       expect(
         await slotFor({

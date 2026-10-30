@@ -785,6 +785,8 @@ function asResult(value: unknown): WidgetResult | undefined {
     op?: unknown;
     total?: unknown;
     atLeast?: unknown;
+    totalByKind?: unknown;
+    window?: unknown;
     items?: unknown;
     fields?: unknown;
     buckets?: unknown;
@@ -798,7 +800,7 @@ function asResult(value: unknown): WidgetResult | undefined {
   if (result.op === "count") return asCount(result.total, result.atLeast);
 
   if (result.op === "list") {
-    return asList(result.items, result.fields, result.total, result.atLeast);
+    return asList(result);
   }
 
   if (result.op === "groupBy") {
@@ -826,28 +828,76 @@ function asResult(value: unknown): WidgetResult | undefined {
  * fails there rather than here -- the same shape as a count's `total`, one
  * level down.
  */
-function asList(
-  items: unknown,
-  fields: unknown,
-  total: unknown,
-  atLeast: unknown
-): WidgetResult | undefined {
+function asList({
+  items,
+  fields,
+  total,
+  atLeast,
+  totalByKind,
+  window,
+}: {
+  items?: unknown;
+  fields?: unknown;
+  total?: unknown;
+  atLeast?: unknown;
+  totalByKind?: unknown;
+  window?: unknown;
+}): WidgetResult | undefined {
   if (!Array.isArray(items)) return undefined;
   const rows: unknown[] = items;
   if (!rows.every(isObject)) return undefined;
   const described = asResultFields(fields);
-  // The list's whole count travels with its rows, so a card's "View all (N)" names the number
-  // the server counted. Kept only as a count can be: a whole number of at least zero; anything
-  // else is left out, and the card falls back to saying more exist as a floor.
-  const counted =
-    typeof total === "number" && Number.isInteger(total) && total >= 0;
+  // The list's whole count travels with its rows, so a card says the number the server counted
+  // (a list's "View all (N)", the Content card's subtitle). Kept only as a count can be: a whole
+  // number of at least zero; anything else is left out, and a card falls back to saying more
+  // exist as a floor. How it divides by kind is kept by the same rule, each part a count, or
+  // left out whole.
+  const counted = isCount(total);
+  const byKind = asCountsByKind(totalByKind);
+  // The span a source's rows were read within (the Continue card's trail window), so a card's
+  // empty text can name it; kept only as a whole number of days of at least one.
+  const span = asWindow(window);
   return {
     op: "list",
     items: rows,
     ...(described && { fields: described }),
     ...(counted && { total }),
     ...(counted && atLeast === true && { atLeast: true }),
+    ...(byKind && { totalByKind: byKind }),
+    ...(span && { window: span }),
   };
+}
+
+/** A list's `window` when it is `{ days }` with a whole number of days of at least one. */
+function asWindow(value: unknown): { days: number } | undefined {
+  if (!isObject(value)) return undefined;
+  const { days } = value as { days?: unknown };
+  return typeof days === "number" && Number.isInteger(days) && days >= 1
+    ? { days }
+    : undefined;
+}
+
+/** Whether `value` is a count: a whole number of at least zero. */
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * A list's `totalByKind` when it is a plain object of counts ({@link isCount}), each kind to
+ * its count; `undefined` for anything else, a single part that is not a count included, so a
+ * card never draws a part of a breakdown the server did not send.
+ */
+function asCountsByKind(
+  value: unknown
+): Readonly<Record<string, number>> | undefined {
+  if (!isObject(value) || Array.isArray(value)) return undefined;
+  const counts: [string, number][] = [];
+  for (const [kind, count] of Object.entries(value)) {
+    if (!isCount(count)) return undefined;
+    counts.push([kind, count]);
+  }
+  // `fromEntries` defines each kind as the object's own data, a `__proto__` kind included.
+  return Object.fromEntries(counts);
 }
 
 /**

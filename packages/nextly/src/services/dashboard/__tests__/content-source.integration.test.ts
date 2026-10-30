@@ -444,9 +444,8 @@ describe.each(getConfiguredTestDialects())(
         await t.adapter.insert("users", { ...person, is_active: true });
       }
       await grantTo(t, ANA.id, "read", [BUSY, HOME]);
-      // Home's document, saved by Ben before any of busy's saves; its own
-      // instant is later, as a write the trail did not record leaves it.
-      const home = await singleUpdatedAt(t, HOME, at(1));
+      // Home's document, saved by Ben before any of busy's saves.
+      const home = await singleUpdatedAt(t, HOME, at(30));
       await savedEach(t, BEN, HOME, [home], at(30), "single");
       // More entries of busy, each saved since, than the trail's window holds,
       // so Home's save lies past the window.
@@ -459,8 +458,8 @@ describe.each(getConfiguredTestDialects())(
       const answer = await contentTable(as(ANA), 2);
 
       // 🔴 Ben's save, though the window holds only busy's: its instant and
-      // his name together, never the document's own instant beside his name.
-      expect(answer.items[0]).toMatchObject({
+      // his name together.
+      expect(answer.items.find(row => row.slug === HOME)).toMatchObject({
         kind: "single",
         slug: HOME,
         updatedAt: at(30).toISOString(),
@@ -506,6 +505,33 @@ describe.each(getConfiguredTestDialects())(
         userName: BEN.name,
         event: "published",
       });
+    });
+
+    it("shows a row's own date and no name where the trail's latest change is older than it", async () => {
+      const t = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: NEWS,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      current = t;
+      await t.adapter.insert("users", { ...ANA, is_active: true });
+      await grantTo(t, ANA.id, "read", [NEWS]);
+      // Ana's save of the story, then a later write the trail did not record.
+      const story = await entry(t, NEWS, { title: "story" }, at(5));
+      await saved(t, ANA, NEWS, story, at(20));
+
+      const [row] = (await contentTable(as(ANA))).items;
+
+      // 🔴 The story's own, newer instant, which the row is ranked by, and
+      // nobody named for a write the trail does not say who made.
+      expect(row).toMatchObject({ slug: NEWS, updatedAt: at(5).toISOString() });
+      expect(row).not.toHaveProperty("userName");
+      expect(row).not.toHaveProperty("event");
     });
   }
 );
