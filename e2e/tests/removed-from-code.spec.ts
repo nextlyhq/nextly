@@ -99,7 +99,10 @@ for (const state of ["kept", "pending", "half"] as const) {
         exact: true,
       });
       await expect(link).toBeVisible({ timeout: 30_000 });
-      await expect(link).toContainText("Removed");
+      // The mark itself, not the label: a staged label may hold the word.
+      await expect(link.getByTestId("removed-from-code-mark")).toHaveText(
+        "Removed"
+      );
       await expect(link).toHaveAccessibleDescription(
         new RegExp(escape(stepFor(stateOf(state))))
       );
@@ -138,7 +141,7 @@ for (const state of ["kept", "pending", "half"] as const) {
       }
     });
 
-    test("the Single is marked in the navigation and the Singles list, with its step", async ({
+    test("the Single is marked in the navigation, with its step", async ({
       page,
     }) => {
       const staged = stateOf(state);
@@ -148,28 +151,16 @@ for (const state of ["kept", "pending", "half"] as const) {
         exact: true,
       });
       await expect(link).toBeVisible({ timeout: 30_000 });
-      await expect(link).toContainText("Removed");
+      // The mark itself, not the label: a staged label may hold the word.
+      await expect(link.getByTestId("removed-from-code-mark")).toHaveText(
+        "Removed"
+      );
       await expect(link).toHaveAccessibleDescription(
         new RegExp(escape(stepFor(staged)))
       );
-      // The Singles list (the builder's, where Singles are listed) marks it
-      // too, with the step read out beside it.
-      await gotoAdmin(page, "/builder/singles");
-      const listed = page
-        .locator("main")
-        .getByText(staged.single.label, { exact: true })
-        .filter({ visible: true })
-        .first();
-      await expect(listed).toBeVisible({ timeout: 30_000 });
-      await expect(
-        listed.locator("xpath=..").getByTestId("removed-from-code-mark")
-      ).toHaveText("Removed");
-      await expect(
-        page
-          .locator("main")
-          .getByText(new RegExp(escape(stepFor(staged))))
-          .first()
-      ).toBeAttached();
+      // The Singles list marks it too, but that list is the Schema Builder's,
+      // which a production build does not serve: it is checked on the dev
+      // server, in removed-from-code-singles-list.spec.ts.
     });
 
     test("the Single's edit screen names it and its step, and offers nothing that writes", async ({

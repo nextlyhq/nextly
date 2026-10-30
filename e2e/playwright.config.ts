@@ -56,6 +56,8 @@ const SERVER = process.env.E2E_SERVER === "production" ? "production" : "dev";
  * - `widget-preview`: the widget preview page exists only while the server
  *   runs in development; a production build answers its address as not found
  *   (`tests/production/widget-preview.spec.ts`).
+ * - `removed-from-code-singles-list`: the Singles list it reads is the Schema
+ *   Builder's, which a production build turns off.
  */
 const DEV_SPECS = [
   "**/setup-*.spec.ts",
@@ -65,6 +67,7 @@ const DEV_SPECS = [
   "**/schema-leaving-translation.spec.ts",
   "**/builder-field-gates.spec.ts",
   "**/builder-runtime-collection.spec.ts",
+  "**/removed-from-code-singles-list.spec.ts",
 ];
 
 /** Only the dev specs, for the run beside a production one. */
