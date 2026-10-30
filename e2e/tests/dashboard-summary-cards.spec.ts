@@ -20,7 +20,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
 import { defaultSizeOf } from "./support/dashboard-sizes";
@@ -122,7 +122,11 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
     // spec makes, and a spec that ran before this one may have left a release scheduled, as the
     // whole suite on one database does: either the card is off the dashboard, marked hidden
     // while empty, or it leads to Releases.
-    const releases = cell(page, "core/upcoming-releases");
+    // Read including hidden elements: a card hidden while empty is in the page with its cell
+    // hidden, which a visible-only locator would never find.
+    const releases = includingHidden(page).getByTestId(
+      "widget-cell-core/upcoming-releases"
+    );
     const region = releases.locator('[role="region"]');
     await expect(region).toHaveCount(1);
     // Its answer first: only an answer says whether it is empty, so the card is read once it lands.
