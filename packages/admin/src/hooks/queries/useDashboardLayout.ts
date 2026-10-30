@@ -44,6 +44,7 @@ import {
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { AdminBranding } from "@admin/types/branding";
 import type {
+  DashboardLayoutRead,
   DashboardLayoutResponse,
   WidgetPlacement,
 } from "@admin/types/dashboard/widgets";
@@ -64,14 +65,20 @@ const LAYOUT_PATH = "/dashboard/layout";
  * each card that hides while empty at the tier it is drawn at. Read at the request, never part of
  * the key, so a resize does not split the cache; asked with no dashboard drawn, it sends none and
  * the answer judges no card.
+ *
+ * The answer carries the width it was sent (`askedAtWidth`): a cached answer is drawn from on the
+ * next visit, whose dashboard may be another width, and its verdict holds only where every card
+ * is drawn at the tier it was judged at (`useHiddenWhileEmptyAtFirstPaint`).
  */
-export function fetchDashboardLayout(): Promise<DashboardLayoutResponse> {
+export async function fetchDashboardLayout(): Promise<DashboardLayoutRead> {
   const width = dashboardWidthNow();
-  return protectedApi.get<DashboardLayoutResponse>(
-    width === undefined
-      ? LAYOUT_PATH
-      : `${LAYOUT_PATH}?${new URLSearchParams({ width: String(width) })}`
+  if (width === undefined) {
+    return protectedApi.get<DashboardLayoutResponse>(LAYOUT_PATH);
+  }
+  const answer = await protectedApi.get<DashboardLayoutResponse>(
+    `${LAYOUT_PATH}?${new URLSearchParams({ width: String(width) })}`
   );
+  return { ...answer, askedAtWidth: width };
 }
 
 export interface SaveLayoutInput {
@@ -114,7 +121,7 @@ export interface ResetLayoutInput {
 }
 
 export interface UseDashboardLayoutResult {
-  layout: DashboardLayoutResponse | undefined;
+  layout: DashboardLayoutRead | undefined;
   isPending: boolean;
   /**
    * Whether the arrangement could not be read at all.

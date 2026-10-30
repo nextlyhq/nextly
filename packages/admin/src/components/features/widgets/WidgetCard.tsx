@@ -113,6 +113,10 @@ import {
   titleCountSpoken,
   type TitleCount,
 } from "./frame/title-count";
+import {
+  CardHiddenReportContext,
+  useReportCardHidden,
+} from "./hidden-while-empty";
 
 export interface WidgetCardProps {
   /** The card's subject, always rendered, in every state, once. */
@@ -269,6 +273,8 @@ function hiddenFlags(
   const hidden =
     notShown || props.hiddenWhileEmpty === true || emptyByOwnAnswer;
   return {
+    // Off the dashboard in either mode: what the card reports to its cell (`useReportCardHidden`).
+    hidden,
     hiddenEmpty: hidden && !customizing,
     markedHidden: hidden && customizing,
     hiddenBecause: notShown
@@ -344,6 +350,8 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   // Collapsed by its body to one line (`frame/collapse`): the body's line is the whole card, so
   // the header is kept for assistive technology only, with no gap under it and no footer.
   const collapsed = useFrameCollapsed() && !customizing;
+  // The grid counts the cards on show from this report, so it reads the decision drawn here.
+  useReportCardHidden(flags.hidden);
 
   return (
     <CardTierContext.Provider value={tier}>
@@ -408,7 +416,11 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                     <CardTitleCountContext.Provider value={setTitleCount}>
                       <CardFooterSlotProvider value={footerSlot}>
                         <CardFooterClaimProvider value={footer.claims}>
-                          {props.children}
+                          {/* A card drawn inside this one is not the cell's card: it reports
+                            nothing in its place. */}
+                          <CardHiddenReportContext.Provider value={undefined}>
+                            {props.children}
+                          </CardHiddenReportContext.Provider>
                         </CardFooterClaimProvider>
                       </CardFooterSlotProvider>
                     </CardTitleCountContext.Provider>

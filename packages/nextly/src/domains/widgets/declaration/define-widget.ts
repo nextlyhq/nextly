@@ -182,6 +182,15 @@ export interface WidgetReadServices {
        * @experimental
        */
       total?: true;
+      /**
+       * `0` to answer each link (a relationship or an upload) as the id it
+       * stores, unexpanded. Absent, links are expanded as they are today, as
+       * core's own read expands them by default. `0` is the only depth a read
+       * may name.
+       *
+       * @experimental
+       */
+      depth?: 0;
       signal?: AbortSignal;
     }
   ): Promise<{

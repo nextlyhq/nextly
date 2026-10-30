@@ -26,6 +26,7 @@ import {
   checkbox,
   defineCollection,
   number,
+  relationship,
   select,
   text,
 } from "../../../../config";
@@ -95,6 +96,22 @@ const notes = defineCollection({
   fields: [text({ name: "run" }), text({ name: "kind" })],
 });
 
+/** A collection whose rows link to a note, for how a read answers a link. */
+const LINKS = "widget_read_note_links";
+
+const links = defineCollection({
+  slug: LINKS,
+  access: {
+    read: ({ user }) => user?.id === readerId,
+    create: () => true,
+    delete: () => true,
+  },
+  fields: [
+    text({ name: "run" }),
+    relationship({ name: "note", relationTo: NOTES }),
+  ],
+});
+
 let reader: ReadCaller = { user: { id: readerId, roles: ["editor"] } };
 let stranger: ReadCaller = { user: { id: "reader-b", roles: ["editor"] } };
 
@@ -161,6 +178,7 @@ function readServicesSuite(label: string, boot: () => Promise<TestNextly>) {
       readerId = await userWhoMay(handle, `reader-a-${suffix}`, "read", [
         PARCELS,
         NOTES,
+        LINKS,
       ]);
       reader = { user: { id: readerId, roles: ["editor"] } };
       stranger = {
@@ -408,6 +426,37 @@ function readServicesSuite(label: string, boot: () => Promise<TestNextly>) {
       ).toHaveLength(2);
     });
 
+    it("answers a link as the id it stores at depth 0, and expands it by default", async () => {
+      await bootWithParcels();
+      const [note] = written.filter(row => row.collection === NOTES);
+      const link = await handle!.nextly.create({
+        collection: LINKS as never,
+        data: { run: RUN, note: note.id } as never,
+      });
+      // Deleted before the note it links to.
+      written.unshift({ collection: LINKS, id: String(link.item.id) });
+      const services = servicesFor(reader);
+
+      const stored = await services.find(LINKS, {
+        where: thisRun,
+        select: ["note"],
+        depth: 0,
+      });
+      const expanded = await services.find(LINKS, {
+        where: thisRun,
+        select: ["note"],
+      });
+
+      expect(stored.items).toEqual([
+        expect.objectContaining({ note: note.id }),
+      ]);
+      expect(expanded.items).toEqual([
+        expect.objectContaining({
+          note: expect.objectContaining({ id: note.id }),
+        }),
+      ]);
+    });
+
     it("reads nothing once the card has given up", async () => {
       await bootWithParcels();
       const card = new AbortController();
@@ -420,7 +469,7 @@ function readServicesSuite(label: string, boot: () => Promise<TestNextly>) {
 }
 
 readServicesSuite("sqlite", () =>
-  createTestNextly({ collections: [parcels, notes] })
+  createTestNextly({ collections: [parcels, notes, links] })
 );
 
 // PostgreSQL and MySQL: self-skipping without their URLs, run by CI's matrix.
@@ -435,7 +484,7 @@ describe.skipIf(!PG_URL)("postgres", () => {
       type: "postgresql",
       url: PG_URL,
     } as Parameters<typeof createAdapter>[0]);
-    return createTestNextly({ adapter, collections: [parcels, notes] });
+    return createTestNextly({ adapter, collections: [parcels, notes, links] });
   });
 });
 
@@ -447,6 +496,6 @@ describe.skipIf(!MY_URL)("mysql", () => {
       type: "mysql",
       url: MY_URL,
     } as Parameters<typeof createAdapter>[0]);
-    return createTestNextly({ adapter, collections: [parcels, notes] });
+    return createTestNextly({ adapter, collections: [parcels, notes, links] });
   });
 });

@@ -12,6 +12,7 @@
 
 import type { GridSize } from "nextly/config";
 import {
+  useCallback,
   useMemo,
   useState,
   type ComponentProps,
@@ -34,7 +35,9 @@ import {
 } from "../frame/collapse";
 import { CardGrowContext, grownRows } from "../frame/grow";
 import type { AnswerSize } from "../frame/tier";
+import { CardHiddenReportContext } from "../hidden-while-empty";
 import type { MoveDirection } from "../layout-editor";
+import type { PlacementReport } from "../reported-placements";
 import { cardRowStyle, cardSpanClass, drawnSize } from "../sizes";
 import {
   settingsAsAsked,
@@ -110,6 +113,11 @@ export interface ArrangedCellProps {
    * arrangement has been read, when there is no stored placement to write into.
    */
   settingsWrite?: CellSettingsWrite | undefined;
+  /**
+   * Where the card reports whether it is off the dashboard, as it decides it (`WidgetCard`), by
+   * this card's placement: what the grid counts the cards on show from. Absent, nothing is told.
+   */
+  reportHidden?: PlacementReport;
   /** Registers the card's controls, so focus can be sent back to them. */
   refs: {
     menu: (element: HTMLElement | null) => void;
@@ -540,6 +548,13 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
   const rows = isEditing
     ? size.h
     : collapsedRows(grownRows(size.h, contentHeight), collapsed);
+  // The card's report, bound to this placement. Only the card drawn in the cell is told it: the
+  // settings sheet's preview of the same placement is drawn outside it and reports nothing.
+  const { reportHidden } = props;
+  const reportCardHidden = useCallback(
+    (hidden: boolean) => reportHidden?.(row.placementId, hidden),
+    [reportHidden, row.placementId]
+  );
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
    * config are both in scope. Only DECLARED names are returned, so a component
@@ -598,12 +613,14 @@ export function ArrangedCell(props: ArrangedCellProps): JSX.Element {
       ) : null}
       <CardCollapseContext.Provider value={collapse}>
         <CardGrowContext.Provider value={setContentHeight}>
-          <CardBody
-            {...{ widget, placement, headerAction, data, isEditing }}
-            subtitle={heading.subtitle}
-            quick={quick.inline}
-            onOpenSettings={sheet.openFromEmpty}
-          />
+          <CardHiddenReportContext.Provider value={reportCardHidden}>
+            <CardBody
+              {...{ widget, placement, headerAction, data, isEditing }}
+              subtitle={heading.subtitle}
+              quick={quick.inline}
+              onOpenSettings={sheet.openFromEmpty}
+            />
+          </CardHiddenReportContext.Provider>
         </CardGrowContext.Provider>
       </CardCollapseContext.Provider>
     </DraggableWidgetCell>
