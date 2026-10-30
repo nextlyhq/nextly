@@ -77,6 +77,7 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { LanguageRegistry } from "../domains/i18n/language-registry";
+import { setPerLanguageStorage } from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
 import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
@@ -526,6 +527,15 @@ export interface NextlyServiceConfig {
    * Carried from the sanitized config; absent when built without app config.
    */
   webhookAuditEnabled?: boolean;
+
+  /**
+   * Whether every translatable field is kept per language from the start
+   * (`experimental.perLanguageStorage`). Carried from the sanitized config; absent, which is off,
+   * when built without app config.
+   *
+   * @experimental
+   */
+  perLanguageStorage?: boolean;
 }
 
 // ============================================================
@@ -1043,6 +1053,9 @@ async function registerServicesOnce(
   // ----------------------------------------
   // Layer 3: Domain Service Registrations
   // ----------------------------------------
+  // Published before any service registers, since registration already decides where translatable
+  // values are stored, and chosen here once: a reload refuses to change it.
+  setPerLanguageStorage(transformedConfig.perLanguageStorage === true);
   const ctx: RegistrationContext = {
     adapter,
     adapterDrizzleDb,

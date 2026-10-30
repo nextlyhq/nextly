@@ -219,6 +219,9 @@ export const NEXTLY_ERROR_STATUS = {
   // refusals: no request caused it, and the fix is a change to the server's
   // own configuration.
   NEXTLY_POSTGRES_SCHEMA_MISMATCH: 500,
+  // A reloaded config turns `experimental.perLanguageStorage` on or off while the site runs. 500
+  // like the refusals beside it: no request caused it, and the remedy is restarting the site.
+  NEXTLY_PER_LANGUAGE_STORAGE_CHANGED: 500,
   // `db.postgres.schema` names a schema other than `public`, which the schema
   // push cannot yet create tables in. 500 for the same reason as the mismatch
   // above: a boot-time refusal of the server's own configuration.

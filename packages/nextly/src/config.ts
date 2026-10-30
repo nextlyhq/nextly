@@ -90,6 +90,7 @@ export {
   type SanitizedNextlyConfig,
   type TypeScriptConfig,
   type DatabaseConfig,
+  type ExperimentalConfig,
   type RateLimitingConfig,
   type SanitizedRateLimitingConfig,
 } from "./collections/config/define-config";
