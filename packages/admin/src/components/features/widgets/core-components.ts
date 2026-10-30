@@ -19,6 +19,7 @@
 
 import { BreakdownCard } from "@admin/components/features/dashboard/BreakdownCard";
 import { ContentTable } from "@admin/components/features/dashboard/ContentTable";
+import { ContinueCard } from "@admin/components/features/dashboard/ContinueCard";
 import { CountCard } from "@admin/components/features/dashboard/CountCard";
 import { GetStartedCard } from "@admin/components/features/dashboard/GetStartedCard";
 import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttention";
@@ -26,7 +27,6 @@ import { NoteCard } from "@admin/components/features/dashboard/NoteCard";
 import { OverTimeCard } from "@admin/components/features/dashboard/OverTimeCard";
 import { QuickCreate } from "@admin/components/features/dashboard/QuickCreate";
 import { RecentEntriesCard } from "@admin/components/features/dashboard/RecentEntriesCard";
-import { RecentlyEdited } from "@admin/components/features/dashboard/RecentlyEdited";
 import { TeamActivityCard } from "@admin/components/features/dashboard/TeamActivity";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { UpcomingReleasesCard } from "@admin/components/features/dashboard/UpcomingReleases";
@@ -47,7 +47,7 @@ export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#TeamSummary", TeamSummary);
   registerCoreComponent("core#NeedsAttention", NeedsAttention);
   registerCoreComponent("core#TeamActivity", TeamActivityCard);
-  registerCoreComponent("core#RecentlyEdited", RecentlyEdited);
+  registerCoreComponent("core#ContinueCard", ContinueCard);
   registerCoreComponent("core#UpcomingReleases", UpcomingReleasesCard);
   registerCoreComponent("core#Count", CountCard);
   registerCoreComponent("core#Breakdown", BreakdownCard);

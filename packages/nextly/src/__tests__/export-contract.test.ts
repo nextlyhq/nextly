@@ -504,6 +504,24 @@ describe("published export surface", () => {
   );
 
   it(
+    "exports neither core's handle on a card's caller nor the digest read it is for",
+    () => {
+      // Internal to core: a plugin holding either could read as a card's caller
+      // outside the services bound to that caller, or ask the digest as anyone.
+      const compiled = exported();
+      const leaked = [...compiled].flatMap(([entry, names]) =>
+        ["boundCaller", "readAttentionDigest"]
+          .filter(name => names.has(name))
+          .map(name => `${entry}: ${name}`)
+      );
+      expect(leaked).toEqual([]);
+      // The control: every entry point was read, so an empty list is an answer.
+      expect(compiled.size).toBe(ENTRY_POINTS.length);
+    },
+    COMPILE_TIMEOUT_MS
+  );
+
+  it(
     "exports the grid size type a definition names from the root and the config entry",
     () => {
       // A type is erased at runtime, so only the compiler can say it is

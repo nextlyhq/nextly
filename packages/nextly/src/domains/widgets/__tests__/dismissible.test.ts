@@ -11,7 +11,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
+import { registerContinueWidgetSource } from "../../../services/dashboard/continue-widget-source";
 import { allWidgets } from "../canonical";
 import { CORE_WIDGETS } from "../core-widgets";
 import { clearWidgets, registerWidget } from "../registry";
@@ -24,7 +24,7 @@ beforeEach(() => {
   // against the filters its source declares.
   clearSources();
   clearSystemResolvers();
-  registerRecentEditsWidgetSource();
+  registerContinueWidgetSource();
   for (const definition of CORE_WIDGETS) registerWidget(definition);
 });
 

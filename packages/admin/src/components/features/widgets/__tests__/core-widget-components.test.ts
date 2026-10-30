@@ -149,7 +149,7 @@ describe("core list cards select only fields that get drawn", () => {
 
   /*
    * The population, pinned rather than merely non-empty. Core declares no
-   * list card today: Recently edited and Upcoming releases each draw through a
+   * list card today: Continue and Upcoming releases each draw through a
    * component of their own. Pinned, a card that becomes a list card fails here
    * until it is named, and is then checked below; a bare loop over an empty
    * list would pass having checked nothing.

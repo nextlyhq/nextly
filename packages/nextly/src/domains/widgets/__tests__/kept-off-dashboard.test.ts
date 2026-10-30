@@ -28,14 +28,18 @@ vi.mock("../built-in-sources", async importOriginal => {
 
 import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
+import { publishDeclaredEntities } from "../../dynamic-collections/services/removed-from-code-writes";
 import { refreshCollectionSources } from "../collection-sources";
 import {
   isKeptOffDashboard,
+  keptOffDashboard,
   recordKeptOffDashboard,
 } from "../kept-off-dashboard";
 import { clearSources, listSources } from "../sources";
 
-function registryHolds(rows: Array<{ slug: string; admin?: unknown }>): void {
+function registryHolds(
+  rows: Array<{ slug: string; source?: string; admin?: unknown }>
+): void {
   vi.mocked(container.get).mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
       return {
@@ -65,6 +69,7 @@ beforeEach(() => {
 afterEach(() => {
   refuseNext.value = false;
   recordKeptOffDashboard("collection", []);
+  publishDeclaredEntities(undefined);
 });
 
 describe("the kept-off record and the sources describe one refresh", () => {
@@ -95,5 +100,61 @@ describe("the kept-off record and the sources describe one refresh", () => {
     ]);
     expect(isKeptOffDashboard("collection", "posts")).toBe(false);
     expect(isKeptOffDashboard("collection", "secret")).toBe(true);
+  });
+});
+
+describe("an entity removed from code", () => {
+  /** The running configuration: it declares "posts" alone. */
+  const declaresPosts = () =>
+    publishDeclaredEntities({ collections: [{ slug: "posts" }], singles: [] });
+
+  it("is kept off: no source, and recorded for every surface that lists from the registry", async () => {
+    declaresPosts();
+    // "retired" is the app's code's and the configuration no longer declares it: its registry
+    // row stayed behind, and its table may be gone. A Builder collection and a plugin's are never
+    // in the configuration, so their absence from it leaves them on the dashboard.
+    registryHolds([
+      { slug: "posts", source: "code" },
+      { slug: "retired", source: "code" },
+      { slug: "drawn", source: "ui" },
+      { slug: "plugged", source: "plugin:acme" },
+    ]);
+    await refreshCollectionSources();
+
+    expect(
+      listSources()
+        .map(source => source.id)
+        .sort()
+    ).toEqual(["collection:drawn", "collection:plugged", "collection:posts"]);
+    expect(isKeptOffDashboard("collection", "retired")).toBe(true);
+    expect(isKeptOffDashboard("collection", "posts")).toBe(false);
+    expect(isKeptOffDashboard("collection", "drawn")).toBe(false);
+  });
+
+  it("is kept while no configuration is published, since nothing is known to be removed", async () => {
+    registryHolds([
+      { slug: "posts", source: "code" },
+      { slug: "retired", source: "code" },
+    ]);
+    await refreshCollectionSources();
+
+    expect(
+      listSources()
+        .map(source => source.id)
+        .sort()
+    ).toEqual(["collection:posts", "collection:retired"]);
+    expect(isKeptOffDashboard("collection", "retired")).toBe(false);
+  });
+
+  it("is judged against the configuration's entities of its own kind", () => {
+    // A Single declared under the slug does not keep a collection removed from code.
+    publishDeclaredEntities({
+      collections: [],
+      singles: [{ slug: "retired" }],
+    });
+    const row = { slug: "retired", source: "code" };
+
+    expect(keptOffDashboard("collection", row)).toBe(true);
+    expect(keptOffDashboard("single", row)).toBe(false);
   });
 });

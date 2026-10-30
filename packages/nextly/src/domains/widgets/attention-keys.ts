@@ -1,15 +1,17 @@
 /**
- * The vocabulary of Needs attention's answer: the kinds it counts and the keys
- * its grouped result names them by.
+ * The vocabulary of Needs attention's answers: the kinds its grouped result
+ * counts and the keys it names them by, and the one rule that counts the
+ * attention digest's items.
  *
- * Its own module, importing nothing, because two readers need the one list:
- * the `system:attention` source that writes the keys and the admin's card that
- * reads them to draw and link each row. A copy in the admin would agree on the
- * day it was written, and a kind added here and not there would come back as a
- * row the card cannot place.
+ * Its own module, importing nothing, because more than one reader needs each
+ * rule: the `system:attention` source writes the keys, and the digest's items
+ * are counted by the dashboard header on the server ({@link digestTotal}) and
+ * drawn by the Needs your attention card in the browser, both through
+ * {@link isDrawnAttentionItem}. A copy on either side would agree on the day
+ * it was written and drift after.
  *
- * Exported as `nextly/attention-keys` so a browser bundle reaches the list
- * without the reads that produce it.
+ * Exported as `nextly/attention-keys` so a browser bundle reaches these rules
+ * without the reads that produce the answers.
  *
  * A key is the kind alone for the kind's total, and
  * `<kind>:<contentKind>:<slug>` for one collection's or Single's share of it.
@@ -102,37 +104,54 @@ export function parseAttentionKey(value: string): AttentionKey | null {
   };
 }
 
-/** One bucket of Needs attention's grouped answer, as far as its total reads it. */
-export interface AttentionTotalBucket {
-  readonly value: string | null;
-  readonly count: number;
-  readonly atLeast?: boolean;
-}
-
 /**
- * Everything waiting in a grouped answer, and whether that total is a floor:
- * the sum of each kind's own bucket, never its parts, which break the kind
- * down rather than add to it. A bucket this vocabulary does not name, or one
- * with nothing in it, adds nothing.
+ * Whether one item of the attention digest is one a surface draws: it names
+ * itself (`id`) and says what it is (`label`), each as text. Anything else in
+ * an answer is not an item, and is neither drawn nor counted.
  *
- * The one total the Needs attention card draws and the dashboard header
- * repeats, so the two cannot disagree. A total of none that is a floor means
- * some lists went unread, which is not the same as nothing waiting.
+ * The one test of an item, asked by the Needs your attention card before it
+ * draws a row and by {@link digestTotal} before it counts one, so the card's
+ * rows and the header's number are the same items by construction.
  *
  * @experimental
  */
-export function attentionTotalOf(buckets: readonly AttentionTotalBucket[]): {
+export function isDrawnAttentionItem(
+  item: unknown
+): item is Record<string, unknown> & { id: string; label: string } {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    return false;
+  }
+  const { id, label } = item as Record<string, unknown>;
+  return (
+    typeof id === "string" &&
+    id !== "" &&
+    typeof label === "string" &&
+    label !== ""
+  );
+}
+
+/**
+ * The digest's one number: how many items are waiting, which is the count the
+ * Needs your attention card shows in its title and the dashboard header
+ * repeats, and whether that number is a floor.
+ *
+ * Items, not the sum of their counts: each item is one thing to go and see
+ * about, whatever its own count. A floor when any item is: one whose count
+ * failed (the reader has something unknown) or stopped at a bound, so the
+ * header says "N+" while the card says "Not all checked" or "99+" on a row.
+ *
+ * @experimental
+ */
+export function digestTotal(items: readonly unknown[]): {
   count: number;
   atLeast: boolean;
 } {
   let count = 0;
   let atLeast = false;
-  for (const bucket of buckets) {
-    if (bucket.value === null) continue;
-    const key = parseAttentionKey(bucket.value);
-    if (key === null || "part" in key) continue;
-    if (bucket.count > 0) count += bucket.count;
-    if (bucket.atLeast === true) atLeast = true;
+  for (const item of items) {
+    if (!isDrawnAttentionItem(item)) continue;
+    count += 1;
+    if (item.failed === true || item.atLeast === true) atLeast = true;
   }
   return { count, atLeast };
 }
