@@ -34,7 +34,9 @@ const SLUG = "preferences";
 
 async function boot(
   dialect: TestDialect,
-  locales: Parameters<typeof createTestNextly>[0]["localization"] = {
+  locales: NonNullable<
+    Parameters<typeof createTestNextly>[0]
+  >["localization"] = {
     locales: ["en", "de", "fr", "es"],
     defaultLocale: "en",
   }
