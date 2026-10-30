@@ -62,6 +62,8 @@ export interface FieldsLeavingOnReload {
   /** The same fields before the reload: those leaving translation as the registry recorded them. */
   oldFields: readonly LeavingFieldLike[];
   leaving: ReadonlySet<string>;
+  /** Those of `leaving` a unique index in the entity's `indexes` covers. */
+  uniqueIndexed: ReadonlySet<string>;
 }
 
 /**
@@ -177,7 +179,50 @@ async function leavingIn(
         : f
     ),
     leaving,
+    uniqueIndexed: uniqueIndexedOf(e.entity, leaving),
   };
+}
+
+/** The fields of `leaving` that a unique index the entity declares in `indexes` covers. */
+function uniqueIndexedOf(
+  entity: LocalizableEntity,
+  leaving: ReadonlySet<string>
+): ReadonlySet<string> {
+  const { indexes } = entity as {
+    indexes?: readonly { fields: readonly string[]; unique?: boolean }[];
+  };
+  return new Set(
+    (indexes ?? [])
+      .filter(index => index.unique === true)
+      .flatMap(index => index.fields)
+      .filter(field => leaving.has(field))
+  );
+}
+
+/**
+ * The entities the reload stops for before anything changes: those refused
+ * (`prepareFieldsLeavingOnReload`), and those with fields leaving translation that the reload's
+ * gate leaves for review (`deferred`), each reported. Applied without them, the rest would publish
+ * the fields as shared while their values stayed in the translations table.
+ */
+export function stoppedBeforeApply(
+  leaving: {
+    entries: readonly FieldsLeavingOnReload[];
+    refused: readonly string[];
+  },
+  deferred: ReadonlySet<string>,
+  report: (message: string) => void
+): string[] {
+  const waiting = leaving.entries.filter(e =>
+    deferred.has(`${e.kind}:${e.slug}`)
+  );
+  for (const e of waiting) {
+    report(
+      `[nextly] "${e.slug}": its fields leaving translation (${[...e.leaving].join(", ")}) are not moved ` +
+        "while another change to it needs review. Save that change on its own first, then this one."
+    );
+  }
+  return [...new Set([...leaving.refused, ...waiting.map(e => e.slug)])];
 }
 
 /** What the reload says to do about each kind of refusal of a field leaving translation. */
@@ -222,6 +267,7 @@ async function leavingRefusalsOnReload(
         adapter,
         tableName: e.tableName,
         defaultLocale,
+        uniqueIndexed: e.uniqueIndexed,
       })),
     ];
     for (const r of refusals) {
@@ -273,10 +319,37 @@ export function withLeavingSettingsHeld(
       ])
     );
   return {
-    collections: held("collection", desired.collections),
+    collections: withoutLeavingIndexes(
+      held("collection", desired.collections),
+      entries
+    ),
     singles: held("single", desired.singles),
     components: held("fieldGroup", desired.components),
   };
+}
+
+/**
+ * `collections` without the unique indexes that cover a field leaving translation
+ * (`uniqueIndexed`), which the settings push creates once the values are copied, as it applies a
+ * field's own Unique.
+ */
+function withoutLeavingIndexes(
+  collections: DesiredSchema["collections"],
+  entries: readonly FieldsLeavingOnReload[]
+): DesiredSchema["collections"] {
+  return Object.fromEntries(
+    Object.entries(collections).map(([key, collection]) => {
+      const entry = entries.find(
+        e => e.kind === "collection" && e.slug === key
+      );
+      const indexes = collection.indexes?.filter(
+        index =>
+          index.unique !== true ||
+          !index.fields.some(field => entry?.uniqueIndexed.has(field))
+      );
+      return [key, indexes ? { ...collection, indexes } : collection];
+    })
+  );
 }
 
 /**
@@ -363,7 +436,9 @@ async function settleEveryEntity(
   if (refusals.length > 0) return false;
   const settings = entries.some(e => {
     const held = withoutLeavingConstraints(e.newFields, e.leaving);
-    return held.some((f, i) => f !== e.newFields[i]);
+    return (
+      e.uniqueIndexed.size > 0 || held.some((f, i) => f !== e.newFields[i])
+    );
   });
   if (!settings || (await args.push()).success) return true;
   args.report(

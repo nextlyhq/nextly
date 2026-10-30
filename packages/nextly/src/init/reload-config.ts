@@ -2176,6 +2176,7 @@ async function applyReloadHolding(
   // move an earlier reload stopped after adding the main column is finished rather than deferred.
   const {
     prepareFieldsLeavingOnReload,
+    stoppedBeforeApply,
     heldFields,
     withLeavingSettingsHeld,
     moveFieldsLeavingOnReload,
@@ -2692,14 +2693,18 @@ async function applyReloadHolding(
   //
   // A field leaving translation that was refused stops the reload here too, before this pass
   // changes anything (`unlessLeavingRefused`).
-  const preservation = await unlessLeavingRefused(leaving.refused, () =>
-    ensureLocalizedCompanionsForReload(
-      adapter,
-      newConfig,
-      fieldGroupTables,
-      deferredEntities,
-      "beforeApply"
-    )
+  const preservation = await unlessLeavingRefused(
+    stoppedBeforeApply(leaving, deferredEntities, message =>
+      logger.error(message)
+    ),
+    () =>
+      ensureLocalizedCompanionsForReload(
+        adapter,
+        newConfig,
+        fieldGroupTables,
+        deferredEntities,
+        "beforeApply"
+      )
   );
 
   // The apply is what removes the translatable columns from the main table. Running it after a

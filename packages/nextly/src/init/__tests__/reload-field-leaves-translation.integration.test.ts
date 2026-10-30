@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../config";
+import type { PromptDispatcher } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -43,15 +44,23 @@ type Body = {
   type?: string;
   /** A shared field beside it, for a reload that changes something else too. */
   summary?: true;
+  /** `title`'s type, for a reload with a change that needs review. */
+  titleType?: string;
+  /** A unique index on `body` declared in the collection's `indexes`. */
+  indexedUnique?: true;
 };
 
 /** A translated collection whose `body` is translated or shared, with its settings. */
-const collectionWith = (slug: string, { summary, ...body }: Body) =>
+const collectionWith = (
+  slug: string,
+  { summary, titleType, indexedUnique, ...body }: Body
+) =>
   defineCollection({
     slug,
     localized: true,
+    ...(indexedUnique ? { indexes: [{ fields: ["body"], unique: true }] } : {}),
     fields: [
-      { name: "title", type: "text", localized: false },
+      { name: "title", type: titleType ?? "text", localized: false },
       { name: "body", type: "text", ...body },
       ...(summary ? [{ name: "summary", type: "text", localized: false }] : []),
     ] as never,
@@ -262,6 +271,54 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await mainBodies()).toEqual({ e1: "Hello" });
       expect(await columnsOf(COMPANION)).not.toContain("body");
+    });
+
+    it("stops the reload when the collection a field leaves translation on has a change that needs review", async () => {
+      await seed({ e1: { en: "Hello", es: "Hola" } });
+
+      // `title` changes type, which a reload leaves for review: the field's move waits for it,
+      // even where the terminal confirms the type change, as a developer at one may.
+      const confirming: PromptDispatcher = {
+        dispatch: () =>
+          Promise.resolve({
+            confirmedRenames: [],
+            resolutions: [],
+            proceed: true,
+          }),
+      };
+      loaded.config = configWith({ localized: false, titleType: "number" });
+      await reloadNextlyConfig({ dispatcher: confirming });
+
+      expect(told()).toMatch(/"rlleaves".*another change/s);
+      expect(await columnsOf(TABLE)).not.toContain("body");
+      expect(await columnsOf(COMPANION)).toContain("body");
+      expect(await archived()).toEqual([]);
+    });
+
+    it("refuses a field an index makes unique while two entries share an English value, changing nothing", async () => {
+      await seed({ e1: { en: "Same", es: "Uno" }, e2: { en: "Same" } });
+
+      loaded.config = configWith({ localized: false, indexedUnique: true });
+      await reloadNextlyConfig();
+
+      expect(told()).toMatch(/would share a value for body/);
+      expect(await columnsOf(TABLE)).not.toContain("body");
+      expect(await columnsOf(COMPANION)).toContain("body");
+    });
+
+    it("makes a field an index makes unique unique once its values are copied", async () => {
+      await seed({ e1: { en: "A", es: "Uno" }, e2: { en: "B", es: "Uno" } });
+
+      loaded.config = configWith({ localized: false, indexedUnique: true });
+      await reloadNextlyConfig();
+
+      expect(await mainBodies()).toEqual({ e1: "A", e2: "B" });
+      expect(await columnsOf(COMPANION)).not.toContain("body");
+      await expect(
+        handle.adapter.executeQuery(
+          `UPDATE ${q(TABLE)} SET ${q("body")} = 'A' WHERE ${q("id")} = 'e2'`
+        )
+      ).rejects.toThrow();
     });
 
     it("refuses a Unique field while two entries share an English value, changing nothing", async () => {
