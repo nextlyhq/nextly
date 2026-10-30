@@ -142,6 +142,60 @@ describe("startup refuses the keys a plugin no longer adds widgets through", () 
     });
   });
 
+  it("refuses contributes.widgetSources declared as undefined: declaring the key is the fault", () => {
+    const sources = startupRefusal([
+      {
+        name: "@acme/s",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { widgetSources: undefined },
+      } as unknown as PluginDefinition,
+    ]);
+    expect(sources?.code).toBe("NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL");
+    expect(sources?.logContext).toEqual({
+      plugin: "@acme/s",
+      key: "contributes.widgetSources",
+    });
+  });
+
+  it("refuses contributes.admin.widgets declared as undefined, for the same reason", () => {
+    const widgets = startupRefusal([
+      {
+        name: "@acme/p",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { admin: { widgets: undefined } },
+      } as unknown as PluginDefinition,
+    ]);
+    expect(widgets?.code).toBe("NEXTLY_PLUGIN_REMOVED_WIDGET_CHANNEL");
+    expect(widgets?.logContext).toEqual({
+      plugin: "@acme/p",
+      key: "contributes.admin.widgets",
+    });
+  });
+
+  it("lets through a plugin that leaves both keys out, whatever else it declares", () => {
+    // The control for the case above: absence is not a declaration, with no
+    // contributions, with no admin contributions, and with an empty admin.
+    const absent = [
+      { name: "@acme/a", version: "1.0.0", nextly: "*" },
+      { name: "@acme/b", version: "1.0.0", nextly: "*", contributes: {} },
+      {
+        name: "@acme/c",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { admin: {} },
+      },
+      {
+        name: "@acme/d",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: { admin: undefined },
+      },
+    ] as unknown as PluginDefinition[];
+    expect(startupRefusal(absent)).toBeUndefined();
+  });
+
   it("refuses a disabled plugin carrying either key, so enabling it is never what fails a start", () => {
     const disabled = {
       ...withWidget(bigintWidget),

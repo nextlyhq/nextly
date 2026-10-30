@@ -35,18 +35,39 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
 /**
+ * Where `plugin` declares `contributes.<key>`: the object the key is an own
+ * property of (`contributes` for `widgetSources`, `contributes.admin` for
+ * `admin.widgets`) and the property's name, or `undefined` when the plugin
+ * declares no such key.
+ *
+ * Presence is asked apart from the value, because a key written as
+ * `undefined` is declared all the same and reads exactly like an absent one.
+ * The startup refusal and every reader ask this one question, so a reader
+ * never sees a value the refusal would not have named.
+ */
+function declaredKey(
+  plugin: PluginDefinition,
+  key: RemovedWidgetKey
+): { holder: Record<string, unknown>; name: string } | undefined {
+  const contributes: unknown = plugin.contributes;
+  if (!isRecord(contributes)) return undefined;
+  const holder = key === "widgetSources" ? contributes : contributes.admin;
+  const name = key === "widgetSources" ? "widgetSources" : "widgets";
+  return isRecord(holder) && Object.hasOwn(holder, name)
+    ? { holder, name }
+    : undefined;
+}
+
+/**
  * What `plugin` carries under `contributes.<key>`, or `undefined` when it
- * carries nothing there.
+ * declares nothing there.
  */
 export function carriedRemovedKey(
   plugin: PluginDefinition,
   key: RemovedWidgetKey
 ): unknown {
-  const contributes: unknown = plugin.contributes;
-  if (!isRecord(contributes)) return undefined;
-  if (key === "widgetSources") return contributes.widgetSources;
-  const admin = contributes.admin;
-  return isRecord(admin) ? admin.widgets : undefined;
+  const found = declaredKey(plugin, key);
+  return found === undefined ? undefined : found.holder[found.name];
 }
 
 /**
@@ -74,7 +95,8 @@ function removedWidgetKeyError(
 /**
  * Refuses the first plugin carrying any of {@link REMOVED_WIDGET_KEYS}.
  *
- * Any value counts, an empty list included: the key is not a field, so a
+ * Declaring the key is the fault, whatever it holds: `undefined` and an empty
+ * list count as any other value does, since the key is not a field and a
  * plugin naming it is written against a contract that no longer exists.
  * Disabled plugins are checked too, so enabling one is never what turns a
  * healthy install into one that refuses to start.
@@ -84,7 +106,7 @@ export function assertNoRemovedWidgetKeys(
 ): void {
   for (const plugin of plugins) {
     for (const key of REMOVED_WIDGET_KEYS) {
-      if (carriedRemovedKey(plugin, key) !== undefined) {
+      if (declaredKey(plugin, key) !== undefined) {
         throw removedWidgetKeyError(plugin.name, key);
       }
     }
