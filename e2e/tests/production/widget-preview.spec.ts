@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { includingHidden } from "../support/test";
+
 /**
  * The widget preview page's address, and its read, on a PRODUCTION build.
  *
@@ -45,7 +47,7 @@ test.describe("the widget preview page on a production build", () => {
       .click();
     await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
     await expect(
-      page.getByTestId("widget-previews-link").filter({ visible: true })
+      includingHidden(page).getByTestId("widget-previews-link")
     ).toHaveCount(0);
     await page
       .getByTestId("dashboard-edit-cancel")
@@ -63,7 +65,10 @@ test.describe("the widget preview page on a production build", () => {
     await page.goto(PREVIEWS);
     await expect(notFound).toBeVisible({ timeout: 60_000 });
     await expect(
-      page.getByRole("heading", { name: "Widget previews" })
+      page.getByRole("heading", {
+        name: "Widget previews",
+        includeHidden: true,
+      })
     ).toHaveCount(0);
     await expect(page.locator("[data-preview-section]")).toHaveCount(0);
     // The tab says what it says for any unserved address.

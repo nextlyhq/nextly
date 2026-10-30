@@ -19,12 +19,18 @@ import {
 import { CheckCircle2 } from "lucide-react";
 import type { JSX } from "react";
 
+import { useFieldTypeLabel } from "@admin/lib/builder/field-type-label";
 import type { SchemaPreviewChange } from "@admin/services/schemaApi";
+
+import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 
 interface SafeChangeConfirmDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  collectionName: string;
+  /** The kind being saved, named in the title. */
+  kind: BuilderKind;
+  /** Slug of the entity being saved. */
+  entityName: string;
   changes: SchemaPreviewChange;
   onConfirm: () => void;
   isApplying: boolean;
@@ -33,11 +39,14 @@ interface SafeChangeConfirmDialogProps {
 export function SafeChangeConfirmDialog({
   open,
   onOpenChange,
-  collectionName,
+  kind,
+  entityName,
   changes,
   onConfirm,
   isApplying,
 }: SafeChangeConfirmDialogProps): JSX.Element {
+  // Rows name a field's type by its plain name, never its internal id.
+  const typeLabel = useFieldTypeLabel();
   const hasChanges =
     changes.added.length > 0 ||
     changes.removed.length > 0 ||
@@ -61,9 +70,11 @@ export function SafeChangeConfirmDialog({
               Safe change
             </span>
           </div>
+          {/* Names the kind being saved, as every Builder title that refers
+              to one does. */}
           <AlertDialogTitle>
-            Apply changes to <span className="font-mono">{collectionName}</span>
-            ?
+            Apply changes to the {BUILDER_KIND_NOUN[kind]}{" "}
+            <span className="font-mono">{entityName}</span>?
           </AlertDialogTitle>
           <AlertDialogDescription>
             These changes do not affect existing data. Your dev server will
@@ -82,7 +93,7 @@ export function SafeChangeConfirmDialog({
                   + {f.name}
                 </Badge>
                 <span className="text-xs text-muted-foreground">
-                  {f.type}
+                  {typeLabel(f.type)}
                   {f.required ? ", required" : ", optional"}
                 </span>
               </div>
@@ -103,7 +114,7 @@ export function SafeChangeConfirmDialog({
                   ~ {f.name}
                 </Badge>
                 <span className="text-xs text-muted-foreground">
-                  {f.from} to {f.to}
+                  {typeLabel(f.from)} to {typeLabel(f.to)}
                 </span>
               </div>
             ))}

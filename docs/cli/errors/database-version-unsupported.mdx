@@ -1,0 +1,23 @@
+---
+title: DATABASE_VERSION_UNSUPPORTED
+description: "The database server is older than the oldest version Nextly supports for its dialect."
+---
+
+## Cause
+
+The database server is older than the oldest version Nextly supports for its dialect.
+
+Nextly checks the server's version when it connects. A server older than the oldest supported release is refused, since the SQL Nextly writes may not run on it. The What line names the version it found, and the Why line the minimum.
+
+## Fix
+
+Upgrade the database server, or point `DATABASE_URL` at one that meets the minimum. See [Database support](/docs/database/support) for the versions each dialect needs.
+
+## Example
+
+```text
+✗ The PostgreSQL server is version 12.4, older than Nextly supports.
+  Why:  Nextly needs PostgreSQL 15 or later.
+  Next: Upgrade the PostgreSQL server, or point `DATABASE_URL` at one that is 15 or later.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-version-unsupported  (DATABASE_VERSION_UNSUPPORTED)
+```

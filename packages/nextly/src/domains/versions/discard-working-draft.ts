@@ -183,6 +183,9 @@ export async function discardWorkingDraft(
           locale: args.locale ?? null,
           actor: args.actor,
           user: args.user,
+          // The update this discard was authorized for, asked again under the
+          // lock the delete holds.
+          updateUnderLock: { authenticatedScope: args.authenticatedScope },
         });
 
   return { document: result.data, removed };
