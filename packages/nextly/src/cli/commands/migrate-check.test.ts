@@ -488,6 +488,11 @@ describe("runChecks (F11 PR 4)", () => {
       expect(logger.error.mock.calls[0]?.[0]).toMatch(
         /^SLUG_SQL_KEYWORD: Collection address 'cascade' is a reserved SQL word/
       );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /the rule accepts\. If an entity already exists under it.*remove it from the configuration, create and apply the migration, then add it back under an accepted address/
+        )
+      );
       expect(logger.error).not.toHaveBeenCalledWith(
         expect.stringContaining("SCHEMA_DRIFT")
       );

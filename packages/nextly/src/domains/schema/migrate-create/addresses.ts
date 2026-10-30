@@ -19,6 +19,7 @@ import {
   type AddressKind,
   type JudgedAddress,
   judgeAddresses,
+  type UsedAddress,
 } from "../../../shared/address-rule";
 
 type Tabled = ReadonlyArray<{ slug: string; tableName: string }>;
@@ -45,19 +46,40 @@ const RECORD_KEY = {
  * entities does not hold, by kind and address, so a changed address is new
  * even when its table (a kept `dbName`) is in the snapshot. A snapshot written
  * before entities were recorded is read by its tables instead. With no
- * snapshot nothing can be told apart, and nothing is new.
+ * snapshot nothing is known to exist (these commands read files, never the
+ * database), so everything is new.
  */
 function isNewAgainst(
   latest: LatestSnapshot,
   kind: AddressKind,
   entity: { slug: string; tableName: string }
 ): boolean {
-  if (latest === null) return false;
+  if (latest === null) return true;
   const recorded = latest.data.entities;
   if (recorded !== undefined)
     return !(entity.slug in recorded[RECORD_KEY[kind]]);
   return !latest.data.snapshot.tables.some(
     table => table.name === entity.tableName
+  );
+}
+
+/**
+ * The addresses the latest snapshot records that the configuration no longer
+ * declares. Their entities keep their registry rows at the next start, which
+ * counts them as used, so these commands count them as used too: a new address
+ * sharing one's snake_case form is refused here as the start would refuse it.
+ */
+function removedButStillUsed(
+  latest: LatestSnapshot,
+  declared: ReadonlyArray<{ kind: AddressKind; address: string }>
+): UsedAddress[] {
+  const recorded = latest?.data.entities;
+  if (recorded === undefined) return [];
+  const isDeclared = new Set(declared.map(e => `${e.kind}:${e.address}`));
+  return (Object.keys(RECORD_KEY) as AddressKind[]).flatMap(kind =>
+    Object.keys(recorded[RECORD_KEY[kind]])
+      .filter(address => !isDeclared.has(`${kind}:${address}`))
+      .map(address => ({ kind, address }))
   );
 }
 
@@ -82,8 +104,17 @@ export function judgeMigrationAddresses(
       isNew: isNewAgainst(latest, kind, entity),
     }))
   );
-  return judgeAddresses(entities);
+  return judgeAddresses(entities, removedButStillUsed(latest, entities));
 }
+
+/**
+ * What to do about a new address the rule refuses, said once after the
+ * refusals. An entity a database already holds under it (made before the
+ * rule, or only by a development push before the first migration) cannot be
+ * told apart from a new one here, since these commands read no database.
+ */
+const REFUSED_ADDRESS_NEXT_STEP =
+  "Give each refused address one the rule accepts. If an entity already exists under it (made before this rule, or only by a development push), remove it from the configuration, create and apply the migration, then add it back under an accepted address.";
 
 /** One line per judged address, naming the address and the reason. */
 function describeJudgedAddresses(judged: readonly JudgedAddress[]): string[] {
@@ -103,6 +134,7 @@ export function assertMigrationAddresses(
   const { refused } = judgeMigrationAddresses(merged, latest);
   if (refused.length === 0) return;
   for (const line of describeJudgedAddresses(refused)) logger.error(line);
+  if (refused.length > 0) logger.error(REFUSED_ADDRESS_NEXT_STEP);
   throw addressRefusalsError(refused);
 }
 
@@ -127,5 +159,6 @@ export function reportMigrationAddresses(
     );
   }
   for (const line of describeJudgedAddresses(refused)) logger.error(line);
+  if (refused.length > 0) logger.error(REFUSED_ADDRESS_NEXT_STEP);
   return refused.length === 0;
 }

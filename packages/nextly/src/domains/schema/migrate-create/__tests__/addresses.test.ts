@@ -56,13 +56,13 @@ describe("judgeMigrationAddresses", () => {
     ]);
   });
 
-  it("only reports, and refuses nothing, when there is no snapshot to tell new from existing", () => {
+  it("treats everything as new when there is no snapshot, as on a fresh project", () => {
     const { refused, existing } = judgeMigrationAddresses(
       { collections: [collection("cascade")], singles: [], components: [] },
       null
     );
-    expect(refused).toEqual([]);
-    expect(existing.map(e => e.entity.address)).toEqual(["cascade"]);
+    expect(refused.map(e => e.entity.address)).toEqual(["cascade"]);
+    expect(existing).toEqual([]);
   });
 
   it("decides by the recorded entities when the snapshot has them, not by the table", async () => {
@@ -88,4 +88,73 @@ describe("judgeMigrationAddresses", () => {
     );
     expect(refused.map(r => r.refusal.code)).toEqual(["SLUG_TOO_LONG"]);
   });
+});
+
+/**
+ * The migrate commands' one answer to "is this address new", for every kind of snapshot they can
+ * find and every way an address can change. They read files only, never the database: with no
+ * snapshot nothing is known to exist, so everything is new. An address the latest snapshot records
+ * but the configuration no longer declares still holds its registry row at the next start, so it
+ * still counts as used, as the start counts it.
+ */
+describe("the migrate commands' decision table", () => {
+  type Snapshot = "with entities" | "older, tables only" | "none";
+  const snapshotOf = (
+    kind: Snapshot,
+    slugs: string[]
+  ): Parameters<typeof judgeMigrationAddresses>[1] => {
+    if (kind === "none") return null;
+    const tables = slugs.map(slug => ({
+      name: resolveCollectionTableName(slug),
+    }));
+    if (kind === "older, tables only")
+      return { data: { snapshot: { tables } } };
+    return {
+      data: {
+        snapshot: { tables },
+        entities: {
+          collections: Object.fromEntries(slugs.map(slug => [slug, {}])),
+          singles: {},
+          fieldGroups: {},
+        },
+      },
+    };
+  };
+  const judge = (kind: Snapshot, recorded: string[], declared: string[]) => {
+    const { refused, existing } = judgeMigrationAddresses(
+      { collections: declared.map(collection), singles: [], components: [] },
+      snapshotOf(kind, recorded)
+    );
+    return {
+      refused: refused.map(r => r.entity.address),
+      warned: existing.map(e => e.entity.address),
+    };
+  };
+
+  it.each([
+    // The same address the snapshot records: kept, and warned about since the rule refuses it.
+    ["with entities", ["cascade"], ["cascade"], [], ["cascade"]],
+    ["older, tables only", ["cascade"], ["cascade"], [], ["cascade"]],
+    ["none", [], ["cascade"], ["cascade"], []],
+    // A new address the rule refuses: refused whatever the snapshot.
+    ["with entities", ["posts"], ["posts", "cascade"], ["cascade"], []],
+    ["older, tables only", ["posts"], ["posts", "cascade"], ["cascade"], []],
+    ["none", [], ["posts", "cascade"], ["cascade"], []],
+    // Renamed across separators: the old address is still used, so the new one is refused. An
+    // older snapshot records no addresses, only the table both share, so it cannot tell.
+    ["with entities", ["team-updates"], ["team_updates"], ["team_updates"], []],
+    ["older, tables only", ["team-updates"], ["team_updates"], [], []],
+    ["none", [], ["team_updates"], [], []],
+    // Removed from the configuration: nothing to judge or warn about.
+    ["with entities", ["cascade"], [], [], []],
+    ["older, tables only", ["cascade"], [], [], []],
+  ] as const)(
+    "%s snapshot recording %j, declaring %j: refuses %j, warns %j",
+    (kind, recorded, declared, refused, warned) => {
+      expect(judge(kind, [...recorded], [...declared])).toEqual({
+        refused: [...refused],
+        warned: [...warned],
+      });
+    }
+  );
 });
