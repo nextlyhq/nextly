@@ -74,6 +74,33 @@ function useToastClearance(
 }
 
 /**
+ * Whether the tray's list is taller than the box it scrolls in. A scrolling
+ * region with nothing focusable inside it can't be scrolled from the keyboard,
+ * so the list takes focus itself while, and only while, it scrolls: a list
+ * that fits adds no tab stop. Measured again as rows come and go, and as the
+ * window resizes the tray.
+ */
+function useListScrolls(
+  listRef: React.RefObject<HTMLElement | null>,
+  rowCount: number
+): boolean {
+  const [scrolls, setScrolls] = React.useState(false);
+  React.useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const measure = () => setScrolls(list.scrollHeight > list.clientHeight);
+    measure();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(list);
+    return () => observer?.disconnect();
+  }, [listRef, rowCount]);
+  return scrolls;
+}
+
+/**
  * The file's own image while it uploads, read from the file on disk. Nothing
  * for a file that isn't an image, or where the browser can't make a URL for
  * it; the square stays so the rows line up.
@@ -141,7 +168,12 @@ function UploadTrayRow({
       <UploadThumbnail file={row.file} />
       <div className="min-w-0">
         <div className="flex items-baseline justify-between gap-2">
-          <p className="truncate text-sm font-medium text-foreground">
+          {/* Retry or a size can narrow the name until it is cut short;
+              the whole name stays readable on hover. */}
+          <p
+            className="truncate text-sm font-medium text-foreground"
+            title={row.filename}
+          >
             {row.filename}
           </p>
           <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
@@ -183,7 +215,9 @@ export function UploadTray({
 }: UploadTrayProps): React.JSX.Element {
   const { rows, summary, isUploading } = queue;
   const trayRef = React.useRef<HTMLElement>(null);
+  const listRef = React.useRef<HTMLUListElement>(null);
   useToastClearance(trayRef, placement === "floating" && rows.length > 0);
+  const listScrolls = useListScrolls(listRef, rows.length);
 
   // Close clears every row, since it is offered only once nothing is moving,
   // so the tray and the button go; focus moves on rather than being lost.
@@ -236,7 +270,12 @@ export function UploadTray({
               </Button>
             )}
           </div>
-          <ul className="min-h-0 flex-1 overflow-y-auto">
+          <ul
+            ref={listRef}
+            aria-label="Uploaded files"
+            tabIndex={listScrolls ? 0 : undefined}
+            className="min-h-0 flex-1 overflow-y-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+          >
             {rows.map(row => (
               <UploadTrayRow key={row.id} row={row} onRetry={queue.retry} />
             ))}

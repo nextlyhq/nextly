@@ -393,6 +393,12 @@ describe("the upload tray", () => {
     );
     const failed = row("photo-1.png");
     expect(within(failed).getByText("Storage is full.")).toBeVisible();
+    // Retry narrows the name, which may then be cut short; the whole name
+    // stays readable on hover.
+    expect(within(failed).getByText("photo-1.png")).toHaveAttribute(
+      "title",
+      "photo-1.png"
+    );
     expect(uploads.map(upload => upload.file.name)).not.toContain("poster.png");
     expect(uploads.map(upload => upload.file.name)).not.toContain("setup.exe");
 
@@ -464,6 +470,38 @@ describe("the upload tray", () => {
     expect(toastOffset()).toBe("");
   });
 
+  it("lets the keyboard reach a list taller than the tray, and only then", async () => {
+    renderLibrary();
+    const heading = await screen.findByRole("heading", {
+      name: "Media Library",
+    });
+    const list = () => within(tray()).getByRole("list");
+
+    // CONTROL: a list that fits is no tab stop, so Close stays the tray's
+    // last one.
+    await dropOn(heading, [png("a.png")]);
+    expect(list()).not.toHaveAttribute("tabindex");
+
+    // The same list once it outgrows the tray. jsdom lays nothing out, so the
+    // list's heights are stated: taller inside than the box it scrolls in.
+    const scrollHeight = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.tagName === "UL" ? 900 : 0;
+      });
+    try {
+      await dropOn(
+        heading,
+        Array.from({ length: 8 }, (_, i) => png(`photo-${i + 1}.png`))
+      );
+      await waitFor(() => expect(list()).toHaveAttribute("tabindex", "0"));
+      expect(list()).toHaveAccessibleName("Uploaded files");
+      expect(list().className).toMatch(/focus-visible:ring/);
+    } finally {
+      scrollHeight.mockRestore();
+    }
+  });
+
   it("takes files chosen with Upload the same way", async () => {
     const { container } = renderLibrary();
     // The chooser is the browser's own; what the page can show is that Upload
@@ -478,6 +516,10 @@ describe("the upload tray", () => {
     openChooser.mockRestore();
     const input =
       container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    // The input is only the chooser's mechanism: Upload is what a person and
+    // a screen reader meet, so the input is hidden from both.
+    expect(input).toHaveAttribute("aria-hidden", "true");
+    expect(input).toHaveAttribute("tabindex", "-1");
     fireEvent.change(input, { target: { files: [png("chosen.png")] } });
 
     await waitFor(() => expect(uploads).toHaveLength(1));

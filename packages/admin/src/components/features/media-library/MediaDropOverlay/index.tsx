@@ -28,13 +28,19 @@ export function MediaDropOverlay({
   description,
 }: MediaDropOverlayProps): React.JSX.Element {
   return (
-    <div className="pointer-events-none absolute inset-0 z-30 rounded-lg border-2 border-dashed border-primary bg-background/85">
-      <div className="sticky top-[35dvh] flex flex-col items-center gap-2 px-4 py-8 text-center">
-        <Upload className="h-8 w-8 text-primary" aria-hidden="true" />
-        <p className="text-lg font-semibold text-foreground">
-          Drop to upload to {destination}
-        </p>
-        <p className="max-w-md text-sm text-muted-foreground">{description}</p>
+    // `-inset-3`: the dashed edge sits in the page's margin, around the
+    // library's content rather than across its breadcrumb and toolbar.
+    <div className="pointer-events-none absolute -inset-3 z-30 rounded-lg border-2 border-dashed border-primary bg-background/85">
+      <div className="sticky top-[35dvh] flex justify-center px-4 py-8">
+        {/* A solid surface under the words: through the veil alone, a solid
+            control beneath (the pager's current page) showed behind them. */}
+        <div className="flex max-w-md flex-col items-center gap-2 rounded-lg bg-background px-6 py-5 text-center">
+          <Upload className="h-8 w-8 text-primary" aria-hidden="true" />
+          <p className="text-lg font-semibold text-foreground">
+            Drop to upload to {destination}
+          </p>
+          <p className="text-sm text-muted-foreground">{description}</p>
+        </div>
       </div>
     </div>
   );

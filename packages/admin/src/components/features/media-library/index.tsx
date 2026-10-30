@@ -675,8 +675,16 @@ export function MediaLibrary({
           upload={{ allowed: canUpload, onUpload: fileDrop.open }}
         />
 
-        {/* The chooser Upload opens; a reader has none. */}
-        {canUpload && <input {...fileDrop.getInputProps()} />}
+        {/* The chooser Upload opens; a reader has none. Upload is what a
+            person and a screen reader meet, so the input itself is hidden
+            from both, as the picker's is. */}
+        {canUpload && (
+          <input
+            {...fileDrop.getInputProps()}
+            aria-hidden="true"
+            tabIndex={-1}
+          />
+        )}
 
         {/* The grid and, beside it, the open item's details. */}
         <div className="flex items-start gap-6">
