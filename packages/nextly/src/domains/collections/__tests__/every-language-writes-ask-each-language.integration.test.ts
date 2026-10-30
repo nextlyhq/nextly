@@ -48,11 +48,15 @@ const ANY_LANGUAGE = "eachlang_any_language";
 // A delete rule answering "only the caller's own" in each language, over a
 // translated `owner`.
 const OWN = "eachlang_own";
+// Refusing German, on a collection whose edits are held as working drafts.
+const DRAFTED = "eachlang_drafted";
+// Refusing German, on entries only their owner may read.
+const HIDDEN = "eachlang_hidden";
 
 const AUTHOR = "eachlang-author";
 const OTHER = "eachlang-other";
 const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
-const SLUGS = [NOT_GERMAN, NOT_ENGLISH, ANY_LANGUAGE, OWN];
+const SLUGS = [NOT_GERMAN, NOT_ENGLISH, ANY_LANGUAGE, OWN, DRAFTED, HIDDEN];
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -88,6 +92,28 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       collection(NOT_GERMAN, notIn("de")),
       collection(NOT_ENGLISH, notIn("en")),
       collection(ANY_LANGUAGE, () => true),
+      defineCollection({
+        slug: DRAFTED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          delete: notIn("de"),
+        },
+        fields,
+      }),
+      defineCollection({
+        slug: HIDDEN,
+        localized: true,
+        access: {
+          read: ({ user }) => ({ owner: { equals: user?.id ?? "" } }),
+          update: () => true,
+          delete: notIn("de"),
+        },
+        fields,
+      }),
       defineCollection({
         slug: OWN,
         localized: true,
@@ -293,6 +319,59 @@ describe.each(getConfiguredTestDialects())(
         expect(
           await remaining(t, NOT_GERMAN, [withGerman, englishOnly])
         ).toEqual([true, false]);
+      });
+    });
+
+    describe("what a delete removes beyond its rows, and what it tells", () => {
+      it("refuses deleting an entry whose German edit is held, with no German row of its own", async () => {
+        const t = await boot(dialect);
+        const made = await t.nextly.create({
+          collection: DRAFTED,
+          data: { title: "live", owner: AUTHOR, status: "published" },
+        });
+        const id = String(made.item.id);
+        // Held as a working draft in German: the delete would remove it.
+        await t.nextly.update({
+          collection: DRAFTED,
+          id,
+          locale: "de",
+          data: { title: "entwurf" },
+        } as never);
+
+        expect(
+          await refused(() =>
+            t.nextly.delete({ collection: DRAFTED, id, ...asAuthor })
+          )
+        ).toBe(true);
+        expect(await stillThere(t, DRAFTED, id)).toBe(true);
+      });
+
+      it("answers a batch's refused entry the caller may not read as it answers a missing one", async () => {
+        const t = await boot(dialect);
+        const made = await t.nextly.create({
+          collection: HIDDEN,
+          data: { title: "theirs", owner: OTHER },
+        });
+        const hidden = String(made.item.id);
+        await t.nextly.update({
+          collection: HIDDEN,
+          id: hidden,
+          locale: "de",
+          data: { title: "ihres", owner: OTHER },
+        } as never);
+        const missing = "00000000-0000-4000-8000-000000000000";
+
+        const result = await entriesOf(t).deleteEntries(
+          { collectionName: HIDDEN, user: { id: AUTHOR } } as never,
+          [hidden, missing]
+        );
+
+        expect(result.failed).toBe(2);
+        const [first, second] = result.errors.map(({ error }) =>
+          error.replaceAll(hidden, "<id>").replaceAll(missing, "<id>")
+        );
+        expect(first).toBe(second);
+        expect(await stillThere(t, HIDDEN, hidden)).toBe(true);
       });
     });
 
