@@ -32,16 +32,21 @@ type SetupChange =
   | { skip: { kind: SkippableSetupStepKind; skipped: boolean } }
   | { retire: SampleRoute };
 
+/** Runs when the write it was handed to fails, so the card can undo what it drew ahead of it. */
+type OnFailed = () => void;
+
 export interface SetupStateWrite {
-  setCollapsed: (collapsed: boolean) => void;
+  /** Collapses or expands the card; `onFailed` runs when the write fails. */
+  setCollapsed: (collapsed: boolean, onFailed?: OnFailed) => void;
   dismiss: () => void;
   setSkipped: (kind: SkippableSetupStepKind, skipped: boolean) => void;
   /**
    * Asks the host to record "You're all set" over the steps this card draws,
    * with what the project's sample-content route said: only the admin can ask
    * it. The host judges the steps again and records only what it finds done.
+   * `onFailed` runs when the write fails, so the card can ask again later.
    */
-  retire: (route: SampleRoute) => void;
+  retire: (route: SampleRoute, onFailed?: OnFailed) => void;
   isWriting: boolean;
   /** The last write that failed, said in words; cleared by the next write. */
   failed: string | undefined;
@@ -67,9 +72,15 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     },
   });
   const { mutate } = mutation;
-  const setCollapsed = useCallback(
-    (collapsed: boolean) => mutate({ collapsed }),
+  // One change, with what to undo should it fail.
+  const send = useCallback(
+    (change: SetupChange, onFailed?: OnFailed) =>
+      mutate(change, onFailed === undefined ? {} : { onError: onFailed }),
     [mutate]
+  );
+  const setCollapsed = useCallback(
+    (collapsed: boolean, onFailed?: OnFailed) => send({ collapsed }, onFailed),
+    [send]
   );
   const dismiss = useCallback(() => mutate({ dismissed: true }), [mutate]);
   const setSkipped = useCallback(
@@ -78,8 +89,9 @@ export function useSetupState(refresh: () => void): SetupStateWrite {
     [mutate]
   );
   const retire = useCallback(
-    (route: SampleRoute) => mutate({ retire: route }),
-    [mutate]
+    (route: SampleRoute, onFailed?: OnFailed) =>
+      send({ retire: route }, onFailed),
+    [send]
   );
   return {
     setCollapsed,

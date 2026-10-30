@@ -92,7 +92,8 @@ function dataOf(patch: Partial<SetupCardData> = {}): SetupCardData {
 
 const retry = vi.fn();
 
-function draw(
+/** The card as the dashboard draws it, for `render` or a `rerender` with new data. */
+function tree(
   data: SetupCardData,
   grow?: (px: number | undefined) => void,
   collapse?: CardCollapse
@@ -115,7 +116,7 @@ function draw(
       <CardGrowContext.Provider value={grow}>{body}</CardGrowContext.Provider>
     );
   // At the size core declares for it, 12 × 2, as the dashboard draws it.
-  return render(
+  return (
     <CardHeightContext.Provider value={2}>
       {inFrame(
         collapse === undefined ? (
@@ -129,6 +130,14 @@ function draw(
       )}
     </CardHeightContext.Provider>
   );
+}
+
+function draw(
+  data: SetupCardData,
+  grow?: (px: number | undefined) => void,
+  collapse?: CardCollapse
+) {
+  return render(tree(data, grow, collapse));
 }
 
 /** "N of M done", as the frame's header draws it beside the title. */
@@ -531,6 +540,93 @@ describe("the setup card", () => {
       </CardHeightContext.Provider>
     );
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts the card back as the server holds it when a collapse fails, says so, and collapses on the next try", async () => {
+    put.mockRejectedValueOnce(new Error("network"));
+    draw(dataOf());
+    fireEvent.click(screen.getByRole("button", { name: "Collapse setup" }));
+    // The write failed: drawn expanded again, as the server still has it, and the header says so.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "could not be saved"
+    );
+    expect(
+      screen.getByRole("list", { name: "Setup steps" })
+    ).toBeInTheDocument();
+    const collapse = screen.getByRole("button", { name: "Collapse setup" });
+    await waitFor(() => expect(collapse).not.toBeDisabled());
+    // Collapse again asks to collapse, not to expand.
+    fireEvent.click(collapse);
+    await waitFor(() =>
+      expect(put).toHaveBeenLastCalledWith("/dashboard/setup", {
+        collapsed: true,
+      })
+    );
+    const expand = screen.getByRole("button", { name: "Expand setup" });
+    await waitFor(() => expect(expand).not.toBeDisabled());
+    fireEvent.click(expand);
+    expect(
+      screen.getByRole("list", { name: "Setup steps" })
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(put).toHaveBeenLastCalledWith("/dashboard/setup", {
+        collapsed: false,
+      })
+    );
+  });
+
+  it("asks the host again to record all set after a failed write, on the card's next read, never in a loop", async () => {
+    put.mockRejectedValueOnce(new Error("network"));
+    seed.status = { kind: "hidden" };
+    const steps: SetupStep[] = [
+      { kind: "sample", status: "open" },
+      { kind: "invite", status: "skipped" },
+    ];
+    const data = dataOf({ setup: { known: true, steps, done: 1, total: 2 } });
+    const { rerender } = draw(data);
+    const retire = { retire: { sampleRefused: true } };
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/dashboard/setup", retire)
+    );
+    // The failure lands, and the header says so.
+    await waitFor(() =>
+      expect(headerCount()).toHaveTextContent("could not be saved")
+    );
+    // Drawn again from the same answer: not asked again.
+    rerender(tree(data));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(put).toHaveBeenCalledTimes(1);
+    // The card's data read again, on a load or a refocus: asked again, and it lands.
+    rerender(tree({ ...data }));
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    expect(put).toHaveBeenLastCalledWith("/dashboard/setup", retire);
+    // Landed: a later read asks nothing more.
+    rerender(tree({ ...data }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(put).toHaveBeenCalledTimes(2);
+  });
+
+  it("cuts short only a tile's detail: its links and buttons are never inside the clipped text", () => {
+    draw(dataOf());
+    for (const tile of tiles()) {
+      const actions = within(tile).queryAllByRole("button");
+      const links = within(tile).queryAllByRole("link");
+      for (const control of [...actions, ...links]) {
+        expect(control.closest(".truncate")).toBeNull();
+      }
+    }
+    // The detail is the one part cut short, and the Singles tile keeps Open and Skip beside it.
+    const singles = tiles().find(tile => tile.dataset.setupStep === "singles")!;
+    expect(within(singles).getByText("2 of 5 filled in")).toHaveClass(
+      "truncate"
+    );
+    const kept = singles.querySelector("[data-setup-actions]")!;
+    expect(
+      within(kept as HTMLElement).getByRole("button", { name: /^Open/ })
+    ).toBeInTheDocument();
+    expect(
+      within(kept as HTMLElement).getByRole("button", { name: /^Skip/ })
+    ).toBeInTheDocument();
   });
 
   it("says a sample-content run is under way inside its tile", () => {

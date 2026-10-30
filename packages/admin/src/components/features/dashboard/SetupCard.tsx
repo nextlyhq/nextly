@@ -126,21 +126,28 @@ function drawnSteps(
 }
 
 /**
- * Asks the host, once, to record "You're all set" when the card finds every step it draws done
- * but the host, which cannot ask the project's sample-content route, did not: the host judges the
- * steps again with what the route said, through the same `drawnSetup`.
+ * Asks the host to record "You're all set" when the card finds every step it draws done but the
+ * host, which cannot ask the project's sample-content route, did not: the host judges the steps
+ * again with what the route said, through the same `drawnSetup`.
+ *
+ * Asked once per answer the card is drawn from (`answer`): a write that failed is asked again
+ * when the card's data is next read, on the next load or refocus, never in a loop on its own
+ * failure. One that landed is not asked again.
  */
 function useRetireOnce(
   due: boolean,
   sampleRefused: boolean,
-  retire: SetupStateWrite["retire"]
+  retire: SetupStateWrite["retire"],
+  answer: SetupCardData
 ): void {
   const asked = useRef(false);
   useEffect(() => {
     if (!due || asked.current) return;
     asked.current = true;
-    retire({ sampleRefused });
-  }, [due, sampleRefused, retire]);
+    retire({ sampleRefused }, () => {
+      asked.current = false;
+    });
+  }, [due, sampleRefused, retire, answer]);
 }
 
 /** "N of M done", from a counted answer. */
@@ -239,9 +246,16 @@ function HintAction({
   );
 }
 
-/** " · " between two parts of a hint, for the eye only. */
+/**
+ * "·" between two parts of a hint, for the eye only. Spaced by padding, not by spaces: the hint
+ * line lays its parts out as flex items, which drop a space at either end of their text.
+ */
 function Dot() {
-  return <span aria-hidden="true"> · </span>;
+  return (
+    <span aria-hidden="true" className="px-1">
+      ·
+    </span>
+  );
 }
 
 /**
@@ -403,7 +417,10 @@ function SkipToggle({
   );
 }
 
-/** What the hint line says before its actions: the sample offer while open, else its state. */
+/**
+ * What the hint line says before its actions: the sample offer while open, whole, as it is its
+ * actions; else the step's state, the one part of the line cut short when the tile is narrow.
+ */
 function HintText({
   step,
   detail,
@@ -413,8 +430,14 @@ function HintText({
   detail: string;
   sample: React.ReactNode;
 }) {
-  if (step.kind === "sample" && step.status === "open") return <>{sample}</>;
-  return <span>{step.status === "skipped" ? "Skipped" : detail}</span>;
+  if (step.kind === "sample" && step.status === "open") {
+    return <span className="flex shrink-0 items-center">{sample}</span>;
+  }
+  return (
+    <span className="min-w-0 truncate">
+      {step.status === "skipped" ? "Skipped" : detail}
+    </span>
+  );
 }
 
 /**
@@ -460,22 +483,25 @@ function StepTile({
           {label}
           <span className="sr-only"> — {STATUS_TEXT[step.status]}</span>
         </span>
+        {/* One line: only the detail is cut short, so its actions are never clipped. */}
         <span
           className={cn(
             SETUP_TILE_LINES.hint,
-            "truncate text-muted-foreground"
+            "flex min-w-0 items-center whitespace-nowrap text-muted-foreground"
           )}
         >
           <HintText step={step} detail={detail} sample={sample} />
-          <StepLink step={step} label={label} href={href} action={action} />
-          <SinglesToggle
-            step={step}
-            label={label}
-            open={singlesOpen}
-            listId={singlesListId}
-            onToggle={onToggleSingles}
-          />
-          <SkipToggle step={step} label={label} write={write} />
+          <span className="flex shrink-0 items-center" data-setup-actions="">
+            <StepLink step={step} label={label} href={href} action={action} />
+            <SinglesToggle
+              step={step}
+              label={label}
+              open={singlesOpen}
+              listId={singlesListId}
+              onToggle={onToggleSingles}
+            />
+            <SkipToggle step={step} label={label} write={write} />
+          </span>
         </span>
       </span>
     </li>
@@ -626,7 +652,7 @@ function useDrawnSetup(
       ? drawnSteps(card.setup.steps, seed, answeredHere)
       : undefined;
   const drawnAllSet = drawn !== undefined && setupAllSet(drawn);
-  useRetireOnce(drawnAllSet, seed.kind === "hidden", retire);
+  useRetireOnce(drawnAllSet, seed.kind === "hidden", retire, card);
   return {
     allSet: card.allSet || drawnAllSet,
     counted: drawn?.known && !drawnAllSet ? drawn : undefined,
@@ -745,7 +771,11 @@ function ExpandedSetup({
   );
 }
 
-/** Collapsed as the server says, then as the reader sets it here while the write lands. */
+/**
+ * Collapsed as the server says, then as the reader sets it here while the write lands. A write
+ * that fails puts back what was drawn before it, which is what the server still holds, and the
+ * header says the change was not saved.
+ */
 function useCollapsedHere(
   stored: boolean,
   write: SetupStateWrite
@@ -755,8 +785,9 @@ function useCollapsedHere(
   return {
     collapsed,
     toggle: () => {
+      const before = here;
       setHere(!collapsed);
-      write.setCollapsed(!collapsed);
+      write.setCollapsed(!collapsed, () => setHere(before));
     },
   };
 }
