@@ -41,9 +41,9 @@ import { DocumentBanners } from "@admin/components/features/entries/EntryForm/Do
 import { DocumentBar } from "@admin/components/features/entries/EntryForm/DocumentBar";
 import {
   DOCUMENT_COLUMN_INSET,
-  DOCUMENT_PANEL_STICKY,
   DocumentEditorLayout,
 } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import { DocumentSidePanel } from "@admin/components/features/entries/EntryForm/DocumentSidePanel";
 import { DocumentTitleBlock } from "@admin/components/features/entries/EntryForm/DocumentTitleBlock";
 import { DocumentTrail } from "@admin/components/features/entries/EntryForm/DocumentTrail";
 import {
@@ -80,7 +80,7 @@ import {
   type DocumentActionBindingsInput,
 } from "@admin/components/features/entries/EntryForm/useDocumentActionBindings";
 import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
-import { useDocumentPanelCollapsed } from "@admin/components/features/entries/EntryForm/useDocumentPanelCollapsed";
+import { useDocumentPanel } from "@admin/components/features/entries/EntryForm/useDocumentPanel";
 import {
   mapIntentToPayload,
   passwordFieldNames,
@@ -399,13 +399,12 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
 }
 
 /**
- * The inline language panel, shown where the rail is not.
+ * The inline language panel, shown where the docked panel is not.
  *
- * The rail that otherwise carries the language workflow is
- * `hidden @4xl/content:flex`, so this is the exact complement: shown only
- * where the rail is not, and rendered unconditionally once the author
- * collapses it. Without it a single loses its language workflow entirely at
- * narrow widths, which is the failure this panel exists to remove.
+ * The exact complement of the docked column that otherwise carries the
+ * language workflow: shown once the author folds it, and at every width the
+ * panel floats or is a sheet at, where it opens only when asked for. Without
+ * it a single loses its language workflow whenever the column is away.
  */
 function SingleFormLanguagePanel({
   actionsDisabled,
@@ -415,7 +414,7 @@ function SingleFormLanguagePanel({
   hasStatus,
   locale,
   onLocaleChange,
-  railCollapsed,
+  panelDocked,
   translations,
 }: {
   actionsDisabled: boolean;
@@ -425,19 +424,14 @@ function SingleFormLanguagePanel({
   hasStatus: boolean;
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
-  railCollapsed: boolean;
+  /** Whether the docked panel, which carries the language panel, is on screen. */
+  panelDocked: boolean;
   translations?: Record<string, { translated: boolean; status?: string }>;
 }) {
   if (!enabled) return null;
   return (
     // In line with the title and the fields, not indented past them.
-    <div
-      className={cn(
-        "pt-4",
-        DOCUMENT_COLUMN_INSET,
-        !railCollapsed && "@4xl/content:hidden"
-      )}
-    >
+    <div className={cn("pt-4", DOCUMENT_COLUMN_INSET, panelDocked && "hidden")}>
       <DocumentLanguagePanel
         translations={translations}
         locale={locale}
@@ -497,10 +491,10 @@ function SingleFormFieldsPanel({
 }
 
 /**
- * The metadata rail. Same shape and width as the entry editor's. Collapsed by
- * the shared pref; its document actions act on the LIVE document, so they are
- * withheld while a past version is on screen — the same withholding the
- * header's save affordances observe.
+ * The document panel, framed as the entry editor frames it (docked, floating
+ * or a sheet), with the same sections. Its document actions act on the LIVE
+ * document, so they are withheld while a past version is on screen — the
+ * same withholding the bar's save affordances observe.
  */
 function SingleFormRail({
   actionsDisabled,
@@ -508,41 +502,54 @@ function SingleFormRail({
   publishAllDisabled,
   entry,
   hasStatus,
+  documentStatus,
+  singleSlug,
   locale,
   onLocaleChange,
-  railCollapsed,
+  panel,
 }: {
   actionsDisabled: boolean;
   navigationDisabled: boolean;
   publishAllDisabled: boolean;
   entry: React.ComponentProps<typeof EntryFormSidebar>["entry"];
   hasStatus: boolean;
+  documentStatus: React.ComponentProps<
+    typeof EntryFormSidebar
+  >["documentStatus"];
+  /** The Single's slug, which releases address it by with its id. */
+  singleSlug: string;
   locale?: string;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
-  railCollapsed: boolean;
+  panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
 }) {
-  if (railCollapsed) return null;
+  const documentId = entry?.id === undefined ? "" : String(entry.id);
   return (
-    <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-      {/* Sticks under the document bar, as the entry editor's panel does. */}
-      <div
-        className={cn(
-          DOCUMENT_PANEL_STICKY,
-          "overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col"
-        )}
-      >
-        <EntryFormSidebar
-          mode="edit"
-          entry={entry}
-          hasStatus={hasStatus}
-          actionsDisabled={actionsDisabled}
-          navigationDisabled={navigationDisabled}
-          publishAllDisabled={publishAllDisabled}
-          {...(locale === undefined ? {} : { locale })}
-          {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
-        />
-      </div>
-    </div>
+    <DocumentSidePanel
+      mode={panel.mode}
+      shown={panel.shown}
+      onClose={panel.hide}
+    >
+      <EntryFormSidebar
+        mode="edit"
+        entry={entry}
+        hasStatus={hasStatus}
+        {...(documentStatus === undefined ? {} : { documentStatus })}
+        {...(documentId === ""
+          ? {}
+          : {
+              releaseDocument: {
+                scopeKind: "single" as const,
+                scopeSlug: singleSlug,
+                entryId: documentId,
+              },
+            })}
+        actionsDisabled={actionsDisabled}
+        navigationDisabled={navigationDisabled}
+        publishAllDisabled={publishAllDisabled}
+        {...(locale === undefined ? {} : { locale })}
+        {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
+      />
+    </DocumentSidePanel>
   );
 }
 
@@ -1051,13 +1058,6 @@ export function SingleForm({
     hasWorkingDraft: hasPendingWorkingDraft(document),
   };
 
-  // Rail collapse pref (shared with collection EntryForm via the same
-  // localStorage key).
-  // Out of the way when the author collapsed it (shared with the collection
-  // editor), and while history is open, which takes its place.
-  const { collapsed: railCollapsed, toggle: toggleRail } =
-    useDocumentPanelCollapsed(historyEnabledFrom(schema) !== false);
-
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
   const {
@@ -1142,6 +1142,17 @@ export function SingleForm({
     savedCount,
     inTranslationMode: translationMode.source !== undefined,
     admin: schema.admin,
+  });
+  // Whether the pane is actually on screen, as the pane itself reads below.
+  const previewOnScreen = previewPane.open && !documentView && !updatesHeld;
+
+  // The document panel, as the entry editor decides it (`useDocumentPanel`):
+  // the collapse choice shared with it, history taking its place, and the
+  // preview pane sharing the right side with it.
+  const panel = useDocumentPanel({
+    historyAvailable: historyEnabledFrom(schema) !== false,
+    previewOpen: previewOnScreen,
+    closePreview: previewPane.onClose,
   });
 
   const localeCtx = useEntryLocaleContext({
@@ -1318,7 +1329,7 @@ export function SingleForm({
                  * it there.
                  */
                 // Nor beside a document view, which takes the window alone.
-                open={previewPane.open && !documentView && !updatesHeld}
+                open={previewOnScreen}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -1373,8 +1384,11 @@ export function SingleForm({
                               editor draws: one bar and one banner order on
                               both. */}
                             <DocumentEditorLayout
+                              frameRef={panel.measure}
+                              panelMode={panel.mode}
                               bar={
                                 <DocumentBar
+                                  panelMode={panel.mode}
                                   autosaveEnabled={autosaveScope !== null}
                                   // A recovery point newer than the stored document, still on offer:
                                   // its edits are not stored, whatever the form says.
@@ -1444,8 +1458,8 @@ export function SingleForm({
                                   // entry id.
                                   scope="single"
                                   documentLocked={lock.readOnly}
-                                  isRailCollapsed={railCollapsed}
-                                  onToggleRail={toggleRail}
+                                  isRailCollapsed={panel.collapsed}
+                                  onToggleRail={panel.toggle}
                                 />
                               }
                               banners={
@@ -1483,7 +1497,7 @@ export function SingleForm({
                                   isSubmitting={writePending}
                                 />
                                 <EntryMetaStrip
-                                  isRailCollapsed={railCollapsed}
+                                  panelCarriesId={panel.docked}
                                   documentId={document.id}
                                 />
 
@@ -1496,7 +1510,7 @@ export function SingleForm({
                                   navigationDisabled={navigationHeld}
                                   enabled={localizationEnabled}
                                   hasStatus={hasStatus}
-                                  railCollapsed={railCollapsed}
+                                  panelDocked={panel.docked}
                                   {...(singleTranslations === undefined
                                     ? {}
                                     : { translations: singleTranslations })}
@@ -1524,14 +1538,17 @@ export function SingleForm({
                                 />
                               </div>
 
-                              {/* Rail (collapsible). */}
+                              {/* The document panel, framed for the editor's
+                                width, as the entry editor's is. */}
                               <SingleFormRail
                                 actionsDisabled={contentHeld}
                                 publishAllDisabled={publishAllDisabled}
                                 navigationDisabled={navigationHeld}
                                 entry={entryLike}
                                 hasStatus={hasStatus}
-                                railCollapsed={railCollapsed}
+                                documentStatus={editedStatus}
+                                singleSlug={schema.slug}
+                                panel={panel}
                                 {...(locale === undefined ? {} : { locale })}
                                 {...(switchLocale === undefined
                                   ? {}

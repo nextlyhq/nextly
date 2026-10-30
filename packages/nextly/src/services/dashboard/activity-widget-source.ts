@@ -1,6 +1,6 @@
 /**
  * `system:activity`: who changed what, most recent first, as the dashboard's
- * Recent activity card reads it.
+ * Team activity card reads it.
  *
  * The same read the activity endpoint makes, through the same service call:
  * the per-row read check, the runs of repeated saves and the row limit are the
@@ -50,6 +50,11 @@ const ACTIVITY_FIELDS = [
   { name: "userEmail", type: "string" as const, label: "Email" },
   { name: "identityErasedAt", type: "date" as const, label: "Identity erased" },
   { name: "action", type: "string" as const, label: "Action" },
+  // What the row says happened, in the words a reader is told it: created,
+  // saved, published, unpublished or deleted. The feed names it from the row's
+  // action and its marks, so the card tells a publish from a save without
+  // `metadata`, which this source does not publish.
+  { name: "event", type: "string" as const, label: "Event" },
   { name: "collection", type: "string" as const, label: "Collection" },
   { name: "entryId", type: "string" as const, label: "Entry" },
   { name: "entryTitle", type: "string" as const, label: "Title" },
@@ -144,7 +149,7 @@ export function registerActivityWidgetSource(): void {
   registerSystemSource(
     {
       id: ACTIVITY_SOURCE_ID,
-      label: "Recent activity",
+      label: "Team activity",
       kind: "system",
       titleField: "entryTitle",
       supports: ["list"],

@@ -47,7 +47,7 @@ const CORE_GROUPS = {
   [CORE_WIDGET_ID.needsAttention]: "overview",
   [CORE_WIDGET_ID.recentlyEdited]: "overview",
   [CORE_WIDGET_ID.upcomingReleases]: "overview",
-  [CORE_WIDGET_ID.recentActivity]: "team",
+  [CORE_WIDGET_ID.teamActivity]: "team",
   [CORE_WIDGET_ID.count]: "content",
   [CORE_WIDGET_ID.breakdown]: "content",
   [CORE_WIDGET_ID.note]: "overview",

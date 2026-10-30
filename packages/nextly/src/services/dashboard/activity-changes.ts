@@ -19,6 +19,8 @@
  */
 
 import { LIFECYCLE_FIELDS } from "../../domains/audit/lifecycle-fields";
+import { SETTINGS_ACTIVITY_NAMESPACES } from "../../domains/audit/settings-activity-namespaces";
+import type { ActivityEvent } from "../../domains/widgets/result";
 
 /**
  * A row's metadata as an object, from either form a driver hands back: the
@@ -120,4 +122,86 @@ export function isContentSave(action: unknown, metadata: unknown): boolean {
   const changed = changedFieldsOf(metadata);
   if (changed === undefined) return true;
   return changed.some(name => !LIFECYCLE_FIELDS.has(name));
+}
+
+/** Whether `slug` is a namespace install-level settings changes are filed under. */
+export function isSettingsNamespace(slug: string): boolean {
+  return (SETTINGS_ACTIVITY_NAMESPACES as readonly string[]).includes(slug);
+}
+
+/** What a trail row says about its subject, for the questions below. */
+interface ActivitySubjectFacts {
+  subjectKind?: unknown;
+  collection?: unknown;
+  metadata?: unknown;
+}
+
+/**
+ * Whether a row is an install-level settings change rather than a document's:
+ * it says so, or it predates the kind being recorded and is filed under a
+ * settings namespace.
+ */
+export function isSettingsChange(row: ActivitySubjectFacts): boolean {
+  if (row.subjectKind === "settings") return true;
+  return (
+    (row.subjectKind ?? null) === null &&
+    typeof row.collection === "string" &&
+    isSettingsNamespace(row.collection)
+  );
+}
+
+/**
+ * Whether an update's record leaves open what it did: an entry's update that
+ * names no changed fields and carries no publish mark, written before the
+ * fields were recorded or by a save that changed nothing. It cannot show it was
+ * not a publish or an unpublish, so neither the feed's runs (`runKeyOf`) nor
+ * its events (`activityEventOf`) read it as a save. A Single's rows written
+ * before they recorded either are read as saves, as they always have been.
+ */
+export function updateLeavesOperationOpen(row: ActivitySubjectFacts): boolean {
+  return (
+    row.subjectKind !== "single" &&
+    !publishes(row.metadata) &&
+    changedFieldsOf(row.metadata) === undefined
+  );
+}
+
+/**
+ * What a feed row says happened, as a reader is told it: the published wire
+ * type (`nextly/widget-result`), which every event named here is checked
+ * against, so the producer cannot name one a consumer's switch does not cover.
+ */
+export type { ActivityEvent };
+
+/**
+ * The event a trail row records, read from its action and the same marks the
+ * questions above read, so a row the feed calls a publish is the row
+ * Recently edited declines to call a save.
+ *
+ * - A settings change names none: an event is what happened to an entry or a
+ *   Single, and an install-level change is neither.
+ * - A create and a delete say so by their action.
+ * - An update marked as a publish published, whether or not it also carried
+ *   edits: putting the document live is what a reader needs to hear.
+ * - An update that changed the status without that mark took the document out
+ *   of live, because every path that publishes writes the mark.
+ * - An update whose record leaves open what it did names none
+ *   (`updateLeavesOperationOpen`), the rule the feed's runs read it by.
+ * - Any other update is a save.
+ *
+ * `undefined` for each of those and for an action the trail does not write,
+ * so a reader says what the row's action says rather than an event it cannot
+ * stand behind.
+ */
+export function activityEventOf(
+  row: ActivitySubjectFacts & { action: unknown }
+): ActivityEvent | undefined {
+  if (isSettingsChange(row)) return undefined;
+  if (row.action === "create") return "created";
+  if (row.action === "delete") return "deleted";
+  if (row.action !== "update") return undefined;
+  if (publishes(row.metadata)) return "published";
+  if (changesStatus(row.metadata)) return "unpublished";
+  if (updateLeavesOperationOpen(row)) return undefined;
+  return "saved";
 }

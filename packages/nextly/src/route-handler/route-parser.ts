@@ -2780,6 +2780,7 @@ const DASHBOARD_ROUTES: Readonly<
     activity: { operation: "list", method: "getDashboardActivity" },
     layout: { operation: "list", method: "getWidgetLayout" },
     pins: { operation: "list", method: "getDashboardPins" },
+    summary: { operation: "list", method: "getDashboardSummary" },
   },
   POST: {
     query: { operation: "list", method: "postWidgetQuery" },
@@ -2802,6 +2803,7 @@ const DASHBOARD_ROUTES: Readonly<
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   GET  /api/dashboard/summary        → getDashboardSummary
  *   PUT  /api/dashboard/layout         → putWidgetLayout
  *   DELETE /api/dashboard/layout       → deleteWidgetLayout
  *   POST /api/dashboard/query          → postWidgetQuery

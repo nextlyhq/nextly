@@ -13,6 +13,8 @@
  *
  * @module domains/releases/releases-repository
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
 import { readRevalidateConfig } from "../../revalidation/intent-builders";
@@ -35,6 +37,7 @@ import type { VersionScopeKind } from "../../schemas/versions/types";
 import type { RowLockServer } from "../../shared/lib/row-lock";
 import { uuidV7 } from "../../utils/uuid-v7";
 import { rowLockServer } from "../audit/audit-log-writer";
+import type { NoticeKind } from "../notices/notice-kinds";
 import {
   NoticesService,
   type NoticesDb,
@@ -70,6 +73,8 @@ import {
   type ReleaseRunHistory,
 } from "./release-events";
 import { releaseMemberKey } from "./release-member-key";
+import { enqueueReleaseNoticeEmail } from "./release-notice-email";
+import { RELEASE_OVERDUE_NOTICE } from "./release-overdue-notice";
 import type {
   ReleaseRecheckDocument,
   ReleaseRecheckTarget,
@@ -83,6 +88,7 @@ import {
   RELEASES_TABLE as RELEASES,
 } from "./release-tables";
 import {
+  overdueCutoff,
   releaseTabQuery,
   type ReleaseAttentionReason,
   type ReleaseTab,
@@ -154,9 +160,10 @@ export type ReleasesDbApi = Omit<VersionsDbApi, "select"> & {
  *
  * The statements the atomic paths perform, and no others: a fenced
  * compare-and-set on the release, the read of the revision that compare-and-set
- * is fenced on, the member write it guards, and the owner's notice a stop
- * records with it (`NoticesWriter`). Each is declared in the
- * adapter's `TransactionContext` shape, narrowed to the where clause and
+ * is fenced on, the member write it guards, and the owner's notice a
+ * transition records with it (`NoticesWriter`), with the job that emails the
+ * notice's copy (`getDrizzle`, the jobs table's own insert). Each is declared
+ * in the adapter's `TransactionContext` shape, narrowed to the where clause and
  * options this repository uses, so the transaction context satisfies it
  * without adapting. Kept separate from {@link ReleasesDbApi} rather than
  * reusing it, because a transaction context genuinely cannot do everything the
@@ -164,7 +171,9 @@ export type ReleasesDbApi = Omit<VersionsDbApi, "select"> & {
  * nested transactions and revalidation that are either unavailable or actively
  * wrong before the commit.
  */
-export interface ReleasesTxApi extends NoticesWriter {
+export interface ReleasesTxApi
+  extends NoticesWriter,
+    Pick<TransactionContext, "getDrizzle"> {
   /**
    * Hold one row's lock until the transaction ends. Taken on the release
    * before its revision is read, so two membership changes to one release
@@ -1407,9 +1416,9 @@ export class ReleasesRepository {
    * A release stopped before its instant gains nothing from the flush and
    * loses nothing by it.
    *
-   * Each release's owner is told, in the same transaction, once per
-   * occurrence ({@link recordStopped}): the notice and the stop stand or fall
-   * together, so no path into `blocked` can stop a release without it.
+   * Each release's owner is told, in the same transaction, once for the
+   * revision it stopped at ({@link tellOwner}): the notice and the stop stand
+   * or fall together, so no path into `blocked` can stop a release without it.
    *
    * @returns the ids actually blocked — every id given, or none at all.
    */
@@ -1437,7 +1446,15 @@ export class ReleasesRepository {
         ],
       }),
       async (tx, entry, revision) => {
-        await this.recordStopped(tx, entry, revision);
+        await this.tellOwner(tx, entry.id, {
+          kind: RELEASE_STOPPED_NOTICE,
+          occurrence: String(revision),
+          data: release => ({
+            title: release.title,
+            scheduledAt: entry.scheduledAt.toISOString(),
+            timezone: release.timezone,
+          }),
+        });
         // The stop is the system's, whichever event found the problem.
         await this.recordEvent(tx, entry.id, {
           kind: "stopped",
@@ -1529,45 +1546,166 @@ export class ReleasesRepository {
   }
 
   /**
-   * Tell a stopped release's owner, inside the stop's transaction, once for
-   * the revision it stopped at.
+   * Tell a release's owner, inside the transaction of the change being
+   * reported, once for `occurrence`: the notice, and, when this call created
+   * it, the job that emails its copy (`release-notice-email`). The two commit
+   * with the change, so no change can be reported without its email handed
+   * on, and one seen twice hands it on once.
    *
    * Nobody is told when the release records no owner, or its owner's account
    * is gone: a notice belongs to a person who exists, and writing one for an
-   * account that does not would refuse the whole stop.
+   * account that does not would refuse the whole change. Nor when the release
+   * no longer meets `still`, the conditions a caller that read it before the
+   * transaction requires of it now.
+   *
+   * @returns whether this call created the notice
    */
-  private async recordStopped(
+  private async tellOwner<TData>(
     tx: ReleasesTxApi,
-    entry: BlockRequest,
-    revision: number
-  ): Promise<void> {
+    releaseId: string,
+    notice: {
+      kind: NoticeKind<TData>;
+      occurrence: string;
+      /** The kind's snapshot, from the release as the transaction reads it. */
+      data: (release: { title: string; timezone: string | null }) => TData;
+      still?: readonly VersionsWhereCondition[];
+    }
+  ): Promise<boolean> {
     const [release] = await tx.select<{
       title: string;
       createdBy: string | null;
+      timezone: string | null;
     }>(RELEASES, {
-      columns: ["title", "createdBy"],
-      where: { and: [{ column: "id", op: "=", value: entry.id }] },
+      columns: ["title", "createdBy", "timezone"],
+      where: {
+        and: [
+          { column: "id", op: "=", value: releaseId },
+          ...(notice.still ?? []),
+        ],
+      },
     });
     const owner = release?.createdBy ?? null;
-    if (owner === null) return;
+    if (owner === null) return false;
     const [person] = await tx.select<{ id: string }>(USERS, {
       columns: ["id"],
       where: { and: [{ column: "id", op: "=", value: owner }] },
     });
-    if (person === undefined) return;
-    await this.notices.record(
+    if (person === undefined) return false;
+    const recorded = await this.notices.record(
       {
-        kind: RELEASE_STOPPED_NOTICE,
+        kind: notice.kind,
         userId: owner,
-        subjectId: entry.id,
-        occurrence: String(revision),
-        data: {
-          title: release.title,
-          scheduledAt: entry.scheduledAt.toISOString(),
-        },
+        subjectId: releaseId,
+        occurrence: notice.occurrence,
+        data: notice.data(release),
       },
       tx
     );
+    if (!recorded.created || recorded.id === null) return false;
+    await enqueueReleaseNoticeEmail(
+      tx,
+      this.db.dialect,
+      recorded.id,
+      new Date()
+    );
+    return true;
+  }
+
+  /**
+   * Tell the owner of each release overdue at `now` that it has missed its
+   * time, once for each instant it missed (`release-overdue-notice`).
+   *
+   * The drain's pass asks this before it runs anything, so a release the
+   * runner stopped reaching, or one the pass then fails to run, is reported
+   * whatever the pass does next. Overdue is the Needs attention tab's own
+   * rule, read through {@link listingFor}, so the notice and the tab never
+   * disagree about which releases are late. Each release is told in a
+   * transaction of its own, which its notice and email job commit in.
+   *
+   * @returns how many owners this call newly told
+   */
+  async recordOverdueReleases(now: Date): Promise<number> {
+    // Before any transaction, for the reason `blockReleases` gives; with no
+    // table yet nobody can be told, and nothing is read.
+    if (!(await this.notices.ready())) return 0;
+    const listing = this.listingFor({
+      tab: "attention",
+      reason: "overdue",
+      now,
+    });
+    if (listing === null) return 0;
+    const rows = await this.db.select<{
+      id: string;
+      scheduledAt: Date | string;
+      createdBy: string | null;
+    }>(RELEASES, {
+      columns: ["id", "scheduledAt", "createdBy"],
+      where: listing.where,
+      orderBy: listing.orderBy,
+    });
+    const overdue = rows.flatMap(row =>
+      row.createdBy === null
+        ? []
+        : [
+            {
+              id: row.id,
+              owner: row.createdBy,
+              at: new Date(row.scheduledAt),
+              // The missed instant, as the transition to published keys it.
+              occurrence: isoOf(row.scheduledAt),
+            },
+          ]
+    );
+    // The misses already told, in one read, so a release that stays overdue
+    // costs each later pass nothing per release before the pass runs what is
+    // due.
+    const told = await this.notices.recorded(
+      RELEASE_OVERDUE_NOTICE,
+      overdue.map(release => ({
+        userId: release.owner,
+        subjectId: release.id,
+        occurrence: release.occurrence,
+      }))
+    );
+    let newlyTold = 0;
+    for (const [index, release] of overdue.entries()) {
+      if (told[index]) continue;
+      try {
+        const created = await this.db.transaction(tx =>
+          this.tellOwner(tx, release.id, {
+            kind: RELEASE_OVERDUE_NOTICE,
+            occurrence: release.occurrence,
+            data: row => ({
+              title: row.title,
+              scheduledAt: release.occurrence,
+              timezone: row.timezone,
+              ranAt: null,
+            }),
+            // Read before the transaction: a release cancelled, run or
+            // moved since has not missed this instant.
+            still: [
+              {
+                column: "state",
+                op: "=",
+                value: "scheduled" satisfies ReleaseState,
+              },
+              { column: "scheduledAt", op: "=", value: release.at },
+            ],
+          })
+        );
+        if (created) newlyTold += 1;
+      } catch (error) {
+        // One release that cannot be told leaves the others told, rather
+        // than every one after it waiting behind it on every pass.
+        getNextlyLogger().warn({
+          kind: "release-overdue-notice-failed",
+          message: "A release's owner could not be told it is overdue",
+          releaseId: release.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return newlyTold;
   }
 
   /**
@@ -2186,11 +2324,24 @@ export class ReleasesRepository {
    *
    * Through `advanceRevision`, so publishing bumps each revision as every
    * other move of a release does.
+   *
+   * A release that ran past the overdue cutoff tells its owner it ran late,
+   * in the same transaction, keyed on the instant it missed: the key the
+   * drain's overdue pass uses ({@link recordOverdueReleases}), so a runner
+   * that catches up late still tells the owner, and one miss is told once
+   * whichever saw it first.
    */
   async markReleasesPublished(
     entries: readonly { id: string; revision: number; scheduledAt: Date }[],
     at: Date
   ): Promise<readonly string[]> {
+    // Asked of the cutoff the Needs attention tab uses, never of arithmetic
+    // of its own, so "ran late" and "was overdue" are one judgement.
+    const late = (entry: { scheduledAt: Date }) =>
+      entry.scheduledAt.getTime() < overdueCutoff(at).getTime();
+    // Before the transaction, for the reason `blockReleases` gives; asked only
+    // when a release ran late, so an ordinary settle reads nothing more.
+    if (entries.some(late)) await this.notices.ready();
     const moved = await this.moveComponentWhole(
       entries,
       entry => ({
@@ -2207,13 +2358,26 @@ export class ReleasesRepository {
       // Each release's `release-published`, in the settle's transaction, so a
       // component settles with its events or not at all. The run is the
       // system's.
-      (tx, entry) =>
-        this.recordEvent(tx, entry.id, {
+      async (tx, entry) => {
+        await this.recordEvent(tx, entry.id, {
           kind: "published",
           actor: SYSTEM_RELEASE_EVENT_ACTOR,
           fromState: "scheduled",
           toState: "published",
-        })
+        });
+        if (!late(entry)) return;
+        const scheduledAt = isoOf(entry.scheduledAt);
+        await this.tellOwner(tx, entry.id, {
+          kind: RELEASE_OVERDUE_NOTICE,
+          occurrence: scheduledAt,
+          data: release => ({
+            title: release.title,
+            scheduledAt,
+            timezone: release.timezone,
+            ranAt: at.toISOString(),
+          }),
+        });
+      }
     );
     return moved.map(entry => entry.id);
   }

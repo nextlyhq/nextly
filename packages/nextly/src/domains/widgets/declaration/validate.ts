@@ -112,9 +112,6 @@ const RENAMED_FIELDS: Readonly<Record<string, string>> = {
     "it is removed: the add panel draws the view's own skeleton until it draws the preview cases",
 };
 
-/** Said of a field this core types but does not apply yet, so a declaration fails closed. */
-const LATER_RELEASE = "available in a later release";
-
 const nonBlank = z.string().trim().min(1);
 const isFunction = (value: unknown): boolean => typeof value === "function";
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -458,8 +455,7 @@ function previewSettingsProblems(
 
 /**
  * Every problem with a widget's summary: a label and a count, run as the
- * person. A well-formed one is refused until the dashboard's header reads it:
- * started, it would be accepted and never shown.
+ * person, which the dashboard's header reads for each card a reader is shown.
  */
 function summaryProblems(summary: unknown): string[] {
   if (summary === undefined) return [];
@@ -476,11 +472,7 @@ function summaryProblems(summary: unknown): string[] {
         : "summary.count must be a function that counts, as the person asking"
     ),
   ];
-  return problems.length > 0
-    ? problems
-    : [
-        `summary is ${LATER_RELEASE}: until then a widget that declares it is not started, so a summary it states is never accepted and left unshown`,
-      ];
+  return problems;
 }
 
 function idProblem(id: unknown, inCore: boolean): string | undefined {

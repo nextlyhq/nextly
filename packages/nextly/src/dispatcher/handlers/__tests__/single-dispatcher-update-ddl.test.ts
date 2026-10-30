@@ -253,6 +253,8 @@ function wireRegistry(existing: Record<string, unknown>) {
     listSingles: vi.fn(),
     getAllSingles: vi.fn().mockResolvedValue([]),
     getSingleBySlug: vi.fn(async () => existing),
+    // A schema save reads the Single as stored, past the registry row cache.
+    getSingleForWrite: vi.fn(async () => existing),
     registerSingle: vi.fn(async (row: unknown) => row),
     updateMigrationStatus: vi.fn(),
     updateSingle: vi.fn(
