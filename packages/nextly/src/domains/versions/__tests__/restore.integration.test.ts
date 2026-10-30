@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -32,6 +33,19 @@ afterEach(async () => {
 });
 
 const superAdmin = { id: "tester", roles: ["super-admin"] };
+
+const stored = new WeakSet<TestNextly>();
+/**
+ * The super-admin a restore is made as, stored in `t` so the update gate the
+ * restore asks finds its role: role names a caller hands in grant nothing.
+ */
+async function storedSuperAdmin(t: TestNextly): Promise<typeof superAdmin> {
+  if (!stored.has(t)) {
+    await superAdminUser(t, superAdmin.id);
+    stored.add(t);
+  }
+  return superAdmin;
+}
 
 async function bootPosts(): Promise<TestNextly> {
   return createTestNextly({
@@ -67,7 +81,7 @@ describe("restoreVersion (integration)", () => {
       slug: "posts",
       entryId,
       versionNo: 1,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
 
     const after = await handler.getEntry({
@@ -102,7 +116,7 @@ describe("restoreVersion (integration)", () => {
       slug: "posts",
       entryId,
       versionNo: 1,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
 
     const history = await versions.list({
@@ -143,7 +157,7 @@ describe("restoreVersion (integration)", () => {
       slug: "posts",
       entryId,
       versionNo: 1,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
 
     const ref = {
@@ -205,7 +219,7 @@ describe("restoreVersion (integration)", () => {
       slug: "posts",
       entryId,
       versionNo: head!.versionNo!,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
 
     const history = await versions.list(ref);
@@ -236,7 +250,7 @@ describe("restoreVersion (integration)", () => {
       slug: "posts",
       entryId,
       versionNo: 1,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
     // Undo the restore by restoring the version it replaced.
     await restoreVersion({
@@ -244,7 +258,7 @@ describe("restoreVersion (integration)", () => {
       slug: "posts",
       entryId,
       versionNo: 2,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
 
     const after = await handler.getEntry({
@@ -307,7 +321,7 @@ describe("restoreVersion (integration)", () => {
       slug: "preferences",
       entryId,
       versionNo: 1,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
 
     // The pre-restore snapshot holds the content that was live at the restore
@@ -378,7 +392,7 @@ describe("restoreVersion (integration)", () => {
       slug: "branding",
       entryId: deVersion!.entryId,
       versionNo: deVersion!.versionNo!,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
 
     const beforeRestore = (await rows()).find(
@@ -459,7 +473,7 @@ describe("restoreVersion (integration)", () => {
       slug: "prefs",
       entryId: first!.entryId,
       versionNo: 1,
-      user: superAdmin,
+      user: await storedSuperAdmin(current!),
     });
 
     const beforeRestore = (await rows()).find(
