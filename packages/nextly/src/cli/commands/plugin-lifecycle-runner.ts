@@ -387,7 +387,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         publicMessage:
           `Another migration is holding the migrate lock, so ${notRun}. ` +
           "Nothing was changed — re-run once it finishes.",
-        logContext: { ...logContext, reason: outcome.reason },
+        logContext: {
+          ...logContext,
+          reason: "plugin-lifecycle-lock-busy",
+          outcome: outcome.reason,
+        },
       });
     }
     return outcome.value;
@@ -583,7 +587,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage: `Services are already registered in this process, so ${plugin.name}'s ${hook} was not run.`,
-        logContext: { plugin: plugin.name, hook },
+        logContext: {
+          reason: "plugin-hook-services-registered",
+          plugin: plugin.name,
+          hook,
+        },
       });
     }
 
@@ -693,7 +701,11 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       throw new NextlyError({
         code: "CONFLICT",
         publicMessage: `Event handlers that ${plugin.name}'s ${hook} set off were still running after ${LIFECYCLE_HANDLER_WAIT_MS / 1000}s, so the command stopped there. Run it again once what they do can finish.`,
-        logContext: { plugin: plugin.name, hook },
+        logContext: {
+          reason: "plugin-hook-handlers-running",
+          plugin: plugin.name,
+          hook,
+        },
       });
     }
   };

@@ -11,11 +11,18 @@
  * - The person's reduced-motion setting, which the shared setup always answers "no". A chart
  *   animated in starts its bars at no length, and jsdom never runs the animation on, so a test of
  *   the marks asks for reduced motion and reads them as drawn.
+ * - The drawings, loaded with the test file. A chart loads its drawing lazily, and the first
+ *   render of one would otherwise load the module and the chart engine inside a test's 1s wait
+ *   for `chart-drawing`, which a busy runner can outlast. Loaded here, before any test runs, the
+ *   chart's own lazy import finds them already loaded.
  *
  * @module components/features/widgets/charts/__tests__/chart-env
  */
 import { act, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
+
+import "../drawn/groups-drawing";
+import "../drawn/over-time-drawing";
 
 /** The width the engine's container measures, in pixels. */
 export const CHART_WIDTH = 320;

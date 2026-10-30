@@ -30,10 +30,10 @@ describe("FIELD_TYPES_CATALOG", () => {
     expect(cats.has("Structured")).toBe(true);
   });
 
-  it("names the rich-text editor 'Editor' with a Lexical hint", () => {
+  it("names the rich-text type 'Rich text' with a Lexical hint", () => {
     const richText = FIELD_TYPES_CATALOG.find(t => t.type === "richText");
     expect(richText).toBeDefined();
-    expect(richText?.label).toBe("Editor");
+    expect(richText?.label).toBe("Rich text");
     expect(richText?.hint).toMatch(/lexical/i);
   });
 });

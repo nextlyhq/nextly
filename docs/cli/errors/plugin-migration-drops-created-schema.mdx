@@ -1,0 +1,24 @@
+---
+title: PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA
+description: "A generated plugin migration would drop a table or column an earlier migration of the plugin created."
+---
+
+## Cause
+
+A generated plugin migration would drop a table or column an earlier migration of the plugin created.
+
+The generator compares the plugin's declared schema with what its earlier migrations created, and cannot tell a rename from a drop and an add. Dropping what an earlier migration created would lose its rows without anyone asking to, so it does not.
+
+## Fix
+
+- If the table or column was renamed, write the rename by hand in a module from `nextly migrate:create --plugin <entry> --blank`.
+- If the drop is deliberate, write the drop by hand the same way.
+
+## Example
+
+```text
+✗ This migration would drop seo_redirects.target, which an earlier migration of plugin "@acme/seo" created, and lose its rows.
+  Why:  The generator cannot tell a rename from a drop and an add, so it does not drop what the plugin created on its own.
+  Next: If it was renamed, write the rename by hand; if the drop is deliberate, write the drop by hand — in a module from `nextly migrate:create --plugin <entry> --blank`, which records this change for the SQL you write.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-migration-drops-created-schema  (PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA)
+```
