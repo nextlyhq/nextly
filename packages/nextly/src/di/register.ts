@@ -264,6 +264,7 @@ import type {
   PasswordHasher,
   UserService,
 } from "../services/users/user-service";
+import { assertConfiguredAddresses } from "../shared/address-rule";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
 import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
@@ -1745,6 +1746,14 @@ async function reconcileBuilderTargets<T>(
   const builderEntities = await loadBuilderEntities(adapter);
 
   assertRegisteredKeepTheirKind(transformedConfig, builderEntities);
+
+  // The configuration's addresses, judged by the one address rule before the boot writes
+  // anything. Only an address no registry row holds, and whose table does not exist yet, is new
+  // and judged, against every address used; an existing entity keeps its address, whatever the
+  // rule now says of it.
+  await assertConfiguredAddresses(transformedConfig, builderEntities, table =>
+    adapter.tableExists(table)
+  );
 
   // A plugin's settings permission has to be one it owns, which is the
   // collector's answer for the config's entities and the seeder's for the
@@ -3238,7 +3247,7 @@ function logStorageConfiguration(
 /**
  * Publish every code-defined `access` block to the RBAC service.
  *
- * `checkAccess` resolves these from an in-memory registry, and a slug missing
+ * The access decision resolves these from an in-memory registry, and a slug missing
  * from it falls through to the caller's stored permissions — so a rule that is
  * never registered does not fail closed, it stops applying. A restrictive
  * `access.read` silently stops restricting.

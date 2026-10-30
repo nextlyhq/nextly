@@ -21,6 +21,10 @@ import {
   renameEntity,
 } from "../../entity-rename/rename-entity";
 import {
+  deletedEntityIntent,
+  flushContentChange,
+} from "../../flush-content-change";
+import {
   clearWebhookRecording,
   setWebhookRecording,
 } from "../../webhooks/recording-policy";
@@ -28,7 +32,7 @@ import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
 import {
   cachedCollectionRow,
-  clearCollectionRowCache,
+  clearRegistryRowCache,
 } from "./collection-row-cache";
 
 export interface CollectionMetadata {
@@ -279,7 +283,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         createdBy: metadata.createdBy,
       });
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // Publish the decision into the live policy as well as the column. The
@@ -404,7 +408,7 @@ export class DynamicCollectionRegistryService extends BaseService {
         }
       }
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // A rename carries the live recording decision to the new slug and drops
@@ -642,13 +646,28 @@ export class DynamicCollectionRegistryService extends BaseService {
   }
 
   async unregisterCollection(slug: string): Promise<void> {
+    // The setting and the delete in one transaction, the row locked between
+    // them: the expiry below uses the setting the deleted row held, and a
+    // second delete racing this one waits, then finds nothing to remove.
+    const where = {
+      and: [{ column: "slug", op: "=" as const, value: slug }],
+    };
+    let removed = 0;
+    let stored: unknown;
     // Cleared once the delete has run, as after an insert.
     try {
-      await this.db
-        .delete(this.dynamicCollections)
-        .where(eq(this.dynamicCollections.slug, slug));
+      ({ removed, stored } = await this.adapter.transaction(async tx => {
+        const [row] = await tx.select<{ revalidate: unknown }>(
+          "dynamic_collections",
+          { columns: ["revalidate"], where, forUpdate: true }
+        );
+        return {
+          removed: await tx.delete("dynamic_collections", where),
+          stored: row?.revalidate,
+        };
+      }));
     } finally {
-      clearCollectionRowCache();
+      clearRegistryRowCache();
     }
 
     // Drop the in-process recording decision with the row: this is the path the
@@ -656,5 +675,16 @@ export class DynamicCollectionRegistryService extends BaseService {
     // must start from the recording default rather than inherit a suppression
     // whose row no longer exists.
     clearWebhookRecording("collection", slug);
+
+    // Every cached read of it now describes rows that are gone. Only when this
+    // call removed the row, with the setting it held: a repeated delete finds
+    // nothing and expires nothing.
+    if (removed > 0) {
+      await flushContentChange(
+        deletedEntityIntent("collection", slug, stored),
+        this.logger,
+        "a collection was deleted"
+      );
+    }
   }
 }

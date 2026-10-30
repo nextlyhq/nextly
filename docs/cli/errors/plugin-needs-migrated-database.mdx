@@ -1,0 +1,23 @@
+---
+title: PLUGIN_NEEDS_MIGRATED_DATABASE
+description: "A plugin was installed or uninstalled on a database `nextly migrate` has not run on yet."
+---
+
+## Cause
+
+A plugin was installed or uninstalled on a database `nextly migrate` has not run on yet.
+
+Installing or uninstalling a plugin records what it owns in tables `nextly migrate` creates. A database where it has never run has none of them.
+
+## Fix
+
+Run `nextly migrate`, then run the plugin command again.
+
+## Example
+
+```text
+✗ This database has not been migrated yet, so no plugin can be installed or uninstalled on it.
+  Why:  It has none of `nextly_schema_events`, `nextly_schema_owners`, which record what each plugin owns.
+  Next: Run `nextly migrate`, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-needs-migrated-database  (PLUGIN_NEEDS_MIGRATED_DATABASE)
+```

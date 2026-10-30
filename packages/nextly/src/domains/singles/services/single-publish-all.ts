@@ -20,9 +20,18 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  ownDatabaseVisitor,
+  visitorWithoutAccessService,
+} from "../../../auth/access/own-database-visitor";
 import { askEachLanguage } from "../../../auth/access/rule-language";
 import { actorForWrite } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  asNotMigrated,
+  type NotMigratedEntity,
+  singleNotMigrated,
+} from "../../../database/with-db-errors";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -38,9 +47,11 @@ import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversio
 import {
   resolvedCallerGrants,
   type CallerGrants,
+  type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
+import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordTransitionEvents } from "../../content-events/write-event";
 import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
@@ -217,6 +228,25 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
+   * Where this service's Single gate and promotion field rules read a
+   * visitor's Public grants: the read service's, built over the same database
+   * and access-control service, so publishing judges the Public role the read
+   * and update paths do. A service built without one reads its own database
+   * the same way.
+   */
+  private get fieldRuleVisitor(): VisitorGrantsLoader | undefined {
+    if (this.queryService) return this.queryService.fieldRuleVisitor;
+    return visitorWithoutAccessService(
+      this.rbacAccessControlService,
+      ownDatabaseVisitor({
+        adapter: this.adapter,
+        logger: this.logger,
+        db: () => this.db,
+      })
+    );
+  }
+
+  /**
    * Set every language of this Single to published, atomically.
    *
    * The main row's status and every companion `_status` move in ONE
@@ -269,7 +299,8 @@ export class SinglePublishAllService extends BaseService {
       // transaction is holding.
       const promoteGrants = await resolvedCallerGrants(
         options.user,
-        options.authenticatedScope
+        options.authenticatedScope,
+        this.fieldRuleVisitor
       );
 
       // Every component type's readiness, resolved before the transaction:
@@ -325,11 +356,12 @@ export class SinglePublishAllService extends BaseService {
       };
     } catch (error) {
       if (refused.denied) return refused.denied;
-      if (error instanceof NextlyError) throw error;
-      throw NextlyError.internal({
-        cause: error instanceof Error ? error : undefined,
-        logContext: { reason: "single-publish-all", single: slug },
-      });
+      throw await publishAllFailure(
+        error,
+        singleNotMigrated(this.singleRegistryService, slug, {
+          trusted: fieldTrustOf(options),
+        })
+      );
     }
   }
 
@@ -396,6 +428,7 @@ export class SinglePublishAllService extends BaseService {
             user: options.user,
             overrideAccess: options.overrideAccess,
             rbacAccessControlService: this.rbacAccessControlService,
+            visitor: this.fieldRuleVisitor,
             authenticatedScope: options.authenticatedScope,
             logger: this.logger,
           })
@@ -417,6 +450,7 @@ export class SinglePublishAllService extends BaseService {
         overrideAccess: options.overrideAccess,
         routeAuthorized: options.routeAuthorized,
         rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
         authenticatedScope: options.authenticatedScope,
         logger: this.logger,
       });
@@ -517,6 +551,7 @@ export class SinglePublishAllService extends BaseService {
         // the publish permission is checked here for the first time.
         routeAuthorized: false,
         rbacAccessControlService: this.rbacAccessControlService,
+        visitor: this.fieldRuleVisitor,
         // A scoped API key is judged on its own `publish-{slug}` grant, not the
         // key owner's — the route checked only `update` against the scope.
         authenticatedScope: options.authenticatedScope,
@@ -782,7 +817,9 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       priorCompanionStatuses,
       pending,
-      fieldGroupWriteAccessOf(options)
+      // A visitor's promoted field groups judged by the Public role this
+      // service's gate reads.
+      fieldGroupWriteAccessOf(options, this.fieldRuleVisitor)
     );
 
     let publishVersionNo: number | null = null;
@@ -2034,4 +2071,23 @@ function withSharedState(
       ),
     },
   };
+}
+
+/**
+ * What a Single's publish-all throws for `error`: a typed error as it is, the
+ * not-migrated answer for a database not migrated for the Single, and an
+ * internal error for anything else. Nothing after the publish's transaction
+ * reads the database, so a failure here never follows a written row.
+ */
+async function publishAllFailure(
+  error: unknown,
+  single: NotMigratedEntity
+): Promise<NextlyError> {
+  if (error instanceof NextlyError) return error;
+  const notMigrated = await asNotMigrated(error, single);
+  if (NextlyError.is(notMigrated)) return notMigrated;
+  return NextlyError.internal({
+    cause: error instanceof Error ? error : undefined,
+    logContext: { reason: "single-publish-all", single: single.slug },
+  });
 }

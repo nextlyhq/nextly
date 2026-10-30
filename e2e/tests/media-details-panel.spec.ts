@@ -23,6 +23,9 @@ async function libraryWithTwoImages(page: Page, theme: Theme, tag: string) {
   await expect(
     page.getByRole("status").filter({ hasText: /uploaded/ })
   ).toContainText("2 uploaded", { timeout: 30_000 });
+  // The upload tray stays in the corner until it is closed; close it so it
+  // can't sit over a tile these tests click.
+  await page.getByRole("button", { name: "Close uploads" }).click();
   await page.getByRole("button", { name: "Grid view" }).click();
 }
 

@@ -1858,7 +1858,7 @@ describe("a row of an earlier format", () => {
     placements: [
       {
         id: "mine-team",
-        widgetId: "core/team",
+        widgetId: "core/upcoming-releases",
         width: "quarter",
         removed: true,
         config: { range: "7d" },
@@ -1875,12 +1875,18 @@ describe("a row of an earlier format", () => {
   });
   const DEFAULT: WidgetPlacement[] = [
     { id: STARTED, widgetId: STARTED, w: 12, h: 3, removed: false },
-    { id: "core/team", widgetId: "core/team", w: 12, h: 3, removed: false },
+    {
+      id: "core/upcoming-releases",
+      widgetId: "core/upcoming-releases",
+      w: 12,
+      h: 3,
+      removed: false,
+    },
   ];
 
   beforeEach(() => {
     registerWidget(widget({ id: STARTED, defaultOrder: 0, dismissible: true }));
-    registerWidget(widget({ id: "core/team", defaultOrder: 10 }));
+    registerWidget(widget({ id: "core/upcoming-releases", defaultOrder: 10 }));
     getStartedSteps.mockResolvedValue(open);
     stored = { version: 7, layout: EARLIER };
   });
@@ -1908,14 +1914,16 @@ describe("a row of an earlier format", () => {
       "a removal",
       placements =>
         placements.map(p =>
-          p.widgetId === "core/team" ? { ...p, removed: true } : p
+          p.widgetId === "core/upcoming-releases" ? { ...p, removed: true } : p
         ),
     ],
     [
       "a quick setting",
       placements =>
         placements.map(p =>
-          p.widgetId === "core/team" ? { ...p, config: { range: "30d" } } : p
+          p.widgetId === "core/upcoming-releases"
+            ? { ...p, config: { range: "30d" } }
+            : p
         ),
     ],
     [
@@ -2291,7 +2299,7 @@ describe("the Get started card in the layout read and write", () => {
   });
   const teamCard: WidgetPlacement = {
     id: "team",
-    widgetId: "core/team",
+    widgetId: "core/upcoming-releases",
     w: 12,
     h: 3,
     removed: false,
@@ -2301,7 +2309,7 @@ describe("the Get started card in the layout read and write", () => {
 
   beforeEach(() => {
     registerWidget(widget({ id: STARTED, defaultOrder: 0, dismissible: true }));
-    registerWidget(widget({ id: "core/team", defaultOrder: 10 }));
+    registerWidget(widget({ id: "core/upcoming-releases", defaultOrder: 10 }));
   });
 
   type WithStarted = LayoutPayload & {
@@ -2313,11 +2321,11 @@ describe("the Get started card in the layout read and write", () => {
     const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
     expect(body.placements?.map(p => p.widgetId)).toEqual([
       STARTED,
-      "core/team",
+      "core/upcoming-releases",
     ]);
     expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
       STARTED,
-      "core/team",
+      "core/upcoming-releases",
     ]);
     expect(body.getStarted).toEqual({ drawn: true, answer: open });
   });
@@ -2332,24 +2340,30 @@ describe("the Get started card in the layout read and write", () => {
       await getWidgetLayout(getReq())
     )) as WithStarted;
     expect(plain.defaultPlacements?.map(p => p.widgetId)).toEqual([
-      "core/team",
+      "core/upcoming-releases",
     ]);
     const asked = (await bodyOf(
       await getWidgetLayout(getStartedReq())
     )) as WithStarted;
     expect(asked.defaultPlacements?.map(p => p.widgetId)).toEqual([
       STARTED,
-      "core/team",
+      "core/upcoming-releases",
     ]);
     // The reader's own arrangement is unchanged by the asking.
-    expect(asked.placements?.map(p => p.widgetId)).toEqual(["core/team"]);
+    expect(asked.placements?.map(p => p.widgetId)).toEqual([
+      "core/upcoming-releases",
+    ]);
   });
 
   it("leaves a finished card dormant for a reader who never acted on it, and never offers it in the add panel", async () => {
     getStartedSteps.mockResolvedValue(finished);
     const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
-    expect(body.placements?.map(p => p.widgetId)).toEqual(["core/team"]);
-    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual(["core/team"]);
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      "core/upcoming-releases",
+    ]);
+    expect(body.defaultPlacements?.map(p => p.widgetId)).toEqual([
+      "core/upcoming-releases",
+    ]);
     expect(body.available).not.toContain(STARTED);
     expect(body.getStarted?.drawn).toBe(false);
   });
@@ -2366,7 +2380,7 @@ describe("the Get started card in the layout read and write", () => {
     const body = (await bodyOf(await getWidgetLayout(getReq()))) as WithStarted;
     expect(body.placements?.map(p => p.widgetId)).toEqual([
       STARTED,
-      "core/team",
+      "core/upcoming-releases",
     ]);
     expect(body.getStarted?.drawn).toBe(true);
   });
@@ -2674,6 +2688,74 @@ describe("a card's note", () => {
     );
     expect(res.status).toBe(400);
     expect(saved).toBeUndefined();
+  });
+});
+
+describe("a card's settings, held on write to what its widget takes", () => {
+  const goalWidget = () =>
+    widget({
+      id: "core/goal",
+      settings: [
+        { name: "goal", label: "Goal", type: "number", min: 1, max: 10 },
+        {
+          name: "tone",
+          label: "Tone",
+          type: "select",
+          options: [
+            { label: "Calm", value: "calm" },
+            { label: "Loud", value: "loud" },
+          ],
+        },
+      ],
+    });
+  const placed = (config: Record<string, unknown>) => [
+    { id: "g", widgetId: "core/goal", w: 12, h: 3, removed: false, config },
+  ];
+  const put = (config: Record<string, unknown>, version = 0) =>
+    putWidgetLayout(
+      putReq({ placements: placed(config), version, scope: scopeFor() })
+    );
+
+  it("refuses a number outside the range its widget declares, naming the setting, and saves nothing", async () => {
+    registerWidget(goalWidget());
+    const res = await put({ goal: 20 });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain(
+      '\\"Goal\\" is between 1 and 10.'
+    );
+    expect(saved).toBeUndefined();
+  });
+
+  it("refuses a choice that is not among its options", async () => {
+    registerWidget(goalWidget());
+    const res = await put({ tone: "shouty" });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain(
+      '\\"Tone\\" is not one of its choices.'
+    );
+    expect(saved).toBeUndefined();
+  });
+
+  it("saves values its widget takes, and a number cleared to no value", async () => {
+    // The must-differ half of the two above: the same card, within its
+    // declaration.
+    registerWidget(goalWidget());
+    expect((await put({ goal: 10, tone: "loud" })).status).toBe(200);
+    expect(saved?.placements.find(p => p.id === "g")?.config).toEqual({
+      goal: 10,
+      tone: "loud",
+    });
+    // A cleared number is held as null, which reads back as the default.
+    expect((await put({ goal: null })).status).toBe(200);
+  });
+
+  it("still saves a value it already held, stored before its widget narrowed the range", async () => {
+    registerWidget(goalWidget());
+    stored = {
+      version: 1,
+      layout: serializeLayout(placed({ goal: 20 }) as WidgetPlacement[]),
+    };
+    expect((await put({ goal: 20 }, 1)).status).toBe(200);
   });
 });
 

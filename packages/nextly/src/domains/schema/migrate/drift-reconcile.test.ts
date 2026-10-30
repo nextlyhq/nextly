@@ -29,6 +29,11 @@ type FakeRepo = ReconcileRepo & {
   applied: Array<{ statementsExecuted?: number | null }>;
   /** The handles the applied row was written through (`boundTo`). */
   bound: unknown[];
+  /**
+   * Where each attempt row was started: `"pool"` through the repository
+   * itself, or the handle it was bound to.
+   */
+  startedThrough: unknown[];
   failed: number;
   /** Attempts deleted after a lost race rolled back whole. */
   discarded: number;
@@ -50,6 +55,7 @@ function fakeRepo(
     failed: 0,
     discarded: 0,
     bound: [] as unknown[],
+    startedThrough: [] as unknown[],
     applied: [] as Array<{ statementsExecuted?: number | null }>,
     superseded: [] as Array<{
       supersededEventIds: string[];
@@ -58,9 +64,12 @@ function fakeRepo(
   };
   const repo: FakeRepo = {
     ...state,
+    // Counted on `repo`, the object the tests read: the spread above copies
+    // `state.starts` once, so counting on `state` left `repo.starts` at 0.
     recordStart: () => {
-      state.starts++;
-      return Promise.resolve(`evt-${state.starts}`);
+      repo.starts++;
+      repo.startedThrough.push("pool");
+      return Promise.resolve(`evt-${repo.starts}`);
     },
     markApplied: (_id, args) => {
       state.applied.push(args);
@@ -79,9 +88,20 @@ function fakeRepo(
       return Promise.resolve();
     },
     findFileApplies: () => Promise.resolve(priorAttempts),
+    // One ledger behind every handle, but a bound repository of its own, so
+    // a test can tell a row started inside the transaction from one started
+    // on the pool.
     boundTo: handle => {
       state.bound.push(handle);
-      return repo;
+      return {
+        recordStart: () => {
+          repo.starts++;
+          repo.startedThrough.push(handle);
+          return Promise.resolve(`evt-${repo.starts}`);
+        },
+        markApplied: (id, args) => repo.markApplied(id, args),
+        supersede: args => repo.supersede(args),
+      };
     },
   };
   return repo;
@@ -346,6 +366,75 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     });
   });
 
+  describe("where an attempt is recorded", () => {
+    /** Runs the file, noting how many attempts were started when its statements began. */
+    async function startsBeforeStatements(
+      dialect: "postgresql" | "mysql" | "sqlite",
+      over: { transaction?: boolean; filename?: string } = {}
+    ) {
+      const repo = fakeRepo();
+      let startsAtFirstStatement = -1;
+      const executeSql = vi.fn(
+        async (
+          _sql: string,
+          _unit: unknown,
+          after: (db: unknown, statementsExecuted: number) => Promise<void>
+        ) => {
+          startsAtFirstStatement = repo.starts;
+          await after(TX_HANDLE, 1);
+          return 1;
+        }
+      );
+      await reconcileFile({
+        file: { ...file, ...over },
+        before: snap("a"),
+        target: snap("a", "b"),
+        live: snap("a"),
+        dialect,
+        repo,
+        executeSql,
+      });
+      return { startsAtFirstStatement, starts: repo.starts, repo };
+    }
+
+    it.each(["postgresql", "sqlite"] as const)(
+      "writes an app file's attempt on %s inside its transaction, after its statements, with its outcome",
+      async dialect => {
+        const r = await startsBeforeStatements(dialect);
+        expect(r.startsAtFirstStatement).toBe(0);
+        expect(r.starts).toBe(1);
+        // Started through the transaction's handle, and its outcome too.
+        expect(r.repo.startedThrough).toEqual([TX_HANDLE]);
+        expect(r.repo.bound).toEqual([TX_HANDLE]);
+        expect(r.repo.applied).toHaveLength(1);
+      }
+    );
+
+    it.each([
+      ["mysql", undefined],
+      ["postgresql", false],
+      ["sqlite", false],
+      ["mysql", false],
+    ] as const)(
+      "records an app file's attempt on %s (transaction: %s) before its first statement",
+      async (dialect, transaction) => {
+        const r = await startsBeforeStatements(dialect, { transaction });
+        expect(r.startsAtFirstStatement).toBe(1);
+        expect(r.starts).toBe(1);
+        // Committed on its own, apart from the statements.
+        expect(r.repo.startedThrough).toEqual(["pool"]);
+      }
+    );
+
+    it("records a plugin module's attempt before its first statement, in a transaction too", async () => {
+      const r = await startsBeforeStatements("postgresql", {
+        filename: "plugin:@acme/p/0006_x",
+      });
+      expect(r.startsAtFirstStatement).toBe(1);
+      expect(r.starts).toBe(1);
+    });
+  });
+
   it("IN_SYNC: live ≡ before → runs the SQL and records file_apply", async () => {
     const repo = fakeRepo();
     const executeSql = executor();
@@ -398,7 +487,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     expect(order).toEqual(["statements", "recordApplied:1", "commit"]);
   });
 
-  it("IN_SYNC: an applied-row write that fails fails the executor's work, so its transaction rolls back, and the attempt is recorded failed", async () => {
+  it("IN_SYNC: an applied-row write that fails fails the executor's work, so its transaction rolls back with the attempt written in it", async () => {
     const repo = fakeRepo();
     repo.markApplied = () => Promise.reject(new Error("ledger write failed"));
     let committed = false;
@@ -424,8 +513,34 @@ describe("reconcileFile (Phase 2 three-state)", () => {
       })
     ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
     expect(committed).toBe(false);
-    expect(repo.failed).toBe(1);
+    // The attempt was written inside the transaction that rolled back, so no
+    // row of it is left to record failed.
+    expect(repo.failed).toBe(0);
   });
+
+  it.each([
+    ["mysql", undefined],
+    ["postgresql", false],
+    ["sqlite", false],
+  ] as const)(
+    "IN_SYNC: records the attempt failed on %s (transaction: %s), where it was recorded before its statements",
+    async (dialect, transaction) => {
+      const repo = fakeRepo();
+      await expect(
+        reconcileFile({
+          file: { ...file, transaction },
+          before: snap("a"),
+          target: snap("a", "b"),
+          live: snap("a"),
+          dialect,
+          repo,
+          executeSql: () => Promise.reject(new Error("constraint violation")),
+        })
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(repo.starts).toBe(1);
+      expect(repo.failed).toBe(1);
+    }
+  );
 
   it("records a failure's cause in the ledger and keeps it on the error it rethrows", async () => {
     // A partial failure keeps the database's reason out of its public
@@ -629,7 +744,7 @@ describe("reconcileFile (Phase 2 three-state)", () => {
     });
   });
 
-  it("apply failure: IN_SYNC + executeSql throws → marks failed + throws APPLY_FAILED", async () => {
+  it("apply failure: IN_SYNC + executeSql throws → throws APPLY_FAILED", async () => {
     const repo = fakeRepo();
     await expect(
       reconcileFile({
@@ -725,6 +840,32 @@ describe("a file whose last attempt failed, with the database at its start", () 
     expect(repo.starts).toBe(0);
   });
 
+  it("refuses on MySQL when the failed attempt is followed by a record that is not an outcome", async () => {
+    // A superseded row resolves nothing: the attempt before it is still the
+    // latest attempt, with no outcome since. Read as "the newest record", the
+    // file would run again on top of what stayed.
+    const repo = fakeRepo([
+      ...failed,
+      { status: "superseded" as const, startedAt: new Date(2) },
+    ]);
+    const run = args("mysql");
+    await expect(reconcileFile({ ...run, repo })).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+    });
+    expect(run.executeSql).not.toHaveBeenCalled();
+  });
+
+  it("runs it on MySQL when the failed attempt ended with nothing applied", async () => {
+    const repo = fakeRepo([
+      ...failed,
+      { status: "nothing_applied" as const, startedAt: new Date(2) },
+    ]);
+    const run = args("mysql");
+    await expect(reconcileFile({ ...run, repo })).resolves.toEqual({
+      state: "in_sync",
+    });
+  });
+
   it.each(["postgresql", "mysql", "sqlite"] as const)(
     "refuses to run it again on %s when it runs outside a transaction",
     async dialect => {
@@ -793,12 +934,27 @@ describe("a file whose applied row loses to another run's", () => {
     executeSql: executor(),
   });
 
-  it("throws inside the transaction and discards the attempt, which nothing of reached the database", async () => {
+  it("throws inside the transaction, which rolls back the attempt written in it", async () => {
     const repo = lostRace();
     await expect(reconcileFile({ ...args(), repo })).rejects.toMatchObject({
       code: "NEXTLY_MIGRATION_CONCURRENT_RUN",
       logContext: { source: "0006_x.sql", reason: "concurrent-run" },
     });
+    // Nothing of the attempt reached the database, and nothing is recorded
+    // after it: the other run's row stays the only one.
+    expect(repo.discarded).toBe(0);
+    expect(repo.failed).toBe(0);
+  });
+
+  it("discards a plugin module's attempt, recorded before its statements as its history records them", async () => {
+    const repo = lostRace();
+    await expect(
+      reconcileFile({
+        ...args(),
+        file: { ...file, filename: "plugin:@acme/p/0006_x" },
+        repo,
+      })
+    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_CONCURRENT_RUN" });
     expect(repo.discarded).toBe(1);
     expect(repo.failed).toBe(0);
   });

@@ -52,7 +52,12 @@ import {
 import { readAccessCaller, readCaller } from "./authenticated-read";
 import { readJsonBody } from "./read-json-body";
 import { respondData } from "./response-shapes";
-import { isCardEntry, prepareCards, type CardBatch } from "./widget-cards";
+import {
+  isCardEntry,
+  prepareCards,
+  readableCollectionsOnce,
+  type CardBatch,
+} from "./widget-cards";
 import {
   answerReadyQueries,
   failedSlot,
@@ -423,7 +428,14 @@ export function cardBatchFor(
   caller: ReadCaller,
   mayRead: (slug: string) => Promise<boolean> = readDecisionsFor(caller)
 ): CardBatch {
-  return { auth, caller, check: raw => checkedQuery(raw, mayRead) };
+  return {
+    auth,
+    caller,
+    check: raw => checkedQuery(raw, mayRead),
+    // Read once for every card the batch answers, the default's cards judged
+    // together included.
+    readableCollections: readableCollectionsOnce(caller),
+  };
 }
 
 /**

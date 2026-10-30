@@ -313,6 +313,12 @@ export function componentRelationshipStoresJson(field: {
  * that is one `{ relationTo, value }` object, JSON but not a list. Asked when an older scalar column
  * is converted, because the conversion reads every stored value as a list, and reading an object as
  * one would change what it stores.
+ *
+ * Also the rule for which component relation takes no plain index, by the creating SQL and the
+ * desired schema alike, even when the field asks for one: no lookup reads a whole list, MySQL
+ * refuses a plain index on its JSON column, and on PostgreSQL a btree entry over a long list
+ * exceeds the row size and refuses the save. A single polymorphic reference is one object, so an
+ * index it asks for is kept where the dialect can build one.
  */
 export function componentRelationshipHoldsReferenceList(field: {
   type?: unknown;
@@ -321,6 +327,31 @@ export function componentRelationshipHoldsReferenceList(field: {
 }): boolean {
   const isRelation = field.type === "relationship" || field.type === "upload";
   return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
+}
+
+/**
+ * Whether a relationship or upload on a component row references ONE entry, in a scalar column:
+ * it names one collection and does not hold a list of references
+ * (`componentRelationshipHoldsReferenceList`).
+ *
+ * Such a column gets a plain index; a list does not, for the reasons that rule gives. A
+ * many-to-many naming its target in `relationTo` names one collection and is still a list, which
+ * is why this derives from the list rule rather than reading `hasMany` and `relationTo` alone.
+ *
+ * Asked by the creating SQL and by the desired schema the diff compares a component table
+ * against, so the two declare the same indexes.
+ */
+export function componentRelationIsSingleReference(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  relationTo?: unknown;
+  options?: unknown;
+}): boolean {
+  if (field.type !== "relationship" && field.type !== "upload") return false;
+  return (
+    typeof field.relationTo === "string" &&
+    !componentRelationshipHoldsReferenceList(field)
+  );
 }
 
 /**

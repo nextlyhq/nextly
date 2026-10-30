@@ -54,6 +54,9 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
       supportsOnConflict: true,
       supportsFts: true,
     }),
+    // Answered as inside a transaction, so a registry read goes to `selectOne` as these tests
+    // drive it rather than to the registry row cache, which has tests of its own.
+    transactionOpenInFlow: vi.fn(() => true),
     select: vi.fn().mockResolvedValue([]),
     selectOne: vi.fn().mockResolvedValue(null),
     insert: vi.fn().mockResolvedValue({ id: "new-id" }),
@@ -178,10 +181,9 @@ export function createMockComponentDataService(): MockRecord {
 
 // ── Mock RBACAccessControlService ───────────────────────────────────────
 
-export function createMockRBACService(allowed: boolean = true): MockRecord {
+export function createMockRBACService(): MockRecord {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {
-    checkAccess: vi.fn().mockResolvedValue(allowed),
     // Answers `undefined`: no code-defined rule governs the operation for an
     // anonymous caller, who then falls through to the public default.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
