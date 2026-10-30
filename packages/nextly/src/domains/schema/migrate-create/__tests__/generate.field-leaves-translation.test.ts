@@ -416,6 +416,22 @@ const NOTES_GROWN: MinimalConfigEntity = {
   fields: [...NOTES.fields, { name: "summary", type: "text" }],
 };
 
+/**
+ * A database whose translations tables hold every column these tests translate, for a recording
+ * run whose point is elsewhere; the cases about what the database holds give their own.
+ */
+const HELD = () =>
+  Promise.resolve([
+    "_parent",
+    "_locale",
+    "body",
+    "code",
+    "headline",
+    "summary",
+    "tagline",
+    "title",
+  ]);
+
 /** `migrate:create` on `dir` for `collections`, as `name`, at the minute `at` past 10:00. */
 function generate(
   dialect: SupportedDialect,
@@ -423,7 +439,11 @@ function generate(
   collections: MinimalConfigEntity[],
   name: string,
   at: number,
-  options: { recordSnapshot?: boolean; onWarning?: (m: string) => void } = {}
+  options: {
+    recordSnapshot?: boolean;
+    onWarning?: (m: string) => void;
+    liveCompanionColumns?: (tableName: string) => Promise<readonly string[]>;
+  } = {}
 ) {
   return generateMigration({
     name,
@@ -435,6 +455,7 @@ function generate(
     components: [],
     nonInteractive: true,
     now: new Date(Date.UTC(2026, 9, 16, 10, at)),
+    liveCompanionColumns: HELD,
     ...options,
   });
 }
@@ -1094,8 +1115,79 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
           components: [],
           nonInteractive: true,
           recordSnapshot: true,
+          liveCompanionColumns: HELD,
           now: new Date(at),
         });
+
+      it("refuses to record translated fields the database has no translations table for", async () => {
+        // Turned translated with only a new translated field, before the config is put back: read
+        // from the main table alone, it looks as if its translations table were there.
+        const notes: MinimalConfigEntity = {
+          slug: "notes",
+          tableName: "dc_notes",
+          fields: [{ name: "headline", type: "text", localized: false }],
+        };
+        const dir = await projectAfter(dialect, [
+          { collections: [notes], after: forgetTranslatedFieldRecord },
+        ]);
+        const before = await contentsOf(dir);
+
+        const recording = generate(
+          dialect,
+          dir,
+          [
+            {
+              ...notes,
+              localized: true,
+              fields: [
+                ...notes.fields,
+                { name: "summary", type: "text", localized: true },
+              ],
+            },
+          ],
+          "record",
+          30,
+          {
+            recordSnapshot: true,
+            liveCompanionColumns: () => Promise.resolve([]),
+          }
+        );
+        await expect(recording).rejects.toThrow(/collection "notes"/);
+        await expect(recording).rejects.toThrow(/dc_notes_locales/);
+        await expect(recording).rejects.toThrow(/applied every migration/);
+        expect(await contentsOf(dir)).toEqual(before);
+      });
+
+      it("records a translations table made outside the migration files that holds every column", async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED], after: forgetCompanionFiles },
+        ]);
+
+        expect(
+          await generate(dialect, dir, [TRANSLATED], "record", 30, {
+            recordSnapshot: true,
+            liveCompanionColumns: table =>
+              Promise.resolve(
+                table === "dc_docs" ? ["_parent", "_locale", "body"] : []
+              ),
+          })
+        ).not.toBeNull();
+      });
+
+      it("refuses to record a translated field its translations table has no column for, naming it", async () => {
+        const dir = await projectAfter(dialect, [
+          { collections: [TRANSLATED], after: forgetCompanionFiles },
+        ]);
+        const before = await contentsOf(dir);
+
+        const recording = generate(dialect, dir, [TRANSLATED], "record", 30, {
+          recordSnapshot: true,
+          liveCompanionColumns: () => Promise.resolve(["_parent", "_locale"]),
+        });
+        await expect(recording).rejects.toThrow(/"body"/);
+        await expect(recording).rejects.toThrow(/collection "docs"/);
+        expect(await contentsOf(dir)).toEqual(before);
+      });
 
       it("records the translated fields, once, and lets the change through after it", async () => {
         let recorded: Awaited<ReturnType<typeof record>> = null;
@@ -1248,6 +1340,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
             components: [],
             nonInteractive: true,
             recordSnapshot,
+            liveCompanionColumns: HELD,
             now: new Date(at),
           });
         await run(shared, "one", "2026-10-16T10:00:00.000Z");

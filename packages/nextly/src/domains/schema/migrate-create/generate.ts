@@ -244,6 +244,12 @@ export interface GenerateArgs {
    */
   recordSnapshot?: boolean;
   /**
+   * The columns `<tableName>_locales` has in the database, empty when there is no such table. Read
+   * only by `recordSnapshot`, which records which fields are translated as the database holds them
+   * (`refuseTranslatedStorageNotHeld`); every other run stays offline.
+   */
+  liveCompanionColumns?: (tableName: string) => Promise<readonly string[]>;
+  /**
    * Override the timestamp for tests. Production callers omit and get
    * `new Date()`.
    */
@@ -763,8 +769,62 @@ async function recordedUnlessChanged(
 ): Promise<GenerateResult | undefined> {
   if (args.recordSnapshot !== true) return undefined;
   refuseChangesToRecord(run.pendingTables);
+  await refuseTranslatedStorageNotHeld(args, run.record.written);
   if (run.hasSettingsChanges) return undefined;
   return recordSnapshot(args, run.record);
+}
+
+/**
+ * `--record-snapshot` records which fields are translated as the database holds them, never as the
+ * main table's shape suggests: read from the main table alone, an entity turned translated with only
+ * new translated fields looks the same as one whose translations table is there. So each table the
+ * snapshot records with translated fields must have its translations table in the database, with a
+ * column for each. Refused before anything is written otherwise, naming the entities and fields, and
+ * refused when no database was read.
+ */
+async function refuseTranslatedStorageNotHeld(
+  args: Pick<
+    GenerateArgs,
+    "liveCompanionColumns" | "collections" | "singles" | "components" | "name"
+  >,
+  written: NextlySchemaSnapshot
+): Promise<void> {
+  const translated = written.tables.filter(
+    t => t.localized === true && (t.localizedColumns ?? []).length > 0
+  );
+  if (translated.length === 0) return;
+  const read = args.liveCompanionColumns;
+  const entityOf = new Map<string, string>([
+    ...args.collections.map(
+      e => [e.tableName, `${KIND_NAMES.collection} "${e.slug}"`] as const
+    ),
+    ...args.singles.map(
+      e => [e.tableName, `${KIND_NAMES.single} "${e.slug}"`] as const
+    ),
+    ...args.components.map(
+      e => [e.tableName, `${KIND_NAMES.fieldGroup} "${e.slug}"`] as const
+    ),
+  ]);
+  const missing: string[] = [];
+  for (const table of translated) {
+    const live = new Set(read === undefined ? [] : await read(table.name));
+    const absent = (table.localizedColumns ?? []).filter(c => !live.has(c));
+    if (absent.length === 0) continue;
+    const entity = entityOf.get(table.name) ?? `"${table.name}"`;
+    missing.push(
+      live.size === 0
+        ? `${entity} has no translations table (${table.name}_locales)`
+        : `${entity} has no column for ${absent.map(c => `"${c}"`).join(", ")} in ${table.name}_locales`
+    );
+  }
+  if (missing.length === 0) return;
+  throw new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage:
+      `--record-snapshot records which fields are translated as the database holds them, and ${missing.join("; ")}. ` +
+      "Nothing was written. Run it against a database that has applied every migration, with the config as it was at the last migration.",
+    logContext: { missing },
+  });
 }
 
 /**
