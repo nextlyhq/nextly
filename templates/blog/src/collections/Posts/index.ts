@@ -25,9 +25,14 @@ import {
 // through Node's module resolver - no TypeScript path-alias support.
 import { anyone } from "../../access/anyone";
 import { hasPermission } from "../../access/has-permission";
+import {
+  mayPublishPosts,
+  ownPostsUnlessPublisher,
+} from "../../access/own-posts";
 import { autoSlug } from "../../hooks/auto-slug";
 import { refuseReservedSlug } from "../../lib/static-params";
 
+import { authorIsCreator } from "./hooks/author-is-creator";
 import { computeReadingTime } from "./hooks/reading-time";
 import { requireFeaturedAlt } from "./hooks/require-featured-alt";
 
@@ -47,7 +52,15 @@ export const Posts = defineCollection({
     // Author: the post belongs to a user. Public-facing author profile
     // at `/authors/[slug]` resolves to a user by their `slug` extension
     // field. See blog/configs/codefirst.config.ts for the user extension.
-    relationship({ name: "author", relationTo: "users" }),
+    // Who may change a post follows its author (see `access` below), so
+    // only a caller who may publish posts sets or changes it; anyone
+    // else's value is dropped, and a new post becomes the caller's own
+    // (the authorIsCreator hook).
+    relationship({
+      name: "author",
+      relationTo: "users",
+      access: { create: mayPublishPosts, update: mayPublishPosts },
+    }),
     relationship({
       name: "categories",
       relationTo: "categories",
@@ -95,18 +108,18 @@ export const Posts = defineCollection({
   // Access control: reads are public (frontend queries filter by
   // status=published for visitors). Creating, editing and deleting need
   // the matching permission on the caller's role (`create-posts`,
-  // `update-posts`, `delete-posts`), and publishing needs
-  // `publish-posts`, which no rule here overrides. A rule cannot see the
-  // post it is judging, so "authors edit only their own posts" is not
-  // expressible here: what an author may do is what the role holds.
+  // `update-posts`, `delete-posts`). Editing and deleting are then
+  // narrowed by a filter: a caller who may publish posts changes every
+  // post, anyone else only the posts whose `author` is them. Publishing
+  // needs `publish-posts`, which only editors and admins hold.
   access: {
     read: anyone,
     create: hasPermission,
-    update: hasPermission,
-    delete: hasPermission,
+    update: ownPostsUnlessPublisher,
+    delete: ownPostsUnlessPublisher,
   },
   hooks: {
     beforeValidate: [autoSlug, requireFeaturedAlt],
-    beforeChange: [computeReadingTime],
+    beforeChange: [authorIsCreator, computeReadingTime],
   },
 });
