@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { head, BlobNotFoundError, BlobAccessError } from "@vercel/blob";
 import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
@@ -6,6 +6,7 @@ import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
 import { NextlyError } from "nextly/errors";
 
 import { VercelBlobStorageAdapter } from "./adapter";
+import { vercelBlobStorage } from "./plugin";
 
 vi.mock("nextly/storage/fetch-stored-bytes", async importOriginal => {
   /*
@@ -306,5 +307,71 @@ describe("VercelBlobStorageAdapter — list", () => {
     expect(vi.mocked(list).mock.calls[1]?.[0]).toMatchObject({
       cursor: "next",
     });
+  });
+});
+
+/*
+ * The factory runs while the host's config file is evaluated, so construction
+ * is the config load: a throw there stops every command, including the
+ * schema-only ones that never reach storage. The credential check belongs to
+ * the first storage operation instead. The cases are ordered: the first is
+ * the config load itself, the second is the refusal at the moment storage is
+ * actually used, the third is the environment fallback still resolving — at
+ * use, not before.
+ */
+describe("VercelBlobStorageAdapter — credentials are checked at first use", () => {
+  beforeEach(() => {
+    /*
+     * Stubbed to EMPTY rather than deleted: an empty value is falsy to the
+     * adapter's resolution, and a stub keeps a developer's real token from
+     * turning the refusal cases green.
+     */
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("constructs the factory and adapter with no token anywhere", () => {
+    const plugin = vercelBlobStorage({ collections: { media: true } });
+    expect(plugin.adapter).not.toBeNull();
+  });
+
+  it("refuses the first storage operation with today's message", async () => {
+    const plugin = vercelBlobStorage({ collections: { media: true } });
+    const outcome = await plugin.adapter
+      .upload(Buffer.from("x"), { filename: "a.png", mimeType: "image/png" })
+      .then(
+        value => value,
+        (error: unknown) => error
+      );
+    /*
+     * On the MESSAGE, not merely that something threw: the contract is that
+     * the operator sees today's refusal — naming the variable to set — at
+     * the moment of the use, so a generic failure would be a different
+     * answer wearing the same pass.
+     */
+    expect((outcome as Error).message).toContain("token is required");
+    expect((outcome as Error).message).toContain("BLOB_READ_WRITE_TOKEN");
+  });
+
+  it("resolves the token from the environment at first use", async () => {
+    /*
+     * The positive control for the refusal above: a config that omits the
+     * token but an environment that supplies it must serve the operation —
+     * without it, an implementation that never checked at all would pass
+     * every other case in this block.
+     */
+    vi.stubEnv(
+      "BLOB_READ_WRITE_TOKEN",
+      "vercel_blob_rw_test_dummy_token_for_unit_tests"
+    );
+    const plugin = vercelBlobStorage({ collections: { media: true } });
+    const result = await plugin.adapter.upload(Buffer.from("x"), {
+      filename: "a.png",
+      mimeType: "image/png",
+    });
+    expect(result.url).toContain("test.public.blob.vercel-storage.com");
   });
 });

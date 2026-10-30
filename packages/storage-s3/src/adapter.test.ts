@@ -9,7 +9,7 @@
  *
  * @module adapter.test
  */
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 import { S3Client } from "@aws-sdk/client-s3";
 
@@ -19,6 +19,7 @@ import {
 } from "nextly/storage/read-errors";
 
 import { S3StorageAdapter } from "./adapter";
+import { s3Storage } from "./plugin";
 
 vi.mock("@aws-sdk/client-s3", () => {
   class S3Client {
@@ -57,9 +58,12 @@ function adapterWithSend(): {
     bucket: "test-bucket",
     region: "us-east-1",
   });
-  // The client the adapter built for itself, so the stub is the one it uses.
-  const send = (adapter as unknown as { client: { send: typeof vi.fn } }).client
-    .send as unknown as ReturnType<typeof vi.fn>;
+  /*
+   * The client the adapter materialised for itself, through the public
+   * accessor, so the stub is the one it uses. Construction defers building
+   * the client, so it is not sitting on the instance before a use asks.
+   */
+  const send = adapter.getClient().send as unknown as ReturnType<typeof vi.fn>;
   return { adapter, send };
 }
 
@@ -335,5 +339,83 @@ describe("S3StorageAdapter — list", () => {
       { path: "2026/10/a-thumb_x.png", lastModified: time },
     ]);
     expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+/*
+ * The factory runs while the host's config file is evaluated, so construction
+ * is the config load: a throw there stops every command, including the
+ * schema-only ones that never reach storage. The documented config pattern
+ * passes `process.env` values straight in, so a missing variable arrives
+ * empty at runtime although the type says string — and the bucket and region
+ * checks belong to the first storage operation instead.
+ */
+describe("S3StorageAdapter — configuration is checked at first use", () => {
+  beforeEach(() => {
+    /*
+     * Stubbed to EMPTY rather than deleted, pinning what the environment
+     * holds so a developer's own S3_BUCKET cannot turn the refusal cases
+     * green.
+     */
+    vi.stubEnv("S3_BUCKET", "");
+    vi.stubEnv("AWS_REGION", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("constructs the factory and adapter with no bucket or region", () => {
+    const plugin = s3Storage({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.AWS_REGION!,
+      collections: { media: true },
+    });
+    expect(plugin.adapter).not.toBeNull();
+  });
+
+  it("refuses the first storage operation when the bucket is absent", async () => {
+    const adapter = new S3StorageAdapter({
+      bucket: process.env.S3_BUCKET!,
+      region: "us-east-1",
+      collections: { media: true },
+    });
+    const outcome = await adapter.exists("f.woff2").then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect((outcome as Error).message).toContain("bucket is required");
+  });
+
+  it("refuses the first storage operation when the region is absent", async () => {
+    const adapter = new S3StorageAdapter({
+      bucket: "test-bucket",
+      region: process.env.AWS_REGION!,
+      collections: { media: true },
+    });
+    const outcome = await adapter.exists("f.woff2").then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect((outcome as Error).message).toContain("region is required");
+  });
+
+  it("checks the bucket before the region, as today's refusal did", async () => {
+    /*
+     * Both absent must answer with the BUCKET message: the constructor
+     * checked in that order, and the refusal the operator sees is meant to
+     * be the one they saw before — which one an implementation that reversed
+     * the order would quietly change.
+     */
+    const adapter = new S3StorageAdapter({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.AWS_REGION!,
+      collections: { media: true },
+    });
+    const outcome = await adapter.exists("f.woff2").then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect((outcome as Error).message).toContain("bucket is required");
   });
 });
