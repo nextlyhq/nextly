@@ -96,7 +96,10 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
-import { issuesTheReaderMaySee } from "../../../shared/lib/unreadable-field-issues";
+import {
+  issuesTheReaderMaySee,
+  type IssueReader,
+} from "../../../shared/lib/unreadable-field-issues";
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { editsOver } from "../../audit/lifecycle-fields";
@@ -1432,8 +1435,10 @@ export class SingleMutationService extends BaseService {
     fieldConfigs: DynamicSingleRecord["fields"];
     localizedFieldNames: ReadonlySet<string>;
     enforceLocalizedRequired: boolean;
-    user: UpdateSingleOptions["user"];
-    overrideAccess: boolean | undefined;
+    /** The Single's stored document id, which a read rule is handed. */
+    entryId: string;
+    /** Who the refusal is told to, with the scope a key arrived with. */
+    reader: IssueReader;
   }): Promise<void> {
     const { slug, fieldConfigs } = args;
     const validationView = relationshipValidationView(args.data, fieldConfigs);
@@ -1442,7 +1447,7 @@ export class SingleMutationService extends BaseService {
       attachFieldValidators("single", slug, fieldConfigs),
       {
         mode: "update",
-        req: args.user ? { user: args.user } : {},
+        req: args.reader.user ? { user: args.reader.user } : {},
         // A component inside a group or repeater is judged here, since no
         // component write reaches it. On the pool, as this is.
         componentFields: await containedComponentResolver(
@@ -1472,7 +1477,8 @@ export class SingleMutationService extends BaseService {
       document: validationView,
       fields: fieldConfigs,
       fieldGroups: this.fieldGroupDataService,
-      reader: { user: args.user, overrideAccess: args.overrideAccess },
+      entryId: args.entryId,
+      reader: args.reader,
     });
     if (validationIssues.length > 0) {
       throw NextlyError.validation({ errors: validationIssues });
@@ -1912,8 +1918,12 @@ export class SingleMutationService extends BaseService {
         fieldConfigs,
         localizedFieldNames,
         enforceLocalizedRequired,
-        user: options.user,
-        overrideAccess: options.overrideAccess,
+        entryId: String(documentId),
+        reader: {
+          user: options.user,
+          overrideAccess: options.overrideAccess,
+          authenticatedScope: options.authenticatedScope,
+        },
       });
 
       // 6.3. A publish promotes the held pending change, and that content has

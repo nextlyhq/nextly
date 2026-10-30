@@ -558,6 +558,7 @@ async function schemaIssues(
     kind: "single",
     slug: ctx.slug,
     document: view,
+    entryId: ctx.entryId,
     fields: ctx.fields,
     ...(ctx.componentFields === undefined
       ? {}

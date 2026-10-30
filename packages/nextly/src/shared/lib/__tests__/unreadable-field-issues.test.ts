@@ -4,9 +4,10 @@
  * repeater, a field of a field group, an issue on the whole document and a
  * path this cannot read.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import { consoleLogger } from "../../types";
 import type { ValidationIssue } from "../entry-validation";
 import {
   clearFieldFunctions,
@@ -42,6 +43,7 @@ function told(
   options: {
     overrideAccess?: boolean;
     fieldGroups?: Record<string, FieldConfig[]>;
+    entryId?: string;
   } = {}
 ) {
   const groups = options.fieldGroups;
@@ -58,6 +60,7 @@ function told(
           },
         }
       : {}),
+    ...(options.entryId === undefined ? {} : { entryId: options.entryId }),
     reader: {
       ...reader,
       ...(options.overrideAccess === undefined
@@ -69,6 +72,7 @@ function told(
 
 afterEach(() => {
   clearFieldFunctions();
+  vi.restoreAllMocks();
 });
 
 describe("issuesTheReaderMaySee", () => {
@@ -125,6 +129,42 @@ describe("issuesTheReaderMaySee", () => {
     ).toEqual([UNREADABLE_FIELD_ISSUE]);
   });
 
+  it("withholds an issue inside a group the document leaves out, by the group's rule or its child's", async () => {
+    const withGroups = [
+      { name: "title", type: "text" },
+      {
+        name: "hiddenGroup",
+        type: "group",
+        access: hidden,
+        fields: [{ name: "note", type: "text" }],
+      },
+      {
+        name: "box",
+        type: "group",
+        fields: [
+          { name: "label", type: "text" },
+          { name: "cost", type: "number", access: hidden },
+        ],
+      },
+    ] as unknown as FieldConfig[];
+    registerFieldFunctions("collection", SLUG, withGroups);
+
+    expect(
+      await told(
+        [
+          issue("hiddenGroup.note", "hiddenGroup.note is required."),
+          issue("box.cost", "box.cost is required."),
+          issue("box.label", "box.label is required."),
+        ],
+        { title: "t" },
+        withGroups
+      )
+    ).toEqual([
+      UNREADABLE_FIELD_ISSUE,
+      issue("box.label", "box.label is required."),
+    ]);
+  });
+
   it("keeps an issue on the whole document, and withholds a path it cannot read", async () => {
     registerFieldFunctions("collection", SLUG, fields);
 
@@ -164,5 +204,83 @@ describe("issuesTheReaderMaySee", () => {
         { fieldGroups: { meta: metaFields } }
       )
     ).toEqual([issue("meta.summary"), UNREADABLE_FIELD_ISSUE]);
+  });
+  it("judges a field named as an object's own method by the document's own value", async () => {
+    const named = [
+      { name: "title", type: "text" },
+      { name: "toString", type: "text", access: hidden },
+    ] as unknown as FieldConfig[];
+    registerFieldFunctions("collection", SLUG, named);
+
+    expect(
+      await told([issue("toString")], { title: "t", toString: "v" }, named)
+    ).toEqual([UNREADABLE_FIELD_ISSUE]);
+    expect(await told([issue("toString")], { title: "t" }, named)).toEqual([
+      UNREADABLE_FIELD_ISSUE,
+    ]);
+  });
+
+  it("hands a rule the stored entry's id where the judged document has none", async () => {
+    const byEntry = [
+      { name: "title", type: "text" },
+      {
+        name: "secret",
+        type: "text",
+        access: { read: ({ id }: { id?: unknown }) => id !== "protected" },
+      },
+    ] as unknown as FieldConfig[];
+    registerFieldFunctions("collection", SLUG, byEntry);
+
+    expect(
+      await told([issue("secret")], { secret: "s" }, byEntry, {
+        entryId: "protected",
+      })
+    ).toEqual([UNREADABLE_FIELD_ISSUE]);
+    expect(
+      await told([issue("secret")], { secret: "s" }, byEntry, {
+        entryId: "other",
+      })
+    ).toEqual([issue("secret")]);
+  });
+
+  it("judges each issue on the document as it is, not with another issue's field held", async () => {
+    // Readable only while `flag` is held as empty: the document leaves `flag`
+    // out, so a read of it removes `secret`.
+    const bySibling = [
+      { name: "flag", type: "text" },
+      {
+        name: "secret",
+        type: "text",
+        access: {
+          read: ({ data }: { data?: Record<string, unknown> }) =>
+            data?.flag === null,
+        },
+      },
+    ] as unknown as FieldConfig[];
+    registerFieldFunctions("collection", SLUG, bySibling);
+
+    expect(
+      await told(
+        [issue("flag", "flag is required."), issue("secret", "Code s.")],
+        { secret: "s" },
+        bySibling
+      )
+    ).toEqual([issue("flag", "flag is required."), UNREADABLE_FIELD_ISSUE]);
+  });
+
+  it("logs which paths were withheld, never their messages", async () => {
+    registerFieldFunctions("collection", SLUG, fields);
+    const info = vi.spyOn(consoleLogger, "info").mockImplementation(() => {});
+
+    await told(
+      [issue("secret", "Code TOPSECRET-4411 is not allowed.")],
+      { secret: "TOPSECRET-4411" },
+      fields
+    );
+
+    expect(info).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify(info.mock.calls);
+    expect(logged).toContain("secret");
+    expect(logged).not.toContain("TOPSECRET");
   });
 });

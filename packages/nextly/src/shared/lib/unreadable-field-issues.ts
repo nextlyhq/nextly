@@ -8,7 +8,8 @@
  * it is empty, and a validator's own message may carry the value itself. So
  * each issue rooted at a field the caller may not read, or at a row inside
  * one, is told as one generic issue instead. The refusal stands: only what it
- * says changes. The issues withheld go to the server log.
+ * says changes. The server log records which paths were withheld, never their
+ * messages, which can carry the very values withheld.
  *
  * "May not read" is the read redaction's own answer, asked of a copy of the
  * judged document: the entity's field rules (`applyFieldReadAccess`), then the
@@ -84,19 +85,52 @@ function asContainer(value: unknown): Record<PathStep, unknown> | undefined {
 }
 
 /**
- * Give an issue's own field a value where the document has none, so the read
- * rules judge it: a required field left empty is often absent, and a rule is
- * asked only of a field the document holds. Only the last step is filled, and
- * only inside a container the document already has.
+ * Whether `container` holds `step` itself. Never by inheritance: a field may
+ * be named `toString`, which every object answers to.
  */
-function holdIssueField(document: Record<string, unknown>, steps: PathStep[]) {
-  let at: unknown = document;
-  for (const step of steps.slice(0, -1)) at = asContainer(at)?.[step];
-  const container = asContainer(at);
-  const last = steps.at(-1);
-  if (container && last !== undefined && !(last in container)) {
-    container[last] = null;
+function holds(container: Record<PathStep, unknown>, step: PathStep): boolean {
+  return Object.hasOwn(container, step);
+}
+
+/**
+ * Give an issue's path a value where the document has none, so the read rules
+ * judge it: a required field left empty is often absent, and a rule is asked
+ * only of a field the document holds. Walked from the issue's root field: an
+ * absent or empty group on the way is held as an empty group, so the group's
+ * own rule and its child's are both asked, and an issue inside a hidden group
+ * is withheld however little of it the document holds. Where the next step is
+ * a row, which a document without the list cannot have, the list itself is
+ * held, to be judged by its own rule. Whether anything was held.
+ */
+function holdIssuePath(
+  document: Record<string, unknown>,
+  steps: PathStep[]
+): boolean {
+  let at: Record<PathStep, unknown> | undefined = document;
+  let changed = false;
+  for (const [index, step] of steps.entries()) {
+    if (!at) break;
+    const next = steps[index + 1];
+    changed = holdStep(at, step, next) || changed;
+    at = next === undefined ? undefined : asContainer(at[step]);
   }
+  return changed;
+}
+
+/**
+ * Hold one step of a path: the issue's own field, or a list ahead of one of
+ * its rows, as an empty value where it is absent; a group on the way as an
+ * empty group where it is absent or empty. Whether it held anything.
+ */
+function holdStep(
+  at: Record<PathStep, unknown>,
+  step: PathStep,
+  next: PathStep | undefined
+): boolean {
+  const asGroup = typeof next === "string";
+  if (holds(at, step) && (!asGroup || at[step] != null)) return false;
+  at[step] = asGroup ? {} : null;
+  return true;
 }
 
 /**
@@ -112,9 +146,9 @@ function removedAlong(
   let after: unknown = redacted;
   for (const step of steps) {
     const from = asContainer(before);
-    if (!from || !(step in from)) return false;
+    if (!from || !holds(from, step)) return false;
     const to = asContainer(after);
-    if (!to || !(step in to)) return true;
+    if (!to || !holds(to, step)) return true;
     before = from[step];
     after = to[step];
   }
@@ -140,6 +174,11 @@ export async function issuesTheReaderMaySee(
     fieldGroups?: FieldGroupFieldsSource;
     /** A write's transaction connection, where the issues were found in one. */
     executor?: unknown;
+    /**
+     * The stored entry's id, which a read rule is handed, where the judged
+     * document does not carry it.
+     */
+    entryId?: string;
     reader: IssueReader;
   }
 ): Promise<ValidationIssue[]> {
@@ -147,9 +186,9 @@ export async function issuesTheReaderMaySee(
     return issues;
   }
   const located = issues.map(issue => ({ issue, steps: stepsOf(issue.path) }));
-  // Two copies: the judged document with each issue's field held, and the
-  // same after the read removes what the reader may not see. The document
-  // itself belongs to the write and is left as it is.
+  // A copy of the judged document, as a read of the stored entry would show
+  // it to its rules. The document itself belongs to the write and is left as
+  // it is.
   let judged: Record<string, unknown>;
   try {
     judged = structuredClone(args.document);
@@ -158,45 +197,74 @@ export async function issuesTheReaderMaySee(
     // every issue on a field is withheld.
     return collapse(located, () => true, args);
   }
-  for (const { steps } of located) {
-    if (steps) holdIssueField(judged, steps);
+  if (args.entryId !== undefined && !holds(judged, "id")) {
+    judged.id = args.entryId;
   }
-  const redacted = structuredClone(judged);
+  const redact = await readRedaction(args);
+  const redacted = await redact(judged);
+  const withheld = new Set<number>();
+  for (const [index, { steps }] of located.entries()) {
+    if (!steps || steps.length === 0) continue;
+    // An issue on a field the document leaves out is judged with that field
+    // held, on a copy of its own: held beside the others, one placeholder
+    // could change how a rule reading it decides another field.
+    const held = structuredClone(judged);
+    const removed = holdIssuePath(held, steps)
+      ? removedAlong(held, await redact(held), steps)
+      : removedAlong(judged, redacted, steps);
+    if (removed) withheld.add(index);
+  }
+  return collapse(located, (_steps, index) => withheld.has(index), args);
+}
+
+/**
+ * The read redaction of a document for this reader: a copy of it with every
+ * field they may not read removed, as a read of it removes them.
+ */
+async function readRedaction(args: {
+  kind: ReadKind;
+  slug: string;
+  fields: readonly FieldConfig[];
+  fieldGroups?: FieldGroupFieldsSource;
+  executor?: unknown;
+  reader: IssueReader;
+}): Promise<
+  (document: Record<string, unknown>) => Promise<Record<string, unknown>>
+> {
   const { user, authenticatedScope } = args.reader;
   const grants =
     args.reader.grants ??
     callerAccessGrants(user, authenticatedScope, args.executor);
-  await applyFieldReadAccess({
-    kind: args.kind,
-    slug: args.slug,
-    entry: redacted,
-    user,
-    authenticatedScope,
-    grants,
-  });
   const fieldGroupPass = await liveFieldGroupReadPass(
     args.fields,
     args.fieldGroups
   );
-  await fieldGroupPass?.(redacted, { user, authenticatedScope, grants });
-  return collapse(
-    located,
-    steps => removedAlong(judged, redacted, steps),
-    args
-  );
+  return async document => {
+    const redacted = structuredClone(document);
+    await applyFieldReadAccess({
+      kind: args.kind,
+      slug: args.slug,
+      entry: redacted,
+      user,
+      authenticatedScope,
+      grants,
+    });
+    await fieldGroupPass?.(redacted, { user, authenticatedScope, grants });
+    return redacted;
+  };
 }
 
 function collapse(
   located: Array<{ issue: ValidationIssue; steps: PathStep[] | null }>,
-  withheld: (steps: PathStep[]) => boolean,
+  withheld: (steps: PathStep[], index: number) => boolean,
   args: { kind: ReadKind; slug: string }
 ): ValidationIssue[] {
   const told: ValidationIssue[] = [];
   const kept: ValidationIssue[] = [];
-  for (const { issue, steps } of located) {
+  for (const [index, { issue, steps }] of located.entries()) {
     // An issue on the document as a whole names no field; one whose path
     // cannot be read is withheld, as it may name one.
-    if (steps === null || (steps.length > 0 && withheld(steps))) {
+    if (steps === null || (steps.length > 0 && withheld(steps, index))) {
       if (kept.length === 0) told.push(UNREADABLE_FIELD_ISSUE);
       kept.push(issue);
     } else {
@@ -206,7 +274,11 @@ function collapse(
   if (kept.length > 0) {
     consoleLogger.info(
       "A validation refusal withheld issues on fields its caller may not read",
-      { kind: args.kind, slug: args.slug, withheldIssues: kept }
+      {
+        kind: args.kind,
+        slug: args.slug,
+        withheld: kept.map(({ path, code }) => ({ path, code })),
+      }
     );
   }
   return told;

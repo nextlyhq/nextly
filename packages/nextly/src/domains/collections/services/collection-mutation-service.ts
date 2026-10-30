@@ -1998,6 +1998,7 @@ export class CollectionMutationService extends BaseService {
           service.getComponentFields(componentSlug, args.tx?.getDrizzle()),
       },
       executor: args.tx?.getDrizzle(),
+      entryId: args.id,
       reader: args.reader,
     });
   }
