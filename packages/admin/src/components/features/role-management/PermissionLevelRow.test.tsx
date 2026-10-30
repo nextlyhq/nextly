@@ -66,11 +66,13 @@ function Harness({
   initial,
   lockedIds = [],
   bases,
+  visitors,
 }: {
   row: LevelRow;
   initial: string[];
   lockedIds?: string[];
   bases?: { name: string; ids: string[] }[];
+  visitors?: boolean;
 }) {
   const [value, setValue] = useState(initial);
   saved = value;
@@ -84,6 +86,7 @@ function Harness({
       }}
       lockedIds={lockedIds}
       bases={bases}
+      visitors={visitors}
     />
   );
 }
@@ -343,5 +346,72 @@ describe("PermissionLevelRow", () => {
     const read = screen.getByRole("switch", { name: "Post (posts): View" });
     expect(read).toBeChecked();
     expect(read).toBeDisabled();
+  });
+
+  describe("for the Public role, whose permissions are what visitors may do", () => {
+    it("offers only No access and Can view", () => {
+      render(<Harness row={POSTS} initial={[]} visitors />);
+
+      const offered = levels("Post (posts)")
+        .getAllByRole("radio")
+        .map(radio => radio.textContent);
+      expect(offered).toEqual(["No access", "Can view"]);
+    });
+
+    it("saves Can view as reading alone", async () => {
+      render(<Harness row={POSTS} initial={[ELSEWHERE]} visitors />);
+
+      await userEvent.click(
+        levels("Post (posts)").getByRole("radio", { name: "Can view" })
+      );
+
+      expect([...saved].sort()).toEqual([ELSEWHERE, "posts-read"].sort());
+    });
+
+    it("shows no publish or unpublish switch, and warns beside a write that is on", async () => {
+      render(<Harness row={POSTS} initial={["posts-read"]} visitors />);
+      await userEvent.click(
+        screen.getByRole("switch", { name: "Post (posts): each action" })
+      );
+
+      expect(
+        screen.queryByRole("switch", { name: /Post \(posts\): Publish/ })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("switch", { name: /Post \(posts\): Unpublish/ })
+      ).not.toBeInTheDocument();
+      // POPULATION CONTROL: the other actions are still there.
+      expect(
+        screen.getByRole("switch", { name: "Post (posts): Create" })
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          "Visitors who aren't signed in can change these entries."
+        )
+      ).not.toBeInTheDocument();
+
+      await userEvent.click(
+        screen.getByRole("switch", { name: "Post (posts): Create" })
+      );
+
+      expect(
+        screen.getByText(
+          "Visitors who aren't signed in can change these entries."
+        )
+      ).toBeInTheDocument();
+    });
+
+    it("reads a row holding create as Custom, and keeps it", () => {
+      render(
+        <Harness
+          row={POSTS}
+          initial={["posts-read", "posts-create"]}
+          visitors
+        />
+      );
+
+      expect(screen.getByText("Custom")).toBeInTheDocument();
+      expect([...saved].sort()).toEqual(["posts-create", "posts-read"]);
+    });
   });
 });

@@ -12,9 +12,12 @@ import { randomUUID } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray } from "drizzle-orm";
+import type { z } from "zod";
 
 import { getDialectTables } from "../../../database";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { RoleSchema } from "../../../schemas/_zod/rbac";
+import { SUPER_ADMIN_SLUG } from "../../../services/access/super-admin";
 import type { Logger } from "../../../services/shared";
 import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
 
@@ -35,6 +38,29 @@ export const PUBLIC_ROLE_META_KEY = "public-role-created";
  */
 export function isAssignableRole(role: { slug: string }): boolean {
   return role.slug !== PUBLIC_ROLE_SLUG;
+}
+
+/**
+ * A built-in role the admin treats apart from every other, as the published
+ * role schema names it.
+ */
+export type BuiltInRole = NonNullable<z.infer<typeof RoleSchema>["builtIn"]>;
+
+/**
+ * Which built-in role `role` is, as the `builtIn` its record carries: the
+ * Public role, whose permissions are what visitors who aren't signed in may
+ * do, or super-admin, which holds every permission and is never edited.
+ * Every other role gets no `builtIn` at all, not one left undefined, so a
+ * record read in process says what its JSON says. Spread into each role,
+ * from the same slugs as {@link isAssignableRole}, so a screen tells them
+ * apart without naming either slug.
+ */
+export function builtInMarkOf(role: { slug: string }): {
+  builtIn?: BuiltInRole;
+} {
+  if (role.slug === PUBLIC_ROLE_SLUG) return { builtIn: "public" };
+  if (role.slug === SUPER_ADMIN_SLUG) return { builtIn: "super-admin" };
+  return {};
 }
 
 /**
