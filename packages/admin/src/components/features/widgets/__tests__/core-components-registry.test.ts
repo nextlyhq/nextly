@@ -84,6 +84,19 @@ describe("core widget components register at runtime", () => {
     }
   });
 
+  it("registers Continue where you left off, and no longer Recently edited", async () => {
+    const { hasComponent } = await import(
+      "@admin/lib/plugins/component-registry"
+    );
+    const { registerCoreWidgetComponents } = await import("../core-components");
+
+    registerCoreWidgetComponents();
+
+    // The control: the call ran, so an absence below is the path being gone.
+    expect(hasComponent("core#ContinueCard")).toBe(true);
+    expect(hasComponent("core#RecentlyEdited")).toBe(false);
+  });
+
   it("resolves each path to something renderable", async () => {
     const { getComponent } = await import(
       "@admin/lib/plugins/component-registry"

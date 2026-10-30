@@ -9,7 +9,9 @@
  * reading, never when the pin was made: a pin of something they may no longer
  * read is left out of the list, with no title and no placeholder, and kept
  * stored, so it comes back if their access does. Pinning needs read access to
- * the target, so a reader cannot learn that an entry exists by pinning it.
+ * the target, so a reader cannot learn that an entry exists by pinning it. A
+ * pin whose target no longer exists is removed when the pins are read, so it
+ * never costs the reader one of their pins.
  *
  * @module services/dashboard/dashboard-pins-service
  * @experimental Until the dashboard's pins are drawn on it.
@@ -17,106 +19,91 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import {
-  canReadEntity,
-  readAccessCaller,
-  readableEntities,
-} from "../../auth/entity-read-access";
 import { container } from "../../di/container";
-import { COMMON_TITLE_FIELDS } from "../../domains/collections/entry-title";
 import {
   type DashboardPin,
   DashboardPins,
   type PinTarget,
 } from "../../domains/dashboard/dashboard-pins";
 import { NextlyError } from "../../errors/nextly-error";
-import { entryHeading } from "../../lib/entry-heading";
-import { readableDocumentColumns } from "../lib/readable-documents";
+import { existingDocumentIds } from "../lib/readable-documents";
 
+import {
+  bootedHeadingRegistries,
+  type DocumentHeading,
+  type DocumentRef,
+  headingKey,
+  type HeadingRegistries,
+  readableHeadings,
+} from "./readable-headings";
 import type { ReadCaller } from "./readable-resources";
 
-/** One pin as the reader is shown it: what it names, and its title. */
-interface ShownPin {
+/**
+ * One pin as the reader is shown it: what it names, and its heading as the
+ * reader reads it now (its title, and its icon, status and update time where
+ * it has them).
+ */
+export interface ShownPin extends DocumentHeading {
   targetType: "collection" | "single";
   targetSlug: string;
   /** The pinned entry's id; "" for a Single. */
   entryId: string;
-  /** The entry's title, as the reader reads it, or the Single's label. */
-  title: string;
   pinnedAt: string;
 }
 
-/** The registries the titles are read from. */
-interface PinRegistries {
-  getCollectionBySlug(
-    slug: string
-  ): Promise<{ admin?: { useAsTitle?: string } | null } | null>;
-  getSingleBySlug(slug: string): Promise<{ label: string } | null>;
+/** The document a stored pin names, as the headings are keyed. */
+function refOf(
+  pin: Pick<DashboardPin, "targetType" | "targetSlug" | "entryId">
+): DocumentRef {
+  return {
+    kind: pin.targetType,
+    slug: pin.targetSlug,
+    entryId: pin.targetType === "single" ? "" : pin.entryId,
+  };
 }
 
-/** The key one pin's title is kept under while a list is assembled. */
-const keyOf = (
-  pin: Pick<DashboardPin, "targetType" | "targetSlug" | "entryId">
-) => `${pin.targetType}\u0000${pin.targetSlug}\u0000${pin.entryId}`;
+/** A stored pin as the target the repository takes. */
+function targetOf(pin: DashboardPin): PinTarget {
+  return pin.targetType === "single"
+    ? { targetType: "single", targetSlug: pin.targetSlug }
+    : {
+        targetType: "collection",
+        targetSlug: pin.targetSlug,
+        entryId: pin.entryId,
+      };
+}
 
 class DashboardPinsService {
   constructor(
     private readonly pins: DashboardPins,
-    private readonly registries: PinRegistries
+    private readonly registries: HeadingRegistries
   ) {}
 
   /**
-   * The reader's pins they may read, newest first, each with its title. One
+   * The reader's pins they may read, newest first, each with its heading. One
    * read per collection, for every pinned entry of it at once, as the reader.
+   *
+   * Reading the pins first removes the reader's orphans, pins whose target no
+   * longer exists, so they are neither shown nor counted against the limit.
    */
   async list(caller: ReadCaller): Promise<ShownPin[]> {
-    const pins = await this.pins.list(caller.user.id);
+    const pins = await this.livePins(caller.user.id);
     if (pins.length === 0) return [];
-    const readable = await readableEntities(
-      [...new Set(pins.map(pin => pin.targetSlug))],
-      readAccessCaller(caller)
+    const headings = await readableHeadings(
+      pins.map(refOf),
+      caller,
+      this.registries
     );
-    const titles = new Map<string, string>();
-    const entries = new Map<string, string[]>();
-    const singles = new Set<string>();
-    for (const pin of pins) {
-      if (!readable.has(pin.targetSlug)) continue;
-      if (pin.targetType === "single") singles.add(pin.targetSlug);
-      else
-        entries.set(pin.targetSlug, [
-          ...(entries.get(pin.targetSlug) ?? []),
-          pin.entryId,
-        ]);
-    }
-    await Promise.all([
-      ...[...entries].map(async ([slug, ids]) => {
-        for (const [id, title] of await this.entryTitles(slug, ids, caller)) {
-          titles.set(
-            keyOf({ targetType: "collection", targetSlug: slug, entryId: id }),
-            title
-          );
-        }
-      }),
-      ...[...singles].map(async slug => {
-        const single = await this.registries.getSingleBySlug(slug);
-        if (single !== null) {
-          titles.set(
-            keyOf({ targetType: "single", targetSlug: slug, entryId: "" }),
-            single.label
-          );
-        }
-      }),
-    ]);
     return pins.flatMap(pin => {
-      const title = titles.get(keyOf(pin));
-      return title === undefined
+      const heading = headings.get(headingKey(refOf(pin)));
+      return heading === undefined
         ? []
         : [
             {
               targetType: pin.targetType,
               targetSlug: pin.targetSlug,
               entryId: pin.entryId,
-              title,
+              ...heading,
               pinnedAt: new Date(pin.pinnedAt).toISOString(),
             },
           ];
@@ -126,6 +113,8 @@ class DashboardPinsService {
   /**
    * Pin `target` for the reader. Refused, as not found, when they may not read
    * it or it does not exist, so pinning tells nobody what they could not open.
+   * Their orphans are removed first, so the limit counts only pins of targets
+   * that still exist.
    */
   async pin(caller: ReadCaller, target: PinTarget): Promise<void> {
     if (!(await this.mayRead(caller, target))) {
@@ -133,6 +122,7 @@ class DashboardPinsService {
         logContext: { target, reason: "not readable or not found" },
       });
     }
+    await this.livePins(caller.user.id);
     await this.pins.pin(caller.user.id, target);
   }
 
@@ -149,51 +139,71 @@ class DashboardPinsService {
     caller: ReadCaller,
     target: PinTarget
   ): Promise<boolean> {
-    if (target.targetType === "single") {
-      return (
-        (await canReadEntity(target.targetSlug, readAccessCaller(caller))) &&
-        (await this.registries.getSingleBySlug(target.targetSlug)) !== null
-      );
-    }
-    const titles = await this.entryTitles(
-      target.targetSlug,
-      [target.entryId],
-      caller
-    );
-    return titles.has(target.entryId);
+    const ref = refOf({
+      targetType: target.targetType,
+      targetSlug: target.targetSlug,
+      entryId: target.targetType === "collection" ? target.entryId : "",
+    });
+    const headings = await readableHeadings([ref], caller, this.registries);
+    return headings.has(headingKey(ref));
   }
 
   /**
-   * The titles of the entries among `ids` the reader may read in `slug`, as
-   * the read path returns them; none when the collection is gone or the read
-   * refuses outright.
+   * `userId`'s pins whose target still exists, after removing those whose
+   * target does not: a deleted entry or Single, or a collection gone with
+   * its entries. A delete sweeps its own target's pins; this catches a pin
+   * written while its target was being deleted, so it never costs a pin.
+   *
+   * 🔴 Existence, not readability: a pin of something the reader may not read
+   * now is kept, so it returns when their access does. The existence read
+   * ignores access, and what it learns reaches the reader only as their own
+   * pin of a deleted target going away.
    */
-  private async entryTitles(
-    slug: string,
-    ids: readonly string[],
-    caller: ReadCaller
-  ): Promise<Map<string, string>> {
-    const collection = await this.registries.getCollectionBySlug(slug);
-    if (collection === null) return new Map();
-    const titleField = collection.admin?.useAsTitle ?? "title";
-    let documents: Map<string, Record<string, unknown>>;
-    try {
-      documents = await readableDocumentColumns(slug, ids, caller, [
-        titleField,
-        ...COMMON_TITLE_FIELDS,
-      ]);
-    } catch (error) {
-      // A read the gate refuses outright shows nothing, as one that returns no
-      // rows does. Any other failure is a real one and is reported as such,
-      // rather than read as "not yours".
-      if (NextlyError.isForbidden(error) || NextlyError.isNotFound(error)) {
-        return new Map();
-      }
-      throw error;
-    }
-    return new Map(
-      [...documents].map(([id, row]) => [id, entryHeading(row, titleField, id)])
+  private async livePins(userId: string): Promise<DashboardPin[]> {
+    const pins = await this.pins.list(userId);
+    if (pins.length === 0) return pins;
+    const live = await this.existingTargets(pins);
+    const orphans = pins.filter(pin => !live.has(headingKey(refOf(pin))));
+    await Promise.all(
+      orphans.map(pin => this.pins.unpin(userId, targetOf(pin)))
     );
+    return pins.filter(pin => live.has(headingKey(refOf(pin))));
+  }
+
+  /** The targets among `pins` that still exist, by {@link headingKey}. */
+  private async existingTargets(
+    pins: readonly DashboardPin[]
+  ): Promise<Set<string>> {
+    const live = new Set<string>();
+    const entries = new Map<string, string[]>();
+    for (const pin of pins) {
+      if (pin.targetType === "collection") {
+        entries.set(pin.targetSlug, [
+          ...(entries.get(pin.targetSlug) ?? []),
+          pin.entryId,
+        ]);
+      }
+    }
+    const singles = [
+      ...new Set(
+        pins.filter(pin => pin.targetType === "single").map(p => p.targetSlug)
+      ),
+    ];
+    await Promise.all([
+      ...[...entries].map(async ([slug, ids]) => {
+        // A collection that is gone takes every entry of it with it.
+        if ((await this.registries.getCollectionBySlug(slug)) === null) return;
+        for (const id of await existingDocumentIds(slug, ids)) {
+          live.add(headingKey({ kind: "collection", slug, entryId: id }));
+        }
+      }),
+      ...singles.map(async slug => {
+        if ((await this.registries.getSingleBySlug(slug)) !== null) {
+          live.add(headingKey({ kind: "single", slug, entryId: "" }));
+        }
+      }),
+    ]);
+    return live;
   }
 }
 
@@ -203,17 +213,8 @@ class DashboardPinsService {
  * differently.
  */
 export function dashboardPinsService(): DashboardPinsService {
-  const collections = container.get<Pick<PinRegistries, "getCollectionBySlug">>(
-    "collectionRegistryService"
-  );
-  const singles = container.get<Pick<PinRegistries, "getSingleBySlug">>(
-    "singleRegistryService"
-  );
   return new DashboardPinsService(
     new DashboardPins(container.get<DrizzleAdapter>("adapter")),
-    {
-      getCollectionBySlug: slug => collections.getCollectionBySlug(slug),
-      getSingleBySlug: slug => singles.getSingleBySlug(slug),
-    }
+    bootedHeadingRegistries()
   );
 }

@@ -50,6 +50,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { WIDGET_QUERIES_KEY } from "./widget-queries-key";
 import {
   fetchWidgetBatch,
   type CardAsk,
@@ -1090,7 +1091,7 @@ function partitionRequests(
 function partitionKey(
   partition: readonly WidgetQueryRequest[]
 ): readonly unknown[] {
-  return ["dashboard", "widget-queries", partition.map(unsized)];
+  return [...WIDGET_QUERIES_KEY, partition.map(unsized)];
 }
 
 /**

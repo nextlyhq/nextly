@@ -25,11 +25,11 @@ const onlyMine: AnyWidgetSetting = {
 
 /** A source reading every collection, narrowing by one and by its reader's own rows. */
 const filtering = {
-  id: "system:recent-edits",
+  id: "system:saves",
   filters: ["collection", "onlyMine"] as const,
 };
 const query: WidgetQuery = {
-  source: "system:recent-edits",
+  source: "system:saves",
   op: "list",
   limit: 5,
 };
@@ -46,7 +46,7 @@ const asked = (
 describe("Collection on a source that narrows by it", () => {
   it("sets the query's where.collection and keeps the source", () => {
     const out = asked([collection], { collection: "pages" });
-    expect(out.source).toBe("system:recent-edits");
+    expect(out.source).toBe("system:saves");
     expect(out.where).toEqual({ collection: "pages" });
   });
 
@@ -102,7 +102,7 @@ describe("Only mine on a source that narrows by it", () => {
     // Only Collection declared: Only mine is the widget's own checkbox there,
     // admitted as any checkbox is, and it sets nothing the card asks.
     const collectionOnly = {
-      id: "system:recent-edits",
+      id: "system:saves",
       filters: ["collection"] as const,
     };
     expect(
@@ -111,6 +111,52 @@ describe("Only mine on a source that narrows by it", () => {
     // Admitted beside Collection where the source declares both.
     expect(
       widgetSettingsProblem([onlyMine, collection], false, filtering)
+    ).toBeUndefined();
+  });
+});
+
+describe("Tab on a source that narrows by it", () => {
+  const tab: AnyWidgetSetting = {
+    name: "tab",
+    type: "select",
+    defaultValue: "mine",
+    quick: true,
+    options: [
+      { label: "Mine", value: "mine" },
+      { label: "Team", value: "team" },
+    ],
+  };
+  const tabbed = { id: "system:continue", filters: ["tab"] as const };
+  const continueQuery: WidgetQuery = {
+    source: "system:continue",
+    op: "list",
+    limit: 5,
+  };
+
+  it("sets where.tab to the chosen tab, Mine by default, and keeps the source", () => {
+    const team = applyWidgetSettings(
+      continueQuery,
+      [tab],
+      { tab: "team" },
+      { source: tabbed }
+    );
+    expect(team.source).toBe("system:continue");
+    expect(team.where).toEqual({ tab: "team" });
+    expect(
+      applyWidgetSettings(continueQuery, [tab], {}, { source: tabbed }).where
+    ).toEqual({ tab: "mine" });
+  });
+
+  it("is not driven on a source that does not narrow by it", () => {
+    // 🔴 The must-differ case: the same setting over a source declaring no
+    // Tab filter is the widget's own select, and sets nothing it asks.
+    expect(
+      applyWidgetSettings(
+        continueQuery,
+        [tab],
+        { tab: "team" },
+        { source: { id: "system:continue", filters: ["collection"] as const } }
+      ).where
     ).toBeUndefined();
   });
 });

@@ -456,7 +456,7 @@ describe("where the add panel lists each widget", () => {
     // Registered in an order the panel must not follow.
     registerWidget(widget({ id: "site/zeta" }));
     registerWidget(widget({ id: "core/team" }));
-    registerWidget(widget({ id: "core/recently-edited" }));
+    registerWidget(widget({ id: "core/continue" }));
     registerWidget(widget({ id: "site/alpha" }));
     setContributedWidgets([{ id: "forms/latest", plugin: "@acme/forms" }]);
     // Something stored, so every widget is offered rather than placed.
@@ -465,7 +465,7 @@ describe("where the add panel lists each widget", () => {
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
     expect(body.available).toEqual([
-      "core/recently-edited",
+      "core/continue",
       "site/zeta",
       "site/alpha",
       "core/team",
@@ -478,7 +478,7 @@ describe("where the add panel lists each widget", () => {
     // it, as on the dashboard, and needs its place. Without a rank it could only guess one.
     registerWidget(widget({ id: "site/zeta" }));
     registerWidget(widget({ id: "core/team" }));
-    registerWidget(widget({ id: "core/recently-edited" }));
+    registerWidget(widget({ id: "core/continue" }));
     stored = {
       version: 1,
       layout: serializeLayout([
@@ -493,7 +493,7 @@ describe("where the add panel lists each widget", () => {
       .filter(([, facts]) => typeof facts.rank === "number")
       .sort(([, a], [, b]) => (a.rank ?? 0) - (b.rank ?? 0))
       .map(([id]) => id);
-    expect(ranked).toEqual(["core/recently-edited", "site/zeta", "core/team"]);
+    expect(ranked).toEqual(["core/continue", "site/zeta", "core/team"]);
   });
 });
 
@@ -1014,7 +1014,7 @@ describe("PUT /api/dashboard/layout", () => {
     );
     const single = await refused("single/about-card");
     expect(single).toContain(
-      `\\"single/about-card\\" is a retired card: core no longer makes a card per Single. A Single's edits show in Recently edited (core/recently-edited).`
+      `\\"single/about-card\\" is a retired card: core no longer makes a card per Single. A Single's edits show in Continue where you left off (core/continue).`
     );
     expect(single).not.toContain("Collection to");
     expect(saved).toBeUndefined();

@@ -43,7 +43,7 @@ import { setDefaultLayoutPlan } from "../default-layout";
 const AGREED = [
   ["core/needs-attention", "8x3"],
   ["core/quick-create", "4x3"],
-  ["core/recently-edited", "6x5"],
+  ["core/continue", "6x5"],
   ["core/team-activity", "6x5"],
   ["core/content", "12x4"],
   ["core/upcoming-releases", "4x4"],
@@ -176,14 +176,14 @@ describe.each(getConfiguredTestDialects())(
       // waits for its reader.
       expect(await defaultFor(editor)).toEqual([
         ["core/needs-attention", "8x3"],
-        ["core/recently-edited", "6x5"],
+        ["core/continue", "6x5"],
         ["core/team-activity", "6x5"],
       ]);
 
       // One collection to read and none to write in: Needs attention and Content, never Create.
       expect(await defaultFor(readerId)).toEqual([
         ["core/needs-attention", "8x3"],
-        ["core/recently-edited", "6x5"],
+        ["core/continue", "6x5"],
         ["core/team-activity", "6x5"],
         ["core/content", "12x4"],
       ]);
