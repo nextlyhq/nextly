@@ -456,12 +456,12 @@ stays encrypted, and is still answered as `{ set: true }`, until a new value
 is written to it.
 
 **Who may change the settings.** Changing a plugin's settings takes core's
-`manage-settings`, and reading them `read-settings` or `manage-settings`. A
+`update-settings`, and reading them `read-settings`. A
 plugin can keep its settings to a narrower role by naming one of its own
 `permissions` in `contributes.settingsPermission` (`@experimental`): a write
 then takes that permission alone, holding it also lets the operator read
 them, and the admin's settings page for the plugin asks for it in place of
-`manage-settings`. A name that is not one of the plugin's own permissions, or
+`update-settings`. A name that is not one of the plugin's own permissions, or
 that comes without a `settings` schema, fails boot. A `publish` or `unpublish`
 permission declared on a collection or Single is not the plugin's own: it is
 that entity's publish permission, which every content publisher holds.
