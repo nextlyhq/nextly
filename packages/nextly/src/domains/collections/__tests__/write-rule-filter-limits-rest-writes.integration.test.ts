@@ -10,13 +10,17 @@
  * an editor makes through an entry's versions: a restore, a discard of the
  * held edit, and an autosave.
  *
+ * Taking the live shared values into a held edit matches the filter in the
+ * language of that edit, and a take or a discard asks the update again under
+ * the entry's lock, so a change after the first ask cannot slip past it.
+ *
  * @module domains/collections/__tests__/write-rule-filter-limits-rest-writes.integration.test
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   grantTo,
@@ -29,9 +33,12 @@ import { resetSessionStandingForTests } from "../../../auth/session/session-stan
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import { VersionsRepository } from "../../versions/versions-repository";
 
 // Integration files share fixed system-table names, so this file keeps its
 // own collection slugs.
@@ -162,6 +169,41 @@ async function rest(
   return res.status;
 }
 
+/**
+ * Gives entry `id` of `collection` to `OTHER` the moment a transaction locks
+ * its row, in that transaction: what a concurrent write committed just before
+ * the lock leaves behind. A check made before the lock still sees the
+ * author's entry; only one made under it sees another's. Counts the times it
+ * gave the entry away, so a test can tell the lock was reached.
+ */
+function giveAwayAtLock(
+  t: TestNextly,
+  collection: string,
+  id: string
+): { given: number } {
+  const table = `dc_${collection}`;
+  const gave = { given: 0 };
+  const transaction = t.adapter.transaction.bind(t.adapter);
+  vi.spyOn(t.adapter, "transaction").mockImplementation((callback, options) =>
+    transaction(tx => {
+      const lockRow = tx.lockRow.bind(tx);
+      tx.lockRow = async (locked, rowId) => {
+        await lockRow(locked, rowId);
+        if (locked === table && String(rowId) === id) {
+          await tx.update(
+            table,
+            { owner: OTHER },
+            { and: [{ column: "id", op: "=", value: id }] }
+          );
+          gave.given++;
+        }
+      };
+      return callback(tx);
+    }, options)
+  );
+  return gave;
+}
+
 const entry = (collection: string, id: string) => [
   "collections",
   collection,
@@ -217,50 +259,56 @@ describe("a REST update or delete whose rule answers a filter", () => {
   });
 });
 
-describe("a REST update in one language whose rule answers a filter", () => {
-  // The route judges the write in the languages it writes, which hold the one
-  // the update writes, so its kept filter answers the update's question.
-  const LOCALIZED = "restfilter_localized_posts";
+// A write in one language reads and writes that language's row, so it runs
+// on each database this run reaches.
+describe.each(getConfiguredTestDialects())(
+  "a REST update in one language whose rule answers a filter (%s)",
+  dialect => {
+    // The route judges the write in the languages it writes, which hold the one
+    // the update writes, so its kept filter answers the update's question.
+    const LOCALIZED = "restfilter_localized_posts";
 
-  it("updates the author's own entry in German, and refuses another's", async () => {
-    current = await createTestNextly({
-      localization: { locales: ["en", "de"], defaultLocale: "en" },
-      collections: [
-        defineCollection({
-          slug: LOCALIZED,
-          localized: true,
-          status: true,
-          access: { read: () => true, update: ownEntries },
-          fields: [
-            text({ name: "title" }),
-            text({ name: "owner", localized: false }),
-          ],
-        }),
-      ],
+    it("updates the author's own entry in German, and refuses another's", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: LOCALIZED,
+            localized: true,
+            status: true,
+            access: { read: () => true, update: ownEntries },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "owner", localized: false }),
+            ],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [LOCALIZED]);
+      await grantTo(t, AUTHOR, "update", [LOCALIZED]);
+      const { own, others } = await seed(t, LOCALIZED);
+
+      expect(
+        await rest(
+          "PATCH",
+          entry(LOCALIZED, own),
+          { title: "deutsch" },
+          "?locale=de"
+        )
+      ).toBe(200);
+      expect(
+        await rest(
+          "PATCH",
+          entry(LOCALIZED, others),
+          { title: "deutsch" },
+          "?locale=de"
+        )
+      ).toBe(403);
     });
-    const t = current;
-    await userWhoMay(t, AUTHOR, "read", [LOCALIZED]);
-    await grantTo(t, AUTHOR, "update", [LOCALIZED]);
-    const { own, others } = await seed(t, LOCALIZED);
-
-    expect(
-      await rest(
-        "PATCH",
-        entry(LOCALIZED, own),
-        { title: "deutsch" },
-        "?locale=de"
-      )
-    ).toBe(200);
-    expect(
-      await rest(
-        "PATCH",
-        entry(LOCALIZED, others),
-        { title: "deutsch" },
-        "?locale=de"
-      )
-    ).toBe(403);
-  });
-});
+  }
+);
 
 describe("an editor's write through an entry's versions whose update rule answers a filter", () => {
   it("restores a version of the author's own entry, and refuses another's", async () => {
@@ -377,3 +425,345 @@ describe("an editor's write through an entry's versions whose update rule answer
     ).toBe(403);
   });
 });
+
+// Each language's row and the entry's lock: on each database this run
+// reaches.
+describe.each(getConfiguredTestDialects())(
+  "an editor's write through an entry's versions, in its language and under its lock (%s)",
+  dialect => {
+    const LANGUAGES = { locales: ["en", "de"], defaultLocale: "en" };
+    // `owner` is translated, so an entry can be the author's in one language
+    // and another's in the other.
+    const translatedOwner = [text({ name: "title" }), text({ name: "owner" })];
+
+    /** A published entry the author owns in English and `OTHER` owns in German, with a held edit in German. */
+    async function ownedInEnglishOnly(
+      t: TestNextly,
+      collection: string
+    ): Promise<string> {
+      const made = await t.nextly.create({
+        collection,
+        data: { title: "mine", owner: AUTHOR, status: "published" },
+      });
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection,
+        id,
+        locale: "de",
+        data: { title: "meins", owner: OTHER, status: "published" },
+      } as never);
+      await t.nextly.update({
+        collection,
+        id,
+        locale: "de",
+        data: { title: "entwurf" },
+      } as never);
+      return id;
+    }
+
+    it("matches a take of the live values against the filter in the held edit's language", async () => {
+      const SLUG = "restfilter_take_language";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const id = await ownedInEnglishOnly(t, SLUG);
+
+      // The German edit is another's in German: refused, though the entry is
+      // the author's in English.
+      expect(
+        await rest(
+          "POST",
+          [...entry(SLUG, id), "versions", "working-draft", "take-live"],
+          {},
+          "?locale=de"
+        )
+      ).toBe(403);
+    });
+
+    it("matches an autosave against the filter in the language it saves", async () => {
+      const SLUG = "restfilter_autosave_language";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const id = await ownedInEnglishOnly(t, SLUG);
+      const autosave = (query: string) =>
+        rest(
+          "PUT",
+          [...entry(SLUG, id), "versions", "autosave"],
+          { title: "typed" },
+          query
+        );
+
+      // The author's in English, another's in German.
+      expect(await autosave("?locale=en")).toBe(200);
+      expect(await autosave("?locale=de")).toBe(403);
+    });
+
+    it("matches a discard of the held edit against the filter in its language", async () => {
+      const SLUG = "restfilter_discard_language";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      // Another's in English, the author's in German, with a held edit in each.
+      const made = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "theirs", owner: OTHER, status: "published" },
+      });
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "meins", owner: AUTHOR, status: "published" },
+      } as never);
+      for (const locale of ["en", "de"]) {
+        await t.nextly.update({
+          collection: SLUG,
+          id,
+          locale,
+          data: { title: "held" },
+        } as never);
+      }
+      const discard = (query: string) =>
+        rest(
+          "DELETE",
+          [...entry(SLUG, id), "versions", "working-draft"],
+          undefined,
+          query
+        );
+
+      expect(await discard("?locale=en")).toBe(403);
+      expect(await discard("?locale=de")).toBe(200);
+    });
+
+    it("takes the live values into a held edit the filter matches in its language", async () => {
+      const SLUG = "restfilter_take_matched";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const made = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "mine", owner: AUTHOR, status: "published" },
+      });
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "meins", owner: AUTHOR, status: "published" },
+      } as never);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "entwurf" },
+      } as never);
+
+      expect(
+        await rest(
+          "POST",
+          [...entry(SLUG, id), "versions", "working-draft", "take-live"],
+          {},
+          "?locale=de"
+        )
+      ).toBe(200);
+    });
+
+    it("restores a version the filter matches in the version's language", async () => {
+      const SLUG = "restfilter_restore_matched";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const made = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "mine", owner: AUTHOR, status: "published" },
+      });
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "meins", owner: AUTHOR, status: "published" },
+      } as never);
+      const german = (
+        await new VersionsRepository(t.adapter).newestVersionNoByLocale(
+          { scopeKind: "collection", scopeSlug: SLUG, entryId: id },
+          ["de"]
+        )
+      ).get("de");
+      expect(german).toBeDefined();
+
+      expect(
+        await rest("POST", [
+          ...entry(SLUG, id),
+          "versions",
+          String(german),
+          "restore",
+        ])
+      ).toBe(200);
+    });
+
+    it("matches a take of the live values again under the entry's lock", async () => {
+      const SLUG = "restfilter_take_locked";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "owner", localized: false }),
+            ],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const made = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "mine", owner: AUTHOR, status: "published" },
+      });
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "entwurf" },
+      } as never);
+      const entries = t
+        .getService("collectionsHandler")
+        .getEntryService() as CollectionEntryService;
+      const gave = giveAwayAtLock(t, SLUG, id);
+
+      const taken = await entries.takeLiveSharedValues({
+        collectionName: SLUG,
+        entryId: id,
+        locale: "de",
+        user: { id: AUTHOR },
+        overrideAccess: false,
+      });
+
+      expect(gave.given).toBe(1);
+      expect(taken.success).toBe(false);
+      expect(taken.statusCode).toBe(403);
+    });
+
+    it("matches a discard of the held edit again under the entry's lock", async () => {
+      const SLUG = "restfilter_discard_locked";
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: [text({ name: "title" }), text({ name: "owner" })],
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const { own } = await seed(t, SLUG, "published");
+      await t.nextly.update({
+        collection: SLUG,
+        id: own,
+        data: { title: "held" },
+      } as never);
+      const gave = giveAwayAtLock(t, SLUG, own);
+
+      const status = await rest("DELETE", [
+        ...entry(SLUG, own),
+        "versions",
+        "working-draft",
+      ]);
+
+      expect(gave.given).toBe(1);
+      expect(status).toBe(403);
+      // The held edit is still there to publish or discard.
+      expect(
+        await new VersionsRepository(t.adapter).findWorkingDraft(
+          { scopeKind: "collection", scopeSlug: SLUG, entryId: own },
+          null
+        )
+      ).toBeDefined();
+    });
+  }
+);

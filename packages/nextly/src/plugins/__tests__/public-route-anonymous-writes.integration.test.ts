@@ -1,14 +1,17 @@
 /**
- * A public plugin route writing for an anonymous visitor needs a rule that
- * allows the write.
+ * A public plugin route writing for an anonymous visitor is judged by the
+ * Public role.
  *
  * `public: true` waives the route's own authentication, and `{ as: "public" }`
- * keeps the collection's rules in force for a caller with no session. With no
- * rule naming a create, an update or a delete, that write is refused and the
- * table is left as it was; where the collection's author wrote a rule that
- * answers `true`, as a public form's submissions do with `create`, the write
- * goes through. A visitor's read keeps the public default, and the admin's
- * REST route still asks an anonymous caller to sign in before anything else.
+ * keeps access in force for a caller with no session: the visitor holds what
+ * the Public role grants, and a rule only narrows that. Boot grants Public no
+ * write, so a create, an update or a delete is refused and the table is left
+ * as it was, even where the collection's author wrote a rule that answers
+ * `true`, as a public form's submissions do with `create`; once a site admin
+ * grants Public that create, the write goes through. A visitor's read of a
+ * collection with no read rule is refused until Public holds the read, and
+ * the admin's REST route still asks an anonymous caller to sign in before
+ * anything else.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -20,6 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../config";
 import { NextlyError } from "../../errors/nextly-error";
+import { grantPublic } from "../../__tests__/helpers/public-role";
 import { createDynamicHandlers } from "../../routeHandler";
 import { definePlugin } from "../plugin-context";
 import type { PluginRouteContext } from "../routes/route-types";
@@ -124,6 +128,10 @@ describe.each(getConfiguredTestDialects())(
     beforeAll(async () => {
       t = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        // The boot's seeding, which makes the Public role a visitor is judged
+        // by, with what boot grants it: no write here, and no read of a
+        // collection without a read rule.
+        seedPublic: true,
         plugins: [probe],
         collections: [
           defineCollection({ slug: OPEN, fields: [text({ name: "title" })] }),
@@ -175,9 +183,16 @@ describe.each(getConfiguredTestDialects())(
       expect(await titles(OPEN)).toContain("kept");
     });
 
-    it("allows a create where the collection's rule answers true, and the entry is stored", async () => {
-      // The control for the refusals above: the same route and the same
-      // anonymous caller, so only the rule differs.
+    it("allows a create where the collection's rule answers true once Public holds it, and the entry is stored", async () => {
+      // A rule answering `true` only narrows the permission: until Public
+      // holds the create, which boot never grants, the visitor is refused and
+      // nothing is stored.
+      expect(await ask(FORM, "create")).toEqual({ ok: false, status: 403 });
+      expect(await titles(FORM)).not.toContain("from a visitor");
+      // Granted as a site admin would grant it. The control for the refusals
+      // above: the same route and the same anonymous caller, so only what
+      // Public holds differs.
+      await grantPublic(t, [`create-${FORM}`]);
       expect(await ask(FORM, "create")).toEqual({ ok: true });
       expect(await titles(FORM)).toContain("from a visitor");
     });
@@ -189,14 +204,16 @@ describe.each(getConfiguredTestDialects())(
       expect(await titles(FORM)).toContain("submitted");
     });
 
-    it("keeps a visitor's read on the public default", async () => {
+    it("judges a visitor's read by the Public role, which boot grants no read where no read rule answers true", async () => {
       const id = await seeded(OPEN, "readable");
-      const found = await t.nextly.findByID({
-        collection: OPEN,
-        id,
-        overrideAccess: false,
-      });
-      expect(found?.title).toBe("readable");
+      const read = () =>
+        t.nextly.findByID({ collection: OPEN, id, overrideAccess: false });
+      // With no read rule there is no public default: the visitor is refused.
+      await expect(read()).rejects.toMatchObject({ statusCode: 403 });
+      // The control: the same read once a site admin grants Public it, so
+      // the refusal above is Public's missing read and nothing else.
+      await grantPublic(t, [`read-${OPEN}`]);
+      expect((await read())?.title).toBe("readable");
     });
 
     it("lets the plugin acting as itself write a rule-less collection through every write method", async () => {

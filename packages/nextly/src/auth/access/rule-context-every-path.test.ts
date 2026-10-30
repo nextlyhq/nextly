@@ -40,6 +40,8 @@ vi.mock("../../services/lib/permissions", async importOriginal => ({
   hasPermission: vi.fn(async () => true),
   listRoleSlugsForUser: vi.fn(async () => ["editor"]),
   listEffectiveGrants: vi.fn(async () => GRANTS),
+  // What the Public role grants a visitor: nothing, unless a test says so.
+  listPublicGrants: vi.fn(async () => [] as GrantedPermission[]),
   listEffectivePermissions: vi.fn(async () =>
     GRANTS.map(grant => `${grant.resource}:${grant.action}`)
   ),
@@ -49,6 +51,7 @@ import { RBACAccessControlService } from "../../domains/auth/services/rbac-acces
 import type { NextlyContext } from "../../direct-api/namespaces/context";
 import { createAccessNamespace } from "../../direct-api/namespaces/rbac";
 import { makePrincipal } from "../../plugins/principals/principal";
+import { listPublicGrants } from "../../services/lib/permissions";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
@@ -274,7 +277,8 @@ describe("a field rule", () => {
     expect(seen[0].target).toEqual({ kind: "component", slug: "cards" });
   });
 
-  it("hands an anonymous reader no user and no permissions", async () => {
+  it("hands an anonymous reader no user and the Public role's permissions", async () => {
+    vi.mocked(listPublicGrants).mockResolvedValueOnce([GRANTS[0]]);
     const seen: AccessRuleContext[] = [];
     gate(ctx => {
       seen.push(ctx);
@@ -287,6 +291,6 @@ describe("a field rule", () => {
     });
     expect(seen[0].user).toBeNull();
     expect(seen[0].req.user).toBeUndefined();
-    expect([...seen[0].permissions]).toEqual([]);
+    expect([...seen[0].permissions]).toEqual(["read-posts"]);
   });
 });

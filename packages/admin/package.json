@@ -13,6 +13,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.mjs",
+      "default": "./dist/testing.mjs"
+    },
     "./lib/component-registry": {
       "types": "./dist/lib/plugins/component-registry.d.ts",
       "import": "./dist/lib/plugins/component-registry.mjs",

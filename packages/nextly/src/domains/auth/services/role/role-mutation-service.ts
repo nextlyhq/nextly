@@ -14,7 +14,7 @@ import type {
 import {
   batches,
   storedAsPlainLocked,
-} from "../../../../auth/access/manage-bridge";
+} from "../../../../auth/access/retired-manage-permissions";
 import { toDbError } from "../../../../database/errors";
 import { resolveRelations } from "../../../../database/resolve-relations";
 import { NextlyError } from "../../../../errors/nextly-error";
