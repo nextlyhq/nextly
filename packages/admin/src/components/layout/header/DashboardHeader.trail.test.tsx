@@ -20,6 +20,15 @@ import {
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({ plugins: [] }),
+  useBrandingStatus: () => ({
+    isPending: false,
+    isUnavailable: false,
+    isBrandingUnavailable: false,
+  }),
+}));
+// Answered, so the controls beside the menu are settled and shown.
+vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
+  useCurrentUserPermissions: () => ({ isLoading: false }),
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({ user: null }),
@@ -170,6 +179,31 @@ describe("the top bar's trail", () => {
     expect(within(toList).getByText(long).className).toMatch(
       /(^|\s)truncate(\s|$)/
     );
+  });
+
+  it("takes only the width the controls leave, in the row that holds them", () => {
+    // jsdom lays nothing out, so the flex roles that decide the widths are read instead.
+    const long = "Quarterly investor relations announcements";
+    renderHeader(
+      <Editor trail={{ ...ENTRY, pluralLabel: long }} title="Spring is here" />
+    );
+    const slot = trail().parentElement!;
+    // Grows into the free width from a basis of none, and may shrink below its content: a long
+    // label is cut short within the space left, never wider than it.
+    expect(slot.className).toMatch(/(^|\s)flex-1(\s|$)/);
+    expect(slot.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+    expect(slot.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+    // The controls follow it in the same row, which spans the bar, so their arrival takes width
+    // from the trail's right end rather than moving the row.
+    const row = slot.parentElement!;
+    const theme = screen.getByRole("button", { name: "Choose theme" });
+    expect(row.contains(theme)).toBe(true);
+    expect(slot.contains(theme)).toBe(false);
+    expect(
+      slot.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(row.parentElement).toBe(screen.getByRole("banner"));
+    expect(row.className).toMatch(/(^|\s)flex-1(\s|$)/);
   });
 
   it("draws nothing where no document is open", () => {
