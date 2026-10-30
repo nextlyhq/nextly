@@ -11,11 +11,22 @@
  */
 import { NextlyError } from "../../errors/nextly-error";
 
-const state = { enabled: false };
+const state = { enabled: false, chosen: false };
 
 /** Publish, at boot, whether every translatable field is kept per language from the start. */
 export function setPerLanguageStorage(enabled: boolean): void {
   state.enabled = enabled;
+  state.chosen = true;
+}
+
+/**
+ * Adopt a configuration's choice in a process that reads its config without booting a site, such
+ * as a CLI command, whose DDL must lay tables out as the site does. A process that already chose,
+ * at boot, keeps its choice: a running site's reload reads the config again, and it is the reload
+ * that decides whether a changed choice is refused.
+ */
+export function adoptPerLanguageStorage(enabled: boolean | undefined): void {
+  if (!state.chosen) setPerLanguageStorage(enabled === true);
 }
 
 /** Whether every translatable field is kept per language from the start. Defaults to false. */

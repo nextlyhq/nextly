@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -29,6 +29,23 @@ describe("per-language storage", () => {
     expect(storesPerLanguage({ localized: false })).toBe(true);
     expect(storesPerLanguage({})).toBe(true);
     expect(storesPerLanguage(undefined)).toBe(true);
+  });
+
+  it("adopts a config's choice in a process that has not chosen, and keeps a boot's choice", async () => {
+    // A fresh instance of the module: this file's other cases have already chosen.
+    vi.resetModules();
+    const fresh = await import("../per-language-storage");
+    fresh.adoptPerLanguageStorage(true);
+    expect(fresh.perLanguageStorageEnabled()).toBe(true);
+    // Once chosen, a later config read leaves it, as a running site's reload does.
+    fresh.adoptPerLanguageStorage(false);
+    expect(fresh.perLanguageStorageEnabled()).toBe(true);
+
+    vi.resetModules();
+    const booted = await import("../per-language-storage");
+    booted.setPerLanguageStorage(false);
+    booted.adoptPerLanguageStorage(true);
+    expect(booted.perLanguageStorageEnabled()).toBe(false);
   });
 
   it("refuses a reloaded config that turns it on or off, and accepts one that keeps it", () => {

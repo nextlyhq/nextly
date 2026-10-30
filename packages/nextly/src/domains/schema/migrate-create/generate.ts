@@ -64,6 +64,7 @@ import type {
   LocalizedColumnSpec,
 } from "../../i18n/migration/types";
 import { writeCompanionMigrationFile } from "../../i18n/migration/write-migration-file";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -785,7 +786,7 @@ function planTranslatedUniqueMigrations(
   plan: TranslatedUniquePlan;
 }[] {
   return entities.flatMap(({ entity: c, kind }) => {
-    if (c.localized !== true) return [];
+    if (!storesPerLanguage(c)) return [];
     const derive = {
       builtBy: "codeFirst" as const,
       slug: c.slug,
@@ -867,7 +868,7 @@ function planCompanionMigrations(
     // disable. A pre-marker snapshot records no marker, so it reads as unknown and no
     // transition is emitted — that self-heals as soon as one migrate:create runs while the
     // entity is still localized.
-    if (c.localized !== true) {
+    if (!storesPerLanguage(c)) {
       const prevMain = previousSnapshot.tables.find(
         t => t.name === (spec?.mainTable ?? c.tableName)
       );
@@ -1175,7 +1176,7 @@ function fieldsLeavingTranslationIn(
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect
 ): LeavingField[] {
-  if (c.localized !== true) return [];
+  if (!storesPerLanguage(c)) return [];
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
   const recorded =
     prevMain?.localized === true ? prevMain.localizedColumns : undefined;
@@ -1209,7 +1210,7 @@ function fieldsJoiningTranslationIn(
   dialect: SupportedDialect,
   companionPresent: boolean
 ): LeavingField[] {
-  if (c.localized !== true) return [];
+  if (!storesPerLanguage(c)) return [];
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
   if (prevMain?.localized !== true) return [];
   if (!prevMain.localizedColumns && !companionPresent) return [];
@@ -1382,7 +1383,7 @@ function warnOfRenamesIntoShared(
   dialect: SupportedDialect,
   warn: (message: string) => void
 ): void {
-  if (c.localized !== true) return;
+  if (!storesPerLanguage(c)) return;
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
   if (prevMain?.localized !== true) return;
   const recorded = prevMain.localizedColumns ?? [];
@@ -1519,7 +1520,7 @@ function withLocalizedMarker(
   entity: MinimalConfigEntity,
   dialect: SupportedDialect
 ): TableSpec {
-  if (entity.localized !== true) return table;
+  if (!storesPerLanguage(entity)) return table;
   // `defaultLocale` does not affect column names, so any value works here.
   const spec = deriveCompanionSpec({
     builtBy: "codeFirst" as const,
@@ -1622,7 +1623,7 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
           builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
-          localized: c.localized === true,
+          localized: storesPerLanguage(c),
           ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
@@ -1640,7 +1641,7 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromFields(c.tableName, c.fields, dialect, {
           builtBy: "codeFirst" as const,
           hasStatus: c.status === true,
-          localized: c.localized === true,
+          localized: storesPerLanguage(c),
           ...(c.indexes !== undefined ? { indexes: c.indexes } : {}),
         }),
         c,
@@ -1660,7 +1661,7 @@ export function buildDesiredSnapshotFromConfig(
       withLocalizedMarker(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
           builtBy: "codeFirst" as const,
-          localized: c.localized === true,
+          localized: storesPerLanguage(c),
         }),
         c,
         dialect
