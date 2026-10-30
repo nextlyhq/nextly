@@ -16,7 +16,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   grantTo,
@@ -347,6 +347,49 @@ describe.each(getConfiguredTestDialects())(
         expect(
           await remaining(t, NOT_GERMAN, [withGerman, englishOnly])
         ).toEqual([true, false]);
+      });
+    });
+
+    describe("a caller who may not delete", () => {
+      it("is refused before anything about the entry's languages is read", async () => {
+        const t = await boot(dialect);
+        const { withGerman } = await seed(t, ANY_LANGUAGE);
+        const READER = "eachlang-reader";
+        await userWhoMay(t, READER, "read", [ANY_LANGUAGE]);
+        // The pending rows cannot be read: a delete that read them before its
+        // gate would answer this failure rather than the refusal.
+        const select = t.adapter.select.bind(t.adapter);
+        vi.spyOn(t.adapter, "select").mockImplementation(((
+          table: string,
+          ...rest: unknown[]
+        ) =>
+          table === "nextly_versions"
+            ? Promise.reject(new Error("versions unreadable"))
+            : (select as (...args: unknown[]) => unknown)(
+                table,
+                ...rest
+              )) as never);
+        const reader = { overrideAccess: false, user: { id: READER } } as const;
+
+        expect(
+          await refused(() =>
+            t.nextly.delete({
+              collection: ANY_LANGUAGE,
+              id: withGerman,
+              ...reader,
+            })
+          )
+        ).toBe(true);
+        const batch = await entriesOf(t).deleteEntries(
+          { collectionName: ANY_LANGUAGE, user: { id: READER } } as never,
+          [withGerman]
+        );
+        expect(batch.failed).toBe(1);
+        expect(JSON.stringify(batch.errors)).not.toContain(
+          "versions unreadable"
+        );
+        vi.restoreAllMocks();
+        expect(await stillThere(t, ANY_LANGUAGE, withGerman)).toBe(true);
       });
     });
 
