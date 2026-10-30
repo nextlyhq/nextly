@@ -11,14 +11,20 @@
  * - **Warm:** back on the dashboard within the same session, its arrangement and answers cached.
  *   Nothing on the dashboard moves at all.
  *
- * What is asserted is what the DASHBOARD moves: a shift counts as the dashboard's when one of the
- * elements it moved lies inside the dashboard's container. The admin shell around it (the header,
- * the sidebar and its panels) moves too, and that is reported beside it, not hidden, but it is
- * not what the dashboard promises to hold still.
+ * What is asserted for the dashboard is what the DASHBOARD moves: a shift counts as the
+ * dashboard's when one of the elements it moved lies inside the dashboard's container. The admin
+ * shell around it (the header, the sidebar and its panels) is everything else, reported beside it.
  *
- * Measured on the e2e dev server, which compiles on first request: the first visit warms the
- * route, and only the second is measured. Each value is attached to the report, so a change in
- * it can be quoted with its conditions.
+ * The shell holds its own place on a cold load: its navigation and the header's account controls
+ * are drawn where they settle, so no element of the shell moves at all, in a shift of its own or
+ * in one that moved the dashboard too. That is asserted only against a production build
+ * (`E2E_SERVER=production`, how CI runs this suite), because when the shell's pieces arrive
+ * depends on bundling and loading order, which `next dev` compiling on request does not share
+ * with what ships.
+ *
+ * On the e2e dev server, which compiles on first request, the first visit warms the route and
+ * only the second is measured; the production server is measured the same way. Each value is
+ * attached to the report, so a change in it can be quoted with its conditions.
  *
  * @module tests/dashboard-layout-shift.spec
  */
@@ -34,6 +40,9 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.heavy] });
 /** The cold-load ceiling. */
 const MAX_COLD_SHIFT = 0.1;
 
+/** Whether the server is a production build, where the shell's share is asserted. */
+const PRODUCTION_SERVER = process.env.E2E_SERVER === "production";
+
 const WIDTHS = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "phone", width: 390, height: 844 },
@@ -46,6 +55,15 @@ interface Shift {
   mixed: number;
   /** Entries that moved only the shell. */
   shell: number;
+  /**
+   * Shell elements that moved, counted in EVERY entry: one that moved only the shell, and one
+   * that moved it beside the dashboard. An entry's value cannot be split between the elements it
+   * moved, but the elements can be told apart, so this, not the shell's share, says whether the
+   * shell moved at all.
+   */
+  shellMoves: number;
+  /** What each shell element moved, from where to where, so a red names the element. */
+  shellSources: string[];
 }
 
 /**
@@ -56,14 +74,41 @@ interface Shift {
  */
 async function recordShifts(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const record = { dashboard: 0, mixed: 0, shell: 0 };
+    const record = {
+      dashboard: 0,
+      mixed: 0,
+      shell: 0,
+      shellMoves: 0,
+      shellSources: [] as string[],
+    };
     (window as unknown as { __shift: typeof record }).__shift = record;
+    // An element by its tag and accessible name, and its box before and after the move.
+    const describe = (source: {
+      node: Node | null;
+      previousRect: DOMRectReadOnly;
+      currentRect: DOMRectReadOnly;
+    }): string => {
+      const node = source.node;
+      const label =
+        node instanceof Element ? node.getAttribute("aria-label") : null;
+      const name =
+        node instanceof Element
+          ? `${node.tagName.toLowerCase()}${label ? `[${label}]` : ""}`
+          : (node?.nodeName ?? "removed");
+      const box = (rect: DOMRectReadOnly) =>
+        `${Math.round(rect.x)},${Math.round(rect.y)} ${Math.round(rect.width)}x${Math.round(rect.height)}`;
+      return `${name} ${box(source.previousRect)} -> ${box(source.currentRect)}`;
+    };
     new PerformanceObserver(list => {
       for (const entry of list.getEntries() as PerformanceEntry[] &
         {
           value: number;
           hadRecentInput: boolean;
-          sources: { node: Node | null }[];
+          sources: {
+            node: Node | null;
+            previousRect: DOMRectReadOnly;
+            currentRect: DOMRectReadOnly;
+          }[];
         }[]) {
         if (entry.hadRecentInput) continue;
         // An entry's value cannot be split between the elements it moved, so one that moved
@@ -81,15 +126,24 @@ async function recordShifts(page: Page): Promise<void> {
             ? "mixed"
             : "shell";
         record[kind] += entry.value;
+        // The shell's elements in this entry, whichever share its value went to.
+        const shellMoved = entry.sources.filter((_, index) => !inside[index]);
+        record.shellMoves += shellMoved.length;
+        if (shellMoved.length > 0) {
+          record.shellSources.push(
+            `${kind} ${entry.value.toFixed(4)}: ${shellMoved.map(describe).join("; ")}`
+          );
+        }
       }
     }).observe({ type: "layout-shift", buffered: true });
   });
 }
 
 const shiftSoFar = (page: Page): Promise<Shift> =>
-  page.evaluate(() => ({
-    ...(window as unknown as { __shift: Shift }).__shift,
-  }));
+  page.evaluate(() => {
+    const record = (window as unknown as { __shift: Shift }).__shift;
+    return { ...record, shellSources: [...record.shellSources] };
+  });
 
 const forgetShifts = (page: Page) =>
   page.evaluate(() => {
@@ -97,22 +151,34 @@ const forgetShifts = (page: Page) =>
     record.dashboard = 0;
     record.mixed = 0;
     record.shell = 0;
+    record.shellMoves = 0;
+    record.shellSources.length = 0;
   });
 
-/** Writes both figures where the report and the log can be read. */
+/** Writes the figures, and what the shell moved, where the report and the log can be read. */
 function report(
   info: { annotations: { type: string; description?: string }[] },
   label: string,
   shift: Shift
 ): void {
-  const line = `${label}: dashboard ${shift.dashboard.toFixed(4)}, mixed ${shift.mixed.toFixed(4)}, shell ${shift.shell.toFixed(4)}`;
+  const line = `${label}: dashboard ${shift.dashboard.toFixed(4)}, mixed ${shift.mixed.toFixed(4)}, shell ${shift.shell.toFixed(4)}, shell elements moved ${shift.shellMoves}`;
   info.annotations.push({ type: "layout-shift", description: line });
   console.log(`LAYOUT-SHIFT ${line}`);
+  for (const source of shift.shellSources) {
+    console.log(`LAYOUT-SHIFT   shell ${source}`);
+  }
 }
 
 /**
- * Every card drawn and none still loading, held for a second: the end of the window. A second
- * of stillness, because a batch can settle and a later one start moments after.
+ * Every card drawn and none still loading, and the shell's own answers in, held for a second: the
+ * end of the window. A second of stillness, because a batch can settle and a later one start
+ * moments after.
+ *
+ * The shell's answers (the workspace, the permissions, the collections and Singles) are waited on
+ * apart from the cards', since nothing ties when they arrive to when the cards settle: one that
+ * arrives later than the second of stillness would otherwise move the shell after the window
+ * closed. The header's controls row and the sidebar's rail each mark themselves
+ * `data-shell-answers="pending"` until the answers they draw from are in.
  */
 async function waitForSettled(page: Page): Promise<void> {
   const cells = page.locator('[data-testid^="widget-cell-"]');
@@ -125,8 +191,16 @@ async function waitForSettled(page: Page): Promise<void> {
     'main [aria-busy="true"], main [data-slot="skeleton"], main [data-testid="widget-grid-loading"]'
   );
   await expect(loading).toHaveCount(0, { timeout: 60_000 });
+  const shellPending = page.locator('[data-shell-answers="pending"]');
+  await expect(shellPending).toHaveCount(0, { timeout: 60_000 });
+  // The positive control: the shell does mark itself, so no pending region means its answers are
+  // in rather than that nothing is marked.
+  await expect(
+    page.locator('[data-shell-answers="settled"]').first()
+  ).toBeAttached();
   await page.waitForTimeout(1_000);
   await expect(loading).toHaveCount(0);
+  await expect(shellPending).toHaveCount(0);
 }
 
 /** Follows the link at `href` the way the app does, without it counting as a reader's input. */
@@ -147,7 +221,7 @@ for (const size of WIDTHS) {
     test.setTimeout(240_000);
     await page.setViewportSize({ width: size.width, height: size.height });
     await recordShifts(page);
-    // Warm the route on the dev server, then measure a fresh load of it.
+    // Warm the route (on the dev server, its compile), then measure a fresh load of it.
     await gotoAdmin(page, "/");
     await waitForSettled(page);
     await page.reload();
@@ -155,6 +229,16 @@ for (const size of WIDTHS) {
     const shift = await shiftSoFar(page);
     report(info, `cold ${size.name} ${size.width}px`, shift);
     expect(shift.dashboard + shift.mixed).toBeLessThan(MAX_COLD_SHIFT);
+    if (PRODUCTION_SERVER) {
+      // No shell element moved: the shell's regions are drawn at the size they settle at, so the
+      // only way for this to go red is for something already painted to move. Counted by element
+      // rather than read from the shell's share, which leaves out a shift that moved the
+      // dashboard in the same frame.
+      expect(
+        shift.shellMoves,
+        `the shell moved: ${shift.shellSources.join(" | ")}`
+      ).toBe(0);
+    }
   });
 
   test(`does not move at all on a warm return (${size.name})`, async ({

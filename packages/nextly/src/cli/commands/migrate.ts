@@ -46,6 +46,10 @@ import {
 } from "../../domains/i18n/migration/migration-intent";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
+import {
+  filesWithinStep,
+  stepContinuedNotice,
+} from "../../domains/i18n/migration/step-windows";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -837,18 +841,23 @@ export async function previewMigrate(args: {
   const pendingModules = modules.filter(module => !module.recorded);
 
   const appStep = appStepAfter(args.step, pendingModules.length);
+  // The files a real run with this step applies, a move out of translation run whole included.
   const pendingFiles =
     appStep === 0
       ? []
-      : (
-          await findPendingFiles(
-            adapter,
-            db,
-            dialect,
-            args.migrationsDir,
-            logger
-          )
-        ).slice(0, appStep);
+      : filesWithinStep(
+          (
+            await listMigrationFiles(
+              adapter,
+              db,
+              dialect,
+              args.migrationsDir,
+              logger
+            )
+          ).map(({ file, applied }) => ({ file, done: applied })),
+          appStep,
+          "up"
+        ).run;
 
   logger.newline();
   logger.keyValue(
@@ -1687,19 +1696,74 @@ export async function findPendingFiles(
   migrationsDir: string,
   logger: CommandContext["logger"]
 ): Promise<ParsedMigration[]> {
+  return (
+    await listMigrationFiles(adapter, db, dialect, migrationsDir, logger)
+  ).flatMap(({ file, applied }) => (applied ? [] : [file]));
+}
+
+/** The app's migration files in run order, each with whether the ledger records it applied. */
+async function listMigrationFiles(
+  adapter: CLIDatabaseAdapter,
+  db: unknown,
+  dialect: SupportedDialect,
+  migrationsDir: string,
+  logger: CommandContext["logger"]
+): Promise<{ file: ParsedMigration; applied: boolean }[]> {
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
   const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
-  if (!hasLedger) return all;
+  if (!hasLedger) return all.map(file => ({ file, applied: false }));
+  return withApplied(all, new SchemaEventsRepository(db, dialect));
+}
 
-  const repo = new SchemaEventsRepository(db, dialect);
-  const pending: ParsedMigration[] = [];
-  for (const m of all) {
-    if (!(await repo.isFileApplied(`${m.name}.sql`))) pending.push(m);
+/** `files` in run order, each with whether the ledger records it applied. */
+async function withApplied(
+  files: readonly ParsedMigration[],
+  repo: SchemaEventsRepository
+): Promise<{ file: ParsedMigration; applied: boolean }[]> {
+  const listed: { file: ParsedMigration; applied: boolean }[] = [];
+  for (const file of files) {
+    listed.push({
+      file,
+      applied: await repo.isFileApplied(`${file.name}.sql`),
+    });
   }
-  return pending;
+  return listed;
+}
+
+/**
+ * What a run with `step` does with `listed`: the files the ledger records applied (`done`), the
+ * files it applies (`runs`, as `filesWithinStep` reads them, so the dry run lists the same), and
+ * the file it goes on to past its step inside a move (`continuesAt`), with what it says there. A
+ * step of zero or less reads as no limit here, as it always has; to `filesWithinStep` it would
+ * mean no file at all.
+ */
+function fileRunPlan(
+  listed: readonly { file: ParsedMigration; applied: boolean }[],
+  step: number | undefined
+): {
+  done: ReadonlySet<ParsedMigration>;
+  runs: ReadonlySet<ParsedMigration>;
+  continuesAt: ParsedMigration | undefined;
+  notice: string;
+} {
+  const within = filesWithinStep(
+    listed.map(({ file, applied }) => ({ file, done: applied })),
+    step !== undefined && step > 0 ? step : undefined,
+    "up"
+  );
+  return {
+    done: new Set(listed.filter(l => l.applied).map(l => l.file)),
+    runs: new Set(within.run),
+    // Past the budget only inside a move, so this is set exactly when `continued` is.
+    continuesAt: within.run[within.budget],
+    notice:
+      within.continued === undefined
+        ? ""
+        : stepContinuedNotice(within.continued),
+  };
 }
 
 async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
@@ -1916,15 +1980,14 @@ export async function runFileMigrations(args: {
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
   let beforeContributions: Record<string, ContributedElements> = {};
   let applied = 0;
-  let remaining =
-    args.step && args.step > 0 ? args.step : Number.POSITIVE_INFINITY;
+  const plan = fileRunPlan(await withApplied(all, repo), args.step);
 
   for (const m of all) {
     const filename = `${m.name}.sql`;
     const targetFile = await loadTargetSnapshot(metaDir, m.name);
     const target = targetFile?.snapshot ?? null;
 
-    if (await repo.isFileApplied(filename)) {
+    if (plan.done.has(m)) {
       // Advance the baseline past applied files.
       if (targetFile) {
         before = targetFile.snapshot;
@@ -1932,7 +1995,8 @@ export async function runFileMigrations(args: {
       }
       continue;
     }
-    if (remaining <= 0) break;
+    if (!plan.runs.has(m)) break;
+    if (m === plan.continuesAt) logger.info(plan.notice);
 
     // Both apply routes run the same whole-file judgement, so a foreign drop
     // — or a statement the runner's transaction cannot hold — is refused
@@ -2017,7 +2081,6 @@ export async function runFileMigrations(args: {
         throw err;
       }
       applied++;
-      remaining--;
       logger.success(`Applied ${filename}`);
       continue;
     }
@@ -2075,7 +2138,6 @@ export async function runFileMigrations(args: {
     before = target;
     beforeContributions = targetFile?.contributions ?? {};
     applied++;
-    remaining--;
     logger.success(`Applied ${filename}`);
   }
 

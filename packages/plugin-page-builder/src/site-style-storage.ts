@@ -77,8 +77,8 @@ export function siteStyleSingle(policy: SectionPolicy = {}): SingleConfig {
     // by being given one.
     //
     // A code-defined read rule cannot serve the anonymous render it would be
-    // written for. `checkAccess` refuses an absent user before consulting any
-    // rule, singles are not public endpoints, and the published page does not
+    // written for. A signed-in check refuses an absent user before consulting
+    // any rule, singles are not public endpoints, and the published page does not
     // use the route at all — `loadSiteStyle` reads through the Direct API,
     // whose `overrideAccess` default returns from `checkSingleAccess` before
     // the rule is reached. What such a rule DOES reach is every authenticated

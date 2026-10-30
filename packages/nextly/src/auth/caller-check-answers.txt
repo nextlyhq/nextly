@@ -3907,8 +3907,8 @@ service returns-filter user-with
   can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
-  can(manage,settings):true
-  can(read,media):true
+  can(manage,settings):false
+  can(read,media):false
   can(update,email-providers):false
   can(manage,email-providers):false
   can(manage,):false
@@ -3922,8 +3922,8 @@ service returns-filter user-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
-  holds(read-media):true
+  holds(manage-settings):false
+  holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
   holds(manage):false
@@ -4057,8 +4057,8 @@ service returns-filter key-with
   can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
-  can(manage,settings):true
-  can(read,media):true
+  can(manage,settings):false
+  can(read,media):false
   can(update,email-providers):false
   can(manage,email-providers):false
   can(manage,):false
@@ -4072,8 +4072,8 @@ service returns-filter key-with
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
-  holds(read-media):true
+  holds(manage-settings):false
+  holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
   holds(manage):false
@@ -4177,8 +4177,8 @@ service returns-filter key-slugs-only
   can(unpublish,posts):false
   can(export,posts):false
   can(read,settings):true
-  can(manage,settings):true
-  can(read,media):true
+  can(manage,settings):false
+  can(read,media):false
   can(update,email-providers):false
   can(manage,email-providers):false
   can(manage,):false
@@ -4192,8 +4192,8 @@ service returns-filter key-slugs-only
   holds(export-posts):false
   holds(edit-posts):false
   holds(read-settings):true
-  holds(manage-settings):true
-  holds(read-media):true
+  holds(manage-settings):false
+  holds(read-media):false
   holds(update-email-providers):false
   holds(manage-email-providers):false
   holds(manage):false
@@ -4239,8 +4239,8 @@ service returns-filter key-custom-slugs
   can(read,settings):false
   can(manage,settings):false
   can(read,media):false
-  can(update,email-providers):true
-  can(manage,email-providers):true
+  can(update,email-providers):false
+  can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
   holds(create-posts):false
@@ -4254,8 +4254,8 @@ service returns-filter key-custom-slugs
   holds(read-settings):false
   holds(manage-settings):false
   holds(read-media):false
-  holds(update-email-providers):true
-  holds(manage-email-providers):true
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service returns-filter key-manage
@@ -4269,8 +4269,8 @@ service returns-filter key-manage
   can(read,settings):false
   can(manage,settings):false
   can(read,media):false
-  can(update,email-providers):true
-  can(manage,email-providers):true
+  can(update,email-providers):false
+  can(manage,email-providers):false
   can(manage,):false
   can(,posts):false
   holds(create-posts):false
@@ -4284,8 +4284,8 @@ service returns-filter key-manage
   holds(read-settings):false
   holds(manage-settings):false
   holds(read-media):false
-  holds(update-email-providers):true
-  holds(manage-email-providers):true
+  holds(update-email-providers):false
+  holds(manage-email-providers):false
   holds(manage):false
   holds():false
 service permission-spelling user-with
