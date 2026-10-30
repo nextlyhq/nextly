@@ -1039,12 +1039,13 @@ async function bulkItemRefusal(
  */
 async function bulk(world: World, row: Row, who: CallerHandle) {
   // The table asks this door only writes to existing entries.
-  if (row.action === "list" || row.action === "count") {
-    throw new Error(`a bulk route sends no ${row.action}`);
+  const { action } = row;
+  if (action === "list" || action === "count") {
+    throw new Error(`a bulk route sends no ${action}`);
   }
   const { slug, id } = addressOf(world, row, "bulk");
-  const res = await bulkRequest(slug, row.action, id, who.headers);
-  const absent = () => bulkRequest(slug, row.action, ABSENT_ID, who.headers);
+  const res = await bulkRequest(slug, action, id, who.headers);
+  const absent = () => bulkRequest(slug, action, ABSENT_ID, who.headers);
   // A request refused whole names no entry in its path, and is compared with
   // the same request for an entry that does not exist, so a refusal that
   // tells the two apart shows.
