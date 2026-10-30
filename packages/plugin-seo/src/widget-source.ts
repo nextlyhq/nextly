@@ -146,12 +146,13 @@ export function checksFor(installed: readonly FieldConfig[]): IssueChecks {
 }
 
 /**
- * Every issue the scan can report, in the order a reader should meet them.
+ * Every issue the scan can report, listed by priority.
  *
  * Priority, not declaration convenience: a `noindex` that nobody intended and a
  * missing title both remove a page from results, while a missing social image
  * changes how a link previews. The order is the one Screaming Frog, Search
- * Console and Lighthouse agree on.
+ * Console and Lighthouse agree on. It is the order of what the card's `load`
+ * answers; the bars view draws its rows by count, largest first.
  *
  * Derived from the same {@link IssueChecks} the scan counts by, so a card
  * built from this cannot offer a number for a field the project never

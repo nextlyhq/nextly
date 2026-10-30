@@ -124,12 +124,22 @@ async function drawnBars(card: Locator): Promise<Record<string, number>> {
     return {};
   }
   // Each drawn row's count by its name: the chart engine writes the names in
-  // one column and the counts in another, a row apart from the next.
+  // one column and the counts in another, a row apart from the next. A name
+  // is read whole, whatever the card's width: from the `<title>` a cut name
+  // has, else from the `aria-label` every name has, since the drawn text of a
+  // cut one ends in "…".
   const rows = await card.getByTestId("chart-drawing").evaluate(element => {
-    const [names = [], counts = []] = [
+    const [nameAxis, countAxis] = [
       ...element.querySelectorAll(".recharts-yAxis-tick-labels"),
-    ].map(axis =>
-      [...axis.querySelectorAll("text")].map(text => text.textContent ?? "")
+    ];
+    const names = [...(nameAxis?.querySelectorAll("text") ?? [])].map(
+      text =>
+        text.parentElement?.querySelector(":scope > title")?.textContent ??
+        text.getAttribute("aria-label") ??
+        ""
+    );
+    const counts = [...(countAxis?.querySelectorAll("text") ?? [])].map(
+      text => text.textContent ?? ""
     );
     return names.map((name, index) => [name, counts[index] ?? ""] as const);
   });
@@ -194,9 +204,9 @@ test("the SEO issues card draws a bar for each issue the pages have", async ({
   await gotoAdmin(page, "/");
   const after = await drawnBars(card);
 
-  // One bar per issue, each risen by what the two pages added, and in the
-  // order a reader should meet them: a missing title first.
-  expect(Object.keys(after)).toEqual(ALL_MISSING);
+  // One bar per issue, each risen by what the two pages added. The bars view
+  // orders its rows by count, so the set is asserted, not the order.
+  expect(Object.keys(after).sort()).toEqual([...ALL_MISSING].sort());
   for (const issue of ALL_MISSING) {
     const added = issue === "Missing meta title" ? 1 : 2;
     expect(after[issue], issue).toBe((before[issue] ?? 0) + added);

@@ -33,4 +33,6 @@ The SEO plugin's dashboard card is now declared with `defineWidget` under `contr
 
 A widget's data reads gain one option: `services.find` takes `depth: 0` to return links as their stored ids, unexpanded, where a read naming no depth still expands them as before. `0` is the only depth a read may name. The SEO scan reads at `depth: 0`, so a page's social image is judged by the id it stores: a reader who may not read media is no longer told every page with an image is missing one, and an image whose file is gone counts as present, as it did before.
 
+A bars card's names now take a column as wide as the longest of them, up to two fifths of the chart, in place of a fixed 80 px one that cut names sharing their first words to the same "Missing me…"; a name still too long ends in "…" and keeps its whole name as its label and its title.
+
 Removed from `@nextlyhq/plugin-seo`, with nothing in their place: the `plugin:seo/issues` data source and `seoIssuesWidgetSource`, `issueFilter`, `SEO_ISSUES_SOURCE_ID`, `ISSUE_FIELD` and `ISSUE_SCAN_PAGE_SIZE`, and `seoIssuesWidget`, the stats card. The card and the Needs attention line reach the dashboard through `seoPlugin`; `SEO_ISSUES_WIDGET_ID` names the card in a site's `admin.dashboard`.

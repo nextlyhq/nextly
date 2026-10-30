@@ -67,8 +67,9 @@ type DashboardWidget = NonNullable<
 type IssueBucket = { value: string; count: number };
 
 /**
- * The card's data from a tally: each kind found, in the order a reader should
- * meet them, and whether the counts are floors.
+ * The card's data from a tally: each kind found, in the order `issues` lists
+ * them, and whether the counts are floors. The bars view draws its rows by
+ * count, largest first, so that order is the answer's and not the drawn one.
  *
  * A kind counted at zero is left out, so a site with nothing to fix answers no
  * bars and the frame draws the card's empty state, rather than a chart of
@@ -89,11 +90,11 @@ function issueBuckets(
 
 /**
  * A tally for the preview page to draw: each issue the configured fields can
- * report, with a sample count, fewer for each issue further down the order.
+ * report, with a sample count, fewer for each issue further down the list.
  *
  * Built from the same `issues` the card's `load` draws, and drawn through the
  * same `issueBuckets`, so the preview offers a bar only for a check the project
- * installed, in the order the card draws them.
+ * installed.
  */
 function sampleTally(issues: readonly { label: string }[]): IssueTally {
   return {

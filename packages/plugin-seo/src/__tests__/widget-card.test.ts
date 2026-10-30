@@ -97,10 +97,9 @@ describe("the SEO issues card", () => {
     expect(size.min?.h ?? size.default.h).toBeGreaterThanOrEqual(3);
   });
 
-  it("answers one bar per issue found, in the order a reader should meet them", async () => {
-    // Priority, not declaration convenience: an unintended `noindex` and a
-    // missing title both take a page out of search, where a missing social
-    // image changes how a link previews.
+  it("answers one bar per issue found, in the order the issues are listed", async () => {
+    // The answer keeps `reportableIssues`'s order; the bars view draws its rows
+    // by count, so this is the answer's order, not the drawn one.
     const card = declared(seoIssuesWidget(["pages"], defaultSeoFields()));
     const services = servicesHolding({
       pages: [
@@ -178,7 +177,7 @@ describe("the SEO issues card", () => {
         declared(seoIssuesWidget(["pages"], [text({ name: "canonical" })]))
       )
     ).toEqual([["Missing canonical URL"]]);
-    // Every default check, in the order the card draws them.
+    // Every default check, in the order `reportableIssues` lists them.
     expect(
       previewedIssues(declared(seoIssuesWidget(["pages"], defaultSeoFields())))
     ).toEqual([
