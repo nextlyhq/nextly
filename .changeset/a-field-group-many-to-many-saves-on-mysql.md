@@ -29,4 +29,6 @@
 "nextly": patch
 ---
 
-A field group with a many-to-many relationship can now be created on MySQL. The table is no longer followed by a plain index on the relation's JSON column, which MySQL refuses; PostgreSQL and SQLite keep the index.
+A field group with a many-to-many relationship can now be created on MySQL. Its relation column holds a list of ids, and it no longer gets a plain index on any database: MySQL refused the index, so the create failed, and on PostgreSQL the index refused a save once the list held about a hundred ids. A unique field in a field group also no longer gets a plain index beside its unique one.
+
+The next migration drops an unused index on many-to-many fields in field groups.

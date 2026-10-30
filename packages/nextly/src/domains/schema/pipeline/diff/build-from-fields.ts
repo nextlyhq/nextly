@@ -38,6 +38,7 @@ import {
   componentRelationshipHoldsReferenceList,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  componentRelationIsSingleReference,
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
@@ -812,12 +813,10 @@ export function buildDesiredTableFromComponentFields(
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,
-      // The component creator indexes a relationship only when it names a single collection, so a
-      // many-to-many (which names its target on `options`) gets no index there.
-      isSingleRelation: field =>
-        (field.type === "relationship" || field.type === "upload") &&
-        field.hasMany !== true &&
-        typeof field.relationTo === "string",
+      // The component creator indexes a relationship only when it references one entry, which a
+      // relation holding a JSON list (a many-to-many included) never does. Asked through the rule
+      // the creator asks, so the two declare the same indexes.
+      isSingleRelation: componentRelationIsSingleReference,
       hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
       localizedNames,
       columnNameFor: field =>

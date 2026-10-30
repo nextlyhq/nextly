@@ -324,6 +324,32 @@ export function componentRelationshipHoldsReferenceList(field: {
 }
 
 /**
+ * Whether a relationship or upload on a component row references ONE entry, in a scalar column:
+ * it names one collection and `componentRelationshipStoresJson` does not make it a list.
+ *
+ * Such a column gets a plain index. A relation holding JSON does not: no lookup reads a whole
+ * list, MySQL refuses a plain index on a JSON column, and on PostgreSQL a btree entry over a long
+ * list exceeds the row size and refuses the save. A many-to-many naming its target in
+ * `relationTo` names one collection and is still a list, which is why this derives from the JSON
+ * rule rather than reading `hasMany` and `relationTo` alone.
+ *
+ * Asked by the creating SQL and by the desired schema the diff compares a component table
+ * against, so the two declare the same indexes.
+ */
+export function componentRelationIsSingleReference(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  relationTo?: unknown;
+  options?: unknown;
+}): boolean {
+  if (field.type !== "relationship" && field.type !== "upload") return false;
+  return (
+    typeof field.relationTo === "string" &&
+    !componentRelationshipStoresJson(field)
+  );
+}
+
+/**
  * The descriptor for a field stored on a component's own row, which is where a component's values
  * live when they are not in a nested field group's table.
  *

@@ -68,6 +68,7 @@ import type { ExtensionColumn } from "../../schema/extension/types";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
+  componentRelationIsSingleReference,
   componentRelationshipStoresJson,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
@@ -286,26 +287,42 @@ export class FieldGroupSchemaService {
       );
     }
 
-    // A plain index on every column that references another table, then on
-    // every other column a field asks to index — one per column either way.
-    // Localized fields live in the companion, not the main comp_ table, so
-    // they get no main index.
-    // Either kind of index only where the dialect can index the column: MySQL cannot index a JSON
-    // column, so an index on one would fail after the table was already created. That includes a
-    // reference column, because a many-to-many naming one collection reads as a reference here
-    // while its ids live on the row as a JSON list. The desired schema asks the same rule for
-    // both, so neither side declares an index the other lacks.
+    // A plain index on every column that references one entry, then on every
+    // other column a field asks to index — one per column either way, by the
+    // rule the desired schema applies (`collectionIndexSpecs`), so neither side
+    // declares an index the other lacks. Localized fields live in the
+    // companion, not the main comp_ table, so they get no main index.
+    //
+    // A unique column the dialect can key carries its uniqueness as `uq_`
+    // below and gets no plain index besides. Either kind of plain index goes
+    // only where the dialect can index the column: MySQL cannot index a JSON
+    // column, and the index statement would fail after the table was already
+    // created.
+    const indexed = (field: DataFieldConfig, wanted: boolean): boolean => {
+      if (!wanted) return false;
+      const columnType = this.columnTypeFor(field) ?? "";
+      if (
+        "unique" in field &&
+        field.unique &&
+        uniquenessCanBeAnIndex(columnType, this.dialect)
+      ) {
+        return false;
+      }
+      return columnTypeIsIndexable(columnType, this.dialect);
+    };
     const mainColumns = this.columnFields(fields).filter(
-      field =>
-        !localizedNames.has(field.name) &&
-        columnTypeIsIndexable(this.columnTypeFor(field) ?? "", this.dialect)
+      field => !localizedNames.has(field.name)
     );
     const referencing = mainColumns.filter(field =>
-      this.fieldHasForeignKey(field)
+      indexed(field, componentRelationIsSingleReference(field))
     );
-    const declaredIndexed = mainColumns.filter(
-      field =>
-        !this.fieldHasForeignKey(field) && "index" in field && field.index
+    const declaredIndexed = mainColumns.filter(field =>
+      indexed(
+        field,
+        !componentRelationIsSingleReference(field) &&
+          "index" in field &&
+          field.index === true
+      )
     );
     for (const field of [...referencing, ...declaredIndexed]) {
       const columnName = this.toSnakeCase(field.name);
@@ -1133,15 +1150,6 @@ export class FieldGroupSchemaService {
       if (match[1]) found.add(match[1]);
     }
     return [...found];
-  }
-
-  private fieldHasForeignKey(field: DataFieldConfig): boolean {
-    if (!isRelationshipField(field) && !isUploadField(field)) return false;
-    return (
-      !Array.isArray(field.relationTo) &&
-      !field.hasMany &&
-      typeof field.relationTo === "string"
-    );
   }
 
   private isFieldModified(
