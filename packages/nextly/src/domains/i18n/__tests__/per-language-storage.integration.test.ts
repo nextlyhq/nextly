@@ -365,6 +365,22 @@ describe.each(getConfiguredTestDialects())(
             ...site,
             adapter: await onFile(),
           });
+          // And one the Schema Builder made, known only from its registry row.
+          vi.stubEnv("NODE_ENV", "development");
+          const handler = before.getService(
+            "collectionsHandler"
+          ) as unknown as {
+            createCollection(
+              data: Record<string, unknown>
+            ): Promise<{ success: boolean }>;
+          };
+          const made = await handler.createCollection({
+            name: "posts",
+            label: "Post",
+            fields: [{ name: "heading", type: "text" }],
+          });
+          expect(made.success, JSON.stringify(made)).toBe(true);
+          vi.stubEnv("NODE_ENV", "test");
           await before.destroy();
 
           let refused: unknown;
@@ -382,6 +398,9 @@ describe.each(getConfiguredTestDialects())(
           ).toBe(true);
           expect((refused as Error).message).toMatch(
             /the collection "articles" \(headline\)/
+          );
+          expect((refused as Error).message).toMatch(
+            /the collection "dc_posts" \(heading\)/
           );
         } finally {
           _resetEnvCache();

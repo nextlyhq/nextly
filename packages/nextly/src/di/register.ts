@@ -5058,7 +5058,9 @@ function handleUnresolvedExtends(
 
 /**
  * Refuses the boot of a site keeping every translatable field per language over a database whose
- * main tables still hold the translatable columns of an entity its configuration declares.
+ * main tables still hold the translatable columns of an entity: one its configuration declares, or
+ * one the Schema Builder made, read from the registries. A registry that cannot be read yet, as on
+ * a fresh database, holds nothing laid out before the setting.
  */
 async function refuseMixedStorageInConfig(
   adapter: DrizzleAdapter,
@@ -5076,7 +5078,7 @@ async function refuseMixedStorageInConfig(
   type Entity = Parameters<typeof refuseMixedStorage>[1][number];
   const fieldsOf = (entity: { fields?: unknown }) =>
     (entity.fields ?? []) as Entity["fields"];
-  await refuseMixedStorage(adapter, [
+  const entities: Entity[] = [
     ...(config.collections ?? []).map(
       (c): Entity => ({
         kind: "collection",
@@ -5110,5 +5112,40 @@ async function refuseMixedStorageInConfig(
         localized: (g as { localized?: unknown }).localized,
       })
     ),
-  ]);
+  ];
+  // The Schema Builder's entities, by their registered tables; one the configuration also declares
+  // is judged as the configuration describes it.
+  const declared = new Set(entities.map(entity => entity.tableName));
+  const registries: Array<
+    [Entity["kind"], Parameters<typeof loadDynamicTables>[1]]
+  > = [
+    ["collection", "dynamic_collections"],
+    ["single", "dynamic_singles"],
+  ];
+  const fieldGroupRegistry = await resolveFieldGroupRegistryName(adapter).catch(
+    () => undefined
+  );
+  if (fieldGroupRegistry) registries.push(["component", fieldGroupRegistry]);
+  for (const [kind, registry] of registries) {
+    try {
+      await loadDynamicTables(
+        adapter,
+        registry,
+        (tableName, fields, _status, localized) => {
+          if (declared.has(tableName)) return Promise.resolve();
+          entities.push({
+            kind,
+            slug: tableName,
+            tableName,
+            fields: fields as Entity["fields"],
+            localized,
+          });
+          return Promise.resolve();
+        }
+      );
+    } catch {
+      // Not readable yet: nothing in it was laid out before the setting.
+    }
+  }
+  await refuseMixedStorage(adapter, entities);
 }
