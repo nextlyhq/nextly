@@ -6,13 +6,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getEntrySpy, checkAccessSpy, findByIdSpy, actorForUserSpy } =
-  vi.hoisted(() => ({
-    actorForUserSpy: vi.fn(),
-    getEntrySpy: vi.fn(),
-    checkAccessSpy: vi.fn(),
-    findByIdSpy: vi.fn(),
-  }));
+const { getEntrySpy, findByIdSpy, actorForUserSpy } = vi.hoisted(() => ({
+  actorForUserSpy: vi.fn(),
+  getEntrySpy: vi.fn(),
+  findByIdSpy: vi.fn(),
+}));
 
 // A signed-in user's actor: the roles and grants the read decision judges,
 // as one lookup resolves them. Mocked so each case names the grants.
@@ -26,9 +24,6 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
 vi.mock("../../../di", () => ({
   getService: vi.fn((name: string) => {
     if (name === "collectionsHandler") return { getEntry: getEntrySpy };
-    if (name === "rbacAccessControlService") {
-      return { checkAccess: checkAccessSpy };
-    }
     if (name === "mediaService") return { findById: findByIdSpy };
     return {};
   }),
@@ -40,10 +35,7 @@ vi.mock("../../../di", () => ({
 vi.mock("../../../di/container", () => ({
   container: {
     has: (name: string) => name === "rbacAccessControlService",
-    get: (name: string) =>
-      name === "rbacAccessControlService"
-        ? { checkAccess: checkAccessSpy }
-        : {},
+    get: () => ({}),
   },
 }));
 
@@ -78,7 +70,6 @@ beforeEach(() => {
   getEntrySpy.mockImplementation(({ entryId }: { entryId: string }) =>
     Promise.resolve({ success: true, data: { title: `T-${entryId}` } })
   );
-  checkAccessSpy.mockResolvedValue(true);
   actorForUserSpy.mockResolvedValue(readerOf("media"));
   findByIdSpy.mockResolvedValue({
     originalFilename: "pic.png",

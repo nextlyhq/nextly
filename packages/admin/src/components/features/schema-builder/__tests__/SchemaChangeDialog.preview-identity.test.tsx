@@ -71,6 +71,7 @@ function Host({
       </button>
       <BuilderSchemaChangeDialogs
         confirmation={confirmation}
+        kind="collection"
         entityName={entityName}
         onConfirm={vi.fn()}
       />
@@ -137,10 +138,10 @@ describe("a second preview after the first was dismissed", () => {
     await user.click(
       screen.getAllByRole("radio").find(r => !(r as HTMLInputElement).checked)!
     );
-    expect(selectedRenameLabel()).toContain("Drop");
+    expect(selectedRenameLabel()).toContain("Remove it");
 
     rerender(<Host first={only} second={only} entityName="articles" />);
 
-    expect(selectedRenameLabel()).toContain("Drop");
+    expect(selectedRenameLabel()).toContain("Remove it");
   });
 });

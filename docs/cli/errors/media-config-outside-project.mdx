@@ -1,0 +1,24 @@
+---
+title: MEDIA_CONFIG_OUTSIDE_PROJECT
+description: "`nextly media orphans --apply` was given a configuration from outside the project, whose storage may be another project's."
+---
+
+## Cause
+
+`nextly media orphans --apply` was given a configuration from outside the project, whose storage may be another project's.
+
+`--apply` compares the media storage the config names with the media table in the project's database. A config outside the project, given with `--config` or linked from it, may name another project's storage, whose files would all read as left behind. Nothing was changed.
+
+## Fix
+
+- Run the command from the project that config belongs to.
+- Or pass `--config` a configuration inside the project `--cwd` names.
+
+## Example
+
+```text
+✗ Nothing was changed: the config ../other-project/nextly.config.ts is outside /home/you/app.
+  Why:  /home/you/app's database settings would be read, so the config's storage may be another project's.
+  Next: Run the command from that config's project to remove files.
+  Docs: https://nextlyhq.com/docs/cli/errors/media-config-outside-project  (MEDIA_CONFIG_OUTSIDE_PROJECT)
+```

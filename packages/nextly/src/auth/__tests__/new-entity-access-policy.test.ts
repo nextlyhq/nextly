@@ -118,22 +118,29 @@ describe("an API key", () => {
     ).toBe(false);
   });
 
-  it("is ADMITTED on a name only the code-first validator reserves", async () => {
-    // 🔴 `admin` is reserved for a code-first config, which is mounted on a
-    // route -- but nothing on the runtime create path consults that list, and a
-    // Schema-Builder create accepts the name. Judging the grant by the
-    // code-first rules withheld the step from a key that can finish it, which
-    // is the same defect as offering one that cannot, in the other direction.
-    expect(await wouldReadOwnNewCollection(key(["read-admin"]))).toBe(true);
+  it("is refused on a name the one address rule reserves for a route", async () => {
+    // `admin` is the admin route's segment. The Builder's create once accepted
+    // it while configuration refused it; one rule judges every create now, and
+    // it refuses the name, so a key whose grant reads only `admin` could never
+    // create what it reads.
+    expect(await wouldReadOwnNewCollection(key(["read-admin"]))).toBe(false);
+  });
+
+  it("is ADMITTED on a hyphenated name, which every create now accepts", async () => {
+    // The Builder's create refused a hyphen while configuration accepted it.
+    // The one rule accepts it on every road, naming the table from the
+    // snake_case form, so the step a `read-team-updates` key is offered is one
+    // it can finish.
+    expect(await wouldReadOwnNewCollection(key(["read-team-updates"]))).toBe(
+      true
+    );
   });
 
   it("is refused when its read grant cannot be a slug at all", async () => {
-    // A second reason to refuse, and not the system-resource one: a Builder
-    // slug takes underscores and no hyphens, so the create the reader is sent
-    // to would not accept `team-updates` however unreserved the name is.
-    expect(await wouldReadOwnNewCollection(key(["read-team-updates"]))).toBe(
-      false
-    );
+    // A second reason to refuse, and not the system-resource one: an address
+    // starts with a letter, so the create the reader is sent to would not
+    // accept `2fast` however unreserved the name is.
+    expect(await wouldReadOwnNewCollection(key(["read-2fast"]))).toBe(false);
   });
 
   it("is refused when its read grant names a SQL keyword", async () => {
@@ -145,10 +152,9 @@ describe("an API key", () => {
     expect(await wouldReadOwnNewCollection(key(["read-select"]))).toBe(false);
   });
 
-  it("is refused on a name only the Schema Builder's own list reserves", async () => {
-    // `accounts` is in `RESERVED_COLLECTION_NAMES` without being a system
-    // resource and without being a SQL keyword, so it is refused by the
-    // Builder's validator and by nothing else here. That makes it the case a
+  it("is refused on a name reserved for a system table", async () => {
+    // `accounts` is a retired core table's name, reserved without being a
+    // system resource and without being a SQL keyword. That makes it the case a
     // predicate stopping at `isReservedResourceSlug` cannot answer.
     expect(await wouldReadOwnNewCollection(key(["read-accounts"]))).toBe(false);
   });

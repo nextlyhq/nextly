@@ -575,6 +575,17 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * to the start of the name, so each name is read once and a long line still
  * costs its length.
  *
+ * A double-quoted name past the bound is read back the same way, by the JSON
+ * grammar that reads it forwards within the bound, so a long name with spaces
+ * or escapes in it (`"… access token"`, `\"… \\\"api\\\" token\"`) is
+ * judged whole too. That read is tried only at a quote a separator follows,
+ * and the grammar passes an escaped quote but never one that ends a string:
+ * so a read covers the one string that ends at its quote, no two reads cover
+ * the same text, and a line costs its length. Read forwards with no bound,
+ * a run of escaped quotes (`\" \" \" …`) would be read from each quote to its
+ * end, the length squared. It is tried before the bare name read backwards,
+ * which would judge `"password <long word>"` by its last word.
+ *
  * An escaped JSON name is a JSON string inside another one, so it is read
  * as the outer quoting wrote the inner one's characters: a plain character,
  * an inner escape (`\\` and what follows it, where an inner quote is `\\\"`
@@ -583,13 +594,14 @@ const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
  * and a name ending in an inner backslash still ends at its own `\"`.
  *
  * Groups: an escaped JSON name's quote and text, a JSON name's quote and
- * text, any other name's quote and text, a long name and the quote after
- * it, and the separator. The value is read
+ * text, any other name's quote and text, a long escaped JSON name's quote
+ * and text, a long JSON name's quote and text, any other long name and the
+ * quote after it, and the separator. The value is read
  * only after a credential's name (`TEXT_PARAMETER_VALUE`), so any other value
  * is searched as ordinary text.
  */
 const TEXT_PARAMETER =
-  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b(?=[A-Za-z_])(?<=(?:^|[^\w.-])[.-]*(?:[0-9]\w*[.-]+)*)([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5|(?=[\s=:])(?<=(?<![\w.-])(?=[\w.[\]-]{257})([\w.-]+(?:\[[\w.-]*\])*)(\\?["']?)))(\s*[=:]\s*)/g;
+  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b(?=[A-Za-z_])(?<=(?:^|[^\w.-])[.-]*(?:[0-9]\w*[.-]+)*)([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5|(?<=")(?=\s*[=:])(?<=(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){257,})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){257,})")|(?=[\s=:])(?<=(?<![\w.-])(?=[\w.[\]-]{257})([\w.-]+(?:\[[\w.-]*\])*)(\\?["']?)))(\s*[=:]\s*)/g;
 
 /**
  * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes
@@ -604,16 +616,27 @@ function parameterName(match: RegExpExecArray): {
   name: string;
 } {
   const [, escapedQuote, escapedName, jsonQuote, jsonName, quote, name] = match;
-  if (escapedQuote !== undefined) {
+  const [, , , , , , , longEscapedQuote, longEscapedName] = match;
+  const [, , , , , , , , , longJsonQuote, longJsonName] = match;
+  // A JSON name past the bound is the same name read from its other end, so
+  // it is decoded as the bounded reads of each form are.
+  const escaped = escapedQuote ?? longEscapedQuote;
+  if (escaped !== undefined) {
     return {
-      nameQuote: escapedQuote,
-      name: decodedJsonName(decodedJsonName(escapedName ?? "")),
+      nameQuote: escaped,
+      name: decodedJsonName(
+        decodedJsonName(escapedName ?? longEscapedName ?? "")
+      ),
     };
   }
-  if (jsonQuote !== undefined) {
-    return { nameQuote: jsonQuote, name: decodedJsonName(jsonName ?? "") };
+  const json = jsonQuote ?? longJsonQuote;
+  if (json !== undefined) {
+    return {
+      nameQuote: json,
+      name: decodedJsonName(jsonName ?? longJsonName ?? ""),
+    };
   }
-  const [, , , , , , , longName, longNameQuote] = match;
+  const [, , , , , , , , , , , longName, longNameQuote] = match;
   if (longName !== undefined) {
     return { nameQuote: longNameQuote ?? "", name: longName };
   }
@@ -739,12 +762,25 @@ function redactCredentialParameters(text: string): string {
   let from = 0;
   for (let match = names.exec(text); match; match = names.exec(text)) {
     const [prefix] = match;
-    const separator = match[9] ?? "";
+    const separator = match[13] ?? "";
     const { nameQuote, name } = parameterName(match);
     if (
       !isCredentialName(name) &&
       !CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
     ) {
+      // A quoted name read from an escaped quote may be the tail of a longer
+      // quoted name (`"… token for \"api\"":`), so the search goes on from
+      // where it ends: the whole name, read back from the separator, is still
+      // judged. Each place is still tried once, so a line costs its length;
+      // a name read backwards has no width here, and the search moves on.
+      const nameEnd = match.index + prefix.length - separator.length;
+      if (
+        nameEnd > match.index &&
+        nameQuote.endsWith('"') &&
+        text.charAt(match.index - 1) === "\\"
+      ) {
+        names.lastIndex = nameEnd;
+      }
       continue;
     }
     const valueStart = match.index + prefix.length;
@@ -858,9 +894,17 @@ function httpMessageSummary(value: object): unknown {
  * domain literal (`john@[192.0.2.1]`, `john@[IPv6:2001:db8::1]`) is an
  * address too, while an index such as `arr@[0]` is not. Bounded on both sides
  * so a longer run of address characters is not split into a match.
+ *
+ * A quoted local part is read for at most 64 characters or escapes between
+ * its quotes. RFC 5321 (section 4.5.3.1.1) caps a local part at 64 octets,
+ * its quotes included, so no address a mail system must carry is longer. The
+ * bound is what keeps a line's cost linear: the read may start at any quote,
+ * and an escaped quote does not end it, so read with no bound along a stretch
+ * of escaped quotes it would run from each of them to the stretch's end, and
+ * cost the line's length squared. Bounded, each quote costs at most 64 steps.
  */
 const EMAIL_PATTERN =
-  /(?<![\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.)+"|[\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?\.)+(?:[Xx][Nn]--[A-Za-z0-9-]+|\p{L}[\p{L}\p{M}]+)|\[(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]*[A-Za-z0-9]:[^[\]\s\\]+)\])(?![\p{L}\p{M}\p{N}-])/gu;
+  /(?<![\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.){1,64}"|[\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?\.)+(?:[Xx][Nn]--[A-Za-z0-9-]+|\p{L}[\p{L}\p{M}]+)|\[(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]*[A-Za-z0-9]:[^[\]\s\\]+)\])(?![\p{L}\p{M}\p{N}-])/gu;
 
 /** Whether this environment's logs mask addresses. */
 export function emailMaskingEnabled(nodeEnv: string | undefined): boolean {

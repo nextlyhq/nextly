@@ -32,9 +32,9 @@ import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/fie
 import { toSnakeCase } from "../../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../../errors";
 import { isReservedSystemColumn } from "../../lib/system-columns";
+import { FIELD_GROUP_ROUTE_SLUGS } from "../../shared/address-rule";
 import {
   type BaseValidationError,
-  DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
   validateContainerFieldsShared,
   validateFieldBasicsShared,
@@ -163,15 +163,9 @@ export interface FieldGroupValidationResult {
  */
 export const RESERVED_FIELD_GROUP_SLUGS = [
   ...RESERVED_SLUGS,
-  // API namespace. A slug matching a live route segment would make the two
-  // indistinguishable in a URL.
-  "field-groups",
-  "field-group",
+  // API namespace, stated with the one address rule that judges a slug.
+  ...FIELD_GROUP_ROUTE_SLUGS,
 ] as const;
-
-const RESERVED_COMPONENT_SLUGS_SET: Set<string> = new Set<string>(
-  RESERVED_FIELD_GROUP_SLUGS
-);
 
 // ============================================================
 // Domain-Specific Field Validation
@@ -415,11 +409,7 @@ export function validateFieldGroupConfig(
   const errors: FieldGroupValidationError[] = [];
   const errsBase = errors as unknown as BaseValidationError[];
 
-  validateSlugShared(config.slug, errsBase, {
-    entityLabel: "Component",
-    reservedSlugsSet: RESERVED_COMPONENT_SLUGS_SET,
-    sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
-  });
+  validateSlugShared(config.slug, errsBase, "fieldGroup");
 
   validateFields(config.fields, errors);
 
@@ -435,24 +425,50 @@ export function validateFieldGroupConfig(
  * Convenience wrapper around {@link validateFieldGroupConfig}.
  */
 export function assertValidFieldGroupConfig(config: FieldGroupConfig): void {
-  const result = validateFieldGroupConfig(config);
+  throwIfInvalid(config, validateFieldGroupConfig(config).errors);
+}
 
-  if (!result.valid) {
-    const errorMessages = result.errors
-      .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
-      .join("\n");
+/**
+ * Throws if the configuration of a field group that already exists is
+ * invalid, judging everything but the rule's verdict on its address: the
+ * address is one the field group already has, and the one address rule judges
+ * only a new or changed one, so a field group created under an address the
+ * rule now refuses can still be updated. A missing or non-string address is
+ * still refused, since no field group can be named by one.
+ */
+export function assertValidExistingFieldGroupConfig(
+  config: FieldGroupConfig
+): void {
+  throwIfInvalid(
+    config,
+    validateFieldGroupConfig(config).errors.filter(
+      err =>
+        err.path !== "slug" ||
+        err.code === "SLUG_REQUIRED" ||
+        err.code === "SLUG_INVALID_TYPE"
+    )
+  );
+}
 
-    throw NextlyError.validation({
-      errors: result.errors.map(err => ({
-        path: err.path,
-        code: err.code,
-        message: err.message,
-      })),
-      logContext: {
-        reason: "component-config-invalid",
-        slug: config.slug,
-        details: errorMessages,
-      },
-    });
-  }
+function throwIfInvalid(
+  config: FieldGroupConfig,
+  errors: FieldGroupValidationError[]
+): void {
+  if (errors.length === 0) return;
+  const errorMessages = errors
+    .map(err => `  - [${err.code}] ${err.path}: ${err.message}`)
+    .join("\n");
+
+  throw NextlyError.validation({
+    errors: errors.map(err => ({
+      path: err.path,
+      code: err.code,
+      message: err.message,
+    })),
+    logContext: {
+      reason: "component-config-invalid",
+      slug: config.slug,
+      details: errorMessages,
+    },
+  });
 }

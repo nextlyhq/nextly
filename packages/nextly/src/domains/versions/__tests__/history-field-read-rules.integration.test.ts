@@ -6,6 +6,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
 import {
   defineCollection,
   defineFieldGroup,
@@ -204,6 +205,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("does not restore a component field the restorer may not read", async () => {
       const id = await documentWithGuardedComponent(dialect);
+      // A restore is an update of the document, so the restorer holds update.
+      await userWhoMay(current!, CLERK.id, "update", ["posts"]);
 
       const result = await restoreVersion({
         ...at(id),

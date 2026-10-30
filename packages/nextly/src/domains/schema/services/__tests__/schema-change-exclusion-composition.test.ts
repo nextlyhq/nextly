@@ -80,6 +80,11 @@ function makeAdapter(options: MigrationLockSurfaceOptions = {}) {
         return name.includes("_locales") ? false : created;
       }),
       selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+      // The slug guard also lists the addresses already used, to refuse one with the same
+      // snake_case form; none are.
+      select: vi.fn(
+        async (): Promise<Array<{ id: string; slug: string }>> => []
+      ),
       executeQuery: vi.fn(async (sql: string) => {
         executed.push(sql);
         // The lock's DDL is a `CREATE TABLE` too, and it runs first. Letting it set this flag would
@@ -157,6 +162,60 @@ const createSingle = (service: SingleMetadataService) =>
 beforeEach(() => {
   executed.length = 0;
   pluginOptionRefusal.error = undefined;
+});
+
+describe("a Single create judges its address inside the exclusion", () => {
+  // Whichever road reached the service, the dispatcher's own check included or not: the address is
+  // judged under the lock, before the Single's table is built.
+  it.each([
+    ["admin", "SLUG_RESERVED"],
+    ["a".repeat(49), "SLUG_TOO_LONG"],
+  ])("refuses '%s' before any DDL of its own", async (slug, code) => {
+    const adapter = makeAdapter();
+    const { service, registry } = makeService(adapter);
+
+    await expect(
+      service.createSingle({
+        ...INPUT,
+        slug,
+        tableName: `single_${slug}`,
+      } as unknown as Parameters<typeof service.createSingle>[0])
+    ).rejects.toMatchObject({ publicData: { errors: [{ code }] } });
+    expect(executed.filter(sql => !isMigrationLockStatement(sql))).toEqual([]);
+    expect(registry.registerSingle).not.toHaveBeenCalled();
+  });
+
+  it("refuses an address with a collection's snake_case form, naming both", async () => {
+    const adapter = makeAdapter();
+    Object.assign(adapter, {
+      select: vi.fn(async (table: string) =>
+        table === "dynamic_collections"
+          ? [{ id: "c-1", slug: "team-updates" }]
+          : []
+      ),
+    });
+    const { service } = makeService(adapter);
+
+    await expect(
+      service.createSingle({
+        ...INPUT,
+        slug: "team_updates",
+        tableName: "single_team_updates",
+      } as unknown as Parameters<typeof service.createSingle>[0])
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            code: "SLUG_SAME_SNAKE_CASE",
+            message: expect.stringMatching(
+              /^Single address 'team_updates'.*collection 'team-updates'/
+            ),
+          },
+        ],
+      },
+    });
+    expect(executed.filter(sql => !isMigrationLockStatement(sql))).toEqual([]);
+  });
 });
 
 describe("a schema change and the storage migration contend for one row", () => {
