@@ -12,35 +12,29 @@ import { DocumentIdCopy } from "./DocumentIdCopy";
 // once shared this strip now live in the document bar and under the title.
 
 export interface EntryMetaStripProps {
-  /** Whether the panel is currently collapsed. Where it is expanded and on
-   *  screen, it carries the id itself, so this line steps aside there. */
-  isRailCollapsed: boolean;
+  /**
+   * Whether the docked document panel is on screen beside the fields. It
+   * carries the id itself there, so this line steps aside; wherever the panel
+   * is folded, floats or is a sheet, it opens only when asked for, and this
+   * line is where the id is offered.
+   */
+  panelCarriesId: boolean;
   /** The document's id. Absent before the document exists, and then no line
    *  is drawn. */
   documentId?: string | null | undefined;
 }
 
 export function EntryMetaStrip({
-  isRailCollapsed,
+  panelCarriesId,
   documentId,
 }: EntryMetaStripProps): JSX.Element | null {
-  if (!documentId) return null;
-
-  /*
-   * The id says itself in the document panel where that panel is on screen and
-   * open, so the line steps aside there and only there: at the width the panel
-   * appears from (`@4xl/content`), while it is expanded. Below that width the
-   * panel is not drawn at all, so this line is the only place the id is
-   * offered, whatever the panel's setting.
-   */
-  const besidePanel = isRailCollapsed ? undefined : "@4xl/content:hidden";
+  if (!documentId || panelCarriesId) return null;
 
   return (
     <div
       className={cn(
         "mt-1.5 flex items-center gap-1 text-xs text-muted-foreground",
-        DOCUMENT_COLUMN_INSET,
-        besidePanel
+        DOCUMENT_COLUMN_INSET
       )}
     >
       <span>ID:</span>
