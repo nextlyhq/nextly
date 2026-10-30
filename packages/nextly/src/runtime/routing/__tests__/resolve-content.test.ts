@@ -91,6 +91,23 @@ describe("resolveContent (unit)", () => {
     expect(await resolveContent("posts", "a", { nextly: reader })).toBeNull();
   });
 
+  it("resolves a visitor asked to sign in (AUTH_REQUIRED) to null", async () => {
+    const { reader } = stubReader({ error: NextlyError.authRequired() });
+    expect(await resolveContent("posts", "a", { nextly: reader })).toBeNull();
+  });
+
+  it("rethrows any other 401, so a broken credential is not a missing page", async () => {
+    for (const failure of [
+      NextlyError.invalidCredentials(),
+      NextlyError.tokenExpired(),
+    ]) {
+      const { reader } = stubReader({ error: failure });
+      await expect(
+        resolveContent("posts", "a", { nextly: reader })
+      ).rejects.toBe(failure);
+    }
+  });
+
   it("rethrows a non-access error (retryable, not a cached 404)", async () => {
     const boom = NextlyError.internal();
     const { reader } = stubReader({ error: boom });

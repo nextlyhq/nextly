@@ -97,8 +97,9 @@ describe("SchemaEventsRepository (sqlite)", () => {
     await repo.markApplied(id, {});
     expect(await repo.isFileApplied("0001_init.sql")).toBe(true);
 
-    // What `migrate:resolve --rolled-back` does: append a later rolled_back event.
-    await repo.insertEvent({
+    // What `migrate:resolve --rolled-back` does: append a later rolled_back
+    // event that retires the applied one.
+    const rollback = await repo.insertEvent({
       eventType: "file_apply",
       status: "rolled_back",
       source: "cli-migrate",
@@ -106,7 +107,47 @@ describe("SchemaEventsRepository (sqlite)", () => {
       startedAt: new Date(Date.now() + 1000),
       endedAt: new Date(Date.now() + 1000),
     });
+    await repo.supersede({ supersededEventIds: [id], byEventId: rollback });
     expect(await repo.isFileApplied("0001_init.sql")).toBe(false);
+  });
+
+  it("isFileApplied keeps an app migration applied after a later attempt that failed or stopped", async () => {
+    const id = await repo.recordStart({
+      eventType: "file_apply",
+      source: "cli-migrate",
+      filename: "0001_init.sql",
+    });
+    await repo.markApplied(id, {});
+    // Attempts that are not outcomes: one failed, one that recorded none.
+    const failed = await repo.recordStart({
+      eventType: "file_apply",
+      source: "cli-migrate",
+      filename: "0001_init.sql",
+    });
+    await repo.markFailed(failed, { errorMessage: "boom" });
+    await repo.recordStart({
+      eventType: "file_apply",
+      source: "cli-migrate",
+      filename: "0001_init.sql",
+    });
+    expect(await repo.isFileApplied("0001_init.sql")).toBe(true);
+  });
+
+  it("isFileApplied reads a plugin module by its newest record, as its history always has", async () => {
+    const module = "plugin:acme/0001_init";
+    const id = await repo.recordStart({
+      eventType: "file_apply",
+      source: "cli-plugin-migrate",
+      filename: module,
+    });
+    await repo.markApplied(id, {});
+    const failed = await repo.recordStart({
+      eventType: "file_apply",
+      source: "cli-plugin-migrate",
+      filename: module,
+    });
+    await repo.markFailed(failed, { errorMessage: "boom" });
+    expect(await repo.isFileApplied(module)).toBe(false);
   });
 
   it("supersede links consumed rows and prune never deletes them", async () => {
