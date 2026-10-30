@@ -12,10 +12,12 @@
  *
  * The rows come in the server's order (latest update first, collections holding no entries last),
  * and the card draws as many as its body holds, from the query it was asked at its size. The
- * server counted those rows and no others, and named how many collections there are in all: the
- * footer's "View all (N)" to the collections, N being the collections alone, since that page lists
- * no Single and each Single is reached from its own row. A reader with no collection to see has
- * no such page to open, so the card then draws no footer at all.
+ * server counted those rows and no others.
+ *
+ * The card has no "View all" footer. The admin has no page listing the collections:
+ * `/admin/collections` only redirects to one collection's entries, which is not the list the rows
+ * are drawn from, and a link must open what it names. Each row opens its own list or Single, and
+ * the sidebar's Content lists them all.
  *
  * A zero is drawn muted, never as large as a count, and an empty collection's whole row is muted,
  * so the eye lands on the rows with something in them.
@@ -29,7 +31,6 @@ import type { ListDensity } from "nextly/config";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { JSX } from "react";
 
-import { answerTotal } from "@admin/components/features/widgets/archetypes/tiered-rows";
 import { FrameState } from "@admin/components/features/widgets/frame/card-state";
 import { CardFigure } from "@admin/components/features/widgets/frame/figure";
 import {
@@ -39,12 +40,6 @@ import {
   TABLE_ROW_CLASS,
   TABLE_ROW_HEIGHT_CLASS,
 } from "@admin/components/features/widgets/frame/geometry";
-import {
-  ListFooter,
-  listFooter,
-  type FooterCount,
-  type ListTotal,
-} from "@admin/components/features/widgets/frame/list-card";
 import { useListCard } from "@admin/components/features/widgets/frame/list-slot";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
@@ -346,27 +341,6 @@ function ContentRows({
   );
 }
 
-const isCollection = (row: ContentRow): boolean => row.kind === "collection";
-
-/**
- * The footer's link to the collections and its count, told from the collection rows alone, since
- * `total` counts only collections: "(N)" when the card draws fewer collections than there are,
- * and no link at all where the reader has no collection. Without a total, the rows answered say
- * whether there is any.
- */
-function collectionsFooter(
-  rows: readonly ContentRow[],
-  shown: readonly ContentRow[],
-  total: ListTotal | undefined
-): { footer: FooterCount | undefined; href: string | undefined } {
-  const fetched = rows.filter(isCollection).length;
-  const hasCollections = total === undefined ? fetched > 0 : total.count > 0;
-  return {
-    footer: listFooter(fetched, shown.filter(isCollection).length, total),
-    href: hasCollections ? ROUTES.COLLECTIONS : undefined,
-  };
-}
-
 export function ContentTable(props: WidgetComponentProps): JSX.Element {
   const { drawn, density, now, read } = useListCard(props);
   if ("node" in read) return read.node;
@@ -388,12 +362,10 @@ export function ContentTable(props: WidgetComponentProps): JSX.Element {
       />
     );
   }
-  const shown = rows.slice(0, drawn);
+  // The rows the body holds, and no footer: see the module's note on View all.
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <ContentRows rows={shown} density={density} now={now} />
-      {/* The collections, with how many there are in all when the table draws fewer. */}
-      <ListFooter {...collectionsFooter(rows, shown, answerTotal(read.list))} />
+      <ContentRows rows={rows.slice(0, drawn)} density={density} now={now} />
     </div>
   );
 }

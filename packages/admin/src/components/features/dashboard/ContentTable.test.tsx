@@ -2,7 +2,7 @@
  * The dashboard's Content table, drawn from its `system:content` answer: its columns in order, a
  * collection's row and a Single's, the + only where the reader may create, Drafts linked to the
  * list's Draft filter, zeros and empty collections muted, the rows a card of width 6 and of
- * width 12 draws, and its one "View all (N)" to the collections, N counting collections alone.
+ * width 12 draws, and no "View all", since the admin has no page listing the collections.
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
@@ -208,49 +208,32 @@ describe("the Content table", () => {
     ["6", "medium", 5],
     ["12", "large", 10],
   ] as const)(
-    "at width %s draws the rows its %s body holds, and View all (N) to the content index",
+    "at width %s draws the rows its %s body holds",
     (_width, tier, drawn) => {
       const answered = Array.from({ length: 11 }, (_, i) =>
         collectionRow(`c${String(i).padStart(2, "0")}`)
       );
       draw(answered, { tier, total: 14 });
       expect(rows()).toHaveLength(drawn);
-      const viewAll = screen.getByRole("link", { name: /^View all/ });
-      expect(viewAll).toHaveTextContent("View all (14)");
-      expect(viewAll).toHaveAttribute("href", "/admin/collections");
     }
   );
 
-  it("counts only collections in View all (N), a Single's row drawn among them", () => {
-    // Ten collections in all; the large body draws ten rows, one of them a Single, so it draws nine
-    // of the ten collections.
+  it("draws no View all, though the answer holds more rows than the card draws", () => {
     const answered = [
       HOME,
       ...Array.from({ length: 10 }, (_, i) => collectionRow(`c${i}`)),
     ];
-    draw(answered, { tier: "large", total: 10 });
-    expect(rows()).toHaveLength(10);
-    const viewAll = screen.getByRole("link", { name: /^View all/ });
-    // 🔴 Compared with the collections drawn, not the rows: the rows drawn are ten, as many as
-    // the total, and the collections page still holds one more than the card shows.
-    expect(viewAll).toHaveTextContent("View all (10)");
-    expect(viewAll).toHaveAttribute("href", "/admin/collections");
-  });
-
-  it("offers no View all where the reader has Singles and no collection", () => {
-    draw([HOME], { total: 0 });
-    expect(rowOf("Home")).toBeDefined();
-    // 🔴 The collections page would be empty: no link to it at all.
+    draw(answered, { tier: "large", total: 14 });
+    // 🔴 `/admin/collections` only redirects to one collection's list, so no
+    // link to it, and no footer at all: a link must open what it names.
     expect(
       screen.queryByRole("link", { name: /^View all/ })
     ).not.toBeInTheDocument();
-  });
-
-  it("still offers the content index when it draws every row", () => {
-    draw([collectionRow("posts")], { total: 1 });
-    const viewAll = screen.getByRole("link", { name: /^View all/ });
-    // No "(N)" when every row is drawn: the link alone.
-    expect(viewAll.textContent).not.toContain("(");
-    expect(viewAll).toHaveAttribute("href", "/admin/collections");
+    expect(screen.queryByTestId("list-card-footer")).not.toBeInTheDocument();
+    expect(
+      screen
+        .getAllByRole("link")
+        .filter(link => link.getAttribute("href") === "/admin/collections")
+    ).toEqual([]);
   });
 });

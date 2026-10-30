@@ -379,6 +379,37 @@ function collectionsKeptOffClause(
   };
 }
 
+/**
+ * The conditions narrowing the saves to one subject's, by its slug AND its
+ * kind, since a collection and a Single may share a slug: a collection's
+ * entries, by a row stating that kind or none (a row written before the kind
+ * was recorded is a collection's), and a Single's document, by a row stating
+ * it is a Single's. None when neither is asked for.
+ */
+function oneSubjectConditions(
+  options: Pick<RecentEditsOptions, "collection" | "single">
+): NonNullable<WhereClause["and"]> {
+  const conditions: NonNullable<WhereClause["and"]> = [];
+  if (options.collection !== undefined) {
+    conditions.push(
+      { column: "collection", op: "=", value: options.collection },
+      {
+        or: [
+          { column: "subjectKind", op: "IS NULL" },
+          { column: "subjectKind", op: "=", value: "collection" },
+        ],
+      }
+    );
+  }
+  if (options.single !== undefined) {
+    conditions.push(
+      { column: "collection", op: "=", value: options.single },
+      { column: "subjectKind", op: "=", value: "single" }
+    );
+  }
+  return conditions;
+}
+
 /** Options for the documents most recently saved; see `getRecentEdits`. */
 export interface RecentEditsOptions {
   /** How many documents the card shows; clamped as every widget query is. */
@@ -391,6 +422,11 @@ export interface RecentEditsOptions {
   keptOffCollections?: ActivityKeptOffCollections;
   /** Only this collection's entries: never a Single, which may share its slug. */
   collection?: string;
+  /**
+   * Only this Single's document: never a collection's entries, which may share
+   * its slug. Given with `collection`, both narrow, and no save is of both.
+   */
+  single?: string;
   /**
    * Only saves this person made. A PERSON's id: a row whose actor is an API
    * key never matches it, though a key's id and a person's could be equal.
@@ -1366,25 +1402,7 @@ export class ActivityLogService extends BaseService {
             },
           ],
         },
-        ...(options.collection === undefined
-          ? []
-          : [
-              {
-                column: "collection",
-                op: "=" as const,
-                value: options.collection,
-              },
-              {
-                or: [
-                  { column: "subjectKind", op: "IS NULL" as const },
-                  {
-                    column: "subjectKind",
-                    op: "=" as const,
-                    value: "collection",
-                  },
-                ],
-              },
-            ]),
+        ...oneSubjectConditions(options),
         ...(options.savedBy === undefined
           ? []
           : [

@@ -4,11 +4,11 @@
  * rows drawn and no others.
  *
  * Every collaborator answers from a fixture, so each property is watched at
- * the call it depends on: which collections are counted and read, by which
- * rule the drafts are, whose create decision is asked, where a row's date comes
- * from, and how often the activity trail is read. A table that counted every
- * collection and kept a page answers the same rows; only the calls tell the
- * two apart.
+ * the call it depends on: which collections are counted and read, how many of
+ * those reads run at once, by which rule the drafts are, whose create decision
+ * is asked, where a row's date comes from, and how often, and for which
+ * subject, the activity trail is read. A table that counted every collection
+ * and kept a page answers the same rows; only the calls tell the two apart.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -81,17 +81,30 @@ let newest: Record<string, { id: string; updatedAt: string }> = {};
 let stored: Record<string, { id: string; updated_at: unknown }> = {};
 let collections: ReturnType<typeof collection>[] = [];
 let singles: Array<{ slug: string; label?: string; tableName?: string }> = [];
-/** The trail's answer to the window read, and to a read narrowed to one collection. */
+/**
+ * The trail's answer to the window read, to a read narrowed to one
+ * collection, and to a read narrowed to one Single.
+ */
 let windowAnswer: { edits: RecentEdit[]; hasMore: boolean } = {
   edits: [],
   hasMore: false,
 };
 let narrowed: Record<string, RecentEdit[]> = {};
+let narrowedSingles: Record<string, RecentEdit[]> = {};
+/** The saves a read narrowed to one subject answers, by the option it narrowed with. */
+function narrowedAnswer(options: RecentEditsOptions): RecentEdit[] {
+  if (options.collection !== undefined) {
+    return narrowed[options.collection] ?? [];
+  }
+  return options.single === undefined
+    ? windowAnswer.edits
+    : (narrowedSingles[options.single] ?? []);
+}
 const getRecentEdits = vi.fn((options: RecentEditsOptions) =>
   Promise.resolve(
-    options.collection === undefined
+    options.collection === undefined && options.single === undefined
       ? windowAnswer
-      : { edits: narrowed[options.collection] ?? [], hasMore: false }
+      : { edits: narrowedAnswer(options), hasMore: false }
   )
 );
 const selectOne = vi.fn((table: string) => Promise.resolve(stored[table]));
@@ -153,6 +166,7 @@ beforeEach(() => {
   singles = [];
   windowAnswer = { edits: [], hasMore: false };
   narrowed = {};
+  narrowedSingles = {};
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
       return { getAllCollections: () => Promise.resolve(collections) };
@@ -185,10 +199,12 @@ beforeEach(() => {
 
 describe("the Content table's bounded read", () => {
   // Sixty collections, the registry returning them in reverse order, five of
-  // them saved recently: the page is those five and the first of the rest.
-  const SIXTY = Array.from({ length: 60 }, (_, i) =>
-    collection(`c${String(i).padStart(2, "0")}`, `C${i}`)
-  ).reverse();
+  // them saved recently, one of those (c50) past the first fifty by label:
+  // the page is those five and the first of the rest.
+  const SIXTY = Array.from({ length: 60 }, (_, i) => {
+    const n = String(i).padStart(2, "0");
+    return collection(`c${n}`, `C${n}`);
+  }).reverse();
   const SAVED = ["c41", "c07", "c33", "c50", "c12"];
   const at = (i: number) => `2026-10-29T1${9 - i}:00:00.000Z`;
 
@@ -203,7 +219,7 @@ describe("the Content table's bounded read", () => {
     );
   });
 
-  it("counts only the collections it draws, out of sixty, and reads each one's newest entry once", async () => {
+  it("counts only the collections it draws, out of sixty, and reads the newest entry of fifty: those the window names, then the first by label", async () => {
     const answer = await table(6);
     const page = [...SAVED, "c00"];
 
@@ -212,9 +228,15 @@ describe("the Content table's bounded read", () => {
     // the same rows, and only the calls tell the two apart.
     expect([...collectionsOf(count)].sort()).toEqual([...page].sort());
     expect(count.mock.calls.length).toBeLessThanOrEqual(12);
-    // Each collection's own last update ranks the page, so each is read once.
-    expect(collectionsOf(find)).toEqual(new Set(SIXTY.map(c => c.slug)));
-    expect(find).toHaveBeenCalledTimes(60);
+    // 🔴 At most fifty newest-entry reads, each once: the five the window
+    // names, c50 among them though it is past the first fifty by label, then
+    // the first forty-five of the rest by label (c00 to c48 less the four
+    // saved there). The last ten by label are never read.
+    const unread = ["c49", ...SIXTY.map(c => c.slug).filter(s => s > "c50")];
+    expect(collectionsOf(find)).toEqual(
+      new Set(SIXTY.map(c => c.slug).filter(s => !unread.includes(s)))
+    );
+    expect(find).toHaveBeenCalledTimes(MAX_WIDGET_LIMIT);
     // The newest entry, one, as the reader, every state.
     expect(find).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -228,8 +250,28 @@ describe("the Content table's bounded read", () => {
     expect(new Set(verdict.mock.calls.map(([slug]) => slug))).toEqual(
       new Set(page)
     );
-    // Every collection the reader may see, counted without a count.
-    expect(answer.collections).toBe(60);
+    // Every row the table could show, counted without a count.
+    expect(answer.total).toBe(60);
+  });
+
+  it("runs at most four of those reads at once", async () => {
+    let running = 0;
+    let most = 0;
+    find.mockImplementation(async (asked: { collection: string }) => {
+      running += 1;
+      most = Math.max(most, running);
+      // Held past a turn of the event loop, so every read started meanwhile overlaps it.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      running -= 1;
+      const entry = newest[asked.collection];
+      return { items: entry === undefined ? [] : [entry] };
+    });
+
+    await table(6);
+
+    // 🔴 Four at once, not fifty: `Promise.all` over every read answers the
+    // same rows, and only how many overlap tells the two apart.
+    expect(most).toBe(4);
   });
 
   it("reads the trail once when its window reached the trail's end", async () => {
@@ -379,6 +421,77 @@ describe("the Content table's rows", () => {
     expect(bySlug.get("about")).not.toHaveProperty("userName");
   });
 
+  it("asks the trail past the window, for who saved a drawn Single, for that Single alone", async () => {
+    collections = [collection("busy", "Busy")];
+    singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
+    // The window is busy's saves alone and stops short of the trail's end, so
+    // Home's latest save lies past it.
+    windowAnswer = {
+      edits: Array.from({ length: MAX_WIDGET_LIMIT }, (_, i) =>
+        save("busy", "2026-10-29T10:00:00.000Z", { entryId: `doc-busy-${i}` })
+      ),
+      hasMore: true,
+    };
+    newest = {
+      busy: { id: "doc-busy-0", updatedAt: "2026-10-29T10:00:00.000Z" },
+    };
+    stored = {
+      single_home: { id: "doc-home", updated_at: "2026-10-29T11:00:00.000Z" },
+    };
+    // A collection's saves under Home's slug would answer a read narrowed by
+    // the slug alone: they name someone else.
+    narrowed = {
+      home: [save("home", "2026-10-29T10:30:00.000Z", { userName: "Cara" })],
+    };
+    narrowedSingles = {
+      home: [
+        save("home", "2026-10-29T11:00:00.000Z", {
+          subjectKind: "single",
+          entryId: "doc-home",
+          userName: "Ben",
+        }),
+      ],
+    };
+
+    const answer = await table(10);
+    const home = answer.rows.find(row => row.kind === "single");
+
+    // 🔴 Named though the window holds no save of it, by the Single's own
+    // save, read for the Single and not for a collection of its slug.
+    expect(home).toMatchObject({
+      updatedAt: "2026-10-29T11:00:00.000Z",
+      userName: "Ben",
+    });
+    expect(getRecentEdits).toHaveBeenCalledWith(
+      expect.objectContaining({ single: "home", limit: 1 })
+    );
+    expect(
+      getRecentEdits.mock.calls.filter(([options]) => options.single)
+    ).toHaveLength(1);
+  });
+
+  it("asks the trail nothing more for a Single when its window reached the trail's end", async () => {
+    singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
+    stored = {
+      single_home: { id: "doc-home", updated_at: "2026-10-29T11:00:00.000Z" },
+    };
+    narrowedSingles = {
+      home: [
+        save("home", "2026-10-29T11:00:00.000Z", {
+          subjectKind: "single",
+          entryId: "doc-home",
+        }),
+      ],
+    };
+
+    const answer = await table(10);
+
+    // The control: a window holding the whole trail and no save of Home means
+    // there is none to find, so nobody is named and nothing more is read.
+    expect(getRecentEdits).toHaveBeenCalledTimes(1);
+    expect(answer.rows[0]).not.toHaveProperty("userName");
+  });
+
   it("leaves Updated out only where there is nothing to date", async () => {
     collections = [collection("empty", "Empty")];
     singles = [{ slug: "about", label: "About", tableName: "single_about" }];
@@ -449,8 +562,9 @@ describe("the Content table's rows", () => {
     // A Single carries no count and no create decision.
     expect(answer.rows[0]).not.toHaveProperty("count");
     expect(answer.rows[0]).not.toHaveProperty("canCreate");
-    // The collections alone: the Single is reached from its own row.
-    expect(answer.collections).toBe(4);
+    // 🔴 Every row the table could show, the Single's included: the list
+    // answer's total is the rows it matched, as every list answer's is.
+    expect(answer.total).toBe(5);
   });
 
   it("counts drafts by the collection list's Draft filter, and none for a collection without the lifecycle", async () => {
@@ -524,6 +638,6 @@ describe("the Content table's rows", () => {
 
     expect(answer.rows.map(row => row.slug)).toEqual(["posts"]);
     expect(collectionsOf(count)).toEqual(new Set(["posts"]));
-    expect(answer.collections).toBe(1);
+    expect(answer.total).toBe(1);
   });
 });

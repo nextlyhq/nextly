@@ -5,9 +5,10 @@
  * own data (a collection's newest entry that reader may read, a Single's
  * document), who saved it as the trail lets that reader see, and a + only where
  * they may create. Then the ranking: each row by its own last update, though
- * one collection's saves fill the trail's window. Then the bound: with sixty
- * collections, one load counts the rows it draws and no others, and reads each
- * collection's newest entry once.
+ * one collection's saves fill the trail's window, and a Single's saver named
+ * from past that window. Then the bound: with sixty collections, one load
+ * counts the rows it draws and no others, and reads the newest entry of at most
+ * fifty, every one the trail's window names among them.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -147,12 +148,15 @@ async function entry(
   return id;
 }
 
-/** The Single's document, made by a first read, last updated at `updatedAt`. */
+/**
+ * The Single's document, made by a first read, last updated at `updatedAt`;
+ * its id, as the trail names it.
+ */
 async function singleUpdatedAt(
   t: TestNextly,
   slug: string,
   updatedAt: Date
-): Promise<void> {
+): Promise<string> {
   await t.nextly.findSingle({ slug: slug as never });
   const registry = t.getService("singleRegistryService") as unknown as {
     getSingleBySlug: (slug: string) => Promise<{ tableName: string } | null>;
@@ -168,6 +172,7 @@ async function singleUpdatedAt(
     { updated_at: updatedAt },
     { and: [{ column: "id", op: "=", value: row.id }] }
   );
+  return String(row.id);
 }
 
 interface TrailRow {
@@ -188,14 +193,15 @@ async function saved(
 /**
  * `person` saving each of `entryIds` at `when`, as the trail records a save:
  * written through the service, then given its instant, so the order is the
- * case's own.
+ * case's own. A collection's entries unless `subjectKind` says a Single's.
  */
 async function savedEach(
   t: TestNextly,
   person: typeof ANA,
   collection: string,
   entryIds: readonly string[],
-  when: Date
+  when: Date,
+  subjectKind: "collection" | "single" = "collection"
 ): Promise<void> {
   const trail = () => t.adapter.select<TrailRow>("activity_log");
   const before = new Set((await trail()).map(row => row.id));
@@ -207,7 +213,7 @@ async function savedEach(
       collection,
       entryId,
       entryTitle: "Saved",
-      subjectKind: "collection",
+      subjectKind,
       metadata: { changedFields: ["title"] },
     });
   }
@@ -304,8 +310,9 @@ describe.each(getConfiguredTestDialects())(
       expect(ana.items[3]).toMatchObject({ count: 0 });
       // Kept off the dashboard for every reader, though readable to this one.
       expect(ana.items.some(row => row.slug === HIDDEN)).toBe(false);
-      // The collections alone, the list View all opens: Home is reached from its row.
-      expect(ana.total).toBe(3);
+      // 🔴 Every row the table could show Ana, Home's included: the list
+      // answer's total is the rows it matched.
+      expect(ana.total).toBe(4);
 
       const ben = await contentTable(as(BEN));
       const benArticles = ben.items.find(row => row.slug === ARTICLES);
@@ -401,13 +408,59 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(answer.total).toBe(3);
     });
+
+    it("names who saved a Single from past the trail's window, by the Single's own save", async () => {
+      const t = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: BUSY,
+            access: { read: () => true },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: HOME,
+            label: { singular: "Home" },
+            access: { read: () => true },
+            fields: [text({ name: "headline" })],
+          }),
+        ],
+      });
+      current = t;
+      await t.adapter.insert("users", { ...ANA, is_active: true });
+      await grantTo(t, ANA.id, "read", [BUSY, HOME]);
+      // Home's document, saved by Ben before any of busy's saves.
+      const home = await singleUpdatedAt(t, HOME, at(1));
+      await savedEach(t, BEN, HOME, [home], at(30), "single");
+      // More entries of busy, each saved since, than the trail's window holds,
+      // so Home's save lies past the window.
+      const busy: string[] = [];
+      for (let i = 0; i <= MAX_WIDGET_LIMIT; i++) {
+        busy.push(await entry(t, BUSY, { title: `busy ${i}` }, at(5)));
+      }
+      await savedEach(t, ANA, BUSY, busy, at(5));
+
+      const answer = await contentTable(as(ANA), 2);
+
+      // 🔴 Dated by its document and naming Ben, though the window holds only
+      // busy's saves.
+      expect(answer.items[0]).toMatchObject({
+        kind: "single",
+        slug: HOME,
+        updatedAt: at(1).toISOString(),
+        userName: BEN.name,
+      });
+      expect(answer.total).toBe(2);
+    });
   }
 );
 
 describe.each(getConfiguredTestDialects())(
   "the Content table's bounded load (integration, %s)",
   dialect => {
-    it("counts the rows it draws and no others, and reads each collection's newest entry once, with sixty collections", async () => {
+    it("counts the rows it draws and no others, and reads the newest entry of at most fifty of sixty collections, every one the window names among them", async () => {
       const t = await createTestNextly({
         dialect,
         collections: SIXTY.map(slug =>
@@ -421,8 +474,9 @@ describe.each(getConfiguredTestDialects())(
       current = t;
       await t.adapter.insert("users", { ...ANA, is_active: true });
       await grantTo(t, ANA.id, "read", SIXTY);
-      // Two saved collections, so the page is not merely the first by label.
-      const late = SIXTY[47]!;
+      // Two saved collections, so the page is not merely the first by label;
+      // one of them past the first fifty by label.
+      const late = SIXTY[55]!;
       const later = SIXTY[23]!;
       const lateEntry = await entry(t, late, { title: "a" }, at(20));
       await saved(t, ANA, late, lateEntry, at(20));
@@ -446,15 +500,21 @@ describe.each(getConfiguredTestDialects())(
       expect(new Set(counted)).toEqual(new Set(drawn));
       // Entries alone here: no collection has the lifecycle, so no drafts.
       expect(counted).toHaveLength(6);
-      // Each collection's newest entry ranks the page: read once for each. The
-      // trail's own reads, which authorize a save by its id, ask by `where`.
+      // Each collection's newest entry ranks the page: read once for each of
+      // fifty. The trail's own reads, which authorize a save by its id, ask by
+      // `where`.
       const read = find.mock.calls
         .map(([args]) => args as { collection: unknown; sort?: unknown })
         .filter(args => args.sort === "-updatedAt")
         .map(args => String(args.collection));
-      expect(new Set(read)).toEqual(new Set(SIXTY));
-      expect(read).toHaveLength(60);
-      // "View all (N)" counts every collection without counting an entry.
+      // 🔴 At most fifty, each once: the two the window names, `late` among
+      // them though it is past the first fifty by label, then the first by
+      // label. The last by label is never read.
+      expect(read).toHaveLength(MAX_WIDGET_LIMIT);
+      expect(new Set(read).size).toBe(MAX_WIDGET_LIMIT);
+      expect(read).toContain(late);
+      expect(read).not.toContain(SIXTY[59]);
+      // Every row the table could show, counted without counting an entry.
       expect(answer.total).toBe(60);
     });
   }
