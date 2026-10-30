@@ -459,6 +459,101 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(403);
     });
 
+    it("takes the live values into a held edit the filter matches in its language", async () => {
+      const SLUG = "restfilter_take_matched";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const made = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "mine", owner: AUTHOR, status: "published" },
+      });
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "meins", owner: AUTHOR, status: "published" },
+      } as never);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "entwurf" },
+      } as never);
+
+      expect(
+        await rest(
+          "POST",
+          [...entry(SLUG, id), "versions", "working-draft", "take-live"],
+          {},
+          "?locale=de"
+        )
+      ).toBe(200);
+    });
+
+    it("restores a version the filter matches in the version's language", async () => {
+      const SLUG = "restfilter_restore_matched";
+      current = await createTestNextly({
+        dialect,
+        localization: LANGUAGES,
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            status: true,
+            versions: { drafts: true },
+            access: { read: () => true, update: ownEntries },
+            fields: translatedOwner,
+          }),
+        ],
+      });
+      const t = current;
+      await userWhoMay(t, AUTHOR, "read", [SLUG]);
+      await grantTo(t, AUTHOR, "update", [SLUG]);
+      const made = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "mine", owner: AUTHOR, status: "published" },
+      });
+      const id = String(made.item.id);
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        locale: "de",
+        data: { title: "meins", owner: AUTHOR, status: "published" },
+      } as never);
+      const german = (
+        await new VersionsRepository(t.adapter).newestVersionNoByLocale(
+          { scopeKind: "collection", scopeSlug: SLUG, entryId: id },
+          ["de"]
+        )
+      ).get("de");
+      expect(german).toBeDefined();
+
+      expect(
+        await rest("POST", [
+          ...entry(SLUG, id),
+          "versions",
+          String(german),
+          "restore",
+        ])
+      ).toBe(200);
+    });
+
     it("asks a take of the live values again under the entry's lock", async () => {
       const SLUG = "restfilter_take_locked";
       // The rule's answer changes once it has been asked, as it does when what
