@@ -101,3 +101,38 @@ export function parseAttentionKey(value: string): AttentionKey | null {
     part: { contentKind, slug, ...(locale !== undefined ? { locale } : {}) },
   };
 }
+
+/** One bucket of Needs attention's grouped answer, as far as its total reads it. */
+export interface AttentionTotalBucket {
+  readonly value: string | null;
+  readonly count: number;
+  readonly atLeast?: boolean;
+}
+
+/**
+ * Everything waiting in a grouped answer, and whether that total is a floor:
+ * the sum of each kind's own bucket, never its parts, which break the kind
+ * down rather than add to it. A bucket this vocabulary does not name, or one
+ * with nothing in it, adds nothing.
+ *
+ * The one total the Needs attention card draws and the dashboard header
+ * repeats, so the two cannot disagree. A total of none that is a floor means
+ * some lists went unread, which is not the same as nothing waiting.
+ *
+ * @experimental
+ */
+export function attentionTotalOf(buckets: readonly AttentionTotalBucket[]): {
+  count: number;
+  atLeast: boolean;
+} {
+  let count = 0;
+  let atLeast = false;
+  for (const bucket of buckets) {
+    if (bucket.value === null) continue;
+    const key = parseAttentionKey(bucket.value);
+    if (key === null || "part" in key) continue;
+    if (bucket.count > 0) count += bucket.count;
+    if (bucket.atLeast === true) atLeast = true;
+  }
+  return { count, atLeast };
+}

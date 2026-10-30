@@ -84,6 +84,11 @@ export default defineConfig({
     // A widget the site declares itself, offered in the Add panel like a
     // plugin's, for site-widget.spec.ts.
     dashboard: { widgets: [siteNotesWidget] },
+    // The environment badge in the dashboard's header, only when a contributor
+    // names one: never guessed, as an app is told to configure it.
+    ...(process.env.NEXTLY_ENV_LABEL
+      ? { environment: { label: process.env.NEXTLY_ENV_LABEL } }
+      : {}),
   },
   localization: {
     locales: [

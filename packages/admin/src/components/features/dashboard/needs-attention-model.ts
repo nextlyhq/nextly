@@ -14,6 +14,7 @@
 import {
   ATTENTION_DUE_WINDOW_MS,
   ATTENTION_KINDS,
+  attentionTotalOf,
   parseAttentionKey,
   type AttentionKind,
 } from "nextly/attention-keys";
@@ -230,13 +231,21 @@ export function attentionView(
   return kinds.length === 0 ? { state: "clear" } : { state: "ready", kinds };
 }
 
-/** Everything waiting, across kinds, and whether that total is a floor. */
+/**
+ * Everything waiting, across kinds, and whether that total is a floor: each
+ * kind's row read back as the bucket it came from, and summed by the rule the
+ * dashboard header counts by (`attentionTotalOf`), so the card's total and the
+ * header's never disagree.
+ */
 export function attentionTotal(kinds: readonly AttentionKindRow[]): {
   count: number;
   atLeast: boolean;
 } {
-  return {
-    count: kinds.reduce((sum, kind) => sum + kind.count, 0),
-    atLeast: kinds.some(kind => kind.atLeast),
-  };
+  return attentionTotalOf(
+    kinds.map(kind => ({
+      value: kind.kind,
+      count: kind.count,
+      atLeast: kind.atLeast,
+    }))
+  );
 }
