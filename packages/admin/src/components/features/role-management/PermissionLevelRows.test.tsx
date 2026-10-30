@@ -83,4 +83,25 @@ describe("PermissionLevelRows", () => {
       screen.getByRole("button", { name: /^Reports, Reports, No access$/ })
     ).toBeInTheDocument();
   });
+
+  it("keeps Find open on a read-only role, while its levels can't change", () => {
+    const row = { ...group("@acme/reports", "reports").rows[0], plugin: null };
+    render(
+      <PermissionLevelRows
+        rows={[row]}
+        groups={[]}
+        pluginNames={new Map()}
+        value={[]}
+        onChange={vi.fn()}
+        readOnly
+      />
+    );
+
+    expect(
+      screen.getByRole("searchbox", { name: "Find a collection or Single" })
+    ).toBeEnabled();
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio).toBeDisabled();
+    }
+  });
 });

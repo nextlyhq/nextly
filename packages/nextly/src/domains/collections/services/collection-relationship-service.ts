@@ -4,6 +4,7 @@ import { getColumns, inArray, sql, type SQL } from "drizzle-orm";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { relatedRowReads } from "../../../auth/access/population-read";
+import { readsAsVisitor } from "../../../auth/access/resolve-actor";
 import {
   readOf,
   type FilteredRead,
@@ -83,6 +84,7 @@ import {
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import {
   localizedFilterContext,
+  matchColumn,
   ruleFilterCondition,
   type DynamicSchema,
 } from "../query/filter-condition";
@@ -1600,6 +1602,8 @@ export class CollectionRelationshipService extends BaseService {
       // The LIFECYCLE question, not the trust question — see widensLifecycle.
       overrideAccess: widensLifecycle(access),
       explicit: access.status,
+      // A visitor's expansion sees published rows only, as its own read does.
+      publishedOnly: readsAsVisitor(access),
     });
     return statusFilter;
   }
@@ -1768,10 +1772,7 @@ export class CollectionRelationshipService extends BaseService {
       },
       this.logger
     );
-    if (condition === undefined) return undefined;
-    return sql<number>`case when ${condition} then 1 else 0 end`.mapWith(
-      Number
-    );
+    return condition === undefined ? undefined : matchColumn(condition);
   }
 
   /**
@@ -1946,6 +1947,10 @@ export class CollectionRelationshipService extends BaseService {
           },
           scope: access.authenticatedScope,
           principal: currentPrincipal(),
+          // Without the access-control service, the Public role as this
+          // service's own database records it, as its direct gate reads it.
+          visitorWithoutService: () =>
+            this.resolveAccessService().ownDatabaseVisitor(),
         },
         container.has("rbacAccessControlService")
           ? container.get<RBACAccessControlService>("rbacAccessControlService")
@@ -4086,6 +4091,8 @@ export class CollectionRelationshipService extends BaseService {
             // seeing the anonymous bearer who is actually asking.
             user: access.fieldAccessUser ?? access.user,
             overrideAccess: false,
+            // A visitor is handed the Public role the row gate above read.
+            visitor: this.resolveAccessService().fieldRuleVisitor,
           },
           redactions
         );
@@ -4114,7 +4121,12 @@ export class CollectionRelationshipService extends BaseService {
       // A scoped API key's own grants, never its owner's.
       state = {
         passes: new Map(),
-        grants: callerAccessGrants(user, access.authenticatedScope),
+        grants: callerAccessGrants(
+          user,
+          access.authenticatedScope,
+          undefined,
+          this.resolveAccessService().fieldRuleVisitor
+        ),
         redactions: new WeakMap(),
       };
       relatedFieldGroupState.set(access, state);

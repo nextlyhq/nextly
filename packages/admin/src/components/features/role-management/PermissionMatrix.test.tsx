@@ -189,4 +189,47 @@ describe("PermissionMatrix", () => {
 
     expect(onChange).toHaveBeenCalledWith(["p4"]);
   });
+
+  it("lets the keyboard reach its scrolling table while every control is disabled", () => {
+    // A read-only role's table has no control left to focus, so the region
+    // that scrolls it takes the focus itself, by its name.
+    const { unmount } = render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+        disabled
+      />
+    );
+    const region = screen.getByRole("region", { name: "Permissions table" });
+    expect(region).toHaveAttribute("tabindex", "0");
+    unmount();
+
+    // CONTROL: an editable table's controls take the focus, and the region
+    // adds no stop of its own.
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole("region", { name: "Permissions table" })
+    ).not.toHaveAttribute("tabindex");
+  });
+
+  it("keeps Search open on a read-only role, while its permissions can't change", () => {
+    render(
+      <PermissionMatrix
+        permissions={PERMISSIONS}
+        value={[]}
+        onChange={vi.fn()}
+        readOnly
+      />
+    );
+
+    expect(screen.getByPlaceholderText("Search...")).toBeEnabled();
+    expect(readTags()).toBeDisabled();
+  });
 });

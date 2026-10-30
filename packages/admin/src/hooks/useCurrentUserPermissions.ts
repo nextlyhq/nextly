@@ -53,8 +53,8 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
 > = {
   canViewUsers: ["read-users"],
   canViewRoles: ["read-roles"],
-  // A `manage-` permission counts as each plain one through `holdsPermission`,
-  // so the media, settings and email flags name the plain permissions alone.
+  // The media, settings and email flags name the plain permissions alone, as
+  // the server asks them.
   canViewMedia: ["read-media"],
   canViewSettings: settingsPanelSlugs(),
   canViewWebhooks: ["read-webhooks", "update-webhooks", "create-webhooks"],
@@ -923,9 +923,8 @@ export function useCurrentUserPermissions(): CurrentUserPermissions {
   );
 
   /**
-   * Check if the current user has a specific permission by slug, a `manage-`
-   * permission counting as the plain ones it stands for (`holdsPermission`).
-   * Super-admin always returns true.
+   * Check if the current user has a specific permission by slug
+   * (`holdsPermission`). Super-admin always returns true.
    */
   const held = new Set(permissions);
   const hasPermission = (slug: string): boolean => {

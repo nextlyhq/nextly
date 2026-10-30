@@ -12,10 +12,15 @@ import {
   groupLevel,
   type PluginGroup,
 } from "@admin/lib/permissions/level-rows";
+import { offeredSwitches } from "@admin/lib/roles/role-screen-mode";
 import { cn } from "@admin/lib/utils";
 import type { Permission } from "@admin/types/ui/form";
 
-import { PermissionLevelRow, PermissionSwitches } from "./PermissionLevelRow";
+import {
+  PermissionLevelRow,
+  PermissionSwitches,
+  VisitorWriteWarning,
+} from "./PermissionLevelRow";
 import { useHeldPermissions } from "./useHeldPermissions";
 
 export interface PluginLevelGroupProps {
@@ -28,6 +33,8 @@ export interface PluginLevelGroupProps {
   lockedIds?: readonly string[];
   bases?: readonly { name: string; ids: readonly string[] }[];
   disabled?: boolean;
+  /** The Public role's rows: see {@link PermissionLevelRow}'s `visitors`. */
+  visitors?: boolean;
 }
 
 /**
@@ -44,6 +51,7 @@ export function PluginLevelGroup({
   lockedIds = [],
   bases,
   disabled = false,
+  visitors = false,
 }: PluginLevelGroupProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const { owned, locked, held } = useHeldPermissions(value, lockedIds);
@@ -56,15 +64,29 @@ export function PluginLevelGroup({
       : `${ownCount} ${ownCount === 1 ? "permission" : "permissions"}`;
 
   // A plugin's own permission is named by its declared name; where two share
-  // one, each is told apart by the resource it acts on.
-  const nameCounts = new Map<string, number>();
+  // one, each is told apart by the resource it acts on, and where they also
+  // share that, by the action too. A permission is its resource and action,
+  // so the three together never repeat.
+  const counts = new Map<string, number>();
+  const count = (key: string) => counts.get(key) ?? 0;
+  const byResource = (permission: Permission) =>
+    `${permission.name}\u0000${permission.resource}`;
   for (const permission of group.permissions) {
-    nameCounts.set(permission.name, (nameCounts.get(permission.name) ?? 0) + 1);
+    counts.set(permission.name, count(permission.name) + 1);
+    counts.set(byResource(permission), count(byResource(permission)) + 1);
   }
-  const ownLabel = (permission: Permission) =>
-    (nameCounts.get(permission.name) ?? 0) > 1
+  const ownLabel = (permission: Permission) => {
+    if (count(byResource(permission)) > 1) {
+      return `${permission.name} (${permission.resource}, ${permission.action})`;
+    }
+    return count(permission.name) > 1
       ? `${permission.name} (${permission.resource})`
       : permission.name;
+  };
+
+  // The plugin's own switches, and for the Public role the warning where one
+  // of them gives visitors a write, as a level row warns of its own.
+  const ownSwitches = offeredSwitches(group.permissions, visitors);
 
   const setOwn = (id: string, on: boolean) => {
     onChange(on ? [...value, id] : value.filter(kept => kept !== id));
@@ -95,7 +117,12 @@ export function PluginLevelGroup({
         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
           {summary}
         </span>
-        <Badge variant={level === "custom" ? "warning" : "outline"}>
+        {/* Kept whole beside a long name: the pill has a fixed height, so
+            its words wrapping would clip them. */}
+        <Badge
+          variant={level === "custom" ? "warning" : "outline"}
+          className="shrink-0 whitespace-nowrap"
+        >
           {levelWord}
         </Badge>
       </CollapsibleTrigger>
@@ -109,6 +136,7 @@ export function PluginLevelGroup({
             lockedIds={lockedIds}
             bases={bases}
             disabled={disabled}
+            visitors={visitors}
           />
         ))}
         {ownCount > 0 && (
@@ -116,8 +144,11 @@ export function PluginLevelGroup({
             <span className="text-sm font-medium text-foreground">
               {`${displayName}'s own permissions`}
             </span>
+            {visitors && (
+              <VisitorWriteWarning permissions={ownSwitches} held={held} />
+            )}
             <PermissionSwitches
-              permissions={group.permissions}
+              permissions={ownSwitches}
               name={displayName}
               // A plugin's own action has no level to be named after: its
               // permission's own name says what it does.

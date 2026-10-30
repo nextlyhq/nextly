@@ -45,6 +45,11 @@ import {
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
+import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
+import {
+  filesWithinStep,
+  stepContinuedNotice,
+} from "../../domains/i18n/migration/step-windows";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -126,15 +131,18 @@ import { UserExtSchemaService } from "../../domains/users/services/user-ext-sche
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
 import type { UserConfig } from "../../users/config/types";
+import { exitWithError } from "../errors";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
   type SupportedDialect,
 } from "../utils/adapter";
-import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
+import {
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   builderMigrationRemedy,
@@ -272,35 +280,21 @@ export async function runMigrate(
   logger.header("Migrate");
 
   logger.debug("Validating database environment...");
-  const dbValidation = validateDatabaseEnv();
+  const dbValidation = requireDatabaseEnv(logger);
 
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
-
-  const dialect = dbValidation.dialect!;
+  const dialect = dbValidation.dialect;
   logger.debug(`Database dialect: ${dialect}`);
 
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -326,8 +320,7 @@ export async function runMigrate(
     });
     logger.success("Database connected");
   } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   installRegistryResolver(adapter as unknown as DrizzleAdapter);
@@ -382,6 +375,17 @@ export async function runMigrate(
     // crashed prior run), then proceed with the normal migrate.
     await maybeForceUnlock(options, db, dialect);
 
+    // Every entity as the registry records it before any file applies, so the companion pass
+    // after the migrations can tell a field this run newly translates from one translated before.
+    const recordedBefore = await readRecordedEntities(
+      adapter as unknown as DrizzleAdapter,
+      configResult.config,
+      error =>
+        logger.warn(
+          `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+        )
+    );
+
     // Delegate to the non-exiting core (Phase 1 + Phase 2 under the lock). The
     // ledger (`nextly_schema_events`) is bootstrapped out-of-band by
     // `ensureLedger` — AFTER applyCore (so pushSchema doesn't see it as an
@@ -422,6 +426,28 @@ export async function runMigrate(
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
+        // A translations column already in place that cannot hold a field the config newly
+        // translates, judged as the files left it and before the registry records them: refused
+        // here, the registry keeps its definitions and the next run is refused the same way.
+        // Judged only once no file is pending, since a later one may still change the column.
+        beforeMetadata: async () => {
+          const pending = await findPendingFiles(
+            adapter,
+            db,
+            dialect,
+            appMigrationsDir,
+            logger
+          );
+          if (pending.length > 0) return;
+          const { refuseCompanionColumnsThatCannotHold } = await import(
+            "../../domains/i18n/runtime/companion-io"
+          );
+          await refuseCompanionColumnsThatCannotHold(
+            adapter as unknown as DrizzleAdapter,
+            configResult.config,
+            recordedBefore
+          );
+        },
       });
 
       logger.newline();
@@ -446,8 +472,7 @@ export async function runMigrate(
           : `${formatCount(ran, "migration")} applied.`
       );
     } catch (err) {
-      logger.error(describeError(err));
-      process.exit(1);
+      exitWithError(logger, err);
     }
 
     // Localization companions, once the schema is in step.
@@ -492,6 +517,7 @@ export async function runMigrate(
             // Never by default: an entity with no transition record may be a legacy install or one
             // localized since birth, and nothing distinguishes them. See `repairLocalization`.
             repairUntracked: options.repairLocalization === true,
+            recordedBefore,
           }
         );
         // After the migrations too, and for the same reason: the user fields'
@@ -508,8 +534,7 @@ export async function runMigrate(
         }
       }
     } catch (err) {
-      logger.error(describeError(err));
-      process.exit(1);
+      exitWithError(logger, err);
     }
 
     // Read-only, once the run has done its own work: name every registry row
@@ -702,6 +727,14 @@ export interface MigrateCoreDeps {
    */
   syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
   /**
+   * Runs inside the lock once the migration files have applied and before their metadata is
+   * recorded (Phase 3). A throw stops the run there: the files that ran stay applied and in the
+   * ledger, and the registry keeps the definitions it had, so the next run judges the same change
+   * again. `nextly migrate` refuses here a translations column that cannot hold a field the config
+   * newly translates.
+   */
+  beforeMetadata?: () => Promise<void>;
+  /**
    * Refuse, before anything changes, a pending migration file the Schema
    * Builder wrote with no snapshot beside it (`isBuilderWrittenMigration`),
    * rather than apply it as written.
@@ -793,18 +826,23 @@ export async function previewMigrate(args: {
   const pendingModules = modules.filter(module => !module.recorded);
 
   const appStep = appStepAfter(args.step, pendingModules.length);
+  // The files a real run with this step applies, a move out of translation run whole included.
   const pendingFiles =
     appStep === 0
       ? []
-      : (
-          await findPendingFiles(
-            adapter,
-            db,
-            dialect,
-            args.migrationsDir,
-            logger
-          )
-        ).slice(0, appStep);
+      : filesWithinStep(
+          (
+            await listMigrationFiles(
+              adapter,
+              db,
+              dialect,
+              args.migrationsDir,
+              logger
+            )
+          ).map(({ file, applied }) => ({ file, done: applied })),
+          appStep,
+          "up"
+        ).run;
 
   logger.newline();
   logger.keyValue(
@@ -1561,6 +1599,9 @@ export async function migrateCore(
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
 
+      // What the caller must hold true before the registry records the files' metadata.
+      await deps.beforeMetadata?.();
+
       /*
        * Phase 3 — make the registry agree with the tables Phase 2 just created.
        *
@@ -1640,19 +1681,74 @@ export async function findPendingFiles(
   migrationsDir: string,
   logger: CommandContext["logger"]
 ): Promise<ParsedMigration[]> {
+  return (
+    await listMigrationFiles(adapter, db, dialect, migrationsDir, logger)
+  ).flatMap(({ file, applied }) => (applied ? [] : [file]));
+}
+
+/** The app's migration files in run order, each with whether the ledger records it applied. */
+async function listMigrationFiles(
+  adapter: CLIDatabaseAdapter,
+  db: unknown,
+  dialect: SupportedDialect,
+  migrationsDir: string,
+  logger: CommandContext["logger"]
+): Promise<{ file: ParsedMigration; applied: boolean }[]> {
   // Passing dialect prefers {name}.{dialect}.sql over base {name}.sql when both exist
   const all = await discoverMigrations(migrationsDir, logger, dialect, "app");
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
-  if (!hasLedger) return all;
+  if (!hasLedger) return all.map(file => ({ file, applied: false }));
+  return withApplied(all, new SchemaEventsRepository(db, dialect));
+}
 
-  const repo = new SchemaEventsRepository(db, dialect);
-  const pending: ParsedMigration[] = [];
-  for (const m of all) {
-    if (!(await repo.isFileApplied(`${m.name}.sql`))) pending.push(m);
+/** `files` in run order, each with whether the ledger records it applied. */
+async function withApplied(
+  files: readonly ParsedMigration[],
+  repo: SchemaEventsRepository
+): Promise<{ file: ParsedMigration; applied: boolean }[]> {
+  const listed: { file: ParsedMigration; applied: boolean }[] = [];
+  for (const file of files) {
+    listed.push({
+      file,
+      applied: await repo.isFileApplied(`${file.name}.sql`),
+    });
   }
-  return pending;
+  return listed;
+}
+
+/**
+ * What a run with `step` does with `listed`: the files the ledger records applied (`done`), the
+ * files it applies (`runs`, as `filesWithinStep` reads them, so the dry run lists the same), and
+ * the file it goes on to past its step inside a move (`continuesAt`), with what it says there. A
+ * step of zero or less reads as no limit here, as it always has; to `filesWithinStep` it would
+ * mean no file at all.
+ */
+function fileRunPlan(
+  listed: readonly { file: ParsedMigration; applied: boolean }[],
+  step: number | undefined
+): {
+  done: ReadonlySet<ParsedMigration>;
+  runs: ReadonlySet<ParsedMigration>;
+  continuesAt: ParsedMigration | undefined;
+  notice: string;
+} {
+  const within = filesWithinStep(
+    listed.map(({ file, applied }) => ({ file, done: applied })),
+    step !== undefined && step > 0 ? step : undefined,
+    "up"
+  );
+  return {
+    done: new Set(listed.filter(l => l.applied).map(l => l.file)),
+    runs: new Set(within.run),
+    // Past the budget only inside a move, so this is set exactly when `continued` is.
+    continuesAt: within.run[within.budget],
+    notice:
+      within.continued === undefined
+        ? ""
+        : stepContinuedNotice(within.continued),
+  };
 }
 
 async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
@@ -1869,15 +1965,14 @@ export async function runFileMigrations(args: {
   let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
   let beforeContributions: Record<string, ContributedElements> = {};
   let applied = 0;
-  let remaining =
-    args.step && args.step > 0 ? args.step : Number.POSITIVE_INFINITY;
+  const plan = fileRunPlan(await withApplied(all, repo), args.step);
 
   for (const m of all) {
     const filename = `${m.name}.sql`;
     const targetFile = await loadTargetSnapshot(metaDir, m.name);
     const target = targetFile?.snapshot ?? null;
 
-    if (await repo.isFileApplied(filename)) {
+    if (plan.done.has(m)) {
       // Advance the baseline past applied files.
       if (targetFile) {
         before = targetFile.snapshot;
@@ -1885,7 +1980,8 @@ export async function runFileMigrations(args: {
       }
       continue;
     }
-    if (remaining <= 0) break;
+    if (!plan.runs.has(m)) break;
+    if (m === plan.continuesAt) logger.info(plan.notice);
 
     // Both apply routes run the same whole-file judgement, so a foreign drop
     // — or a statement the runner's transaction cannot hold — is refused
@@ -1961,7 +2057,6 @@ export async function runFileMigrations(args: {
         throw NextlyError.is(err) ? err : applyFailedError(filename, err);
       }
       applied++;
-      remaining--;
       logger.success(`Applied ${filename}`);
       continue;
     }
@@ -2019,7 +2114,6 @@ export async function runFileMigrations(args: {
     before = target;
     beforeContributions = targetFile?.contributions ?? {};
     applied++;
-    remaining--;
     logger.success(`Applied ${filename}`);
   }
 
@@ -2216,8 +2310,7 @@ export function registerMigrateCommand(program: Command): void {
       try {
         await runMigrate(resolvedOptions, context);
       } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+        exitWithError(context.logger, error);
       }
     });
 }

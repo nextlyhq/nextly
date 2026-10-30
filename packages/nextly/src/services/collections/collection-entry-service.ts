@@ -708,6 +708,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** API-key scope; judges the update gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
   }
@@ -727,6 +729,21 @@ export class CollectionEntryService extends BaseService {
   }): Promise<Map<string, ValidationIssue[]>> {
     return withRuleLanguage(everyLanguageOf(this.localization), () =>
       this.mutationService.releasePublishIssues(params)
+    );
+  }
+
+  /**
+   * Which of these entries a write of the action by this caller would find
+   * inside its rule's filter, judged as a write to every language is. See the
+   * mutation service.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(
+    params: Parameters<CollectionMutationService["entriesWithinWriteFilter"]>[0]
+  ): ReturnType<CollectionMutationService["entriesWithinWriteFilter"]> {
+    return withRuleLanguage(everyLanguageOf(this.localization), () =>
+      this.mutationService.entriesWithinWriteFilter(params)
     );
   }
 

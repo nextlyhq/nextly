@@ -313,6 +313,8 @@ export class CollectionsHandler {
     routeAuthorized?: boolean;
     /** API-key scope; judges the update gate on the key's own grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** The language the write acts in, which a rule's filter is matched in. */
+    locale?: string;
   }): Promise<boolean> {
     return this.entryService.canUpdateEntry(params);
   }
@@ -332,6 +334,19 @@ export class CollectionsHandler {
     action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
     return this.entryService.releasePublishIssues(params);
+  }
+
+  /**
+   * Which of these entries a write of the action by this caller would find
+   * inside its rule's filter, judged now and without writing, on the instance
+   * that serves collection writes. See the mutation service.
+   *
+   * @experimental
+   */
+  async entriesWithinWriteFilter(
+    params: Parameters<CollectionEntryService["entriesWithinWriteFilter"]>[0]
+  ): ReturnType<CollectionEntryService["entriesWithinWriteFilter"]> {
+    return this.entryService.entriesWithinWriteFilter(params);
   }
 
   /**

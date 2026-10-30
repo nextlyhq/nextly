@@ -67,6 +67,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     const fake = await import("./collection-test-helpers");
     return {
       actorForUser: fake.fakeActorForUser,
+      actorForVisitor: fake.fakeActorForVisitor,
       userHoldsPermission: fake.fakeUserHoldsPermission,
       userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
@@ -663,12 +664,22 @@ describe("publish-transition access control", () => {
   };
 
   /** Every action the collection gate was asked about, in order. */
+  // A write a rule's filter may limit is asked through `checkCollectionWrite`,
+  // any other question through `checkCollectionAccess`: the gate was asked
+  // about an operation when either was.
   const gateAsked = () => {
-    const asked = vi.spyOn(
+    const access = vi.spyOn(
       CollectionAccessService.prototype,
       "checkCollectionAccess"
     );
-    return () => asked.mock.calls.map(([params]) => params.operation);
+    const write = vi.spyOn(
+      CollectionAccessService.prototype,
+      "checkCollectionWrite"
+    );
+    return () => [
+      ...access.mock.calls.map(([params]) => params.operation),
+      ...write.mock.calls.map(([params]) => params.operation),
+    ];
   };
 
   // The transition gate only runs when the collection has the draft/published

@@ -27,6 +27,14 @@ export type {
   PreviewViewport,
   PreviewViewportsDeclaration,
 } from "./domains/collections/services/preview-viewports";
+// What a collection's read rule may answer: a filter typed by its fields.
+export type {
+  CollectionFilterRule,
+  CollectionFilterRuleInput,
+  CollectionRuleAnswer,
+  CollectionRuleFilter,
+  UntypedRuleFilter,
+} from "./shared/types/rule-filter";
 
 // The context a FIELD-level hook is handed. `FieldHooks` is already public
 // through the field types below, so the handler it is declared with is too.
@@ -287,7 +295,13 @@ export type {
 // The workspace payload's `widgetSources`, read off the wire as it is
 // serialized, for the same reason. A type only, so it carries nothing of the
 // module that builds it into a `nextly.config.ts`.
-export type { PublishedContentSource } from "./domains/widgets/published-content-source";
+export {
+  contentFieldFits,
+  type PublishedContentSource,
+  staleValueTakesDefault,
+  startsAtDefault,
+  unfitContentField,
+} from "./domains/widgets/published-content-source";
 // The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
 // leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
 // and without it the two fields have types no config author can write down.
@@ -340,6 +354,9 @@ export {
   MAX_CHOSEN_FIELDS,
   naturalGroupBy,
   resolveWidgetSettings,
+  // The rule a stored value is read back by, asked before it is kept: the
+  // settings sheet holds a setting's own editor to it on Done.
+  settingValueProblem,
   type AppliedQuery,
 } from "./domains/widgets/settings";
 // Whether a link a plugin wrote stays inside the admin: asked at startup and

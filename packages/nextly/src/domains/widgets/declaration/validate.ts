@@ -38,6 +38,7 @@ import {
 } from "./displays";
 import { isPermissionName } from "./permission-name";
 import { quote } from "./quote";
+import { isWidgetSkeleton, WIDGET_SKELETON_SKETCH } from "./skeleton";
 import { transportableProblem } from "./transportable";
 
 /** One thing wrong with one declaration, said where an author reads it. */
@@ -87,6 +88,7 @@ const FIELDS = new Set([
   "shows",
   "several",
   "hidesWhenEmpty",
+  "skeleton",
   "settings",
   "load",
   "view",
@@ -190,6 +192,10 @@ const CHECKS: readonly ((
     d.hidesWhenEmpty === undefined || typeof d.hidesWhenEmpty === "boolean"
       ? undefined
       : "hidesWhenEmpty must be true or false",
+  d =>
+    d.skeleton === undefined || isWidgetSkeleton(d.skeleton)
+      ? undefined
+      : `skeleton must be one of ${Object.keys(WIDGET_SKELETON_SKETCH).join(", ")}, got ${quote(d.skeleton)}`,
   d => settingsProblems(d.settings),
   d => loadProblem(d.load),
   d => viewProblem(d.view),
@@ -568,6 +574,8 @@ function settingsProblems(settings: unknown): string[] {
       isRecord(setting) ? { ...setting, name } : setting
     )
   ).filter(problem => problem !== SETTING_NOT_AN_OBJECT);
+  // A setting's own editor is judged among the shared rules, so a widget of
+  // every channel is held to its shape.
   return [...malformed, ...unlabelled, ...shared];
 }
 
@@ -728,8 +736,119 @@ function groupShapeFault(
     : { owner, widget: "(widgets)", problem: sparse };
 }
 
+/** One place a component path is drawn: a widget's view, or one of its settings' editor. */
+interface ComponentUse {
+  owner: string;
+  widget: string;
+  /** The setting it edits, for an editor; absent for a view. */
+  setting?: string;
+}
+
+/** Whether a value can name a component: text with more than blanks in it. */
+const isComponentPath = (value: unknown): value is string =>
+  nonBlank.safeParse(value).success;
+
+/** The component paths a declaration draws with: its view's, and each setting's editor's. */
+function componentUses(
+  declaration: unknown,
+  owner: string
+): (ComponentUse & { path: string })[] {
+  if (!isRecord(declaration) || typeof declaration.id !== "string") return [];
+  const widget = declaration.id;
+  const view = isRecord(declaration.view)
+    ? declaration.view.component
+    : undefined;
+  const settings = isRecord(declaration.settings)
+    ? Object.entries(declaration.settings)
+    : [];
+  return [
+    ...(isComponentPath(view) ? [{ path: view, owner, widget }] : []),
+    ...settings.flatMap(([setting, declared]) => {
+      const editor =
+        isRecord(declared) && isRecord(declared.editor)
+          ? declared.editor.component
+          : undefined;
+      return isComponentPath(editor)
+        ? [{ path: editor, owner, widget, setting }]
+        : [];
+    }),
+  ];
+}
+
+/** The first use of one component path as a view, and as an editor. */
+interface FirstUses {
+  view?: ComponentUse;
+  editor?: ComponentUse;
+}
+
+/** A use of a component, as a fault names it. */
+function describeComponentUse(use: ComponentUse): string {
+  return use.setting === undefined
+    ? `the view of widget "${use.widget}" of ${use.owner}`
+    : `the editor of setting "${use.setting}" of widget "${use.widget}" of ${use.owner}`;
+}
+
 /**
- * Every fault across every owner's declarations, a duplicate id included.
+ * The fault for each component path drawn both as a widget's view and as a
+ * setting's editor, reported once per path against the later use, naming the
+ * earlier one.
+ *
+ * Across every owner, since the generated component map holds one component
+ * per path: a view is handed `WidgetProps` and an editor `SettingEditorProps`,
+ * and the map, which keeps the view, cannot hold the component to both, so an
+ * ordinary view drawn as an editor would throw on props it was never given.
+ */
+function sharedComponentFaults(
+  groups: readonly WidgetDeclarationGroup[]
+): WidgetDeclarationFault[] {
+  const first = new Map<string, FirstUses>();
+  return everyComponentUse(groups).flatMap(({ path, ...use }) => {
+    const other = earlierUseOfOtherKind(first, path, use);
+    return other === undefined
+      ? []
+      : [
+          {
+            owner: use.owner,
+            widget: use.widget,
+            problem: `component "${path}" is ${describeComponentUse(use)} and ${describeComponentUse(other)}; a view and a setting editor are handed different props, so one component cannot be both`,
+          },
+        ];
+  });
+}
+
+/** Every component use in every owner's declarations, in declaration order. */
+function everyComponentUse(
+  groups: readonly WidgetDeclarationGroup[]
+): (ComponentUse & { path: string })[] {
+  return groups.flatMap(({ owner, declarations }) =>
+    Array.isArray(declarations)
+      ? (declarations as readonly unknown[]).flatMap(declaration =>
+          componentUses(declaration, owner)
+        )
+      : []
+  );
+}
+
+/**
+ * The earlier use of `path` as the other kind (a view for an editor, an editor for a view), when
+ * `use` is the first of its own kind there; `undefined` otherwise. Records `use` as the first of
+ * its kind, so each path is reported once.
+ */
+function earlierUseOfOtherKind(
+  first: Map<string, FirstUses>,
+  path: string,
+  use: ComponentUse
+): ComponentUse | undefined {
+  const seen: FirstUses = first.get(path) ?? {};
+  const kind: keyof FirstUses = use.setting === undefined ? "view" : "editor";
+  const other = kind === "view" ? seen.editor : seen.view;
+  first.set(path, { ...seen, [kind]: seen[kind] ?? use });
+  return seen[kind] === undefined ? other : undefined;
+}
+
+/**
+ * Every fault across every owner's declarations, a duplicate id and a
+ * component drawn both as a view and as a setting's editor included.
  *
  * A duplicate is reported against the later claimant, naming the earlier one,
  * so the message tells its reader which two to reconcile.
@@ -763,7 +882,7 @@ export function collectWidgetDeclarationFaults(
       }
     }
   }
-  return faults;
+  return [...faults, ...sharedComponentFaults(groups)];
 }
 
 /**

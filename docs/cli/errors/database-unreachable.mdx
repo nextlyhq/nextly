@@ -1,0 +1,25 @@
+---
+title: DATABASE_UNREACHABLE
+description: "The command could not connect to the database `DATABASE_URL` names."
+---
+
+## Cause
+
+The command could not connect to the database `DATABASE_URL` names.
+
+The connection failed before the command did anything. The Why line is the database driver's own reason: a refused connection, an unknown host, a failed login or a missing database.
+
+## Fix
+
+- Check that the database is running, and reachable from where the command runs.
+- Check the host, port, database name, user and password in `DATABASE_URL`.
+- Then run the command again.
+
+## Example
+
+```text
+✗ The command could not connect to the PostgreSQL database.
+  Why:  connect ECONNREFUSED 127.0.0.1:5432
+  Next: Check that the database is running and that `DATABASE_URL` names its host, port, database, user and password.
+  Docs: https://nextlyhq.com/docs/cli/errors/database-unreachable  (DATABASE_UNREACHABLE)
+```

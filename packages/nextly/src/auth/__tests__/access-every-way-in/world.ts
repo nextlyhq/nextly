@@ -19,11 +19,11 @@ import {
 } from "../../../config";
 import { getDialectTables } from "../../../database/index";
 import { container } from "../../../di/container";
+import { PUBLIC_ROLE_SLUG } from "../../../domains/auth/services/public-role";
 import { getWidget, registerWidget } from "../../../domains/widgets/registry";
 import type { RateLimitStore } from "../../../middleware/rate-limit";
 import type { Principal } from "../../../plugins/principals/types";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
-import { seedAllPermissions } from "../../../init/seed-permissions";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
@@ -39,19 +39,46 @@ import { refusalFromError } from "./refusals";
 import {
   ENTRY_ACTIONS,
   CALLERS,
+  FILTERED_WRITES,
+  isFilterRule,
   RULES,
+  TARGETS,
+  publicHolds,
   type Action,
   type Caller,
   type Rule,
+  type Setup,
+  type Target,
 } from "./table";
 
 export const ORIGIN = "http://localhost";
 
+/**
+ * Each set of targets the world holds, named by the setup that asks it. A
+ * `public` row asks targets of its own, on which the Public role is granted
+ * `PUBLIC_HOLDS`, so that grant never reaches the targets every other setup
+ * asks; `no-service` and `bound` ask `service`'s.
+ */
+const TARGET_SETS = ["service", "public"] as const;
+type TargetSet = (typeof TARGET_SETS)[number];
+
+const setOf = (setup: Setup): TargetSet =>
+  setup === "public" ? "public" : "service";
+
+/** What a set's slugs start with, so no slug names a target of two sets. */
+const prefixOf = (setup: Setup) => (setOf(setup) === "public" ? "p" : "");
+
 /** The slug of the collection, and of the Single, declaring `rule`. */
-export const collectionOf = (rule: Rule) => `c_${rule.replace(/-/g, "_")}`;
-export const singleOf = (rule: Rule) => `s_${rule.replace(/-/g, "_")}`;
+export const collectionOf = (rule: Rule, setup: Setup) =>
+  `${prefixOf(setup)}c_${rule.replace(/-/g, "_")}`;
+export const singleOf = (rule: Rule, setup: Setup) =>
+  `${prefixOf(setup)}s_${rule.replace(/-/g, "_")}`;
 /** The slug of the Single with a status that declares `rule`. */
-export const pubSingleOf = (rule: Rule) => `s_pub_${rule.replace(/-/g, "_")}`;
+export const pubSingleOf = (rule: Rule, setup: Setup) =>
+  `${prefixOf(setup)}s_pub_${rule.replace(/-/g, "_")}`;
+/** The slug of the collection whose relationships a setup's rows populate. */
+export const refsOf = (setup: Setup) =>
+  setOf(setup) === "public" ? "p_refs" : "refs";
 
 /**
  * The filter a `list` and a `count` ask with: it matches the two published
@@ -78,11 +105,17 @@ export function probesRead(read: readonly unknown[] | number): string {
   return other ? "=probe-other" : "R";
 }
 /**
- * The filter the filter rule kinds answer with: it matches the probe entry
- * and no other, so a door that applies it returns the probe and withholds the
- * rest of the collection.
+ * The filter the filter rule kinds answer with: it matches the probe entry and
+ * the rows a filtered write acts on, and not `probe-other` or a filtered
+ * write's twin outside it, so a door that applies it returns the probe and
+ * withholds the other, and changes the one entry and refuses the other. On a
+ * field every caller may read, so no check on hidden fields comes into it.
  */
-const PROBE_FILTER = { slug: { equals: "probe" } };
+const PROBE_FILTER = { team: { equals: "probe" } };
+
+/** The `team` of the rows the filter rule kinds match, and of those they do not. */
+const INSIDE = "probe";
+const OUTSIDE = "other";
 
 /** The relationship on `refs` that points at `rule`'s collection. */
 export const relationOf = (rule: Rule) => `to_${rule.replace(/-/g, "_")}`;
@@ -212,23 +245,27 @@ const PUB_SINGLE_OPERATIONS = [
   "unpublish",
 ] as const;
 
-function ruleCollections() {
+function ruleCollections(setup: TargetSet) {
   return RULES.map(rule => {
     const config = defineCollection({
-      slug: collectionOf(rule),
+      slug: collectionOf(rule, setup),
       status: true,
       access: accessFor(rule, COLLECTION_OPERATIONS) as never,
-      fields: [text({ name: "title" }), text({ name: "slug" })],
+      fields: [
+        text({ name: "title" }),
+        text({ name: "slug" }),
+        text({ name: "team" }),
+      ],
     });
     restoreBooleans(config, rule, COLLECTION_OPERATIONS);
     return config;
   });
 }
 
-function ruleSingles() {
+function ruleSingles(setup: TargetSet) {
   const plain = RULES.map(rule => {
     const config = defineSingle({
-      slug: singleOf(rule),
+      slug: singleOf(rule, setup),
       access: accessFor(rule, SINGLE_OPERATIONS) as never,
       fields: [text({ name: "headline" })],
     });
@@ -239,7 +276,7 @@ function ruleSingles() {
   // publish and an unpublish each meet the rule for its own operation.
   const publishing = RULES.map(rule => {
     const config = defineSingle({
-      slug: pubSingleOf(rule),
+      slug: pubSingleOf(rule, setup),
       status: true,
       access: accessFor(rule, PUB_SINGLE_OPERATIONS) as never,
       fields: [text({ name: "headline" })],
@@ -250,15 +287,22 @@ function ruleSingles() {
   return [...plain, ...publishing];
 }
 
-/** Points at one row of every rule collection, one media row and one user. */
-function refsCollection() {
+/**
+ * Points at one row of every rule collection of a set, one media row and one
+ * user. Its read rule answers `true`, so boot seeding grants the Public role
+ * its read.
+ */
+function refsCollection(setup: TargetSet) {
   return defineCollection({
-    slug: "refs",
+    slug: refsOf(setup),
     access: { read: () => true },
     fields: [
       text({ name: "name" }),
       ...RULES.map(rule =>
-        relationship({ name: relationOf(rule), relationTo: collectionOf(rule) })
+        relationship({
+          name: relationOf(rule),
+          relationTo: collectionOf(rule, setup),
+        })
       ),
       upload({ name: "picture", relationTo: "media" }),
       relationship({ name: "owner", relationTo: "users" }),
@@ -295,12 +339,19 @@ export interface Seeded {
   /**
    * A row of its own for each door, caller and action that consumes one: a
    * delete, a publish (from a draft) and an unpublish (from a published row).
+   * Inside the filter the filter rule kinds answer with; where the rule
+   * answers a filtered write with one, also its twin outside it, under
+   * {@link outsideKey}.
    */
   own: Map<string, string>;
 }
 
 export const ownKey = (door: string, caller: Caller, action: Action) =>
   `${door} ${caller} ${action}`;
+
+/** The key of a row's twin outside the filter, beside its {@link ownKey}. */
+export const outsideKey = (door: string, caller: Caller, action: Action) =>
+  `${ownKey(door, caller, action)} outside`;
 
 /**
  * A plugin call as `opts`, for the action a probe route names.
@@ -359,20 +410,24 @@ function serviceCall(
 }
 
 function probePlugin() {
+  // The gates serve `route` and `can`, which ask `service`'s targets alone.
   const gates = [
     ...RULES.flatMap(rule =>
       // A gate names one permission on one entry, so none is a list or a count.
-      ENTRY_ACTIONS.map(action => ({ slug: collectionOf(rule), action }))
+      ENTRY_ACTIONS.map(action => ({
+        slug: collectionOf(rule, "service"),
+        action,
+      }))
     ),
     ...RULES.flatMap(rule =>
       (["read", "update"] as const).map(action => ({
-        slug: singleOf(rule),
+        slug: singleOf(rule, "service"),
         action,
       }))
     ),
     ...RULES.flatMap(rule =>
       (["publish", "unpublish"] as const).map(action => ({
-        slug: pubSingleOf(rule),
+        slug: pubSingleOf(rule, "service"),
         action,
       }))
     ),
@@ -504,7 +559,8 @@ export interface World {
   t: TestNextly;
   callers: Map<Caller, CallerHandle>;
   seeded: Map<string, Seeded>;
-  refId: string;
+  /** The id of the one row of each `refsOf` collection, by its slug. */
+  refIds: Map<string, string>;
 }
 
 type Db = {
@@ -617,22 +673,34 @@ async function inBatches<T, R>(
   return out;
 }
 
+/** The callers that ask each set's targets: a set's own rows name no other. */
+const CALLERS_OF: Record<TargetSet, readonly Caller[]> = {
+  service: CALLERS,
+  public: ["visitor"],
+};
+
 async function seedCollections(
   t: TestNextly,
-  batch: number
+  batch: number,
+  setup: TargetSet
 ): Promise<Map<string, Seeded>> {
   const seeded = new Map<string, Seeded>();
-  const create = async (collection: string, status: string, n: string) => {
+  const create = async (
+    collection: string,
+    status: string,
+    n: string,
+    team: string = INSIDE
+  ) => {
     const made = await t.nextly.create({
       collection,
-      data: { title: n, slug: n, status },
+      data: { title: n, slug: n, status, team },
     });
     return String((made.item as { id: string | number }).id);
   };
   for (const rule of RULES) {
-    const slug = collectionOf(rule);
+    const slug = collectionOf(rule, setup);
     const keys = ["rest", "direct", "service"].flatMap(door =>
-      CALLERS.flatMap(caller =>
+      CALLERS_OF[setup].flatMap(caller =>
         (["delete", "publish", "unpublish"] as const).map(action =>
           ownKey(door, caller, action)
         )
@@ -647,21 +715,41 @@ async function seedCollections(
       )
     );
     const own = new Map(keys.map((key, i) => [key, ids[i]]));
+    // A filtered write asks a twin outside the filter too, for the filter
+    // rule kinds alone: under any other rule it would answer as its twin does.
+    if (isFilterRule(rule)) {
+      const twins = ["rest", "direct", "service"].flatMap(door =>
+        CALLERS.flatMap(caller =>
+          [...FILTERED_WRITES].map(action => outsideKey(door, caller, action))
+        )
+      );
+      // An unpublish's twin starts published, as the entry it pairs with
+      // does, so a refused unpublish that changed it would show.
+      const twinIds = await inBatches(twins, batch, key =>
+        create(
+          slug,
+          key.endsWith(" unpublish outside") ? "published" : "draft",
+          key.replace(/ /g, "-"),
+          OUTSIDE
+        )
+      );
+      twins.forEach((key, i) => own.set(key, twinIds[i]));
+    }
     seeded.set(slug, {
       readId: await create(slug, "published", "probe"),
-      otherId: await create(slug, "published", "probe-other"),
+      otherId: await create(slug, "published", "probe-other", OUTSIDE),
       updateId: await create(slug, "draft", "edited"),
       own,
     });
   }
   for (const rule of RULES) {
     await t.nextly.updateSingle({
-      slug: singleOf(rule),
+      slug: singleOf(rule, setup),
       data: { headline: "probe" },
     });
     // Its status is set before each publish or unpublish is asked.
     await t.nextly.updateSingle({
-      slug: pubSingleOf(rule),
+      slug: pubSingleOf(rule, setup),
       data: { headline: "probe", status: "draft" },
     });
   }
@@ -679,10 +767,12 @@ interface SeededUser {
  * holding the same permissions, and `chief`, which inherits super-admin.
  */
 async function seedUsers(t: TestNextly) {
+  // The harness ran the boot's seeding (`seedPublic`): every target's
+  // permissions, the preset roles (`editor` among them, which `makeRole` below
+  // takes over), the Public role and what boot grants it. Each step logs its
+  // failure rather than throw, so `grantPublic` checks what the Public role
+  // was left holding.
   const services = new ServiceContainer(t.adapter);
-  // The permissions and role presets an install seeds at startup, which the
-  // harness does not: without them there is no `read-media` to grant.
-  await seedAllPermissions();
   const rootId = await makeUser(t, "root");
   const superAdminRole = (await services.roles.ensureSuperAdminRole()).id;
 
@@ -727,6 +817,96 @@ async function seedUsers(t: TestNextly) {
     users[name] = { id, roleIds: roleId ? [roleId] : [] };
   }
   return { users, reviewerRole, partialRole };
+}
+
+/** A permission's slug, as the role screen and the rules spell it. */
+type Slug = string;
+
+/** The slug of each target's permissions in a set, for a target declaring `rule`. */
+const RESOURCE_OF: Record<Target, (rule: Rule, setup: TargetSet) => Slug> = {
+  collection: collectionOf,
+  // A related row is a row of a rule collection, judged by its permissions.
+  related: collectionOf,
+  single: singleOf,
+  "single-pub": pubSingleOf,
+  media: () => "media",
+  users: () => "users",
+  roles: () => "roles",
+  providers: () => "email-providers",
+};
+
+/** The actions that name a permission of their own. */
+const PERMISSION_ACTIONS: readonly Action[] = [
+  "read",
+  "create",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+];
+
+/**
+ * Every permission the table says the Public role holds on a set's targets
+ * (`publicHolds`), and the read of the set's `refs`, whose read rule answers
+ * `true`: what boot seeding grants on `service`'s, and `PUBLIC_HOLDS` on
+ * `public`'s.
+ */
+function publicPermissions(setup: TargetSet): Set<Slug> {
+  const held = new Set<Slug>([`read-${refsOf(setup)}`]);
+  for (const target of TARGETS) {
+    for (const rule of RULES) {
+      for (const action of PERMISSION_ACTIONS) {
+        if (publicHolds(setup, target, rule, action)) {
+          held.add(`${action}-${RESOURCE_OF[target](rule, setup)}`);
+        }
+      }
+    }
+  }
+  return held;
+}
+
+/**
+ * Grants the Public role what it holds on `public`'s targets, through the
+ * role-permission writer the role screen's save reaches (`setRolePermissions`,
+ * under the lock on the role's row), keeping every grant boot seeding made.
+ *
+ * Then checks that the role holds exactly what the table says it does on
+ * every set: what boot seeding granted on `service`'s targets is the table's
+ * model of it, so a model that drifts from the boot fails here rather than in
+ * thousands of cells.
+ */
+async function grantPublic(t: TestNextly): Promise<void> {
+  const role = (await t.nextly.roles.find({ limit: 100 })).items.find(
+    found => found.slug === PUBLIC_ROLE_SLUG
+  );
+  if (!role) throw new Error("boot seeding made no Public role");
+  const roleId = String(role.id);
+  const holding = async () =>
+    await t.nextly.roles.getPermissions({ id: roleId });
+  const wanted = publicPermissions("public");
+  const ids = await permissionIds(t, slug => wanted.has(slug));
+  if (ids.length !== wanted.size) {
+    throw new Error(
+      `only ${ids.length} of the ${wanted.size} permissions Public is granted exist`
+    );
+  }
+  await t.nextly.roles.setPermissions({
+    roleId,
+    permissionIds: [
+      ...new Set([...(await holding()).map(held => String(held.id)), ...ids]),
+    ],
+  });
+  const held = new Set((await holding()).map(permission => permission.slug));
+  const expected = new Set(
+    TARGET_SETS.flatMap(set => [...publicPermissions(set)])
+  );
+  const missing = [...expected].filter(slug => !held.has(slug));
+  const extra = [...held].filter(slug => !expected.has(slug));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `the Public role does not hold what the table says: missing ${JSON.stringify(missing)}, extra ${JSON.stringify(extra)}`
+    );
+  }
 }
 
 const SESSIONS: [Caller, string][] = [
@@ -883,20 +1063,21 @@ export const widgetFor = (slug: string, action: string) =>
  * The registry outlives an instance, so one already there is kept.
  */
 function registerProbeWidgets(): void {
+  // The `widget` door asks `service`'s targets alone.
   const named: [string, string][] = [
     ...RULES.flatMap(rule =>
       ENTRY_ACTIONS.map(
-        action => [collectionOf(rule), action] as [string, string]
+        action => [collectionOf(rule, "service"), action] as [string, string]
       )
     ),
     ...RULES.flatMap(rule =>
       SINGLE_OPERATIONS.map(
-        action => [singleOf(rule), action] as [string, string]
+        action => [singleOf(rule, "service"), action] as [string, string]
       )
     ),
     ...RULES.flatMap(rule =>
       (["publish", "unpublish"] as const).map(
-        action => [pubSingleOf(rule), action] as [string, string]
+        action => [pubSingleOf(rule, "service"), action] as [string, string]
       )
     ),
     ["media", "read"],
@@ -927,7 +1108,11 @@ function registerProbeWidgets(): void {
 export const MEDIA_MARKER = "probe-image.png";
 export const USER_MARKER = "root@access.test";
 
-async function seedRefs(t: TestNextly, seeded: Map<string, Seeded>) {
+/**
+ * The one media row every set's `refs` points at, filed by the super-admin,
+ * whose id is returned as the user every `refs` row points at.
+ */
+async function seedMedia(t: TestNextly): Promise<string | undefined> {
   const db = t.adapter.getDrizzle() as unknown as Db;
   const owner = (
     await t.adapter.select<{ id: string; email: string }>("users", {})
@@ -945,14 +1130,24 @@ async function seedRefs(t: TestNextly, seeded: Map<string, Seeded>) {
     uploadedAt: new Date(),
     updatedAt: new Date(),
   });
+  return owner;
+}
+
+/** The row of a set's `refs`, pointing at the probe row of each of its rule collections. */
+async function seedRefs(
+  t: TestNextly,
+  seeded: Map<string, Seeded>,
+  setup: TargetSet,
+  owner: string | undefined
+) {
   const made = await t.nextly.create({
-    collection: "refs",
+    collection: refsOf(setup),
     data: {
       name: "refs",
       ...Object.fromEntries(
         RULES.map(rule => [
           relationOf(rule),
-          seeded.get(collectionOf(rule))?.readId,
+          seeded.get(collectionOf(rule, setup))?.readId,
         ])
       ),
       picture: "media-probe",
@@ -985,8 +1180,14 @@ const UNCOUNTED_LIMITS: RateLimitStore = {
 export async function boot(dialect: TestDialect): Promise<World> {
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
-    collections: [...ruleCollections(), refsCollection()],
-    singles: ruleSingles(),
+    collections: TARGET_SETS.flatMap(set => [
+      ...ruleCollections(set),
+      refsCollection(set),
+    ]),
+    singles: TARGET_SETS.flatMap(set => ruleSingles(set)),
+    // The boot's seeding: every target's permissions, the preset roles, the
+    // Public role and what boot grants it.
+    seedPublic: true,
     plugins: [probePlugin(), membersPlugin()],
   });
   // Replaces the boot's registration outright, cached instance and all, so
@@ -1001,9 +1202,16 @@ export async function boot(dialect: TestDialect): Promise<World> {
   try {
     registerProbeWidgets();
     const callers = await seedCallers(t);
-    const seeded = await seedCollections(t, dialect === "sqlite" ? 1 : 16);
-    const refId = await seedRefs(t, seeded);
-    return { t, callers, seeded, refId };
+    await grantPublic(t);
+    const seeded = new Map<string, Seeded>();
+    const refIds = new Map<string, string>();
+    const owner = await seedMedia(t);
+    for (const set of TARGET_SETS) {
+      const own = await seedCollections(t, dialect === "sqlite" ? 1 : 16, set);
+      for (const [slug, ids] of own) seeded.set(slug, ids);
+      refIds.set(refsOf(set), await seedRefs(t, seeded, set, owner));
+    }
+    return { t, callers, seeded, refIds };
   } catch (error) {
     await t.destroy();
     throw error;

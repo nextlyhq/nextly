@@ -283,14 +283,25 @@ exports[`plugin-sdk public export surface > \`./schema\` surface is unchanged 1`
 ]
 `;
 
+exports[`plugin-sdk public export surface > \`./testing/admin\` surface is unchanged 1`] = `
+[
+  "RenderWidgetCardOptions (type)",
+  "WidgetCardState (type)",
+  "renderWidgetCard (value)",
+]
+`;
+
 exports[`plugin-sdk public export surface > \`./testing\` surface is unchanged 1`] = `
 [
   "CreateTestNextlyOptions (type)",
+  "RunWidgetLoadOptions (type)",
   "TestDialect (type)",
   "TestNextly (type)",
+  "WidgetLoadResult (type)",
   "createTestNextly (value)",
   "describeAbortedTransactions (value)",
   "getConfiguredTestDialects (value)",
+  "runWidgetLoad (value)",
   "takeAbortedTransactionSightings (value)",
 ]
 `;
@@ -527,6 +538,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "SecretData (type)",
   "SerializedFieldConfig (type)",
   "ServiceOpts (type)",
+  "SettingEditorProps (type)",
   "TIMESERIES_INTERVALS (value)",
   "TimeseriesInterval (type)",
   "TrustedHtml (value)",

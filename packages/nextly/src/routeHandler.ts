@@ -25,8 +25,10 @@ import {
   requireAnyPermission,
   requireCollectionAccess,
   requireCollectionWriteAccess,
+  requireGrantAccess,
   requireLifecycleAccess,
   admittedActionOf,
+  carriesNoCredential,
   createJsonErrorResponse,
   isErrorResponse,
   type AuthContext,
@@ -720,6 +722,34 @@ const FILTERED_READ_METHODS: ReadonlySet<string> = new Set([
   "getEntry",
 ]);
 
+/**
+ * The entry writes whose service matches the entry against a write rule's
+ * filter: an update, a delete, the writes an editor makes through an entry's
+ * versions, each judged as an update of the entry, and the bulk writes, which
+ * judge each entry they name or match as the single writes do.
+ */
+const FILTERED_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "updateEntry",
+  "deleteEntry",
+  "restoreEntryVersion",
+  "discardWorkingDraft",
+  "takeLiveSharedValues",
+  "autosaveEntry",
+  "bulkUpdateEntries",
+  "bulkDeleteEntries",
+  "bulkUpdateByQuery",
+]);
+
+/**
+ * The writes whose route asks the grant alone: a restore, which writes the
+ * restored version's language, known only once the version is read. The
+ * update it makes asks the rule in that language, before it writes.
+ */
+const GRANT_ONLY_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "restoreEntryVersion",
+  "restoreSingleVersion",
+]);
+
 export const COLLECTION_ENTRY_METHODS = new Set([
   "listEntries",
   "createEntry",
@@ -970,6 +1000,35 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
   publishAllSingleLocales: "publish",
 };
 
+/**
+ * The collection entry and Single document methods a visitor, a request
+ * carrying no credential, may reach: reading, counting and the plain writes of
+ * one entry or document, judged by the Public role. A version, an event, an
+ * autosave, a bulk write and every lifecycle route still need a signed-in
+ * caller: a visitor reads published content only and never publishes.
+ */
+const VISITOR_METHODS: ReadonlySet<string> = new Set([
+  "listEntries",
+  "countEntries",
+  "getEntry",
+  "createEntry",
+  "updateEntry",
+  "deleteEntry",
+  "getSingleDocument",
+  "updateSingleDocument",
+]);
+
+/** Whether a route serves a visitor: an entry or document method it admits one at. */
+function servesVisitor(service: string, method: string): boolean {
+  return VISITOR_SERVICES.has(service) && VISITOR_METHODS.has(method);
+}
+
+/** The services whose entry and document routes serve a visitor. */
+const VISITOR_SERVICES: ReadonlySet<string> = new Set([
+  "collections",
+  "singles",
+]);
+
 async function resolveAuthorization(
   req: Request,
   service: string,
@@ -979,7 +1038,7 @@ async function resolveAuthorization(
   httpMethod: string,
   // Whether the request's path names one entry; see the caller.
   entryInPath = false
-): Promise<AuthContext | ErrorResponse> {
+): Promise<AuthContext | ErrorResponse | null> {
   // --- Collection endpoints ---
   if (service === "collections") {
     if (COLLECTION_ENTRY_METHODS.has(method)) {
@@ -993,6 +1052,10 @@ async function resolveAuthorization(
         // filtered read, which applies a read rule's filter; every other entry
         // route refuses a caller whose rule answers one.
         appliesReadFilter: FILTERED_READ_METHODS.has(method),
+        // The entry writes whose service matches the entry against a write
+        // rule's filter let such a caller through on it the same way.
+        appliesWriteFilter: FILTERED_WRITE_METHODS.has(method),
+        admitsVisitor: VISITOR_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
         return requireCollectionWriteAccess(
@@ -1005,6 +1068,14 @@ async function resolveAuthorization(
       const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
       if (lifecycle) {
         return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      if (GRANT_ONLY_WRITE_METHODS.has(method)) {
+        return requireGrantAccess(
+          req,
+          getActionFromOperation(operation),
+          slug,
+          route
+        );
       }
       return requireCollectionAccess(
         req,
@@ -1049,6 +1120,7 @@ async function resolveAuthorization(
         params: routeParams ?? {},
         // A Single is its one document, named by its slug.
         namesOne: true,
+        admitsVisitor: VISITOR_METHODS.has(method),
       };
       if (STATUS_WRITE_METHODS.has(method)) {
         return requireCollectionWriteAccess(
@@ -1061,6 +1133,9 @@ async function resolveAuthorization(
       const lifecycle = LIFECYCLE_ROUTE_ACTIONS[method];
       if (lifecycle) {
         return requireLifecycleAccess(req, lifecycle, slug, route);
+      }
+      if (GRANT_ONLY_WRITE_METHODS.has(method)) {
+        return requireGrantAccess(req, action, slug, route);
       }
       return requireCollectionAccess(req, action, slug, route);
     }
@@ -1735,6 +1810,14 @@ async function serveServiceRequest(
     }
     // Require specific permission based on service/method/operation
     else {
+      // A request carrying no credential to a route that serves visitors is
+      // judged by the Public role, which is read through the app's services,
+      // so they are initialised before it is judged, as `getDispatcher()`
+      // would only do after. A route that serves no visitor still refuses
+      // such a request before anything boots.
+      if (servesVisitor(service, method) && carriesNoCredential(req)) {
+        await ensureServicesInitialized();
+      }
       const authResult = await resolveAuthorization(
         req,
         service,
@@ -1747,7 +1830,9 @@ async function serveServiceRequest(
       if (isErrorResponse(authResult)) {
         return refuseRequest(req, method, authResult);
       }
-      authorizedUser = authResult;
+      // `null` is a visitor the gate admitted: dispatched with no caller, so
+      // the service judges it as the visitor it is.
+      authorizedUser = authResult ?? undefined;
     }
   }
 
@@ -2442,7 +2527,7 @@ const EMAIL_METHOD_GRANTS: Readonly<Record<string, RouteGrant>> = {
 /**
  * The grant a catch-all Email route asks, read from the system policies:
  * its method's own entry where it has one, else the entry for the action its
- * verb names. A `manage-` permission counts as each plain one.
+ * verb names.
  */
 function emailGrant(
   resource: "emailProviders" | "emailTemplates",

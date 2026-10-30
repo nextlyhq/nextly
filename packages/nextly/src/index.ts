@@ -665,7 +665,11 @@ export {
   type WidgetAccess,
   // The permission gate `access` takes.
   type WidgetAccessGate,
+  // What `describe` answers, and a count's window.
+  type WidgetCollectionDescription,
+  type WidgetCollectionField,
   type WidgetComponentMap,
+  type WidgetCountWindow,
   type WidgetData,
   type WidgetDataInput,
   type WidgetDisplay,
@@ -680,6 +684,8 @@ export {
   type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
+  // A card's loading shape and add-panel sketch.
+  type WidgetSkeleton,
   type WidgetSummary,
   type WidgetView,
 } from "./domains/widgets/declaration/public";
@@ -687,6 +693,8 @@ export {
 // reads its `size` by to ask for no more rows than the card shows, by the formula core's own list
 // cards are drawn with. From the module the admin draws the frame by, which imports nothing more.
 export { rowsThatFit } from "./domains/widgets/card-geometry";
+// A setting's own editor component's props (experimental).
+export type { SettingEditorProps } from "./domains/widgets/result";
 // @experimental The check a site's generated admin component map applies, and what it reads:
 // the widgets a config declares, kept as types from `definePlugin` through `defineConfig`.
 export type {
@@ -1138,6 +1146,12 @@ export {
   type AccessRuleOperation,
   type AccessRuleTarget,
   type MinimalUser,
+  // A read rule may answer a filter, typed by the collection's fields.
+  type CollectionFilterRule,
+  type CollectionFilterRuleInput,
+  type CollectionRuleAnswer,
+  type CollectionRuleFilter,
+  type UntypedRuleFilter,
 } from "./collections/config";
 
 // Collection configuration validation

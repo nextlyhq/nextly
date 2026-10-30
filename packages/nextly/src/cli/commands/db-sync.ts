@@ -68,6 +68,7 @@ import { SchemaRegistry } from "../../database/schema-registry";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
+import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import {
   ACCEPT_DATA_LOSS_ENV,
@@ -77,6 +78,7 @@ import {
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
+import { exitWithError } from "../errors";
 import {
   createContext,
   type CommandContext,
@@ -84,16 +86,14 @@ import {
 } from "../program";
 import {
   createCliAdapter,
-  validateDatabaseEnv,
   getDialectDisplayName,
   type CLIDatabaseAdapter,
 } from "../utils/adapter";
 import {
-  loadConfig,
-  watchConfig,
-  clearConfigCache,
-  type LoadConfigResult,
-} from "../utils/config-loader";
+  requireDatabaseEnv,
+  loadConfigOrExit,
+} from "../utils/command-prerequisites";
+import { watchConfig, clearConfigCache } from "../utils/config-loader";
 import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration } from "../utils/logger";
 
@@ -201,36 +201,22 @@ export async function runDbSync(
 
   // Step 1: Validate database environment
   logger.debug("Validating database environment...");
-  const dbValidation = validateDatabaseEnv();
-
-  if (!dbValidation.valid) {
-    for (const error of dbValidation.errors) {
-      logger.error(error);
-    }
-    logger.newline();
-    logger.info(
-      "Set DATABASE_URL and optionally DB_DIALECT environment variables."
-    );
-    process.exit(1);
-  }
+  const dbValidation = requireDatabaseEnv(logger);
 
   logger.debug(`Database dialect: ${dbValidation.dialect}`);
 
   // Step 2: Load configuration
   logger.info("Loading configuration...");
 
-  let configResult: LoadConfigResult;
-  try {
-    configResult = await loadConfig({
+  const configResult = await loadConfigOrExit(
+    {
       configPath: options.config,
       cwd: options.cwd,
       watch: options.watch,
       debug: options.verbose,
-    });
-  } catch (error) {
-    logger.error(`Failed to load config: ${describeError(error)}`);
-    process.exit(1);
-  }
+    },
+    logger
+  );
 
   if (configResult.configPath) {
     logger.success(`Loaded config from ${configResult.configPath}`);
@@ -250,7 +236,7 @@ export async function runDbSync(
   // Step 3: Connect to database (needed for seeding even without collections)
   logger.newline();
   logger.info(
-    `Connecting to ${getDialectDisplayName(dbValidation.dialect!)}...`
+    `Connecting to ${getDialectDisplayName(dbValidation.dialect)}...`
   );
 
   let adapter: CLIDatabaseAdapter;
@@ -282,8 +268,7 @@ export async function runDbSync(
     (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry);
     logger.debug("Schema registry initialized with static tables");
   } catch (error) {
-    logger.error(`Failed to connect to database: ${describeError(error)}`);
-    process.exit(1);
+    exitWithError(logger, error);
   }
 
   try {
@@ -356,6 +341,21 @@ export async function runDbSync(
 
           assertPluginFieldDeclarations(configResult.config);
 
+          // Every entity as the registry records it before the syncs below rewrite it, so the
+          // companion pass after them can tell a field this run newly translates from one
+          // translated before it.
+          const recordedBefore =
+            options.autoSync !== false
+              ? await readRecordedEntities(
+                  adapter as unknown as DrizzleAdapter,
+                  configResult.config,
+                  error =>
+                    logger.warn(
+                      `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+                    )
+                )
+              : undefined;
+
           // Before the pushes, so an entity gaining localization has its existing content copied
           // into the companion while the main table still carries it. The drop the push then
           // applies is a cleanup rather than a loss.
@@ -368,7 +368,8 @@ export async function runDbSync(
               configResult.config,
               adapter,
               context,
-              "beforeApply"
+              "beforeApply",
+              { recordedBefore }
             );
           }
 
@@ -396,7 +397,9 @@ export async function runDbSync(
             await ensureLocalizedCompanions(
               configResult.config,
               adapter,
-              context
+              context,
+              "afterApply",
+              { recordedBefore }
             );
           }
 
@@ -556,8 +559,7 @@ export function registerDbSyncCommand(program: Command): void {
         try {
           exportDataLossConsent(cmdOptions.acceptDataLoss);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
 
         // Promote / demote short-circuit the full db:sync flow because
@@ -569,8 +571,7 @@ export function registerDbSyncCommand(program: Command): void {
             await runPromote(cmdOptions.promote, context);
             return;
           } catch (error) {
-            context.logger.error(describeError(error));
-            process.exit(1);
+            exitWithError(context.logger, error);
           }
         }
 
@@ -580,8 +581,7 @@ export function registerDbSyncCommand(program: Command): void {
             await runDemote(cmdOptions.demote, context);
             return;
           } catch (error) {
-            context.logger.error(describeError(error));
-            process.exit(1);
+            exitWithError(context.logger, error);
           }
         }
 
@@ -596,8 +596,7 @@ export function registerDbSyncCommand(program: Command): void {
         try {
           await runDbSync(resolvedOptions, context);
         } catch (error) {
-          context.logger.error(describeError(error));
-          process.exit(1);
+          exitWithError(context.logger, error);
         }
       }
     );

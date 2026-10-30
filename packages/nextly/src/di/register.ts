@@ -157,6 +157,7 @@ import {
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
+import { startCompanionReadinessWarmUp } from "../init/warm-companion-readiness";
 import { env } from "../lib/env";
 import type { RateLimitStore } from "../middleware/rate-limit";
 import { maskingServiceLogger } from "../observability/mask-emails";
@@ -1242,6 +1243,20 @@ async function registerServicesOnce(
   // declaration names an entity — so anything left out here silently leaves the
   // endpoint folding against the raw route config for that field.
   setBootedConfig(transformedConfig);
+
+  // Every translated entity's translation table resolved in the background, so
+  // a write inside a caller's own transaction finds the verdict it can only
+  // read (see `init/warm-companion-readiness`). Not awaited: a cold start does
+  // not wait for one probe per translated entity.
+  startCompanionReadinessWarmUp({
+    adapter,
+    registries: {
+      collections: getService("collectionRegistryService"),
+      singles: getService("singleRegistryService"),
+      fieldGroups: getService("fieldGroupRegistryService"),
+    },
+    logger: resolvedLogger,
+  });
 }
 
 // ============================================================
@@ -3223,7 +3238,7 @@ function logStorageConfiguration(
 /**
  * Publish every code-defined `access` block to the RBAC service.
  *
- * `checkAccess` resolves these from an in-memory registry, and a slug missing
+ * The access decision resolves these from an in-memory registry, and a slug missing
  * from it falls through to the caller's stored permissions — so a rule that is
  * never registered does not fail closed, it stops applying. A restrictive
  * `access.read` silently stops restricting.

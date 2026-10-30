@@ -88,6 +88,7 @@ import {
   readAuthenticatedActor,
   readAuthenticatedScope,
   routeAdmittedUpdate,
+  routeVouched,
 } from "../helpers/authenticated-actor";
 import {
   readAuthenticatedUser,
@@ -192,6 +193,20 @@ function formatToastSummary(summary: {
   if (summary.changed) parts.push(`${summary.changed} changed`);
   if (summary.removed) parts.push(`${summary.removed} removed`);
   return parts.length > 0 ? parts.join(", ") : "no changes";
+}
+
+/**
+ * The fields the registry records for a collection before a Schema Builder change, as it records
+ * them, so a relationship the change adds over a column an earlier apply already added still gets
+ * its foreign key, and one that apply renamed does not. The preview and the apply both hand the
+ * pipeline this one list, so they plan the same keys.
+ */
+function recordedFieldsOf(collection: {
+  fields?: unknown;
+}): DesiredCollection["fields"] {
+  return Array.isArray(collection.fields)
+    ? (collection.fields as DesiredCollection["fields"])
+    : [];
 }
 
 /**
@@ -647,6 +662,7 @@ const COLLECTIONS_METHODS: Record<
           (collection as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
       };
 
       return respondData(
@@ -918,6 +934,7 @@ const COLLECTIONS_METHODS: Record<
         localized: isLocalized,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
+        recordedFields: recordedFieldsOf(collection),
       };
 
       // A field leaving translation has preconditions of its own, asked before the push alters
@@ -1358,10 +1375,12 @@ const COLLECTIONS_METHODS: Record<
           locale: p.locale,
           // Who performed the write, recorded on the outbox event.
           actor: readAuthenticatedActor(),
-          // Route middleware already ran the RBAC/code-access gate; attest it
-          // so the handler skips only that redundant re-check (field-level
-          // write access still runs). Never inferred from userId.
-          routeAuthorized: true,
+          // Route middleware already ran the RBAC/code-access gate for the
+          // caller it authenticated; attest it so the handler skips only that
+          // redundant re-check (field-level write access still runs). Never
+          // inferred from userId, and never for a visitor, whom the service
+          // judges itself.
+          routeAuthorized: routeVouched(),
           // The route authorized only `create` against an API key's scope; a
           // create-as-published publish gate judges the key's own grants.
           authenticatedScope: readAuthenticatedScope(),
@@ -1486,10 +1505,12 @@ const COLLECTIONS_METHODS: Record<
         // Who performed the delete (user vs API key), recorded on the
         // `entry.deleted` outbox event — same attribution as create/update.
         actor: readAuthenticatedActor(),
-        // Route middleware already ran the RBAC/code-access gate; attest it so
-        // the handler skips only that redundant re-check (field-level write
-        // access still runs). Never inferred from userId.
-        routeAuthorized: true,
+        // Route middleware already ran the RBAC/code-access gate for the
+        // caller it authenticated; attest it so the handler skips only that
+        // redundant re-check (field-level write access still runs). Never
+        // inferred from userId, and never for a visitor, whom the service
+        // judges itself.
+        routeAuthorized: routeVouched(),
         // The route authorized `delete` against the key's scope; carry the scope
         // so a super-admin-owned key's delete is judged on the key's OWN grant
         // and does not skip stored owner/role delete rules.
