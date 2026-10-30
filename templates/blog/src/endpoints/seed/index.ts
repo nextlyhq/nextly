@@ -22,6 +22,8 @@ import path from "path";
 
 import type { Nextly } from "nextly";
 
+import { ownPostsUnlessPublisher } from "../../access/own-posts";
+
 /**
  * Structured summary of what the seed produced. Returned to the
  * /admin/api/seed POST handler so the dashboard card can render
@@ -74,7 +76,7 @@ const TEMPLATE_ROLES = [
     slug: "author",
     name: "Author",
     description:
-      "Can draft, edit, and delete their own posts, but not publish them. Reads taxonomy.",
+      "Can draft and edit posts, but not publish them; on a code-first blog only their own, which they may also delete. Reads taxonomy.",
     level: 10,
   },
 ] as const;
@@ -135,12 +137,32 @@ async function findUserByEmail(
 /**
  * The only posts permissions the author role is given. Named rather than
  * withheld, so an action a site adds later (`manage-posts`, say) is not
- * handed to authors by default. Posts' update and delete rules limit a caller
- * without `publish-posts` to the posts they wrote, so update and delete reach
- * an author's own posts only. Publish is withheld: it would reach every post
- * (see pickPermissionIdsForRoles).
+ * handed to authors by default. Publish is withheld: it would reach every
+ * post (see pickPermissionIdsForRoles). Delete is added only where Posts'
+ * delete rule limits it to the author's own posts.
  */
-const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update", "delete"]);
+const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
+
+/**
+ * Whether this install's Posts limits a delete to the posts the caller wrote:
+ * its `delete` rule is `ownPostsUnlessPublisher`. A code-first blog registers
+ * Posts with it. A visual blog registers no code collections, and the Posts
+ * its migration creates carries no rule, since the Schema Builder can't store
+ * a function: there the permission alone decides a delete, and granting it
+ * to authors would let each delete every post.
+ */
+export function postsLimitDeletesToTheirAuthor(config: {
+  readonly collections?: ReadonlyArray<{
+    readonly slug: string;
+    readonly access?: { readonly delete?: unknown };
+  }>;
+}): boolean {
+  return (config.collections ?? []).some(
+    collection =>
+      collection.slug === "posts" &&
+      collection.access?.delete === ownPostsUnlessPublisher
+  );
+}
 
 /**
  * Pick permission IDs appropriate for each role. Fetches the catalog of
@@ -150,19 +172,19 @@ const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update", "delete"]);
  * - admin: every permission in the system (broad default - tighten via
  *   /admin/roles/<slug> after seeding).
  * - editor: content + media permissions.
- * - author: posts (create, read, update, delete) + media and read-only
- *   access to the content taxonomy. Posts' rules limit an update or a
- *   delete by a caller without `publish-posts` to the posts they wrote, so
- *   an author changes and deletes only their own. No publish on posts: it
- *   is not limited that way, and would reach every post. An editor
- *   publishes.
+ * - author: posts (create, read, update) + media and read-only access to
+ *   the content taxonomy, and delete on posts where `authorsDeleteOwnPosts`
+ *   says Posts' rule limits it to the posts they wrote (see
+ *   postsLimitDeletesToTheirAuthor). No publish on posts: it is not limited
+ *   that way, and would reach every post. An editor publishes.
  *
  * Returns an empty array if fetching permissions fails; callers still
  * get a "at least one permission required" error from the core service
  * in that case and the role will be skipped with a warning.
  */
 export async function pickPermissionIdsForRoles(
-  nextly: Nextly
+  nextly: Nextly,
+  options: { authorsDeleteOwnPosts: boolean }
 ): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = { admin: [], editor: [], author: [] };
   try {
@@ -186,7 +208,12 @@ export async function pickPermissionIdsForRoles(
         const resource = (p as { resource?: string }).resource;
         const action = (p as { action?: string }).action;
         if (resource === "media") return true;
-        if (resource === "posts") return AUTHOR_POST_ACTIONS.has(action ?? "");
+        if (resource === "posts") {
+          return (
+            AUTHOR_POST_ACTIONS.has(action ?? "") ||
+            (options.authorsDeleteOwnPosts && action === "delete")
+          );
+        }
         if (
           (resource === "categories" || resource === "tags") &&
           action === "read"
@@ -205,7 +232,8 @@ export async function pickPermissionIdsForRoles(
 }
 
 async function seedRoles(
-  nextly: Nextly
+  nextly: Nextly,
+  options: { authorsDeleteOwnPosts: boolean }
 ): Promise<{ idsBySlug: Record<string, string>; created: number }> {
   const roleIdBySlug: Record<string, string> = {};
   let created = 0;
@@ -231,7 +259,7 @@ async function seedRoles(
   // satisfied. Requires the Direct API to forward permissionIds through
   // `data.permissionIds` (wired up in packages/nextly Direct API rbac
   // namespace).
-  const rolePermissionIds = await pickPermissionIdsForRoles(nextly);
+  const rolePermissionIds = await pickPermissionIdsForRoles(nextly, options);
   for (const role of TEMPLATE_ROLES) {
     if (roleIdBySlug[role.slug]) continue;
     const permissionIds = rolePermissionIds[role.slug] ?? [];
@@ -495,15 +523,19 @@ async function uploadMediaFile(
  * Main seed function. Invoked from the auth-gated POST route at
  * `src/app/admin/api/seed/route.ts`. Receives a Nextly instance the
  * route has already initialised with `{ config }` and a verified
- * super-admin session.
+ * super-admin session, and that same config: it says whether Posts limits
+ * an author's deletes to their own posts, which decides whether the author
+ * role is given `delete-posts`.
  *
  * Schema is created via SQL migrations (boot-time auto-apply).
  * This function only populates demo content (Phase C).
  */
 export async function seed({
   nextly,
+  config,
 }: {
   nextly: Nextly;
+  config: Parameters<typeof postsLimitDeletesToTheirAuthor>[0];
 }): Promise<SeedResult> {
   const summary: SeedSummary = {
     rolesCreated: 0,
@@ -586,7 +618,9 @@ export async function seed({
 
   // Step 2a: Seed roles first so user creation can assign them.
   console.log("  Seeding roles...");
-  const rolesResult = await seedRoles(nextly);
+  const rolesResult = await seedRoles(nextly, {
+    authorsDeleteOwnPosts: postsLimitDeletesToTheirAuthor(config),
+  });
   const roleIdBySlug = rolesResult.idsBySlug;
   summary.rolesCreated = rolesResult.created;
 

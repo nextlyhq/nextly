@@ -44,7 +44,7 @@ Three roles seeded on first run:
 
 - **Administrator** (`admin`) - full access to content, taxonomy, media, and users.
 - **Editor** (`editor`) - create, edit, and publish any post; manages categories, tags, and media.
-- **Author** (`author`) - draft, edit, and delete their own posts, but not publish; read taxonomy.
+- **Author** (`author`) - draft and edit posts, but not publish; read taxonomy. On a code-first blog, only their own posts, which they may also delete.
 
 The seed gives each role its permissions; change them on the Roles screen at `/admin/roles/<slug>` or with `nextly.roles.setPermissions({...})`. The `super-admin` role (seeded by Nextly core) bypasses all access checks.
 
@@ -54,7 +54,9 @@ Collection access rules in `src/access/` decide by permission, never by a role's
 - Media: a visitor reads it through the built-in Public role's `read-media`, granted once at the first start. Take it away on the Roles screen and it stays away.
 - Posts: editing and deleting are narrowed by who wrote the post (`src/access/own-posts.ts`). A caller holding `publish-posts` changes every post; anyone else only the posts whose `author` is them. Only a `publish-posts` holder sets or changes a post's `author`, and a new post with no author becomes its creator's.
 
-So the seeded editor edits and deletes every post, and the seeded author, who holds `update-posts` and `delete-posts` but not `publish-posts`, only their own. To let another role edit every post, give it `publish-posts`. See [Only their own entries](https://nextlyhq.com/docs/permissions#only-their-own-entries).
+So the seeded editor edits and deletes every post, and the seeded author, who holds `update-posts` and `delete-posts` but not `publish-posts`, only their own. To let another role edit every post, give it `publish-posts`.
+
+A blog scaffolded with the visual approach registers Posts without these rules, since the Schema Builder can't store a function, so the permission alone decides. Its seed gives the author no `delete-posts`, which would reach every post, and `update-posts` lets the author edit every post. See [Only their own entries](https://nextlyhq.com/docs/permissions#only-their-own-entries).
 
 ## Pages
 
