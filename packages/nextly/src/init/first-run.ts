@@ -663,7 +663,11 @@ export async function ensureFirstRunSetup(
     // A new database holds no content, so the record of where each media
     // item is used is complete from the start; an existing site's becomes so
     // once `nextly media reindex-usage` has read its content.
-    await markMediaUsageRecordedOnNewSite(adapter, logger);
+    await markMediaUsageRecordedOnNewSite(
+      adapter,
+      staticTables.nextlyMeta,
+      logger
+    );
 
     const durationMs = Date.now() - start;
     logger.info(
@@ -961,10 +965,12 @@ async function resolveDeps(
  */
 async function markMediaUsageRecordedOnNewSite(
   adapter: EnsureFirstRunSetupArgs["adapter"],
+  /** The `nextly_meta` table the push above created. */
+  metaTable: unknown,
   logger: EnsureFirstRunSetupArgs["logger"]
 ): Promise<void> {
+  if (metaTable === undefined) return;
   try {
-    const { loadedDialect } = await import("../database/dialect-tables");
     const { MEDIA_USAGE_RECORDED_KEY } = await import(
       "../domains/media/usage/media-usage-store"
     );
@@ -975,7 +981,7 @@ async function markMediaUsageRecordedOnNewSite(
         values(row: Record<string, unknown>): Promise<unknown>;
       };
     };
-    await db.insert(loadedDialect(adapter.dialect).tables.nextlyMeta).values({
+    await db.insert(metaTable).values({
       key: MEDIA_USAGE_RECORDED_KEY,
       value: JSON.stringify({ rebuiltAt: new Date().toISOString() }),
       updatedAt: new Date(),

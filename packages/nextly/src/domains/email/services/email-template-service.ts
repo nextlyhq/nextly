@@ -1301,6 +1301,18 @@ export class EmailTemplateService extends BaseService {
   }
 
   /**
+   * Whether the media usage table is there to write. An adapter that cannot
+   * say which tables it has (one built by hand around a bare Drizzle handle)
+   * counts as having none, as `transactionOpenInFlow` counts one that cannot
+   * say whether a transaction is open.
+   */
+  private async recordsMediaUsage(): Promise<boolean> {
+    const probe = this.adapter as { tableExists?: unknown };
+    if (typeof probe.tableExists !== "function") return false;
+    return mediaUsagePresent(this.adapter, this.logger);
+  }
+
+  /**
    * Run a write to one template's row and rewrite the record of which media
    * items the template uses, on one transaction, so the two commit or roll
    * back together. Before `nextly migrate` has created the record's table the
@@ -1315,9 +1327,7 @@ export class EmailTemplateService extends BaseService {
     templateId: string,
     write: (db: EmailTemplateService["db"]) => Promise<T>
   ): Promise<T> {
-    if (!(await mediaUsagePresent(this.adapter, this.logger))) {
-      return write(this.db);
-    }
+    if (!(await this.recordsMediaUsage())) return write(this.db);
     if (transactionOpenInFlow(this.adapter)) {
       const result = await write(this.db);
       await recordEmailTemplateUsage(this.adapter, templateId);

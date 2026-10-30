@@ -184,9 +184,6 @@ function serviceOver(fresh: FreshDatabase): EmailTemplateService {
   const adapter = {
     dialect: fresh.dialect,
     getDrizzle: () => fresh.db,
-    // The media usage table is not part of this schema: a template's row is
-    // written alone, as before that table existed.
-    tableExists: async () => false,
     getCapabilities: () => ({ dialect: fresh.dialect }),
     connect: async () => {},
     disconnect: async () => {},
