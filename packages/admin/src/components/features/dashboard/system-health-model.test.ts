@@ -47,6 +47,23 @@ describe("System health's lines", () => {
     });
   });
 
+  it.each([
+    ["missing", { ...HEALTHY, version: undefined }],
+    ["empty", { ...HEALTHY, version: "" }],
+    ["not text", { ...HEALTHY, version: 3 }],
+  ])(
+    "reads couldn't check, never OK, when the version is %s",
+    (_case, data) => {
+      // 🔴 Drawn as "Nextly unknown" with a green check: a version not read,
+      // confirmed.
+      expect(line(data, "version")).toMatchObject({
+        value: COULD_NOT_CHECK,
+        severity: "unknown",
+        links: [],
+      });
+    }
+  );
+
   describe("migrations", () => {
     it("reads up to date when nothing is waiting", () => {
       expect(line(HEALTHY, "migrations")).toMatchObject({
@@ -123,6 +140,63 @@ describe("System health's lines", () => {
         }
       }
     );
+
+    it.each([
+      ["absent", { ...HEALTHY, schemaChanges: undefined }],
+      ["not an object", { ...HEALTHY, schemaChanges: "none" }],
+      ["without its list", { ...HEALTHY, schemaChanges: { more: 0 } }],
+      [
+        "without its count of more",
+        { ...HEALTHY, schemaChanges: { failed: [] } },
+      ],
+      [
+        "with a count of more that is not a whole number",
+        { ...HEALTHY, schemaChanges: { failed: [], more: -1 } },
+      ],
+    ])(
+      "reads the migrations line as couldn't check when the schema-change result is %s",
+      (_case, data) => {
+        // 🔴 Read as no failures, a truncated or version-skewed answer drew
+        // "Up to date" without a schema-change result to say so.
+        expect(line(data, "migrations")).toMatchObject({
+          value: COULD_NOT_CHECK,
+          severity: "unknown",
+          links: [],
+        });
+      }
+    );
+
+    it("still reads a failed or pending migration as such when the schema-change result is missing", () => {
+      expect(
+        line(
+          {
+            ...HEALTHY,
+            migrations: { status: "failed", failed: 1, pending: 0 },
+            schemaChanges: undefined,
+          },
+          "migrations"
+        )
+      ).toMatchObject({ value: "Failed", severity: "critical" });
+      expect(
+        line(
+          {
+            ...HEALTHY,
+            migrations: { status: "pending", failed: 0, pending: 1 },
+            schemaChanges: undefined,
+          },
+          "migrations"
+        )
+      ).toMatchObject({ value: "1 pending", severity: "warning" });
+    });
+
+    it("reads failed when the result counts failed collections it could not list", () => {
+      expect(
+        line(
+          { ...HEALTHY, schemaChanges: { failed: [{ label: 3 }], more: 0 } },
+          "migrations"
+        )
+      ).toMatchObject({ value: "Failed", severity: "critical", links: [] });
+    });
 
     it("still reads failed for a collection's failed schema change when the migrations line is absent", () => {
       const data = {

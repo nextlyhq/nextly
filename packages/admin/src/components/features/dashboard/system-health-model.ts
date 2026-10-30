@@ -64,23 +64,41 @@ function adminLink(label: string, path: string): HealthLink[] {
   return href === undefined ? [] : [{ label, href }];
 }
 
-/** The version line: the running Nextly, never a problem. */
+/**
+ * The version line: the running Nextly, never a problem; unchecked when the
+ * answer carried no version, since a version not read is not confirmed.
+ */
 function versionLine(data: Record<string, unknown>): HealthLine {
-  const version = isText(data.version) ? data.version : "unknown";
+  if (!isText(data.version)) return uncheckedLine("version", "Version");
   return {
     id: "version",
     label: "Version",
-    value: `Nextly ${version}`,
+    value: `Nextly ${data.version}`,
     severity: "ok",
     links: [],
   };
 }
 
-/** One link per collection whose last schema change failed, then the rest. */
-function schemaChangeLinks(schema: unknown): HealthLink[] {
-  if (!isRecord(schema)) return [];
-  const failed = Array.isArray(schema.failed) ? schema.failed : [];
-  const links = failed.flatMap(entry =>
+/** The schema-change result, as the answer gave it. */
+interface SchemaChanges {
+  /** How many collections' last schema change failed, listed or not. */
+  failed: number;
+  /** One link per listed collection, then one for the rest. */
+  links: HealthLink[];
+}
+
+/**
+ * The schema-change result, when the answer holds one: its failed list and
+ * how many more. Absent or malformed, it is undefined: no result was read,
+ * which is not zero failures.
+ */
+function schemaChanges(schema: unknown): SchemaChanges | undefined {
+  if (!isRecord(schema) || !Array.isArray(schema.failed)) return undefined;
+  const { more } = schema;
+  if (typeof more !== "number" || !Number.isInteger(more) || more < 0) {
+    return undefined;
+  }
+  const links = schema.failed.flatMap((entry: unknown) =>
     isRecord(entry) && isText(entry.slug)
       ? adminLink(
           `Fix ${isText(entry.label) ? entry.label : entry.slug}`,
@@ -88,61 +106,69 @@ function schemaChangeLinks(schema: unknown): HealthLink[] {
         )
       : []
   );
-  const more = whole(schema.more);
-  return more > 0
-    ? [...links, ...adminLink(`${more} more`, "builder/collections")]
-    : links;
+  return {
+    failed: schema.failed.length + more,
+    links:
+      more > 0
+        ? [...links, ...adminLink(`${more} more`, "builder/collections")]
+        : links,
+  };
+}
+
+/** A migrations line in one state, with its links. */
+function migrationsState(
+  value: string,
+  severity: HealthSeverity,
+  links: HealthLink[] = []
+): HealthLine {
+  return { id: "migrations", label: "Migrations", value, severity, links };
+}
+
+/**
+ * The links of a failed migrations line, when it failed: a migration file
+ * did not apply (the guide on resolving it), or a collection's schema change
+ * did not (each collection, then the rest). Undefined when nothing failed.
+ */
+function failureLinks(
+  status: unknown,
+  schema: SchemaChanges | undefined
+): HealthLink[] | undefined {
+  const failedFiles = status === "failed";
+  const schemaLinks = schema?.links ?? [];
+  if (!failedFiles && (schema?.failed ?? 0) === 0) return undefined;
+  const docs: HealthLink[] = failedFiles
+    ? [{ label: "How to resolve", href: MIGRATIONS_DOCS, external: true }]
+    : [];
+  return [...docs, ...schemaLinks];
+}
+
+/** What a pending migrations line says: how many, when the answer counted them. */
+function pendingValue(pending: unknown): string {
+  const count = whole(pending);
+  return count > 0 ? `${count} pending` : "Pending";
 }
 
 /**
  * The migrations line: failed when a migration or a collection's schema
  * change did not apply, pending while migrations are still applying, up to
- * date only when the answer says "ok", and unchecked otherwise: a missing
- * line or an unknown status is not a healthy one.
+ * date only when the answer says "ok" AND holds a schema-change result, and
+ * unchecked otherwise: a missing line, an unknown status or a schema-change
+ * result not read is not a healthy one.
  */
 function migrationsLine(data: Record<string, unknown>): HealthLine {
   const migrations = isRecord(data.migrations) ? data.migrations : {};
-  const schemaLinks = schemaChangeLinks(data.schemaChanges);
-  const failedFiles = migrations.status === "failed";
-  if (failedFiles || schemaLinks.length > 0) {
-    return {
-      id: "migrations",
-      label: "Migrations",
-      value: "Failed",
-      severity: "critical",
-      links: [
-        ...(failedFiles
-          ? [
-              {
-                label: "How to resolve",
-                href: MIGRATIONS_DOCS,
-                external: true as const,
-              },
-            ]
-          : []),
-        ...schemaLinks,
-      ],
-    };
+  const schema = schemaChanges(data.schemaChanges);
+  const failure = failureLinks(migrations.status, schema);
+  if (failure !== undefined) {
+    return migrationsState("Failed", "critical", failure);
   }
   if (migrations.status === "pending") {
-    const pending = whole(migrations.pending);
-    return {
-      id: "migrations",
-      label: "Migrations",
-      value: pending > 0 ? `${pending} pending` : "Pending",
-      severity: "warning",
-      links: [],
-    };
+    return migrationsState(pendingValue(migrations.pending), "warning");
   }
-  if (migrations.status !== "ok")
+  if (migrations.status !== "ok" || schema === undefined) {
     return uncheckedLine("migrations", "Migrations");
-  return {
-    id: "migrations",
-    label: "Migrations",
-    value: "Up to date",
-    severity: "ok",
-    links: [],
-  };
+  }
+  return migrationsState("Up to date", "ok");
 }
 
 /**

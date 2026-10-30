@@ -10,7 +10,8 @@
  *   and the schema ledger's migrations with an attempt, an apply's or a
  *   rollback's, that did not finish and that nothing has resolved since
  *   (`readSchemaProblems`, by each migration's standing, as `migrate:status`
- *   reads it).
+ *   reads it), told apart into those still running in another process and
+ *   those that failed or were interrupted.
  * - **Schema changes:** the ledger's collections whose newest schema change
  *   failed or was interrupted, from the same read.
  * - **Storage:** the storage layer's last failed write, which it keeps per
@@ -96,24 +97,30 @@ async function collectionLabel(slug: string): Promise<string> {
 
 /**
  * The migrations line: failed when the gate refused or a migration has an
- * unresolved attempt (an apply or a rollback that did not finish); pending
- * while boot migrations are still running; otherwise up to date.
+ * unresolved attempt that failed or was interrupted; pending while boot
+ * migrations are still running, or while another process (a CLI, a second
+ * instance) is applying one; otherwise up to date.
  *
  * While the gate is pending, an attempt with no outcome yet is the boot's own
- * run under way, so it is counted as pending; once settled, the same row is an
- * attempt that stopped without one, which the ledger's rule reads as the
- * failure it may be.
+ * run under way, so every unresolved attempt is counted as pending. Once
+ * settled, this process is applying nothing, so an attempt still open was
+ * recorded by another one: running while it is younger than the threshold a
+ * schema change is judged by (`SCHEMA_CHANGE_STALE_MS`, as `readSchemaProblems`
+ * splits them), and interrupted, the failure it may be, past it.
  */
 function migrationsLine(
   gate: BootGateState,
-  unfinished: number
+  unfinished: number,
+  running: number
 ): SystemHealthData["migrations"] {
   if (gate === "pending") {
-    return { status: "pending", failed: 0, pending: unfinished };
+    return { status: "pending", failed: 0, pending: unfinished + running };
   }
   const failed = unfinished + (gate === "refused" && unfinished === 0 ? 1 : 0);
-  const status: SystemHealthMigrationStatus = failed > 0 ? "failed" : "ok";
-  return { status, failed, pending: 0 };
+  let status: SystemHealthMigrationStatus = "ok";
+  if (failed > 0) status = "failed";
+  else if (running > 0) status = "pending";
+  return { status, failed, pending: running };
 }
 
 /** The storage line: working, or when, where and why its last write failed. */
@@ -144,7 +151,11 @@ async function readSystemHealth(): Promise<SystemHealthData> {
   const listed = failed.slice(0, SYSTEM_HEALTH_LISTED_COLLECTIONS);
   return {
     version: getCoreVersion(),
-    migrations: migrationsLine(gate, problems.unfinishedMigrations.length),
+    migrations: migrationsLine(
+      gate,
+      problems.unfinishedMigrations.length,
+      problems.runningMigrations.length
+    ),
     schemaChanges: {
       failed: await Promise.all(
         listed.map(async slug => ({ slug, label: await collectionLabel(slug) }))
@@ -187,11 +198,12 @@ const SYSTEM_PROBLEMS: readonly {
     label: "Pending migrations",
     reason:
       "Migrations are still being applied. Run nextly migrate:status to see which.",
-    // Pending with no attempt recorded yet is still one thing waiting.
+    // Pending with no attempt recorded yet is still one thing waiting; and a
+    // migration another process is applying is pending beside a failed one.
     count: health =>
       health.migrations.status === "pending"
         ? Math.max(1, health.migrations.pending)
-        : 0,
+        : health.migrations.pending,
   },
   {
     id: "core/system-schema-changes",

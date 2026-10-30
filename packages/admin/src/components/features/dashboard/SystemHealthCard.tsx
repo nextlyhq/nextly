@@ -6,6 +6,7 @@ import { useMemo } from "react";
 
 import { AlertTriangle, Check } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
+import { useNowTick } from "@admin/hooks/useNowTick";
 import { cn } from "@admin/lib/utils";
 
 import { ENTITY_LEADING_CLASS } from "../widgets/frame/entity-row";
@@ -24,11 +25,16 @@ import {
  * the three lines `load` answered, always all three, since "up to date" and
  * "working" are answers too. Each line leads with its severity, by shape as
  * well as colour, then its name and state, and a link for each problem.
+ *
+ * A storage failure's age is derived from a ticking clock (`useNowTick`, as
+ * the other relative-time cards do): widget batches do not poll, so without
+ * it a failure drawn "just now" kept that wording while the card stayed open.
  */
 export const SystemHealthCard: React.FC<DeclaredComponentProps> = ({
   data,
 }) => {
-  const lines = useMemo(() => systemHealthLines(data), [data]);
+  const now = useNowTick();
+  const lines = useMemo(() => systemHealthLines(data, now), [data, now]);
   return (
     <div data-testid="system-health">
       <ul className="grid divide-y divide-border">

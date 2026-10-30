@@ -4,7 +4,7 @@
  * each collection by its newest schema change; and read from a real ledger,
  * each key by its own current state however many events came after it.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb } from "../../../../__tests__/fixtures/db";
 import type {
@@ -122,6 +122,47 @@ describe("schema problems", () => {
         apply("0001_a.sql", "applied", 1),
       ])
     ).toEqual([]);
+  });
+
+  it("reads a migration attempt still open within the stale threshold as running, and one past it as failed", () => {
+    const now = new Date("2026-10-30T12:00:00.000Z");
+    const open = (filename: string, ageMs: number) => ({
+      ...apply(filename, "in_progress", 0),
+      startedAt: new Date(now.getTime() - ageMs),
+    });
+    // 🔴 Another process (a CLI, a second instance) recorded these attempts:
+    // counted as failed the moment this process's boot gate settled, an
+    // ordinary rolling deployment raised a critical failed-migration alert.
+    expect(
+      problemsFromNewestFirst(
+        [
+          open("0002_running.sql", 1000),
+          open("0001_stale.sql", SCHEMA_CHANGE_STALE_MS + 1),
+        ],
+        now
+      )
+    ).toEqual({
+      unfinishedMigrations: ["0001_stale.sql"],
+      runningMigrations: ["0002_running.sql"],
+      failedCollectionChanges: [],
+    });
+    // At the threshold itself it is still running; a failed attempt is
+    // failed however recent.
+    expect(
+      problemsFromNewestFirst(
+        [
+          open("0002_edge.sql", SCHEMA_CHANGE_STALE_MS),
+          {
+            ...apply("0001_failed.sql", "failed", 0),
+            startedAt: new Date(now.getTime() - 1000),
+          },
+        ],
+        now
+      )
+    ).toMatchObject({
+      unfinishedMigrations: ["0001_failed.sql"],
+      runningMigrations: ["0002_edge.sql"],
+    });
   });
 
   it("judges a plugin's module by its stream's own rule, its newest records", () => {
@@ -246,6 +287,7 @@ describe("schema problems, read from the ledger", () => {
     }
     expect(await read()).toEqual({
       unfinishedMigrations: ["0001_old.sql"],
+      runningMigrations: [],
       failedCollectionChanges: ["posts"],
     });
   });
@@ -281,6 +323,7 @@ describe("schema problems, read from the ledger", () => {
     });
     expect(await read()).toEqual({
       unfinishedMigrations: [],
+      runningMigrations: [],
       failedCollectionChanges: [],
     });
   });
@@ -301,5 +344,58 @@ describe("schema problems, read from the ledger", () => {
     ).toEqual(["posts"]);
     // A minute on: still running.
     expect((await read(at(1))).failedCollectionChanges).toEqual([]);
+  });
+
+  describe("a failed change and its retry in the same millisecond", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("reads the retry as newer, so it resolves the failure", async () => {
+      // Every clock read returns the same millisecond: the save, its failure,
+      // the retry and its success all happen "at once".
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(at(0));
+      const scope = {
+        eventType: "ui_save" as const,
+        source: "admin-ui" as const,
+        scopeKind: "collection" as const,
+        scopeSlug: "posts",
+      };
+      const failed = await ledger.recordStart(scope);
+      await ledger.markFailed(failed, { errorCode: "TEST" });
+      // The control: the failure alone is the collection's problem.
+      expect((await read(at(1))).failedCollectionChanges).toEqual(["posts"]);
+
+      const retry = await ledger.recordStart(scope);
+      await ledger.markApplied(retry, {});
+
+      // 🔴 Stamped with the same startedAt, the strict "started after"
+      // comparison did not see the retry as newer, and the failure stayed in
+      // System health for good.
+      const first = await ledger.findById(failed);
+      const second = await ledger.findById(retry);
+      expect(
+        new Date(second?.startedAt ?? 0).getTime() -
+          new Date(first?.startedAt ?? 0).getTime()
+      ).toBeGreaterThan(0);
+      expect((await read(at(1))).failedCollectionChanges).toEqual([]);
+    });
+
+    it("still names a failure recorded after a success in the same millisecond", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(at(0));
+      const scope = {
+        eventType: "ui_save" as const,
+        source: "admin-ui" as const,
+        scopeKind: "collection" as const,
+        scopeSlug: "posts",
+      };
+      const applied = await ledger.recordStart(scope);
+      await ledger.markApplied(applied, {});
+      const failed = await ledger.recordStart(scope);
+      await ledger.markFailed(failed, { errorCode: "TEST" });
+      expect((await read(at(1))).failedCollectionChanges).toEqual(["posts"]);
+    });
   });
 });

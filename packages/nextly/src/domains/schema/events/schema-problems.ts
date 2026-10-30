@@ -14,7 +14,10 @@
  *   outcome, with no outcome since that resolves it. So an older failure an
  *   apply, a rollback or `migrate:resolve` superseded is history, not a
  *   problem; and a failed rollback of an applied migration is one, although
- *   the migration is still applied, as `migrate:status` warns of it;
+ *   the migration is still applied, as `migrate:status` warns of it. An
+ *   attempt still `in_progress`, with no end, that started less than
+ *   {@link SCHEMA_CHANGE_STALE_MS} ago is running, not a problem: another
+ *   process (a CLI, a second instance) may be applying it now;
  * - a collection is a problem when its NEWEST schema change (a Schema Builder
  *   save, a dev push or a `db:sync`, the events the admin's schema journal
  *   lists) failed, or was interrupted: it is still `in_progress`, with no
@@ -65,11 +68,13 @@ const SCHEMA_PROBLEM_KEYS = 25;
 const RECORDS_PER_MIGRATION = 100;
 
 /**
- * How long a schema change may stay `in_progress` before it reads as
- * interrupted. A Schema Builder save, a dev push or a `db:sync` finishes in
- * seconds; one still open ten minutes on lost its process (killed, out of
- * memory, a dropped connection) after `recordStart` and before `recordEnd`,
- * and may have applied part of its change.
+ * How long a schema change, or a migration's attempt, may stay `in_progress`
+ * before it reads as interrupted. A Schema Builder save, a dev push or a
+ * `db:sync` finishes in seconds; one still open ten minutes on lost its
+ * process (killed, out of memory, a dropped connection) after `recordStart`
+ * and before `recordEnd`, and may have applied part of its change. A
+ * migration recorded by another process (a CLI, a second instance in a
+ * rolling deployment) is judged by the same clock.
  */
 export const SCHEMA_CHANGE_STALE_MS = 10 * 60 * 1000;
 
@@ -95,9 +100,16 @@ const CANDIDATE_STATUSES: readonly SchemaEventStatus[] = [
 export interface SchemaProblems {
   /**
    * Migrations whose standing has an unresolved attempt, an apply's or a
-   * rollback's, by ledger key, the most recently recorded first.
+   * rollback's, that failed or was interrupted, by ledger key, the most
+   * recently recorded first.
    */
   unfinishedMigrations: string[];
+  /**
+   * Migrations whose unresolved attempt is still running: `in_progress`,
+   * with no end, started within {@link SCHEMA_CHANGE_STALE_MS}. By ledger
+   * key, the most recently recorded first.
+   */
+  runningMigrations: string[];
   /**
    * Collections whose newest schema change failed or was interrupted, by
    * slug, newest first.
@@ -170,37 +182,48 @@ const collectionOf = (event: ProblemEvent): string | null =>
     ? event.scopeSlug
     : null;
 
+/** Whether an event is still open, with no end, at `now`. */
+const isOpen = (event: ProblemEvent): boolean =>
+  event.status === "in_progress" && event.endedAt === null;
+
+/**
+ * Whether an open event is still running at `now`: it started no more than
+ * {@link SCHEMA_CHANGE_STALE_MS} ago. Past that, it was interrupted.
+ */
+const isRunning = (event: ProblemEvent, now: Date): boolean =>
+  isOpen(event) &&
+  now.getTime() - event.startedAt.getTime() <= SCHEMA_CHANGE_STALE_MS;
+
 /**
  * Whether a collection's newest schema change is a problem: it failed, or it
  * is still open with no end {@link SCHEMA_CHANGE_STALE_MS} after it started.
  */
 function changeIsProblem(event: ProblemEvent, now: Date): boolean {
   if (event.status === "failed") return true;
-  return (
-    event.status === "in_progress" &&
-    event.endedAt === null &&
-    now.getTime() - event.startedAt.getTime() > SCHEMA_CHANGE_STALE_MS
-  );
+  return isOpen(event) && !isRunning(event, now);
 }
 
 /**
  * Which migrations and collections are a problem, from events newest first:
- * each migration by its standing (`standingsByFilename`), each collection by
- * the first (newest) schema change met for it, judged at `now`.
+ * each migration by its standing (`standingsByFilename`), its unresolved
+ * attempt running or not at `now`, and each collection by the first (newest)
+ * schema change met for it, judged at `now`.
  */
 export function problemsFromNewestFirst(
   events: readonly ProblemEvent[],
   now: Date = new Date()
 ): SchemaProblems {
   const unfinishedMigrations: string[] = [];
+  const runningMigrations: string[] = [];
   // In the order each file is first met, which newest first is the order of
   // its most recent record.
   for (const [filename, standing] of standingsByFilename(
     events.filter(isMigrationEvent)
   )) {
-    if (standing.unresolvedAttempt !== undefined) {
-      unfinishedMigrations.push(filename);
-    }
+    const attempt = standing.unresolvedAttempt;
+    if (attempt === undefined) continue;
+    if (isRunning(attempt, now)) runningMigrations.push(filename);
+    else unfinishedMigrations.push(filename);
   }
   const seenCollections = new Set<string>();
   const failedCollectionChanges: string[] = [];
@@ -210,7 +233,7 @@ export function problemsFromNewestFirst(
     seenCollections.add(slug);
     if (changeIsProblem(event, now)) failedCollectionChanges.push(slug);
   }
-  return { unfinishedMigrations, failedCollectionChanges };
+  return { unfinishedMigrations, runningMigrations, failedCollectionChanges };
 }
 
 /** A candidate collection: its newest failed or unfinished change, and that row's id. */
@@ -303,7 +326,11 @@ export async function readSchemaProblems(args: {
   // The candidate collections with a schema change after their newest
   // candidate, which is then not their newest change. The candidate's own
   // row is excluded by id, so a column that keeps finer time than the value
-  // read back cannot count it as newer than itself.
+  // read back cannot count it as newer than itself. "After" is a strict
+  // comparison of start times: the ledger stamps each scope's changes in
+  // strictly increasing milliseconds where they are written
+  // (`SchemaEventsRepository.recordStart`), so a retry recorded in the same
+  // millisecond as the failure it fixed still reads as newer on every dialect.
   const changedSince =
     keys.collections.size === 0
       ? []

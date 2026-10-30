@@ -320,6 +320,47 @@ describe.each(getConfiguredTestDialects())(
       expect(await offered(editor)).toBe(false);
     });
 
+    it("reports a migration another process is applying as pending, and an interrupted one as failed", async () => {
+      const { admin, ledger } = await boot();
+      // The gate is settled: this process is applying nothing, so the attempt
+      // was recorded by another (a CLI, a second instance), a moment ago.
+      await ledger.recordStart({
+        eventType: "file_apply",
+        source: "cli-migrate",
+        filename: "0005_shi_running.sql",
+      });
+      // 🔴 Counted as failed once this process's gate settled, an ordinary
+      // rolling deployment raised a critical failed-migration alert.
+      expect((await healthFor(admin)).migrations).toEqual({
+        status: "pending",
+        failed: 0,
+        pending: 1,
+      });
+      expect(
+        (await systemItemsFor(admin)).map(item => [item.id, item.count])
+      ).toEqual([["core/system-migrations-pending", 1]]);
+
+      // Open past the stale threshold: its process stopped.
+      await ledger.insertEvent({
+        eventType: "file_apply",
+        source: "cli-migrate",
+        status: "in_progress",
+        filename: "0006_shi_interrupted.sql",
+        startedAt: new Date(Date.now() - SCHEMA_CHANGE_STALE_MS - 60_000),
+      });
+      expect((await healthFor(admin)).migrations).toEqual({
+        status: "failed",
+        failed: 1,
+        pending: 1,
+      });
+      expect(
+        (await systemItemsFor(admin)).map(item => [item.id, item.count]).sort()
+      ).toEqual([
+        ["core/system-migrations-failed", 1],
+        ["core/system-migrations-pending", 1],
+      ]);
+    });
+
     it("reports a collection's failed schema change, linking the collections", async () => {
       const { admin, editor, ledger } = await boot();
       const id = await ledger.recordStart({

@@ -47,7 +47,11 @@ export interface SystemHealthData {
     status: SystemHealthMigrationStatus;
     /** Migrations whose last attempt failed or never finished. */
     failed: number;
-    /** Migrations this process is still applying at boot; 0 when unknown. */
+    /**
+     * Migrations still being applied: by this process at boot, or by another
+     * (a CLI, a second instance) that recorded an attempt within the stale
+     * threshold; 0 when unknown.
+     */
     pending: number;
   };
   /** Collections whose last schema change failed, the first few by label. */
