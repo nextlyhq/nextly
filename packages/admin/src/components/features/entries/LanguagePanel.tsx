@@ -669,7 +669,7 @@ function LanguageRow({
  * row after the default reads "not translated": a claim about content that
  * cannot exist rather than work left to do.
  */
-function hasLanguages(
+export function hasLanguages(
   enabled: boolean,
   collectionLocalized: boolean,
   languageCount: number

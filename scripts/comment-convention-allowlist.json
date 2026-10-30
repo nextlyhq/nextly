@@ -551,10 +551,6 @@
     "count": 1,
     "digests": ["6c1a54197305e411"]
   },
-  "packages/nextly/src/domains/schema/legacy-preview/translate.ts": {
-    "count": 2,
-    "digests": ["0978648f64091f91", "680c7c3d3336fd24"]
-  },
   "packages/nextly/src/domains/schema/migrate-create/__tests__/format-file.test.ts": {
     "count": 1,
     "digests": ["2af35d0fbf0e41ef"]
