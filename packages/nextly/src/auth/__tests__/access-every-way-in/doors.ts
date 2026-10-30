@@ -17,6 +17,10 @@ import { createMediaHandlers } from "../../../api/media-handlers";
 import { container } from "../../../di/container";
 import { CollectionAccessService } from "../../../domains/collections/services/collection-access-service";
 import { checkSingleAccess } from "../../../domains/singles/services/single-query-service";
+import {
+  NEXTLY_ERROR_STATUS,
+  type NextlyErrorCode,
+} from "../../../errors/error-codes";
 import { getPluginRouteRegistry } from "../../../plugins/routes/route-registry";
 import { runPluginRoute } from "../../../plugins/routes/dispatch";
 import type {
@@ -53,6 +57,7 @@ import {
   hasOutsideTwin,
   rowKey,
   verdictOf,
+  WRITING_DOORS,
   type Answer,
   type Door,
   type Row,
@@ -961,6 +966,103 @@ async function lock(world: World, row: Row, who: CallerHandle) {
   return status === "acquired" ? "A" : `=${String(status)}`;
 }
 
+/** Whether `code` is a canonical code, which carries its status. */
+const isErrorCode = (code: string): code is NextlyErrorCode =>
+  Object.hasOwn(NEXTLY_ERROR_STATUS, code);
+
+/** A bulk route's answer: the entries it changed and those it failed. */
+interface BulkBody {
+  items?: { id?: unknown }[];
+  errors?: { id?: unknown; code?: unknown; message?: unknown }[];
+}
+
+/**
+ * Asks the REST bulk route by ids for one entry, as the admin's entry list
+ * sends a row's or a selection's Delete, Publish and Unpublish: a delete
+ * through `bulk-delete`, any other write through `bulk-update` with the body
+ * the single write sends as its `data`.
+ */
+function bulkRequest(
+  slug: string,
+  action: Exclude<Row["action"], "list" | "count">,
+  id: string,
+  headers: Record<string, string>
+): Promise<Response> {
+  const { body } = COLLECTION_REQUESTS[action];
+  return action === "delete"
+    ? request(
+        "POST",
+        ["collections", slug, "entries", "bulk-delete"],
+        headers,
+        { ids: [id] }
+      )
+    : request(
+        "POST",
+        ["collections", slug, "entries", "bulk-update"],
+        headers,
+        { ids: [id], data: body }
+      );
+}
+
+/**
+ * The refusal a bulk route answered `id` with among its items, its message
+ * read with the id taken out, so an entry answered as missing compares equal
+ * with a missing entry, whose own id its message names. `undefined` where the
+ * route changed the entry.
+ */
+async function bulkItemRefusal(
+  res: Response,
+  id: string
+): Promise<Refusal | undefined> {
+  const body = (await res.clone().json()) as BulkBody;
+  const failed = body.errors?.find(item => String(item.id) === id);
+  if (!failed) return undefined;
+  const code = typeof failed.code === "string" ? failed.code : "-";
+  return {
+    status: isErrorCode(code) ? NEXTLY_ERROR_STATUS[code] : 0,
+    code,
+    shape: "item",
+    message:
+      typeof failed.message === "string"
+        ? failed.message.replaceAll(id, "<id>")
+        : "",
+  };
+}
+
+/**
+ * The bulk routes by ids. A request the route refuses whole answers with its
+ * status, as REST does; one it lets through answers 200 whatever happened to
+ * each entry, so the entry's own result among the items is the answer: `A`
+ * where it was changed, the status of its failure's code where it failed. A
+ * failure is compared with the same request for an entry that does not exist.
+ */
+async function bulk(world: World, row: Row, who: CallerHandle) {
+  // The table asks this door only writes to existing entries.
+  if (row.action === "list" || row.action === "count") {
+    throw new Error(`a bulk route sends no ${row.action}`);
+  }
+  const { slug, id } = addressOf(world, row, "bulk");
+  const res = await bulkRequest(slug, row.action, id, who.headers);
+  if (res.status >= 300) {
+    await noteResponse(res);
+    return fromStatus(res.status);
+  }
+  const refusal = await bulkItemRefusal(res, id);
+  if (!refusal) {
+    const body = (await res.json()) as BulkBody;
+    const changed = body.items?.some(item => String(item.id) === id);
+    return changed ? "A" : "=unnamed";
+  }
+  noteRefusal(refusal);
+  const absent = await bulkRequest(slug, row.action, ABSENT_ID, who.headers);
+  noteMissingRefusal(
+    absent.status >= 300
+      ? await refusalOf(absent)
+      : await bulkItemRefusal(absent, ABSENT_ID)
+  );
+  return refusal.status === 0 ? "E" : String(refusal.status);
+}
+
 const ADAPTERS: Record<
   Door,
   (world: World, row: Row, who: CallerHandle) => Promise<Answer | Attributed>
@@ -978,6 +1080,7 @@ const ADAPTERS: Record<
   widget,
   lock,
   capabilities,
+  bulk,
 };
 
 /**
@@ -1031,15 +1134,8 @@ async function answer(
     : { answer: result.answer, deviations: [...result.deviations], refusal };
 }
 
-/**
- * The doors where asking for a write IS the write. The others only ask a gate
- * (`route`, `can`) or read, so nothing they answer can have been written.
- */
-const WRITING_DOORS: ReadonlySet<Door> = new Set<Door>([
-  "rest",
-  "direct",
-  "service",
-]);
+/** The doors where asking for a write IS the write ({@link WRITING_DOORS}). */
+const WRITES_BY_ASKING: ReadonlySet<Door> = new Set<Door>(WRITING_DOORS);
 
 const READS: ReadonlySet<Row["action"]> = new Set(["read", "list", "count"]);
 
@@ -1056,7 +1152,7 @@ function writes(row: Row, door: Door): boolean {
     (row.target === "collection" ||
       row.target === "single" ||
       row.target === "single-pub") &&
-    WRITING_DOORS.has(door)
+    WRITES_BY_ASKING.has(door)
   );
 }
 
