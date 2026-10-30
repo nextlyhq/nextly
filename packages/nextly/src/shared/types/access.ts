@@ -230,42 +230,49 @@ export type AccessControlFunction = (
  * });
  * ```
  */
+/**
+ * A collection rule as it is stored: one that may answer a filter, which
+ * allows only the entries it matches (see `CollectionFilterRule`), or `true`
+ * or `false`. `defineCollection` types that filter by the collection's fields.
+ *
+ * Spelled out rather than as `CollectionFilterRule`: a rule typed by a
+ * collection's fields is stored here, and the checker, comparing two uses of
+ * one generic alias by how its fields parameter varies, would refuse it.
+ * Compared as written, it holds every typed rule.
+ */
+export type StoredFilterRule =
+  | ((
+      ctx: AccessControlContext
+    ) => boolean | UntypedRuleFilter | Promise<boolean | UntypedRuleFilter>)
+  | boolean;
+
 export interface CollectionAccessControl {
   /** Access rule for creating new documents */
   create?: AccessControlFunction | boolean;
+  /** Access rule for reading/listing documents; it may answer a filter. */
+  read?: StoredFilterRule;
   /**
-   * Access rule for reading/listing documents. It may answer a filter, which
-   * allows only the entries it matches (see `CollectionFilterRule`).
-   * `defineCollection` types that filter by the collection's fields.
-   *
-   * Spelled out rather than as `CollectionFilterRule`: a rule typed by a
-   * collection's fields is stored here, and the checker, comparing two uses
-   * of one generic alias by how its fields parameter varies, would refuse it.
-   * Compared as written, it holds every typed rule.
+   * Access rule for updating existing documents. A filter it answers allows
+   * an update only of the entries it matches, and the update may not move an
+   * entry out of it.
    */
-  read?:
-    | ((
-        ctx: AccessControlContext
-      ) => boolean | UntypedRuleFilter | Promise<boolean | UntypedRuleFilter>)
-    | boolean;
-  /** Access rule for updating existing documents */
-  update?: AccessControlFunction | boolean;
-  /** Access rule for deleting documents */
-  delete?: AccessControlFunction | boolean;
+  update?: StoredFilterRule;
+  /** Access rule for deleting documents; it may answer a filter. */
+  delete?: StoredFilterRule;
   /**
    * Access rule for moving a document INTO published (publishing). A write that
    * changes only the status is judged by it alone; one that also edits fields
    * needs `update` too. Absent means the publish permission is resolved from
-   * DB grants alone (`publish-<slug>`).
+   * DB grants alone (`publish-<slug>`). It may answer a filter.
    */
-  publish?: AccessControlFunction | boolean;
+  publish?: StoredFilterRule;
   /**
    * Access rule for moving a document OUT of published (unpublishing). A write
    * that changes only the status is judged by it alone; one that also edits
    * fields needs `update` too. Absent means it is resolved from DB grants alone
-   * (`unpublish-<slug>`).
+   * (`unpublish-<slug>`). It may answer a filter.
    */
-  unpublish?: AccessControlFunction | boolean;
+  unpublish?: StoredFilterRule;
 }
 
 // ============================================================
