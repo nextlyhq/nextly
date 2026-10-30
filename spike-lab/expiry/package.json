@@ -1,0 +1,9 @@
+{
+  "name": "expiry-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "start": "next start"
+  }
+}

@@ -1,0 +1,5 @@
+# Build output, the run files and the linked packages stay local.
+.next/
+run/
+node_modules
+next-env.d.ts

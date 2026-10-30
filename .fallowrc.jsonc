@@ -38,7 +38,14 @@
   //     repository rather than beside it, each is a full second copy that
   //     fallow walks as ordinary source, so every file, export and cycle is
   //     counted twice and the report is dominated by another branch's tree.
-  "ignorePatterns": ["templates/**", "docs/**", "**/worktrees/**"],
+  //   spike-lab/ = stand-alone Next.js apps outside every workspace package,
+  //     run by their own scripts, so the graph has no entry into them.
+  "ignorePatterns": [
+    "templates/**",
+    "docs/**",
+    "**/worktrees/**",
+    "spike-lab/**",
+  ],
 
   // Reachable only through a string, so the graph has no edge leading to
   // them. Left out, each reports as unused, and an unused file takes whatever

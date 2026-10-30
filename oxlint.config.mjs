@@ -229,6 +229,10 @@ export default defineConfig({
     "packages/create-nextly-app/templates/**",
     "packages/eslint-plugin/**",
     "apps/playground/src/stubs/**",
+    // Stand-alone Next.js apps outside every package's TypeScript project, run
+    // by their own scripts, so type-aware rules and turbo's env list do not
+    // apply to them.
+    "spike-lab/**",
     // The playground's scripts and tests run in its TypeScript project and
     // were always linted with it, so they are taken back from the two
     // exclusions above.
