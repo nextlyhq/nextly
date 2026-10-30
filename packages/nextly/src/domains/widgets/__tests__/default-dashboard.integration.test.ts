@@ -34,6 +34,7 @@ import {
 import { ReleasesRepository } from "../../releases/releases-repository";
 import { refreshContentSources } from "../content-sources";
 import { setDefaultLayoutPlan } from "../default-layout";
+import { listWidgets } from "../registry";
 
 /**
  * The agreed default, in order, each at its agreed size, `w` by `h` in grid units. A list card is
@@ -44,7 +45,7 @@ const AGREED = [
   ["core/quick-create", "4x4"],
   ["core/recently-edited", "6x5"],
   ["core/recent-activity", "6x5"],
-  ["core/content", "12x4"],
+  ["core/content-table", "12x4"],
   ["core/upcoming-releases", "4x4"],
   ["core/team", "4x4"],
 ] as const;
@@ -176,7 +177,7 @@ describe.each(getConfiguredTestDialects())(
         ["core/needs-attention", "8x4"],
         ["core/recently-edited", "6x5"],
         ["core/recent-activity", "6x5"],
-        ["core/content", "12x4"],
+        ["core/content-table", "12x4"],
       ]);
     });
 
@@ -195,7 +196,10 @@ describe.each(getConfiguredTestDialects())(
       await refreshContentSources();
       // The default a site's `admin.dashboard.defaultLayout` asks for, as startup sets it.
       setDefaultLayoutPlan({
-        cards: [{ widget: "core/content" }, { widget: "core/team", w: 6 }],
+        cards: [
+          { widget: "core/content-table" },
+          { widget: "core/team", w: 6 },
+        ],
         suggestions: true,
         suggested: [],
       });
@@ -203,7 +207,7 @@ describe.each(getConfiguredTestDialects())(
       const following = await layoutOf(admin);
       expect(following.source).toBe("default");
       expect(sized(following.placements)).toEqual([
-        ["core/content", "12x4"],
+        ["core/content-table", "12x4"],
         ["core/team", "6x4"],
       ]);
 
@@ -225,7 +229,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The site's default changes; the saved dashboard does not.
       setDefaultLayoutPlan({
-        cards: [{ widget: "core/team" }, { widget: "core/content" }],
+        cards: [{ widget: "core/team" }, { widget: "core/content-table" }],
         suggestions: true,
         suggested: [],
       });
@@ -237,8 +241,57 @@ describe.each(getConfiguredTestDialects())(
       // What a reset would return to is the new default.
       expect(sized(saved.defaultPlacements)).toEqual([
         ["core/team", "4x4"],
-        ["core/content", "12x4"],
+        ["core/content-table", "12x4"],
       ]);
+    });
+
+    it("has no core/content card: it is not registered, and a saved layout naming it is refused", async () => {
+      current = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        // A collection the administrator may read, so the Content table is theirs to place.
+        collections: [
+          defineCollection({
+            slug: "dd_posts",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const admin = await account(current, "admin@example.com");
+      await refreshContentSources();
+
+      const ids = listWidgets().map(widget => widget.id);
+      expect(ids).not.toContain("core/content");
+      // The control: the registry is populated, the table among it.
+      expect(ids).toContain("core/content-table");
+
+      const read = await layoutOf(admin);
+      expect(read.placements.map(p => p.widgetId)).not.toContain(
+        "core/content"
+      );
+      const write = (widgetId: string) => {
+        signedInAs(admin);
+        return putWidgetLayout(
+          new Request("http://localhost/api/dashboard/layout", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              placements: [
+                { id: "content", widgetId, w: 12, h: 4, removed: false },
+              ],
+              version: read.version,
+              scope: read.scope,
+            }),
+          })
+        );
+      };
+      // Refused as any widget nobody can place is, with no conversion to the table.
+      const refused = await write("core/content");
+      expect(refused.status).toBe(400);
+      expect(await refused.text()).toContain("core/content");
+      expect((await layoutOf(admin)).source).toBe("default");
+      // The control: the same write naming the table is accepted.
+      const accepted = await write("core/content-table");
+      expect(accepted.status).toBe(200);
     });
 
     it("gives a super-admin who may read only internal collections no Content and no Create", async () => {
@@ -255,7 +308,11 @@ describe.each(getConfiguredTestDialects())(
       const admin = await account(current, "admin@example.com");
       await refreshContentSources();
       expect(await defaultFor(admin)).toEqual(
-        without("core/content", "core/quick-create", "core/upcoming-releases")
+        without(
+          "core/content-table",
+          "core/quick-create",
+          "core/upcoming-releases"
+        )
       );
     });
   }

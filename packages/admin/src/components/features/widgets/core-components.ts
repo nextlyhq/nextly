@@ -17,7 +17,7 @@
  * @module components/features/widgets/core-components
  */
 
-import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
+import { ContentTable } from "@admin/components/features/dashboard/ContentTable";
 import { CountCard } from "@admin/components/features/dashboard/CountCard";
 import { GetStartedCard } from "@admin/components/features/dashboard/GetStartedCard";
 import { NeedsAttention } from "@admin/components/features/dashboard/NeedsAttention";
@@ -41,7 +41,7 @@ import { registerCoreComponent } from "@admin/lib/plugins/component-registry-int
  */
 export function registerCoreWidgetComponents(): void {
   registerCoreComponent("core#GetStartedCard", GetStartedCard);
-  registerCoreComponent("core#CollectionQuickLinks", CollectionQuickLinks);
+  registerCoreComponent("core#ContentTable", ContentTable);
   registerCoreComponent("core#QuickCreate", QuickCreate);
   registerCoreComponent("core#TeamSummary", TeamSummary);
   registerCoreComponent("core#NeedsAttention", NeedsAttention);

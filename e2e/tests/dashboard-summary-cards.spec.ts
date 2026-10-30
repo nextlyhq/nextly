@@ -32,7 +32,7 @@ test.describe.configure({ lock: [LOCK.dashboard, LOCK.releases] });
 
 const CARDS = [
   "core/team",
-  "core/content",
+  "core/content-table",
   "core/quick-create",
   "core/upcoming-releases",
 ] as const;
@@ -103,8 +103,8 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       /\/admin\/users$/
     );
 
-    const content = cell(page, "core/content");
-    // At least one collection tile, each a link to its list.
+    const content = cell(page, "core/content-table");
+    // At least one row of the Content table, its label a link to its list.
     await expect(content.getByRole("link").first()).toBeVisible();
 
     await expect(cell(page, "core/quick-create")).toBeVisible();

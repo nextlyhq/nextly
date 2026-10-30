@@ -21,6 +21,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 
+import type { RequestActorType } from "../../auth/request-actor";
 import { container } from "../../di/container";
 import { requireNextly } from "../../direct-api/nextly";
 import type { CountArgs, FindArgs } from "../../direct-api/types";
@@ -29,13 +30,24 @@ import {
   keptOffDashboard,
   type DashboardContentKind,
 } from "../../domains/widgets/kept-off-dashboard";
+import {
+  effectiveWidgetLimit,
+  MAX_WIDGET_LIMIT,
+} from "../../domains/widgets/query-limits";
+import {
+  createDisabledSlugs,
+  createVerdict,
+} from "../../domains/widgets/reader-content";
 import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
 import type {
+  ActivityKeptOffCollections,
   ActivityLogService,
+  ActivitySingles,
   RecentActivityCount,
+  RecentEdit,
 } from "./activity-log-service";
 import type { AdminCount, ApiKeyCountScope } from "./admin-counts";
 import {
@@ -96,15 +108,197 @@ export interface DashboardStatsResponse {
  * One collection's entries as this caller may read them: its total, and how
  * many are published and how many are drafts.
  *
- * The one per-collection reading the dashboard makes. `/stats` derives its
- * counts and its overall breakdown from these rows, and `system:content`
- * answers them, so the Content card and the summary cannot come to disagree.
- * A collection without the Draft/Published lifecycle has no drafts: every entry
- * the caller may read is published.
+ * The per-collection reading `/stats` derives its counts and its overall
+ * breakdown from. Its drafts are counted by the one rule the Content table's
+ * Drafts column counts by (the list's Draft filter), so the two cannot come to
+ * disagree about what a draft is. A collection without the Draft/Published
+ * lifecycle has no drafts: every entry the caller may read is published.
  */
-export interface CollectionContent extends CollectionCount {
+interface CollectionContent extends CollectionCount {
   published: number;
   draft: number;
+}
+
+/**
+ * One row of the dashboard's Content table: a collection or a Single this
+ * caller may see, flat, as `system:content` answers it.
+ *
+ * The counts and the create decision are a collection's alone: a Single has
+ * one document, so its row carries none of them. When it was last updated is
+ * the row's own data; who made that save is the activity trail's record of
+ * it, absent where the trail holds no save of that document.
+ */
+export interface ContentTableRow {
+  kind: "collection" | "single";
+  slug: string;
+  label: string;
+  group: string | null;
+  /** The entries this caller may read; a collection's only. */
+  count?: number;
+  /**
+   * The drafts this caller may read, by the list's Draft filter; `null` for a
+   * collection without the Draft/Published lifecycle, which has none to count.
+   * A collection's only.
+   */
+  draft?: number | null;
+  /** Whether this caller may create an entry here; a collection's only. */
+  canCreate?: boolean;
+  /**
+   * When it was last updated: a collection's newest entry this caller may
+   * read, or a Single's document. Absent only while there is none.
+   */
+  updatedAt?: string;
+  /** Who made that save, as the trail records them. */
+  userId?: string;
+  userName?: string | null;
+  actorType?: RequestActorType;
+  identityErasedAt?: string | null;
+}
+
+/** The Content table's rows, and how many it could have drawn. */
+export interface ContentTable {
+  /** The rows drawn, in the table's order. */
+  rows: ContentTableRow[];
+  /**
+   * Every collection and Single this caller may see on the dashboard, counted
+   * from the registries without reading a single entry: the "View all (N)".
+   */
+  total: number;
+}
+
+/**
+ * The collection list's Draft filter, as the admin's entry list asks it: every
+ * entry (`status: "all"`), narrowed by `where` to those whose `status` is
+ * `draft` (the list's `buildEntryWhereFilter`). The dashboard counts its drafts
+ * by it, so a Drafts figure and the list its link opens are the same read.
+ *
+ * Not `status: "draft"`, which is every state the workflow does not publish
+ * and, on a localized collection, is also applied to each language's own
+ * status: the two can disagree, and the link would then open a list holding
+ * another number.
+ */
+const LIST_DRAFT_FILTER = {
+  status: "all",
+  where: { status: { equals: "draft" } },
+} as const satisfies Pick<CountArgs<string>, "status" | "where">;
+
+/** Which entries of a collection a count reads. */
+type EntryCount = "all" | "published" | "draft";
+
+/** A collection or a Single the Content table may draw, before anything is counted. */
+type ContentSubject =
+  | { kind: "collection"; slug: string; label: string; info: CollectionInfo }
+  | { kind: "single"; slug: string; label: string; tableName?: string };
+
+/** What every read of the trail for the Content table is narrowed by. */
+interface TrailSubjects {
+  scope: ReadableResources;
+  caller: ReadCaller;
+  singles: ActivitySingles;
+  keptOffCollections: ActivityKeptOffCollections;
+  /** One collection's saves alone, never a Single's. */
+  collection?: string;
+}
+
+/** A subject's key in the trail's answer: a collection and a Single may share a slug. */
+function subjectKey(kind: "collection" | "single", slug: string): string {
+  return `${kind}:${slug}`;
+}
+
+/** The key of the document a save names: a row stating no kind is a collection's. */
+function saveKey(save: RecentEdit): string {
+  return subjectKey(
+    save.subjectKind === "single" ? "single" : "collection",
+    save.collection
+  );
+}
+
+/**
+ * Each subject's latest save among `saves`, which are newest first: the first
+ * save naming it is its latest.
+ */
+function latestSaveOf(saves: readonly RecentEdit[]): Map<string, RecentEdit> {
+  const latest = new Map<string, RecentEdit>();
+  for (const save of saves) {
+    const key = saveKey(save);
+    if (!latest.has(key)) latest.set(key, save);
+  }
+  return latest;
+}
+
+/** Who made `save`, as a row of the table carries them; nothing without one. */
+function saverFields(
+  save: RecentEdit | undefined
+): Pick<
+  ContentTableRow,
+  "userId" | "userName" | "actorType" | "identityErasedAt"
+> {
+  if (save === undefined) return {};
+  return {
+    userId: save.userId,
+    userName: save.userName,
+    actorType: save.actorType,
+    identityErasedAt: save.identityErasedAt,
+  };
+}
+
+/**
+ * A stored instant as an ISO string, or `undefined` for anything that is not
+ * one: a driver answers a timestamp column as a `Date` on one dialect and a
+ * string on another.
+ */
+function isoInstant(value: unknown): string | undefined {
+  const date =
+    value instanceof Date
+      ? value
+      : typeof value === "string" && value !== ""
+        ? new Date(value)
+        : undefined;
+  return date === undefined || Number.isNaN(date.getTime())
+    ? undefined
+    : date.toISOString();
+}
+
+/** Ascending by label, then slug, for subjects the trail gives no save. */
+function byLabel(
+  a: { label: string; slug: string },
+  b: { label: string; slug: string }
+): number {
+  return a.label.localeCompare(b.label) || (a.slug < b.slug ? -1 : 1);
+}
+
+/**
+ * The subjects in the table's order: those with a known save, newest first,
+ * then the rest by label. Every instant compared is the trail's own ISO
+ * string, so comparing the strings compares the instants.
+ */
+function byLastSave<T extends { slug: string; label: string }>(
+  subjects: readonly T[],
+  savedAt: (subject: T) => string | undefined
+): T[] {
+  return [...subjects].sort((a, b) => {
+    const at = savedAt(a);
+    const bt = savedAt(b);
+    if (at !== undefined && bt !== undefined && at !== bt) {
+      return at < bt ? 1 : -1;
+    }
+    if (at !== undefined && bt === undefined) return -1;
+    if (at === undefined && bt !== undefined) return 1;
+    return byLabel(a, b);
+  });
+}
+
+/**
+ * `rows` with the collections holding no entries this caller may read moved
+ * after the rest, each part keeping its order: an empty collection is the one
+ * row with nothing to open, so it goes last however recently it was touched.
+ */
+function emptyCollectionsLast(
+  rows: readonly ContentTableRow[]
+): ContentTableRow[] {
+  const empty = (row: ContentTableRow) =>
+    row.kind === "collection" && row.count === 0;
+  return [...rows.filter(row => !empty(row)), ...rows.filter(empty)];
 }
 
 /**
@@ -180,21 +374,6 @@ function leftOut(
   if (!keptOffDashboard(record)) return false;
   keptOff?.add(record.slug);
   return true;
-}
-
-/**
- * The page of collections a content answer counts: all of them in slug order,
- * cut to `limit` when there is one. A stated order, so the same install gives
- * the same page on every read, whatever order the registry returns.
- */
-function contentPage<T extends { slug: string }>(
-  collections: readonly T[],
-  limit: number | undefined
-): T[] {
-  const ordered = [...collections].sort((a, b) =>
-    a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0
-  );
-  return limit === undefined ? ordered : ordered.slice(0, limit);
 }
 
 export class DashboardService extends BaseService {
@@ -490,11 +669,11 @@ export class DashboardService extends BaseService {
     scope: ReadableResources,
     /** Collects the slugs left out as kept off the dashboard, for the figures read elsewhere. */
     keptOff?: KeptOffRead
-  ): Promise<Array<{ slug: string; label?: string }>> {
+  ): Promise<RegisteredSingle[]> {
     try {
       const singleRegistryService = container.get<{
         getAllSingles: () => Promise<
-          Array<{ slug: string; label?: string; admin?: unknown }>
+          Array<RegisteredSingle & { admin?: unknown }>
         >;
       }>("singleRegistryService");
 
@@ -716,17 +895,20 @@ export class DashboardService extends BaseService {
    * status condition is built at all, for the main row or a localized
    * collection's per-locale `_status` companion.
    *
-   * `getCollectionContent` calls this same method with `"published"` and
-   * `"draft"` explicitly, rather than a second implementation of "how many
-   * rows of this collection can this caller read": one question, one
-   * implementation, so the total and the breakdown cannot silently drift
-   * apart the way a raw `SELECT ... GROUP BY` and this access-controlled
-   * count already had.
+   * `getCollectionContent` and `getContentTable` call this same method with
+   * `"published"` and `"draft"` explicitly, rather than a second
+   * implementation of "how many rows of this collection can this caller
+   * read": one question, one implementation, so the total and the breakdown
+   * cannot silently drift apart the way a raw `SELECT ... GROUP BY` and this
+   * access-controlled count already had.
+   *
+   * `"draft"` is the collection list's Draft filter (`LIST_DRAFT_FILTER`), so
+   * every draft figure the dashboard shows is the number that list holds.
    */
   private async countReadableEntries(
     coll: CollectionInfo,
     caller: ReadCaller,
-    status: "all" | "published" | "draft" = "all"
+    entries: EntryCount = "all"
   ): Promise<number> {
     try {
       const result = await requireNextly().count({
@@ -744,7 +926,7 @@ export class DashboardService extends BaseService {
               "actor"
             >)
           : {}),
-        status,
+        ...(entries === "draft" ? LIST_DRAFT_FILTER : { status: entries }),
       });
       return result.total;
     } catch (error) {
@@ -778,8 +960,9 @@ export class DashboardService extends BaseService {
    * hiding a published row whose scheduled unpublish has arrived (see
    * `collection-query-service.ts`'s `releaseDecisions`, which only fires for
    * `status: "published"`) -- while `"draft"` and `"all"` apply no such
-   * adjustment. So the three numbers are not guaranteed to sum, and each is
-   * asked for explicitly rather than derived.
+   * adjustment, and the drafts are the list's Draft filter rather than every
+   * state the workflow does not publish. So the three numbers are not
+   * guaranteed to sum, and each is asked for explicitly rather than derived.
    */
   private async getCollectionContent(
     collections: CollectionInfo[],
@@ -802,50 +985,270 @@ export class DashboardService extends BaseService {
   }
 
   /**
-   * The collections this caller may see on the dashboard, each with its total
-   * and its published/draft split: what `system:content` answers.
+   * The dashboard's Content table, as this caller may see it: what
+   * `system:content` answers.
    *
-   * The same registry read and the same per-collection reading `/stats` makes,
-   * so a collection kept off the dashboard is absent here as it is there, and
-   * every number is the caller's own.
+   * The rows are every collection and Single this caller may read on the
+   * dashboard (the registry reads `/stats` makes, so one kept off the
+   * dashboard is absent here as it is there), at most `limit` of them. Only
+   * then is anything read, and only for the rows drawn: each collection on the
+   * page costs its total, its drafts, its newest entry and its create
+   * decision, and each Single its own document's last update, so reading
+   * every collection and keeping a page would grow the dashboard's work with
+   * the install rather than with the card.
    *
-   * With a `limit`, the page is chosen before anything is counted: the
-   * collections in slug order, the first `limit` of them. Each collection
-   * costs up to three counts, so counting every one and then keeping a page
-   * would grow the dashboard's work with the install rather than the card.
+   * Which rows make the page comes from ONE bounded read of the activity trail
+   * (`latestSaves`): the documents most recently saved, as this caller may see
+   * them, so the page holds where the work is. Those with a save in it come
+   * first, newest first, then the rest by label. The page is then ordered by
+   * each row's own last update, with the collections holding no entries this
+   * caller may read last.
+   *
+   * Updated is each row's own data, never the trail's: a collection's newest
+   * entry this caller may read (`getRecentFromCollection`, one entry), and a
+   * Single's document as stored. So a row whose last save the trail no longer
+   * holds still shows its date. The trail names who saved it, and only when its
+   * latest save of that collection is of that newest entry, or is the Single's.
+   *
+   * Every number is the caller's own: the counts through the access-enforced
+   * count, the drafts by the collection list's Draft filter, the newest entry
+   * through the ordinary read, the create decision the one a real write makes,
+   * and the saves each authorized as the caller by the trail's own walk.
    */
-  async getContentByCollection(options: {
+  async getContentTable(options: {
     scope: ReadableResources;
     caller: ReadCaller;
+    /** How many rows to draw; clamped as every widget query's limit is. */
     limit?: number;
-  }): Promise<CollectionContent[]> {
-    const collections = await this.getRegisteredCollections(options.scope, {
+  }): Promise<ContentTable> {
+    const keptOffCollections: KeptOffRead = {
       slugs: new Set(),
       complete: false,
-    });
-    return this.getCollectionContent(
-      contentPage(collections, options.limit),
-      options.caller
+    };
+    const keptOffSingles: KeptOffRead = { slugs: new Set(), complete: false };
+    const collections = await this.getRegisteredCollections(
+      options.scope,
+      keptOffCollections
     );
+    const singles = await this.getRegisteredSingles(
+      options.scope,
+      keptOffSingles
+    );
+    const subjects: ContentSubject[] = [
+      ...collections.map(info => ({
+        kind: "collection" as const,
+        slug: info.slug,
+        label: info.label,
+        info,
+      })),
+      ...singles.map(single => ({
+        kind: "single" as const,
+        slug: single.slug,
+        label: single.label ?? single.slug,
+        ...(single.tableName === undefined
+          ? {}
+          : { tableName: single.tableName }),
+      })),
+    ];
+    const trail: TrailSubjects = {
+      scope: options.scope,
+      caller: options.caller,
+      singles: {
+        labels: new Map(
+          singles.map(single => [single.slug, single.label ?? single.slug])
+        ),
+        keptOff: keptOffSingles.slugs,
+        complete: keptOffSingles.complete,
+      },
+      keptOffCollections: {
+        slugs: keptOffCollections.slugs,
+        complete: keptOffCollections.complete,
+      },
+    };
+    const recent = await this.latestSaves(trail, MAX_WIDGET_LIMIT);
+    const saved = latestSaveOf(recent.saves);
+    const page = byLastSave(
+      subjects,
+      subject => saved.get(subjectKey(subject.kind, subject.slug))?.createdAt
+    ).slice(0, effectiveWidgetLimit(options.limit));
+
+    const mayCreate = await this.createDecision(options.caller);
+    const rows = await Promise.all(
+      page.map(async (subject): Promise<ContentTableRow> => {
+        const save = saved.get(subjectKey(subject.kind, subject.slug));
+        if (subject.kind === "single") return this.singleRow(subject, save);
+        const [count, draft, newest, canCreate] = await Promise.all([
+          this.countReadableEntries(subject.info, options.caller),
+          subject.info.hasStatus
+            ? this.countReadableEntries(subject.info, options.caller, "draft")
+            : Promise.resolve(null),
+          this.getRecentFromCollection(subject.info, 1, options.caller),
+          mayCreate(subject.slug),
+        ]);
+        const updatedAt = isoInstant(newest[0]?.updatedAt);
+        const saver =
+          newest[0] === undefined
+            ? undefined
+            : await this.saveOfEntry(
+                trail,
+                recent,
+                save,
+                subject.slug,
+                newest[0].id
+              );
+        return {
+          kind: "collection",
+          slug: subject.slug,
+          label: subject.label,
+          group: subject.info.group,
+          count,
+          draft,
+          canCreate,
+          ...(updatedAt === undefined ? {} : { updatedAt }),
+          ...saverFields(saver),
+        };
+      })
+    );
+    return {
+      // Ordered by each row's own last update, the empty collections after the rest.
+      rows: emptyCollectionsLast(byLastSave(rows, row => row.updatedAt)),
+      total: subjects.length,
+    };
   }
 
   /**
-   * The Singles this caller may see on the dashboard, in slug order, at most
-   * `limit` of them: the Singles half of what `system:content` answers.
-   *
-   * The same registry read `/stats` makes, so a Single kept off the dashboard
-   * is absent here as it is there. Nothing is counted: a Single has one
-   * document, not entries.
+   * A Single's row: dated by its own document, and naming who saved it only
+   * when the trail's latest save of the Single is of that document. A Single
+   * deleted and created again under its slug keeps the trail's saves of the
+   * document it had before, and those name nobody here, as a save of another
+   * entry names nobody on a collection's row.
    */
-  async getContentSingles(options: {
-    scope: ReadableResources;
-    limit?: number;
-  }): Promise<Array<{ slug: string; label: string }>> {
-    const singles = await this.getRegisteredSingles(options.scope);
-    return contentPage(singles, options.limit).map(single => ({
-      slug: single.slug,
-      label: single.label ?? single.slug,
-    }));
+  private async singleRow(
+    subject: Extract<ContentSubject, { kind: "single" }>,
+    save: RecentEdit | undefined
+  ): Promise<ContentTableRow> {
+    const document = await this.singleDocument(subject);
+    const updatedAt = document?.updatedAt;
+    const saver =
+      document !== undefined && save?.entryId === document.id
+        ? save
+        : undefined;
+    return {
+      kind: "single",
+      slug: subject.slug,
+      label: subject.label,
+      group: null,
+      ...(updatedAt === undefined ? {} : { updatedAt }),
+      ...(updatedAt === undefined ? {} : saverFields(saver)),
+    };
+  }
+
+  /**
+   * A Single's document as its table stores it: its id, and when it was last
+   * updated. `undefined` while it has none.
+   *
+   * Read from the table rather than through `findSingle`, because that read
+   * creates a missing document, and a dashboard load must not write. The
+   * caller's read of the Single was already decided by the scope that put it
+   * on the page, and a Single has one document, with no rule over its rows, so
+   * the two columns read here are what that read would return for it.
+   */
+  private async singleDocument(single: {
+    slug: string;
+    tableName?: string;
+  }): Promise<{ id: string; updatedAt?: string } | undefined> {
+    if (single.tableName === undefined) return undefined;
+    try {
+      const row = await this.adapter.selectOne<{
+        id?: unknown;
+        updated_at?: unknown;
+      }>(single.tableName, { columns: ["id", "updated_at"] });
+      // A trail row names the document by its id as a string, whatever the
+      // column's type; anything else is no document to name a saver of.
+      const id =
+        typeof row?.id === "string" || typeof row?.id === "number"
+          ? String(row.id)
+          : undefined;
+      if (id === undefined) return undefined;
+      const updatedAt = isoInstant(row?.updated_at);
+      return {
+        id,
+        ...(updatedAt === undefined ? {} : { updatedAt }),
+      };
+    } catch (error) {
+      this.logger.debug(`Failed to read when ${single.slug} was updated`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * The trail's save of a collection's newest entry, naming who made it: the
+   * collection's latest save in the window, or past it, read on its own, when
+   * the window did not reach the trail's end. A save of another entry names
+   * nobody, since it is not the save the row's date is.
+   */
+  private async saveOfEntry(
+    trail: TrailSubjects,
+    recent: { complete: boolean },
+    inWindow: RecentEdit | undefined,
+    collection: string,
+    entryId: string
+  ): Promise<RecentEdit | undefined> {
+    const save =
+      inWindow ??
+      (recent.complete
+        ? undefined
+        : (await this.latestSaves({ ...trail, collection }, 1)).saves[0]);
+    return save?.entryId === entryId ? save : undefined;
+  }
+
+  /**
+   * The documents most recently saved that this caller may see, newest first,
+   * at most `limit` of them, and whether that reached the end of the trail:
+   * the activity trail's own walk (`getRecentEdits`), each save authorized as
+   * the caller.
+   *
+   * A failed read answers no saves and an incomplete window, so the table
+   * still draws its rows, in label order, naming nobody, rather than failing.
+   */
+  private async latestSaves(
+    subjects: TrailSubjects,
+    limit: number
+  ): Promise<{ saves: RecentEdit[]; complete: boolean }> {
+    try {
+      const { edits, hasMore } = await container
+        .get<ActivityLogService>("activityLogService")
+        .getRecentEdits({ ...subjects, limit });
+      return { saves: edits, complete: !hasMore };
+    } catch (error) {
+      this.logger.error("Failed to read the latest saves", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { saves: [], complete: false };
+    }
+  }
+
+  /**
+   * Whether this caller may create an entry in a collection: the decision a
+   * real write makes (`createVerdict`), and never for a collection whose
+   * definition turns creating off in the admin (`createDisabledSlugs`).
+   *
+   * Fails closed: while which collections turn creating off is unknown, and
+   * for a decision that throws, the answer is no, so a + is never drawn onto
+   * a refusal.
+   */
+  private async createDecision(
+    caller: ReadCaller
+  ): Promise<(slug: string) => Promise<boolean>> {
+    const disabled = await createDisabledSlugs().catch(() => undefined);
+    if (disabled === undefined) return () => Promise.resolve(false);
+    const verdict = createVerdict(caller);
+    return slug =>
+      disabled.has(slug)
+        ? Promise.resolve(false)
+        : verdict(slug).catch(() => false);
   }
 
   /**
@@ -975,6 +1378,16 @@ export class DashboardService extends BaseService {
       return [];
     }
   }
+}
+
+/**
+ * A Single as the registry lists it: its slug, its label, and the table its one
+ * document is stored in, which the Content table reads the last update from.
+ */
+interface RegisteredSingle {
+  slug: string;
+  label?: string;
+  tableName?: string;
 }
 
 /** Simplified collection info for internal use. */

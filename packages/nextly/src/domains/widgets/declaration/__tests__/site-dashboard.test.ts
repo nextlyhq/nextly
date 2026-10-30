@@ -726,8 +726,8 @@ describe("a list with an empty slot", () => {
   it("is refused in each list of the site config, naming the list", () => {
     const message = refusal(() =>
       resetWidgetRegistries([shop], {
-        hide: holed(3, { 0: "core/team", 2: "core/content" }),
-        defaultLayout: holed(3, { 0: "core/content", 2: "core/team" }),
+        hide: holed(3, { 0: "core/team", 2: "core/content-table" }),
+        defaultLayout: holed(3, { 0: "core/content-table", 2: "core/team" }),
         widgets: holed(2, { 0: { ...revenue, id: "site/revenue" } }),
       })
     );
