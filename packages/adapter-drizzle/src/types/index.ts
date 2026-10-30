@@ -120,6 +120,8 @@ export {
   isApplicationError,
   POOL_WAIT_TIMEOUT_CODE,
   poolWaitTimeoutError,
+  TABLE_NOT_REGISTERED_CODE,
+  tableNotRegisteredError,
 } from "./error";
 
 // ============================================================
