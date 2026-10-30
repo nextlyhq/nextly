@@ -69,10 +69,6 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     ],
   });
   await grantPublic(current, [`read-${TAGGED}`, `read-${SORTED}`]);
-  // Boot's seeding asks each read rule as a visitor to decide the Public
-  // role's grants, which reports a rule's misuse once; it is forgotten here
-  // so the report the case counts is its own read's.
-  clearRuleFilterReports();
   return current;
 }
 
