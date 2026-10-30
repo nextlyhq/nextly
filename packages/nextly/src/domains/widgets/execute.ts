@@ -33,6 +33,7 @@ import {
 import { answerAsAsked } from "./answer-as-asked";
 import { resolveExecutableSource } from "./executable-source";
 import {
+  openWindowEnd,
   rangeWindow,
   relativeSpanStart,
   type TimeseriesRange,
@@ -137,11 +138,13 @@ function windowedQuery(
   now: Date
 ): WidgetQuery {
   if (query.since === undefined) return query;
+  // A window left open at the batch's instant keeps that instant's whole
+  // second (`openWindowEnd`); a stated `until` is a boundary in the past.
   return boundedBy(
     query,
     field,
     relativeSpanStart(query.since, now),
-    windowEnd(query, now)
+    query.until === undefined ? openWindowEnd(now) : windowEnd(query, now)
   );
 }
 
@@ -301,7 +304,12 @@ async function runRangedTimeseries(
     interval: window.interval,
     intervals: window.intervals,
     now: window.anchor,
-    ...sharedReadArgs(boundedBy(query, dateField, window.start, now), caller),
+    // The rows end at the batch's instant's whole second (`openWindowEnd`);
+    // the intervals are still placed by the instant itself.
+    ...sharedReadArgs(
+      boundedBy(query, dateField, window.start, openWindowEnd(now)),
+      caller
+    ),
   });
   return { op: "timeseries", points: result.points, interval: result.interval };
 }

@@ -25,8 +25,7 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 // The permissions the signed-in caller holds, as the guard asks about them.
 const held = new Set<string>();
 vi.mock("@admin/hooks/useCurrentUserPermissions", async () => {
-  // Asked as the product asks: a `manage-` permission counts as the plain
-  // ones it stands for.
+  // Asked as the product asks it.
   const { holdsPermission } = await import(
     "@admin/lib/permissions/holds-permission"
   );
@@ -61,7 +60,7 @@ beforeEach(() => {
   // Core's settings permission, which every case below that is not about
   // who may open the page needs to open it.
   held.clear();
-  held.add("manage-settings");
+  held.add("update-settings");
 });
 
 describe("PluginDetailPage", () => {
@@ -262,7 +261,7 @@ describe("who may open PluginSettingsPage", () => {
     expect(navigateTo).not.toHaveBeenCalled();
   });
 
-  it("turns away a caller holding only manage-settings, whose saves the server refuses", () => {
+  it("turns away a caller holding only update-settings, whose saves the server refuses", () => {
     mockBranding = payPlugin();
 
     renderWithProviders(<PluginSettingsPage params={{ slug: "acme-pay" }} />);
@@ -278,12 +277,12 @@ describe("who may open PluginSettingsPage", () => {
 
   it.each([
     ["the plugin's own permission", "update-pay-settings"],
-    ["only manage-settings", "manage-settings"],
+    ["only update-settings", "update-settings"],
   ])(
     "says the plugin list could not load, to a caller holding %s, rather than gate on a guess",
     (_label, grant) => {
       // Gated on the default when the list never arrived, the page sent the
-      // plugin's own role away and showed a manage-settings holder an editor
+      // plugin's own role away and showed an update-settings holder an editor
       // whose saves the server refuses.
       held.clear();
       held.add(grant);
@@ -312,7 +311,7 @@ describe("who may open PluginSettingsPage", () => {
 
   it("waits for the plugin list rather than turning the caller away on the default", () => {
     // Before the list arrives, the page cannot know the plugin keeps its
-    // settings to another permission; gated on manage-settings meanwhile, this
+    // settings to another permission; gated on update-settings meanwhile, this
     // caller would already have been sent to the dashboard.
     held.clear();
     held.add("update-pay-settings");

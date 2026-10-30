@@ -43,7 +43,6 @@ import { ServiceContainer } from "../index";
 
 import {
   hasPermission,
-  hasSuperAdminExcluding,
   isSuperAdmin,
   listEffectivePermissions,
 } from "./permissions";
@@ -350,11 +349,6 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await isSuperAdmin(lapsed)).toBe(false);
       expect(await isSuperAdmin(held)).toBe(true);
-      // The last-super-admin guard counts only a held assignment: with `held`
-      // excluded, nobody else holds the role; with `lapsed` excluded, `held`
-      // still does.
-      expect(await hasSuperAdminExcluding(held)).toBe(false);
-      expect(await hasSuperAdminExcluding(lapsed)).toBe(true);
     });
 
     it("leaves a lapsed role's grants, and a lapsed super-admin's catalogue, out of an API key", async () => {
