@@ -22,7 +22,7 @@ import type {
   ColumnState,
   DifferenceCause,
 } from "../../domains/schema/repair-columns/types";
-import { describeError } from "../../errors/index";
+import { databaseEnvError, exitWithError } from "../errors";
 import type { CommandContext, GlobalOptions } from "../program";
 import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
@@ -96,19 +96,16 @@ interface RepairColumnsOptions {
 }
 
 /**
- * Compare and print. Returns the findings, or null when the database settings are unusable, which
- * it names; anything else that stops the run is thrown, and the caller exits 1 for either.
+ * Compare and print. Returns the findings; anything that stops the run is thrown, unusable
+ * database settings as the CLI error that names them, for the caller to end with.
  */
 async function runRepairColumns(
   options: RepairColumnsOptions,
   context: CommandContext
-): Promise<ColumnFinding[] | null> {
+): Promise<ColumnFinding[]> {
   const { logger } = context;
   const env = validateDatabaseEnv();
-  if (!env.valid || env.dialect === undefined) {
-    for (const problem of env.errors) logger.error(problem);
-    return null;
-  }
+  if (!env.valid || env.dialect === undefined) throw databaseEnvError(env);
   const dialect = env.dialect;
   const cwd = options.cwd ?? context.cwd;
   const { config, projectRoot, deferredExtends } = await loadConfig({
@@ -180,14 +177,10 @@ export function registerRepairColumnsCommand(
     .action(async (_options: Record<string, never>, cmd: Command) => {
       const globals = cmd.optsWithGlobals<GlobalOptions>();
       const context = createContext(globals);
-      const findings = await runRepairColumns(
+      // Every way the run stops ends in the CLI's error shape, with the code that names it.
+      await runRepairColumns(
         { config: globals.config, cwd: globals.cwd, verbose: globals.verbose },
         context
-      ).catch((error: unknown) => {
-        context.logger.error(describeError(error));
-        process.exit(1);
-      });
-      // Settings it could not use were named above; the run could not compare anything.
-      if (findings === null) process.exit(1);
+      ).catch((error: unknown) => exitWithError(context.logger, error));
     });
 }

@@ -22,6 +22,7 @@
 
 import { WithCollectionUnit } from "../charts/chart-unit";
 import { GroupsChart, type GroupsChartGroup } from "../charts/groups-chart";
+import type { CardEmptyContent } from "../frame/states";
 
 import { choiceLabel, type CellColumn } from "./cell-text";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
@@ -46,7 +47,7 @@ import type { ArchetypeAccepts, ArchetypeBody } from "./types";
  * arbitrary text — so the placeholder rows are marked and drawn differently
  * instead of relying on their wording to separate them.
  */
-function bucketRow(
+export function bucketRow(
   value: string | null,
   count: number,
   choices: CellColumn["choices"]
@@ -91,6 +92,28 @@ function humanised(value: string): string {
     : `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }
 
+/**
+ * What a chart of groups with no group to draw says: the frame's one empty state, worded for
+ * groups, for this archetype and Breakdown's own card alike. Source-neutral: the card may read any
+ * collection's, system's or plugin's data, so it names no kind of row it cannot know.
+ *
+ * A source that stopped at a work bound (`floor`) found no group in what it read, and the rest may
+ * still hold some: that answer is a floor, so it says what was checked rather than claim that
+ * nothing matches.
+ */
+export function groupsEmpty(floor: boolean): CardEmptyContent {
+  return floor
+    ? {
+        title: "None found in what was checked",
+        detail:
+          "This card read only part of the content, so groups may exist beyond what it checked.",
+      }
+    : {
+        title: "Nothing to compare yet",
+        detail: "Groups appear here once something matches this card.",
+      };
+}
+
 export const barsAccepts: ArchetypeAccepts = definition => {
   if (definition.query) return undefined;
   const name = definition.title ?? "This bars widget";
@@ -110,26 +133,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
   );
 
   if (rows.length === 0) {
-    // The frame's one empty state, worded for groups. Source-neutral: the card may read any
-    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
-    //
-    // A source that stopped at a work bound found no group in what it read, and the rest may
-    // still hold some: that answer is a floor, so it says what was checked rather than claim
-    // that nothing matches.
-    return {
-      ok: true,
-      empty:
-        result.atLeast === true
-          ? {
-              title: "None found in what was checked",
-              detail:
-                "This card read only part of the content, so groups may exist beyond what it checked.",
-            }
-          : {
-              title: "Nothing to compare yet",
-              detail: "Groups appear here once something matches this card.",
-            },
-    };
+    return { ok: true, empty: groupsEmpty(result.atLeast === true) };
   }
 
   return {

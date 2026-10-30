@@ -4,10 +4,11 @@
  * field is never offered as a Group by, a stored setting naming it falls back
  * to what the collection divides by, and a query naming it is refused.
  *
- * The declaration is core's, as the registry holds it; the reader's sources
- * are what the workspace payload publishes them (`publishableContentSources`);
- * the settings become the query through `applyWidgetSettings`, the admin's
- * one path; and the query runs against real rows as the reader.
+ * The declaration is core's, its `load` run as the reader: the reader's
+ * sources are what the workspace payload publishes them
+ * (`publishableContentSources`), the settings become the query through
+ * `applyWidgetSettings`, the one path the admin's own cards take too, and the
+ * query runs against real rows as the reader.
  */
 
 // Must be set before the harness boots (env validation).
@@ -26,14 +27,15 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { refreshCollectionSources } from "../collection-sources";
+import { breakdownWidget } from "../core-widgets/breakdown";
 import { executeWidgetQuery } from "../execute";
 import {
   publishableContentSources,
   type PublishedContentSource,
 } from "../publish";
-import { validateWidgetQuery, type WidgetQuery } from "../query";
-import { getWidget } from "../registry";
-import { applyWidgetSettings, type KnobContext } from "../settings";
+import { validateWidgetQuery } from "../query";
+
+import { loadCard } from "./core-card-load";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const ITEMS = "bd_items";
@@ -48,28 +50,19 @@ describe.each(getConfiguredTestDialects())("a Breakdown card (%s)", dialect => {
   let handle: TestNextly;
   let caller: ReadCaller;
   let sources: PublishedContentSource[];
-  let ctx: KnobContext;
 
-  /** What a Breakdown card with `stored` asks and is answered, bucket by bucket. */
+  /** What a Breakdown card with `stored` is answered: the field it grouped by, bucket by bucket. */
   async function divided(
     stored: Record<string, unknown>
   ): Promise<{ groupBy: string | undefined; buckets: Record<string, number> }> {
-    const breakdown = getWidget("core/breakdown")!;
-    const query = applyWidgetSettings(
-      breakdown.query as WidgetQuery,
-      breakdown.settings,
-      stored,
-      ctx
-    );
-    const result = await executeWidgetQuery(validateWidgetQuery(query), caller);
-    expect(result.op).toBe("groupBy");
-    const buckets = (
-      result as { buckets: { value: string | null; count: number }[] }
-    ).buckets;
+    const answer = await loadCard(breakdownWidget, stored, caller);
     return {
-      groupBy: query.groupBy,
+      groupBy: answer.field?.name,
       buckets: Object.fromEntries(
-        buckets.map(bucket => [String(bucket.value), bucket.count])
+        (answer.buckets ?? []).map(bucket => [
+          String(bucket.value),
+          bucket.count,
+        ])
       ),
     };
   }
@@ -122,12 +115,6 @@ describe.each(getConfiguredTestDialects())("a Breakdown card (%s)", dialect => {
     // collection sources from the live registry, which boot does not do.
     await refreshCollectionSources();
     sources = publishableContentSources([ITEMS, POSTS]);
-    ctx = {
-      sourceOf: collection =>
-        sources.find(source => source.collection === collection),
-      fieldsOf: collection =>
-        sources.find(source => source.collection === collection)?.fields,
-    };
   }, 120_000);
 
   afterAll(async () => {

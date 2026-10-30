@@ -13,6 +13,7 @@ import {
   isUnitTestFile,
   listedFiles,
   readsOutsideTheGraph,
+  runInOrder,
   scriptTestsNeeded,
   selectedFiles,
   testArgs,
@@ -182,6 +183,38 @@ describe("when the root scripts tests run too", () => {
     expect(
       scriptTestsNeeded(["packages/nextly/src/a.ts", "packages/ui/scripts/build.mjs", "e2e/a.spec.ts"], dirs)
     ).toBe(false);
+  });
+});
+
+describe("the order the two legs run in", () => {
+  // A leg's result is how many of its runs failed, and `calls` records which
+  // legs ran, in order, so a case can say what never started.
+  const legs = (scriptsFailed, packagesFailed) => {
+    const calls = [];
+    const logged = [];
+    const status = runInOrder({
+      scripts: () => (calls.push("scripts"), scriptsFailed),
+      packages: () => (calls.push("packages"), packagesFailed),
+      log: line => logged.push(line),
+    });
+    return { status, calls, logged };
+  };
+
+  it("runs the scripts tests first, then the packages, when the scripts pass", () => {
+    expect(legs(0, 0)).toEqual({ status: 0, calls: ["scripts", "packages"], logged: [] });
+  });
+
+  // The package suites take a quarter of an hour, and the push has already
+  // lost: running them would only hold the machine.
+  it("stops before the package tests when the scripts tests fail, and says so", () => {
+    const { status, calls, logged } = legs(1, 0);
+    expect(status).toBe(1);
+    expect(calls).toEqual(["scripts"]);
+    expect(logged).toEqual([expect.stringMatching(/root scripts tests failed; not running the package tests/)]);
+  });
+
+  it("fails on a package failure as it did before", () => {
+    expect(legs(0, 3)).toEqual({ status: 1, calls: ["scripts", "packages"], logged: [] });
   });
 });
 

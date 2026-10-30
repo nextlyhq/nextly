@@ -680,13 +680,17 @@ function dependencyProblems(
  * only a list returns rows for its fields to fill. On a grouped or timeseries
  * query a chosen field would be refused by the query's own check, and on a
  * count it would be ignored, so a control that breaks the card or changes
- * nothing is never offered.
+ * nothing is never offered. A widget whose data core builds on the server
+ * (`serverData`) asks no query here: its own `load` reads the setting, as
+ * `widgetSettingsProblem` admits its other content settings.
  */
 export function fieldsSettingQueryProblem(widget: {
   settings?: unknown;
   query?: unknown;
+  serverData?: unknown;
 }): string | undefined {
   if (!Array.isArray(widget.settings)) return undefined;
+  if (widget.serverData === true) return undefined;
   const fields = (widget.settings as unknown[]).find(
     (setting): setting is { name: unknown } =>
       typeof setting === "object" &&
@@ -1594,10 +1598,18 @@ const QUERY_KNOBS: readonly QueryKnob[] = [
       setting.type === "filter" && readsACollection(source),
     fits: (value, fields) =>
       allOffered(whereFieldNames(value as Record<string, unknown>), fields),
-    apply: (query, value) => ({
-      ...query,
-      where: withReaderFilter(query.where, value as Record<string, unknown>),
-    }),
+    // A Filter of no conditions narrows nothing, so it adds nothing: the query
+    // asks as it was declared, never with an empty clause beside it.
+    apply: (query, value) =>
+      Object.keys(value as Record<string, unknown>).length === 0
+        ? { ...query }
+        : {
+            ...query,
+            where: withReaderFilter(
+              query.where,
+              value as Record<string, unknown>
+            ),
+          },
   },
   {
     drives: (setting, source) =>
