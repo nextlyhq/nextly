@@ -33,6 +33,7 @@ import {
   plainRule,
   type AccessTarget,
 } from "../../../auth/access/decide";
+import { mayAnswerFilter, ruleAnswer } from "../../../auth/access/rule-answer";
 import {
   everyLanguage,
   languagesOfContent,
@@ -528,34 +529,56 @@ function listing(asked: readonly Asked[], held: Set<string>): string | null {
   ].join("\n");
 }
 
-/** Why a read visitors lost was theirs before, as the notice says it. */
-const LOST_BECAUSE = {
-  "no-rule": "no read rule",
-  "not-true": "its read rule answers visitors with a filter",
-} as const;
+/**
+ * How visitors read a target before the Public role judged them, where the
+ * notice names it: every entry where it has no read rule (`"no-rule"`), or
+ * the entries a well-formed filter its read rule answers matches, where the
+ * target may answer one (`"filter"`). `null` for every other read: one its
+ * rule allows outright, which boot grants, and one its rule refuses, with
+ * `false`, `null`, `undefined` or a filter that is not well formed or that a
+ * Single may not answer, which visitors never had. Read through
+ * {@link ruleAnswer}, as a visitor's request reads the answer.
+ */
+function lostRead(
+  target: AccessTarget,
+  read: Answer
+): "no-rule" | "filter" | null {
+  if (read.kind === "no-rule") return "no-rule";
+  if (read.kind !== "answered" || !mayAnswerFilter(target.kind, "read")) {
+    return null;
+  }
+  return ruleAnswer(read.value).kind === "filter" ? "filter" : null;
+}
 
 /**
  * The once-only notice of the reads visitors had before the Public role judged
- * them and have no longer: each collection and Single with no read rule, or
- * one answering a filter, whose read Public does not hold. `null` where there
- * is none.
+ * them and have no longer, each read Public does not hold that
+ * {@link lostRead} names, with how to give it back: a read with no rule by
+ * declaring that anyone may read or granting Public the read, and a filtered
+ * one by granting Public the read alone, which keeps the filter, since
+ * declaring that anyone may read would open the entries it leaves out.
+ * `null` where there is none.
  */
 function lostReadsNotice(
   asked: readonly Asked[],
   held: Set<string>
 ): string | null {
   const lines = asked.flatMap(({ target, read }) => {
-    const group = listedRead(read);
-    if (group !== "no-rule" && group !== "not-true") return [];
-    if (held.has(permissionSlug("read", target.slug))) return [];
+    const lost = lostRead(target, read);
+    const permission = permissionSlug("read", target.slug);
+    if (lost === null || held.has(permission)) return [];
     const kind = target.kind === "single" ? "Single" : "collection";
-    return [`  - ${kind} "${target.slug}" (${LOST_BECAUSE[group]})`];
+    return [
+      lost === "no-rule"
+        ? `  - ${kind} "${target.slug}" (no read rule): declare \`access: { read: () => true }\` on it, or grant the Public role \`${permission}\` under Roles.`
+        : `  - ${kind} "${target.slug}" (its read rule answers visitors with a filter): grant the Public role \`${permission}\` under Roles, and the filter still applies to them.`,
+    ];
   });
   if (lines.length === 0) return null;
   return [
     "[Nextly] Visitors who aren't signed in now read only what the Public role holds. Before this upgrade they could read these, and now can't:",
     ...lines,
-    "To let visitors read one again, declare `access: { read: () => true }` on it in your config, and the Public role is granted its read at the next start; or grant the Public role its read (`read-<slug>`) under Roles, which keeps a read rule's filter. Leave one that should stay private as it is. This notice is shown once.",
+    "A read declared with `() => true` is granted to the Public role at the next start. Leave one that should stay private as it is. This notice is shown once.",
   ].join("\n");
 }
 

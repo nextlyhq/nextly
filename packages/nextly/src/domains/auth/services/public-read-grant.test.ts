@@ -9,6 +9,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "../../../services/shared";
+import type {
+  AccessControlContext,
+  AccessControlFunction,
+} from "../../../shared/types/access";
 
 import {
   PUBLIC_READ_NOTICE_META_KEY,
@@ -17,6 +21,13 @@ import {
   seedPublicReadGrants,
   withdrawUndeclaredPluginGrants,
 } from "./public-read-grant";
+
+/**
+ * A rule answering what its type does not allow, as a rule written without
+ * the types, or reaching past them, can.
+ */
+const untypedRule = (rule: (ctx: AccessControlContext) => unknown) =>
+  rule as AccessControlFunction;
 
 const quiet = {
   debug() {},
@@ -441,6 +452,30 @@ describe("the once-only notice of the reads visitors lost", () => {
             access: { read: false },
           },
           { kind: "single" as const, slug: "banner" },
+          // Refusals, which visitors never read through: no filter, one
+          // that is not well formed, and a filter a Single may not answer.
+          {
+            kind: "collection" as const,
+            slug: "nulls",
+            access: { read: untypedRule(() => null) },
+          },
+          {
+            kind: "collection" as const,
+            slug: "undefs",
+            access: { read: untypedRule(() => undefined) },
+          },
+          {
+            kind: "collection" as const,
+            slug: "malformed",
+            access: {
+              read: untypedRule(() => ({ title: { resembles: "x" } })),
+            },
+          },
+          {
+            kind: "single" as const,
+            slug: "singlefilter",
+            access: { read: untypedRule(() => ({ title: { equals: "x" } })) },
+          },
         ],
         publicHolds: async () => new Set(["read-kept"]),
         logger: {
@@ -518,6 +553,34 @@ describe("the once-only notice of the reads visitors lost", () => {
     expect(notice).not.toContain('"posts"');
     expect(notice).not.toContain('"kept"');
     expect(notice).not.toContain('"closed"');
+  });
+
+  it("never names a read its rule refuses with null, undefined or a filter it may not answer", async () => {
+    const { seeding, warned } = upgraded(recorded("due"));
+
+    await seedPublicReadGrants(seeding);
+
+    const [notice] = notices(warned);
+    // POPULATION CONTROL: the notice is logged, naming the reads lost.
+    expect(notice).toContain('"pages"');
+    for (const refused of ["nulls", "undefs", "malformed", "singlefilter"]) {
+      expect(notice).not.toContain(`"${refused}"`);
+    }
+  });
+
+  it("tells a filtered read to grant the read, which keeps the filter, not to open it to anyone", async () => {
+    const { seeding, warned } = upgraded(recorded("due"));
+
+    await seedPublicReadGrants(seeding);
+
+    const lines = notices(warned)[0].split("\n");
+    const notes = lines.find(line => line.includes('"notes"'));
+    expect(notes).toContain("grant the Public role `read-notes`");
+    expect(notes).toContain("the filter still applies");
+    expect(notes).not.toContain("() => true");
+    const pages = lines.find(line => line.includes('"pages"'));
+    expect(pages).toContain("`access: { read: () => true }`");
+    expect(pages).toContain("`read-pages`");
   });
 
   it("is not told again at the next boot", async () => {

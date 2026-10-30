@@ -121,8 +121,8 @@ could read before and can't now. A new install isn't told, and the notice isn't 
 collection kept private by having no read rule is ordinary. To let visitors read one again,
 either:
 
-- declare that anyone may read it, and the Public role is granted its read the next time
-  Nextly starts:
+- for one with no read rule, declare that anyone may read it, and the Public role is
+  granted its read the next time Nextly starts:
 
   ```ts
   defineCollection({
@@ -134,8 +134,10 @@ either:
   });
   ```
 
-- or grant the Public role its read (`read-posts`) on the **Roles** screen. A read rule that
-  answers with a filter still applies to visitors once the Public role holds the read.
+- or grant the Public role its read (`read-posts`) on the **Roles** screen. This is the way
+  for one whose read rule answers with a filter, which still applies to visitors once the
+  Public role holds the read; declaring `read: () => true` there would open the entries the
+  filter leaves out.
 
 ### A read rule that answers with a filter (experimental)
 

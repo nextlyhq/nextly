@@ -33,6 +33,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { Logger } from "../../../services/shared";
+import type {
+  AccessControlContext,
+  AccessControlFunction,
+} from "../../../shared/types/access";
 import { ServiceContainer } from "../../../services/index";
 import { PUBLIC_ROLE_SLUG } from "../services/public-role";
 
@@ -56,6 +60,13 @@ const logger: Logger = {
 } as Logger;
 
 const fields = [text({ name: "title" })];
+
+/**
+ * A rule answering what its type does not allow, as a rule written without
+ * the types, or reaching past them, can.
+ */
+const untypedRule = (rule: (ctx: AccessControlContext) => unknown) =>
+  rule as AccessControlFunction;
 
 /** What the `counted` collection's read rule does when asked. */
 let counted: () => boolean = () => false;
@@ -88,6 +99,25 @@ async function boot(
       }),
       defineCollection({ slug: "closed", access: { read: false }, fields }),
       defineCollection({ slug: "ruleless", fields }),
+      // Read by a visitor through a filter; and two refusals, one with no
+      // filter and one with a filter that is not well formed.
+      defineCollection({
+        slug: "filtered",
+        access: { read: () => ({ title: { equals: "public" } }) },
+        fields,
+      }),
+      defineCollection({
+        slug: "nullread",
+        access: { read: untypedRule(() => null) },
+        fields,
+      }),
+      defineCollection({
+        slug: "malformedread",
+        access: {
+          read: untypedRule(() => ({ title: { resembles: "x" } })),
+        },
+        fields,
+      }),
       defineCollection({
         slug: "throwing",
         access: {
@@ -313,6 +343,14 @@ describe.each(getConfiguredTestDialects())(
       const [notice] = notices();
       expect(notice).toContain('collection "ruleless" (no read rule)');
       expect(notice).toContain('Single "notice" (no read rule)');
+      // A filtered read is told to grant the read, which keeps its filter.
+      const filtered = notice.split("\n").find(l => l.includes('"filtered"'));
+      expect(filtered).toContain("grant the Public role `read-filtered`");
+      expect(filtered).not.toContain("() => true");
+      // A rule refusing visitors, with null or a filter that is not well
+      // formed, was never read through.
+      expect(notice).not.toContain('"nullread"');
+      expect(notice).not.toContain('"malformedread"');
       // Not a read Public is granted because its rule answers true, nor one a
       // rule refuses visitors.
       expect(notice).not.toMatch(/"open(fn|async)?"/);
