@@ -22,6 +22,7 @@ import {
   ISSUE_SCAN_PAGE_SIZE,
   ISSUE_SCAN_ROW_BUDGET,
   issuesFor,
+  scanBudget,
   tallyIssues,
 } from "../widget-source";
 
@@ -393,6 +394,28 @@ describe("a hook that rewrites the ids it answers", () => {
       byIssue: { "Missing meta title": rows },
       bounded: false,
     });
+  });
+});
+
+describe("a budget handed to several tallies", () => {
+  it("bounds them together, each tally after it spent saying floors", async () => {
+    // Two tallies sharing one budget read one budget's pages between them.
+    const services = servicesWith({
+      pages: untitledRows(ISSUE_SCAN_ROW_BUDGET * 2),
+      posts: untitledRows(ISSUE_SCAN_ROW_BUDGET * 2),
+    });
+    const budget = scanBudget();
+
+    const [pages, posts] = await Promise.all([
+      tallyIssues(services, ["pages"], allChecks, budget),
+      tallyIssues(services, ["posts"], allChecks, budget),
+    ]);
+
+    expect(services.find).toHaveBeenCalledTimes(
+      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
+    );
+    expect([pages.bounded, posts.bounded]).toEqual([true, true]);
+    expect(budget.pagesLeft).toBe(0);
   });
 });
 

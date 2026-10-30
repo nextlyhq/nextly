@@ -27,6 +27,7 @@
 import {
   defineAttentionItem,
   defineWidget,
+  MAX_ATTENTION_ITEMS_PER_PLUGIN,
   type AttentionCount,
   type AttentionItem,
   type FieldConfig,
@@ -36,20 +37,25 @@ import {
 import {
   checksFor,
   reportableIssues,
+  scanBudget,
   tallyIssues,
   type IssueChecks,
   type IssueTally,
+  type ScanBudget,
 } from "./widget-source";
 
 /** The card's id, in the `namespace/name` shape every widget id takes. */
 export const SEO_ISSUES_WIDGET_ID = "seo/issues";
 
 /**
- * The most Needs attention items core takes from one plugin. Core's own bound,
- * restated because the SDK does not publish it; a plugin past it is refused at
- * startup, so no more lines than this are declared.
+ * The key the Needs attention lines' shared page budget is kept under, in the
+ * scope core hands this plugin's items; scopes are per owner, so it need only
+ * be unique among this plugin's own keys.
  */
-const MAX_ATTENTION_ITEMS = 10;
+const SCAN_BUDGET_KEY = "issue-scan-budget";
+
+/** The scope core hands an attention item's `count`. */
+type AttentionScope = Parameters<AttentionItem["count"]>[0]["scope"];
 
 /**
  * A widget as `contributes.dashboard.widgets` holds it, named from the SDK's
@@ -185,14 +191,22 @@ export function seoIssuesAttentionItems(
   const checks = checksFor(installed);
   if (reportableIssues(checks).length === 0) return [];
 
-  const listed = collections.slice(0, MAX_ATTENTION_ITEMS);
+  const listed = collections.slice(0, MAX_ATTENTION_ITEMS_PER_PLUGIN);
   const ids = attentionIds(listed);
   return listed.map((slug, index) =>
     issuesItem(ids[index], `SEO issues in ${slug}`, [slug], checks)
   );
 }
 
-/** One line counting the issues in `collections`, linked to the first's list. */
+/**
+ * One line counting the issues in `collections`, linked to the first's list.
+ *
+ * 🔴 Its scan spends the budget every line shares for one answer, not one of
+ * its own. Core answers all of a plugin's lines in one request, at once, and
+ * hands each the same scope for that answer, so the budget kept there bounds
+ * the whole digest load: ten large collections read one budget's pages
+ * between them, not ten budgets', and the lines left short say floors.
+ */
 function issuesItem(
   id: string,
   label: string,
@@ -203,10 +217,24 @@ function issuesItem(
     id,
     label,
     collections,
-    count: async ({ services }) =>
-      issueCount(await tallyIssues(services, collections, checks)),
+    count: async ({ services, scope }) =>
+      issueCount(
+        await tallyIssues(
+          services,
+          collections,
+          checks,
+          await sharedBudget(scope)
+        )
+      ),
     link: `collections/${collections[0]}`,
   });
+}
+
+/** The page budget this plugin's lines share within one answer, made by the first to ask. */
+function sharedBudget(scope: AttentionScope): Promise<ScanBudget> {
+  return scope.getOrCompute(SCAN_BUDGET_KEY, () =>
+    Promise.resolve(scanBudget())
+  );
 }
 
 /**

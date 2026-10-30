@@ -16,7 +16,7 @@ import {
   seoIssuesAttentionItems,
   seoIssuesWidget,
 } from "../widget-card";
-import { ISSUE_SCAN_ROW_BUDGET } from "../widget-source";
+import { ISSUE_SCAN_PAGE_SIZE, ISSUE_SCAN_ROW_BUDGET } from "../widget-source";
 
 /** The fields of a declaration this file reads, which the contribution type does not name. */
 interface Declared {
@@ -202,8 +202,38 @@ describe("the SEO issues card", () => {
 type CountInput = Parameters<
   ReturnType<typeof seoIssuesAttentionItems>[number]["count"]
 >[0];
-const countWith = (services: unknown) =>
-  ({ services }) as unknown as CountInput;
+const countWith = (services: unknown, scope: unknown = oneAnswerScope()) =>
+  ({ services, scope }) as unknown as CountInput;
+
+/** The scope core hands every item of one plugin within one answer: work kept by key. */
+function oneAnswerScope() {
+  const kept = new Map<string, Promise<unknown>>();
+  return {
+    getOrCompute<T>(key: string, compute: () => Promise<T>): Promise<T> {
+      if (!kept.has(key)) kept.set(key, compute());
+      return kept.get(key) as Promise<T>;
+    },
+  };
+}
+
+/**
+ * Read services whose every collection holds far more rows than a scan reads,
+ * each answering its own pages: `total` is what matches after the cursor, as
+ * that collection's stored ids count them.
+ */
+function largeCollections() {
+  const served = new Map<string, number>();
+  const find = vi.fn(async (slug: string) => {
+    const next = served.get(slug) ?? 0;
+    served.set(slug, next + 50);
+    const items = Array.from({ length: 50 }, (_, i) => ({
+      id: `${slug}-${String(next + i).padStart(6, "0")}`,
+      seo: {},
+    }));
+    return { items, total: ISSUE_SCAN_ROW_BUDGET * 2 - next };
+  });
+  return { find };
+}
 
 describe("the SEO issues lines of Needs attention", () => {
   it("are one per configured collection, each naming, linking to and counting its own", async () => {
@@ -302,6 +332,32 @@ describe("the SEO issues lines of Needs attention", () => {
       "seo/issues-blog-posts",
       "seo/issues-blog-posts-2",
     ]);
+  });
+
+  it("share one scan budget between every line of one answer, the rest of their counts floors", async () => {
+    // 🔴 Core answers all of a plugin's lines in one request, at once, with one
+    // scope for that answer. A budget per line would let ten large collections
+    // read ten budgets' pages on every dashboard load.
+    const slugs = Array.from({ length: 10 }, (_, i) => `c${i + 1}`);
+    const items = seoIssuesAttentionItems(slugs, defaultSeoFields());
+    const services = largeCollections();
+    const scope = oneAnswerScope();
+
+    const answers = await Promise.all(
+      items.map(item => item.count(countWith(services, scope)))
+    );
+
+    expect(services.find.mock.calls.length).toBeLessThanOrEqual(
+      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
+    );
+    for (const answer of answers) {
+      expect(answer).toMatchObject({ atLeast: true });
+    }
+    // A new answer has a budget of its own.
+    await items[0]?.count(countWith(services, oneAnswerScope()));
+    expect(services.find.mock.calls.length).toBeGreaterThan(
+      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
+    );
   });
 
   it("say a count is a floor when the scan stopped at its bound", async () => {
