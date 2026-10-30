@@ -28,7 +28,6 @@ export const recentActivityWidget = {
     min: { w: 4, h: 4 },
     max: { w: 12, h: 8 },
   },
-  defaultOrder: 40,
   component: "core#RecentActivity",
   query: { source: ACTIVITY_SOURCE_ID, op: "list" },
   // Asked like core's own lists: the rows its size draws and one more, so the

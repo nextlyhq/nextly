@@ -156,19 +156,23 @@ function askedWith(
   dashboardWidth: number | undefined,
   editing: boolean,
   sources: readonly PublishedContentSource[] | undefined
-): Array<ArrangedWidget & { tier?: SizeTier; h?: number; editing?: true }> {
+): Array<
+  ArrangedWidget & { tier?: SizeTier; h?: number; w?: number; editing?: true }
+> {
   return rows.map(row => {
-    // A card core answers on the server is asked by its id at rest, and with
-    // the settings it is drawn with while customising, when they may not be
-    // saved yet (see `questionsFor`).
-    if (row.widget.serverData === true) {
-      return editing ? { ...row, editing: true as const } : row;
-    }
     // The tier the card will be drawn at, from the dashboard's width and the card's drawn span,
     // and the height its rows are counted from: the query is asked before the card can measure
     // itself, and sized for both.
     const size = drawnSize(row.size, row.widget.size);
     const tier = predictedTier(size.w, dashboardWidth);
+    // A card core answers on the server is asked by its id at rest, and with
+    // the settings it is drawn with while customising, when they may not be
+    // saved yet (see `questionsFor`); with the size it is drawn at, which its
+    // widget's `load` is handed (`cardAskFor`).
+    if (row.widget.serverData === true) {
+      const drawn = tier ? { ...row, tier, w: size.w, h: size.h } : row;
+      return editing ? { ...drawn, editing: true as const } : drawn;
+    }
     const sized = tier ? { ...row, tier, h: size.h } : row;
     const widget = widgetAsAsked(row.widget, row.config, sources);
     // The declared query, or cells, travel with the asked ones, so the batch keys the card by

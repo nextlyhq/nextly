@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
 import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
+import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import {
   migrationChecksum,
   type MigrationContent,
@@ -283,7 +284,15 @@ beforeEach(async () => {
 });
 
 const uninstall = () =>
-  runPluginUninstall(PLUGIN, { keepData: false, yes: true }, context);
+  runPluginUninstall(
+    PLUGIN,
+    {
+      keepData: false,
+      yes: false,
+      consent: resolveDataLossConsent({ flag: true, env: {} }),
+    },
+    context
+  );
 
 const rollBack = (step: number) =>
   runMigrateDown({ plugin: PLUGIN, step, allowDataLoss: true }, context);
@@ -491,14 +500,56 @@ describe("plugins uninstall against a real database", () => {
     state.migrations = [init, more];
     const warn = vi.spyOn(context.logger, "warn");
 
-    await expect(
-      runPluginUninstall(PLUGIN, { keepData: false, yes: false }, context)
-    ).rejects.toMatchObject({ code: "PLUGIN_UNINSTALL_UNCONFIRMED" });
+    const refusal: unknown = await runPluginUninstall(
+      PLUGIN,
+      { keepData: false, yes: false },
+      context
+    ).catch((error: unknown) => error);
+    expect(refusal).toMatchObject({ code: "PLUGIN_UNINSTALL_UNCONFIRMED" });
 
-    const warned = warn.mock.calls.map(call => String(call[0])).join("\n");
+    // What the operator is shown: the warnings, and the refusal that lists
+    // what would be deleted.
+    const shown = [
+      ...warn.mock.calls.map(call => String(call[0])),
+      (refusal as { publicMessage: string }).publicMessage,
+    ].join("\n");
     warn.mockRestore();
-    expect(warned).toContain("fx__notes");
-    expect(warned).not.toContain("app_idx");
+    expect(shown).toContain("table fx__notes");
+    expect(shown).not.toContain("app_idx");
+  });
+});
+
+describe("plugins uninstall names a column it added to another owner's table", () => {
+  it("only while the column is still there", async () => {
+    // fx records a column on the app's table, as a module that added one
+    // would. Its ownership row outlives a rollback that removed the column.
+    await new SchemaOwnersRepository(state.db, "sqlite").upsert([
+      {
+        tableName: "app_notes",
+        elementKind: "column",
+        elementName: "fx_flag",
+        ownerKind: "plugin",
+        ownerId: PLUGIN,
+        migratedBy: `plugin:${PLUGIN}`,
+        ownerVersion: null,
+        schemaVersion: null,
+        state: "active",
+      },
+    ]);
+    state.migrations = [init, more];
+    const refusal = async () => {
+      const error: unknown = await runPluginUninstall(
+        PLUGIN,
+        { keepData: false, yes: false },
+        context
+      ).catch((caught: unknown) => caught);
+      return (error as { publicMessage: string }).publicMessage;
+    };
+
+    expect(await refusal()).not.toContain("app_notes.fx_flag");
+
+    state.sqlite.exec("ALTER TABLE app_notes ADD COLUMN fx_flag TEXT");
+    expect(await refusal()).toContain("column app_notes.fx_flag");
   });
 });
 

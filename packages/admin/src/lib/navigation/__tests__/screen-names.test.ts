@@ -36,6 +36,18 @@ vi.mock("@admin/components/layout/sidebar/sidebar-types", async () => {
   };
 });
 
+vi.mock("@admin/constants/email-hub", async () => {
+  const actual = await vi.importActual<
+    typeof import("@admin/constants/email-hub")
+  >("@admin/constants/email-hub");
+  return {
+    ...actual,
+    EMAIL_HUB_TABS: actual.EMAIL_HUB_TABS.map(tab =>
+      tab.id === "design" ? { ...tab, label: "Look and Feel" } : tab
+    ),
+  };
+});
+
 import { ROUTES } from "@admin/constants/routes";
 import {
   clearPluginPages,
@@ -79,6 +91,26 @@ describe("the name each route gives its screen", () => {
     // The screens reached from that entry keep its name; the item they show
     // is what tells them apart.
     expect(nameOf(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES)).toBe("Outgoing Hooks");
+  });
+
+  it("names each Email hub tab by its tab label, within Email", () => {
+    expect(nameOf(ROUTES.EMAIL)).toBe("Messages · Email");
+    // Read from the tab declarations: the label swapped above, not a copy.
+    expect(nameOf(ROUTES.EMAIL_DESIGN)).toBe("Look and Feel · Email");
+    expect(nameOf(ROUTES.EMAIL_SENDING)).toBe("Sending · Email");
+    // A tab's editors, and the old addresses that redirect into it, carry the
+    // tab they belong to.
+    expect(nameOf(ROUTES.EMAIL_MESSAGES_EDIT)).toBe("Messages · Email");
+    expect(nameOf(ROUTES.EMAIL_SENDING_CREATE)).toBe("Sending · Email");
+    expect(nameOf(ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT)).toBe(
+      "Sending · Email"
+    );
+    expect(nameOf(ROUTES.SETTINGS_EMAIL_TEMPLATES)).toBe("Messages · Email");
+  });
+
+  it("names a plugin's settings apart from its details", () => {
+    expect(nameOf(ROUTES.PLUGIN_DETAIL)).toBe("Plugins");
+    expect(nameOf(ROUTES.PLUGIN_SETTINGS)).toBe("Settings");
   });
 
   it("names a rail destination by its rail entry", () => {

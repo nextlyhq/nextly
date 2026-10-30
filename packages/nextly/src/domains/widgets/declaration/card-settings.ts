@@ -32,7 +32,7 @@ function declaredSettings(settings: unknown): [string, DeclaredSetting][] {
  * the starting value everywhere else.
  *
  * Read by `resolveWidgetSettings`, the reader every stored card goes through,
- * all eight setting types alike, so a declared widget's values and a
+ * every setting type alike, so a declared widget's values and a
  * registered one's cannot be judged two ways. That reader also hides a
  * dependent setting whose Collection setting has no value, and hands on only
  * declared names, in a record with no prototype.

@@ -79,6 +79,14 @@
       "types": "./dist/domains/widgets/attention-keys.d.mts",
       "import": "./dist/domains/widgets/attention-keys.mjs"
     },
+    "./card-geometry": {
+      "types": "./dist/domains/widgets/card-geometry.d.mts",
+      "import": "./dist/domains/widgets/card-geometry.mjs"
+    },
+    "./field-label": {
+      "types": "./dist/collections/fields/field-label.d.mts",
+      "import": "./dist/collections/fields/field-label.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.mts",
       "import": "./dist/query/index.mjs"
@@ -305,6 +313,8 @@
     "esbuild": "^0.28.1",
     "next": "^16.4.1",
     "nodemailer": "^10.2.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "sharp": "^0.35.5"
   },
   "peerDependenciesMeta": {

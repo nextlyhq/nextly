@@ -8,7 +8,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import { spawnSync } from "node:child_process";
 
@@ -18,8 +18,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { compile } from "../../../../scripts/tsc-cli.mjs";
 
 import { generateInstrumentation } from "../generators/instrumentation";
-import { nextConfigFiles, patchNextConfig } from "../generators/next-config";
-import type { DatabaseConfig } from "../types";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const blankHook = path.resolve(
@@ -447,9 +445,8 @@ describe("generateInstrumentation", () => {
   );
 
   it.each([
-    ["an installed Next.js 14", "14.2.3"],
     ["a Next.js version that cannot be read", null],
-    ["Next.js 15", "15.0.3"],
+    ["Next.js 16.4", "16.4.2"],
   ] as const)(
     "on %s writes the hook and says nothing about the Next config, which the Next config step owns",
     async (_, version) => {
@@ -464,50 +461,6 @@ describe("generateInstrumentation", () => {
       expect(await readFile(path.join(cwd, "next.config.js"), "utf-8")).toBe(
         config
       );
-    }
-  );
-
-  it.each(["commonjs", "module"])(
-    "on a Next.js 14 app with no config, following the advice makes one config that opts in and lists the packages, in a %s project",
-    async type => {
-      const cwd = await app("14.2.3");
-      await writeFile(path.join(cwd, "package.json"), JSON.stringify({ type }));
-      const sqlite: DatabaseConfig = {
-        type: "sqlite",
-        adapter: "@nextlyhq/adapter-sqlite",
-        databaseDriver: "better-sqlite3",
-        connectionUrl: "file:./data/nextly.db",
-        envExample: "file:./data/nextly.db",
-      };
-
-      // The order the scaffolder runs them in.
-      const hook = await generateInstrumentation(cwd, { srcDir: true });
-      const patch = await patchNextConfig(cwd, sqlite);
-
-      // One piece of advice about the config, from one step.
-      expect(hook.skipped).toEqual([]);
-      expect(patch).toMatchObject({
-        kind: "manual",
-        file: "next.config.mjs",
-        create: true,
-      });
-      // The whole file the run says to create, as it prints it to add.
-      const message = nextConfigFiles(patch).skipped[0]?.toAdd ?? "";
-      const created = path.join(cwd, "next.config.mjs");
-      await writeFile(created, message.slice(message.indexOf("/** @type")));
-      // Loaded the way Node loads it: both keys survive, in one object.
-      const loaded = (await import(pathToFileURL(created).href)) as {
-        default: {
-          experimental?: {
-            instrumentationHook?: boolean;
-            serverComponentsExternalPackages?: string[];
-          };
-        };
-      };
-      expect(loaded.default.experimental?.instrumentationHook).toBe(true);
-      expect(
-        loaded.default.experimental?.serverComponentsExternalPackages
-      ).toEqual(expect.arrayContaining(["@nextlyhq/adapter-sqlite"]));
     }
   );
 });

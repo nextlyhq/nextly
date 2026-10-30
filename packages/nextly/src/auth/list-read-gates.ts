@@ -17,10 +17,10 @@
  * already authenticated; both dispatch on its shape as the Direct API's
  * `authorizeChecked` does.
  *
- * The users, roles, permissions and media gates ARE the system read policy's
- * (`SYSTEM_READ_POLICY`), the one the checked Direct API reads, so REST's
- * lists, the dashboard's counts and the Direct API cannot come to admit
- * different callers.
+ * The users, roles, permissions, media and field-group gates ARE the system
+ * read policy's (`SYSTEM_READ_POLICY`), the one the checked Direct API reads,
+ * so REST's lists, the dashboard's counts and the Direct API cannot come to
+ * admit different callers.
  *
  * @module auth/list-read-gates
  */
@@ -51,10 +51,10 @@ export type ListReadGate = RouteGrant;
  * - `users`, `roles`, `permissions` and `media` are the system read policy's
  *   list reads: `permissions` admits `read-roles` (the role form's permission
  *   matrix reads it) and names the reading of permissions when it refuses.
- * - `fieldGroups` is the settings-gated field-group list's. The read policy
- *   has none to share: the Direct API reads field groups as the builder's
- *   palette does, open to any signed-in caller, and the dashboard counts them
- *   only for a caller the settings-gated list admits.
+ * - `fieldGroups` is the settings-gated field-group list's: the read policy's
+ *   settings read. The Direct API reads field groups as the builder's palette
+ *   does, open to any signed-in caller, and the dashboard counts them only
+ *   for a caller the settings-gated list admits.
  * - `apiKeys` takes the API-key read policy from where the key endpoints take it.
  */
 export const LIST_READ_GATES = {
@@ -62,12 +62,7 @@ export const LIST_READ_GATES = {
   roles: SYSTEM_READ_POLICY.roles.read,
   permissions: SYSTEM_READ_POLICY.permissions.list,
   media: SYSTEM_READ_POLICY.media.read,
-  fieldGroups: {
-    anyOf: [
-      { action: "read", resource: "settings" },
-      { action: "manage", resource: "settings" },
-    ],
-  },
+  fieldGroups: SYSTEM_READ_POLICY.settings.read,
   apiKeys: { anyOf: apiKeyPermissionsFor("read") },
 } as const satisfies Record<string, ListReadGate>;
 

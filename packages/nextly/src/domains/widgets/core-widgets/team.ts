@@ -23,7 +23,6 @@ export const teamWidget = {
     min: { w: 3, h: 2 },
     max: { w: 6, h: 4 },
   },
-  defaultOrder: 70,
   component: "core#TeamSummary",
   link: { label: "All users", href: "/admin/users" },
   // Offered to the readers its source answers, by the one constant both read.

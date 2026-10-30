@@ -24,6 +24,7 @@ import type {
   VersionStatus,
 } from "../../schemas/versions/types";
 import { recordWriteEvent } from "../content-events/write-event";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 
 import type { PartVersion } from "./comparison-baselines";
 import type { VersionsDbApi } from "./db-api";
@@ -149,6 +150,9 @@ export class VersionsService {
      */
     by?: { actor: RequestActor; personName?: string | null }
   ): Promise<VersionRow> {
+    // Refused first when the document's collection or Single is removed from
+    // code: a version's name is something recorded about the entry.
+    await refuseHistoryWriteIfRemovedFromCode(ref);
     await this.get(ref, versionNo);
     await this.db.transaction(async tx => {
       // Under the document's lock, which retention's own pass waits for, the
@@ -244,6 +248,9 @@ export class VersionsService {
     ref: VersionRef,
     locale: string | null
   ): Promise<number> {
+    // Refused first when the document's collection or Single is removed from
+    // code: its pending change is its own.
+    await refuseHistoryWriteIfRemovedFromCode(ref);
     return this.repo.deleteWorkingDraft(ref, locale);
   }
 
@@ -267,6 +274,9 @@ export class VersionsService {
     locale?: string | null;
     createdBy?: string | null;
   }): Promise<AutosaveWriteResult> {
+    // Refused first when the document's collection or Single is removed from
+    // code: a recovery point is a write to its history.
+    await refuseHistoryWriteIfRemovedFromCode(input.ref);
     return this.repo.upsertAutosave(input);
   }
 

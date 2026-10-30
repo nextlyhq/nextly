@@ -62,6 +62,11 @@ export interface UserFieldFormProps {
   userField?: UserFieldDefinitionRecord;
   isPending: boolean;
   onSubmit: (values: UserFieldFormValues) => void;
+  /**
+   * Shown and not changed: the caller may read the field but not update it,
+   * so every control is disabled and nothing is offered to save.
+   */
+  readOnly?: boolean;
 }
 
 // `readonly string[]` (not the built-in union) so membership checks accept a
@@ -80,9 +85,13 @@ export function UserFieldForm({
   userField,
   isPending,
   onSubmit,
+  readOnly = false,
 }: UserFieldFormProps): JSX.Element {
   const isEdit = mode === "edit";
   const isCodeSourced = isEdit && userField?.source === "code";
+  // A code-defined field cannot be changed here by anyone, and no field by a
+  // caller who may only read it: either way the form shows and offers nothing.
+  const isLocked = isCodeSourced || readOnly;
   // Name, type, and the multi-value flag identify the backing database
   // column, which the schema reconciler only ever adds to — changing any of
   // them would strand the existing column and its data. The server refuses
@@ -187,7 +196,7 @@ export function UserFieldForm({
           <Input
             type="number"
             placeholder="No limit"
-            disabled={isCodeSourced}
+            disabled={isLocked}
             {...field}
           />
         </FieldShell>
@@ -265,7 +274,7 @@ export function UserFieldForm({
               <FieldShell label="Label" error={fieldState.error?.message}>
                 <Input
                   placeholder="e.g. Phone Number"
-                  disabled={isCodeSourced}
+                  disabled={isLocked}
                   {...field}
                   onChange={e =>
                     handleLabelChange(e.target.value, field.onChange)
@@ -322,7 +331,7 @@ export function UserFieldForm({
                 <Textarea
                   placeholder="Helper text shown under the input"
                   className="min-h-20"
-                  disabled={isCodeSourced}
+                  disabled={isLocked}
                   {...field}
                 />
               </FieldShell>
@@ -348,7 +357,7 @@ export function UserFieldForm({
                   >
                     <Input
                       placeholder="e.g. Enter your phone number"
-                      disabled={isCodeSourced}
+                      disabled={isLocked}
                       {...field}
                     />
                   </FieldShell>
@@ -356,9 +365,7 @@ export function UserFieldForm({
               />
             )}
 
-            {showOptions && (
-              <OptionsEditor form={form} disabled={isCodeSourced} />
-            )}
+            {showOptions && <OptionsEditor form={form} disabled={isLocked} />}
 
             {/* Not a FieldShell candidate: a horizontal label-left /
                 switch-right settings row, not the vertical stack FieldShell
@@ -432,7 +439,7 @@ export function UserFieldForm({
         )}
 
         {/* Section: Default Value */}
-        <DefaultValueField form={form} disabled={isCodeSourced} />
+        <DefaultValueField form={form} disabled={isLocked} />
 
         {/* Section: Behavior */}
         <div className="space-y-4">
@@ -454,7 +461,7 @@ export function UserFieldForm({
                     <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
-                      disabled={isCodeSourced}
+                      disabled={isLocked}
                     />
                   </FormControl>
                 </FormItem>
@@ -472,7 +479,7 @@ export function UserFieldForm({
                     <Switch
                       checked={field.value}
                       onCheckedChange={field.onChange}
-                      disabled={isCodeSourced}
+                      disabled={isLocked}
                     />
                   </FormControl>
                 </FormItem>
@@ -481,7 +488,7 @@ export function UserFieldForm({
           </Grid>
         </div>
 
-        {!isCodeSourced && (
+        {!isLocked && (
           <FormActions dirty={form.formState.isDirty}>
             <Link href={ROUTES.USERS_FIELDS}>
               <Button type="button" variant="outline" disabled={isPending}>

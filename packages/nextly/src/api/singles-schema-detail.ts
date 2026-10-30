@@ -23,6 +23,7 @@
 import type { FieldConfig } from "@nextly/collections";
 
 import { getService } from "../di";
+import { SCHEMA_CHANGE_PERMISSIONS } from "../domains/auth/system-write-policy";
 import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
 import {
   coerceBuilderMaxPerDoc,
@@ -44,14 +45,14 @@ import { requireBuilderEnabled } from "../shared/builder-access";
 import { assertValidFieldsPayload } from "./fields-payload";
 import { respondDoc, respondMutation } from "./response-shapes";
 import {
+  requireRouteAllPermissions,
   requireRouteCollectionAccess,
-  requireRoutePermission,
 } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
  * Context object for dynamic route handlers.
- * Next.js 15+ requires params to be a Promise.
+ * Next.js passes route params as a Promise.
  */
 interface RouteContext {
   params: Promise<{ slug: string }>;
@@ -129,16 +130,17 @@ export const GET = withErrorHandler(
 /**
  * PATCH handler for updating a Single's schema/metadata.
  *
- * Requires manage-settings, matching the dispatcher's `updateSingleSchema`
- * authorization. The registry returns 403 if the Single is locked
- * (code-first Singles cannot be modified via API).
+ * Requires create, update and delete on settings, matching the dispatcher's
+ * `updateSingleSchema` authorization. The registry returns 403 if the Single
+ * is locked (code-first Singles cannot be modified via API).
  */
 export const PATCH = withErrorHandler(
   async (request: Request, context: RouteContext) => {
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("update-single-schema");
 
-    await requireRoutePermission(request, "manage", "settings");
+    // A schema change asks create, update and delete on settings.
+    await requireRouteAllPermissions(request, SCHEMA_CHANGE_PERMISSIONS);
 
     const { slug } = await context.params;
     const registry = await getSingleRegistry();
@@ -270,8 +272,8 @@ export const PATCH = withErrorHandler(
 /**
  * DELETE handler for removing a Single.
  *
- * Requires manage-settings, matching the dispatcher's `deleteSingle`
- * authorization. The registry returns 403 if the Single is locked
+ * Requires create, update and delete on settings, matching the dispatcher's
+ * `deleteSingle` authorization. The registry returns 403 if the Single is locked
  * (code-first Singles cannot be deleted via API). Singles require
  * `force: true` to delete because they represent persistent site-wide
  * configuration.
@@ -281,7 +283,8 @@ export const DELETE = withErrorHandler(
     // Schema DDL: refuse when the builder is disabled for this environment.
     requireBuilderEnabled("delete-single");
 
-    await requireRoutePermission(request, "manage", "settings");
+    // A schema change asks create, update and delete on settings.
+    await requireRouteAllPermissions(request, SCHEMA_CHANGE_PERMISSIONS);
 
     const { slug } = await context.params;
     const registry = await getSingleRegistry();

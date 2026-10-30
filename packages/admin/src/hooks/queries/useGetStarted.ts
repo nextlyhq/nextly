@@ -42,10 +42,15 @@ export interface UseGetStartedResult {
 
 export function useGetStarted(placementId: string): UseGetStartedResult {
   const queryClient = useQueryClient();
+  // 🔴 The layout the grid has just read, not a read of its own: the card mounts
+  // once that read has answered, so asking again as it mounts read the layout
+  // twice on every dashboard load. With nothing in the cache yet it still asks,
+  // and it asks again on focus and on Retry, as the grid's own read does.
   const layout = useQuery({
     queryKey: DASHBOARD_LAYOUT_KEY,
     queryFn: fetchDashboardLayout,
     staleTime: 0,
+    refetchOnMount: false,
     refetchOnWindowFocus: true,
   });
   const inLayout = layout.data?.getStarted?.answer ?? undefined;

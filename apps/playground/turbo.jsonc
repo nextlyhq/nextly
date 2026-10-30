@@ -27,7 +27,13 @@
       // and Markdown included. So unlike the shared build inputs, this hash
       // keeps them: a class used only there still lands in the compiled sheet,
       // and leaving it out would replay a stale one.
-      "inputs": ["$TURBO_DEFAULT$", ".env*"]
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      // Hashed, not passed through: it decides whether this build has Cache
+      // Components on, so a build with it set and one without produce
+      // different output and must not restore each other's. Task-scoped, so no
+      // other package's hash moves, and "$TURBO_EXTENDS$" keeps the root
+      // task's own variables.
+      "env": ["$TURBO_EXTENDS$", "NEXTLY_PLAYGROUND_CACHE_COMPONENTS"]
     }
   }
 }

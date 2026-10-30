@@ -26,7 +26,6 @@ export const needsAttentionWidget = {
     min: { w: 4, h: 4 },
     max: { w: 12, h: 6 },
   },
-  defaultOrder: 10,
   // Offered only to a reader who may read a kind it counts; its source
   // answers "not available" to anyone else.
   lifecycle: "conditional",

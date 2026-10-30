@@ -291,8 +291,10 @@ describe.each(getConfiguredTestDialects())(
       // answer depends on cards they cannot see.
       const reader = await account("cv-hoarder@example.com");
       await grantTo(handle, reader, "read", [POSTS]);
+      // A plugin's cards the install does not have now: carried, not dropped,
+      // so the row keeps every one of them out of view.
       const hidden = Array.from({ length: MAX_PLACEMENTS }, (_, i) =>
-        card(`gone${i}`, `collection/cv-gone-${i}-count`)
+        card(`gone${i}`, `acme/cv-gone-${i}`)
       );
       await service().saveLayout("user", reader, hidden, 0);
       const seen = await read(reader);

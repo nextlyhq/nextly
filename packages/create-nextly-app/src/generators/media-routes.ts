@@ -84,8 +84,23 @@ const UPLOADS_ROUTE = {
 /** One route this module writes, as {@link ROUTES} and {@link UPLOADS_ROUTE} spell them. */
 type RouteSpec = (typeof ROUTES)[number] | typeof UPLOADS_ROUTE;
 
-/** Every route the existing-app path writes, read from the templates together. */
-const ALL_ROUTES: readonly RouteSpec[] = [...ROUTES, UPLOADS_ROUTE];
+/**
+ * The admin's layout, which `generateAdminPage` writes beside the admin page.
+ * Read with the routes, from the template a new project gets, so an app Nextly
+ * is added to renders its admin the same way: its shell prerendered, and its
+ * request work beneath a Suspense boundary.
+ */
+export const ADMIN_LAYOUT = {
+  path: "admin/[[...params]]/layout.tsx",
+  importsConfig: true,
+} as const;
+
+/** Every file the existing-app path writes from the templates, read together. */
+const ALL_ROUTES: readonly { path: string; importsConfig: boolean }[] = [
+  ...ROUTES,
+  UPLOADS_ROUTE,
+  ADMIN_LAYOUT,
+];
 
 /**
  * The import that brings in the Nextly config: the template spells it through
@@ -346,7 +361,7 @@ function prepareRoute(
  * `nextly.config` by a path relative to where the route is written, so it
  * resolves with or without a `src/` folder and with no import alias at all.
  */
-function withRelativeConfigImport(
+export function withRelativeConfigImport(
   text: string,
   cwd: string,
   target: string,

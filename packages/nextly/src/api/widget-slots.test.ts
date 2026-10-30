@@ -195,7 +195,7 @@ describe("a declared card's own data in the batch", () => {
     // runner settles it exactly as answered, and its neighbour is drawn.
     const needs = {
       ok: false,
-      error: "Choose Collection in the card's settings",
+      error: "No Collection chosen yet",
       code: "needs-setting",
       setting: "Collection",
     } as const;

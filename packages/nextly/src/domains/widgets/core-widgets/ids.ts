@@ -12,6 +12,8 @@
  * @module domains/widgets/core-widgets/ids
  */
 
+import type { DefaultLayoutCard } from "../declaration/dashboard";
+
 /** Each core widget's id, by name. */
 export const CORE_WIDGET_ID = {
   getStarted: "core/get-started",
@@ -35,16 +37,7 @@ export type CoreWidgetId = (typeof CORE_WIDGET_ID)[keyof typeof CORE_WIDGET_ID];
 /**
  * Every one of core's widget ids, in core's order: the one list of what is
  * core's, for every reader asking whether an id is a built-in and where it
- * sorts.
- *
- * The agreed default dashboard, in each widget's `defaultOrder`: Needs
- * attention, Create, Recently edited, Recent activity, Content, Upcoming
- * releases and Team, each at its agreed size, after the onboarding cards. The
- * cards that share a row share a height, so the default dashboard tiles: Needs
- * attention and Create at 3 rows, the two activity lists at 4, Upcoming
- * releases and Team at 4. `defaultOrder` is spaced by ten rather than numbered
- * one-by-one, so a card can be placed between two of these later without
- * renumbering the rest -- the reason it is a number and not an index.
+ * sorts. Which of them the default dashboard holds is `CORE_DEFAULT_LAYOUT`.
  */
 export const CORE_WIDGET_IDS = [
   CORE_WIDGET_ID.getStarted,
@@ -71,3 +64,26 @@ const everyIdOrdered: Exclude<
   ? true
   : false = true;
 void everyIdOrdered;
+
+/**
+ * Core's own default dashboard, written as a site writes `defaultLayout`, so
+ * there is one path to the default whoever wrote it: the onboarding card, then
+ * Needs attention, Create, Recently edited, Recent activity, Content, Upcoming
+ * releases and Team, each at its widget's starting size. The cards that share a
+ * row share a height, so the default dashboard tiles: Needs attention and
+ * Create at 3 rows, the two activity lists at 4, Upcoming releases and Team at
+ * 4. A site's own `defaultLayout` takes its place whole.
+ *
+ * Here, beside the ids and importing no widget, so the site dashboard's check
+ * and the default's builder read it without loading every core card.
+ */
+export const CORE_DEFAULT_LAYOUT: readonly DefaultLayoutCard[] = [
+  CORE_WIDGET_ID.getStarted,
+  CORE_WIDGET_ID.needsAttention,
+  CORE_WIDGET_ID.quickCreate,
+  CORE_WIDGET_ID.recentlyEdited,
+  CORE_WIDGET_ID.recentActivity,
+  CORE_WIDGET_ID.content,
+  CORE_WIDGET_ID.upcomingReleases,
+  CORE_WIDGET_ID.team,
+].map(widget => ({ widget }));

@@ -55,14 +55,14 @@ async function cookiesFor(
     ttlSeconds: 600,
     minter: "minter-1",
   });
-  return () => ({
+  return async () => ({
     get: (name: string) =>
       name === PREVIEW_SCOPE_COOKIE ? { value: token } : undefined,
   });
 }
 
 /** A request with no preview cookie at all. */
-const noCookies = () => ({ get: () => undefined });
+const noCookies = async () => ({ get: () => undefined });
 
 // `NonNullable`, because the config parameter is optional: the ordinary mount
 // passes nothing and lets every value default. These tests pin all three, which
@@ -256,7 +256,7 @@ describe("previewDraftGate", () => {
           hkdfSync("sha256", SECRET, "", "nextly:preview-token:v1", 32)
         )
       );
-    const cookies = () => ({
+    const cookies = async () => ({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE ? { value: legacy } : undefined,
     });

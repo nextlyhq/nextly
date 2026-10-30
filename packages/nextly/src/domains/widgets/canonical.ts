@@ -32,10 +32,6 @@
  * @module domains/widgets/canonical
  */
 
-import {
-  generatedCollectionSlug,
-  generatedWidgets,
-} from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
 import type { WidgetPermissionGate } from "./gate";
 import {
@@ -49,36 +45,12 @@ import {
   type AnyWidgetSetting,
   type TextBound,
 } from "./settings";
+import { withSiteOverride } from "./site-rules";
 import { UNSTATED_WIDGET_SIZE } from "./unstated-size";
 
 /** The part of a widget that layout resolution needs, from either channel. */
 export interface CanonicalWidget {
   id: string;
-  /**
-   * Whether core DERIVED this card rather than an author declaring it.
-   *
-   * 🔴 It decides one thing: a derived card is offered and never placed. The
-   * default arrangement is materialized from the widgets an install DECLARES,
-   * and a generated set is unbounded in the install's own content -- forty
-   * collections would open onto eighty cards nobody asked for, and could fill
-   * the submission cap before the reader chose anything.
-   *
-   * Set only where the generated channel is the one that supplied the entry. A
-   * contribution or a registration claiming the same id has DECLARED that
-   * widget, so it is placed like any other: the flag describes where the
-   * surviving declaration came from, not which ids core can generate.
-   */
-  generated?: boolean;
-  /**
-   * The collection a GENERATED card reads, when it is one.
-   *
-   * Carried because access to such a card is a question about that collection
-   * rather than about a declared permission — it has none — and the summary is
-   * what layout resolution filters. Taken from the definition's QUERY where the
-   * generated channel supplies it, so the value names the thing actually read
-   * rather than a slug recovered from a display identity.
-   */
-  collection?: string;
   /**
    * The plugin that contributed this widget, by its name. Set by the
    * contribution channel alone, so a registration overriding a plugin's widget
@@ -213,6 +185,21 @@ const REGISTRATION_FIELDS = [
   keyof WidgetDefinition & keyof CanonicalWidget
 >;
 
+/**
+ * The gate a declared widget's empty-state action is offered under: a link's permission, when
+ * it names one. An action opening the card's settings has none here; the admin offers it only
+ * where the reader can change that card's settings.
+ */
+function emptyActionGate(
+  action: NonNullable<WidgetDefinition["empty"]>["action"]
+): string[] {
+  return action !== undefined &&
+    "requiredPermission" in action &&
+    action.requiredPermission !== undefined
+    ? [action.requiredPermission]
+    : [];
+}
+
 /** The summary of one registered widget. */
 function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
   const stated = REGISTRATION_FIELDS.filter(
@@ -224,9 +211,7 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
     // gate is resolved with them, before the payload decides what to withhold.
     actionGates: [
       ...actionGatesOf(definition.actions),
-      ...(definition.empty?.action?.requiredPermission === undefined
-        ? []
-        : [definition.empty.action.requiredPermission]),
+      ...emptyActionGate(definition.empty?.action),
     ],
     ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
     ...textBoundsField(definition.settings),
@@ -485,20 +470,6 @@ export function canonicalWidgets(
   for (const widget of contributed) {
     if (widget.id && !byId.has(widget.id)) byId.set(widget.id, widget);
   }
-  // Generated cards sit BETWEEN the two declared channels. A contribution
-  // already holding the id keeps it -- a plugin that declared that widget meant
-  // it, and core's derived guess must not displace it -- while a registration
-  // below still merges over whichever of the two is here, for the same reason.
-  for (const definition of generatedWidgets()) {
-    if (!byId.has(definition.id)) {
-      const collection = generatedCollectionSlug(definition);
-      byId.set(definition.id, {
-        ...fromRegistration(definition),
-        generated: true,
-        ...(collection === undefined ? {} : { collection }),
-      });
-    }
-  }
   for (const definition of publishableWidgets()) {
     const registration = fromRegistration(definition);
     const contribution = byId.get(definition.id);
@@ -507,7 +478,9 @@ export function canonicalWidgets(
       contribution ? mergeCanonical(contribution, registration) : registration
     );
   }
-  return [...byId.values()];
+  // Each as the site's `overrides` change it, whichever channel supplied it:
+  // its sizes are what layouts start and keep its cards at.
+  return [...byId.values()].map(widget => withSiteOverride(widget));
 }
 
 /**
@@ -529,18 +502,6 @@ const globalForContributed = globalThis as unknown as {
   __nextly_contributedWidgets?: CanonicalWidget[];
 };
 
-/**
- * The contributed set, for a caller that needs to know which ids a PLUGIN
- * claimed rather than merely which ids exist.
- *
- * The workspace payload asks: a generated card published under an id a plugin
- * declared would be read by the admin as a registration, and the merge gives a
- * registration authority over the contribution's title, archetype and query.
- */
-export function contributedWidgets(): CanonicalWidget[] {
-  return [...(globalForContributed.__nextly_contributedWidgets ?? [])];
-}
-
 /** Replace the contributed set. Called once per boot, beside the registry. */
 export function setContributedWidgets(
   widgets: readonly CanonicalWidget[]
@@ -554,29 +515,15 @@ export function setContributedWidgets(
  * The question every server-side consumer should ask. `listWidgets()` answers
  * only the imperative registry and is the reason a contributed widget could
  * render and never be arranged.
+ *
+ * Every widget here was DECLARED by core, a plugin or the site: core mints no
+ * card from the install's own content, so this is also the set the default
+ * arrangement is materialized from, with no narrower view of it to keep.
  */
 export function allWidgets(): CanonicalWidget[] {
   return canonicalWidgets(
     globalForContributed.__nextly_contributedWidgets ?? []
   );
-}
-
-/**
- * The widgets an install DECLARES, which is what a default arrangement is built
- * from.
- *
- * DERIVED from {@link allWidgets} rather than assembled separately, so the two
- * cannot disagree about which widgets exist: this is the same set, less the
- * cards core generated for content the reader has not asked to see.
- *
- * The distinction is not cosmetic. `defaultPlacements` positions a card by its
- * index in the sorted set, and a generated card that appeared here would both
- * take a position and consume one of the placements a caller may submit --
- * so an install with many collections would open onto a dashboard nobody chose
- * and, past the cap, one they could not add to.
- */
-export function declaredWidgets(): CanonicalWidget[] {
-  return allWidgets().filter(widget => widget.generated !== true);
 }
 
 /** What the dashboard needs to know about a widget's size. */
@@ -588,13 +535,14 @@ export interface WidgetSizeFacts {
 }
 
 /**
- * Whether a widget enters the default arrangement: the ONE answer, for every
- * reader that follows the default.
+ * Whether a widget of the older shape is placed on the default by being
+ * declared, as a suggestion after the default's own cards
+ * (`default-layout.ts`): the ONE answer, for every reader that follows the
+ * default.
  *
- * A plugin's declared widget is offered, never placed by default: where a
- * plugin may put one is its suggestion, which the site may decline, and an
- * unsuggested one stays in the add panel. Until suggestions are placed, no
- * declared widget enters it at all.
+ * A plugin's declared widget is offered, never placed this way: where a plugin
+ * may put one is its suggestion (`contributes.dashboard.suggest`), which the
+ * site may decline, and an unsuggested one stays in the add panel.
  *
  * Nor does a widget that is offered (`offered`): one offered per collection
  * reads the collection a card is set to, and the default arrangement places a

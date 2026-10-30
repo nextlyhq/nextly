@@ -25,7 +25,7 @@ import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWi
 
 import { columnGapPx, drawnSpan } from "../sizes";
 
-import { listBodyHeight, rowsThatFit, type RowsSize } from "./list-rows";
+import { listBodyHeight, rowsInBody, type RowsSize } from "./list-rows";
 
 /** Below this rendered width a card is small: a full grouped figure may not fit. */
 const SMALL_BELOW_PX = 340;
@@ -72,7 +72,7 @@ export function predictedTier(
 
 /**
  * The rows a card of `size` (its tier, and its height where it has one) draws at `density` when
- * its setting asks for `items`: the whole rows its body holds ({@link rowsThatFit}), or fewer
+ * its setting asks for `items`: the whole rows its body holds ({@link rowsInBody}), or fewer
  * where the setting asks for fewer.
  *
  * One answer for every reader of it: the list and table displays draw this
@@ -94,7 +94,7 @@ export function rowsDrawn(
   const rows = typeof size === "string" ? { tier: size } : size;
   return Math.min(
     effectiveWidgetLimit(items),
-    rowsThatFit(listBodyHeight(rows) - reservedPx, density)
+    rowsInBody(listBodyHeight(rows) - reservedPx, density)
   );
 }
 

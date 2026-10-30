@@ -376,11 +376,7 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
       "notes/pinned",
     ]);
     expect(ids(body.widgets)).toEqual(
-      expect.arrayContaining([
-        "app/board",
-        "app/tools",
-        "collection/notes-count",
-      ])
+      expect.arrayContaining(["app/board", "app/tools"])
     );
 
     // Then the absences, and on the CONTENT rather than only the id: the whole
@@ -555,31 +551,32 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     );
   });
 
-  it("withholds a generated card for a collection the reader may not read", async () => {
-    // A key stamped with nothing about `notes` -- the generated cards name the
-    // collection in their id, title and query, and the layout endpoint would
-    // never offer them to this key. It holds a read on `events` instead, so
-    // the cards for THAT collection are the population: the absence below is
-    // a gate on one collection, not a payload with no generated cards at all.
-    const body = await workspaceFor(await keyHolding([`read-${EVENTS}`]));
+  it("ships no widget per collection, to a reader who may read every collection", async () => {
+    // 🔴 A card about one collection is a core widget set to it, so the
+    // payload names no widget after a collection: none in the per-collection
+    // or per-Single namespaces, whichever collections the reader may read.
+    const body = await workspaceFor(
+      await keyHolding([`read-${NOTES}`, `read-${EVENTS}`])
+    );
 
-    const generated = ids(body.widgets).filter(id =>
-      id.startsWith("collection/")
-    );
-    expect(generated).toContain(`collection/${EVENTS}-count`);
-    expect(generated.some(id => id.startsWith(`collection/${NOTES}-`))).toBe(
-      false
-    );
-    // And the ungated declarations still arrive.
-    expect(ids(everyDeclaration(body))).toEqual(
-      expect.arrayContaining(["notes/welcome", "app/board"])
+    const shipped = ids(everyDeclaration(body));
+    expect(
+      shipped.filter(
+        id => id.startsWith("collection/") || id.startsWith("single/")
+      )
+    ).toEqual([]);
+    // The control: the Content widget a collection is reached through ships,
+    // with the ungated declarations, so the absence above is not an empty
+    // payload.
+    expect(shipped).toEqual(
+      expect.arrayContaining(["core/count", "notes/welcome", "app/board"])
     );
   });
 
   it("offers a card's content settings only the collections the reader may read", async () => {
-    // The same reader as above. The collection it may read is offered, which
-    // is the population: the absence of the other is a gate on one
-    // collection, not a payload that offers none.
+    // A reader who may read `events` alone. The collection it may read is
+    // offered, which is the population: the absence of the other is a gate on
+    // one collection, not a payload that offers none.
     const body = await workspaceFor(await keyHolding([`read-${EVENTS}`]));
 
     const offered = (body.widgetSources ?? []).map(source => source.collection);

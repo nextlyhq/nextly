@@ -6,6 +6,7 @@
 //   -- Singles: header, footer
 //   -- Field groups: hero
 //   -- UserExt: user_ext
+//   -- Settings: posts: description     (one line per entity whose settings changed)
 //   -- Generated at: <ISO timestamp>
 //   -- Dialect: PostgreSQL
 //
@@ -41,6 +42,9 @@ import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
  * header would report those migrations as touching no field groups, silently.
  */
 export const FIELD_GROUP_HEADER = "-- Field groups:";
+
+/** The header line naming one entity's settings changes (`-- Settings: posts: description`). */
+const SETTINGS_HEADER = "-- Settings:";
 
 /**
  * Marks a file whose entity headers name what the migration CHANGES.
@@ -136,6 +140,22 @@ export interface FormatArgs {
    * declaration from a wrong one only if wrong ones are never written.
    */
   entitiesAreScoped?: boolean;
+  /**
+   * Each entity whose settings changed, as `describeSettingsChange` words it
+   * (`posts: description`), one header line each.
+   *
+   * Separate from the entity headers above on purpose: those name the entities
+   * whose TABLES this file changes, and `nextly migrate` withholds a registry
+   * row while a file naming it is pending. A settings change leaves the table
+   * as it is, so naming it there would hold back a row that has nothing to
+   * wait for.
+   */
+  settingsChanges?: readonly string[];
+  /**
+   * Whether the file changes no table. Its UP may still hold statements: a
+   * Builder entity's registry row travels with its settings.
+   */
+  changesNoTable?: boolean;
   /** Override generated-at timestamp for tests; default = `new Date()`. */
   now?: Date;
 }
@@ -158,16 +178,28 @@ export function formatMigrationFile(args: FormatArgs): string {
   // when the caller says it did not compute the arrays at all.
   const scopeLine =
     args.entitiesAreScoped === false ? "" : `${SCOPED_ENTITIES_MARKER}\n`;
+  const settingsLines = (args.settingsChanges ?? [])
+    .map(change => `${SETTINGS_HEADER} ${change}\n`)
+    .join("");
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.
   const body = args.sqlStatements.map(s => `${s};`).join("\n\n");
+  // A file that changes settings alone has no table statement to undo, which
+  // is a different fact from a table change nobody wrote the reverse of:
+  // `migrate:down` refuses a DOWN with no statement as irreversible, and this
+  // file must not stop a rollback reaching the migrations before it. So its
+  // DOWN is one statement that changes nothing, valid on every dialect.
+  const settingsOnly =
+    args.changesNoTable === true && (args.settingsChanges ?? []).length > 0;
   const downBody =
     args.downSqlStatements.length > 0
       ? args.downSqlStatements.map(s => `${s};`).join("\n\n")
-      : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
+      : settingsOnly
+        ? "-- No table statements to undo: this migration changes settings only.\nSELECT 1;"
+        : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 
   return `-- Migration: ${args.name}
-${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}-- Generated at: ${now}
+${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}-- Generated at: ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP

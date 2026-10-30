@@ -139,7 +139,11 @@ export class SingleEntryService extends BaseService {
       fieldGroupDataService,
       rbacAccessControlService,
       localizationSource,
-      releaseVisibility
+      releaseVisibility,
+      // The write's own judgement, asked when a read shows a pending change to
+      // a caller who may publish and not update. Read when a read asks it,
+      // after the mutation service below exists.
+      args => this.mutationService.workingDraftPromotionRefused(args)
     );
 
     this.mutationService = new SingleMutationService(

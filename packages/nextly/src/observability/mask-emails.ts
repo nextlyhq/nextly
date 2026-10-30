@@ -22,6 +22,8 @@
 
 import type { Logger } from "../shared/types";
 
+import { redactCredentialTokens } from "./credential-shapes";
+
 // ---------------------------------------------------------------------------
 // The one walk over a log value
 //
@@ -533,20 +535,100 @@ const CREDENTIAL_IN_TEXT = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi;
 /**
  * Credentials before a host in an address, with a scheme or without one:
  * `https://user:password@host` and `//user:password@host`.
+ *
+ * A scheme is read up to 64 characters. A long run of dashed or dotted words
+ * is tried from each word in it, and an unbounded scheme made every try read
+ * the run to its end, so a long line cost its length squared. What is
+ * redacted does not change: the scheme is put back as written, and an
+ * address after a longer run is matched from its `//`.
  */
-const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]*:)?\/\/)[^\s/@"'<>]+@/gi;
+const URL_USERINFO = /((?:\b[a-z][a-z0-9+.-]{0,63}:)?\/\/)[^\s/@"'<>]+@/gi;
 
 /**
  * The name of a named value in text, in each form an upstream message quotes
  * one: a URL's `name=value`, a header's `Name: value`, JSON's
  * `"name":"value"` (escaped too, when a body sits inside a message) and
  * `name="value"`, and a form's bracketed `user[password]=` or `tokens[]=`.
- * Groups: the quote around the name, the name, and the
- * separator. The value is read only after a credential's name
- * (`TEXT_PARAMETER_VALUE`), so any other value is searched as ordinary text.
+ *
+ * A double-quoted name is read as JSON reads one, whatever sits between its
+ * quotes (`"access token"`, `"2fa_token"`), not only an identifier; up to 256
+ * characters, so a long line costs a bounded step at each quote. It holds no
+ * `=` or `:`, though: a name that does (a map keyed by a URL with a `token=`
+ * in it) is left to be searched as text, so the parameter inside it is still
+ * found. Any other name keeps the identifier grammar, up to 256 characters
+ * too, and is read from its first word only: the first that starts with a
+ * letter or `_`, after any words that start with a digit (`token` in
+ * `2fa.token`, or in `--token`). Tried from every word in a long run of
+ * dotted or dashed words, an unbounded name read the run to its end each
+ * time, so a long line cost its length squared; and a bounded name tried
+ * from a word near the separator would be judged by that word alone.
+ *
+ * A name longer than either bound, counting its bracketed parts with its
+ * stem, is read backwards instead, whole: at a separator no other form
+ * reached, from the separator through an optional closing quote and any
+ * bracketed parts, back to the start of the name, so it is judged as a name
+ * of any length would be (`password…=` as well as `…password=`, and
+ * `user[…][password]`), bare, quoted or escaped. Its length is what is
+ * measured, so a short stem with long bracketed parts is read this way too;
+ * a name within the bound is left to the forms above, which read it
+ * forwards. It is read only where a separator could follow, and only back
+ * to the start of the name, so each name is read once and a long line still
+ * costs its length.
+ *
+ * An escaped JSON name is a JSON string inside another one, so it is read
+ * as the outer quoting wrote the inner one's characters: a plain character,
+ * an inner escape (`\\` and what follows it, where an inner quote is `\\\"`
+ * and an inner backslash `\\\\`), or an outer escape of any other character.
+ * Read that way, an inner quote stays part of the name (`password\"hint`),
+ * and a name ending in an inner backslash still ends at its own `\"`.
+ *
+ * Groups: an escaped JSON name's quote and text, a JSON name's quote and
+ * text, any other name's quote and text, a long name and the quote after
+ * it, and the separator. The value is read
+ * only after a credential's name (`TEXT_PARAMETER_VALUE`), so any other value
+ * is searched as ordinary text.
  */
 const TEXT_PARAMETER =
-  /(\\?["']|)\b([A-Za-z_][\w.-]*(?:\[[\w.-]*\])*)\1(\s*[=:]\s*)/g;
+  /(?:(\\")((?:[^"\\\r\n=:]|\\\\\\["\\]|\\\\[^"\\\r\n]|\\[^"\\\r\n]){0,256})\\"|(")((?:[^"\\\r\n=:]|\\[^\r\n]){0,256})"|(\\?'|)\b(?=[A-Za-z_])(?<=(?:^|[^\w.-])[.-]*(?:[0-9]\w*[.-]+)*)([A-Za-z_][\w.-]{0,255}(?:\[[\w.-]*\])*)\5|(?=[\s=:])(?<=(?<![\w.-])(?=[\w.[\]-]{257})([\w.-]+(?:\[[\w.-]*\])*)(\\?["']?)))(\s*[=:]\s*)/g;
+
+/**
+ * The quote and the name a `TEXT_PARAMETER` match found. A JSON name's escapes
+ * are decoded as JSON decodes them, so `"\u0074oken"` is judged as `token`;
+ * one JSON would refuse is judged as written. An escaped JSON name is a JSON
+ * string inside another one, so it is decoded a level at a time by the same
+ * decoder: `\"\\u0074oken\"` loses the outer quoting's escapes first, then
+ * its own, and is judged as `token` too.
+ */
+function parameterName(match: RegExpExecArray): {
+  nameQuote: string;
+  name: string;
+} {
+  const [, escapedQuote, escapedName, jsonQuote, jsonName, quote, name] = match;
+  if (escapedQuote !== undefined) {
+    return {
+      nameQuote: escapedQuote,
+      name: decodedJsonName(decodedJsonName(escapedName ?? "")),
+    };
+  }
+  if (jsonQuote !== undefined) {
+    return { nameQuote: jsonQuote, name: decodedJsonName(jsonName ?? "") };
+  }
+  const [, , , , , , , longName, longNameQuote] = match;
+  if (longName !== undefined) {
+    return { nameQuote: longNameQuote ?? "", name: longName };
+  }
+  return { nameQuote: quote ?? "", name: name ?? "" };
+}
+
+/** A JSON name's text decoded, or as written when JSON would refuse it. */
+function decodedJsonName(text: string): string {
+  try {
+    const decoded: unknown = JSON.parse(`"${text}"`);
+    return typeof decoded === "string" ? decoded : text;
+  } catch {
+    return text;
+  }
+}
 
 /**
  * A credential's value, read where its name ends: quoted, and then taken
@@ -656,7 +738,9 @@ function redactCredentialParameters(text: string): string {
   let out = "";
   let from = 0;
   for (let match = names.exec(text); match; match = names.exec(text)) {
-    const [prefix, nameQuote, name, separator] = match;
+    const [prefix] = match;
+    const separator = match[9] ?? "";
+    const { nameQuote, name } = parameterName(match);
     if (
       !isCredentialName(name) &&
       !CREDENTIAL_PARAMETER_ONLY_NAMES.has(normalisedName(name))
@@ -690,13 +774,19 @@ function redactCredentialParameters(text: string): string {
 const COOKIE_HEADER_IN_TEXT = /\b((?:set-)?cookie):[^\r\n]*/gi;
 
 /**
- * Every credential in a piece of text redacted: a `Bearer` or `Basic`
- * credential, the user and password before a host, a quoted cookie header,
- * and the value of a parameter named like a credential or a session.
+ * Every credential in a piece of text redacted: a token with a known
+ * credential's shape (a JWT, a GitHub or npm token, an AWS key id, a PEM
+ * block) wherever it sits, a `Bearer` or `Basic` credential, the user and
+ * password before a host, a quoted cookie header, and the value of a parameter
+ * named like a credential or a session. Since every string the log walk meets
+ * passes through here, a shaped credential under a neutral field name (a
+ * `toJSON` result, a header pair in a list) is taken out too.
  */
 export function redactCredentialsInText(text: string): string {
   return redactCredentialParameters(
-    text
+    // Shapes first: a PEM block is taken whole, before a header rule that
+    // reads one line could leave its body behind.
+    redactCredentialTokens(text, REDACTED)
       .replace(
         CREDENTIAL_IN_TEXT,
         (_, scheme: string) => `${scheme} ${REDACTED}`

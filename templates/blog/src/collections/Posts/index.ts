@@ -26,6 +26,7 @@ import {
 import { anyone } from "../../access/anyone";
 import { hasPermission } from "../../access/has-permission";
 import { autoSlug } from "../../hooks/auto-slug";
+import { refuseReservedSlug } from "../../lib/static-params";
 
 import { computeReadingTime } from "./hooks/reading-time";
 import { requireFeaturedAlt } from "./hooks/require-featured-alt";
@@ -35,7 +36,12 @@ export const Posts = defineCollection({
   labels: { singular: "Post", plural: "Posts" },
   fields: [
     text({ name: "title", required: true }),
-    text({ name: "slug", required: true, unique: true }),
+    text({
+      name: "slug",
+      required: true,
+      unique: true,
+      validate: refuseReservedSlug,
+    }),
     richText({ name: "content" }),
     upload({ name: "featuredImage", relationTo: "media" }),
     // Author: the post belongs to a user. Public-facing author profile

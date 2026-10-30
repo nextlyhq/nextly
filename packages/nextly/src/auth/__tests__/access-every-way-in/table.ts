@@ -22,7 +22,10 @@
  * that asks for the wrong action's permission answers it differently from the
  * others. The read-only and full-access keys are made by `user-with`; the
  * role-based keys carry `reviewer` and `partial`; `key-super-admin` is a
- * full-access key made by the super-admin. `principal` and `principal-other`
+ * full-access key made by the super-admin, and `key-read-only-super-admin` and
+ * `key-role-based-super-admin` are the super-admin's read-only key and a
+ * role-based key of theirs carrying `reviewer`: only the full-access one
+ * carries its maker's super-admin authority. `principal` and `principal-other`
  * are plugin-defined signed-in people of two different kinds.
  *
  * Two callers exist only as a call names them, never as a request presents
@@ -44,6 +47,8 @@ export const CALLERS = [
   "key-full-access",
   "key-role-based",
   "key-super-admin",
+  "key-read-only-super-admin",
+  "key-role-based-super-admin",
   "user-partial",
   "key-partial",
   "principal",
@@ -75,7 +80,16 @@ const KEYS: readonly Caller[] = [
   "key-full-access",
   "key-role-based",
   "key-super-admin",
+  "key-read-only-super-admin",
+  "key-role-based-super-admin",
   "key-partial",
+];
+
+/** The keys the super-admin made. */
+const MADE_BY_SUPER_ADMIN: readonly Caller[] = [
+  "key-super-admin",
+  "key-read-only-super-admin",
+  "key-role-based-super-admin",
 ];
 const STAFF: readonly Caller[] = [...USERS, ...KEYS];
 
@@ -592,7 +606,7 @@ const HOLDS_ROLES: readonly Caller[] = [...STAFF, ...HANDED_ONLY];
  */
 const MADE_BY_USER_WITH: readonly Caller[] = [
   "user-with",
-  ...KEYS.filter(key => key !== "key-super-admin"),
+  ...KEYS.filter(key => !MADE_BY_SUPER_ADMIN.includes(key)),
   "key-without-rows",
 ];
 
@@ -617,6 +631,7 @@ const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
   "custom-role": () => true,
   "key-full-access": () => true,
   "key-role-based": () => true,
+  "key-role-based-super-admin": () => true,
   // The role-based key's own grants, without the rows they came from.
   "key-without-rows": () => true,
   "key-read-only": action => action === "read",
@@ -627,13 +642,12 @@ const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
 /**
  * The permissions an install seeds for each resource that is not an entry.
  * An action missing here has no permission to tick, so only a super-admin's
- * own session reaches it: there is no `update-email-providers`, and a key
- * holds only rows that exist.
+ * own session reaches it, and a key holds only rows that exist.
  */
 const SEEDED: Partial<Record<Target, readonly Action[]>> = {
   users: ["create", "read", "update", "delete"],
   roles: ["create", "read", "update", "delete"],
-  providers: ["create", "read", "delete"],
+  providers: ["create", "read", "update", "delete"],
 };
 
 /**
@@ -664,8 +678,10 @@ function holdsPermission(caller: Caller, action: Action, target: Target) {
   if (holdsManage(caller, action, target)) return true;
   if (!(SEEDED[target]?.includes(action) ?? true)) return false;
   // A full-access key carries its maker's live permissions, and a
-  // super-admin's are the whole catalogue, users included.
+  // super-admin's are the whole catalogue, users included; their read-only
+  // key carries the catalogue's reads.
   if (caller === "key-super-admin") return true;
+  if (caller === "key-read-only-super-admin") return action === "read";
   if (target === "users") return false;
   return GRANTS[caller]?.(action) ?? false;
 }
@@ -682,12 +698,12 @@ type RulesLet = "all" | "matching" | "none";
 
 /**
  * What the target's rules let through. Its own rule, where the target
- * declares one, must answer exactly `true`, or for a collection's read a
- * well-formed filter, which lets through the entries it matches. A filter
- * from any other rule refuses: a write rule's is not applied yet, and a
- * create rule or a Single's rule may not answer one. A publish or an
- * unpublish is judged by its own rule, as any action is, not the update rule
- * as well.
+ * declares one, must answer exactly `true`, or for a collection's read or
+ * delete a well-formed filter, which lets through the entries it matches. A
+ * filter from any other rule refuses: that write's filter is not applied
+ * yet, and a create rule or a Single's rule may not answer one. A publish or
+ * an unpublish is judged by its own rule, as any action is, not the update
+ * rule as well.
  */
 function rulesLet(
   rule: Rule,
@@ -698,9 +714,11 @@ function rulesLet(
   const says = RULE_SAYS[rule](action, caller);
   if (says === "filter") {
     const collection = target !== "single" && target !== "single-pub";
-    return action === "read" && collection ? "matching" : "none";
+    const applied = action === "read" || FILTERED_WRITES.has(action);
+    return applied && collection ? "matching" : "none";
   }
-  return says === null || says === true ? "all" : "none";
+  if (says !== null && says !== true) return "none";
+  return "all";
 }
 
 /**
@@ -711,7 +729,38 @@ function rulesLet(
 function answerFor(row: Row, lets: RulesLet): Verdict {
   if (lets === "none") return "refuse";
   if (lets === "all") return "allow";
-  return row.action === "list" || row.action === "count" ? "matching" : "allow";
+  const many = row.action === "list" || row.action === "count";
+  return many || FILTERED_WRITES.has(row.action) ? "matching" : "allow";
+}
+
+/**
+ * The writes a rule's filter limits to the entries it matches. Each asks an
+ * entry inside the filter and its twin outside it, so its answer can show
+ * that the one was changed and the other refused and left as it was.
+ */
+export const FILTERED_WRITES: ReadonlySet<Action> = new Set<Action>([
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+]);
+
+/** Whether a rule answers its collection's writes with a filter. */
+export function isFilterRule(rule: Rule): boolean {
+  return RULE_SAYS[rule]("delete", "user-with") === "filter";
+}
+
+/**
+ * Whether a door asks the row's write of an entry outside the rule's filter as
+ * well as of one inside it: a filtered write of a collection whose rule
+ * answers with a filter.
+ */
+export function hasOutsideTwin(row: Row): boolean {
+  return (
+    row.target === "collection" &&
+    FILTERED_WRITES.has(row.action) &&
+    isFilterRule(row.rule)
+  );
 }
 
 /**
@@ -721,7 +770,9 @@ function answerFor(row: Row, lets: RulesLet): Verdict {
  * - a visitor's permissions are the Public role's, and no Public role exists
  *   yet, so it holds none: every row is refused;
  * - a super-admin, held directly or through inheritance, passes every
- *   collection and Single rule. No key carries super-admin authority;
+ *   collection and Single rule, and so does the full-access key a super-admin
+ *   made, which counts as holding every permission. The super-admin's
+ *   read-only and role-based keys keep their types' limits;
  * - a plugin's signed-in person holds no role, so the target's rule decides
  *   alone, and a target that declares none refuses. As today, a person never
  *   publishes or unpublishes, whatever the rule says. A person reads media
@@ -736,7 +787,8 @@ function answerFor(row: Row, lets: RulesLet): Verdict {
  * - a collection's read rule may answer a well-formed filter instead of
  *   `true`, which allows the entries it matches: a list or a count returns
  *   those alone, and a read of the probe entry, which it matches, is allowed.
- *   A filter from any other rule refuses.
+ *   A delete rule may answer one too: the entry inside it is deleted and its
+ *   twin outside it refused. A filter from any other rule refuses.
  */
 export function oneAnswer(row: Row): Verdict {
   if (row.action === "new-pub") {
@@ -756,11 +808,46 @@ export function oneAnswer(row: Row): Verdict {
     return answerFor(row, rulesLet(rule, action, caller, target));
   }
   if (caller === "visitor") return "refuse";
-  if (caller === "super-admin" || caller === "super-admin-inherited") {
+  if (
+    caller === "super-admin" ||
+    caller === "super-admin-inherited" ||
+    caller === "key-super-admin"
+  ) {
     return "allow";
   }
   if (!holdsPermission(caller, action, target)) return "refuse";
   return answerFor(row, rulesLet(rule, action, caller, target));
+}
+
+/**
+ * The doors that answer yes or no about a collection, not about one entry.
+ * Where the one answer lets the caller read the entries a filter matches,
+ * theirs is yes: the caller may read the collection, those entries. A write
+ * under a filter is no there: the answer names no entry and applies no
+ * filter, so a yes would let the caller act past it.
+ */
+const YES_OR_NO_DOORS: ReadonlySet<Door> = new Set<Door>(["can"]);
+
+/**
+ * The doors that show a hint of what the caller may try, whose request
+ * applies the rule's filter: a capability cell, and a dashboard widget offered
+ * by the permission it requires. Where the one answer lets the caller act on
+ * the entries a filter matches, for any action, theirs is yes.
+ */
+const CELL_DOORS: ReadonlySet<Door> = new Set<Door>(["capabilities", "widget"]);
+
+/**
+ * The one answer as `door` gives it (see {@link YES_OR_NO_DOORS} and
+ * {@link CELL_DOORS}).
+ */
+export function oneAnswerAt(row: Row, door: Door): Verdict {
+  const answer = oneAnswer(row);
+  if (answer !== "matching") return answer;
+  if (CELL_DOORS.has(door)) return "allow";
+  if (YES_OR_NO_DOORS.has(door)) {
+    return judgedAs(row.action) === "read" ? "allow" : "refuse";
+  }
+  return answer;
 }
 
 // ---------------------------------------------------------------------------
@@ -769,7 +856,8 @@ export function oneAnswer(row: Row): Verdict {
 
 /**
  * One door's answer as the file spells it: `A` allowed, `M` a list or a count
- * that returned only the entries a rule's filter matches, `R` refused, an HTTP
+ * that returned only the entries a rule's filter matches, or a filtered write
+ * that changed the entry inside the filter and refused its twin, `R` refused, an HTTP
  * status for a refusal or failure that carried one, `E` for a failure without
  * one, and `.` where the door does not ask the row. `S` is a media row a read
  * was refused and still populated with its file, its internal columns taken

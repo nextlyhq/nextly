@@ -105,13 +105,14 @@ export function ContentSettingControl({
       />
     );
   }
-  if (setting.type === "groupBy") {
+  if (setting.type === "groupBy" || setting.type === "field") {
     return (
       <FieldRenderer
         field={selectOf(
           setting,
-          // Only keys the read will group by: a field offered to filter and
-          // sort may still be one it refuses as a group key.
+          // Group by offers only keys the read will group by: a field offered
+          // to filter and sort may still be one it refuses as a group key. A
+          // Field setting offers every field the collection offers the reader.
           fields
             .filter(field => fieldFits(setting, field))
             .map(field => ({ label: labelOf(field), value: field.name })),

@@ -198,17 +198,14 @@ export interface BlockRenderArgs<P>
    *
    * `ReactNode` rather than the `ReactNode | Promise<ReactNode>` that `render`
    * returns, and the asymmetry is deliberate: this value is one a block places
-   * into its own JSX, and that union is not a legal child under EITHER supported
-   * peer. React 18 admits no promise at all; React 19 admits only
+   * into its own JSX, and that union is not a legal child. React admits only
    * `Promise<AwaitedReactNode>`, a promise of a settled node, so a promise that
-   * may itself yield a promise is refused there too. Widening here would move
-   * the error onto every block that draws a slot.
+   * may itself yield a promise is refused. Widening here would move the error
+   * onto every block that draws a slot.
    *
-   * It still says what each peer can express, because React 19 counts
-   * `Promise<AwaitedReactNode>` as a `ReactNode`: a renderer on 19 may hand back
-   * a pending slot and the block places it unchanged. On 18 it may not, which
-   * costs nothing, since an async block cannot be drawn under React 18's types
-   * regardless — `<AsyncBlock />` is refused outright there.
+   * It still admits a pending slot, because React counts
+   * `Promise<AwaitedReactNode>` as a `ReactNode`: a renderer may hand one back
+   * and the block places it unchanged.
    */
   renderSlot(this: void, name: string, ctx?: BlockRenderContext): ReactNode;
 }
@@ -238,11 +235,10 @@ export interface BlockDefinition<P extends object = Record<string, unknown>>
   /**
    * Renders the block.
    *
-   * The promise is spelled out rather than left to `ReactNode`. React 19 added
-   * promises to that type and React 18 did not, and this package supports both,
-   * so an async block would compile against one peer and be rejected by the
-   * other. Naming it here makes the async contract mean the same thing across
-   * the range this package declares.
+   * The promise is spelled out rather than left to `ReactNode`, which admits
+   * only a promise of a settled node: an async block's `render` returns a
+   * promise of anything it could return synchronously, and spelling it out
+   * says so.
    */
   render(args: BlockRenderArgs<P>): BlockRenderResult;
 }
@@ -323,9 +319,7 @@ export type {
  * not satisfy `BlockDefinition["render"]`, so handing that helper to
  * `defineBlock` failed to compile.
  *
- * The promise is spelled out for the same reason `render` spells it out: React
- * 19 added promises to `ReactNode` and React 18 did not, and this package
- * supports both.
+ * The promise is spelled out for the same reason `render` spells it out.
  *
  * @experimental Carried by the same freeze as `defineBlock`.
  */

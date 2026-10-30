@@ -128,7 +128,7 @@ export interface VersionHistorySheetProps {
   liveDirty?: boolean;
   /**
    * A transient reason the confirm action must refuse: the document
-   * becoming read-only while the confirmation is open. The Restore… trigger
+   * becoming read-only while the confirmation is open. The restore trigger
    * removes itself on the same signal, but an already-open dialog outlives
    * it, so the refusal has to be carried into the confirmation as well.
    */
@@ -501,8 +501,8 @@ export function VersionHistorySheet({
               : {}),
           }),
     });
-    // Withdrawn on unmount as well as on close: a Restore… left holding a
-    // trigger into an unmounted panel would open a dialog nothing renders.
+    // Withdrawn on unmount as well as on close: a restore button left holding
+    // a trigger into an unmounted panel would open a dialog nothing renders.
     return () => setRestore(null);
   }, [
     open,
@@ -869,7 +869,7 @@ export function VersionHistorySheet({
             hasWithheldFields={viewedWithheld.length > 0}
             confirmDisabled={restoreRefused}
             isRestoring={restore.isPending}
-            // Re-checked at confirm time: the Restore… trigger can vanish while
+            // Re-checked at confirm time: the restore trigger can vanish while
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.
             onConfirm={() => {

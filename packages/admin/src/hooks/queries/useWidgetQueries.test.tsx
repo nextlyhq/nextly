@@ -235,7 +235,7 @@ describe("useWidgetQueries", () => {
       results: [
         {
           ok: false,
-          error: "Choose Collection in the card's settings",
+          error: "No Collection chosen yet",
           code: "needs-setting",
           setting: "Collection",
         },
@@ -261,7 +261,7 @@ describe("useWidgetQueries", () => {
     // Lost here, each would be drawn as a failure with Retry rather than as what it is.
     expect(result.current.slots["c-needs"]).toEqual({
       ok: false,
-      error: "Choose Collection in the card's settings",
+      error: "No Collection chosen yet",
       code: "needs-setting",
       setting: "Collection",
     });

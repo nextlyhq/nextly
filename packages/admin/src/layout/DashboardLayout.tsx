@@ -21,6 +21,7 @@ import {
   useSuppressedChrome,
 } from "../components/layout/ChromeSuppression";
 import { DashboardHeader } from "../components/layout/header";
+import { HeaderTrailProvider } from "../components/layout/header/HeaderTrail";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
 import {
@@ -59,7 +60,11 @@ export function DashboardLayout({
   return (
     <ChromeSuppressionProvider>
       <SidePanelReservationProvider>
-        <DashboardChrome>{children}</DashboardChrome>
+        {/* Above the chrome for the same reason: the top bar draws the trail
+            a page below it registers. */}
+        <HeaderTrailProvider>
+          <DashboardChrome>{children}</DashboardChrome>
+        </HeaderTrailProvider>
       </SidePanelReservationProvider>
     </ChromeSuppressionProvider>
   );

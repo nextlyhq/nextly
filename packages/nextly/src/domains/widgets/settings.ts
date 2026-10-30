@@ -43,6 +43,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { textLength } from "../../shared/text-length";
 
+import { quote } from "./declaration/quote";
 import type { PublishedContentSource } from "./published-content-source";
 import {
   isTimeseriesRange,
@@ -137,7 +138,14 @@ export type WidgetSetting =
       type: "textarea";
       defaultValue?: string;
       maxLength?: number;
-    });
+    })
+  /**
+   * A date, drawn as the field system's own date picker, held as the ISO 8601
+   * string that picker writes.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  | (WidgetSettingBase & { type: "date"; defaultValue?: string });
 
 /**
  * A setting over the site's content: the collection a card reads, and the
@@ -183,6 +191,13 @@ export type ContentSetting =
       defaultValue?: Record<string, unknown>;
     })
   | (WidgetSettingBase & { type: "sort"; of: string; defaultValue?: string })
+  /**
+   * One field of the collection the setting it names chooses, for a card's own
+   * `load` to read: offered from the fields that collection offers the reader.
+   *
+   * @experimental While the dashboard widget SDK is being built.
+   */
+  | (WidgetSettingBase & { type: "field"; of: string; defaultValue?: string })
   | (WidgetSettingBase & {
       type: "fields";
       of: string;
@@ -225,6 +240,7 @@ export type AnyWidgetSetting = WidgetSetting | ContentSetting;
 const DEPENDENT_TYPES: ReadonlySet<AnyWidgetSetting["type"]> = new Set([
   "filter",
   "sort",
+  "field",
   "fields",
   "groupBy",
 ]);
@@ -250,6 +266,7 @@ const FIELD_DRAWN: Record<WidgetSetting["type"], true> = {
   checkbox: true,
   select: true,
   textarea: true,
+  date: true,
 };
 
 /** Whether a setting is one a registered widget's query cannot apply yet. */
@@ -307,6 +324,7 @@ const USABLE_AS: Record<
     Number.isFinite(value) &&
     withinBounds(value, limits),
   checkbox: value => typeof value === "boolean",
+  date: value => isIsoDate(value),
   select: (value, limits) =>
     typeof value === "string" &&
     limits.options !== undefined &&
@@ -315,6 +333,7 @@ const USABLE_AS: Record<
   // names nothing, so it is no more usable than an absent one.
   collection: value => isName(value),
   sort: value => isName(value),
+  field: value => isName(value),
   groupBy: value => isName(value),
   // The fields a list's rows show: one or more names, each once, and no more
   // than a row has places for.
@@ -367,6 +386,27 @@ function isName(value: unknown): value is string {
 }
 
 /** Whether a finite number sits inside the range its setting declares. */
+const ISO_DATE =
+  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+
+/**
+ * Whether a value is a date as the date picker writes one: an ISO 8601 date,
+ * with or without its time, that names a real day. `Date.parse` alone would
+ * take "March 3" and a bare year, which no picker writes, and rolls February
+ * 30 over into March, so the day is read back and compared with what was
+ * written.
+ */
+function isIsoDate(value: unknown): value is string {
+  if (typeof value !== "string" || !ISO_DATE.test(value)) return false;
+  const day = value.slice(0, 10);
+  const midnight = Date.parse(`${day}T00:00:00Z`);
+  return (
+    !Number.isNaN(midnight) &&
+    new Date(midnight).toISOString().startsWith(day) &&
+    !Number.isNaN(Date.parse(value))
+  );
+}
+
 function withinBounds(value: number, limits: SettingLimits): boolean {
   // An absent bound is not a bound. Written as two independent tests rather
   // than one range check so a setting may declare either end alone, which is
@@ -430,29 +470,6 @@ function isSelectOptions(
  * opens the settings panel.
  */
 export const MAX_WIDGET_SETTINGS = 24;
-
-/**
- * A value named in a diagnostic, without the formatter itself throwing.
- *
- * 🔴 `JSON.stringify` is not total. A BigInt throws `TypeError`, and so does a
- * circular object — so a declaration carrying `defaultValue: 1n` produced a
- * native `TypeError` from inside the message-building, BEFORE the refusal it
- * was describing could be raised as a `NextlyError`. The author saw the wrong
- * error, naming neither the widget nor the setting.
- *
- * `String()` is the fallback rather than a fixed placeholder, because it
- * survives everything `JSON.stringify` does not and still names the value: a
- * BigInt reads `1`, a symbol reads `Symbol(x)`.
- */
-function describeValue(value: unknown): string {
-  try {
-    // `undefined` and a function both stringify to `undefined` rather than to
-    // text, so the fallback covers them too.
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
-  }
-}
 
 /*
  * `invalidInput` rather than `validation`, matching the widget definition's own
@@ -528,7 +545,7 @@ function contentSettingRefusal({ name, type }: ContentSetting): string {
 }
 
 /**
- * Every problem with a set of settings, of any of the eight types, in the
+ * Every problem with a set of settings, of any type, in the
  * order they were declared; empty when there is none.
  *
  * The declaration's channel reads all of them, naming every fault at once; the
@@ -613,7 +630,7 @@ function dependencyProblems(
   return dependents.filter(isDependent).flatMap(setting => {
     if (!collections.has(setting.of)) {
       return [
-        `setting "${setting.name}" depends on ${describeValue(setting.of)}, which is not a Collection setting of this widget`,
+        `setting "${setting.name}" depends on ${quote(setting.of)}, which is not a Collection setting of this widget`,
       ];
     }
     // A Fields setting keeps the list's title first and replaces the rest,
@@ -621,7 +638,7 @@ function dependencyProblems(
     // title, and keeping it would ask a field the reader never chose.
     if (setting.type === "fields" && !titled.has(setting.of)) {
       return [
-        `setting "${setting.name}" is a Fields setting over ${describeValue(setting.of)}, which must be a Collection setting with rows "titled"`,
+        `setting "${setting.name}" is a Fields setting over ${quote(setting.of)}, which must be a Collection setting with rows "titled"`,
       ];
     }
     return [];
@@ -653,7 +670,7 @@ export function fieldsSettingQueryProblem(widget: {
       : undefined;
   return op === "list"
     ? undefined
-    : `setting ${describeValue(fields.name)} is a Fields setting, which only a list query's rows can show; this widget asks ${describeValue(op)}`;
+    : `setting ${quote(fields.name)} is a Fields setting, which only a list query's rows can show; this widget asks ${quote(op)}`;
 }
 
 /**
@@ -703,7 +720,7 @@ function settingProblem(
   seen.add(name);
 
   if (!isSettingType(type)) {
-    return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
+    return `setting "${name}" has type ${quote(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
   }
   const flags = flagsProblem(
     type,
@@ -724,7 +741,7 @@ function flagsProblem(
   defaultFrom: unknown
 ): string | undefined {
   if (quick !== undefined && typeof quick !== "boolean") {
-    return `has quick ${describeValue(quick)}; expected true or false`;
+    return `has quick ${quote(quick)}; expected true or false`;
   }
   // Refused rather than ignored: a misspelt value, or the flag on a setting
   // it means nothing to, would otherwise leave a card grouped by nothing with
@@ -733,7 +750,7 @@ function flagsProblem(
     defaultFrom !== undefined &&
     (type !== "groupBy" || defaultFrom !== "collection")
   ) {
-    return `has defaultFrom ${describeValue(defaultFrom)}; only a Group by setting takes it, as "collection"`;
+    return `has defaultFrom ${quote(defaultFrom)}; only a Group by setting takes it, as "collection"`;
   }
   return rowsProblem(type, rows);
 }
@@ -751,7 +768,7 @@ function rowsProblem(
     return "declares rows, which only a Collection setting takes";
   return rows === "titled"
     ? undefined
-    : `has rows ${describeValue(rows)}; expected "titled"`;
+    : `has rows ${quote(rows)}; expected "titled"`;
 }
 
 /**
@@ -886,7 +903,7 @@ function defaultMismatch(
   name: string
 ): string {
   if (type === "select") {
-    return `setting "${name}" defaults to ${describeValue(defaultValue)}, which is not one of its options`;
+    return `setting "${name}" defaults to ${quote(defaultValue)}, which is not one of its options`;
   }
   if (type === "textarea" && typeof defaultValue === "string") {
     return `setting "${name}" defaults to text longer than its maxLength of ${limits.maxLength} characters`;
@@ -894,7 +911,7 @@ function defaultMismatch(
   const bounded = limits.min !== undefined || limits.max !== undefined;
   return bounded && typeof defaultValue === "number"
     ? `setting "${name}" defaults to ${defaultValue}, outside the range it declares`
-    : `setting "${name}" is typed "${type}" but defaults to ${describeValue(defaultValue)}`;
+    : `setting "${name}" is typed "${type}" but defaults to ${quote(defaultValue)}`;
 }
 
 /**

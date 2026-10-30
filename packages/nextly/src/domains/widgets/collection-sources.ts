@@ -425,7 +425,7 @@ export async function refreshCollectionSources(): Promise<boolean> {
   const collections = await readRegisteredCollections();
   if (!collections) return false;
 
-  // A collection kept off the dashboard gets no source, so no card is generated for it and a
+  // A collection kept off the dashboard gets no source, so no card can be set to it and a
   // query naming it is refused exactly as an unknown name is -- for a super-admin too.
   const named = collections.filter(
     (collection): collection is RegisteredCollection & { slug: string } =>

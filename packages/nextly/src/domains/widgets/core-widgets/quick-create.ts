@@ -23,7 +23,6 @@ export const quickCreateWidget = {
     min: { w: 4, h: 2 },
     max: { w: 12, h: 4 },
   },
-  defaultOrder: 20,
   component: "core#QuickCreate",
   // Offered only to a reader who could create an entry somewhere: every
   // button on it would otherwise open onto a refusal.

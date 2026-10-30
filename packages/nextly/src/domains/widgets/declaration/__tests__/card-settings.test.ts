@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { resolveCardSettings, unsetSetting } from "../card-settings";
 import { defineWidget } from "../define-widget";
-import { settings } from "../setting-builders";
+import { setting } from "../setting-builders";
 
 const recentEntries = defineWidget({
   id: "test/recent-entries",
@@ -20,10 +20,19 @@ const recentEntries = defineWidget({
   category: "Test",
   size: { default: { w: 12, h: 4 } },
   settings: {
-    collection: settings.collection(),
-    sort: settings.sort({ of: "collection", default: "-updatedAt" }),
-    range: settings.dateRange({ default: "30d" }),
-    items: settings.items({ default: 5 }),
+    collection: setting.collection({ label: "Collection" }),
+    sort: setting.sort({
+      of: "collection",
+      label: "Sort",
+      defaultValue: "-updatedAt",
+    }),
+    range: setting.dateRange({ label: "Date range", defaultValue: "30d" }),
+    items: setting.number({
+      label: "Number of items",
+      defaultValue: 5,
+      min: 1,
+      max: 10,
+    }),
   },
   load: async ({ settings, services, signal }) => ({
     items: (
@@ -43,10 +52,18 @@ describe("a setting with no value", () => {
   it("is named, so the card asks for it rather than running load", () => {
     // A Collection setting has no default: it is given its value when a card is
     // placed from a collection's group. Until then the card cannot be loaded.
-    // The builder states no label, so it is named by its key, as the card's
-    // settings sheet names it.
+    // It is named by its label, as the card's settings sheet names it.
     const stored = resolveCardSettings(recentEntries.settings, undefined);
     expect(unsetSetting(recentEntries.settings, stored)).toEqual({
+      name: "collection",
+      label: "Collection",
+    });
+  });
+
+  it("is named by its key where it states no label", () => {
+    // A stored definition may omit a label, which startup refuses only in a
+    // declaration: the sheet names such a setting by its key, and so does this.
+    expect(unsetSetting({ collection: { type: "collection" } }, {})).toEqual({
       name: "collection",
       label: "collection",
     });

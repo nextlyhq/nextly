@@ -32,6 +32,12 @@ export const NEXTLY_ERROR_STATUS = {
   // for access. The sentence stays FORBIDDEN's and names no permission.
   API_KEY_ROLE_ABOVE_CREATOR: 403,
   NOT_FOUND: 404,
+  // A write to a collection or Single removed from code: its registry row
+  // says the app's code defines it, and the running configuration no longer
+  // declares it. 409 like the other states the database and the configuration
+  // disagree about: the caller's permissions are not the problem, retrying
+  // cannot change it, and declaring it again or retiring it does.
+  ENTITY_REMOVED_FROM_CODE: 409,
   // The path exists and this verb is not one it serves. Distinct from NOT_FOUND, which would
   // tell the caller the address is wrong when only the method is; the response carries `Allow`.
   METHOD_NOT_ALLOWED: 405,
@@ -58,6 +64,10 @@ export const NEXTLY_ERROR_STATUS = {
   DATABASE_BUSY: 503,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
+  // The app nextly runs in is set up so nextly cannot work: its config, or the
+  // Next.js and React it installs. 500: nothing about the request is wrong,
+  // and only the operator can change it.
+  CONFIGURATION_ERROR: 500,
   // Outbound-fetch safety (utils/validate-external-url): a URL refused for SSRF
   // safety, and a fetch that timed out / exceeded the size cap / failed to decode.
   EXTERNAL_URL_BLOCKED: 400,

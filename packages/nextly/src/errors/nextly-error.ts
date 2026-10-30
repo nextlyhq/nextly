@@ -422,6 +422,33 @@ export class NextlyError extends Error {
   }
 
   /**
+   * A write to an entry of a collection or Single removed from code: its
+   * registry row says the app's code defines it, and the running configuration
+   * no longer declares it. Its entries are read-only until it is retired or
+   * declared again, so the message names the entity, says what happened and
+   * gives both ways out. `publicData` carries the kind and the slug, which the
+   * caller named, so a client can mark the entity without parsing the sentence.
+   */
+  static removedFromCode(opts: {
+    kind: "collection" | "single";
+    slug: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    const thing = opts.kind === "single" ? "Single" : "collection";
+    const its = opts.kind === "single" ? "it" : "its entries";
+    return new NextlyError({
+      code: "ENTITY_REMOVED_FROM_CODE",
+      publicMessage:
+        `The ${thing} "${opts.slug}" was removed from code, so ${its} ` +
+        `can't be changed. To retire it, run \`nextly migrate:create\` and ` +
+        `then \`nextly migrate\`. To keep it, declare it again in ` +
+        `nextly.config.ts.`,
+      publicData: { kind: opts.kind, slug: opts.slug },
+      logContext: { kind: opts.kind, slug: opts.slug, ...opts.logContext },
+    });
+  }
+
+  /**
    * An autosave where the collection or Single does not autosave: its owner
    * switched autosave off, or it keeps no drafts to autosave into. Forbidden,
    * and the message says so, since it is a setting and not a permission.
@@ -629,6 +656,23 @@ export class NextlyError extends Error {
       publicMessage: "An unexpected error occurred.",
       cause: opts?.cause,
       logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * The app is set up so nextly cannot work: a missing `config`, or a Next.js
+   * or React outside the supported ranges. The public message stays generic;
+   * what to change goes in `logMessage`, for the operator.
+   */
+  static configuration(opts: {
+    logMessage: string;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "CONFIGURATION_ERROR",
+      publicMessage: "Server configuration error.",
+      logMessage: opts.logMessage,
+      logContext: opts.logContext,
     });
   }
 

@@ -10,10 +10,9 @@
  *
  * They go through `registerWidget`, the same door a plugin uses, rather than an
  * admin-side list the server cannot see. That is what lets a plugin
- * `extendWidget("core/team", ...)` to tighten a permission or relabel a card --
- * and it is why `defaultOrder` exists: registrations resolve after
- * contributions, so without a declared position core's cards would sit BELOW
- * every plugin's, which is not the dashboard anyone has today.
+ * `extendWidget("core/team", ...)` to tighten a permission or relabel a card.
+ * Which of them the default dashboard holds, and in what order, is
+ * `CORE_DEFAULT_LAYOUT` in `./ids`, written as a site writes its own `defaultLayout`.
  *
  * Collections, Singles and Team draw inside the shared frame like every other
  * card, so they read as one product. The other `custom` ones still carry

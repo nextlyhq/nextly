@@ -7,6 +7,9 @@
  * the layout hands to this check. In development the check compares that list
  * with what the boot's resolved plugins declare:
  *
+ * - A map that names a site component relative to a config that has moved is
+ *   out of date too, though its paths agree: the same spelling now resolves
+ *   from another folder.
  * - A map that is out of date is written again, and the render goes on: Next
  *   sees the files change and reloads the admin with the new map, so a plugin
  *   added during `next dev` needs no command.
@@ -32,16 +35,22 @@
  * @module domains/widgets/declaration/component-map-check
  */
 
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { getNextly } from "../../../init";
 import { getNextlyLogger } from "../../../observability/logger";
+import {
+  type ComponentMapAgreement,
+  checkComponentMapFiles,
+} from "../../../plugins/codegen/check-component-map";
 import {
   COMPONENT_IMPORT_MAP_FILENAME,
   componentUses,
   type ComponentMapEntry,
   configImportOf,
+  configImportSpecifier,
   describeComponentUse,
 } from "../../../plugins/codegen/component-import-map";
 import { writeComponentMapFiles } from "../../../plugins/codegen/write-component-map";
@@ -50,7 +59,10 @@ import { findConfigFile } from "../../../shared/lib/config-file";
 import { generatedTypesFile } from "../../../shared/lib/generated-output-paths";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 
-import { adminComponentPlugins } from "./component-map-store";
+import {
+  adminComponentPlugins,
+  adminSiteDashboard,
+} from "./component-map-store";
 
 /** What the admin's server layout hands the check. */
 export interface AdminComponentCheckInput {
@@ -75,9 +87,13 @@ export async function checkAdminComponents(
   if (plugins === undefined) return;
 
   const registered = new Set(input.registeredComponentPaths);
+  // The site's own widgets draw through the map as the plugins' do, as the
+  // boot registered them: after every plugin's setup(), which may add one the
+  // config as written does not hold.
+  const siteDashboard = adminSiteDashboard();
   // Every use, not one per path: two widgets drawn with one missing component
   // are both named.
-  const uses = componentUses(plugins);
+  const uses = componentUses(plugins, siteDashboard);
   const missing = uses.filter(each => !registered.has(each.path));
   /*
    * 🔴 Compared in both directions. A plugin removed from the config leaves
@@ -87,14 +103,85 @@ export async function checkAdminComponents(
    */
   const declared = new Set(uses.map(each => each.path));
   const obsolete = [...registered].filter(path => !declared.has(path));
-  if (missing.length === 0 && obsolete.length === 0) return;
-
   const place = mapFolder(input.config);
+  const otherConfig =
+    missing.length === 0 && obsolete.length === 0
+      ? await configDisagreement(plugins, siteDashboard, uses, place)
+      : undefined;
+  if (missing.length === 0 && obsolete.length === 0 && !otherConfig) return;
+
+  const stale = { missing, obsolete, otherConfig };
   if (generatedFilesWriteOff()) {
-    warnStale({ missing, obsolete }, place, "write-off");
+    warnStale(stale, place, "write-off");
     return;
   }
-  await rewriteInDevelopment(plugins, place, missing, obsolete);
+  await rewriteInDevelopment(plugins, siteDashboard, place, stale);
+}
+
+/**
+ * Where a map that lists the right paths still imports a config-relative component from the
+ * wrong folder: the config it is held to has moved, so the same spelling now resolves from
+ * another place. Asked of `generate:types --check`'s own comparison, never a second one.
+ *
+ * Only a site component written relative to the config moves with it, so only then are the
+ * map's files read; any other map is judged by its paths alone, at no cost per request. A map
+ * that cannot be read is answered as out of date, and the rewrite then names the failure.
+ */
+async function configDisagreement(
+  plugins: readonly PluginDefinition[],
+  siteDashboard: unknown,
+  uses: readonly ComponentMapEntry[],
+  place: MapFolder
+): Promise<ComponentMapAgreement["otherConfig"]> {
+  if (!uses.some(each => each.fromConfig)) return undefined;
+  const config = await heldConfig(place);
+  try {
+    const found = await checkComponentMapFiles(
+      plugins,
+      place.typesOutputPath,
+      process.cwd(),
+      config,
+      siteDashboard
+    );
+    return found.otherConfig;
+  } catch {
+    return { written: undefined, expected: undefined };
+  }
+}
+
+/**
+ * The config file the map is held to in development, absolute, or none: the one the existing
+ * map imports, while that file is still there, since `generate:types` may have been given a
+ * `--config` path this process cannot know; otherwise the one found as the loader finds it.
+ * The rewrite and the check above both read it, so a rewritten map agrees with the check.
+ */
+async function heldConfig(place: MapFolder): Promise<string | undefined> {
+  const mapDir = dirname(place.typesOutputPath);
+  const kept = configImportOf(
+    await readFile(join(mapDir, COMPONENT_IMPORT_MAP_FILENAME), "utf-8").catch(
+      () => ""
+    )
+  );
+  return (
+    (kept === undefined ? undefined : configFileOf(kept, mapDir)) ??
+    findConfigFile(process.cwd())
+  );
+}
+
+/**
+ * The file a map's config import names, as `configImportSpecifier` wrote it from that file, or
+ * none when no such file is there. The extension the specifier dropped, or wrote as its output's,
+ * is tried back, and the file is taken only where it gives the same specifier again.
+ */
+function configFileOf(specifier: string, mapDir: string): string | undefined {
+  const named = resolve(mapDir, specifier);
+  const candidates = named.endsWith(".mjs")
+    ? [named.replace(/\.mjs$/, ".mts"), named]
+    : [`${named}.ts`, `${named}.js`];
+  return candidates.find(
+    file =>
+      existsSync(file) && configImportSpecifier(mapDir, file) === specifier
+  );
 }
 
 /**
@@ -161,28 +248,28 @@ function mapFolder(config: AdminComponentCheckInput["config"]): MapFolder {
   };
 }
 
+/** How a map is out of date: what it lacks, what it still imports, and the config it is held to. */
+interface Stale {
+  readonly missing: readonly ComponentMapEntry[];
+  readonly obsolete: readonly string[];
+  readonly otherConfig: ComponentMapAgreement["otherConfig"];
+}
+
 /** Write the map again from the config, and warn instead where it cannot be written. */
 async function rewriteInDevelopment(
   plugins: readonly PluginDefinition[],
+  siteDashboard: unknown,
   place: MapFolder,
-  missing: readonly ComponentMapEntry[],
-  obsolete: readonly string[]
+  stale: Stale
 ): Promise<void> {
+  const { missing, obsolete } = stale;
   try {
-    // The config the map already checks against, kept as it was written: `generate:types` may
-    // have been given a `--config` path this process cannot know. Only a map that names none
-    // takes the config file found as the loader finds it.
-    const kept = configImportOf(
-      await readFile(
-        join(dirname(place.typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME),
-        "utf-8"
-      ).catch(() => "")
-    );
     await writeComponentMapFiles(
       [...plugins],
       place.typesOutputPath,
       process.cwd(),
-      kept === undefined ? findConfigFile(process.cwd()) : { import: kept }
+      await heldConfig(place),
+      siteDashboard
     );
     getNextlyLogger().info({
       kind: "admin-component-map-regenerated",
@@ -196,7 +283,7 @@ async function rewriteInDevelopment(
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
     const refused = code === "EACCES" || code === "EPERM" || code === "EROFS";
     warnStale(
-      { missing, obsolete },
+      stale,
       place,
       refused ? "unwritable" : "failed",
       error instanceof Error ? error.message : String(error)
@@ -233,10 +320,7 @@ export function resetComponentMapWarnings(): void {
  * components nothing declares any more.
  */
 function warnStale(
-  stale: {
-    missing: readonly ComponentMapEntry[];
-    obsolete: readonly string[];
-  },
+  stale: Stale,
   place: MapFolder,
   cause: LeftStale,
   /** The write's own error, for a write that failed. */
@@ -245,6 +329,11 @@ function warnStale(
   const lines = [
     ...stale.missing.map(each => `- missing: ${describeComponentUse(each)}`),
     ...stale.obsolete.map(path => `- no longer declared: ${path}`),
+    ...(stale.otherConfig === undefined
+      ? []
+      : [
+          `- held to another config: imports ${stale.otherConfig.written ?? "none"}, where the config is ${stale.otherConfig.expected ?? "not found"}`,
+        ]),
   ];
   const key = `${cause}\n${lines.join("\n")}`;
   if (WARNED.has(key)) return;

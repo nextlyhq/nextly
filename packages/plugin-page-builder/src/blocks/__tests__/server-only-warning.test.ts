@@ -15,15 +15,17 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type Service = typeof import("../registration-service");
+// Loaded once, with the file, rather than afresh in each test's hook: loading
+// it is most of what a test here costs, and inside a hook it outran the hook's
+// timeout on a busy machine. The service remembers which blocks it has warned
+// about for as long as it is loaded, so a test that registers a block in code
+// names one no other test registers, and so starts with nothing remembered.
+import * as service from "../registration-service";
 
-let service: Service;
+type Service = typeof service;
 
-beforeEach(async () => {
+beforeEach(() => {
   clearBlocks();
-  // A fresh module for each test: the warning is remembered per process.
-  vi.resetModules();
-  service = await import("../registration-service");
 });
 
 afterEach(() => {
@@ -79,7 +81,7 @@ describe("a block registered in code but not declared", () => {
     vi.stubEnv("NODE_ENV", "production");
     const { ctx, warn } = contextFor();
 
-    service.blockRegistry(ctx).register(block("acme/ticker"));
+    service.blockRegistry(ctx).register(block("acme/quote"));
 
     expect(warn).not.toHaveBeenCalled();
   });

@@ -23,9 +23,23 @@
  * is a Single that keeps serving its pre-release document — a failure visible
  * only in production, and only for the half nobody wired.
  *
+ * ## Why Cache Components skips it
+ *
+ * The bound takes the clock and reads the database OUTSIDE the cached read,
+ * because `unstable_cache` takes the lifetime before it runs. Under Cache
+ * Components both of those, outside a cache scope, stop a prerender, so a
+ * page that should be a static shell fails to build. There the read keeps the
+ * caller's own lifetime and nothing else, and a scheduled release reaches the
+ * page only through the tags its schedule flushes.
+ *
+ * Whether Cache Components is on is the value Next.js inlines for
+ * `process.env.__NEXT_CACHE_COMPONENTS` into code it bundles. A runtime that
+ * loads nextly unbundled cannot see it, and keeps the bound.
+ *
  * @module runtime/cache/release-cache-window
  */
 
+import { cacheComponentsEnabled } from "../../cache-components";
 import { container } from "../../di/container";
 import {
   NO_RELEASE_CACHE_BOUND,
@@ -50,11 +64,12 @@ function currentBound(): ReleaseCacheBound {
  * The caller's own window still wins when it is SHORTER — a route that asked
  * for sixty seconds meant it. The release bound is a ceiling, not a
  * replacement: a page can never outlive the release that changes it, but may
- * be refreshed sooner for reasons of its own.
+ * be refreshed sooner for reasons of its own. Under Cache Components it is the
+ * caller's window alone; see the module notes.
  */
 export async function releaseBoundedRevalidate(
   callerRevalidate: number | false | undefined,
-  now: Date = new Date()
+  now?: Date
 ): Promise<number | false> {
   // `unstable_cache` rejects a zero lifetime, and both callers' contracts
   // already spell tag-only as `false`.
@@ -63,7 +78,13 @@ export async function releaseBoundedRevalidate(
       ? callerRevalidate
       : false;
 
-  const release = await currentBound().maxCacheSeconds(now);
+  // Before the clock is taken: a default parameter would take it on every
+  // call, and taking it is what a Cache Components prerender refuses.
+  if (cacheComponentsEnabled(process.env.__NEXT_CACHE_COMPONENTS)) {
+    return caller;
+  }
+
+  const release = await currentBound().maxCacheSeconds(now ?? new Date());
 
   if (caller === false) return release;
   if (release === false) return caller;

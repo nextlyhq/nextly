@@ -10,7 +10,7 @@
  *
  * Why a form-level hook instead of per-field logic:
  * moved the title input out of the field-renderer pipeline (it now lives in
- * `EntrySystemHeader` as a plain `<input>` bound via `form.register`),
+ * `DocumentTitleBlock` as a plain `<input>` bound to the form),
  * so the slug-gen useEffect that lived inside `TextInput` never fired
  * for the title anymore. Watching at the form level fixes that and also
  * lets the slug follow the *configured* title (e.g. `useAsTitle:

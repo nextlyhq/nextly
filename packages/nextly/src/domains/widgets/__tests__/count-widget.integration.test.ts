@@ -28,7 +28,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
-import { refreshContentSources } from "../collection-widgets";
+import { refreshContentSources } from "../content-sources";
 import { CORE_WIDGETS } from "../core-widgets";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";

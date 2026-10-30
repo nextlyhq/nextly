@@ -28,7 +28,6 @@ export const upcomingReleasesWidget = {
     min: { w: 4, h: 4 },
     max: { w: 8, h: 8 },
   },
-  defaultOrder: 60,
   // Beside its gate: offered once a release exists that the reader may
   // read, not as an empty card on a site that has never made one.
   lifecycle: "conditional",

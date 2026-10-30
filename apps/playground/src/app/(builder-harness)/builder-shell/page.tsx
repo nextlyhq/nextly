@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 
 import { BuilderShellHarness } from "./harness";
 
@@ -23,7 +24,7 @@ import { BuilderShellHarness } from "./harness";
  * The slot contents are intentionally inert. Anything interactive here would be
  * testing the harness.
  */
-export default async function BuilderShellHarnessRoute({
+export default function BuilderShellHarnessRoute({
   searchParams,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -48,7 +49,23 @@ export default async function BuilderShellHarnessRoute({
    * it — resolving it in the browser instead would render full-width once and
    * narrow afterwards, which is a hydration mismatch and also hides the very
    * first measurement the test is about.
+   *
+   * Read beneath a Suspense boundary: the query is request data, and under
+   * Cache Components a route that reads it above one cannot prerender its
+   * shell.
    */
+  return (
+    <Suspense fallback={null}>
+      <SizedHarness searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function SizedHarness({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const raw = (await searchParams).container;
   const parsed = Number(typeof raw === "string" ? raw : "");
   const container = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;

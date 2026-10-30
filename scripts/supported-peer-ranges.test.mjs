@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 // The ranges have one home, which `create-nextly-app` also holds an existing app to.
 import { SUPPORTED_RANGES as SUPPORTED } from "../packages/create-nextly-app/src/supported-versions.ts";
+import { supportedFrameworkRanges } from "../packages/nextly/src/runtime/framework-versions.ts";
 
 const manifests = ["packages", "templates"].flatMap(root =>
   readdirSync(new URL(`../${root}/`, import.meta.url), { withFileTypes: true })
@@ -47,5 +48,13 @@ describe("the Next.js and React versions nextly accepts", () => {
           .map(name => `${path} ${name}`)
       );
     expect(installed).toEqual([]);
+  });
+
+  it("are the ranges nextly checks at start, read from its own peers", () => {
+    // One declaration: create-nextly-app inlines nextly's peers at build, and
+    // nextly's start check reads the same manifest.
+    expect(supportedFrameworkRanges()).toEqual(SUPPORTED);
+    const nextly = manifests.find(({ path }) => path === "packages/nextly/package.json");
+    expect(nextly?.manifest.peerDependencies).toMatchObject(SUPPORTED);
   });
 });

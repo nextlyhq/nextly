@@ -542,17 +542,22 @@ export async function seed({
   // Per-file failures are captured into `outcomes` for an end-of-run summary.
   console.log("  Uploading seed media...");
   const outcomes: UploadOutcome[] = [];
-  const mediaIdByFilename = new Map<string, string>();
+  // Keyed by file AND alt text: two posts may share an image, and each keeps
+  // its own alt text rather than reading the first post's title as its own.
+  const mediaIdByUpload = new Map<string, string>();
+  const uploadKey = (filename: string, altText: string) =>
+    JSON.stringify([filename, altText]);
 
   const uploadAndTrack = async (
     filename: string,
     altText: string
   ): Promise<void> => {
-    if (mediaIdByFilename.has(filename)) return; // dedupe
+    const key = uploadKey(filename, altText);
+    if (mediaIdByUpload.has(key)) return; // dedupe
     const outcome = await uploadMediaFile(nextly, filename, altText, seedMedia);
     outcomes.push(outcome);
     if ("id" in outcome) {
-      mediaIdByFilename.set(filename, outcome.id);
+      mediaIdByUpload.set(key, outcome.id);
     }
   };
 
@@ -722,7 +727,7 @@ export async function seed({
         .map(slug => tagIdMap[slug])
         .filter(Boolean);
       const featuredImageId = post.featuredImage
-        ? mediaIdByFilename.get(post.featuredImage)
+        ? mediaIdByUpload.get(uploadKey(post.featuredImage, post.title))
         : undefined;
 
       if (existing.meta.total > 0) {

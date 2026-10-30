@@ -60,13 +60,21 @@ export function useMediaFieldAutosave({
   const [value, setValue] = React.useState(savedValue);
   const [state, setState] = React.useState<MediaFieldSaveState>("idle");
 
+  // The latest text handed to the save queue below for each item, until its
+  // save settles. An item opened again while its save is still under way
+  // (A, then B, then back to A) shows that text and its outcome: the list
+  // still holds the item's old text until the save's refetch, and showing
+  // that would let leaving the item again send it back over the edit.
+  const pendingByItemRef = React.useRef(new Map<string, string>());
+
   // A different item shows its own text at once, in the same render, rather
   // than the previous item's for a frame.
   const [shownItem, setShownItem] = React.useState(itemId);
   if (shownItem !== itemId) {
+    const pendingText = pendingByItemRef.current.get(itemId);
     setShownItem(itemId);
-    setValue(savedValue);
-    setState("idle");
+    setValue(pendingText ?? savedValue);
+    setState(pendingText === undefined ? "idle" : "saving");
   }
 
   // What is typed, what is stored, and the latest value handed to the save
@@ -134,6 +142,12 @@ export function useMediaFieldAutosave({
         }
       )
       .finally(() => {
+        // Settled, so an item opened from now on starts from what is stored,
+        // unless a newer text for it is still waiting.
+        const pending = pendingByItemRef.current;
+        if (pending.get(job.item) === job.value && !stillWaiting()) {
+          pending.delete(job.item);
+        }
         sendingRef.current = false;
         pump();
       });
@@ -145,6 +159,7 @@ export function useMediaFieldAutosave({
       const queue = queueRef.current.filter(waiting => waiting.item !== item);
       queue.push({ item, value });
       queueRef.current = queue;
+      pendingByItemRef.current.set(item, value);
       pump();
     },
     [pump]
@@ -154,10 +169,13 @@ export function useMediaFieldAutosave({
   // out: it runs with the item being left, before the next one's setup.
   React.useEffect(() => {
     activeItemRef.current = itemId;
+    // Opened while a save of its own is under way: that text is the field's,
+    // and the save's outcome lands on this field like any other.
+    const pendingText = pendingByItemRef.current.get(itemId);
     draftRef.current = {
-      value: savedValueRef.current,
+      value: pendingText ?? savedValueRef.current,
       baseline: savedValueRef.current,
-      queued: null,
+      queued: pendingText ?? null,
     };
     return () => {
       activeItemRef.current = null;

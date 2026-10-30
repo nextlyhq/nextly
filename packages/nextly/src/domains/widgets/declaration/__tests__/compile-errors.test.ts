@@ -60,7 +60,7 @@ interface Case {
 }
 
 const imports = `import { defineWidget } from "../define-widget";
-import { settings } from "../setting-builders";
+import { setting } from "../setting-builders";
 `;
 
 /** A widget with every field a case does not care about filled in. */
@@ -142,7 +142,7 @@ const CASES: Case[] = [
     name: "a data function reads a setting as the wrong type",
     ...pair(
       t =>
-        widget(`  settings: { items: settings.items({ default: 5 }) },
+        widget(`  settings: { items: setting.number({ label: "Items", defaultValue: 5 }) },
   load: async ({ settings }) => {
     const items: ${t} = settings.items; ${MARK}
     return { total: Number(items) };
@@ -159,7 +159,7 @@ const CASES: Case[] = [
     name: "a widget's load is a function, not a query for core to run",
     ...pair(
       load =>
-        widget(`  settings: { collection: settings.collection() },
+        widget(`  settings: { collection: setting.collection({ label: "Collection" }) },
   load: ${load}, ${MARK}
   view: "figure",`),
       // No parameter: one the form no longer types would add an implicit-any error of its own.
@@ -316,7 +316,7 @@ export function Card({ data }: WidgetProps<typeof revenue>) {
     name: "a core view refuses a preview case drawn with a setting value the widget does not offer",
     ...pair(
       range =>
-        widget(`  settings: { range: settings.dateRange() },
+        widget(`  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async () => ({ total: 3 }),
   view: "figure",
   preview: [{ name: "Year", data: { total: 3 }, settings: { range: "${range}" } }], ${MARK}`),
@@ -337,7 +337,7 @@ const w = defineWidget({
   description: "A widget under test",
   category: "Test",
   size: { default: { w: 12, h: 4 } },
-  settings: { range: settings.dateRange() },
+  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async ({ settings }) => ({ range: settings.range }),
   view: { component: "@test/w/admin#Card" },
   isEmpty: () => false,
@@ -365,7 +365,7 @@ const w = defineWidget({
   description: "A widget under test",
   category: "Test",
   size: { default: { w: 12, h: 4 } },
-  settings: { range: settings.dateRange() },
+  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async ({ settings }) => ({ range: settings.range }),
   view: { component: "@test/w/admin#Card" },
   isEmpty: () => false,
@@ -392,7 +392,7 @@ export function Card(props: WidgetProps<typeof w>) { ${MARK}
     name: "a widget's empty test reads its data as the wrong type",
     ...pair(
       t =>
-        widget(`  settings: { range: settings.dateRange() },
+        widget(`  settings: { range: setting.dateRange({ label: "Date range" }) },
   load: async ({ settings }) => ({ days: [settings.range] }),
   view: { component: "@test/w/admin#Card" },
   isEmpty: data => { const days: ${t} = data.days; return days.length === 0; }, ${MARK}`),
@@ -622,12 +622,25 @@ export const components = {
 
   // ---- What else the declaration checks where it is written.
   {
+    name: "a setting is declared without a label",
+    ...pair(
+      config =>
+        widget(`  settings: { items: setting.number(${config}) }, ${MARK}
+  load: async () => ({ total: 3 }),
+  view: "figure",`),
+      `{ defaultValue: 5 }`,
+      `{ label: "Items", defaultValue: 5 }`
+    ),
+    code: 2345,
+    message: "Property 'label' is missing",
+  },
+  {
     name: "a dependent setting names no Collection setting of the widget's",
     ...pair(
       on =>
         widget(`  settings: {
-    collection: settings.collection(),
-    sort: settings.sort({ of: "${on}" }), ${MARK}
+    collection: setting.collection({ label: "Collection" }),
+    sort: setting.sort({ of: "${on}", label: "Sort" }), ${MARK}
   },
   load: async () => ({ total: 3 }),
   view: "figure",`),
@@ -636,6 +649,32 @@ export const components = {
     ),
     code: 2322,
     message: `'"colection"' is not assignable to type '"collection"'`,
+  },
+  {
+    name: "access written as a bare list of permissions, which is neither any-of nor all-of",
+    ...pair(
+      access =>
+        widget(`  access: ${access}, ${MARK}
+  load: async () => ({ total: 3 }),
+  view: "figure",`),
+      `["read-orders", "update-orders"]`,
+      `{ anyOf: ["read-orders", "update-orders"] }`
+    ),
+    code: 2322,
+    message: "is not assignable to type 'WidgetAccess",
+  },
+  {
+    name: "a series read over a range a series does not draw",
+    ...pair(
+      range =>
+        widget(`  load: async ({ services }) =>
+    services.timeseries("orders", { range: "${range}" }), ${MARK}
+  view: "series",`),
+      "60d",
+      "30d"
+    ),
+    code: 2322,
+    message: `'"60d"' is not assignable to type`,
   },
   {
     name: "a size written as a named width",

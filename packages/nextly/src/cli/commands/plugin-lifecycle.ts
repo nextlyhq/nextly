@@ -19,9 +19,19 @@
  * @module cli/commands/plugin-lifecycle
  */
 
+import {
+  countDeletions,
+  judgeDataLoss,
+  NO_CONSENT,
+  type DataLossConsent,
+  type Deletion,
+} from "../../domains/schema/migrate/data-loss-consent";
 import { tablesLeftInPlace } from "../../domains/schema/ownership/drop-guard";
 import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
-import { createOwnerRegistry } from "../../domains/schema/ownership/owner-registry";
+import {
+  createOwnerRegistry,
+  type OwnerRecord,
+} from "../../domains/schema/ownership/owner-registry";
 import type { PluginLifecycleRecord } from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import {
@@ -186,6 +196,35 @@ export interface PluginLifecycleDeps {
     plugin: LifecyclePlugin,
     record: PluginLifecycleRecord
   ) => Promise<void>;
+  /**
+   * Whether a person is at a terminal to be asked before data is deleted.
+   * Absent reads as no: a full uninstall without consent is then refused
+   * rather than run, which is the safe reading of a caller that said nothing.
+   */
+  interactive?: boolean;
+  /** Asks that person a yes-or-no question; only called when `interactive`. */
+  askToDelete?: (question: string) => Promise<boolean>;
+  /**
+   * The columns each named table has now. An uninstall lists a column the
+   * plugin added to another owner's table only while it is still there: its
+   * ownership row outlives a `migrate:down --plugin` that removed it. Absent,
+   * every recorded column is listed, which asks for more consent, never less.
+   */
+  liveColumns?: (
+    tables: readonly string[]
+  ) => Promise<ReadonlyMap<string, ReadonlySet<string>>>;
+}
+
+/** How an uninstall was asked for: whether it keeps the data, and the consent to lose it. */
+export interface UninstallOptions {
+  keepData: boolean;
+  /**
+   * Given on the command line. It answers no question here: deleting data
+   * takes `consent`, and the refusal says so when `--yes` was passed.
+   */
+  yes: boolean;
+  /** The data-loss consent; none when absent. */
+  consent?: DataLossConsent;
 }
 
 function find(plugins: LifecyclePlugin[], name: string): LifecyclePlugin {
@@ -350,6 +389,8 @@ interface UninstallDecision {
   plan: UninstallPlan;
   /** The modules' DOWNs, newest first, each already verified and judged. */
   downs: PreparedModuleDown[];
+  /** What it deletes, as consented to or agreed to at the terminal. */
+  deletions: Deletion[];
 }
 
 /**
@@ -368,12 +409,15 @@ interface UninstallDecision {
  */
 export async function runPluginUninstallCommand(
   name: string,
-  opts: { keepData: boolean; yes: boolean },
+  opts: UninstallOptions,
   deps: PluginLifecycleDeps
 ): Promise<void> {
-  await decideUninstall(name, opts, deps);
+  const first = await decideUninstall(name, opts, deps);
   await deps.underMigrateLock(async () => {
-    const decision = await decideUninstall(name, opts, deps);
+    // Asked once, before the lock: the second decision accepts what the
+    // operator already agreed to and refuses anything new, rather than
+    // asking again while every other migration waits on the lock.
+    const decision = await decideUninstall(name, opts, deps, first.deletions);
     await executeUninstall(decision, opts, deps);
   });
 }
@@ -384,8 +428,9 @@ export async function runPluginUninstallCommand(
  */
 async function decideUninstall(
   name: string,
-  opts: { keepData: boolean; yes: boolean },
-  deps: PluginLifecycleDeps
+  opts: UninstallOptions,
+  deps: PluginLifecycleDeps,
+  agreed?: readonly Deletion[]
 ): Promise<UninstallDecision> {
   const plugin = find(deps.plugins, name);
   assertEnabled(plugin);
@@ -449,9 +494,27 @@ async function decideUninstall(
       : [];
 
   assertDownsDropTables(plugin, plan, downs, deps.dialect);
-  if (!opts.yes) assertNothingLostUnconfirmed(plugin, plan, downs, deps);
+  const columnTables = [
+    ...new Set(
+      owned
+        .filter(row => row.elementKind === "column")
+        .map(row => row.tableName)
+    ),
+  ];
+  const liveColumns =
+    columnTables.length > 0 && deps.liveColumns !== undefined
+      ? await deps.liveColumns(columnTables)
+      : undefined;
+  const deletions = await consentToDeletions(
+    plugin,
+    uninstallDeletions(plugin, plan, owned, downs, liveColumns),
+    plan,
+    opts,
+    deps,
+    agreed
+  );
 
-  return { plugin, plan, downs };
+  return { plugin, plan, downs, deletions };
 }
 
 /**
@@ -514,41 +577,107 @@ function assertTablesCanBeUndone(
 }
 
 /**
- * Refuse, without `--yes`, an uninstall that loses data: the tables the
- * plugin owns, and any DOWN that drops a column or truncates without
- * dropping one of them. What would be lost is listed first.
+ * What a full uninstall deletes: each table it drops, and each column the
+ * plugin added to a table it does not drop. Its DOWNs can delete nothing
+ * else, since the drop guard refuses one that drops what another owner
+ * holds. A DOWN that is judged to lose data while the owner rows account for
+ * none of it is listed by its module, as a deletion only the consent without
+ * targets covers.
+ *
+ * Read from the plan: only its DOWNs delete, so a plan that runs none — an
+ * uninstall keeping its data — deletes nothing and needs no consent, whatever
+ * the plugin owns, and neither does one whose DOWNs are all judged to lose no
+ * data (dropping an index, say). A recorded column is listed only while it is
+ * still in its table (`liveColumns`).
  */
-function assertNothingLostUnconfirmed(
+function uninstallDeletions(
   plugin: LifecyclePlugin,
   plan: UninstallPlan,
+  owned: readonly OwnerRecord[],
   downs: readonly PreparedModuleDown[],
-  deps: Pick<PluginLifecycleDeps, "logger">
-): void {
-  const destructiveDowns = downs.filter(down => down.destructive);
-  if (plan.tablesDropped.length === 0 && destructiveDowns.length === 0) return;
-  warnList(
-    deps,
-    `This will DROP ${String(plan.tablesDropped.length)} table(s) and their data:`,
-    plan.tablesDropped
-  );
-  warnList(
-    deps,
-    `...along with ${String(plan.elementsDropped.length)} element(s) other owners added to those tables:`,
-    plan.elementsDropped
-  );
-  warnList(
-    deps,
-    "These migrations' DOWN drops a table or column, losing its data:",
-    destructiveDowns.map(down => down.filename)
-  );
+  liveColumns: ReadonlyMap<string, ReadonlySet<string>> | undefined
+): Deletion[] {
+  if (plan.downModules.length === 0) return [];
+  if (!downs.some(down => down.destructive)) return [];
+  const dropped = new Set(plan.tablesDropped);
+  const named: Deletion[] = [
+    ...plan.tablesDropped.map(table => ({ kind: "table" as const, table })),
+    ...owned
+      .filter(
+        row =>
+          row.elementKind === "column" &&
+          row.ownerId === plugin.name &&
+          !dropped.has(row.tableName) &&
+          (liveColumns === undefined ||
+            liveColumns.get(row.tableName)?.has(row.elementName ?? "") === true)
+      )
+      .map(row => ({
+        kind: "column" as const,
+        table: row.tableName,
+        column: row.elementName ?? "",
+      })),
+  ];
+  if (named.length > 0) return named;
+  return downs
+    .filter(down => down.destructive)
+    .map(down => ({
+      kind: "unnamed" as const,
+      description: `${down.filename}'s DOWN, which drops a table or column`,
+    }));
+}
+
+/**
+ * The deletions an uninstall may make, or a refusal before anything runs:
+ * covered by the data-loss consent, or agreed to at a terminal. `agreed`,
+ * from the decision made before the lock, is accepted without asking again;
+ * anything beyond it is refused there rather than asked about under the lock.
+ */
+async function consentToDeletions(
+  plugin: LifecyclePlugin,
+  planned: Deletion[],
+  plan: UninstallPlan,
+  opts: UninstallOptions,
+  deps: Pick<
+    PluginLifecycleDeps,
+    "logger" | "db" | "dialect" | "interactive" | "askToDelete"
+  >,
+  agreed: readonly Deletion[] | undefined
+): Promise<Deletion[]> {
+  if (planned.length === 0) return [];
+  const first = agreed === undefined;
+  const deletions = first
+    ? await countDeletions(planned, deps.db, deps.dialect)
+    : planned;
+  if (first) {
+    warnList(
+      deps,
+      `Dropping its tables also drops ${String(plan.elementsDropped.length)} element(s) other owners added to them:`,
+      plan.elementsDropped
+    );
+  }
+  const verdict = await judgeDataLoss({
+    deletions,
+    consent: opts.consent ?? NO_CONSENT,
+    interactive: first && deps.interactive === true,
+    ask: question => deps.askToDelete?.(question) ?? Promise.resolve(false),
+    print: first ? line => deps.logger.warn(line) : () => {},
+    approved: agreed,
+  });
+  if (verdict.kind === "proceed") return deletions;
+  const keepData = " Or use --keep-data to leave the tables in place.";
+  const yes = opts.yes
+    ? " --yes does not consent to deleting data; the data-loss consent does."
+    : "";
   throw new NextlyError({
     code: "PLUGIN_UNINSTALL_UNCONFIRMED",
     publicMessage:
-      "Nothing was changed. Re-run with --yes to confirm, or --keep-data to leave the tables in place.",
+      verdict.kind === "declined"
+        ? `Nothing was changed: the deletion was not confirmed.${keepData}`
+        : `${verdict.message}${yes}${keepData}`,
     logContext: {
       plugin: plugin.name,
       tables: plan.tablesDropped,
-      modules: destructiveDowns.map(down => down.filename),
+      verdict: verdict.kind,
     },
   });
 }

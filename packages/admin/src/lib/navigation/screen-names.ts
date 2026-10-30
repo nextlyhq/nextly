@@ -16,17 +16,11 @@
  */
 import { SETTINGS_NAV } from "@admin/components/layout/sidebar/lib/settings-nav";
 import { MAIN_MENU_ITEMS } from "@admin/components/layout/sidebar/sidebar-types";
+import { EMAIL_HUB_TABS } from "@admin/constants/email-hub";
 import type { NavSection } from "@admin/constants/nav-sections";
 import type { PluginMenuItemMeta, PluginMetadata } from "@admin/types/branding";
 import type { ApiSingle } from "@admin/types/entities";
 
-/**
- * The data a screen's name may depend on, beyond the route itself.
- *
- * Supplied by the title provider from answers the admin already holds: the
- * collection or Single a content route opens, as the sidebar's lists carry
- * them, and the plugin list from admin-meta. Each is absent until it arrives.
- */
 /**
  * What naming a collection reads: the fields its sidebar label is made from.
  * Stated as that shape rather than one of the admin's collection types, since
@@ -39,6 +33,13 @@ export interface NamedCollection {
   labels?: { plural?: string };
 }
 
+/**
+ * The data a screen's name may depend on, beyond the route itself.
+ *
+ * Supplied by the title provider from answers the admin already holds: the
+ * collection or Single a content route opens, as the sidebar's lists carry
+ * them, and the plugin list from admin-meta. Each is absent until it arrives.
+ */
 export interface ScreenNameSources {
   pathname: string;
   collection?: NamedCollection;
@@ -67,12 +68,33 @@ export function resolveScreenName(
   return resolved?.trim() || undefined;
 }
 
+/** The rail entry's label for a section, as the rail's own tooltip shows it. */
+function railLabel(section: NavSection): string | undefined {
+  return MAIN_MENU_ITEMS.find(item => item.id === section)?.label;
+}
+
 /**
  * The rail entry's label for a top-level destination (Dashboard, Media
- * Library, Email, ...), as the rail's own tooltip shows it.
+ * Library, ...).
  */
 export function railScreen(section: NavSection): ScreenName {
-  return () => MAIN_MENU_ITEMS.find(item => item.id === section)?.label;
+  return () => railLabel(section);
+}
+
+/**
+ * A tab of the Email hub, named by the tab's own label and then the hub's:
+ * "Messages · Email". The hub is one page headed "Email" with its tabs below,
+ * so unlike a settings screen, whose own heading is its panel label, a tab
+ * names a part of a screen. "Design" or "Sending" alone would not say that
+ * they are about email. `href` is the tab's address; its create and edit
+ * screens, and the old addresses that redirect into it, declare the same tab.
+ */
+export function emailHubScreen(href: string): ScreenName {
+  return () =>
+    joinTitleParts([
+      EMAIL_HUB_TABS.find(tab => tab.href === href)?.label,
+      railLabel("email"),
+    ]);
 }
 
 /**
@@ -134,17 +156,25 @@ export const pluginPageScreen: ScreenName = ({ pathname, plugins }) => {
 const SEPARATOR = " · ";
 
 /**
+ * Parts of a title joined most specific first, with a part that has nothing to
+ * say left out rather than shown empty. The one place titles are joined, so a
+ * screen or item made of several parts reads the same as the whole title.
+ */
+export function joinTitleParts(parts: readonly (string | undefined)[]): string {
+  return parts
+    .map(part => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join(SEPARATOR);
+}
+
+/**
  * The tab title: the item, the screen and the site, most specific first, so a
- * row of narrow tabs still shows what differs between them. A part with
- * nothing to say is left out rather than shown empty.
+ * row of narrow tabs still shows what differs between them.
  */
 export function formatDocumentTitle(parts: {
   item?: string;
   screen?: string;
   site: string;
 }): string {
-  return [parts.item, parts.screen, parts.site]
-    .map(part => part?.trim())
-    .filter((part): part is string => Boolean(part))
-    .join(SEPARATOR);
+  return joinTitleParts([parts.item, parts.screen, parts.site]);
 }

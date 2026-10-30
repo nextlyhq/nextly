@@ -13,7 +13,8 @@
 import type { DashboardContribution } from "../../dashboard";
 import { defineAttentionItem } from "../../dashboard";
 import { defineWidget } from "../../define-widget";
-import { settings } from "../../setting-builders";
+import { option } from "../../../../../collections/fields/helpers";
+import { setting } from "../../setting-builders";
 
 /** A data function behind core's `bars` view. */
 export const ordersByState = defineWidget({
@@ -24,8 +25,13 @@ export const ordersByState = defineWidget({
   size: { default: { w: 6, h: 4 }, min: { w: 4, h: 3 }, max: { w: 8, h: 6 } },
   access: "read-orders",
   settings: {
-    range: settings.dateRange({ default: "30d" }),
-    top: settings.items({ default: 5 }),
+    range: setting.dateRange({ label: "Date range", defaultValue: "30d" }),
+    top: setting.number({
+      label: "Number of items",
+      defaultValue: 5,
+      min: 1,
+      max: 10,
+    }),
   },
   load: async ({ settings, services, signal }) => {
     const paid = await services.count("orders", {
@@ -49,9 +55,18 @@ export const recentOrders = defineWidget({
   size: { default: { w: 12, h: 5 }, min: { w: 6, h: 4 }, max: { w: 12, h: 8 } },
   several: true,
   settings: {
-    collection: settings.collection(),
-    sort: settings.sort({ of: "collection", default: "-createdAt" }),
-    items: settings.items({ default: 5 }),
+    collection: setting.collection({ label: "Collection" }),
+    sort: setting.sort({
+      of: "collection",
+      label: "Sort",
+      defaultValue: "-createdAt",
+    }),
+    items: setting.number({
+      label: "Number of items",
+      defaultValue: 5,
+      min: 1,
+      max: 10,
+    }),
   },
   load: async ({ settings, services, signal }) => {
     const { items } = await services.find(settings.collection, {
@@ -74,9 +89,13 @@ export const revenue = defineWidget({
   category: "Shop",
   size: { default: { w: 8, h: 4 }, min: { w: 6, h: 4 } },
   settings: {
-    range: settings.dateRange({ default: "30d" }),
-    currency: settings.select({ options: ["usd", "eur"], default: "usd" }),
-    net: settings.toggle({ default: false }),
+    range: setting.dateRange({ label: "Date range", defaultValue: "30d" }),
+    currency: setting.select({
+      label: "Currency",
+      options: [option("US dollar", "usd"), option("Euro", "eur")],
+      defaultValue: "usd",
+    }),
+    net: setting.checkbox({ label: "Net", defaultValue: false }),
   },
   load: async ({ settings }) => ({
     currency: settings.currency,
@@ -108,7 +127,7 @@ export const unpaidCount = defineWidget({
   description: "Orders waiting for payment",
   category: "Shop",
   size: { default: { w: 3, h: 2 }, max: { w: 4, h: 2 } },
-  settings: { collection: settings.collection() },
+  settings: { collection: setting.collection({ label: "Collection" }) },
   load: async ({ settings, services, signal }) => ({
     total: await services.count(settings.collection, { signal }),
   }),

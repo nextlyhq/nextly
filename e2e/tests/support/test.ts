@@ -39,7 +39,7 @@ import {
   type StorageState,
 } from "./accounts";
 import { configuredLocks } from "./configured-locks";
-import { keepSessionFresh, STORAGE_STATE } from "./session";
+import { keepSessionFresh, STORAGE_STATE } from "./session.mjs";
 
 /** A document an editor claims, as the document-lock route names it. */
 interface DocumentRef {

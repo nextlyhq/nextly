@@ -69,22 +69,25 @@ describe("DocumentPanel", () => {
     expect(screen.queryByText("Status")).not.toBeInTheDocument();
   });
 
-  it("shows Status pill when hasStatus is on", () => {
+  it("draws no status of its own, even for a document with one", () => {
+    // The document bar's pill is the one place the status is said, read
+    // from the language being edited. A pill here read the main row instead,
+    // so beside a translation the two could disagree. The panel's Modified,
+    // Changed, Draft and Published pills went with it; local unsaved edits
+    // are the bar's save state to report.
     render(
       <DocumentPanel
         mode="edit"
-        entry={{ id: "x", status: "published" }}
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
         hasStatus
       />
     );
-
-    expect(screen.getByText("Status")).toBeInTheDocument();
-    expect(screen.getByText("Published")).toBeInTheDocument();
-  });
-
-  it("defaults Status pill to Draft when entry.status missing", () => {
-    render(<DocumentPanel mode="edit" entry={{ id: "x" }} hasStatus />);
-    expect(screen.getByText("Draft")).toBeInTheDocument();
+    // The control: the panel itself is drawn.
+    expect(screen.getByText("Document")).toBeInTheDocument();
+    expect(screen.queryByText("Status")).not.toBeInTheDocument();
+    for (const word of ["Published", "Changed", "Modified", "Draft"]) {
+      expect(screen.queryByText(word)).not.toBeInTheDocument();
+    }
   });
 
   it("copies the FULL id to clipboard, not the truncated label", async () => {
@@ -125,75 +128,6 @@ describe("DocumentPanel", () => {
     expect(
       screen.getByRole("button", { name: /Copy ID to clipboard/i })
     ).toBeInTheDocument();
-  });
-
-  it("renders the Modified pill when entry is published and form is dirty", () => {
-    // pill shows that the published version exists AND there are local
-    // edits not yet saved. Drafts never show Modified (they're inherently
-    // work-in-progress) — covered separately below.
-    render(
-      <DocumentPanel
-        mode="edit"
-        entry={{ id: "x", status: "published" }}
-        hasStatus
-        isDirty
-      />
-    );
-    expect(screen.getByText("Modified")).toBeInTheDocument();
-    expect(screen.queryByText("Published")).not.toBeInTheDocument();
-  });
-
-  it("does not render Modified when published entry is clean", () => {
-    render(
-      <DocumentPanel
-        mode="edit"
-        entry={{ id: "x", status: "published" }}
-        hasStatus
-        isDirty={false}
-      />
-    );
-    expect(screen.getByText("Published")).toBeInTheDocument();
-    expect(screen.queryByText("Modified")).not.toBeInTheDocument();
-  });
-
-  it("does not render Modified when draft entry is dirty (drafts can't be modified)", () => {
-    render(
-      <DocumentPanel
-        mode="edit"
-        entry={{ id: "x", status: "draft" }}
-        hasStatus
-        isDirty
-      />
-    );
-    expect(screen.getByText("Draft")).toBeInTheDocument();
-    expect(screen.queryByText("Modified")).not.toBeInTheDocument();
-  });
-
-  it("renders the Changed pill when a published entry has a pending working draft", () => {
-    // The server flags an overlay read with `_isWorkingDraft` while keeping the
-    // status at the live parent's "published"; that pairing is "Changed".
-    render(
-      <DocumentPanel
-        mode="edit"
-        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
-        hasStatus
-      />
-    );
-    expect(screen.getByText("Changed")).toBeInTheDocument();
-    expect(screen.queryByText("Published")).not.toBeInTheDocument();
-  });
-
-  it("shows Changed (not Modified) when a working draft exists and the form is dirty", () => {
-    render(
-      <DocumentPanel
-        mode="edit"
-        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
-        hasStatus
-        isDirty
-      />
-    );
-    expect(screen.getByText("Changed")).toBeInTheDocument();
-    expect(screen.queryByText("Modified")).not.toBeInTheDocument();
   });
 });
 

@@ -346,6 +346,53 @@ describe("WidgetGrid — collection and gating", () => {
     ).toBe(false);
   });
 
+  it("asks a card core answers on the server at the size it is drawn at and its predicted tier", async () => {
+    // A full-width card on a 1,200 px dashboard is large, and a card of three columns on it is
+    // 288 px wide, small: the tier its widget's `load` is handed, beside the card's grid size.
+    mockBranding = brandingWithRegistered([
+      {
+        id: "acme/big",
+        title: "Big",
+        archetype: "metric",
+        size: { default: { w: 12, h: 4 } },
+        serverData: true,
+      },
+      {
+        id: "acme/narrow",
+        title: "Narrow",
+        archetype: "metric",
+        size: { default: { w: 3, h: 3 } },
+        serverData: true,
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "count", total: 1 } },
+        { ok: true, result: { op: "count", total: 2 } },
+      ],
+    });
+
+    renderGrid();
+
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalled());
+    const sent = (
+      vi.mocked(protectedApi.post).mock.calls[0][1] as { queries: unknown[] }
+    ).queries;
+    expect(sent).toHaveLength(2);
+    expect(sent).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          widget: "acme/big",
+          size: { w: 12, h: 4, tier: "large" },
+        }),
+        expect.objectContaining({
+          widget: "acme/narrow",
+          size: { w: 3, h: 3, tier: "small" },
+        }),
+      ])
+    );
+  });
+
   it("renders a widget the app only REGISTERED, with no contribution beside it", () => {
     // The registry is what `registerWidget` writes to, and it is the store this
     // whole system is built around. A widget that reached it without also being

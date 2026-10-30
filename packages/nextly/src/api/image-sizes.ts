@@ -12,7 +12,7 @@
  *   GET    /api/image-sizes/regeneration-status
  *   POST   /api/image-sizes/regenerate
  *
- * Requires `read-settings` (read paths) or `manage-settings` (write paths).
+ * Requires `read-settings` to read, and the settings action a write names.
  *
  * The list endpoint is not server-paginated (callers receive every
  * configured image size in one page). To stay on the canonical
@@ -30,6 +30,10 @@ import { z } from "zod";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import {
+  SYSTEM_READ_POLICY,
+  SYSTEM_WRITE_POLICY,
+} from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { ImageSizeService } from "../services/image-size";
@@ -93,8 +97,7 @@ const updateImageSizeSchema = z.object({
  */
 export const listImageSizes = withErrorHandler(async (req: Request) => {
   const authResult = await requireAnyPermission(req, [
-    { action: "read", resource: "settings" },
-    { action: "manage", resource: "settings" },
+    ...SYSTEM_READ_POLICY.settings.read.anyOf,
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
@@ -119,8 +122,7 @@ export const listImageSizes = withErrorHandler(async (req: Request) => {
 export const getImageSizeById = withErrorHandler(
   async (req: Request, id: string) => {
     const authResult = await requireAnyPermission(req, [
-      { action: "read", resource: "settings" },
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_READ_POLICY.settings.read.anyOf,
     ]);
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
@@ -142,7 +144,7 @@ export const getImageSizeById = withErrorHandler(
  */
 export const createImageSize = withErrorHandler(async (req: Request) => {
   const authResult = await requireAnyPermission(req, [
-    { action: "manage", resource: "settings" },
+    ...SYSTEM_WRITE_POLICY.imageSizes.create.anyOf,
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
@@ -203,7 +205,7 @@ export const createImageSize = withErrorHandler(async (req: Request) => {
 export const updateImageSize = withErrorHandler(
   async (req: Request, id: string) => {
     const authResult = await requireAnyPermission(req, [
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_WRITE_POLICY.imageSizes.update.anyOf,
     ]);
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
@@ -241,7 +243,7 @@ export const updateImageSize = withErrorHandler(
 export const deleteImageSize = withErrorHandler(
   async (req: Request, id: string) => {
     const authResult = await requireAnyPermission(req, [
-      { action: "manage", resource: "settings" },
+      ...SYSTEM_WRITE_POLICY.imageSizes.delete.anyOf,
     ]);
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
@@ -259,7 +261,7 @@ export const deleteImageSize = withErrorHandler(
  */
 export const getRegenerationStatus = withErrorHandler(async (req: Request) => {
   const authResult = await requireAnyPermission(req, [
-    { action: "manage", resource: "settings" },
+    ...SYSTEM_READ_POLICY.settings.read.anyOf,
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
@@ -277,7 +279,7 @@ export const getRegenerationStatus = withErrorHandler(async (req: Request) => {
  */
 export const regenerateBatch = withErrorHandler(async (req: Request) => {
   const authResult = await requireAnyPermission(req, [
-    { action: "manage", resource: "settings" },
+    ...SYSTEM_WRITE_POLICY.imageSizes.regenerate.anyOf,
   ]);
   if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 

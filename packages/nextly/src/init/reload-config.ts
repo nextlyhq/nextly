@@ -37,6 +37,10 @@ import {
   declaredSlugsOf,
   withoutRemovedFromCode,
 } from "../domains/dynamic-collections/services/removed-from-code";
+import {
+  publishDeclaredEntities,
+  restoreDeclaredEntities,
+} from "../domains/dynamic-collections/services/removed-from-code-writes";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -164,6 +168,8 @@ interface AdapterLike {
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   // Whether the server can key the per-language unique index a translated unique field needs.
   getCapabilities(): ReturnType<DrizzleAdapter["getCapabilities"]>;
+  // Holds one connection for a statement the companion reconcile builds from the catalog.
+  transaction: DrizzleAdapter["transaction"];
 }
 
 type CollectionDef = {
@@ -234,8 +240,8 @@ type ComponentDef = {
  *
  * That row is not merely cosmetic. Anything deciding whether an entity's table
  * can be queried reads it -- the widget source refresh does -- so a field edit
- * under `next dev` silently withdrew that entity's generated cards from the
- * dashboard for the rest of the session.
+ * under `next dev` silently withdrew that entity's widget source, and with it
+ * every card set to it, from the dashboard for the rest of the session.
  *
  * The edited set is taken from the SYNC'S OWN REPORT rather than from the
  * snapshot, because the snapshot answers "did this table exist before the
@@ -1072,11 +1078,26 @@ async function ensureLocalizedCompanionsForReload(
     versionScopeForEntityKind,
     mainTableExists,
     resolveCompanionSeedDebt,
+    survivingCompanionRefusal,
   } = await import("../domains/i18n/runtime/companion-io");
   const { resolveCollectionTableName, resolveComponentTableName } =
     await import("../domains/schema/utils/resolve-table-name");
   const { resolveSingleTableName } = await import(
     "../domains/singles/services/resolve-single-table-name"
+  );
+  // Every entity as the registry records it before this reload's metadata sync rewrites it, which
+  // every pass of this function runs before. It tells an entity whose translation this reload
+  // starts, and a field it newly translates, from what was translated before.
+  const { readRecordedEntities, recordedBeforeOf } = await import(
+    "../domains/i18n/migration/recorded-before"
+  );
+  const recordedBefore = await readRecordedEntities(
+    adapter as unknown as DrizzleAdapter,
+    config,
+    error =>
+      consoleLogger.warn(
+        `[nextly] The registry could not be read, so no translations column is judged this reload: ${error instanceof Error ? error.message : String(error)}`
+      )
   );
 
   type Localizable = {
@@ -1170,6 +1191,25 @@ async function ensureLocalizedCompanionsForReload(
         // creates this entity's companion once the apply has produced its main table.
         continue;
       }
+      // Before copying anything into a translations table that survived turning translation
+      // off: a column there that can no longer hold its field keeps the apply from running.
+      if (phase === "beforeApply") {
+        const refused = await survivingCompanionRefusal(adapter, {
+          builtBy: "codeFirst",
+          tableName,
+          fields: entity.fields ?? [],
+          dialect: adapter.dialect,
+          recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
+        });
+        if (refused) {
+          preservationFailed.push(entity.slug);
+          consoleLogger.warn(
+            `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
+              `Nothing was copied into it: ${refused.message}`
+          );
+          continue;
+        }
+      }
       const provisioned = await ensureCompanionTable(
         adapter,
         {
@@ -1244,7 +1284,7 @@ async function ensureLocalizedCompanionsForReload(
       // for. Running it early would compare the companion against a main table the apply has not
       // finished shaping.
       if (phase === "beforeApply") continue;
-      await reconcileCompanionColumns(
+      const columnsInStep = await reconcileCompanionColumns(
         adapter,
         {
           // Same config-edit path as the companion creation above.
@@ -1257,6 +1297,7 @@ async function ensureLocalizedCompanionsForReload(
           // Decides whether `_updated_at` can be seeded from version history for this
           // entity kind; a kind with no history correctly seeds nothing.
           versionScope: versionScopeForEntityKind(kind),
+          recordedBefore: recordedBeforeOf(recordedBefore, kind, entity.slug),
         },
         error => {
           consoleLogger.warn(
@@ -1264,9 +1305,16 @@ async function ensureLocalizedCompanionsForReload(
               `Newly translatable fields may fail to save until it is in step: ` +
               `${error instanceof Error ? error.message : String(error)}`
           );
+        },
+        message => {
+          consoleLogger.warn(
+            `[nextly] The translations table for "${entity.slug}": ${message}`
+          );
         }
       );
-      // Its per-language unique indexes, once its columns are in step. Best-effort, as above.
+      // Its per-language unique indexes, once its columns are in step. Best-effort, as above, and
+      // not after a column failure: a refused column is not the field's to index.
+      if (!columnsInStep) continue;
       const { reconcileCompanionUniqueIndexes } = await import(
         "../domains/i18n/runtime/companion-unique-reconcile"
       );
@@ -1510,6 +1558,8 @@ async function applyReloadHolding(
         plugins?: PluginDefinition[];
         /** Read for `db.schema` (app-level hooks) when recompiling below. */
         db?: unknown;
+        /** Read for the site dashboard the component-map check holds the map to. */
+        admin?: { dashboard?: unknown };
       }
     | undefined;
   /**
@@ -1604,6 +1654,7 @@ async function applyReloadHolding(
           webhookAuditEnabled?: boolean;
           plugins?: PluginDefinition[];
           db?: unknown;
+          admin?: { dashboard?: unknown };
         };
       }
     ).config;
@@ -1704,6 +1755,14 @@ async function applyReloadHolding(
   // nothing a refused reload did leaves its options live.
   const previousDbOptions = publishedCollectionDbOptions();
   reloadUndo.push(() => publishCollectionDbOptions(previousDbOptions));
+  // The declared collections and Singles the write guard judges by, likewise:
+  // published at commit, and the set in force put back when the reload does
+  // not land, so a refused reload neither refuses nor allows a write.
+  let previousDeclared: ReturnType<typeof publishDeclaredEntities>;
+  let declaredPublished = false;
+  reloadUndo.push(() => {
+    if (declaredPublished) restoreDeclaredEntities(previousDeclared);
+  });
   // The workflows in force when the reload started, put back if it does not
   // land, as the db options are.
   const previousWorkflows = publishedWorkflows();
@@ -1725,12 +1784,15 @@ async function applyReloadHolding(
       publishPluginDependencies(newConfig.plugins);
       // The plugins the admin's component check compares its map against, as
       // the reloaded config declares them, so a plugin added or changed in
-      // development is rewritten into the map without a restart.
-      setAdminComponentPlugins(newConfig.plugins);
+      // development is rewritten into the map without a restart. The site
+      // dashboard with them, as the loader carries it after every setup().
+      setAdminComponentPlugins(newConfig.plugins, newConfig.admin?.dashboard);
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])
     );
+    previousDeclared = publishDeclaredEntities(newConfig);
+    declaredPublished = true;
     // Published here rather than when the file is read. A reload that is later
     // refused still parsed a valid config, and publishing early would leave a
     // policy the process explicitly rejected in force — deleting on windows

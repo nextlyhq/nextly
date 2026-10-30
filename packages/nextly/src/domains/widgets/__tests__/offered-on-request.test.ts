@@ -39,7 +39,7 @@ describe("a widget offered on request", () => {
 
   it("is one row of the add panel's Overview, not a row per collection", () => {
     const facts = addPanelFacts(widget({ offered: "on-request" }));
-    expect(facts?.group).toBe("overview");
+    expect(facts.group).toBe("overview");
     expect(facts).not.toHaveProperty("perCollection");
   });
 });

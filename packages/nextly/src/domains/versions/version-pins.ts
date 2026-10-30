@@ -38,6 +38,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { refuseHistoryWriteIfRemovedFromCode } from "../dynamic-collections/services/removed-from-code-writes";
 
 import type { VersionsDbApi } from "./db-api";
 import { lockDocument } from "./history-locks";
@@ -261,6 +262,13 @@ function holderHandle(name: string): RegisteredVersionPinHolder {
           logContext: { versionNo },
         });
       }
+      // A pin is held on a document's version, so it is refused when the
+      // document's collection or Single is removed from code, as freeing one
+      // is below: after the checks of the input alone, which touch nothing,
+      // and before the document is locked. Read on the caller's transaction.
+      await refuseHistoryWriteIfRemovedFromCode(ref, {
+        executor: tx.getDrizzle(),
+      });
       // The save path's lock: a save's retention pass and this pin serialize,
       // so the pass either sees this pin or runs before it exists. A delete
       // holds it too, so a document deleted while this waited is refused
@@ -308,6 +316,9 @@ function holderHandle(name: string): RegisteredVersionPinHolder {
     },
     async release(tx, { ref, slot }) {
       assertSlot(slot);
+      await refuseHistoryWriteIfRemovedFromCode(ref, {
+        executor: tx.getDrizzle(),
+      });
       // Under the document lock, so a release cannot land between a pin's
       // read of its slot and its write: the pin would report success over a
       // row this deleted.
@@ -323,6 +334,9 @@ function holderHandle(name: string): RegisteredVersionPinHolder {
       });
     },
     async releaseAll(tx, ref) {
+      await refuseHistoryWriteIfRemovedFromCode(ref, {
+        executor: tx.getDrizzle(),
+      });
       await lockDocument(tx, ref);
       await tx.delete(PINS_TABLE, {
         and: [

@@ -74,7 +74,10 @@ const read = file => readFileSync(resolve(repoRoot, file), "utf8");
  * not mistaken for one.
  */
 const OLD_MAJOR_ANYWHERE = [
-  /\bNext(?:\.js)?\s+v?15\b/,
+  // "Next.js" in any case, since "next.js 15" claims the same support; a bare
+  // "Next 15" only capitalised, since "the next 15 lines" is ordinary prose.
+  /\bnext\.js\s+v?15\b/i,
+  /\bNext\s+v?15\b/,
   /\bReact(?:\s+DOM)?\s+v?18\b/i,
   /\bnext@[\^~>=]*15\b/i,
   /\breact(?:-dom)?@[\^~>=]*18\b/i,
@@ -161,6 +164,8 @@ describe("supported Next.js and React versions", () => {
   it("recognises the ways a page names a dropped major", () => {
     for (const sentence of [
       "Nextly supports Next.js 15 and 16.",
+      "this works on next.js 15.",
+      "requires react 18 or newer.",
       "Works on Next 15.5 with the App Router.",
       "Requires React 18 or newer.",
       "React DOM 18 works too.",

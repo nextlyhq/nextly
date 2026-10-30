@@ -36,6 +36,17 @@
  * The counts are read with no language named, as the entry list reads, so each
  * number is read in the language the list it links to opens in.
  *
+ * ## The digest
+ *
+ * Asked with `op: "list"`, the source answers the attention digest instead: one
+ * item per thing waiting, each with its severity and link, read by the digest's
+ * own runner (`domains/widgets/attention/digest`). Its core kinds are releases
+ * that stopped and overdue releases, both critical and both the releases
+ * domain's own counts; plugins' items follow as warnings. Unpublished changes
+ * and entries publishing this week are not in it: they belong to the Content
+ * table and Upcoming releases. The grouped answer above stays as it is for the
+ * card that reads it today.
+ *
  * @module services/dashboard/attention-source
  * @experimental The card's kinds and bucket keys may change until plugin
  *   attention items join them.
@@ -47,8 +58,14 @@ import type { WorkflowFilter } from "../../domains/collections/query/workflow-fi
 import {
   callerMayReadReleases,
   overdueReleaseCount,
+  stoppedReleaseCount,
 } from "../../domains/releases/releases-widget-source";
 import { singlesWithPendingChanges } from "../../domains/versions/versions-widget-source";
+import {
+  type DigestReader,
+  runDigest,
+} from "../../domains/widgets/attention/digest";
+import { pluginItemReaders } from "../../domains/widgets/attention/items";
 import {
   ATTENTION_DUE_WINDOW_MS,
   attentionPartKey,
@@ -383,14 +400,15 @@ function asGroupedResult(
 
 /**
  * What this source does with each field of a widget query: it answers one
- * fixed question, grouped by item, so nothing else a query may carry applies.
+ * fixed question, grouped by item or as the digest, so nothing else a query
+ * may carry applies.
  */
 const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   source: "consumed",
   op: "consumed",
   groupBy: "consumed",
-  // Defaulted and bounded by validation for every grouped query; it bounds
-  // how many kinds and parts the answer carries.
+  // Defaulted and bounded by validation; it bounds how many kinds and parts
+  // the grouped answer carries, and how many items the digest does.
   limit: "consumed",
   select: "refused",
   where: "refused",
@@ -403,12 +421,79 @@ const QUERY_FIELD_USE: Record<keyof WidgetQuery, "consumed" | "refused"> = {
   range: "refused",
 };
 
+/**
+ * Core's release kinds of the digest: what the releases domain counts on its
+ * Needs attention tab, each critical and linked to that tab filtered to it.
+ */
+const RELEASE_KINDS = [
+  {
+    id: "core/stopped-releases",
+    kind: "stopped",
+    label: "Releases that stopped",
+    count: stoppedReleaseCount,
+  },
+  {
+    id: "core/overdue-releases",
+    kind: "overdue",
+    label: "Overdue releases",
+    count: overdueReleaseCount,
+  },
+] as const;
+
+/**
+ * A reader for each release kind. A reader who may not read releases is shown
+ * neither, exactly as on a site with none; and so is one whose access could
+ * not be read, since the digest hides an item whose `visible` check throws
+ * (and logs it) rather than showing release labels to a reader never proven
+ * to read releases.
+ */
+function releaseReaders(caller: ReadCaller): DigestReader[] {
+  let mayRead: Promise<boolean> | undefined;
+  const mayReadReleases = () => (mayRead ??= callerMayReadReleases(caller));
+  return RELEASE_KINDS.map(({ id, kind, label, count }) => ({
+    id,
+    kind,
+    label,
+    severity: "critical" as const,
+    link: `releases?tab=attention&reason=${kind}`,
+    owner: "core",
+    visible: mayReadReleases,
+    read: () => count(caller),
+  }));
+}
+
+/**
+ * The digest as a list result: the items the query's `limit` holds, most
+ * urgent first, and how many there are in all.
+ */
+async function resolveDigest(
+  query: WidgetQuery,
+  caller: ReadCaller,
+  opts?: ResolverOptions
+): Promise<WidgetResult> {
+  // One instant for every item, so each plugin item counts against the same "now".
+  const now = opts?.now ?? new Date();
+  const readers = [
+    ...releaseReaders(caller),
+    ...pluginItemReaders(caller, now),
+  ];
+  const items = await runDigest(readers, opts?.signal);
+  return {
+    op: "list",
+    items: items
+      .slice(0, query.limit ?? MAX_WIDGET_LIMIT)
+      .map(item => ({ ...item })),
+    total: items.length,
+  };
+}
+
 async function resolveAttention(
   query: WidgetQuery,
   caller: ReadCaller,
   opts?: ResolverOptions
 ): Promise<WidgetResult> {
   refuseUnconsumedQueryFields(query, QUERY_FIELD_USE, ATTENTION_SOURCE_ID);
+  if (query.op === "list") return resolveDigest(query, caller, opts);
   let mayRead: Promise<boolean> | undefined;
   const context: AttentionContext = {
     now: new Date(),
@@ -433,8 +518,9 @@ async function resolveAttention(
 /**
  * Publish the source and the function that answers it.
  *
- * `supports` names `groupBy` alone: the answer is a count per kind and per
- * part, which is a grouped result, and no other op has a meaning here.
+ * `supports` names `groupBy`, a count per kind and per part for the card that
+ * reads it today, and `list`, the digest: one item per thing waiting. No other
+ * op has a meaning here.
  */
 export function registerAttentionWidgetSource(): void {
   registerSystemSource(
@@ -442,7 +528,7 @@ export function registerAttentionWidgetSource(): void {
       id: ATTENTION_SOURCE_ID,
       label: "Needs attention",
       kind: "system",
-      supports: ["groupBy"],
+      supports: ["groupBy", "list"],
       fields: [{ name: "item", type: "string", label: "Item" }],
     },
     resolveAttention

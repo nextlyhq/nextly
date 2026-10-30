@@ -22,11 +22,23 @@ import {
   declaredWidget,
   type DeclaredWidget,
 } from "../domains/widgets/declaration/declared-widgets";
+import type { WidgetLoadSize } from "../domains/widgets/declaration/define-widget";
 import { bindReadServices } from "../domains/widgets/declaration/read-services";
-import { GRID_COLUMNS, MIN_GRID_ROWS } from "../domains/widgets/grid-size";
+import { WIDGET_CELL_TIERS } from "../domains/widgets/definition";
+import {
+  clampSize,
+  GRID_COLUMNS,
+  isGridSize,
+  MAX_GRID_ROWS,
+  MIN_GRID_ROWS,
+  sizeBounds,
+  type GridSize,
+} from "../domains/widgets/grid-size";
 import type { WidgetPlacement } from "../domains/widgets/layout";
 import type { WidgetQuery } from "../domains/widgets/query";
+import { getWidget } from "../domains/widgets/registry";
 import type { WidgetSlot } from "../domains/widgets/result";
+import { withSiteOverride } from "../domains/widgets/site-rules";
 import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getNextlyLogger } from "../observability/logger";
@@ -35,6 +47,7 @@ import type { ReadCaller } from "../services/dashboard/readable-resources";
 import { askableCards } from "./widget-layout";
 import {
   failedSlot,
+  SLOT_TIMEOUT_MS,
   unavailableSlot,
   withinSlotBudget,
   type CardAnswer,
@@ -42,7 +55,28 @@ import {
 } from "./widget-slots";
 
 /**
- * A by-card entry: which card, of which widget, and nothing more.
+ * The size a card is drawn at, as the browser asking says it: its `{ w, h }`
+ * in grid units, each within the grid's own bounds, and the tier the browser
+ * predicted for it from the dashboard's width. Outside input, so held to
+ * exactly that shape; a size that is not one is a malformed entry, refused as
+ * every malformed entry is.
+ *
+ * Trusted for the shape of the card's own load and nothing else: it decides
+ * how much the load reads for the person asking, never what they may read, so
+ * a size of their choosing asks only what resizing the card would.
+ */
+const CARD_SIZE = z.strictObject({
+  w: z.number().int().min(1).max(GRID_COLUMNS),
+  h: z.number().int().min(MIN_GRID_ROWS).max(MAX_GRID_ROWS),
+  tier: z.enum(WIDGET_CELL_TIERS),
+});
+
+/** A card's size as an entry carries it, once read. */
+type AskedSize = z.infer<typeof CARD_SIZE>;
+
+/**
+ * A by-card entry: which card, of which widget, and the size it is drawn at
+ * where the browser knows it; nothing more.
  *
  * 🔴 Strict, so an entry naming a widget carries no query, source or op beside
  * it: a mixed entry is refused with the one "unavailable" answer. That is what
@@ -53,6 +87,7 @@ import {
 const CARD_ENTRY = z.strictObject({
   widget: z.string().min(1),
   card: z.string().min(1),
+  size: CARD_SIZE.optional(),
 });
 
 /**
@@ -68,7 +103,56 @@ const CARD_ENTRY = z.strictObject({
 const PREVIEW_ENTRY = z.strictObject({
   widget: z.string().min(1),
   settings: z.record(z.string(), z.unknown()),
+  size: CARD_SIZE.optional(),
 });
+
+/** The card an entry asks for, and the size the entry says it is drawn at, if it says one. */
+interface AskedCard {
+  placement: WidgetPlacement;
+  /** A card not yet stored, asked with settings of the reader's choosing. */
+  preview: boolean;
+  size?: AskedSize;
+}
+
+/**
+ * The tier a card asked with none is loaded at: `"medium"`, the tier a widget's
+ * component is drawn at before its card has measured itself, so a load asked
+ * with no screen to go by and a component drawn before it has one assume the
+ * same room.
+ */
+const UNSTATED_TIER: WidgetLoadSize["tier"] = "medium";
+
+/**
+ * The size a card's `load` (and its `shows`) is handed, held to its widget's
+ * size bounds as the admin draws it (`clampSize`, the rule both ends read a
+ * size by), so a load never sees a size its widget does not allow:
+ *
+ * - its grid size: the one the entry carries; else a stored card's own, or its
+ *   widget's default where the stored one is not a size the grid can draw; a
+ *   preview's, its widget's default size, the size a new card starts at;
+ * - its tier: the one the entry carries, else {@link UNSTATED_TIER}.
+ *
+ * The bounds are the registry's, falling back to the declaration's own, read
+ * through the site's `overrides` (`withSiteOverride`) as the layout and the
+ * admin read them, so a load is never handed a size the site's narrower bounds
+ * would not draw.
+ */
+function cardSize(declared: DeclaredWidget, asked: AskedCard): WidgetLoadSize {
+  const registered = getWidget(declared.declaration.id);
+  const bounds = sizeBounds(
+    registered === undefined
+      ? withSiteOverride(declared.declaration).size
+      : withSiteOverride(registered).size
+  );
+  const { placement, preview, size } = asked;
+  const stated: GridSize | undefined =
+    size ?? (preview ? undefined : { w: placement.w, h: placement.h });
+  const grid =
+    stated !== undefined && isGridSize(stated)
+      ? clampSize(stated, bounds)
+      : { ...bounds.default };
+  return { ...grid, tier: size?.tier ?? UNSTATED_TIER };
+}
 
 /** What a batch's cards may be looked up in: what the caller was handed, and could place. */
 type AskableCards = Awaited<ReturnType<typeof askableCards>>;
@@ -130,33 +214,34 @@ export async function prepareCards(
  * The card an entry asks for, looked up in what the caller may ask, or why it
  * cannot be (for the log only: every one answers the same).
  */
-function askedPlacement(
-  raw: unknown,
-  cards: AskableCards
-): WidgetPlacement | string {
+function askedPlacement(raw: unknown, cards: AskableCards): AskedCard | string {
   const stored = CARD_ENTRY.safeParse(raw);
   if (stored.success) {
-    const { widget, card } = stored.data;
+    const { widget, card, size } = stored.data;
     const placement = cards.handed.get(card);
     return placement !== undefined && placement.widgetId === widget
-      ? placement
+      ? { placement, preview: false, ...(size === undefined ? {} : { size }) }
       : `card "${card}" of widget "${widget}" is not one this caller was handed`;
   }
   const preview = PREVIEW_ENTRY.safeParse(raw);
   if (preview.success) {
-    const { widget, settings } = preview.data;
+    const { widget, settings, size } = preview.data;
     // Not a stored card, so it has no id of its own; its config is the
-    // settings asked with, read exactly as a stored card's is. Its size
-    // answers nothing about its data, so it is the full width at the fewest
-    // rows a card may span.
+    // settings asked with, read exactly as a stored card's is. The size its
+    // load is handed is the entry's, or its widget's default (`cardSize`), so
+    // the placement's own is only the full width at the fewest rows.
     return cards.placeable.has(widget)
       ? {
-          id: "preview",
-          widgetId: widget,
-          w: GRID_COLUMNS,
-          h: MIN_GRID_ROWS,
-          removed: false,
-          config: settings,
+          placement: {
+            id: "preview",
+            widgetId: widget,
+            w: GRID_COLUMNS,
+            h: MIN_GRID_ROWS,
+            removed: false,
+            config: settings,
+          },
+          preview: true,
+          ...(size === undefined ? {} : { size }),
         }
       : `widget "${widget}" is not one this caller could place`;
   }
@@ -170,19 +255,21 @@ function cardEntryFor(
   cards: AskableCards,
   batch: CardBatch
 ): ReadyCardData | WidgetSlot {
-  const placement = askedPlacement(raw, cards);
-  if (typeof placement === "string") return unavailableCard(placement);
+  const card = askedPlacement(raw, cards);
+  if (typeof card === "string") return unavailableCard(card);
+  const { placement } = card;
   const widget = placement.widgetId;
   const declared = declaredWidget(widget);
   if (declared === undefined) {
     return unavailableCard(`widget "${widget}" is no longer declared`);
   }
+  const size = cardSize(declared, card);
   return {
     kind: "data",
     index,
     widgetId: widget,
     owner: declared.owner,
-    answer: asked => answerCard(declared, placement, batch, asked),
+    answer: asked => answerCard(declared, placement, batch, asked, size),
   };
 }
 
@@ -191,9 +278,11 @@ type CardInput = Parameters<ReadyCardData["answer"]>[0];
 
 /**
  * Whether this person fails the widget's `access`, judged with them before
- * `load` runs: a permission name was judged already, when the card was handed
- * (`askableCards`); the collections it reads, through the batch's own check,
- * the one gate every collection read passes; a predicate, with the person.
+ * `load` runs: a permission gate (a name, `{ anyOf }` or `{ allOf }`) was
+ * judged already, when the card was handed (`askableCards`), by the
+ * `requiredPermission` it was published as, and is not judged a second time
+ * here; the collections it reads, through the batch's own check, the one gate
+ * every collection read passes; a predicate, with the person.
  *
  * 🔴 A predicate that throws refuses: it is the plugin's own code deciding who
  * may see data, and a decision that could not be made is no. It runs within
@@ -213,7 +302,13 @@ async function refusedAccess(
       return true;
     }
   }
-  if (typeof access === "object" && access !== null) {
+  // Only the collections form is judged here: the gate forms are objects too,
+  // and carry no collections to read.
+  if (
+    typeof access === "object" &&
+    access !== null &&
+    "collections" in access
+  ) {
     for (const collection of access.collections) {
       try {
         await batch.check({
@@ -326,7 +421,8 @@ type LoadInput = Parameters<DeclaredWidget["declaration"]["load"]>[0];
  * 3. Its `shows`: anything but `true` is `not-shown`.
  *
  * Otherwise it is `shown`, with what `load` would be handed: its settings, the person, read
- * services bound to them, the card's signal, the batch's instant and the owner's share scope.
+ * services bound to them, the card's signal, the batch's instant, the owner's share scope and the
+ * card's size (`cardSize`). `shows` is handed the same input, so the two read one shape.
  *
  * 🔴 The one judgement: a card answered (`answerCard`) and a card asked whether it is shown at all
  * (`cardIsShownTo`) both read it, so the two cannot come to answer one card differently.
@@ -337,14 +433,26 @@ type CardVerdict =
   | { kind: "not-shown" }
   | { kind: "shown"; input: LoadInput };
 
+/**
+ * Which of a card's rules is being judged, kept up to date by `judgeCard` for whoever bounds it:
+ * a timeout names the stage that was running, the widget's access (its predicate, or core's own
+ * check of the collections it reads) or its `shows`.
+ */
+type JudgingStage = { at: "access" | "shows" };
+
 async function judgeCard(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
-  asked: CardInput
+  asked: CardInput,
+  size: WidgetLoadSize,
+  stage: JudgingStage = { at: "access" }
 ): Promise<CardVerdict> {
+  stage.at = "access";
   if (await refusedAccess(declared, batch)) return { kind: "refused" };
-  const { declaration, collections } = declared;
+  const { collections } = declared;
+  // The settings' starting values as the site's `overrides` change them.
+  const declaration = withSiteOverride(declared.declaration);
   const settings = resolveCardSettings(declaration.settings, placement.config);
   const missing = unsetSetting(declaration.settings, settings);
   if (missing !== undefined) {
@@ -357,6 +465,9 @@ async function judgeCard(
     signal,
     scope,
     now,
+    // This judgement's own copy, as `now` is: a widget's function that changes
+    // what it was handed leaves the size the card was asked at as it was.
+    size: { ...size },
     services: bindReadServices({
       caller: batch.caller,
       prepare: batch.check,
@@ -367,6 +478,7 @@ async function judgeCard(
   };
   const { shows } = declaration;
   if (shows !== undefined) {
+    stage.at = "shows";
     const shown = await ownCode(declared, "widget-shows-threw", () =>
       shows(input)
     );
@@ -384,9 +496,10 @@ async function answerCard(
   declared: DeclaredWidget,
   placement: WidgetPlacement,
   batch: CardBatch,
-  asked: CardInput
+  asked: CardInput,
+  size: WidgetLoadSize
 ): Promise<CardAnswer> {
-  const verdict = await judgeCard(declared, placement, batch, asked);
+  const verdict = await judgeCard(declared, placement, batch, asked, size);
   switch (verdict.kind) {
     case "refused":
       // Routine, not a failure: a person without access is answered "not available" on every
@@ -397,7 +510,7 @@ async function answerCard(
       return {
         settled: {
           ok: false,
-          error: `Choose ${verdict.label} in the card's settings`,
+          error: `No ${verdict.label} chosen yet`,
           code: "needs-setting",
           setting: verdict.label,
         },
@@ -426,8 +539,9 @@ async function answerCard(
  * leaves out the cards they would not be shown.
  *
  * - Refused by its `access`: no.
- * - A setting it needs has no value: YES. The card asks for that setting itself ("Choose ...
- *   in the card's settings"), and leaving it out would hide the one step that fixes it.
+ * - A setting it needs has no value: YES. The card asks for that setting itself ("No ...
+ *   chosen yet", with a button to choose it), and leaving it out would hide the one step that
+ *   fixes it.
  * - Its `shows`, as the person: only `true` is yes.
  * - No `shows`: yes.
  *
@@ -437,7 +551,8 @@ async function answerCard(
  * hands over (`askableCards`).
  *
  * @param asked the signal the work is given up on, the instant reads measure from, and the
- * owner's share scope, as a card answered in the batch is handed them.
+ * owner's share scope, as a card answered in the batch is handed them. No browser asks, so a
+ * `shows` reading its size is handed the placement's own, at the unstated tier (`cardSize`).
  */
 export async function cardIsShownTo(
   declared: DeclaredWidget,
@@ -445,12 +560,20 @@ export async function cardIsShownTo(
   batch: CardBatch,
   asked: CardInput
 ): Promise<boolean> {
+  const stage: JudgingStage = { at: "access" };
+  const size = cardSize(declared, { placement, preview: false });
   try {
     const verdict = await withinSlotBudget(
-      signal => judgeCard(declared, placement, batch, { ...asked, signal }),
-      () => {
-        throw pluginFailure(declared, "widget-shows-timed-out", undefined);
-      },
+      signal =>
+        judgeCard(
+          declared,
+          placement,
+          batch,
+          { ...asked, signal },
+          size,
+          stage
+        ),
+      () => judgingTimedOut(declared, stage),
       asked.signal
     );
     return verdict.kind === "shown" || verdict.kind === "needs-setting";
@@ -459,6 +582,26 @@ export async function cardIsShownTo(
     if (!asked.signal.aborted) logNotJudged(declared, error);
     return false;
   }
+}
+
+/**
+ * The failure a card whose judgement ran past its budget becomes, naming the stage that was
+ * running. Core's own error, not the plugin's: the stage may be core's check of the collections
+ * the widget reads, and nothing the plugin said is in it.
+ */
+function judgingTimedOut(declared: DeclaredWidget, stage: JudgingStage): never {
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "This widget took too long to answer",
+    logMessage: `Declared widget "${declared.declaration.id}" of ${declared.owner} was not judged within ${SLOT_TIMEOUT_MS}ms, at its ${stage.at}`,
+    logContext: {
+      owner: declared.owner,
+      widget: declared.declaration.id,
+      reason: "widget-judging-timed-out",
+      stage: stage.at,
+      timeoutMs: SLOT_TIMEOUT_MS,
+    },
+  });
 }
 
 /** That a card could not be judged shown, so it was not, for the operator. */

@@ -16,7 +16,9 @@
 //   7. Generate per-statement SQL via sql-templates/.
 //   8. Write paired migrations/<ts>_<slug>.sql + migrations/meta/<ts>_<slug>.snapshot.json.
 //
-// Returns null when no operations remain (after rename collapsing).
+// Returns null when no operations remain (after rename collapsing) and no
+// entity's settings changed: a settings change alone is written as a
+// migration with no table statements, beside its snapshot.
 // CLI exits with code 2 in that case ("no changes detected" — distinct
 // from exit 1 for actual errors so CI scripts can tell apart).
 
@@ -91,6 +93,13 @@ import {
 } from "./app-stream";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import { buildInverseOperations } from "./down-generator";
+import {
+  describeSettingsChange,
+  settingsChangesFor,
+  settingsRecordOf,
+  type EntitySettingsChange,
+  type RecordedEntitySettings,
+} from "./entity-settings";
 import { formatMigrationFile, formatTimestamp, slugify } from "./format-file";
 import { promptRenames, type RenameDecision } from "./prompt-renames";
 import {
@@ -159,6 +168,14 @@ export interface MinimalConfigEntity {
    * and relocated to the migration-owned companion `_locales` table (i18n Option B).
    */
   localized?: boolean;
+  /**
+   * The entity's declaration, as the snapshot records its settings: from the
+   * code-first config (`toMinimalEntities`) or the Builder's manifest. Every
+   * entity `migrate:create` hands in carries it, so each snapshot records every
+   * entity's settings; one without it contributes no record, and a run in
+   * which none carries one writes a snapshot that says nothing about settings.
+   */
+  settings?: RecordedEntitySettings;
 }
 
 export interface GenerateArgs {
@@ -173,9 +190,17 @@ export interface GenerateArgs {
   components: MinimalConfigEntity[];
   /**
    * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
-   * Each is appended to the generated SQL when an operation touches its table.
+   * Each is appended to the generated SQL when an operation touches its table
+   * or the entity's settings changed: the row is how a Builder entity's
+   * settings reach a deployed registry.
    */
   metadataUpserts?: { tableName: string; sql: string }[];
+  /**
+   * The same upserts built from the PREVIOUS snapshot's record of each Builder
+   * entity, so a migration that writes a row for its settings alone can write
+   * it back on the way down.
+   */
+  previousMetadataUpserts?: { tableName: string; sql: string }[];
   /**
    * Default locale for localized collections (from `config.localization.defaultLocale`).
    * Used as the `_locale` value when seeding existing rows into the companion table on
@@ -218,6 +243,11 @@ export interface GenerateResult {
   operationCount: number;
   /** Number of rename candidates the operator confirmed. */
   renamesAccepted: number;
+  /**
+   * Each entity whose settings changed since the previous snapshot, whether or
+   * not this migration changes its table. Empty when only tables changed.
+   */
+  settingsChanges: EntitySettingsChange[];
 }
 
 /** The table an operation acts on (for correlating metadata upserts). */
@@ -342,7 +372,21 @@ export async function generateMigration(
     fieldLeavesPlans.length > 0 ||
     fieldJoinsPlans.length > 0 ||
     uniquePlans.length > 0;
-  if (operations.length === 0 && !hasCompanions) {
+
+  // 3e. Settings: what the declarations say beyond their columns. A change to
+  //     one alone changes no table, so without this the run returned "no
+  //     changes" and the setting never reached a deployed database. Compared
+  //     with the previous snapshot's record; a previous snapshot that predates
+  //     the record says nothing about settings, so each entity is named as
+  //     recorded for the first time (`settingsChanges`).
+  const settingsRecord = settingsRecordOf(args);
+  const changedSettings = settingsChangesFor(
+    args,
+    previous === null ? null : previous.data.entities
+  );
+  const hasSettingsChanges = changedSettings.length > 0;
+
+  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
   }
 
@@ -376,7 +420,7 @@ export async function generateMigration(
       previousSnapshot
     );
   }
-  if (operations.length === 0 && !hasCompanions) {
+  if (operations.length === 0 && !hasCompanions && !hasSettingsChanges) {
     return null;
   }
 
@@ -428,13 +472,17 @@ export async function generateMigration(
     previousSnapshot.tables
   );
 
-  // 7b. Append UI metadata-row upserts for any touched UI-built table (§4.12.7).
+  // 7b. Append UI metadata-row upserts for any UI-built table this migration
+  //     touches (§4.12.7), and for any whose entity's settings changed: the row
+  //     is where a Builder entity's settings live, so it travels with them.
   const touched = new Set(operations.map(operationTableName));
-  if (args.metadataUpserts && args.metadataUpserts.length > 0) {
-    for (const m of args.metadataUpserts) {
-      if (touched.has(m.tableName)) sqlStatements.push(m.sql);
-    }
-  }
+  const rows = registryRowsFor(
+    touched,
+    tablesOfSettingsChanges(changedSettings, args),
+    args
+  );
+  sqlStatements.push(...rows.up);
+  downSqlStatements.push(...rows.down);
 
   /*
    * 8. Compose file content + write both files.
@@ -491,6 +539,8 @@ export async function generateMigration(
     singles: singleSlugs,
     components: componentSlugs,
     hasUserExt: false, // F11 PR 3 doesn't model user_ext in migrate:create yet (out of scope).
+    settingsChanges: changedSettings.map(describeSettingsChange),
+    changesNoTable: operations.length === 0,
     now,
   });
 
@@ -504,7 +554,8 @@ export async function generateMigration(
     baseName,
     stream.written,
     sqlContent,
-    stream.contributions
+    stream.contributions,
+    settingsRecord
   );
 
   // 9. Emit the snapshot-less companion `.sql` files around the main migration, ordered by kind:
@@ -608,7 +659,48 @@ export async function generateMigration(
     snapshotPath,
     operationCount: operations.length,
     renamesAccepted: decisions.filter(d => d.accepted).length,
+    settingsChanges: changedSettings,
   };
+}
+
+/**
+ * The Builder registry-row upserts a migration carries: UP writes the row of
+ * each table it touches and of each entity whose settings changed. A row that
+ * travels only because its settings changed goes back with the rollback, so
+ * DOWN writes it as the previous snapshot recorded it; a row the previous
+ * snapshot has no record of has nothing to go back to.
+ */
+function registryRowsFor(
+  touched: ReadonlySet<string>,
+  settingsTables: ReadonlySet<string>,
+  args: Pick<GenerateArgs, "metadataUpserts" | "previousMetadataUpserts">
+): { up: string[]; down: string[] } {
+  return {
+    up: (args.metadataUpserts ?? [])
+      .filter(m => touched.has(m.tableName) || settingsTables.has(m.tableName))
+      .map(m => m.sql),
+    down: (args.previousMetadataUpserts ?? [])
+      .filter(m => settingsTables.has(m.tableName) && !touched.has(m.tableName))
+      .map(m => m.sql),
+  };
+}
+
+/** The tables of the entities whose settings changed, by kind and slug. */
+function tablesOfSettingsChanges(
+  changes: readonly EntitySettingsChange[],
+  entities: Pick<GenerateArgs, "collections" | "singles" | "components">
+): Set<string> {
+  const lists = {
+    collection: entities.collections,
+    single: entities.singles,
+    fieldGroup: entities.components,
+  };
+  const tables = new Set<string>();
+  for (const change of changes) {
+    const entity = lists[change.kind].find(e => e.slug === change.slug);
+    if (entity) tables.add(entity.tableName);
+  }
+  return tables;
 }
 
 /**
@@ -1699,6 +1791,78 @@ function applyRenameDecisions(
   // last, which makes this function silently depend on that contract.
   if (renames.length === 0) return remaining;
 
+  // An index the renamed column already carries is carried BY the rename: every dialect renames the
+  // column inside the index. The diff, seeing the collapsed add's index under the same name with a
+  // new column, plans to create it again — which MySQL refuses as a duplicate key and PostgreSQL
+  // skips with IF NOT EXISTS — and, for a name Nextly manages, to drop the old one first, which would
+  // leave the table with no index at all once the create is gone. When the new index is exactly the
+  // previous one with the column renamed, both are dropped from the plan and the rename keeps it.
+  const carried = indexesCarriedByRenames(
+    effectiveAccepts.map(d => d.candidate),
+    previousSnapshot
+  );
+  const keptByRename = new Set(
+    remaining.flatMap(op =>
+      op.type === "add_index" &&
+      carried.get(`${op.tableName}::${op.index.name}`) === indexShape(op.index)
+        ? [`${op.tableName}::${op.index.name}`]
+        : []
+    )
+  );
+  // Placed first and filtered after: the kept index's create is what the renames are placed ahead
+  // of, so taking it out first would push them past a check that names the new column.
+  const placed = placeRenames(remaining, renames);
+  return keptByRename.size === 0
+    ? placed
+    : placed.filter(
+        op =>
+          !(
+            (op.type === "add_index" || op.type === "drop_index") &&
+            keptByRename.has(`${op.tableName}::${op.index.name}`)
+          )
+      );
+}
+
+/**
+ * The indexes on renamed columns, keyed by table and name, each with its shape as it reads once
+ * the renames have run (`indexShape`).
+ */
+function indexesCarriedByRenames(
+  renamed: readonly RenameCandidate[],
+  previousSnapshot: NextlySchemaSnapshot | undefined
+): Map<string, string> {
+  const carried = new Map<string, string>();
+  for (const table of previousSnapshot?.tables ?? []) {
+    const onTable = renamed.filter(c => c.tableName === table.name);
+    if (onTable.length === 0) continue;
+    const newName = (column: string): string =>
+      onTable.find(c => c.fromColumn === column)?.toColumn ?? column;
+    for (const index of table.indexes ?? []) {
+      if (!index.columns.some(column => newName(column) !== column)) continue;
+      carried.set(
+        `${table.name}::${index.name}`,
+        indexShape({ ...index, columns: index.columns.map(newName) })
+      );
+    }
+  }
+  return carried;
+}
+
+/** What an index is, beyond its name: the same text for two indexes that index alike. */
+function indexShape(index: IndexSpec): string {
+  return JSON.stringify([
+    index.columns,
+    index.unique,
+    index.where ?? null,
+    index.expression ?? null,
+  ]);
+}
+
+/** The operations with the renames placed ahead of the index tail. */
+function placeRenames(
+  remaining: Operation[],
+  renames: Operation[]
+): Operation[] {
   // The renames land ahead of the index tail, not at the very end. Collapsing a
   // (drop_column, add_column) pair removes the statement that would have
   // created the new column, so an index declared on it can only be created

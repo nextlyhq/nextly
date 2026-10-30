@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetWidgetRegistries } from "../../../di/registrations/register-widgets";
 import * as loggerModule from "../../../observability/logger";
-import { declaredWidgets, placedByDefault, sizeFacts } from "../canonical";
+import { allWidgets, placedByDefault, sizeFacts } from "../canonical";
 import {
   CORE_DECLARATIONS,
   CORE_WIDGET_IDS,
@@ -95,7 +95,8 @@ describe("core's Note, declared", () => {
       serverData: true,
       allowsSeveral: true,
       empty: {
-        message: "Nothing written yet. Write it in the card's settings.",
+        message: "Nothing written yet.",
+        action: { label: "Write a note", opens: "settings" },
       },
       settings: [
         expect.objectContaining({
@@ -110,9 +111,7 @@ describe("core's Note, declared", () => {
     expect(published?.category).toBeUndefined();
     // Asked for from the add panel, as when it was offered on request: never
     // on the default dashboard, and as many cards as its reader wants.
-    const canonical = declaredWidgets().find(
-      widget => widget.id === "core/note"
-    );
+    const canonical = allWidgets().find(widget => widget.id === "core/note");
     expect(canonical).toBeDefined();
     if (canonical === undefined) return;
     expect(placedByDefault(canonical)).toBe(false);

@@ -24,6 +24,7 @@ import {
   TRANSLATED_KEY,
 } from "../../domains/collections/query/filter-shape";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import { appLocalization } from "../../domains/i18n/configured-locales";
 import {
   EVERY_LOCALE,
   EVERY_TRANSLATION,
@@ -34,6 +35,8 @@ import {
   resolveRequestedLocale,
 } from "../../domains/i18n/resolve-locale";
 import type { AccessRuleTarget } from "../../shared/types/access";
+
+import { ruleLanguageKeyOf } from "./rule-language-key";
 
 /** The languages an operation involves, and the one judged where it is one. */
 export interface RuleLanguage {
@@ -159,11 +162,19 @@ function registeredContent(): RegisteredContent | undefined {
 }
 
 /**
- * The site's languages, from the configuration the services were registered
- * with, or none before any are registered.
+ * The site's languages as they are now (`appLocalization`): the language
+ * registry's list once services are registered, so a site whose languages are
+ * stored in Settings rather than declared in its configuration tells its rules
+ * every one of them, and the configuration's block before then. None before
+ * anything is registered.
  */
 function registeredLocalization(): SanitizedLocalizationConfig | undefined {
-  return registeredContent()?.localization;
+  try {
+    return appLocalization();
+  } catch {
+    // The container is not initialized; the site has no languages yet.
+    return undefined;
+  }
 }
 
 /**
@@ -313,6 +324,14 @@ export async function askEachLanguage<R>(
  */
 export function currentRuleLanguage(): RuleLanguage {
   return ruleLanguage.getStore() ?? everyLanguage();
+}
+
+/**
+ * The languages rules are told now, as one key: the language judged and every
+ * one involved. Two questions with the same key tell a rule the same language.
+ */
+export function ruleLanguageKey(): string {
+  return ruleLanguageKeyOf(currentRuleLanguage());
 }
 
 /**

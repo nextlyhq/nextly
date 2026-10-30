@@ -21,8 +21,12 @@
  * @module plugins/codegen/component-import-map
  */
 
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, posix, relative, sep } from "node:path";
 
+import {
+  isConfigRelative,
+  SITE_CONFIG,
+} from "../../domains/widgets/declaration/site-component";
 import type {
   ComponentPath,
   PluginAdminContributions,
@@ -57,6 +61,11 @@ export interface ComponentMapEntry {
   readonly use: ComponentMapUse;
   /** The widget's id, for a `widget` entry. */
   readonly widget?: string;
+  /**
+   * Set on a site widget's component written relative to the config file: the
+   * map imports it from its own folder, through where the config file is.
+   */
+  readonly fromConfig?: true;
 }
 
 /**
@@ -219,6 +228,29 @@ function collectDeclaredWidgetEntries(
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The site config's own widgets' components, named as the site config's, each
+ * written relative to the config file marked so the map imports it from there.
+ */
+function siteWidgetEntries(siteDashboard: unknown): ComponentMapEntry[] {
+  return collectDeclaredWidgetEntries(siteDashboard, SITE_CONFIG).map(each =>
+    isConfigRelative(parsePath(each.path).module)
+      ? { ...each, fromConfig: true }
+      : each
+  );
+}
+
+/**
+ * The module a map imports a config-relative component from: the path joined
+ * onto the config file's own folder, as the map's import of the config names
+ * it (`configImport`, from the map's folder). Unchanged with no config import.
+ */
+function importedFromConfig(module: string, configImport?: string): string {
+  if (configImport === undefined) return module;
+  const joined = posix.join(posix.dirname(configImport), module);
+  return joined.startsWith("../") ? joined : `./${joined}`;
+}
 
 /**
  * Every override and injection point a plugin declares per collection.
@@ -401,10 +433,14 @@ function parsePath(path: string): ParsedPath {
  * its warning names both. The map's own entries are derived from it.
  */
 export function componentUses(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  // The site config's `admin.dashboard`, whose own widgets draw through the
+  // map as a plugin's do.
+  siteDashboard?: unknown
 ): ComponentMapEntry[] {
   return [
     ...plugins.flatMap(plugin => collectAdminComponentEntries(plugin)),
+    ...siteWidgetEntries(siteDashboard),
     // Block editor components register through the same map, so the editor
     // bundle loads a contributed block's inspector without a hand-written
     // import -- the same guarantee admin contributions already have.
@@ -427,10 +463,11 @@ export function componentUses(
  * page by the CI check, hiding which card it breaks.
  */
 export function componentImportMapEntries(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  siteDashboard?: unknown
 ): ComponentMapEntry[] {
   const byPath = new Map<string, ComponentMapEntry>();
-  for (const each of componentUses(plugins)) {
+  for (const each of componentUses(plugins, siteDashboard)) {
     const kept = byPath.get(each.path);
     if (
       kept === undefined ||
@@ -444,9 +481,12 @@ export function componentImportMapEntries(
 
 /** The paths of {@link componentImportMapEntries}, in its order. */
 export function componentImportMapPaths(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  siteDashboard?: unknown
 ): string[] {
-  return componentImportMapEntries(plugins).map(each => each.path);
+  return componentImportMapEntries(plugins, siteDashboard).map(
+    each => each.path
+  );
 }
 
 /**
@@ -528,11 +568,13 @@ function objectKeysOf(mapCode: string, name: string): string[] | undefined {
     .split("\n")
     .slice(1)) {
     if (line.startsWith("}")) return paths;
-    const key = /^\s*("(?:[^"\\]|\\.)*")\s*:\s*_p\d+\.[A-Za-z_$][\w$]*,/.exec(
-      line
-    )?.[1];
-    if (key === undefined) return undefined;
-    paths.push(JSON.parse(key) as string);
+    const entry = /^\s*("(?:[^"\\]|\\.)*")\s*:\s*_p\d+\.(.*)$/.exec(line);
+    if (entry === null) return undefined;
+    const path = JSON.parse(entry[1]) as string;
+    // The member the generator writes for that path, read back as written rather than as an
+    // ASCII identifier: an export named in any script (`#Résumé`) is one the generator emits.
+    if (!entry[2].startsWith(`${parsePath(path).member},`)) return undefined;
+    paths.push(path);
   }
   return undefined;
 }
@@ -577,6 +619,18 @@ const AGREEMENT_CHECK = [
 /** The line the map imports the site's config with, written and read as one: see `configImportOf`. */
 const SITE_CONFIG_IMPORT = "import type * as siteConfig from ";
 
+/** The line that holds the map's components to the config's widgets, written and read as one. */
+const SITE_CONFIG_CHECK =
+  "} satisfies DeclaredComponentMap<typeof siteConfig>;";
+
+/**
+ * Whether a generated map still holds its components to the config it imports: the import alone
+ * checks nothing, so a map that kept it but lost the `satisfies` line checks against no config.
+ */
+export function mapChecksAgainstConfig(mapCode: string): boolean {
+  return mapCode.split("\n").some(each => each === SITE_CONFIG_CHECK);
+}
+
 /**
  * The config import a generated map names, as `buildComponentImportMap` wrote it; undefined when it
  * names none or the line cannot be read. A rewrite keeps it, so the map goes on checking against
@@ -606,9 +660,10 @@ export function configImportOf(mapCode: string): string | undefined {
  */
 export function buildComponentImportMap(
   plugins: PluginDefinition[],
-  configImport?: string
+  configImport?: string,
+  siteDashboard?: unknown
 ): string {
-  const entries = componentImportMapEntries(plugins);
+  const entries = componentImportMapEntries(plugins, siteDashboard);
   const blockEditor = blockEditorHandOff(plugins, entries);
   // An editor entry exports block definitions, not a component, so it is
   // handed to the page builder alone and never put in the component registry,
@@ -621,12 +676,21 @@ export function buildComponentImportMap(
   const handedOff = [...blockEditor.entries, ...blockEditor.components].map(
     parsePath
   );
+  // Each path's module as the map imports it: a site's config-relative one
+  // from the map's folder, every other as written.
+  const fromConfig = new Set(
+    registeredEntries.filter(each => each.fromConfig).map(each => each.path)
+  );
+  const importOf = (p: ParsedPath) =>
+    fromConfig.has(p.path)
+      ? importedFromConfig(p.module, configImport)
+      : p.module;
   const modules = Array.from(
-    new Set([...parsed, ...handedOff].map(p => p.module))
+    new Set([...parsed, ...handedOff].map(importOf))
   ).sort();
   const alias = new Map<string, string>();
   modules.forEach((m, i) => alias.set(m, `_p${i}`));
-  const reference = (p: ParsedPath) => `${alias.get(p.module)}.${p.member}`;
+  const reference = (p: ParsedPath) => `${alias.get(importOf(p))}.${p.member}`;
 
   const lines: string[] = [HEADER, ""];
   if (paths.length > 0) {
@@ -658,11 +722,7 @@ export function buildComponentImportMap(
   });
   // Each component registered under a typed widget's path must take that widget's props, or
   // the site's build fails here; every other path is left as it was.
-  lines.push(
-    configImport === undefined
-      ? "};"
-      : "} satisfies DeclaredComponentMap<typeof siteConfig>;"
-  );
+  lines.push(configImport === undefined ? "};" : SITE_CONFIG_CHECK);
   lines.push("");
   if (blockEditor.used) {
     lines.push(
@@ -774,9 +834,10 @@ const PATHS_HEADER = [
  * what the config declares.
  */
 export function buildComponentPathsModule(
-  plugins: readonly PluginDefinition[]
+  plugins: readonly PluginDefinition[],
+  siteDashboard?: unknown
 ): string {
-  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins))}\n`;
+  return `${PATHS_HEADER}\n\n${pathListExport(componentImportMapPaths(plugins, siteDashboard))}\n`;
 }
 
 /**
@@ -792,17 +853,18 @@ export function buildComponentPathsModule(
 export function buildImportMapArtifacts(
   plugins: PluginDefinition[],
   typesOutputPath: string,
-  configImport?: string
+  configImport?: string,
+  siteDashboard?: unknown
 ): { path: string; code: string }[] {
   const dir = dirname(typesOutputPath);
   return [
     {
       path: join(dir, COMPONENT_IMPORT_MAP_FILENAME),
-      code: buildComponentImportMap(plugins, configImport),
+      code: buildComponentImportMap(plugins, configImport, siteDashboard),
     },
     {
       path: join(dir, COMPONENT_PATHS_FILENAME),
-      code: buildComponentPathsModule(plugins),
+      code: buildComponentPathsModule(plugins, siteDashboard),
     },
   ];
 }

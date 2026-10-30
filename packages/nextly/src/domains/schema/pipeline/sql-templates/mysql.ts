@@ -120,11 +120,11 @@ function generateChangeColumnType(op: ChangeColumnTypeOp): string {
 // operator commits the file, then prod CI fails with a confusing error
 // pointing at a comment.
 //
-// Fix: throw at template-generation time (parallel to SQLite). F12 may
-// extend ChangeColumnNullableOp with `columnType: string` (the diff
-// engine has access to it; see RenameColumnOp.fromType for precedent).
-// Until then, MySQL operators must use migrate:create --blank and
-// hand-write the MODIFY COLUMN with the explicit type.
+// Fix: throw at template-generation time (parallel to SQLite). A migration
+// file does not come here: `generateStatements` writes the change as a
+// MODIFY built from the live catalog when the file runs
+// (`mysql-live-restate.ts`), which needs several statements on one
+// connection and so has no single-string form for this renderer.
 function generateChangeColumnNullable(op: ChangeColumnNullableOp): string {
   throw new MysqlUnsupportedOperationError(
     "change_column_nullable",

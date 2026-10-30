@@ -1,6 +1,20 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { expect, test, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 
 import {
   pnpmInvocation,
@@ -10,7 +24,8 @@ import {
   NEXTLY_ROOT,
   PORT,
   productionServerEnv,
-} from "../../production-server";
+} from "../../production-server.mjs";
+import { stop } from "../../support/playground-dev-server";
 
 /**
  * A production build whose committed component map lacks a dashboard widget's
@@ -31,7 +46,34 @@ const DEV_USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 const MISSING = "missing-widget-fixture/never-built";
 
 let server: ChildProcess | undefined;
-let output = "";
+/**
+ * The server's log: its stdout and stderr written to ONE file, so the log is one stream in the
+ * order the server wrote it, whichever of the two a line went to. Two pipes would each keep their
+ * own order and none between them.
+ */
+let logDir: string | undefined;
+let logFile = "";
+const serverLog = () => readFileSync(logFile, "utf8");
+
+/** A line the server writes on request, after anything an earlier request wrote. */
+const SENTINEL = "refresh-token-not-found";
+
+/**
+ * The server's log up to a line it wrote after answering every earlier request, so anything those
+ * requests wrote has arrived. The line is the warning core writes for a refresh token it does not
+ * know, asked for with one that was never issued.
+ */
+async function logThroughNow(request: APIRequestContext): Promise<string> {
+  const before = serverLog().split(SENTINEL).length;
+  const refused = await request.post(`${FIXTURE_URL}/admin/api/auth/refresh`, {
+    headers: { cookie: "nextly_refresh=never-issued" },
+  });
+  expect(refused.status()).toBe(401);
+  await expect
+    .poll(() => serverLog().split(SENTINEL).length, { timeout: 10_000 })
+    .toBeGreaterThan(before);
+  return serverLog();
+}
 
 /** Waits for the server to answer its health route, or fails with its log. */
 async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
@@ -45,7 +87,7 @@ async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
     }
     await new Promise(done => setTimeout(done, 1000));
   }
-  throw new Error(`server at ${url} did not start:\n${output}`);
+  throw new Error(`server at ${url} did not start:\n${serverLog()}`);
 }
 
 test.beforeAll(async () => {
@@ -90,30 +132,39 @@ test.beforeAll(async () => {
     process.platform,
     env
   );
-  server = spawn(starting.command, starting.args, {
-    cwd: NEXTLY_ROOT,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-    shell: starting.shell,
-  });
-  for (const stream of [server.stdout, server.stderr]) {
-    stream?.on("data", chunk => {
-      output += String(chunk);
+  logDir = mkdtempSync(join(tmpdir(), "nextly-component-map-prod-"));
+  logFile = join(logDir, "server.log");
+  const log = openSync(logFile, "a");
+  try {
+    server = spawn(starting.command, starting.args, {
+      cwd: NEXTLY_ROOT,
+      env,
+      stdio: ["ignore", log, log],
+      shell: starting.shell,
+      // Its own process group on POSIX, so `stop` ends pnpm and the
+      // `next start` under it together: a signal to pnpm alone leaves both.
+      detached: process.platform !== "win32",
     });
+  } finally {
+    // The server holds its own copy of the descriptor.
+    closeSync(log);
   }
   await waitForHealth(FIXTURE_URL, 120_000);
 });
 
-test.afterAll(() => {
-  if (server?.pid === undefined) return;
-  // On Windows the handle is the shell the wrapper asked for, so killing it
-  // alone would leave `next start` holding the port; the tree kill reaches it.
-  const treeKill = treeKillCommand(server.pid, process.platform);
-  if (treeKill === null) {
-    server.kill("SIGTERM");
-    return;
+test.afterAll(async () => {
+  // Stopped and waited for before its log is removed, so nothing is still
+  // writing to it, or holding the port, when the files go.
+  if (server?.pid !== undefined) {
+    // On Windows the handle is the shell the wrapper asked for, so killing it
+    // alone would leave `next start` holding the port; the tree kill reaches
+    // it. On POSIX, the process group it was started as, by the stop every
+    // spec-run server shares.
+    const treeKill = treeKillCommand(server.pid, process.platform);
+    if (treeKill === null) await stop(server);
+    else spawnSync(treeKill.command, treeKill.args, { stdio: "ignore" });
   }
-  spawnSync(treeKill.command, treeKill.args, { stdio: "ignore" });
+  if (logDir !== undefined) rmSync(logDir, { recursive: true, force: true });
 });
 
 interface Layout {
@@ -163,8 +214,10 @@ test.describe("a production build missing a widget's component", () => {
   }) => {
     const admin = await request.get(`${FIXTURE_URL}/admin`);
     expect(admin.status()).toBe(200);
-    expect(output).not.toContain("admin-component-map");
-    expect(output).not.toContain("NEXTLY_ADMIN_COMPONENT_MAP");
+    // Read once a later line has arrived, so a marker the admin's answer wrote would be there.
+    const log = await logThroughNow(request);
+    expect(log).not.toContain("admin-component-map");
+    expect(log).not.toContain("NEXTLY_ADMIN_COMPONENT_MAP");
   });
 
   test("draws that card's error state without naming its component, and the card beside it draws", async ({

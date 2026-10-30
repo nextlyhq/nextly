@@ -110,6 +110,11 @@ export { nextlyJobsSqlite as nextlyJobs } from "../jobs/sqlite";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesSqlite as nextlyNotices } from "../notices/sqlite";
+// Each reader's pinned entries and dashboard preferences; in the bundle for
+// the reason the releases note above gives — this map is what the push
+// creates.
+export { nextlyDashboardPinsSqlite as nextlyDashboardPins } from "../dashboard-pins/sqlite";
+export { nextlyDashboardPreferencesSqlite as nextlyDashboardPreferences } from "../dashboard-preferences/sqlite";
 
 // The site's email brand settings; in the bundle for the reason the releases
 // note above gives — this map is what the push creates.

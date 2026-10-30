@@ -46,9 +46,23 @@ const NEXTLY_DYNAMIC_PACKAGES = [
   "@nextlyhq/adapter-sqlite",
 ];
 
+/**
+ * Cache Components with Partial Prefetching, behind a switch.
+ *
+ * The "Playground builds and serves under Cache Components" CI job turns it on,
+ * so this app's build is where nextly's route helpers prove they prerender a
+ * static shell. Everything else builds with it off, the browser suite among
+ * them: the admin's own behaviour under Cache Components is not ready yet, and
+ * a suite run with it on fails there for reasons that have nothing to do with
+ * the change under test. Partial Prefetching is set only with it, since Next.js
+ * accepts it only with Cache Components on.
+ */
+const CACHE_COMPONENTS = process.env.NEXTLY_PLAYGROUND_CACHE_COMPONENTS === "1";
+
 const nextConfig: NextConfig = {
-  // Nextly does not support Cache Components yet; see the installation guide.
-  cacheComponents: false,
+  ...(CACHE_COMPONENTS
+    ? { cacheComponents: true, partialPrefetching: true }
+    : { cacheComponents: false }),
   // Two dev servers on this app cannot share a build directory, and separate
   // ports do not help: the collision is on disk, not on the network. The
   // browser suite runs its own server on its own port, so it points this

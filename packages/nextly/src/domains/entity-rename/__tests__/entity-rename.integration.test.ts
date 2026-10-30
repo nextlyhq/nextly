@@ -364,6 +364,15 @@ async function seedHistory(
     expiresAt: new Date(now.getTime() + 60_000),
     generation: 0,
   });
+  // A reader's pin of the document: a Single's names its slug alone.
+  await adapter.insert("nextly_dashboard_pins", {
+    id: randomUUID(),
+    userId: ANA.id,
+    targetType: kind,
+    targetSlug: slug,
+    entryId: kind === "collection" ? entryId : "",
+    pinnedAt: now,
+  });
   return { releaseId: release.id };
 }
 

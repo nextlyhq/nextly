@@ -100,6 +100,9 @@ export const UploadMediaInputSchema = z.object({
   // may not have a user to attribute the upload to.
   uploadedBy: z.string().uuid("Invalid user ID").nullable(),
   folderId: z.string().uuid("Invalid folder ID").optional(),
+  // The alt text the caller gave, stored on the new row. Without it here the
+  // insert had nothing to write and every upload's alt text was dropped.
+  altText: z.string().optional(),
   // Optional Content-Disposition to set on the stored object. Forwarded
   // by `LegacyMediaService.uploadMedia` to the storage adapter's
   // `UploadOptions.contentDisposition`. The unified MediaService sets

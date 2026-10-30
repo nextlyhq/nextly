@@ -3,7 +3,7 @@
  * is one this caller was handed, from its declaration, as the person asking; every other card gets
  * the one "unavailable" answer, byte for byte.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBatchScope } from "../domains/widgets/batch-scope";
 import { NextlyError } from "../errors/nextly-error";
@@ -11,6 +11,8 @@ import * as loggerModule from "../observability/logger";
 import { declaredWidget } from "../domains/widgets/declaration/declared-widgets";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
+import { setSiteDashboardRules } from "../domains/widgets/site-rules";
+import { clearSources, registerSource } from "../domains/widgets/sources";
 
 import { cardIsShownTo, prepareCards } from "./widget-cards";
 import { askableCards } from "./widget-layout";
@@ -48,6 +50,19 @@ const needsLoad = vi.fn(async () => ({ total: 3 }));
 const maybeLoad = vi.fn(async () => ({ total: 4 }));
 const accessPredicate = vi.fn((_input: { user: unknown }): unknown => true);
 const showsPredicate = vi.fn((_input: unknown): unknown => true);
+// Reads a trend only for a card with the room to draw one: the size it is handed decides how much
+// it asks.
+const trendLoad = vi.fn(
+  async (input: {
+    size: { tier: string };
+    services: { count: Function; timeseries: Function };
+  }) => {
+    const total = (await input.services.count("orders")) as number;
+    if (input.size.tier !== "large") return { total };
+    await input.services.timeseries("orders", { range: "30d" });
+    return { total, trend: true };
+  }
+);
 const declarations: Record<string, unknown> = {
   "acme/orders": {
     owner: "plugin @acme/shop",
@@ -93,6 +108,30 @@ const declarations: Record<string, unknown> = {
       size: { default: { w: 12, h: 3 } },
       access: { collections: ["orders", "customers"] },
       load: readsLoad,
+      view: "figure",
+    },
+  },
+  // Gated on permissions, any of several and all of several: judged when the card is handed, by
+  // the requiredPermission each was published as, so nothing here asks again.
+  "acme/any-of": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/any-of",
+      size: { default: { w: 12, h: 3 } },
+      access: { anyOf: ["read-orders", "update-orders"] },
+      load: gatedLoad,
+      view: "figure",
+    },
+  },
+  "acme/all-of": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/all-of",
+      size: { default: { w: 12, h: 3 } },
+      access: { allOf: ["read-orders", { anyOf: ["update-orders"] }] },
+      load: gatedLoad,
       view: "figure",
     },
   },
@@ -162,6 +201,21 @@ const declarations: Record<string, unknown> = {
       view: "figure",
     },
   },
+  "acme/trend": {
+    owner: "plugin @acme/shop",
+    display: "metric",
+    declaration: {
+      id: "acme/trend",
+      // From a third of the row to the whole of it, three to six rows high.
+      size: {
+        default: { w: 6, h: 4 },
+        min: { w: 4, h: 3 },
+        max: { w: 12, h: 6 },
+      },
+      load: trendLoad,
+      view: "figure",
+    },
+  },
   "acme/dated": {
     owner: "plugin @acme/shop",
     display: "metric",
@@ -176,6 +230,10 @@ const declarations: Record<string, unknown> = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Their implementations too, which clearing keeps: a test that makes either say no must not
+  // leave it saying no for the next.
+  accessPredicate.mockImplementation(() => true);
+  showsPredicate.mockImplementation(() => true);
   vi.mocked(declaredWidget).mockImplementation(id => declarations[id] as never);
   vi.mocked(askableCards).mockResolvedValue({
     handed: new Map([
@@ -197,6 +255,26 @@ beforeEach(() => {
       [
         "c-reads",
         { id: "c-reads", widgetId: "acme/reads", w: 12, h: 3, removed: false },
+      ],
+      [
+        "c-any-of",
+        {
+          id: "c-any-of",
+          widgetId: "acme/any-of",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+      ],
+      [
+        "c-all-of",
+        {
+          id: "c-all-of",
+          widgetId: "acme/all-of",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
       ],
       [
         "c-needs",
@@ -234,26 +312,56 @@ beforeEach(() => {
         "c-gone",
         { id: "c-gone", widgetId: "acme/gone", w: 12, h: 3, removed: false },
       ],
+      [
+        "c-trend",
+        { id: "c-trend", widgetId: "acme/trend", w: 8, h: 5, removed: false },
+      ],
+      // Stored smaller than its widget now allows, and stored at a height the grid cannot draw.
+      [
+        "c-trend-small",
+        {
+          id: "c-trend-small",
+          widgetId: "acme/trend",
+          w: 3,
+          h: 2,
+          removed: false,
+        },
+      ],
+      [
+        "c-trend-bad",
+        {
+          id: "c-trend-bad",
+          widgetId: "acme/trend",
+          w: 3,
+          h: 1,
+          removed: false,
+        },
+      ],
     ]) as never,
     // The widgets this caller could place: the layout write's own gate.
     placeable: new Set([
       "acme/orders",
       "acme/gated",
       "acme/reads",
+      "acme/any-of",
+      "acme/all-of",
       "acme/needs",
       "acme/maybe",
       "acme/throws",
       "acme/dated",
       "acme/raises",
       "acme/gone",
+      "acme/trend",
     ]),
   });
   // Answers the op it is asked, as a source must.
-  vi.mocked(executeWidgetQuery).mockImplementation(async query =>
-    query.op === "count"
-      ? { op: "count", total: 1 }
-      : { op: "list", items: [{ id: "row" }] }
-  );
+  vi.mocked(executeWidgetQuery).mockImplementation(async query => {
+    if (query.op === "count") return { op: "count", total: 1 };
+    if (query.op === "timeseries") {
+      return { op: "timeseries", points: [], interval: "day" };
+    }
+    return { op: "list", items: [{ id: "row" }] };
+  });
   accessPredicate.mockImplementation(() => true);
   showsPredicate.mockImplementation(() => true);
   check.mockImplementation(async (raw: unknown) => raw as WidgetQuery);
@@ -547,13 +655,25 @@ describe("a card's load, judged before it runs", () => {
     expect(readsLoad).toHaveBeenCalledOnce();
   });
 
+  it("is run for a card gated on permissions it was handed, which are not judged a second time", async () => {
+    // Handed means the gate held: a card's permission gate is judged where the cards are handed,
+    // by its published requiredPermission, and here neither re-judged nor read as collections.
+    for (const widget of ["acme/any-of", "acme/all-of"]) {
+      await expect(answered(widget), widget).resolves.toMatchObject({
+        result: { total: 1 },
+      });
+    }
+    expect(gatedLoad).toHaveBeenCalledTimes(2);
+    expect(check).not.toHaveBeenCalled();
+  });
+
   it("is not run while a setting has no value, and the card asks for it", async () => {
     const answer = await answered("acme/needs");
     expect(needsLoad).not.toHaveBeenCalled();
     expect(answer).toEqual({
       settled: {
         ok: false,
-        error: "Choose collection in the card's settings",
+        error: "No collection chosen yet",
         code: "needs-setting",
         setting: "collection",
       },
@@ -582,6 +702,27 @@ describe("a card's load, judged before it runs", () => {
       settings: { items: 5 },
       user: { id: "reader" },
     });
+  });
+
+  it("is handed the starting value the site's override gives a setting the card leaves unset", async () => {
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([["acme/maybe", { settings: { items: 7 } }]]),
+    });
+    try {
+      await answered("acme/maybe");
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
+    const [shown] = showsPredicate.mock.calls[0] as [Record<string, unknown>];
+    expect(shown).toMatchObject({ settings: { items: 7 } });
   });
 });
 
@@ -763,9 +904,9 @@ describe("whether a card is shown to the person asking, without its load", () =>
     }
   });
 
-  it("is not shown when shows does not settle within the card's budget", async () => {
+  /** A card judged against a fake clock, its budget run out, and what was logged. */
+  async function timedOut(widget: string) {
     vi.useFakeTimers();
-    showsPredicate.mockImplementation(() => new Promise(() => {}));
     const logger = {
       warn: vi.fn(),
       error: vi.fn(),
@@ -778,19 +919,264 @@ describe("whether a card is shown to the person asking, without its load", () =>
         logger as unknown as ReturnType<typeof loggerModule.getNextlyLogger>
       );
     try {
-      const judging = shown("acme/maybe");
+      const judging = shown(widget);
       await vi.advanceTimersByTimeAsync(SLOT_TIMEOUT_MS + 1);
-      await expect(judging).resolves.toBe(false);
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          logContext: expect.objectContaining({
-            reason: "widget-shows-timed-out",
-          }),
-        })
-      );
+      return { shown: await judging, warned: logger.warn.mock.calls };
     } finally {
       spy.mockRestore();
       vi.useRealTimers();
     }
+  }
+
+  it("is not shown when shows does not settle within the card's budget, naming shows", async () => {
+    showsPredicate.mockImplementation(() => new Promise(() => {}));
+    const { shown: answer, warned } = await timedOut("acme/maybe");
+    expect(answer).toBe(false);
+    expect(warned[0]?.[0]).toMatchObject({
+      logContext: {
+        owner: "plugin @acme/shop",
+        widget: "acme/maybe",
+        reason: "widget-judging-timed-out",
+        stage: "shows",
+      },
+    });
+  });
+
+  it("names its access as the stage when the access predicate is what does not settle", async () => {
+    // The budget bounds the whole judgement; the log says which part of it hung.
+    accessPredicate.mockImplementation(() => new Promise(() => {}));
+    const { shown: answer, warned } = await timedOut("acme/gated");
+    expect(answer).toBe(false);
+    expect(warned[0]?.[0]).toMatchObject({
+      logContext: { reason: "widget-judging-timed-out", stage: "access" },
+    });
+  });
+});
+
+/** The card asked by `entry`, answered as the batch answers it. */
+async function answeredEntry(entry: unknown): Promise<unknown> {
+  const prepared = await prepareCards([entry], batch);
+  return (prepared.get(0) as { answer: Function }).answer({
+    signal: new AbortController().signal,
+    scope: createBatchScope().forOwner("plugin @acme/shop"),
+    now: new Date(Date.UTC(2026, 9, 22)),
+  });
+}
+
+/** The ops the read services ran, in order: what reached the executor, not what was asked. */
+function opsRun(): string[] {
+  return vi.mocked(executeWidgetQuery).mock.calls.map(([query]) => query.op);
+}
+
+/** The size the latest run of the trend widget's load was handed. */
+function sizeLoaded(): unknown {
+  const [input] = trendLoad.mock.calls.at(-1) ?? [];
+  return input?.size;
+}
+
+describe("the size a card's load is handed", () => {
+  // The collection the trend card's series reads, with the date it places
+  // entries by: a series is placed only by a date field of the collection.
+  beforeEach(() => {
+    clearSources();
+    registerSource({
+      id: "collection:orders",
+      label: "Orders",
+      kind: "collection",
+      supports: ["count", "timeseries"],
+      fields: [{ name: "createdAt", type: "date" }],
+    });
+  });
+  afterEach(() => clearSources());
+
+  it("reads a trend only for a large card: a small one makes no trend read", async () => {
+    await expect(
+      answeredEntry({
+        widget: "acme/trend",
+        card: "c-trend",
+        size: { w: 4, h: 3, tier: "small" },
+      })
+    ).resolves.toMatchObject({ result: { total: 1 } });
+    expect(opsRun()).toEqual(["count"]);
+    expect(sizeLoaded()).toEqual({ w: 4, h: 3, tier: "small" });
+
+    vi.mocked(executeWidgetQuery).mockClear();
+    await expect(
+      answeredEntry({
+        widget: "acme/trend",
+        card: "c-trend",
+        size: { w: 12, h: 6, tier: "large" },
+      })
+    ).resolves.toMatchObject({ result: { total: 1 } });
+    // 🔴 The separating pair: a load handed no size, or the same size for both, reads alike.
+    expect(opsRun()).toEqual(["count", "timeseries"]);
+    expect(sizeLoaded()).toEqual({ w: 12, h: 6, tier: "large" });
+  });
+
+  it("holds the size to the site's narrower bounds, where an override narrows them", async () => {
+    // The site narrows the trend's largest size to half the row, four rows high: a card asked
+    // at the widget's own largest is loaded at the site's, the size the admin draws it at.
+    setSiteDashboardRules({
+      hidden: new Set(),
+      replaced: new Map(),
+      alternatives: new Set(),
+      overrides: new Map([["acme/trend", { size: { max: { w: 6, h: 4 } } }]]),
+    });
+    try {
+      await answeredEntry({
+        widget: "acme/trend",
+        card: "c-trend",
+        size: { w: 12, h: 6, tier: "large" },
+      });
+      expect(sizeLoaded()).toEqual({ w: 6, h: 4, tier: "large" });
+    } finally {
+      setSiteDashboardRules({
+        hidden: new Set(),
+        replaced: new Map(),
+        alternatives: new Set(),
+        overrides: new Map(),
+      });
+    }
+    // The control: with no override, the widget's own bounds hold, and the same ask is loaded
+    // at the size it named.
+    await answeredEntry({
+      widget: "acme/trend",
+      card: "c-trend",
+      size: { w: 12, h: 6, tier: "large" },
+    });
+    expect(sizeLoaded()).toEqual({ w: 12, h: 6, tier: "large" });
+  });
+
+  it("answers two asks of one card differing only in size each at its own size", async () => {
+    const prepared = await prepareCards(
+      [
+        {
+          widget: "acme/trend",
+          card: "c-trend",
+          size: { w: 6, h: 4, tier: "medium" },
+        },
+        {
+          widget: "acme/trend",
+          card: "c-trend",
+          size: { w: 12, h: 4, tier: "large" },
+        },
+      ],
+      batch
+    );
+    const run = {
+      signal: new AbortController().signal,
+      scope: createBatchScope().forOwner("plugin @acme/shop"),
+      now: new Date(Date.UTC(2026, 9, 22)),
+    };
+    const answers = await Promise.all(
+      [0, 1].map(index =>
+        (prepared.get(index) as { answer: Function }).answer(run)
+      )
+    );
+    expect(answers).toEqual([
+      { result: { op: "count", total: 1 }, empty: false },
+      { result: { op: "count", total: 1, trend: true }, empty: false },
+    ]);
+    expect(trendLoad.mock.calls.map(([input]) => input.size)).toEqual([
+      { w: 6, h: 4, tier: "medium" },
+      { w: 12, h: 4, tier: "large" },
+    ]);
+  });
+
+  it("hands shows the same size load is handed", async () => {
+    await answeredEntry({
+      widget: "acme/maybe",
+      card: "c-maybe",
+      size: { w: 12, h: 3, tier: "large" },
+    });
+    expect(showsPredicate.mock.calls[0]?.[0]).toMatchObject({
+      size: { w: 12, h: 3, tier: "large" },
+    });
+  });
+
+  it("holds an asked size to the widget's bounds, as the admin draws the card", async () => {
+    await answeredEntry({
+      widget: "acme/trend",
+      card: "c-trend",
+      size: { w: 2, h: 12, tier: "small" },
+    });
+    expect(sizeLoaded()).toEqual({ w: 4, h: 6, tier: "small" });
+  });
+
+  it("is a stored card's own size at the medium tier when the ask says none", async () => {
+    await answeredEntry({ widget: "acme/trend", card: "c-trend" });
+    expect(sizeLoaded()).toEqual({ w: 8, h: 5, tier: "medium" });
+  });
+
+  it("is a stored size held to the bounds, or the default where the grid cannot draw it", async () => {
+    await answeredEntry({ widget: "acme/trend", card: "c-trend-small" });
+    expect(sizeLoaded()).toEqual({ w: 4, h: 3, tier: "medium" });
+    // `h: 1` is no size the grid draws, so the card is drawn, and loaded, at its default.
+    await answeredEntry({ widget: "acme/trend", card: "c-trend-bad" });
+    expect(sizeLoaded()).toEqual({ w: 6, h: 4, tier: "medium" });
+  });
+
+  it("is a preview's own asked size, or its widget's default when it says none", async () => {
+    await answeredEntry({
+      widget: "acme/trend",
+      settings: {},
+      size: { w: 12, h: 6, tier: "large" },
+    });
+    expect(sizeLoaded()).toEqual({ w: 12, h: 6, tier: "large" });
+    await answeredEntry({ widget: "acme/trend", settings: {} });
+    expect(sizeLoaded()).toEqual({ w: 6, h: 4, tier: "medium" });
+  });
+
+  it("refuses an entry whose size is not one, as every malformed entry is refused", async () => {
+    const refused = await prepareCards(
+      [
+        { widget: "acme/trend", card: "c-trend", size: { w: 4, h: 3 } },
+        {
+          widget: "acme/trend",
+          card: "c-trend",
+          size: { w: 13, h: 3, tier: "small" },
+        },
+        {
+          widget: "acme/trend",
+          card: "c-trend",
+          size: { w: 4, h: 3, tier: "huge" },
+        },
+        {
+          widget: "acme/trend",
+          settings: {},
+          size: { w: 4, h: 3, tier: "small", rows: 99 },
+        },
+      ],
+      batch
+    );
+    const bytes = new Set(
+      [0, 1, 2, 3].map(index => JSON.stringify(refused.get(index)))
+    );
+    expect(bytes).toEqual(new Set([await unavailableBytes()]));
+    expect(trendLoad).not.toHaveBeenCalled();
+  });
+
+  it("is the placement's own, at the medium tier, where a card is judged shown with no ask", async () => {
+    await expect(
+      cardIsShownTo(
+        declarations["acme/maybe"] as never,
+        {
+          id: "c-maybe",
+          widgetId: "acme/maybe",
+          w: 12,
+          h: 3,
+          removed: false,
+        },
+        batch,
+        {
+          signal: new AbortController().signal,
+          scope: createBatchScope().forOwner("plugin @acme/shop"),
+          now: new Date(Date.UTC(2026, 9, 22)),
+        }
+      )
+    ).resolves.toBe(true);
+    expect(showsPredicate.mock.calls[0]?.[0]).toMatchObject({
+      size: { w: 12, h: 3, tier: "medium" },
+    });
   });
 });

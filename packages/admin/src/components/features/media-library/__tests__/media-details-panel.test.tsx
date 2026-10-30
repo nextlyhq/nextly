@@ -302,6 +302,94 @@ describe("the details panel", () => {
     ).toBeInTheDocument();
   });
 
+  describe("going to another item and back while a field's save is under way", () => {
+    const other = media({
+      id: "m2",
+      originalFilename: "hills.jpg",
+      altText: "",
+    });
+
+    /** The panel for `item`, with the props a page passes it. */
+    const panelFor = (
+      item: Media,
+      onSave: ComponentProps<typeof MediaDetailsPanel>["onSave"]
+    ) => (
+      <MediaDetailsPanel
+        media={item}
+        layout="beside"
+        folderName="Blog"
+        readOnly={false}
+        onSave={onSave}
+        onCopyUrl={vi.fn()}
+        onDownload={vi.fn()}
+        onExpand={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    /**
+     * Types over the first item's alt text and leaves the field, then goes to
+     * another item and back before the save settles. The list still holds
+     * the first item's old text, as it does until the save's refetch.
+     */
+    function editThenGoAndComeBack() {
+      const settle: {
+        resolve: () => void;
+        reject: (error: Error) => void;
+      } = { resolve: () => undefined, reject: () => undefined };
+      const onSave = vi.fn(
+        (_id: string, _updates: object) =>
+          new Promise<void>((resolve, reject) => {
+            settle.resolve = resolve;
+            settle.reject = reject;
+          })
+      );
+      const { rerender } = render(panelFor(media(), onSave));
+      const alt = screen.getByLabelText(/Alt text/);
+      fireEvent.change(alt, { target: { value: "Coast at dusk, edited" } });
+      fireEvent.blur(alt);
+      rerender(panelFor(other, onSave));
+      rerender(panelFor(media(), onSave));
+      return { onSave, rerender, settle };
+    }
+
+    it("shows the text being saved, not the old text, and never sends the old text back", async () => {
+      const { onSave, rerender, settle } = editThenGoAndComeBack();
+      expect(screen.getByLabelText(/Alt text/)).toHaveValue(
+        "Coast at dusk, edited"
+      );
+
+      settle.resolve();
+      expect(await screen.findByText("Saved")).toBeInTheDocument();
+      expect(screen.getByLabelText(/Alt text/)).toHaveValue(
+        "Coast at dusk, edited"
+      );
+
+      // Leaving again has nothing to save: the edit is what's stored.
+      rerender(panelFor(other, onSave));
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(onSave).toHaveBeenCalledWith("m1", {
+        altText: "Coast at dusk, edited",
+      });
+    });
+
+    it("shows a failure against the text that failed, and Retry sends it again", async () => {
+      const { onSave, settle } = editThenGoAndComeBack();
+
+      settle.reject(new Error("server down"));
+      expect(await screen.findByText(/Couldn't save/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Alt text/)).toHaveValue(
+        "Coast at dusk, edited"
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(onSave).toHaveBeenCalledTimes(2);
+      expect(onSave).toHaveBeenLastCalledWith("m1", {
+        altText: "Coast at dusk, edited",
+      });
+    });
+  });
+
   it("moves to the previous and next item with the arrow keys and the buttons", () => {
     const { onPrevious, onNext } = renderPanel();
     const title = screen.getByRole("heading", { name: "coast.jpg" });

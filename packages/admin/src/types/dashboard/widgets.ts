@@ -93,11 +93,23 @@ export interface DashboardWidget {
    */
   serverData?: true;
   /**
-   * What a declared widget's empty state says and offers in place of the
-   * frame's own, its action already an href and already one this reader may
-   * take (the server withholds one they may not).
+   * The display its loading state, and its row in the add panel, are drawn as
+   * when that is not its archetype's: a declared widget drawn by its own
+   * component says what it most looks like (its declaration's `skeleton`).
    */
-  declaredEmpty?: { title?: string; action?: { label: string; href: string } };
+  sketch?: string;
+  /**
+   * What a declared widget's empty state says and offers in place of the
+   * frame's own: its action a link already made an href and already one this
+   * reader may take (the server withholds one they may not), or the card's own
+   * settings, which the card offers only where its reader can change them.
+   */
+  declaredEmpty?: {
+    title?: string;
+    action?:
+      | { label: string; href: string }
+      | { label: string; opensSettings: true };
+  };
   /**
    * What a reader may change about this card, as the widget declared it.
    *

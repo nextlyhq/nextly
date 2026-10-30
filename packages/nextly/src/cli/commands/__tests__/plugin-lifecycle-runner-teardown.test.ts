@@ -60,6 +60,8 @@ vi.mock("../../utils/config-loader", () => ({
   loadConfig: async () => ({
     config: state.loadedConfig,
     appConfig: state.appConfig,
+    // The project `--cwd` named, which is not the directory the test runs in.
+    projectRoot: "/projects/site",
   }),
 }));
 
@@ -160,6 +162,18 @@ beforeEach(() => {
   });
   registerServices.mockReset().mockImplementation(async () => {
     calls.push("register");
+  });
+});
+
+describe("the lifecycle hook's boot", () => {
+  // The start check judges the Next.js and React of the app the command was
+  // pointed at, not of wherever the CLI happened to run.
+  it("judges the project --cwd names", async () => {
+    await runPluginInstall("@acme/fx", {}, context);
+
+    expect(registerServices).toHaveBeenCalledWith(
+      expect.objectContaining({ appRoot: "/projects/site" })
+    );
   });
 });
 

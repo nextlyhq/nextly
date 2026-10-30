@@ -232,25 +232,25 @@ describe("whether a reference survives to runtime", () => {
 
   it("reports a plain import as reaching runtime", () => {
     expect(refs(`import a from "pkg";`)).toEqual([
-      { specifier: "pkg", typeOnly: false },
+      { specifier: "pkg", typeOnly: false, dynamic: false },
     ]);
   });
 
   it("reports a bare side-effect import as reaching runtime", () => {
     expect(refs(`import "pkg";`)).toEqual([
-      { specifier: "pkg", typeOnly: false },
+      { specifier: "pkg", typeOnly: false, dynamic: false },
     ]);
   });
 
   it("reports an import type as erased", () => {
     expect(refs(`import type { A } from "pkg";`)).toEqual([
-      { specifier: "pkg", typeOnly: true },
+      { specifier: "pkg", typeOnly: true, dynamic: false },
     ]);
   });
 
   it("reports an export type as erased", () => {
     expect(refs(`export type { A } from "pkg";`)).toEqual([
-      { specifier: "pkg", typeOnly: true },
+      { specifier: "pkg", typeOnly: true, dynamic: false },
     ]);
   });
 
@@ -259,37 +259,54 @@ describe("whether a reference survives to runtime", () => {
     // governing the whole clause erases a real runtime edge, which is the direction that answers
     // "clean" for a bundle guard.
     expect(refs(`import { a, type B } from "pkg";`)).toEqual([
-      { specifier: "pkg", typeOnly: false },
+      { specifier: "pkg", typeOnly: false, dynamic: false },
     ]);
   });
 
-  it("reports a dynamic import as reaching runtime", () => {
+  it("reports a dynamic import as reaching runtime, loaded only when it runs", () => {
     expect(refs(`const f = () => import("pkg");`)).toEqual([
-      { specifier: "pkg", typeOnly: false },
+      { specifier: "pkg", typeOnly: false, dynamic: true },
     ]);
+  });
+
+  it("reports every other runtime reference as loaded with the file", () => {
+    // The control for the case above: a walk of what a file loads at once follows these and only
+    // these, so one misread as dynamic is an edge that walk would silently drop.
+    for (const text of [
+      `import a from "pkg";`,
+      `import "pkg";`,
+      `export { a } from "pkg";`,
+      `const a = require("pkg");`,
+      `import a = require("pkg");`,
+    ]) {
+      expect(
+        refs(text).map(ref => ref.dynamic),
+        text
+      ).toEqual([false]);
+    }
   });
 
   it("reports require as reaching runtime", () => {
     expect(refs(`const a = require("pkg");`)).toEqual([
-      { specifier: "pkg", typeOnly: false },
+      { specifier: "pkg", typeOnly: false, dynamic: false },
     ]);
   });
 
   it("reports an import-equals as reaching runtime", () => {
     expect(refs(`import a = require("pkg");`)).toEqual([
-      { specifier: "pkg", typeOnly: false },
+      { specifier: "pkg", typeOnly: false, dynamic: false },
     ]);
   });
 
   it("reports a type-only import-equals as erased", () => {
     expect(refs(`import type a = require("pkg");`)).toEqual([
-      { specifier: "pkg", typeOnly: true },
+      { specifier: "pkg", typeOnly: true, dynamic: false },
     ]);
   });
 
   it("reports typeof import as erased", () => {
     expect(refs(`type A = typeof import("pkg");`)).toEqual([
-      { specifier: "pkg", typeOnly: true },
+      { specifier: "pkg", typeOnly: true, dynamic: false },
     ]);
   });
 
@@ -299,19 +316,19 @@ describe("whether a reference survives to runtime", () => {
         `/** @typedef {import("pkg").T} T */\nexport const x = 1;`,
         "module.js"
       )
-    ).toEqual([{ specifier: "pkg", typeOnly: true }]);
+    ).toEqual([{ specifier: "pkg", typeOnly: true, dynamic: false }]);
   });
 
   it("reports a triple-slash type reference as erased", () => {
     expect(refs(`/// <reference types="pkg" />\nexport const x = 1;`)).toEqual([
-      { specifier: "pkg", typeOnly: true },
+      { specifier: "pkg", typeOnly: true, dynamic: false },
     ]);
   });
 
   it("keeps an unreadable target unreadable, and at runtime", () => {
     // An unresolvable target has to stay a violation for both consumers.
     expect(refs(`const a = require(name);`)).toEqual([
-      { specifier: UNRESOLVABLE_SPECIFIER, typeOnly: false },
+      { specifier: UNRESOLVABLE_SPECIFIER, typeOnly: false, dynamic: false },
     ]);
   });
 
@@ -345,7 +362,7 @@ describe("module.require", () => {
     ).toEqual(["pkg"]);
     expect(
       moduleSpecifierRefs(`const a = module.require("pkg");`, "m.ts")
-    ).toEqual([{ specifier: "pkg", typeOnly: false }]);
+    ).toEqual([{ specifier: "pkg", typeOnly: false, dynamic: false }]);
   });
 
   it("reads the bracket spelling the same way", () => {

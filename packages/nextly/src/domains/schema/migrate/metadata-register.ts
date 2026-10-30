@@ -68,6 +68,16 @@ export type {
 } from "./snapshot-source";
 
 /**
+ * Whether a collection or Single registered from a migration snapshot has
+ * Draft/Published. A snapshot that leaves `status` out registers it on, so its
+ * table must carry the status columns: a template's hand-written migration is
+ * checked against this same answer.
+ */
+export function registeredStatus(entity: { status?: boolean }): boolean {
+  return entity.status ?? true;
+}
+
+/**
  * Options for registering collections from migrations
  */
 export interface RegisterFromMigrationsOptions {
@@ -257,7 +267,7 @@ async function registerCollection(
     description: collection.description ?? null,
     fields: (collection.fields ?? []) as FieldConfig[],
     timestamps: collection.timestamps !== false,
-    status: collection.status ?? true,
+    status: registeredStatus(collection),
     admin: (collection.admin ?? {}) as CollectionAdminConfig,
     source: "ui",
     locked: false,
@@ -309,7 +319,7 @@ async function registerSingle(
     tableName: single.tableName,
     description: single.description ?? null,
     fields: (single.fields ?? []) as FieldConfig[],
-    status: single.status ?? true,
+    status: registeredStatus(single),
     admin: (single.admin ?? {}) as SingleAdminOptions,
     source: "ui",
     locked: false,

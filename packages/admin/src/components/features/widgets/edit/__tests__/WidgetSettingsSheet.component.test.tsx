@@ -483,3 +483,61 @@ describe("the settings sheet with a note", () => {
     expect(saved(onSave)).toMatchObject({ text: "😀😀😀😀😀" });
   });
 });
+
+describe("the settings sheet drawn from a widget's settings", () => {
+  // One setting of every type a widget can declare, as the builders write them.
+  const every: AnyWidgetSetting[] = [
+    { name: "collection", type: "collection", label: "Collection" },
+    { name: "column", type: "field", of: "collection", label: "Column" },
+    { name: "where", type: "filter", of: "collection", label: "Filter" },
+    { name: "order", type: "sort", of: "collection", label: "Sort" },
+    { name: "by", type: "groupBy", of: "collection", label: "Group by" },
+    { name: "shown", type: "fields", of: "collection", label: "Fields" },
+    { name: "heading", type: "text", label: "Heading" },
+    { name: "body", type: "textarea", label: "Body" },
+    { name: "items", type: "number", label: "Rows", defaultValue: 5, max: 10 },
+    { name: "mine", type: "checkbox", label: "Only mine" },
+    {
+      name: "tone",
+      type: "select",
+      label: "Tone",
+      defaultValue: "calm",
+      options: [
+        { label: "Calm", value: "calm" },
+        { label: "Loud", value: "loud" },
+      ],
+    },
+    { name: "since", type: "date", label: "Since" },
+  ];
+
+  it("draws a control for every setting, each named by its label", () => {
+    open({ collection: "posts" }, every);
+    for (const setting of every) {
+      expect(
+        screen.getAllByText(setting.label ?? "").length,
+        setting.type
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("offers a Field setting every field its collection offers the reader", async () => {
+    open({ collection: "posts" }, every);
+    await userEvent.click(screen.getByRole("combobox", { name: /Column/ }));
+    const offered = screen
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    // A field the read will not group by is still a field a card may read.
+    expect(offered).toEqual(
+      expect.arrayContaining(["Title", "Updated", "Headline", "State"])
+    );
+  });
+
+  it("opens a stored value its setting no longer accepts at the default, and saves nothing for it", async () => {
+    // 🔴 Twenty rows past a bound of ten: opened at the stored value, the
+    // sheet showed a number the card was not using and Done wrote it back.
+    const onSave = open({ collection: "posts", items: 20 }, every);
+    await userEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(saved(onSave)).not.toHaveProperty("items");
+  });
+});

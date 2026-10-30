@@ -2,10 +2,13 @@ import { defineConfig, devices } from "@playwright/test";
 
 import {
   BASE_URL,
+  BUILD_COMMAND,
   NEXTLY_ROOT,
   PORT,
+  PREPARE_COMMANDS,
   productionServerEnv,
-} from "./production-server";
+  START_COMMAND,
+} from "./production-server.mjs";
 import {
   EMPTY_INSTALL_DB_RELATIVE,
   EMPTY_INSTALL_PORT,
@@ -75,15 +78,16 @@ export default defineConfig({
     // so its first-administrator setup is open and needs the operator's token.
     // It starts in the background just before the first; the setup spec waits
     // for it to answer.
+    //
+    // The main server's steps are named in `production-server.mjs`, so the
+    // visual check builds and serves the playground exactly as this does.
     command: [
-      "node e2e/scripts/reset-e2e-db.mjs",
-      "pnpm --filter playground exec tsx scripts/seed.ts",
-      "pnpm --filter playground exec nextly plugins install --all",
+      ...PREPARE_COMMANDS,
       `DATABASE_URL=${EMPTY_INSTALL_DB_RELATIVE} pnpm --filter playground exec tsx scripts/provision-empty.ts`,
       `DATABASE_URL=${EMPTY_INSTALL_DB_RELATIVE} pnpm --filter playground exec nextly plugins install --all`,
-      "pnpm --filter playground exec next build",
-      `{ PORT=${String(EMPTY_INSTALL_PORT)} DATABASE_URL=${EMPTY_INSTALL_DB_RELATIVE} NEXTLY_SETUP_TOKEN=${EMPTY_INSTALL_SETUP_TOKEN} pnpm --filter playground exec next start & }`,
-      "pnpm --filter playground exec next start",
+      BUILD_COMMAND,
+      `{ PORT=${String(EMPTY_INSTALL_PORT)} DATABASE_URL=${EMPTY_INSTALL_DB_RELATIVE} NEXTLY_SETUP_TOKEN=${EMPTY_INSTALL_SETUP_TOKEN} ${START_COMMAND} & }`,
+      START_COMMAND,
     ].join(" && "),
     cwd: NEXTLY_ROOT,
     url: `${BASE_URL}/api/health`,

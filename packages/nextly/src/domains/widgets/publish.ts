@@ -27,6 +27,7 @@ import type { WidgetDefinition } from "./definition";
 import type { PublishedContentSource } from "./published-content-source";
 import { listWidgets } from "./registry";
 import { knobSourceFor } from "./settings";
+import { withSiteOverride } from "./site-rules";
 import { getSource, type WidgetSource } from "./sources";
 
 /**
@@ -50,8 +51,11 @@ export function publishableWidgets(): WidgetDefinition[] {
       });
       continue;
     }
+    // As the site's `overrides` change it, on what ships.
     publishable.push(
-      withSourceFilters(serializable as unknown as WidgetDefinition)
+      withSiteOverride(
+        withSourceFilters(serializable as unknown as WidgetDefinition)
+      )
     );
   }
 

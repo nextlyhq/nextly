@@ -129,6 +129,8 @@ afterEach(async () => {
 interface Install {
   t: TestNextly;
   dialect: TestDialect;
+  /** The install's first account, and so its super-admin. */
+  founder: string;
   /** May share both documents: reads and updates posts and the Single. */
   editor: string;
   /** A second sharer, so a list can show more than one maker. */
@@ -156,7 +158,7 @@ async function boot(dialect: TestDialect): Promise<Install> {
 
   // The install's first account is made its administrator, whom no rule
   // binds. Made first so that none of the accounts below is.
-  await account(t, "founder@example.com");
+  const founder = await account(t, "founder@example.com");
   const editor = await account(t, "editor@example.com");
   const colleague = await account(t, "colleague@example.com");
   const reader = await account(t, "reader@example.com");
@@ -186,6 +188,7 @@ async function boot(dialect: TestDialect): Promise<Install> {
   return {
     t,
     dialect,
+    founder,
     editor,
     colleague,
     reader,
@@ -383,7 +386,7 @@ async function revokeDocument(caller: Caller, doc: Doc): Promise<Response> {
 async function opens(token: string): Promise<boolean> {
   const res = await createPreviewRoute({
     redirectTo: () => "/preview-landing",
-    draftMode: () => ({ enable: () => {} }),
+    draftMode: async () => ({ enable: () => {} }),
   }).GET(
     new Request(
       `https://site.example/api/preview?token=${encodeURIComponent(token)}`
@@ -397,7 +400,7 @@ async function opens(token: string): Promise<boolean> {
 /** A page RENDERED in a session the link already opened. */
 async function renders(token: string): Promise<boolean> {
   const session = await readPreviewSession({
-    cookies: () => ({
+    cookies: async () => ({
       get: (name: string) =>
         name === PREVIEW_SCOPE_COOKIE
           ? { value: encodeURIComponent(token) }
@@ -723,6 +726,33 @@ describe.each(getConfiguredTestDialects())(
           expect(await storedRows(install)).toHaveLength(1);
         }
       );
+
+      it("refuses the full-access key a super-admin made a link, and records none", async () => {
+        // The key carries its maker's super-admin authority, which passes every
+        // access rule but never what is kept for a signed-in person.
+        const install = await boot(dialect);
+        const keys = install.t.getService("apiKeyService") as unknown as {
+          createApiKey: (
+            userId: string,
+            input: { name: string; tokenType: string; expiresIn: string }
+          ) => Promise<{ key: string }>;
+        };
+        const { key } = await keys.createApiKey(install.founder, {
+          name: "automation",
+          tokenType: "full-access",
+          expiresIn: "never",
+        });
+
+        const res = await call({ key }, "POST", ["preview-links"], {
+          body: install.post,
+        });
+
+        expect(res.status).toBe(403);
+        expect(await storedRows(install)).toHaveLength(0);
+        // The control: the same person, signed in, is given one.
+        await mint(install.founder, install.post);
+        expect(await storedRows(install)).toHaveLength(1);
+      });
 
       it("answers a link of another document as not found", async () => {
         const install = await boot(dialect);

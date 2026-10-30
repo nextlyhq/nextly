@@ -187,6 +187,24 @@ const PRIMARY_RULES: readonly {
 const PRIMARY_FALLBACK = { id: "publish", label: "Publish" };
 
 /**
+ * The leading action of a user who may read the document but not change it.
+ * Publishing changes only the status, which the publish permission judges
+ * alone, so where they hold it they publish a draft, or the changes held for
+ * a published document; any other state leaves them nothing to lead with.
+ */
+function readerPrimary(
+  state: DocumentActionState
+): { id: string; label: string } | undefined {
+  if (!state.canPublish || !state.hasStatus || state.mode !== "edit") {
+    return undefined;
+  }
+  if (state.status === "draft") return PRIMARY_FALLBACK;
+  return isPublishedEdit(state) && state.hasWorkingDraft
+    ? { id: "publish", label: "Publish changes" }
+    : undefined;
+}
+
+/**
  * The one action an author is most likely reaching for, given the state.
  *
  * Derived rather than chosen at each call site, which is what stops two
@@ -198,11 +216,15 @@ const PRIMARY_FALLBACK = { id: "publish", label: "Publish" };
  * FIRST MATCH WINS, so the rows read as "the most specific situation first".
  */
 function primaryAction(state: DocumentActionState): DocumentAction | undefined {
-  // Every leading action stores the form, which a user who may not change
-  // the document cannot do, so a page they may only read leads with nothing.
-  if (!state.canEdit) return undefined;
-  const matched = PRIMARY_RULES.find(rule => rule.applies(state));
-  const { id, label } = matched?.build(state) ?? PRIMARY_FALLBACK;
+  // Every leading action but a publish stores the form, which a user who may
+  // not change the document cannot do: a page they may only read leads with a
+  // publish or with nothing.
+  const chosen = state.canEdit
+    ? (PRIMARY_RULES.find(rule => rule.applies(state))?.build(state) ??
+      PRIMARY_FALLBACK)
+    : readerPrimary(state);
+  if (chosen === undefined) return undefined;
+  const { id, label } = chosen;
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
   return withReason(
     { id, label, placement: "primary" },

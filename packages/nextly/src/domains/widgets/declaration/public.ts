@@ -12,23 +12,35 @@ export {
   defineWidget,
   type AnyWidget,
   type WidgetAccess,
+  type WidgetAccessGate,
+  type WidgetCollectionDescription,
+  type WidgetCollectionField,
   type WidgetComponentMap,
+  type WidgetCountWindow,
   type WidgetData,
   type WidgetDataInput,
   type WidgetEmpty,
+  type WidgetInterval,
+  // The size a card's `load` is handed, beside the input it arrives in.
+  type WidgetLoadSize,
   type WidgetPreviewCase,
   type WidgetProps,
+  type WidgetRange,
   type WidgetReadServices,
   type WidgetRenderSize,
+  type WidgetSkeleton,
   type WidgetSummary,
 } from "./define-widget";
-export type {
-  AdminDashboardConfig,
-  CoreWidgetId,
-  DashboardContribution,
-  DefaultLayoutCard,
-  WidgetOverride,
-  WidgetRef,
+export {
+  defineAttentionItem,
+  type AdminDashboardConfig,
+  type AttentionCount,
+  type AttentionItem,
+  type CoreWidgetId,
+  type DashboardContribution,
+  type DefaultLayoutCard,
+  type WidgetOverride,
+  type WidgetRef,
 } from "./dashboard";
 export type {
   ComponentDisplay,
@@ -38,7 +50,7 @@ export type {
   WidgetView,
 } from "./displays";
 export {
-  settings,
+  setting,
   type ChartStyle,
   type DateRange,
   type WidgetFilter,

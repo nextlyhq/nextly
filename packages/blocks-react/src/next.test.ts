@@ -19,6 +19,7 @@ import { createBlocksPage, DEFAULT_MAX_QUERIES } from "./next";
 import type { DerivedPageSeo } from "./next";
 import { coreBlocks } from "./blocks";
 import { createBlockResolver } from "./resolver";
+import { throughBoundary } from "./__tests__/through-boundary";
 import type { PageRendererProps } from "./page-renderer";
 
 /** The core library, so the derivation has real definitions to ask. */
@@ -161,9 +162,11 @@ async function render(
   slug: string[] = ["about"]
 ): Promise<PageRendererProps> {
   const route = createBlocksPage(config);
-  const element = (await route.ContentPage({
-    params: { slug },
-  })) as ReactElement<PageRendererProps>;
+  const element = (await throughBoundary(
+    route.ContentPage({
+      params: { slug },
+    })
+  )) as ReactElement<PageRendererProps>;
   return element.props;
 }
 
@@ -1423,12 +1426,16 @@ describe("createBlocksPage", () => {
     };
     const route = createBlocksPage(config);
 
-    const first = (await route.ContentPage({
-      params: { slug: ["about"] },
-    })) as ReactElement<PageRendererProps>;
-    const second = (await route.ContentPage({
-      params: { slug: ["about"] },
-    })) as ReactElement<PageRendererProps>;
+    const first = (await throughBoundary(
+      route.ContentPage({
+        params: { slug: ["about"] },
+      })
+    )) as ReactElement<PageRendererProps>;
+    const second = (await throughBoundary(
+      route.ContentPage({
+        params: { slug: ["about"] },
+      })
+    )) as ReactElement<PageRendererProps>;
 
     expect(first.props.context?.queries?.take()).toBe(true);
     expect(first.props.context?.queries?.take()).toBe(false);

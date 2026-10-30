@@ -51,7 +51,9 @@ import type { ListDensity } from "nextly/config";
 import {
   useCallback,
   useContext,
+  useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -59,6 +61,7 @@ import {
 } from "react";
 
 import { Link } from "@admin/components/ui/link";
+import { isDevelopmentRuntime } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -71,6 +74,9 @@ import {
   CARD_FOOTER_LINK_CLASS,
   CardFooterClaimProvider,
   CardFooterSlotProvider,
+  drawnClaim,
+  type CardFooterClaims,
+  type FooterClaimRank,
 } from "./frame/footer-slot";
 import { frameIds } from "./frame/ids";
 import { ListDensityContext, useListDensity } from "./frame/list-rows";
@@ -80,9 +86,11 @@ import {
   FRAME_FOOTER_GAP,
   FRAME_HEADER,
   FRAME_PADDING,
+  cardBodyHeightPx,
 } from "./frame/measures";
 import {
   CardEmpty,
+  EMPTY_STACKED_WITH_ACTION_PX,
   CardError,
   CardSkeleton,
   CardUnavailable,
@@ -165,6 +173,8 @@ export interface WidgetCardProps {
    * code drawing its customise controls can label them after the card.
    */
   cardId?: string;
+  /** The widget's id, named in a development warning about what its body draws in the footer. */
+  widgetId?: string;
   /** The size the answer drawn in the body was fetched at; provided as `AnswerSizeContext`. */
   answerSize?: AnswerSize;
   /**
@@ -198,16 +208,50 @@ function stateName(state: CardState): string {
   return state.kind === "no-access" ? "unavailable" : state.kind;
 }
 
-/** The body's classes: top-aligned, dimmed through a refresh and in customise mode. */
-function bodyClassName(refreshing: boolean, customizing: boolean): string {
+/**
+ * The body's classes: top-aligned, dimmed through a refresh, and an answer dimmed in customise
+ * mode.
+ *
+ * 🔴 Only an ANSWER is dimmed while customising, as out of reach. A state's message (empty, not
+ * available, failed, a setting to choose) is an instruction, and dimmed it fell below the 4.5:1
+ * contrast text needs: "Choose collection in the card's settings." measured 2.65:1 in light and
+ * 3.07:1 in dark at 55% opacity.
+ */
+function bodyClassName(
+  refreshing: boolean,
+  customizing: boolean,
+  answering: boolean
+): string {
   return cn(
     // Top-aligned, not centred: cards in a grid row stretch to the tallest of them, so centring
     // floats a one-line figure in the middle of whatever the tallest card happens to be.
     "flex min-h-0 flex-1 flex-col justify-start overflow-visible p-0",
     FRAME_BODY_GAP.className,
     refreshing && "opacity-60 transition-opacity",
-    customizing && "opacity-55"
+    customizing && answering && "opacity-55"
   );
+}
+
+/**
+ * Whether the card is off the dashboard and why: its widget's own `shows` said no for this person,
+ * or it hides when empty and is. Taken out at rest, and shown marked with that reason while
+ * customising, so it can still be moved or removed.
+ */
+function hiddenFlags(
+  props: Pick<WidgetCardProps, "hidesWhenEmpty" | "notShown">,
+  state: CardState,
+  customizing: boolean
+) {
+  const notShown = props.notShown === true;
+  const hidden =
+    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+  return {
+    hiddenEmpty: hidden && !customizing,
+    markedHidden: hidden && customizing,
+    hiddenBecause: notShown
+      ? "Not shown for you right now"
+      : "Hidden while empty",
+  };
 }
 
 /**
@@ -226,15 +270,9 @@ function frameFlags(
 ) {
   const { customizing } = modes;
   const refreshing = modes.refreshing || state.kind === "refreshing";
-  const notShown = props.notShown === true;
-  const hidden =
-    notShown || (props.hidesWhenEmpty === true && state.kind === "empty");
+  const hidden = hiddenFlags(props, state, customizing);
   return {
-    hiddenEmpty: hidden && !customizing,
-    markedHidden: hidden && customizing,
-    hiddenBecause: notShown
-      ? "Not shown for you right now"
-      : "Hidden while empty",
+    ...hidden,
     // A quick control changes the question; before the first answer there is no question on
     // show to change, and in customise mode the card's menu stands there.
     quickInert: state.kind === "loading" || customizing,
@@ -259,7 +297,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
   const [reported, setReported] = useState<CardState | null>(null);
   // The footer's element, once mounted: where a body draws what it has for the footer.
   const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null);
-  const footer = useFooterClaims();
+  const footer = useFooterClaims(props.widgetId);
   const report = useCallback((next: CardState | null) => setReported(next), []);
   const given = props.state ?? READY;
   const state = shownState(given, reported);
@@ -312,7 +350,11 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 aria-busy={flags.busy}
                 // Customise mode: what the card shows stays visible, but nothing in it can be reached.
                 inert={customizing || undefined}
-                className={bodyClassName(flags.refreshing, customizing)}
+                className={bodyClassName(
+                  flags.refreshing,
+                  customizing,
+                  showsBody(state)
+                )}
               >
                 {flags.markedHidden ? (
                   <p
@@ -328,7 +370,7 @@ export function WidgetCard(props: WidgetCardProps): JSX.Element {
                 {drawsBody ? (
                   <CardStateReportProvider value={report}>
                     <CardFooterSlotProvider value={footerSlot}>
-                      <CardFooterClaimProvider value={footer.claim}>
+                      <CardFooterClaimProvider value={footer.claims}>
                         {props.children}
                       </CardFooterClaimProvider>
                     </CardFooterSlotProvider>
@@ -388,12 +430,30 @@ function StateBody({
     case "empty":
       return (
         <CentredState>
-          <CardEmpty {...state.empty} />
+          <EmptyBody empty={state.empty} />
         </CentredState>
       );
     default:
       return null;
   }
+}
+
+/**
+ * The empty state, laid in one row where the card's body is too short to stack its title over its
+ * action (a two-row card's body is 46 px; stacked, they take 64). A card drawn with no height is
+ * stacked, as it was.
+ */
+function EmptyBody({
+  empty,
+}: {
+  empty: Extract<CardState, { kind: "empty" }>["empty"];
+}) {
+  const h = useContext(CardHeightContext);
+  const inline =
+    empty.action !== undefined &&
+    h !== undefined &&
+    cardBodyHeightPx(h) < EMPTY_STACKED_WITH_ACTION_PX;
+  return <CardEmpty {...empty} inline={inline} />;
 }
 
 /**
@@ -532,16 +592,41 @@ function WidgetCardHeader({
 }
 
 /**
- * Whether a body's link holds the card's footer, and how one claims it while it is drawn: the
- * footer holds one link, so while any is held the widget's own is not drawn.
+ * Whether a body's link holds the card's footer, and the claims it is drawn by: the footer holds
+ * one link, so while any is held the widget's own is not drawn, and of the body's, one is
+ * (`drawnClaim`).
  */
-function useFooterClaims(): { held: boolean; claim: () => () => void } {
-  const [claims, setClaims] = useState(0);
-  const claim = useCallback(() => {
-    setClaims(count => count + 1);
-    return () => setClaims(count => count - 1);
+function useFooterClaims(widgetId: string | undefined): {
+  held: boolean;
+  claims: CardFooterClaims;
+} {
+  const [held, setHeld] = useState<{ id: number; rank: FooterClaimRank }[]>([]);
+  const next = useRef(0);
+  const claim = useCallback((rank: FooterClaimRank) => {
+    next.current += 1;
+    const id = next.current;
+    setHeld(claims => [...claims, { id, rank }]);
+    return {
+      id,
+      release: () => setHeld(claims => claims.filter(c => c.id !== id)),
+    };
   }, []);
-  return { held: claims > 0, claim };
+  const drawn = drawnClaim(held);
+  const explicit = held.filter(c => c.rank === "explicit").length;
+  // Whether this card has said so yet: once per card, however often its count of links changes
+  // while it is drawn, so a body redrawing its links does not repeat the same warning.
+  const warned = useRef(false);
+  // A widget's body names one link for its footer; a second is a mistake its author should hear
+  // of, while developing, and the footer still draws one (the last).
+  useEffect(() => {
+    if (warned.current || explicit <= 1 || !isDevelopmentRuntime()) return;
+    warned.current = true;
+    console.warn(
+      `Widget "${widgetId ?? "(unnamed)"}" draws ${explicit} Widget.FooterLink; a card's footer holds one link, so only the last is drawn.`
+    );
+  }, [explicit, widgetId]);
+  const claims = useMemo(() => ({ claim, drawn }), [claim, drawn]);
+  return { held: held.length > 0, claims };
 }
 
 /** The widget's own footer link, where the frame draws a footer and no body's link holds it. */
@@ -581,6 +666,11 @@ function WidgetCardFooter({
       className={cn(
         // A gap and a link's line, 28 px, as `cardBodyHeightPx` counts it.
         "flex h-7 shrink-0 items-center justify-end gap-3 border-0 bg-transparent p-0",
+        // Clicks pass through the footer's own room to what is drawn under it: in a short card
+        // the body's empty state, with its one action, runs into this room, and an empty footer
+        // laid over it took the click. Only what the footer holds, its link and anything a body
+        // draws into it, takes clicks.
+        "pointer-events-none",
         FRAME_FOOTER_GAP.className,
         // Out of reach in customise mode, and dimmed with the body so it does not look usable.
         inert && "opacity-55"
@@ -589,10 +679,13 @@ function WidgetCardFooter({
       <div
         ref={slotRef}
         data-testid="widget-card-footer-slot"
-        className="contents"
+        className="pointer-events-auto contents"
       />
       {link !== undefined && (
-        <Link href={link.href} className={CARD_FOOTER_LINK_CLASS}>
+        <Link
+          href={link.href}
+          className={cn(CARD_FOOTER_LINK_CLASS, "pointer-events-auto")}
+        >
           {link.label}
         </Link>
       )}

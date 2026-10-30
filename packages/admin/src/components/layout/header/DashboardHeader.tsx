@@ -12,6 +12,7 @@ import { cn } from "@admin/lib/utils";
 import { UserProfileDropdown } from "../sidebar/UserProfileDropdown";
 
 import { computeHiddenHeaderButtons } from "./header-visibility";
+import { HeaderTrail } from "./HeaderTrail";
 
 interface DashboardHeaderProps {
   className?: string;
@@ -35,15 +36,21 @@ export function DashboardHeader({
     <header
       className={cn(
         "h-16 border-b border-border bg-background/80 backdrop-blur-md sticky top-0 z-40 w-full",
-        "flex items-center justify-between px-6",
+        "flex items-center justify-between gap-4 px-6",
+        // A container, so the trail on the left answers to the bar's own
+        // width: a sidebar narrows it as much as a small window does.
+        "@container/topbar",
         className
       )}
     >
-      <div className="flex items-center gap-4">
-        {/* Placeholder for breadcrumbs or page title if needed in future */}
+      {/* The trail the page on screen registered, such as an open document's
+          place under Content. It may shrink and truncate; the controls on the
+          right keep their size. */}
+      <div className="flex min-w-0 flex-1 items-center gap-4">
+        <HeaderTrail />
       </div>
 
-      <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1">
         {!hidden.has("github") && (
           <a
             href="https://github.com/nextlyhq/nextly"

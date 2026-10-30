@@ -42,6 +42,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { PublicationFacts } from "../../audit/record-activity";
 import { recordTransitionEvents } from "../../content-events/write-event";
+import { refuseWriteIfRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import {
   fieldGroupWriteAccessOf,
@@ -231,6 +232,9 @@ export class SinglePublishAllService extends BaseService {
     slug: string,
     options: PublishAllSingleLocalesOptions = {}
   ): Promise<SingleResult<PublishAllSingleResult>> {
+    // Refused first when the Single is removed from code, before any hook or
+    // read of its document, so a refused write changes nothing.
+    await refuseWriteIfRemovedFromCode("single", slug);
     this.logger.debug("Publishing all languages of a Single", { slug });
 
     // A refusal inside the transaction (the languages going live changed under

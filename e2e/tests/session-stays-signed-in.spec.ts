@@ -33,7 +33,7 @@ import {
   keepSessionFresh,
   SESSION_MAX_AGE_MS,
   STORAGE_STATE,
-} from "./support/session";
+} from "./support/session.mjs";
 import { test } from "./support/test";
 
 const TESTS = path.dirname(fileURLToPath(import.meta.url));

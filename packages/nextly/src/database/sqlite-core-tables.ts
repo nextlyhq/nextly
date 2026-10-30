@@ -1,3 +1,5 @@
+import { DASHBOARD_PINS_TABLE } from "../schemas/dashboard-pins/table-name";
+import { DASHBOARD_PREFERENCES_TABLE } from "../schemas/dashboard-preferences/table-name";
 import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
 import { EMAIL_QUEUE_TABLE } from "../schemas/email-queue/table-name";
 import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../schemas/email-queue-recipients/table-name";
@@ -734,6 +736,34 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"
       ON "${NOTICES_TABLE}" ("created_at")`,
+    // Each reader's pinned entries and Singles. Columns match
+    // schemas/dashboard-pins/sqlite.ts; a Single's `entry_id` is "" so the
+    // unique index holds without a partial index.
+    `CREATE TABLE IF NOT EXISTS "${DASHBOARD_PINS_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "target_type" TEXT NOT NULL,
+      "target_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "pinned_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_dashboard_pins_target_uidx"
+      ON "${DASHBOARD_PINS_TABLE}" ("user_id", "target_type", "target_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_dashboard_pins_user_idx"
+      ON "${DASHBOARD_PINS_TABLE}" ("user_id", "pinned_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_dashboard_pins_entry_idx"
+      ON "${DASHBOARD_PINS_TABLE}" ("target_type", "target_slug", "entry_id")`,
+    // Each reader's remembered dashboard choices. Columns match
+    // schemas/dashboard-preferences/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "${DASHBOARD_PREFERENCES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "preference_key" TEXT NOT NULL,
+      "value" TEXT NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_dashboard_preferences_key_uidx"
+      ON "${DASHBOARD_PREFERENCES_TABLE}" ("user_id", "preference_key")`,
     // The site's email brand settings, one row. Columns match
     // schemas/email-brand/sqlite.ts; each setting is nullable, null being its
     // starting value.

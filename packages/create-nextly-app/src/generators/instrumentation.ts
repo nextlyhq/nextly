@@ -160,10 +160,7 @@ function pageExtensionsAdvice(
  * never rewritten; it is reported as skipped with what to add. So is the case
  * where the app sets \`pageExtensions\`: Next.js then reads the hook only under a
  * name with one of those extensions, which this does not guess. The config file
- * itself is never edited here. Next.js 14 runs the hook only with
- * `experimental.instrumentationHook`, which the Next config step gives in the
- * same `experimental` object as Nextly's packages (`patchNextConfig`), so two
- * steps never hand the developer two objects for one key.
+ * itself is never edited here.
  */
 export async function generateInstrumentation(
   cwd: string,

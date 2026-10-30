@@ -5,14 +5,14 @@
  * goes when the install says its condition lapsed, a dismissible one goes when
  * the reader says so -- so the cases here pin that the two travel separately.
  *
- * Read through `declaredWidgets()` rather than the private summary builder: the
+ * Read through `allWidgets()` rather than the private summary builder: the
  * admin receives what that returns, so this exercises the path the payload
  * actually takes.
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { registerRecentEditsWidgetSource } from "../../../services/dashboard/recent-edits-widget-source";
-import { declaredWidgets } from "../canonical";
+import { allWidgets } from "../canonical";
 import { CORE_WIDGETS } from "../core-widgets";
 import { clearWidgets, registerWidget } from "../registry";
 import { clearSources } from "../sources";
@@ -29,7 +29,7 @@ beforeEach(() => {
 });
 
 const summaryFor = (id: string) => {
-  const summary = declaredWidgets().find(widget => widget.id === id);
+  const summary = allWidgets().find(widget => widget.id === id);
   if (!summary) throw new Error(`no widget summary for "${id}"`);
   return summary;
 };

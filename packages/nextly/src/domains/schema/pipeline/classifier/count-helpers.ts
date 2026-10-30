@@ -126,6 +126,24 @@ export async function countLongerThan(
 }
 
 /**
+ * How many rows hold a value in `column`: what dropping the column loses, which the data-loss
+ * listing shows beside it. `COUNT(column)` counts the non-null values and nothing else. The names
+ * go through Drizzle's identifier quoting, as `countLongerThan`'s do.
+ */
+export async function countNonEmpty(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  column: string
+): Promise<number> {
+  return readCount(
+    db,
+    dialect,
+    sql`SELECT COUNT(${sql.identifier(column)}) AS count FROM ${sql.identifier(table)}`
+  );
+}
+
+/**
  * A count query's one number, read from each dialect's result shape: SQLite's synchronous `all`,
  * the others' `execute`. A query that returns no row is a broken integration, never a zero.
  */

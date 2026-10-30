@@ -39,7 +39,7 @@ export async function generateIntoExistingApp(
   return [
     await generateConfig(cwd, projectType, projectInfo),
     await generateRoutes(cwd, projectInfo),
-    await generateAdminPage(cwd, projectInfo),
+    await generateAdminPage(cwd, projectInfo, templates),
     await generateMediaRoutes(cwd, projectInfo, templates),
     await generateUploadsRoute(cwd, projectInfo, templates),
     await generateInstrumentation(cwd, projectInfo),

@@ -33,7 +33,7 @@ import type { WidgetPlacement } from "../../layout";
 import { resolveCardSettings } from "../card-settings";
 import { declaredWidget } from "../declared-widgets";
 import { defineWidget } from "../define-widget";
-import { settings } from "../setting-builders";
+import { setting } from "../setting-builders";
 
 const ORDERS = "orders";
 
@@ -62,8 +62,13 @@ function recentOrders(startingItems: number) {
     size: { default: { w: 12, h: 4 }, min: { w: 6, h: 4 } },
     access: `read-${ORDERS}`,
     settings: {
-      collection: settings.collection(),
-      items: settings.items({ default: startingItems }),
+      collection: setting.collection({ label: "Collection" }),
+      items: setting.number({
+        label: "Number of items",
+        defaultValue: startingItems,
+        min: 1,
+        max: 10,
+      }),
     },
     load: async ({ settings, services, signal }) => ({
       items: (

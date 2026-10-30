@@ -45,6 +45,7 @@ import {
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
+import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -138,7 +139,9 @@ import {
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
+  builderMigrationRemedy,
   discoverMigrationGroups,
+  isBuilderWrittenMigration,
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
@@ -381,6 +384,17 @@ export async function runMigrate(
     // crashed prior run), then proceed with the normal migrate.
     await maybeForceUnlock(options, db, dialect);
 
+    // Every entity as the registry records it before any file applies, so the companion pass
+    // after the migrations can tell a field this run newly translates from one translated before.
+    const recordedBefore = await readRecordedEntities(
+      adapter as unknown as DrizzleAdapter,
+      configResult.config,
+      error =>
+        logger.warn(
+          `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
+        )
+    );
+
     // Delegate to the non-exiting core (Phase 1 + Phase 2 under the lock). The
     // ledger (`nextly_schema_events`) is bootstrapped out-of-band by
     // `ensureLedger` — AFTER applyCore (so pushSchema doesn't see it as an
@@ -414,10 +428,35 @@ export async function runMigrate(
         // resolve.
         knownJunctions: resolvedSchema.knownJunctions,
         allowDestructive: allowCoreDestructive,
+        // A file the Builder wrote with no snapshot is replaced by the one
+        // `migrate:create` writes, never applied as written here.
+        refuseBuilderFilesWithoutSnapshot: true,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),
         step: options.step,
+        // A translations column already in place that cannot hold a field the config newly
+        // translates, judged as the files left it and before the registry records them: refused
+        // here, the registry keeps its definitions and the next run is refused the same way.
+        // Judged only once no file is pending, since a later one may still change the column.
+        beforeMetadata: async () => {
+          const pending = await findPendingFiles(
+            adapter,
+            db,
+            dialect,
+            appMigrationsDir,
+            logger
+          );
+          if (pending.length > 0) return;
+          const { refuseCompanionColumnsThatCannotHold } = await import(
+            "../../domains/i18n/runtime/companion-io"
+          );
+          await refuseCompanionColumnsThatCannotHold(
+            adapter as unknown as DrizzleAdapter,
+            configResult.config,
+            recordedBefore
+          );
+        },
       });
 
       logger.newline();
@@ -488,6 +527,7 @@ export async function runMigrate(
             // Never by default: an entity with no transition record may be a legacy install or one
             // localized since birth, and nothing distinguishes them. See `repairLocalization`.
             repairUntracked: options.repairLocalization === true,
+            recordedBefore,
           }
         );
         // After the migrations too, and for the same reason: the user fields'
@@ -697,6 +737,25 @@ export interface MigrateCoreDeps {
    * against the database.
    */
   syncElementOwnersFn?: (deps: MigrateCoreDeps) => Promise<void>;
+  /**
+   * Runs inside the lock once the migration files have applied and before their metadata is
+   * recorded (Phase 3). A throw stops the run there: the files that ran stay applied and in the
+   * ledger, and the registry keeps the definitions it had, so the next run judges the same change
+   * again. `nextly migrate` refuses here a translations column that cannot hold a field the config
+   * newly translates.
+   */
+  beforeMetadata?: () => Promise<void>;
+  /**
+   * Refuse, before anything changes, a pending migration file the Schema
+   * Builder wrote with no snapshot beside it (`isBuilderWrittenMigration`),
+   * rather than apply it as written.
+   *
+   * `nextly migrate` passes it. Off by default because the development boot
+   * runs this core too, over the files the Builder writes into the project as
+   * it saves: there the Builder has already applied the change, and refusing
+   * would stop every later migration of a development server.
+   */
+  refuseBuilderFilesWithoutSnapshot?: boolean;
 }
 
 export interface MigrateCoreResult {
@@ -804,7 +863,14 @@ export async function previewMigrate(args: {
       logger.info(`    ✖ a real run would refuse it: ${refusal}`);
     }
   }
-  for (const m of pendingFiles) previewPendingFile(m, dialect, logger);
+  for (const m of pendingFiles) {
+    previewPendingFile(m, dialect, logger);
+    if (await isRefusedWithoutSnapshot(m, args.migrationsDir)) {
+      logger.info(
+        `    ✖ a real run would refuse it: ${builderMigrationRemedy(`${m.name}.sql`)}`
+      );
+    }
+  }
 }
 
 /**
@@ -1418,6 +1484,12 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
+  // Before the lock as well: taking it creates the lock's own table on a
+  // database that has none, and a refused run leaves the schema as it was. A
+  // file another run records meanwhile is only refused once more.
+  if (deps.refuseBuilderFilesWithoutSnapshot === true) {
+    await assertNoBuilderFilesWithoutSnapshot(deps);
+  }
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -1533,6 +1605,9 @@ export async function migrateCore(
       // own, which is what these rows say.
       await (deps.syncElementOwnersFn ?? syncElementOwners)(deps);
 
+      // What the caller must hold true before the registry records the files' metadata.
+      await deps.beforeMetadata?.();
+
       /*
        * Phase 3 — make the registry agree with the tables Phase 2 just created.
        *
@@ -1635,6 +1710,63 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Refuse a pending app migration file the Schema Builder wrote with no snapshot
+ * beside it, naming each and the file to commit instead.
+ *
+ * Applied as written, such a file runs without the drift check a snapshot
+ * gives — so on a database that is not where the Builder's own was, it either
+ * fails part-way or changes a table into a shape nothing recorded — and it
+ * leaves the next `migrate:create` comparing against a snapshot that never saw
+ * the change. `migrate:create` writes the same change with its snapshot.
+ *
+ * Read before the lock and the core reconcile, so the run is refused with the
+ * schema, the ledger and the registry as it found them. A missing ledger reads
+ * as every file pending, as it does for the files phase.
+ */
+async function assertNoBuilderFilesWithoutSnapshot(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  // The pending files as the dry run and the run's report find them, so all
+  // three agree on which files are still to run.
+  const pending = await findPendingFiles(
+    deps.adapter,
+    deps.db,
+    deps.dialect,
+    deps.migrationsDir,
+    deps.logger
+  );
+  const refused: string[] = [];
+  for (const m of pending) {
+    if (await isRefusedWithoutSnapshot(m, deps.migrationsDir)) {
+      refused.push(`${m.name}.sql`);
+    }
+  }
+  if (refused.length === 0) return;
+  throw new NextlyError({
+    code: "NEXTLY_MIGRATION_SNAPSHOT_MISSING",
+    publicMessage:
+      `nextly migrate does not apply a Schema Builder migration file with no snapshot. ` +
+      refused.map(builderMigrationRemedy).join(" "),
+    logContext: { files: refused },
+  });
+}
+
+/**
+ * Whether `nextly migrate` refuses this file for want of a snapshot: one the
+ * Schema Builder wrote, with none beside it. The one answer the run and
+ * `--dry-run` both ask.
+ */
+async function isRefusedWithoutSnapshot(
+  m: ParsedMigration,
+  migrationsDir: string
+): Promise<boolean> {
+  return (
+    isBuilderWrittenMigration(m.name) &&
+    (await loadTargetSnapshot(resolve(migrationsDir, "meta"), m.name)) === null
+  );
 }
 
 /** Load a migration's paired target snapshot, or null if absent. */

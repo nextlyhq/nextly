@@ -1,7 +1,8 @@
 import { container } from "@nextly/di/container";
-import type {
-  ApiKeyRefusalCause,
-  ApiKeyService,
+import {
+  resolveKeyCaller,
+  type ApiKeyRefusalCause,
+  type ApiKeyService,
 } from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
@@ -27,6 +28,7 @@ import {
   refusalMessageFor,
   type RefusalScope,
 } from "../access/refusal-message";
+import { rememberRouteVerdict } from "../access/request-memo";
 import {
   anyPermissionVerdict,
   routeGateVerdict,
@@ -38,10 +40,14 @@ import {
   registeredReadLanguagesFor,
   registeredWriteAsNamedLanguagesFor,
   registeredWriteLanguagesFor,
+  currentRuleLanguage,
   type RuleLanguage,
   withRuleLanguage,
 } from "../access/rule-language";
-import type { GrantedPermission } from "../authenticated-scope";
+import {
+  apiKeyScopeFrom,
+  type GrantedPermission,
+} from "../authenticated-scope";
 import { getSession } from "../session";
 import { startServicesForAuthentication } from "../session/session-standing";
 
@@ -188,6 +194,25 @@ export interface AuthContext {
   roles: string[];
   authMethod: "session" | "api-key";
   /**
+   * Whether the API key carries super-admin authority: a full-access key whose
+   * maker is an active super-admin for this request. Set only by
+   * authentication, and only for `api-key` requests; a scope built from this
+   * context carries it, and nothing else can give a key that authority.
+   */
+  keyHoldsSuperAdmin?: boolean;
+  /**
+   * The soonest expiry among the key maker's roles (epoch ms), set with
+   * `keyHoldsSuperAdmin`: a scope built from this context loses the authority
+   * there, as a session's token ends there.
+   */
+  keyHoldsSuperAdminUntil?: number;
+  /**
+   * When authentication asked the key maker's standing (`performance.now()`),
+   * set with `keyHoldsSuperAdmin`: a scope built from this context counts
+   * the authority's bound from here.
+   */
+  keyStandingAskedAt?: number;
+  /**
    * The authenticating API key's own id, present only for `api-key` requests.
    * Carried so a write can be attributed to the specific key rather than only
    * to the user that owns it.
@@ -255,6 +280,9 @@ export async function requireApiKeyAuth(req: Request): Promise<
       permissions: string[];
       grants: readonly GrantedPermission[];
       roles: string[];
+      keyHoldsSuperAdmin: boolean;
+      keyHoldsSuperAdminUntil?: number;
+      keyStandingAskedAt?: number;
       apiKeyId: string;
     }
   | ErrorResponse
@@ -304,20 +332,15 @@ export async function requireApiKeyAuth(req: Request): Promise<
     if (overLimit) return overLimit;
   }
 
-  // 5. Resolve effective permissions and roles for this token type
-  const [grants, roles] = await Promise.all([
-    apiKeyService.resolveApiKeyGrants(
-      keyAuth.tokenType,
-      keyAuth.roleId,
-      keyAuth.userId,
-      keyAuth.id
-    ),
-    apiKeyService.resolveApiKeyRoles(
-      keyAuth.tokenType,
-      keyAuth.roleId,
-      keyAuth.userId
-    ),
-  ]);
+  // 5. Resolve effective permissions and roles for this token type, and
+  //    whether the key carries its maker's super-admin authority.
+  const {
+    grants,
+    roles,
+    keyHoldsSuperAdmin,
+    keyHoldsSuperAdminUntil,
+    keyStandingAskedAt,
+  } = await resolveKeyCaller(apiKeyService, keyAuth);
 
   // The key's own id travels with the result so a write can be attributed to
   // the specific key, not just to the user that owns it.
@@ -326,6 +349,11 @@ export async function requireApiKeyAuth(req: Request): Promise<
     permissions: grants.map(grant => grant.slug),
     grants,
     roles,
+    keyHoldsSuperAdmin,
+    ...(keyHoldsSuperAdminUntil === undefined
+      ? {}
+      : { keyHoldsSuperAdminUntil }),
+    ...(keyStandingAskedAt === undefined ? {} : { keyStandingAskedAt }),
     apiKeyId: keyAuth.id,
   };
 }
@@ -425,6 +453,13 @@ export async function requireAuthentication(
     grants: apiKeyResult.grants,
     roles: apiKeyResult.roles,
     authMethod: "api-key",
+    keyHoldsSuperAdmin: apiKeyResult.keyHoldsSuperAdmin,
+    ...(apiKeyResult.keyHoldsSuperAdminUntil === undefined
+      ? {}
+      : { keyHoldsSuperAdminUntil: apiKeyResult.keyHoldsSuperAdminUntil }),
+    ...(apiKeyResult.keyStandingAskedAt === undefined
+      ? {}
+      : { keyStandingAskedAt: apiKeyResult.keyStandingAskedAt }),
     apiKeyId: apiKeyResult.apiKeyId,
   };
 }
@@ -456,6 +491,32 @@ export async function requirePermission(
 }
 
 /**
+ * Every one of `permissions`: for a change that is several kinds of change at
+ * once. Each is asked by grant, as the any-of gates ask a list of one, so no
+ * entity's rule is read: a collection that happens to be named after a system
+ * resource does not judge it. The first one refused answers, so a caller is
+ * told the first permission it lacks.
+ */
+export async function requireAllPermissions(
+  req: Request,
+  permissions: ReadonlyArray<{ action: string; resource: string }>
+): Promise<AuthContext | ErrorResponse> {
+  const authResult = await requireAuthentication(req);
+
+  if ("statusCode" in authResult) {
+    return authResult;
+  }
+
+  for (const { action, resource } of permissions) {
+    const answer = await authorizeCallerForAny(authResult, [
+      { action, resource },
+    ]);
+    if (isErrorResponse(answer)) return answer;
+  }
+  return authResult;
+}
+
+/**
  * `requirePermission`'s decision, for a caller a gate has already
  * authenticated.
  *
@@ -469,12 +530,25 @@ export function authorizeCaller(
   action: string,
   resource: string,
   // Whether the request names one entry, so the refusal says "this post".
-  scope: RefusalScope = "all"
+  scope: RefusalScope = "all",
+  // Whether the route's handler applies a read rule's filter to what it
+  // reads, which lets a caller through whose rule answers one.
+  appliesFilter = false
 ): Promise<AuthContext | ErrorResponse> {
   // The route gate's answer, asked of the one decision: a key on its own
   // grants and the entity's rule, a session through the access-control
   // service's rules and its permissions, as this gate has always judged them.
-  return authorizeBy(routeGateVerdict, authResult, action, resource, scope);
+  // Told whether the route's handler applies a read rule's filter, so a rule
+  // answering one is handed back to be kept rather than refused.
+  return authorizeBy(
+    (auth, asked, slug, rules) =>
+      routeGateVerdict(auth, asked, slug, rules, appliesFilter),
+    authResult,
+    action,
+    resource,
+    scope,
+    appliesFilter
+  );
 }
 
 /**
@@ -498,19 +572,59 @@ async function authorizeBy(
     auth: AuthContext,
     action: string,
     resource: string,
-    rules: RouteRules
+    rules: RouteRules,
+    // Whether the route's handler applies a read rule's filter; a verdict on
+    // the grant alone reads no rule, and has no filter to hand back.
+    appliesFilter?: boolean
   ) => Promise<GateVerdict>,
   authResult: AuthContext,
   action: string,
   resource: string,
-  scope: RefusalScope
+  scope: RefusalScope,
+  // Whether the route's handler applies a read rule's filter: only such a
+  // route keeps its verdict.
+  appliesFilter = false
 ): Promise<AuthContext | ErrorResponse> {
-  const verdict = await verdictOf(
+  const answered = await verdictOf(
     authResult,
     action,
     resource,
     getRBACService()
   );
+  // A route whose handler applies a read rule's filter keeps its verdict for
+  // the request, every entry or the entries the filter matches, so the read
+  // it authorizes applies it without asking the rule again. A request that
+  // cannot keep a filter refuses the caller, as a route that applies no
+  // filter does, rather than let the read run unfiltered. A route that
+  // applies no filter keeps nothing: its rule is asked afresh, and an allow
+  // kept from it could overwrite a filter another route in the request kept
+  // for the same caller; no kept verdict already means every entry.
+  const question = {
+    userId: authResult.userId,
+    // A key is kept apart from its user's other keys and sessions by the
+    // scope its rule is told.
+    ...(authResult.authMethod === "api-key"
+      ? { scope: apiKeyScopeFrom(authResult) }
+      : {}),
+    slug: resource,
+    action,
+    language: currentRuleLanguage(),
+  };
+  if (appliesFilter && answered.allowed) {
+    rememberRouteVerdict(question, { all: true });
+  }
+  if (
+    appliesFilter &&
+    !answered.allowed &&
+    answered.refusal === "only-matching-entries"
+  ) {
+    const kept = rememberRouteVerdict(question, { filter: answered.filter });
+    if (kept) return authResult;
+  }
+  const verdict: GateVerdict =
+    !answered.allowed && answered.refusal === "only-matching-entries"
+      ? { allowed: false, refusal: "insufficient" }
+      : answered;
   if (!verdict.allowed) {
     // A caller naming one entry it may not read is answered exactly as if the
     // entry did not exist, whatever it asked to do: a 403 would confirm the
@@ -820,6 +934,14 @@ export interface RouteOperation {
    * query may carry an `entryId` that names nothing.
    */
   namesOne?: boolean;
+  /**
+   * The route's handler reads through the query service's filtered read,
+   * which limits what it reads to the entries a read rule's filter matches,
+   * so a caller whose rule answers one is let through. Set only by a route
+   * that does: every other route refuses such a caller, as it cannot apply
+   * the filter to what it reads.
+   */
+  appliesReadFilter?: boolean;
 }
 
 /**
@@ -861,7 +983,8 @@ export async function requireCollectionAccess(
       collectionSlug,
       // A route naming one entry is refused about that entry. Named by the
       // route, never by a parameter: a query can carry an `entryId` too.
-      operation?.namesOne ? "one" : "all"
+      operation?.namesOne ? "one" : "all",
+      action === "read" && operation?.appliesReadFilter === true
     )
   );
 }

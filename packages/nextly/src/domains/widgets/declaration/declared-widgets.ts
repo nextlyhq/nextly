@@ -23,7 +23,11 @@
  */
 
 import { getNextlyLogger } from "../../../observability/logger";
+import type { Logger } from "../../../shared/types";
 import { validateWidgetDefinition, type WidgetDefinition } from "../definition";
+// The registry's own gate shape, which this file maps the declaration's
+// `WidgetAccessGate` (of `define-widget.ts`) onto.
+import type { WidgetPermissionGate as RequiredPermission } from "../gate";
 import { sizeBounds, type WidgetSizeDeclaration } from "../grid-size";
 import {
   deregisterWidget,
@@ -34,7 +38,9 @@ import {
 } from "../registry";
 import type { AnyWidgetSetting } from "../settings";
 
+import type { WidgetAccessGate } from "./define-widget";
 import { displayOfView, type WidgetDisplay, type WidgetView } from "./displays";
+import { WIDGET_SKELETON_SKETCH, type WidgetSkeleton } from "./skeleton";
 import {
   collectWidgetDeclarationFaults,
   widgetDeclarationsRefused,
@@ -73,14 +79,17 @@ interface DeclaredWidgetShape {
   /** The card's size and the bounds it may be resized within, in grid units. */
   readonly size: WidgetSizeDeclaration;
   /**
-   * Who may be offered it: a permission name, judged when the card is handed;
-   * the collections it reads, or a predicate of the person, judged with the
-   * person before `load` runs.
+   * Who may be offered it: a permission gate (a permission name, `{ anyOf }`
+   * or `{ allOf }`), published as the registry's `requiredPermission` and
+   * judged when the card is handed; the collections it reads, or a predicate
+   * of the person, judged with the person before `load` runs.
    */
   readonly access?:
-    | string
+    | WidgetAccessGate
     | { readonly collections: readonly string[] }
     | ((input: { user: unknown }) => unknown);
+  /** Where the add panel offers it, published as the registry's own `offered`. */
+  readonly offered?: WidgetDefinition["offered"];
   /** Whether the card shows at all for the person asking, judged before `load`. */
   readonly shows?: (input: unknown) => unknown;
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
@@ -90,10 +99,32 @@ interface DeclaredWidgetShape {
   readonly isEmpty?: (data: unknown) => boolean;
   readonly empty?: {
     readonly message?: string;
-    readonly action?: { label: string; link: string; permission?: string };
+    readonly action?:
+      | { label: string; link: string; permission?: string }
+      | { label: string; opens: "settings" };
   };
   readonly several?: boolean;
   readonly hidesWhenEmpty?: boolean;
+  /** The card's loading shape and add-panel sketch, checked at startup. */
+  readonly skeleton?: WidgetSkeleton;
+  /**
+   * The cases the development preview page draws the card's ready state from,
+   * each held at startup to what JSON carries (`previewProblems`).
+   *
+   * 🔴 Kept here, on the server, and never published: `toDefinition` names
+   * every field the registry carries and this is not one of them, so the
+   * admin's workspace payload never holds a case. Only the preview read, which
+   * answers in development alone, sends them, and only for the widgets its
+   * reader may see.
+   */
+  readonly preview?: readonly DeclaredPreviewCase[];
+}
+
+/** One preview case as a declaration states it, checked at startup. */
+interface DeclaredPreviewCase {
+  readonly name: string;
+  readonly data: unknown;
+  readonly settings?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -114,19 +145,44 @@ function publishedEmpty(
   const { message, action } = empty;
   const published: NonNullable<WidgetDefinition["empty"]> = {
     ...(message === undefined ? {} : { message }),
-    ...(action === undefined
-      ? {}
-      : {
-          action: {
-            label: action.label,
-            link: action.link,
-            ...(action.permission === undefined
-              ? {}
-              : { requiredPermission: action.permission }),
-          },
-        }),
+    ...(action === undefined ? {} : { action: publishedAction(action) }),
   };
   return Object.keys(published).length === 0 ? undefined : published;
+}
+
+/** An empty state's action as a declaration states it. */
+type DeclaredEmptyAction = NonNullable<
+  NonNullable<DeclaredWidgetShape["empty"]>["action"]
+>;
+
+/**
+ * Whether an empty action opens the card's settings: by the value of `opens`, as the startup check
+ * reads it, not by the key alone. A plain JavaScript declaration may carry `opens: undefined`
+ * beside its link, which the check accepts as the link form; read by the key, it was published as
+ * a settings action with no `opens`, which the registry refuses.
+ */
+function opensSettings(
+  action: DeclaredEmptyAction
+): action is Extract<DeclaredEmptyAction, { opens: "settings" }> {
+  return "opens" in action && action.opens === "settings";
+}
+
+/**
+ * An empty state's action as published: a link with the gate's own name for its permission, or
+ * the card's settings, which need no permission here, since the admin offers the button only
+ * where the person can change that card's settings.
+ */
+function publishedAction(
+  action: DeclaredEmptyAction
+): NonNullable<NonNullable<WidgetDefinition["empty"]>["action"]> {
+  if (opensSettings(action)) return { label: action.label, opens: "settings" };
+  return {
+    label: action.label,
+    link: action.link,
+    ...(action.permission === undefined
+      ? {}
+      : { requiredPermission: action.permission }),
+  };
 }
 
 /** `{ empty }` when there is one to publish, and nothing otherwise. */
@@ -142,8 +198,11 @@ const withEmpty = (empty: WidgetDefinition["empty"] | undefined) =>
  * named here. `serverData` says core builds the card's data, so there is no
  * query. The size is published with every end filled in (`sizeBounds`), the
  * one reading of a declared size, so no reader fills a missing end its own way.
+ *
+ * Exported for the test harness alone (`nextly/testing`), which describes a
+ * widget to a test exactly as the registry publishes it.
  */
-function toDefinition(
+export function toDefinition(
   declaration: DeclaredWidgetShape,
   owner: string
 ): WidgetDefinition {
@@ -158,6 +217,11 @@ function toDefinition(
     description: declaration.description,
     ...publishedLabels(declaration, owner),
     ...drawnBy(displayOfView(declaration.view), owner),
+    // The display its loading state and its add-panel row are drawn as: the
+    // registry's own `sketch`, which both read.
+    ...(declaration.skeleton === undefined
+      ? {}
+      : { sketch: WIDGET_SKELETON_SKETCH[declaration.skeleton] }),
     ...(settings.length > 0 ? { settings } : {}),
     size: sizeBounds(declaration.size),
     ...publishedGates(declaration),
@@ -197,22 +261,61 @@ function drawnBy(
     : { archetype: "custom", component: display.component, owner };
 }
 
-/** Who is offered a declared widget, how many times, and whether it leaves while empty. */
+/**
+ * Who is offered a declared widget, where, how many times, and whether it
+ * leaves while empty.
+ */
 function publishedGates(
   declaration: DeclaredWidgetShape
 ): Pick<
   WidgetDefinition,
-  "allowsSeveral" | "hidesWhenEmpty" | "requiredPermission"
+  "allowsSeveral" | "hidesWhenEmpty" | "offered" | "requiredPermission"
 > {
+  const requiredPermission = requiredPermissionOf(declaration.access);
   return {
-    ...(declaration.several === true ? { allowsSeveral: true } : {}),
-    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
-    // A permission name gates who is offered the widget at all; the other
-    // forms are judged per card, with the person, before its `load` runs.
-    ...(typeof declaration.access === "string"
-      ? { requiredPermission: declaration.access }
+    // Published whenever it is stated, `false` included: a widget offered per
+    // collection or on request allows several unless it says otherwise, so a
+    // `several: false` left out would read as the opposite.
+    ...(typeof declaration.several === "boolean"
+      ? { allowsSeveral: declaration.several }
       : {}),
+    ...(declaration.hidesWhenEmpty === true ? { hidesWhenEmpty: true } : {}),
+    // As written: startup held it to the registry's own rule (`offeredProblem`).
+    ...(declaration.offered === undefined
+      ? {}
+      : { offered: declaration.offered }),
+    // A permission gate decides who is offered the widget at all; the other
+    // forms are judged per card, with the person, before its `load` runs.
+    ...(requiredPermission === undefined ? {} : { requiredPermission }),
   };
+}
+
+/**
+ * A declaration's permission gate as the registry's `requiredPermission`, the
+ * one shape the layout and payload gates judge (`widgetGateHolds`), or
+ * `undefined` for an access that is no gate: absent, the collections it
+ * reads, or a predicate.
+ *
+ * 🔴 Mapped, not passed through: the registry reads a bare list as any-of,
+ * which a declaration spells `{ anyOf }`, so each form is rewritten into the
+ * registry's spelling of the same rule, and every gate is judged by the one
+ * path that judges core's own widgets. A fresh value, so nothing else the
+ * author's object carries is published.
+ */
+function requiredPermissionOf(
+  access: DeclaredWidgetShape["access"]
+): RequiredPermission | undefined {
+  if (typeof access === "string") return access;
+  if (typeof access !== "object" || access === null) return undefined;
+  if ("anyOf" in access) return [...access.anyOf];
+  if ("allOf" in access) {
+    return {
+      allOf: access.allOf.map(entry =>
+        typeof entry === "string" ? entry : [...entry.anyOf]
+      ),
+    };
+  }
+  return undefined;
 }
 
 /** The ids one owner declares in today's shape. */
@@ -302,6 +405,20 @@ function snapshot(group: DeclaredWidgetGroup): DeclaredWidgetGroup {
   };
 }
 
+/**
+ * What startup says its warnings through: the logger the app's registration
+ * was given, so they reach the same place as the rest of its boot.
+ */
+export type StartupLogger = Pick<Logger, "warn">;
+
+/**
+ * The process-wide logger, as a startup logger: where startup's warnings go
+ * when the caller hands none.
+ */
+export const NEXTLY_STARTUP_LOGGER: StartupLogger = {
+  warn: (message, meta) => getNextlyLogger().warn({ ...meta, message }),
+};
+
 const WARNED_LEGACY_IDS = new Set<string>();
 
 /** Forgets which shared old-shape ids were warned about, for tests. */
@@ -316,7 +433,10 @@ export function resetLegacyIdWarnings(): void {
  * shape must keep working as they do; the warning is what tells their authors
  * that the new shape refuses this.
  */
-function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
+function warnSharedLegacyIds(
+  legacy: readonly LegacyWidgetIds[],
+  logger: StartupLogger
+): void {
   const owners = new Map<string, string[]>();
   for (const { owner, ids } of legacy) {
     for (const id of ids) owners.set(id, [...(owners.get(id) ?? []), owner]);
@@ -324,15 +444,12 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
   for (const [id, plugins] of owners) {
     if (plugins.length < 2 || WARNED_LEGACY_IDS.has(id)) continue;
     WARNED_LEGACY_IDS.add(id);
-    getNextlyLogger().warn({
-      kind: "widget-id-shared-old-shape",
-      widget: id,
-      plugins,
-      message:
-        `${plugins.join(" and ")} each declare a widget "${id}" in the old ` +
+    logger.warn(
+      `${plugins.join(" and ")} each declare a widget "${id}" in the old ` +
         `shape. The first one is used, as before. Widgets declared with ` +
         `defineWidget() may not share an id: rename one before moving it.`,
-    });
+      { kind: "widget-id-shared-old-shape", widget: id, plugins }
+    );
   }
 }
 
@@ -361,8 +478,8 @@ export interface DashboardWidgets {
     declared: ReadonlyMap<string, WidgetDefinition>,
     groups: readonly DeclaredWidgetGroup[]
   ) => readonly WidgetDeclarationFault[];
-  /** Declarations checked with the rest, duplicates and references included, but not kept or published. */
-  checkedOnly?: readonly DeclaredWidgetGroup[];
+  /** Where startup's warnings go: the registration's logger, or the process-wide one. */
+  logger?: StartupLogger;
 }
 
 /**
@@ -379,26 +496,25 @@ export function registerDashboardWidgets({
   groups: given = [],
   legacy = [],
   references,
-  checkedOnly = [],
+  logger = NEXTLY_STARTUP_LOGGER,
 }: DashboardWidgets): void {
   const groups = given.map(snapshot);
-  const checked = [...groups, ...checkedOnly.map(snapshot)];
   const faults = [
     ...coreWidgetFaults(core),
-    ...collectWidgetDeclarationFaults(checked),
-    ...sharedWithLegacy(checked, legacy),
+    ...collectWidgetDeclarationFaults(groups),
+    ...sharedWithLegacy(groups, legacy),
   ];
   if (references !== undefined) {
     // Core's widgets among them: nothing is kept until every check has passed,
     // so what names a core widget finds it here rather than in the registry.
     const declared = new Map([
       ...core.map(definition => [definition.id, definition] as const),
-      ...wellFormedDefinitions(checked, faults),
+      ...wellFormedDefinitions(groups, faults),
     ]);
-    faults.push(...references(declared, checked));
+    faults.push(...references(declared, groups));
   }
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
-  warnSharedLegacyIds(legacy);
+  warnSharedLegacyIds(legacy, logger);
 
   for (const definition of core) {
     registerWidget(definition, { source: CORE_OWNER });
