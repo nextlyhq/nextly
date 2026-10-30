@@ -326,35 +326,52 @@ export async function nameVerdict(
   return { outOfDate, blockers };
 }
 
-/** Each configured language's outcome, in the order the app configures them. */
+/**
+ * Each configured language's outcome, in the order the app configures them.
+ *
+ * What is kept under no language (a pending change, or its verdict) is the
+ * document's, which the default language shows, so it counts there, as the
+ * publish counts it. A default language with no translation row of its own is
+ * live when the document is.
+ */
 export function languageOutcomes(args: {
   configured: readonly string[];
-  /** The languages holding a pending change. */
+  defaultLocale: string;
+  /** The languages holding a pending change; null for the document's own. */
   pending: ReadonlySet<string | null>;
   outOfDate: NamedVerdict["outOfDate"];
   /** Each stored translation's status before the publish. */
   prior: ReadonlyMap<string, string | null>;
+  /** The document's own status before the publish, on its main row. */
+  mainStatus: unknown;
   /** Whether a language has content of its own, as reads judge it. */
   hasOwnContent: (locale: string) => boolean;
-  /**
-   * The languages a language without content falls back through, itself
-   * first; null when fallback is off.
-   */
-  fallbackChain: (locale: string) => readonly string[] | null;
+  /** The languages a read of a language resolves through, itself first. */
+  fallbackChain: (locale: string) => readonly string[];
 }): LanguageOutcome[] {
+  const own = (locale: string | null) => locale ?? args.defaultLocale;
+  const pending = new Set([...args.pending].map(own));
+  const outOfDate = new Map<string, NamedFields>();
+  for (const [locale, fields] of args.outOfDate) {
+    outOfDate.set(own(locale), fields);
+  }
   return args.configured.map((locale): LanguageOutcome => {
-    const stale = args.outOfDate.get(locale);
+    const stale = outOfDate.get(locale);
     if (stale) return { locale, outcome: "out-of-date", ...stale };
-    if (args.pending.has(locale)) {
+    if (pending.has(locale)) {
       return { locale, outcome: "goes-live-with-pending-change" };
     }
-    if (args.prior.get(locale) === "published") {
-      return { locale, outcome: "stays-published" };
-    }
+    const status = args.prior.has(locale)
+      ? args.prior.get(locale)
+      : locale === args.defaultLocale
+        ? args.mainStatus
+        : undefined;
+    if (status === "published") return { locale, outcome: "stays-published" };
     if (args.hasOwnContent(locale)) return { locale, outcome: "goes-live" };
-    const chain = args.fallbackChain(locale);
     const fallback =
-      chain?.find(code => code !== locale && args.hasOwnContent(code)) ?? null;
+      args
+        .fallbackChain(locale)
+        .find(code => code !== locale && args.hasOwnContent(code)) ?? null;
     return { locale, outcome: "shows-fallback", fallback };
   });
 }

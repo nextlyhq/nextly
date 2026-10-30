@@ -823,6 +823,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const published = unwrapServiceResult<{
         id: string;
         status?: "published";
+        languages?: unknown[];
       }>(result, { slug });
       return respondAction(result.message ?? "All languages published.", {
         slug,
@@ -851,7 +852,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         languages: unknown[];
         blockers: unknown[];
       }>(result, { slug });
-      return respondData({ slug, ...preview });
+      // One caller's answer: who may publish, and which fields they may read,
+      // decide it, so no shared cache may hand it to anyone else.
+      return withSessionCacheHeaders(respondData({ slug, ...preview }));
     },
   },
 

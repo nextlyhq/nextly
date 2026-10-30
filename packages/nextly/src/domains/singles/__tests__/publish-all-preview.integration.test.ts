@@ -9,7 +9,11 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { userWhoMay } from "../../../__tests__/fixtures/permission-holders";
+import {
+  superAdminUser,
+  userWhoMay,
+} from "../../../__tests__/fixtures/permission-holders";
+import { runWithRequestCaller } from "../../../auth/caller-scope";
 import { defineSingle, number, text } from "../../../config";
 import {
   createTestNextly,
@@ -17,6 +21,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -183,6 +188,41 @@ describe.each(getConfiguredTestDialects())(
       expect(told.data?.languages[0]).toEqual({
         locale: "en",
         outcome: "goes-live-with-pending-change",
+      });
+    });
+
+    it("answers over REST with the preview, kept to the caller who asked", async () => {
+      const singles = await boot(dialect);
+      await save(singles, "en", { siteName: "Hello", status: "published" });
+      await save(singles, "en", { siteName: "Hello again" });
+      const admin = await superAdminUser(current!, "admin-1");
+
+      const response = (await runWithRequestCaller(
+        {
+          userId: admin,
+          actor: { type: "user", id: admin },
+          roles: ["super-admin"],
+        },
+        () =>
+          dispatchSingles(
+            "previewPublishAllSingleLocales",
+            { slug: SLUG },
+            undefined
+          )
+      )) as Response;
+
+      expect(response.status).toBe(200);
+      // Who may publish, and which fields they may read, decide the answer,
+      // so no shared cache may hand it to anyone else.
+      expect(response.headers.get("cache-control")).toMatch(/private/);
+      expect(response.headers.get("cache-control")).toMatch(/no-store/);
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        slug: SLUG,
+        blockers: [],
+        languages: expect.arrayContaining([
+          { locale: "en", outcome: "goes-live-with-pending-change" },
+        ]),
       });
     });
   }

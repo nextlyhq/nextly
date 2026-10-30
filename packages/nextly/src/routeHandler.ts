@@ -2411,6 +2411,9 @@ const SESSION_PRIVATE_METHODS = new Set([
   // the list nor the refusal is shared between callers.
   "listEntryEvents",
   "listSingleEvents",
+  // What a publish of every language would do is told only to a caller who
+  // may publish, naming only the fields they may read.
+  "previewPublishAllSingleLocales",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from

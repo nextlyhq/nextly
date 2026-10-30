@@ -72,7 +72,7 @@ import {
   perLanguageFieldNames,
   reachesLocalizedFieldGroup,
 } from "../../i18n/per-language-fields";
-import { resolveFallbackChain } from "../../i18n/resolve-locale";
+import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
   type CompanionSchema,
@@ -161,14 +161,17 @@ export interface PublishAllSingleResult {
   status?: "published";
   /**
    * What the publish did to each configured language, as its preview said it
-   * would. Absent where nothing moved.
+   * would. Empty for a Single whose languages carry no status of their own,
+   * and absent where the Single has no lifecycle to publish.
    */
   languages?: LanguageOutcome[];
 }
 
 /**
  * What a publish of every language would do, without doing it: each configured
- * language's outcome, and what would refuse the publish as a whole. A language
+ * language's outcome, and what in the shared values would refuse the publish
+ * as a whole. The field rules the promotion is judged by are not asked here:
+ * the publish answers to them when it runs. A language
  * whose pending change is out of date is one of the outcomes, naming the
  * shared fields the caller may read and counting the others, as the
  * publish's refusal does.
@@ -899,6 +902,7 @@ export class SinglePublishAllService extends BaseService {
       plan,
       stored,
       priorCompanionStatuses,
+      lockedRow.status,
       new Map()
     );
 
@@ -1521,6 +1525,8 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     stored: readonly PendingChange[],
     prior: ReadonlyMap<string, string | null>,
+    /** The main row's status before the publish. */
+    mainStatus: unknown,
     outOfDate: NamedVerdict["outOfDate"]
   ): Promise<LanguageOutcome[]> {
     const { companion } = plan;
@@ -1549,14 +1555,16 @@ export class SinglePublishAllService extends BaseService {
     >;
     return languageOutcomes({
       configured,
+      defaultLocale: localization.defaultLocale,
       pending: new Set(stored.map(draft => draft.locale)),
       outOfDate,
       prior,
+      mainStatus,
       hasOwnContent: locale => overview[locale]?.translated === true,
+      // The chain a read of the language resolves through, so the language
+      // named is the one its readers see.
       fallbackChain: locale =>
-        localization.fallback
-          ? resolveFallbackChain(localization, locale)
-          : null,
+        resolveLocaleChain(localization, locale, undefined) ?? [locale],
     });
   }
 
@@ -1604,6 +1612,7 @@ export class SinglePublishAllService extends BaseService {
         plan,
         stored,
         prior,
+        (plan.existingDoc as { status?: unknown }).status,
         named.outOfDate
       ),
       blockers: named.blockers,
