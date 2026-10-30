@@ -45,7 +45,7 @@ export type ValueJudge = (
 ) => ConversionReasonKind | null;
 
 /** A judge for a conversion every value survives: it changes no type a value is read through. */
-const keeps: ValueJudge = () => null;
+export const keeps: ValueJudge = () => null;
 
 const STRING_FAMILIES = new Set<TypeFamily>(["text", "varchar"]);
 const INTEGER_WIDTH: Partial<Record<TypeFamily, number>> = {
@@ -70,7 +70,11 @@ export function valueJudgeFor(conversion: ColumnConversion): ValueJudge | null {
   const from = parseColumnType(conversion.from);
   const to = parseColumnType(conversion.to);
   if (conversion.referenceList) return referenceListJudge(conversion, from, to);
-  return stringJudge(conversion, from, to) ?? numberJudge(from, to);
+  return (
+    jsonJudge(conversion, from, to) ??
+    stringJudge(conversion, from, to) ??
+    numberJudge(from, to)
+  );
 }
 
 /**
@@ -103,8 +107,12 @@ function referenceListJudge(
   to: ParsedType
 ): ValueJudge | null {
   if (to.family !== "json") return null;
-  if (!(from.family === "uuid" || STRING_FAMILIES.has(from.family)))
-    return null;
+  // A relation's id was kept in a uuid, a string or a fixed-length string (MySQL's uuid column).
+  const scalar =
+    from.family === "uuid" ||
+    from.family === "char" ||
+    STRING_FAMILIES.has(from.family);
+  if (!scalar) return null;
   // MySQL's conversion wraps every value that is not a JSON list in one, so it reads every value.
   if (conversion.dialect === "mysql") return keeps;
   return ({ text }) =>
@@ -123,6 +131,20 @@ function postgresReadsReferenceList(text: string): boolean {
   if (first === "{") return readsAsPostgresTextArray(text);
   if (first === "[" || first === '"') return readsAsPostgresJson(text);
   return true;
+}
+
+/**
+ * One JSON type becoming the other. PostgreSQL's `jsonb` refuses some JSON its `json` type keeps
+ * (see `readsAsPostgresJson`); MySQL has one JSON type.
+ */
+function jsonJudge(
+  conversion: ColumnConversion,
+  from: ParsedType,
+  to: ParsedType
+): ValueJudge | null {
+  if (from.family !== "json" || to.family !== "json") return null;
+  if (conversion.dialect !== "postgresql") return keeps;
+  return ({ text }) => (readsAsPostgresJson(text) ? null : "not-json");
 }
 
 /** A string becoming JSON, a shorter or longer string. */

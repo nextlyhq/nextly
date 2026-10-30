@@ -409,6 +409,58 @@ describe("judgeColumn", () => {
     });
   });
 
+  describe("reads each value as that database's own reader does", () => {
+    it("PostgreSQL json to jsonb: jsonb refuses a NUL escape json kept; MySQL has one JSON type", async () => {
+      const toJsonb = pg("json", "jsonb", { compareAs: "json" });
+      const judgement = await judgeColumn(
+        toJsonb,
+        rows('{"a":1}', '"\\u0000"')
+      );
+      expect(judgement.class).toBe("lossy");
+      expect(idsOf(judgement, "not-json")).toEqual(["2"]);
+      // Same type, a different spelling of it: nothing to read.
+      await expect(
+        judgeColumn(my("json", "json", { compareAs: "json" }), rows("x"))
+      ).resolves.toEqual({ class: "safe", reasons: [] });
+    });
+
+    it("PostgreSQL jsonb refuses a number with more digits than its numeric holds, as written", async () => {
+      const toJsonb = pg("text", "jsonb", { compareAs: "json" });
+      const judgement = await judgeColumn(
+        toJsonb,
+        rows("[1e131071]", "[1e131072]", "1e-16383", "10e-16384", "12e131070")
+      );
+      expect(idsOf(judgement, "not-json")).toEqual(["2", "4"]);
+    });
+
+    it("MySQL: a fixed-length or tiny text column converts like text", async () => {
+      await expect(
+        judgeColumn(
+          my("char(36)", "json", { compareAs: "json", referenceList: true }),
+          rows("6f1c1f3a-2b7e-4c2a-9d8e-0a1b2c3d4e5f")
+        )
+      ).resolves.toEqual({ class: "safe", reasons: [] });
+      const tiny = await judgeColumn(
+        my("tinytext", "json", { compareAs: "json" }),
+        rows(mysqlJson("[1]", true), mysqlJson("x", false))
+      );
+      expect(idsOf(tiny, "not-json")).toEqual(["2"]);
+    });
+
+    it("PostgreSQL's array reader skips ASCII spaces only: a no-break space blocks", async () => {
+      const toList = pg("text", "jsonb", {
+        compareAs: "json",
+        referenceList: true,
+      });
+      const judgement = await judgeColumn(
+        toList,
+        rows('{"a"\u00a0}', '\v{"a" ,\tb}\v', "{a\u00a0b}")
+      );
+      // An unquoted element may hold one; a quoted element followed by one is malformed.
+      expect(idsOf(judgement, "unreadable-reference-list")).toEqual(["1"]);
+    });
+  });
+
   describe("on a database that cannot check the rows and change the column in one transaction", () => {
     it("MySQL: a 64-bit integer to a double is blocked with the late-write reason; no known shape is", async () => {
       const judgement = await judgeColumn(

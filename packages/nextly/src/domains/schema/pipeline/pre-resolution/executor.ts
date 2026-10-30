@@ -29,10 +29,16 @@ import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
 import { parseColumnType } from "../../value-conversion/column-type";
-import { judgeStoredColumn } from "../../value-conversion/read-values";
+import {
+  judgeStoredColumn,
+  keyedByOf,
+  type KeyedBy,
+} from "../../value-conversion/read-values";
+import type { ConversionJudgement } from "../../value-conversion/types";
 import { countLongerThan } from "../classifier/count-helpers";
 import { narrowingRefusal } from "../classifier/narrowing-refusal";
 import { stringNarrowingLimit } from "../classifier/type-widening";
+import { introspectLiveColumns } from "../diff/introspect-live";
 import {
   isPreResolutionOp,
   isReferenceListConversion,
@@ -250,7 +256,11 @@ async function assertConversionsAreSafe(
         to: { type: converts.toType, nullable: true },
         compareAs: "json",
       },
-      { table: liveTable, column: op.fromColumn, keyedBy: "id" }
+      {
+        table: liveTable,
+        column: op.fromColumn,
+        keyedBy: await liveKeyOf(txOrDb, dialect, liveTable),
+      }
     );
     if (judgement.class === "safe") continue;
 
@@ -259,17 +269,39 @@ async function assertConversionsAreSafe(
         {
           path: `${liveTable}.${op.fromColumn}`,
           code: "COLUMN_NOT_CONVERTIBLE",
-          message:
-            `Column "${op.fromColumn}" on "${liveTable}" holds values that are not valid JSON, ` +
-            `so renaming it to "${op.toColumn}" as a JSON column would lose them. Nothing has been ` +
-            `changed. Remove the field and add it again if the existing values are not needed, or ` +
-            `correct the stored values first.`,
+          message: hasNoConversion(judgement)
+            ? `Column "${op.fromColumn}" on "${liveTable}" is ${converts.fromType}, which Nextly ` +
+              `has no conversion to ${converts.toType} for, so renaming it to "${op.toColumn}" ` +
+              `as a JSON column is refused. Nothing has been changed.`
+            : `Column "${op.fromColumn}" on "${liveTable}" holds values that are not valid JSON, ` +
+              `so renaming it to "${op.toColumn}" as a JSON column would lose them. Nothing has ` +
+              `been changed. Remove the field and add it again if the existing values are not ` +
+              `needed, or correct the stored values first.`,
         },
       ],
     });
   }
 
   await assertReferenceListsConvert(txOrDb, ordered, currentTableName, dialect);
+}
+
+/** Whether a judgement refused the pair of types itself, whatever the rows hold. */
+function hasNoConversion(judgement: ConversionJudgement): boolean {
+  return judgement.reasons.some(reason => reason.kind === "no-conversion");
+}
+
+/**
+ * How a live table's rows are keyed, from its primary key as the database reports it: a rename
+ * can reach any table the diff manages, a translation table keyed by its parent and locale
+ * included, so no one key is assumed.
+ */
+async function liveKeyOf(
+  txOrDb: unknown,
+  dialect: SupportedDialect,
+  table: string
+): Promise<KeyedBy> {
+  const snapshot = await introspectLiveColumns(txOrDb, dialect, [table]);
+  return keyedByOf(snapshot.tables[0]?.columns ?? []);
 }
 
 /**
@@ -295,7 +327,11 @@ async function assertReferenceListsConvert(
         compareAs: "json",
         referenceList: true,
       },
-      { table: liveTable, column: op.columnName, keyedBy: "id" }
+      {
+        table: liveTable,
+        column: op.columnName,
+        keyedBy: await liveKeyOf(txOrDb, dialect, liveTable),
+      }
     );
     if (judgement.class === "safe") continue;
 
@@ -304,11 +340,13 @@ async function assertReferenceListsConvert(
         {
           path: `${liveTable}.${op.columnName}`,
           code: "COLUMN_NOT_CONVERTIBLE",
-          message:
-            `Column "${op.columnName}" on "${liveTable}" holds a value that is neither a single id, ` +
-            `an array of ids nor a JSON list, so it cannot become a list of references. Nothing has ` +
-            `been changed. Find the row whose value starts with "{" or "[" but does not parse, and ` +
-            `correct or clear it first.`,
+          message: hasNoConversion(judgement)
+            ? `Column "${op.columnName}" on "${liveTable}" is ${op.fromType}, which Nextly has no ` +
+              `conversion to a list of references for. Nothing has been changed.`
+            : `Column "${op.columnName}" on "${liveTable}" holds a value that is neither a single ` +
+              `id, an array of ids nor a JSON list, so it cannot become a list of references. ` +
+              `Nothing has been changed. Find the row whose value starts with "{" or "[" but does ` +
+              `not parse, and correct or clear it first.`,
         },
       ],
     });

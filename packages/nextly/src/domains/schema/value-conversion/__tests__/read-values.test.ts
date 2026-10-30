@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { judgeStoredColumn, readStoredValues } from "../read-values";
+import { judgeStoredColumn, keyedByOf, readStoredValues } from "../read-values";
 import type { ColumnConversion, StoredValue } from "../types";
 
 const toJson: ColumnConversion = {
@@ -91,5 +91,69 @@ describe("judgeStoredColumn", () => {
     );
     expect(judgement.class).toBe("blocked");
     expect(handle.asked()).toBe(0);
+  });
+});
+
+describe("judgeStoredColumn, reading only what can change the class", () => {
+  it("reads no row when every value keeps its reading and a null is allowed", async () => {
+    const handle = pagedHandle([[row(1, "x")]]);
+    const judgement = await judgeStoredColumn(
+      handle,
+      {
+        ...toJson,
+        from: { type: "text", nullable: false },
+        to: { type: "text", nullable: true },
+      },
+      { table: "t", column: "c", keyedBy: "id" }
+    );
+    expect(judgement).toEqual({ class: "safe", reasons: [] });
+    expect(handle.asked()).toBe(0);
+  });
+});
+
+describe("keyedByOf", () => {
+  const column = (name: string, primaryKey = false) => ({
+    name,
+    type: "text",
+    nullable: false,
+    ...(primaryKey ? { primaryKey: true } : {}),
+  });
+
+  it("reads the key from the primary key, not from the table's name", () => {
+    expect(keyedByOf([column("id", true), column("c")])).toBe("id");
+    expect(
+      keyedByOf([column("_locale", true), column("_parent", true), column("c")])
+    ).toBe("translation");
+    expect(keyedByOf([column("slug", true), column("id")])).toBe("none");
+    expect(keyedByOf([column("id"), column("c")])).toBe("none");
+  });
+
+  it("reads a table keyed by nothing it can name whole, in one query", async () => {
+    const handle = pagedHandle([
+      Array.from({ length: 1000 }, () => ({ v: "1" })),
+      [{ v: "never read" }],
+    ]);
+    const values: StoredValue[] = [];
+    for await (const value of readStoredValues(handle, "postgresql", {
+      table: "t",
+      column: "c",
+      keyedBy: "none",
+      toJson: false,
+    })) {
+      values.push(value);
+    }
+    expect(handle.asked()).toBe(1);
+    expect(values).toHaveLength(1000);
+  });
+
+  it("stops on a result shape it does not know, rather than reading it as no rows", async () => {
+    const handle = { execute: () => Promise.resolve({ rows: undefined }) };
+    await expect(
+      judgeStoredColumn(handle, toJson, {
+        table: "t",
+        column: "c",
+        keyedBy: "id",
+      })
+    ).rejects.toThrow();
   });
 });

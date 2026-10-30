@@ -14,6 +14,12 @@
 import { sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  COMPANION_LOCALE_COLUMN,
+  COMPANION_PARENT_COLUMN,
+} from "../../i18n/companion-columns";
+import { querySqlRows } from "../pipeline/classifier/count-helpers";
+import type { ColumnSpec } from "../pipeline/diff/types";
 import type { SupportedDialect } from "../services/field-column-descriptor";
 
 import { parseColumnType } from "./column-type";
@@ -26,33 +32,49 @@ import type {
   StoredValue,
 } from "./types";
 
-interface AsyncExecuteHandle {
-  execute(query: SQL): Promise<unknown>;
-}
-
-interface SqliteAllHandle {
-  all(query: SQL): unknown;
-}
-
 /** How many rows one page reads. */
 const PAGE_SIZE = 1000;
+
+/**
+ * How a table's rows are keyed, which is how a reason names them:
+ *
+ * - `id`: an entity's own table, keyed by its `id`;
+ * - `translation`: a translation table, keyed by its parent and locale;
+ * - `none`: a table keyed some other way, read whole in one query. Its rows cannot be named, so it
+ *   is for a caller that needs only the class.
+ */
+export type KeyedBy = "id" | "translation" | "none";
 
 /** Where a column's values are and how its rows are keyed. */
 export interface ValueSource {
   table: string;
   column: string;
-  /**
-   * `id` for an entity's own table; `translation` for a `_locales` table, whose rows are keyed by
-   * their parent and locale.
-   */
-  keyedBy: "id" | "translation";
+  keyedBy: KeyedBy;
   /** The column is becoming JSON, so MySQL is asked whether each value is JSON. */
   toJson: boolean;
 }
 
+/**
+ * How a table with these columns is keyed, read from its primary key rather than from its name: a
+ * table whose key is `id` alone by id, one whose key is the parent and the locale as a translation
+ * table, anything else by nothing.
+ */
+export function keyedByOf(columns: readonly ColumnSpec[]): KeyedBy {
+  const key = columns
+    .filter(column => column.primaryKey === true)
+    .map(column => column.name)
+    .sort();
+  if (key.length === 1 && key[0] === "id") return "id";
+  const translation = [COMPANION_LOCALE_COLUMN, COMPANION_PARENT_COLUMN].sort();
+  if (key.length === 2 && key.every((name, i) => name === translation[i])) {
+    return "translation";
+  }
+  return "none";
+}
+
 /** One row as each query returns it: the key's text, the value's text, and the dialect's extras. */
 interface ValueRow {
-  k1: unknown;
+  k1?: unknown;
   k2?: unknown;
   v: unknown;
   storage?: unknown;
@@ -71,7 +93,7 @@ export async function* readStoredValues(
       await readPage(db, dialect, source, after)
     ).map(row => storedValue(row, source, dialect));
     yield* page;
-    if (page.length < PAGE_SIZE) return;
+    if (source.keyedBy === "none" || page.length < PAGE_SIZE) return;
     after = page[page.length - 1]?.key ?? null;
   }
 }
@@ -83,6 +105,30 @@ function asText(dialect: SupportedDialect, column: SQLWrapper): SQL {
   return sql`CAST(${column} AS TEXT)`;
 }
 
+/** The key columns a source is read by, in key order. */
+function keyColumns(source: ValueSource): SQLWrapper[] {
+  if (source.keyedBy === "id") return [sql.identifier("id")];
+  if (source.keyedBy === "translation") {
+    return [
+      sql.identifier(COMPANION_PARENT_COLUMN),
+      sql.identifier(COMPANION_LOCALE_COLUMN),
+    ];
+  }
+  return [];
+}
+
+/**
+ * The rows after `after`. Each key is compared as stored, against the text the previous page read
+ * of it: the database reads that text back as the key's own type, so the order and the comparison
+ * agree.
+ */
+function afterKey(keys: readonly SQLWrapper[], after: RowKey | null): SQL {
+  if (after === null) return sql``;
+  const [k1, k2] = keys;
+  if ("id" in after) return sql`WHERE ${k1} > ${after.id}`;
+  return sql`WHERE ${k1} > ${after.parent} OR (${k1} = ${after.parent} AND ${k2} > ${after.locale})`;
+}
+
 /** One page of rows after the key `after` holds, or the first page when it is null. */
 async function readPage(
   db: unknown,
@@ -90,61 +136,27 @@ async function readPage(
   source: ValueSource,
   after: RowKey | null
 ): Promise<ValueRow[]> {
-  const table = sql.identifier(source.table);
   const column = sql.identifier(source.column);
-  const [k1, k2] =
-    source.keyedBy === "translation"
-      ? [sql.identifier("_parent"), sql.identifier("_locale")]
-      : [sql.identifier("id"), undefined];
-
-  const extras: SQL[] = [];
-  if (dialect === "sqlite") extras.push(sql`, typeof(${column}) AS storage`);
+  const keys = keyColumns(source);
+  const selected = [
+    ...keys.map(
+      (key, i) => sql`${asText(dialect, key)} AS ${sql.raw(`k${i + 1}`)}`
+    ),
+    sql`${asText(dialect, column)} AS v`,
+  ];
+  if (dialect === "sqlite") selected.push(sql`typeof(${column}) AS storage`);
   if (dialect === "mysql" && source.toJson) {
-    extras.push(sql`, JSON_VALID(${column}) AS json_valid`);
+    selected.push(sql`JSON_VALID(${column}) AS json_valid`);
   }
-
-  // Each key is compared as stored, against the text the previous page read of it: the database
-  // reads that text back as the key's own type, so the order and the comparison agree.
-  let where = sql``;
-  if (after !== null) {
-    where =
-      "id" in after
-        ? sql`WHERE ${k1} > ${after.id}`
-        : sql`WHERE ${k1} > ${after.parent} OR (${k1} = ${after.parent} AND ${k2} > ${after.locale})`;
-  }
-  const keys =
-    k2 === undefined
-      ? sql`${asText(dialect, k1)} AS k1`
-      : sql`${asText(dialect, k1)} AS k1, ${asText(dialect, k2)} AS k2`;
-  const order = k2 === undefined ? sql`${k1}` : sql`${k1}, ${k2}`;
-
-  const query = sql`SELECT ${keys}, ${asText(dialect, column)} AS v${sql.join(extras)} FROM ${table} ${where} ORDER BY ${order} LIMIT ${PAGE_SIZE}`;
-  return rowsOf(await run(db, dialect, query));
-}
-
-async function run(
-  db: unknown,
-  dialect: SupportedDialect,
-  query: SQL
-): Promise<unknown> {
-  if (dialect === "sqlite") return (db as SqliteAllHandle).all(query);
-  return (db as AsyncExecuteHandle).execute(query);
-}
-
-/**
- * The rows of a result, across the shapes the drivers return: node-postgres `{ rows }`, mysql2
- * `[rows, fields]`, and a plain list from SQLite.
- */
-function rowsOf(result: unknown): ValueRow[] {
-  if (Array.isArray(result)) {
-    const first: unknown = result[0];
-    return (Array.isArray(first) ? first : result) as ValueRow[];
-  }
-  if (result && typeof result === "object" && "rows" in result) {
-    const { rows } = result;
-    return Array.isArray(rows) ? (rows as ValueRow[]) : [];
-  }
-  return [];
+  const page =
+    keys.length === 0
+      ? sql``
+      : sql`${afterKey(keys, after)} ORDER BY ${sql.join(keys, sql`, `)} LIMIT ${PAGE_SIZE}`;
+  return querySqlRows<ValueRow>(
+    db,
+    dialect,
+    sql`SELECT ${sql.join(selected, sql`, `)} FROM ${sql.identifier(source.table)} ${page}`
+  );
 }
 
 const SQLITE_STORAGE: readonly SqliteStorage[] = [
@@ -181,17 +193,24 @@ function keyText(value: unknown): string {
   return textOf(value) ?? "";
 }
 
+/** The key a row is named by. A table keyed by nothing names no row. */
+function keyOf(row: ValueRow, keyedBy: KeyedBy): RowKey {
+  if (keyedBy === "translation") {
+    return { parent: keyText(row.k1), locale: keyText(row.k2) };
+  }
+  return { id: keyedBy === "id" ? keyText(row.k1) : "" };
+}
+
 /** One row as the judgement takes it. */
 function storedValue(
   row: ValueRow,
   source: ValueSource,
   dialect: SupportedDialect
 ): StoredValue {
-  const key: RowKey =
-    source.keyedBy === "translation"
-      ? { parent: keyText(row.k1), locale: keyText(row.k2) }
-      : { id: keyText(row.k1) };
-  const value: StoredValue = { key, text: textOf(row.v) };
+  const value: StoredValue = {
+    key: keyOf(row, source.keyedBy),
+    text: textOf(row.v),
+  };
   if (dialect === "sqlite" && isSqliteStorage(row.storage)) {
     value.storage = row.storage;
   }

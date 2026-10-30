@@ -139,8 +139,14 @@ function columnsNamedBy(
   return columns;
 }
 
-/** The live columns of each live table, by lower-cased table and column name. */
-type LiveTables = ReadonlyMap<string, ReadonlyMap<string, ColumnSpec>>;
+/** One live table: its name as the database spells it, and its columns by lower-cased name. */
+interface LiveTable {
+  name: string;
+  columns: ReadonlyMap<string, ColumnSpec>;
+}
+
+/** The live tables, by lower-cased name. */
+type LiveTables = ReadonlyMap<string, LiveTable>;
 
 const key = (table: string, column: string) =>
   `${table.toLowerCase()}\u0000${column.toLowerCase()}`;
@@ -163,7 +169,21 @@ function liveColumnAt(
 ): ColumnSpec | undefined {
   return live
     .get(location.table.toLowerCase())
-    ?.get(location.column.toLowerCase());
+    ?.columns.get(location.column.toLowerCase());
+}
+
+/** The table and column at a location as the database spells them, for a query to name. */
+function liveNamesOf(
+  live: LiveTables,
+  location: ColumnLocation
+): { liveTable: string; liveColumn: string } {
+  const table = live.get(location.table.toLowerCase());
+  return {
+    liveTable: table?.name ?? location.table,
+    liveColumn:
+      table?.columns.get(location.column.toLowerCase())?.name ??
+      location.column,
+  };
 }
 
 /** A live column's state, or null where the column does not exist, as a pending change holds it. */
@@ -200,7 +220,10 @@ async function readLiveTables(
   return new Map(
     snapshot.tables.map(table => [
       table.name.toLowerCase(),
-      new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
+      {
+        name: table.name,
+        columns: new Map(table.columns.map(c => [c.name.toLowerCase(), c])),
+      },
     ])
   );
 }
@@ -322,6 +345,7 @@ async function appliedColumnFindings(
         location: finding.location,
         live: finding.live,
         expected: finding.expected,
+        ...liveNamesOf(live, finding.location),
       }),
     });
   }

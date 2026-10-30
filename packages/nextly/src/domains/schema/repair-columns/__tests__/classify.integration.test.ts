@@ -297,6 +297,24 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it("reads a column by the database's spelling of it, where that differs from the field's", async () => {
+      const type = dialect === "mysql" ? "varchar(255)" : "text";
+      // The field's column is `req`; the table holds it as `REQ`, which only a lookup that ignores
+      // case matches, and only the database's own spelling names in a query on PostgreSQL.
+      await createTable(TABLE, `${q("REQ")} ${type} NULL`);
+      await insert(TABLE, "REQ", [
+        ["r1", "a"],
+        ["r2", null],
+      ]);
+      const [found] = await find([entityOf([REQUIRED])]);
+      expect(found?.location.column).toBe("req");
+      expect(found?.judgement?.class).toBe("blocked");
+      expect(rowsOf(found!, "null-under-not-null")).toEqual({
+        count: 1,
+        keys: ["r2"],
+      });
+    });
+
     it("dropping a required relationship's NOT NULL is safe", async () => {
       const type = dialect === "mysql" ? "varchar(36)" : "text";
       await createTable(TABLE, `${q("author")} ${type} NOT NULL`);

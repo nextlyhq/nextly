@@ -8,11 +8,11 @@
 // @module domains/schema/repair-columns/classify
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { normalizeType } from "../pipeline/diff/normalize-type";
 import {
   usesJunctionTable,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
+import { parseColumnType } from "../value-conversion/column-type";
 import { judgeStoredColumn } from "../value-conversion/read-values";
 import type {
   ColumnConversion,
@@ -25,10 +25,9 @@ import type { ColumnLocation, ColumnState, RepairEntityKind } from "./types";
 /** Field types whose value is a JSON document wherever it is stored. */
 const STRUCTURED_FIELD_TYPES = new Set(["repeater", "group", "json"]);
 
-/** Whether `type` is a JSON column. */
-function isJsonType(type: string): boolean {
-  const normalized = normalizeType(type);
-  return normalized === "json" || normalized === "jsonb";
+/** Whether `column` is a JSON column. */
+function isJson(column: ColumnState): boolean {
+  return parseColumnType(column).family === "json";
 }
 
 /**
@@ -39,7 +38,7 @@ function compareAsFor(
   field: FieldDefinition,
   expected: ColumnState
 ): CompareAs {
-  if (isJsonType(expected.type)) return "json";
+  if (isJson(expected)) return "json";
   if (STRUCTURED_FIELD_TYPES.has(String(field.type))) return "json";
   if (field.type === "number" && field.hasMany !== true) return "number";
   return "exact";
@@ -52,6 +51,12 @@ export interface DifferenceToClass {
   location: ColumnLocation;
   live: ColumnState;
   expected: ColumnState;
+  /**
+   * The table and column as the database spells them. A column is matched to its field ignoring
+   * case, so the database's spelling, not the field's, is the one a query can name.
+   */
+  liveTable: string;
+  liveColumn: string;
 }
 
 /**
@@ -69,7 +74,7 @@ function conversionFor(
     kind === "fieldGroup" &&
     !location.translation &&
     usesJunctionTable(field) &&
-    isJsonType(expected.type);
+    isJson(expected);
   return {
     dialect,
     from: live,
@@ -86,8 +91,8 @@ export async function classifyDifference(
   difference: DifferenceToClass
 ): Promise<ConversionJudgement> {
   return judgeStoredColumn(db, conversionFor(difference, dialect), {
-    table: difference.location.table,
-    column: difference.location.column,
+    table: difference.liveTable,
+    column: difference.liveColumn,
     keyedBy: difference.location.translation ? "translation" : "id",
   });
 }

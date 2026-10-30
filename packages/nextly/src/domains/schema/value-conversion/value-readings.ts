@@ -61,12 +61,49 @@ export function characterLength(text: string): number {
  * the cast would refuse is never judged convertible.
  */
 export function readsAsPostgresJson(text: string): boolean {
+  let numbersFit = true;
   try {
-    JSON.parse(text);
+    JSON.parse(text, (_key, value: unknown, context?: { source?: string }) => {
+      if (typeof value === "number" && !fitsPostgresNumeric(value, context)) {
+        numbersFit = false;
+      }
+      return value;
+    });
   } catch {
     return false;
   }
-  return escapesReadAsJsonb(text);
+  return numbersFit && escapesReadAsJsonb(text);
+}
+
+/** The most digits PostgreSQL's numeric holds before the decimal point, and after it. */
+const NUMERIC_INTEGER_DIGITS = 131072;
+const NUMERIC_SCALE_DIGITS = 16383;
+
+/**
+ * Whether `jsonb` stores a JSON number, which it keeps as a `numeric`: one with more digits before
+ * the point, or more written after it, than a numeric holds is refused. The number is judged by how
+ * it is written, as PostgreSQL reads it, so `10e-16384` is refused though its value has a shorter
+ * spelling. Where the parser does not hand over the source text, a number JavaScript cannot hold is
+ * refused, which a number PostgreSQL refuses also is.
+ */
+function fitsPostgresNumeric(
+  value: number,
+  context: { source?: string } | undefined
+): boolean {
+  const source = context?.source;
+  if (source === undefined) return Number.isFinite(value);
+  const [mantissa = "", exponentText = "0"] = source
+    .replace(/^-/, "")
+    .split(/[eE]/);
+  const [whole = "", fraction = ""] = mantissa.split(".");
+  const exponent = Number(exponentText);
+  const scale = Math.max(0, fraction.length - exponent);
+  const digits = `${whole}${fraction}`.replace(/^0+/, "");
+  const integerDigits =
+    digits === "" ? 0 : digits.length - fraction.length + exponent;
+  return (
+    scale <= NUMERIC_SCALE_DIGITS && integerDigits <= NUMERIC_INTEGER_DIGITS
+  );
 }
 
 /** Which half of a UTF-16 surrogate pair a code unit is, or null when it is neither. */
@@ -115,9 +152,17 @@ function escapesReadAsJsonb(text: string): boolean {
   return highEnd === -1;
 }
 
-/** Whether `c` is a space as PostgreSQL's array reader skips it. */
+/**
+ * Whether `c` is a space as PostgreSQL's array reader skips it: the ASCII spaces alone. A Unicode
+ * space such as U+00A0 is part of an element to PostgreSQL, so it is here too.
+ */
 function isArraySpace(c: string): boolean {
-  return /\s/.test(c);
+  return /^[ \t\n\r\v\f]$/.test(c);
+}
+
+/** `text` without the spaces PostgreSQL's array reader skips at either end. */
+function trimArraySpaces(text: string): string {
+  return text.replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, "");
 }
 
 /** The first position at or after `i` that is not a space. */
@@ -135,10 +180,10 @@ function skipSpaces(body: string, i: number): number {
  * reported, never converted, so the stricter answer can stop a conversion but never change a value.
  */
 export function readsAsPostgresTextArray(text: string): boolean {
-  const s = text.trim();
+  const s = trimArraySpaces(text);
   if (!s.startsWith("{") || !s.endsWith("}")) return false;
   const body = s.slice(1, -1);
-  if (body.trim() === "") return true;
+  if (trimArraySpaces(body) === "") return true;
   let i = 0;
   for (;;) {
     const end = readArrayElement(body, skipSpaces(body, i));

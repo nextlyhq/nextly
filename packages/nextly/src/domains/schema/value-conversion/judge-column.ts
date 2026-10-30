@@ -8,7 +8,7 @@
 //
 // @module domains/schema/value-conversion/judge-column
 
-import { lateWriteCanChange, valueJudgeFor } from "./judge-value";
+import { keeps, lateWriteCanChange, valueJudgeFor } from "./judge-value";
 import type {
   AffectedRows,
   ColumnConversion,
@@ -53,6 +53,9 @@ export async function judgeColumn(
   const typeReasons = lateWriteCanChange(conversion)
     ? [reason("late-write")]
     : [];
+  // Every value keeps its reading and a null is allowed, so no row can give a reason: the rows are
+  // not read at all.
+  if (judge === keeps && conversion.to.nullable) return withClass(typeReasons);
   const rowReasons = new Map<ConversionReasonKind, AffectedRows>();
   const note = (kind: ConversionReasonKind, value: StoredValue) => {
     const rows = rowReasons.get(kind) ?? { first: [], count: 0 };

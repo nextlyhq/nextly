@@ -15,6 +15,7 @@ import type { ColumnType } from "./types";
 export type TypeFamily =
   | "text"
   | "varchar"
+  | "char"
   | "json"
   | "uuid"
   | "int2"
@@ -38,9 +39,13 @@ export interface ParsedType {
 const FAMILY_OF: Record<string, TypeFamily> = {
   text: "text",
   // MySQL's larger text types hold what `text` holds, and a conversion reads them the same way.
+  tinytext: "text",
   mediumtext: "text",
   longtext: "text",
   varchar: "varchar",
+  // A fixed-length string. PostgreSQL drops its padding when it is read as text, so it converts only
+  // where each value is read as a relation's id.
+  bpchar: "char",
   json: "json",
   jsonb: "json",
   uuid: "uuid",
